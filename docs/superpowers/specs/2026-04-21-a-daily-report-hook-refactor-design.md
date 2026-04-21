@@ -610,11 +610,27 @@ This order gives the highest payoff for maintainability, AI readability, and deb
 
 ## 18. Execution Readiness Notes
 
-The current directory is not a Git repository, so this design can be written locally but cannot be committed until the workspace is placed under Git or linked to an existing repository root.
+The workspace is now under Git and the refactor is being executed on a dedicated feature branch:
 
-This is a workflow blocker for the "commit the design doc" step, not for the design itself.
+- `feat/hook-refactor-foundation-clean`
 
-## 19. Summary
+The main remaining execution risk is no longer repository setup. It is dependency completeness across the partially reconstructed legacy surface. Where the repo snapshot is incomplete, the new hook pipeline now prefers degradable behavior and bridge fallbacks over hard failure.
+
+## 19. Implementation Status
+
+- Contracts/context store: complete
+- Trace runtime: complete
+- OpenSpec root contracts: complete
+- `input.hot_rank`: complete
+- `infer.market_phase`: complete
+- `infer.mainline`: complete
+- `infer.execution_permission`: complete
+- `report.markdown_document` + pipeline runner: complete
+- `persist.snapshot`: complete
+- Legacy bridge / mixed routing: complete
+- Final regression status: 22 targeted tests passing, orchestrator smoke run succeeds
+
+## 20. Summary
 
 The future architecture should not be "a bigger but cleaner file." It should be:
 

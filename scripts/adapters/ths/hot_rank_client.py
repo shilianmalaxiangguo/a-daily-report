@@ -1,4 +1,7 @@
 def fetch_hot_rank(limit=30):
-    from ths_hot_stock import fetch_ths_hot_stock
+    try:
+        from ths_hot_stock import fetch_ths_hot_stock
+    except ImportError:
+        return []
 
     return fetch_ths_hot_stock(num=limit) or []
