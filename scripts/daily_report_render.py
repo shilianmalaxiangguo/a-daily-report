@@ -124,6 +124,7 @@ def _render_report_with_display_mode(
 
 
 def generate_markdown_report_from_sections(sections):
+    sections = sections or {}
     ordered_keys = ["preamble", "environment", "observation", "execution", "review", "summary"]
     return "\n\n".join(str(sections.get(key, "") or "").strip() for key in ordered_keys if sections.get(key))
 
@@ -158,7 +159,11 @@ def generate_markdown_report(
     if sections:
         return generate_markdown_report_from_sections(sections)
 
-    import daily_report_entry_demo as _demo
+    try:
+        import daily_report_entry_demo as _demo
+    except (ImportError, ModuleNotFoundError):
+        return generate_markdown_report_from_sections(_extract_sections(data))
+
     return _demo.generate_markdown_report(
         data,
         target_date,

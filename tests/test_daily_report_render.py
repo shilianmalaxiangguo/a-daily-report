@@ -25,6 +25,9 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertEqual(rendered, "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n## Summary")
 
+    def test_generate_markdown_report_from_sections_handles_none(self):
+        self.assertEqual(generate_markdown_report_from_sections(None), "")
+
     def test_generate_markdown_report_uses_legacy_path_when_sections_are_absent(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")
         fake_demo.generate_markdown_report = lambda *args, **kwargs: "legacy report"

@@ -1,5 +1,4 @@
 import sys
-import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -52,10 +51,7 @@ class PipelineRunnerTest(unittest.TestCase):
                 "artifacts": {},
             }
 
-        fake_demo = types.ModuleType("daily_report_entry_demo")
-        fake_demo.generate_markdown_report = lambda *args, **kwargs: "# Legacy Preamble\n\nLegacy summary body"
-
-        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}):
+        with patch("daily_report_render.generate_markdown_report", return_value="# Legacy Preamble\n\nLegacy summary body"):
             ctx = run_pipeline(
                 request={"target_date": "2026-04-21"},
                 hooks=[
@@ -65,9 +61,8 @@ class PipelineRunnerTest(unittest.TestCase):
             )
 
         self.assertEqual(ctx["sections"]["preamble"], "# Legacy Preamble")
-        self.assertIn("Legacy summary body", ctx["sections"]["summary"])
-        self.assertIn("# Legacy Preamble", ctx["rendered"]["markdown_document"])
-        self.assertIn("Legacy summary body", ctx["rendered"]["markdown_document"])
+        self.assertEqual(ctx["sections"]["summary"], "Legacy summary body")
+        self.assertEqual(ctx["rendered"]["markdown_document"], "# Legacy Preamble\n\nLegacy summary body")
 
     def test_run_pipeline_records_error_and_finishes_when_hook_raises(self):
         class StubTraceRuntime:
