@@ -1,0 +1,34 @@
+import json
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from hooks.infer.use_mainline_analysis import run
+from orchestrator.context_store import build_empty_context, merge_hook_patches
+
+
+class UseMainlineAnalysisTest(unittest.TestCase):
+    def test_mainline_hook_selects_strongest_line_and_records_derivation(self):
+        fixture_path = ROOT / "tests" / "fixtures" / "golden_days" / "mainline_competition.json"
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "raw": {"hot_rank": payload["hot_rank"]},
+                "normalized": {"market_snapshot": payload["market_snapshot"]},
+                "derived": {"market_phase": {"phase": "observe"}},
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["derived"]["mainline_analysis"]["primary_line"], "机器人")
+        self.assertIn("hot_rank_weight", result["patches"]["derived"]["mainline_analysis"])
+        self.assertEqual(
+            result["patches"]["diagnostics"]["derivations"]["mainline_analysis"]["hook_name"],
+            "infer.mainline",
+        )

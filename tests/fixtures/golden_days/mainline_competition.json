@@ -1,0 +1,10 @@
+{
+  "market_snapshot": {
+    "hot_rank_count": 3
+  },
+  "hot_rank": [
+    {"code": "300001", "name": "机器人A", "sector": "机器人"},
+    {"code": "300002", "name": "机器人B", "sector": "机器人"},
+    {"code": "600001", "name": "消费A", "sector": "消费"}
+  ]
+}
