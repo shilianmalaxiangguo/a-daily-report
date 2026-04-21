@@ -26,9 +26,31 @@ class UseMainlineAnalysisTest(unittest.TestCase):
 
         result = run(ctx)
 
-        self.assertEqual(result["patches"]["derived"]["mainline_analysis"]["primary_line"], "机器人")
-        self.assertIn("hot_rank_weight", result["patches"]["derived"]["mainline_analysis"])
+        self.assertEqual(result["patches"]["derived"]["mainline"]["primary_line"], "机器人")
+        self.assertIn("hot_rank_weight", result["patches"]["derived"]["mainline"])
         self.assertEqual(
-            result["patches"]["diagnostics"]["derivations"]["mainline_analysis"]["hook_name"],
-            "infer.mainline_analysis",
+            result["patches"]["diagnostics"]["derivations"]["mainline"]["hook_name"],
+            "infer.mainline",
+        )
+        self.assertEqual(result["diagnostics"]["duration_ms"], 0)
+
+    def test_mainline_hook_degrades_when_market_phase_dependency_is_missing(self):
+        fixture_path = ROOT / "tests" / "fixtures" / "golden_days" / "mainline_competition.json"
+        payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "raw": {"hot_rank": payload["hot_rank"]},
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["derived"]["mainline"]["primary_line"], "机器人")
+        self.assertEqual(result["diagnostics"]["status"], "degraded")
+        self.assertIn("derived.market_phase", result["diagnostics"]["missing_inputs"])
+        self.assertEqual(
+            result["patches"]["diagnostics"]["derivations"]["mainline"]["hook_name"],
+            "infer.mainline",
         )
