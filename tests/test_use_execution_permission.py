@@ -23,6 +23,10 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "watch_only")
         self.assertIn("phase=defend", result["patches"]["decision"]["execution_permission"]["reason"])
         self.assertEqual(
+            result["patches"]["decision"]["execution_permission"]["framework"]["gate_chain"],
+            ["环境放行", "主线确认", "异常/触发", "可交易性", "60分钟确认", "30分钟止损"],
+        )
+        self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
             "infer.execution_permission",
         )
@@ -46,6 +50,10 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.market_phase", result["diagnostics"]["warnings"])
+        self.assertIn(
+            "环境放行 -> 主线确认 -> 异常/触发 -> 可交易性 -> 60分钟确认 -> 30分钟止损",
+            result["patches"]["decision"]["execution_permission"]["reason"],
+        )
 
     def test_execution_permission_degrades_when_mainline_is_missing(self):
         ctx = build_empty_context({"target_date": "2026-04-21"})
@@ -64,3 +72,25 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.mainline", result["diagnostics"]["warnings"])
+
+    def test_execution_permission_prefers_strategy_contract_when_present(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "derived": {
+                    "market_phase": {"phase": "observe"},
+                    "mainline": {"primary_line": "机器人"},
+                    "strategy_contract": {
+                        "contract_label": "probe_only",
+                        "permission_label": "watch_only",
+                        "contract_reason": "主线未清，不授予执行权",
+                    },
+                }
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "watch_only")
+        self.assertIn("strategy_contract=probe_only", result["patches"]["decision"]["execution_permission"]["reason"])

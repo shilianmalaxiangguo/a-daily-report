@@ -132,9 +132,15 @@ class ReportOrchestratorTest(unittest.TestCase):
             "infer.mainline",
         )
         self.assertEqual(
+            ctx["diagnostics"]["derivations"]["strategy_contract"]["hook_name"],
+            "infer.strategy_contract",
+        )
+        self.assertEqual(
             ctx["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
             "infer.execution_permission",
         )
+        self.assertEqual(ctx["knowledge"]["trading_philosophy"]["source"], "skillhub")
+        self.assertIn("环境放行", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
         self.assertIn("#", ctx["rendered"]["markdown_document"])
         self.assertIn("watch_only", ctx["rendered"]["markdown_document"])
-
+        self.assertIn("交易理念底线", ctx["rendered"]["markdown_document"])

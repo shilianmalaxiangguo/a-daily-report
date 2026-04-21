@@ -23,6 +23,30 @@ class ContextStoreTest(unittest.TestCase):
         self.assertEqual(merged["decision"]["final_action"], "watch_only")
         self.assertEqual(merged["derived"], {})
 
+    def test_merge_hook_patches_accepts_knowledge_zone(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+
+        merged = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(
+            merged["knowledge"]["trading_philosophy"]["version"],
+            "2026-04-22",
+        )
+        self.assertEqual(
+            merged["knowledge"]["trading_philosophy"]["source"],
+            "skillhub",
+        )
+
     def test_merge_hook_patches_deep_merges_diagnostics_derivations(self):
         ctx = build_empty_context({"target_date": "2026-04-21"})
         ctx = merge_hook_patches(

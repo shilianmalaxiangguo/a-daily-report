@@ -7,6 +7,7 @@ class ReportContext(TypedDict):
     normalized: Dict[str, Any]
     derived: Dict[str, Any]
     decision: Dict[str, Any]
+    knowledge: Dict[str, Any]
     sections: Dict[str, Any]
     rendered: Dict[str, Any]
     diagnostics: Dict[str, Any]
