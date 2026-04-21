@@ -25,6 +25,7 @@ class TraceRuntimeTest(unittest.TestCase):
             ["derived.market_phase"],
             "missing hot rank payload",
         )
+        runtime.finish()
 
         events = runtime.events
 
@@ -33,3 +34,4 @@ class TraceRuntimeTest(unittest.TestCase):
         self.assertEqual(events[2]["fallback_used"], True)
         self.assertEqual(events[3]["status"], "error")
         self.assertIn("missing hot rank payload", events[3]["error"])
+        self.assertEqual(events[4]["status"], "finished")

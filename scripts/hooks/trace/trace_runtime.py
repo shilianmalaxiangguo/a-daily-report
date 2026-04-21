@@ -39,3 +39,6 @@ class TraceRuntime:
                 error=str(error),
             )
         )
+
+    def finish(self):
+        self.events.append(make_trace_event(self.run_id, status="finished"))
