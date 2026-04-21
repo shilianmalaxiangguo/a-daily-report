@@ -4,6 +4,22 @@ import time
 HOOK_NAME = "infer.market_phase"
 
 
+def _coerce_float(value, default, field_name, malformed_inputs):
+    try:
+        return float(value), False
+    except (TypeError, ValueError):
+        malformed_inputs.append(field_name)
+        return default, True
+
+
+def _coerce_int(value, default, field_name, malformed_inputs):
+    try:
+        return int(value), False
+    except (TypeError, ValueError):
+        malformed_inputs.append(field_name)
+        return default, True
+
+
 def run(ctx):
     started_at = time.perf_counter()
     normalized = ctx.get("normalized") or {}
@@ -19,10 +35,26 @@ def run(ctx):
         for field in required_fields
         if field not in snapshot
     ]
+    malformed_inputs = []
 
-    turnover_change_pct = float(snapshot.get("turnover_change_pct", 0))
-    rise_fall_ratio = float(snapshot.get("rise_fall_ratio", 1))
-    dt_count = int(snapshot.get("dt_count", 0))
+    turnover_change_pct, _ = _coerce_float(
+        snapshot.get("turnover_change_pct", 0),
+        0,
+        "normalized.market_snapshot.turnover_change_pct",
+        malformed_inputs,
+    )
+    rise_fall_ratio, _ = _coerce_float(
+        snapshot.get("rise_fall_ratio", 1),
+        1,
+        "normalized.market_snapshot.rise_fall_ratio",
+        malformed_inputs,
+    )
+    dt_count, _ = _coerce_int(
+        snapshot.get("dt_count", 0),
+        0,
+        "normalized.market_snapshot.dt_count",
+        malformed_inputs,
+    )
     zhongshu_signal = str(snapshot.get("zhongshu_signal", "unknown"))
 
     phase = "defend" if (
@@ -34,7 +66,7 @@ def run(ctx):
         and zhongshu_signal == "not_open"
     ) else "observe"
 
-    degraded = bool(missing_inputs)
+    degraded = bool(missing_inputs or malformed_inputs)
     derivation = {
         "hook_name": HOOK_NAME,
         "inputs": [
@@ -51,7 +83,9 @@ def run(ctx):
         "rise_fall_ratio": rise_fall_ratio,
         "dt_count": dt_count,
         "zhongshu_signal": zhongshu_signal,
-        "warnings": ["missing required market snapshot inputs"] if degraded else [],
+        "missing_inputs": missing_inputs,
+        "malformed_inputs": malformed_inputs,
+        "warnings": ["missing or malformed market snapshot inputs"] if degraded else [],
     }
 
     duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -76,6 +110,7 @@ def run(ctx):
             "source_used": "normalized.market_snapshot",
             "fallback_used": False,
             "missing_inputs": missing_inputs,
+            "malformed_inputs": malformed_inputs,
             "warnings": derivation["warnings"],
         },
         "artifacts": {},

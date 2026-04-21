@@ -68,3 +68,37 @@ class UseMarketPhaseTest(unittest.TestCase):
             result["patches"]["diagnostics"]["derivations"]["market_phase"]["zhongshu_signal"],
             "unknown",
         )
+
+    def test_market_phase_hook_degrades_on_malformed_numeric_input(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "normalized": {
+                    "market_snapshot": {
+                        "turnover_change_pct": "oops",
+                        "rise_fall_ratio": 0.41,
+                        "dt_count": 11,
+                        "zhongshu_signal": "not_open",
+                    }
+                }
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["value"]["market_phase"], "observe")
+        self.assertEqual(result["diagnostics"]["status"], "degraded")
+        self.assertEqual(
+            result["diagnostics"]["malformed_inputs"],
+            ["normalized.market_snapshot.turnover_change_pct"],
+        )
+        self.assertEqual(result["patches"]["derived"]["market_phase"]["phase"], "observe")
+        self.assertEqual(
+            result["patches"]["diagnostics"]["derivations"]["market_phase"]["turnover_change_pct"],
+            0,
+        )
+        self.assertEqual(
+            result["patches"]["diagnostics"]["derivations"]["market_phase"]["malformed_inputs"],
+            ["normalized.market_snapshot.turnover_change_pct"],
+        )
