@@ -51,18 +51,46 @@ class PipelineRunnerTest(unittest.TestCase):
                 "artifacts": {},
             }
 
-        with patch("daily_report_render.generate_markdown_report", return_value="# Legacy Preamble\n\nLegacy summary body"):
+        legacy_markdown = (
+            "# Legacy Preamble\n\n"
+            "## Environment\n"
+            "Legacy environment body\n\n"
+            "## Observation\n"
+            "Legacy observation body\n\n"
+            "## Execution\n"
+            "Legacy execution body\n\n"
+            "## Review\n"
+            "Legacy review body\n\n"
+            "## Summary\n"
+            "Legacy summary body"
+        )
+
+        with patch("daily_report_render.generate_markdown_report", return_value=legacy_markdown):
             ctx = run_pipeline(
                 request={"target_date": "2026-04-21"},
                 hooks=[
                     ("legacy.bridge", legacy_sections_hook),
                     ("report.markdown_document", run_markdown_document),
                 ],
-            )
+        )
 
         self.assertEqual(ctx["sections"]["preamble"], "# Legacy Preamble")
-        self.assertEqual(ctx["sections"]["summary"], "Legacy summary body")
-        self.assertEqual(ctx["rendered"]["markdown_document"], "# Legacy Preamble\n\nLegacy summary body")
+        self.assertEqual(ctx["sections"]["environment"], "## Environment\nLegacy environment body")
+        self.assertEqual(ctx["sections"]["observation"], "## Observation\nLegacy observation body")
+        self.assertEqual(ctx["sections"]["execution"], "## Execution\nLegacy execution body")
+        self.assertEqual(ctx["sections"]["review"], "## Review\nLegacy review body")
+        self.assertEqual(ctx["sections"]["summary"], "## Summary\nLegacy summary body")
+        self.assertEqual(
+            ctx["rendered"]["markdown_document"],
+            (
+                "# Legacy Preamble\n\n"
+                "## Environment\nLegacy environment body\n\n"
+                "## Observation\nLegacy observation body\n\n"
+                "## Execution\nLegacy execution body\n\n"
+                "## Review\nLegacy review body\n\n"
+                "## Summary\nLegacy summary body"
+            ),
+        )
 
     def test_run_pipeline_records_error_and_finishes_when_hook_raises(self):
         class StubTraceRuntime:
