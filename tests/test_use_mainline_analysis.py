@@ -32,7 +32,10 @@ class UseMainlineAnalysisTest(unittest.TestCase):
             result["patches"]["diagnostics"]["derivations"]["mainline"]["hook_name"],
             "infer.mainline",
         )
+        self.assertEqual(result["patches"]["diagnostics"]["derivations"]["mainline"]["hot_rank_count"], 3)
         self.assertEqual(result["diagnostics"]["duration_ms"], 0)
+        self.assertEqual(result["diagnostics"]["source_used"], "raw.hot_rank + normalized.market_snapshot")
+        self.assertFalse(result["diagnostics"]["fallback_used"])
 
     def test_mainline_hook_degrades_when_market_phase_dependency_is_missing(self):
         fixture_path = ROOT / "tests" / "fixtures" / "golden_days" / "mainline_competition.json"
@@ -50,6 +53,8 @@ class UseMainlineAnalysisTest(unittest.TestCase):
         self.assertEqual(result["patches"]["derived"]["mainline"]["primary_line"], "机器人")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("derived.market_phase", result["diagnostics"]["missing_inputs"])
+        self.assertEqual(result["diagnostics"]["source_used"], "raw.hot_rank + normalized.market_snapshot")
+        self.assertFalse(result["diagnostics"]["fallback_used"])
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["mainline"]["hook_name"],
             "infer.mainline",
