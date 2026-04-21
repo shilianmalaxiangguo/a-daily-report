@@ -2,6 +2,9 @@ HOOK_NAME = "infer.execution_permission"
 
 
 def run(ctx):
+    import time
+
+    started_at = time.perf_counter()
     derived = ctx.get("derived") or {}
     phase = ((derived.get("market_phase") or {}).get("phase") or "observe").strip()
     mainline = ((derived.get("mainline") or {}).get("primary_line") or "未知").strip()
@@ -13,14 +16,21 @@ def run(ctx):
         "inputs": ["derived.market_phase", "derived.mainline"],
         "assumptions": ["defensive phase blocks new execution"],
         "formula": "watch_only if phase == defend else conditional_30",
-        "output_keys": ["decision.execution_permission"],
+        "output_keys": ["derived.execution_permission", "decision.execution_permission"],
         "confidence": 0.85 if phase == "defend" else 0.65,
         "warnings": [],
     }
+    duration_ms = int((time.perf_counter() - started_at) * 1000)
 
     return {
         "value": {"execution_permission": label},
         "patches": {
+            "derived": {
+                "execution_permission": {
+                    "label": label,
+                    "reason": reason,
+                }
+            },
             "decision": {
                 "execution_permission": {
                     "label": label,
@@ -32,6 +42,7 @@ def run(ctx):
         "diagnostics": {
             "hook_name": HOOK_NAME,
             "status": "success",
+            "duration_ms": duration_ms,
             "confidence": derivation["confidence"],
             "warnings": [],
         },

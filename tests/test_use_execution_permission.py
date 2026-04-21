@@ -19,9 +19,12 @@ class UseExecutionPermissionTest(unittest.TestCase):
 
         result = run(ctx)
 
+        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "watch_only")
         self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "watch_only")
         self.assertIn("phase=defend", result["patches"]["decision"]["execution_permission"]["reason"])
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
             "infer.execution_permission",
         )
+        self.assertIsInstance(result["diagnostics"]["duration_ms"], int)
+        self.assertGreaterEqual(result["diagnostics"]["duration_ms"], 0)
