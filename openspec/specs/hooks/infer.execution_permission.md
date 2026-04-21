@@ -12,6 +12,7 @@ Decide whether execution is permitted for the current run.
 ## Provides
 
 - `derived.execution_permission`
+- `decision.execution_permission`
 - `diagnostics.derivations.execution_permission`
 
 ## Forbidden Reads
@@ -29,4 +30,3 @@ Decide whether execution is permitted for the current run.
 - `duration_ms`
 - `confidence`
 - `warnings`
-
