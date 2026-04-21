@@ -26,5 +26,12 @@ class UseSnapshotPersistenceTest(unittest.TestCase):
             with patch("hooks.persist.use_snapshot_persistence._save_data_snapshot", return_value=str(Path(tmpdir) / "snap.json")) as mocked:
                 result = run(ctx)
 
-        self.assertTrue(result["patches"]["runtime"]["snapshot_path"].endswith("snap.json"))
-        mocked.assert_called_once()
+        expected_payload = {
+            "rendered": {"markdown_document": "# report"},
+            "decision": {"execution_permission": {"label": "watch_only"}},
+            "diagnostics": {},
+        }
+        self.assertEqual(result["value"]["snapshot_path"], str(Path(tmpdir) / "snap.json"))
+        self.assertEqual(result["artifacts"]["snapshot_path"], str(Path(tmpdir) / "snap.json"))
+        self.assertEqual(result["patches"], {})
+        mocked.assert_called_once_with(expected_payload, "2026-04-21")

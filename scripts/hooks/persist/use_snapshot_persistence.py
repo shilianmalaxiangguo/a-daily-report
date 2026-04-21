@@ -14,7 +14,7 @@ def run(ctx):
     path = _save_data_snapshot(payload, target_date)
     return {
         "value": {"snapshot_path": path},
-        "patches": {"runtime": {"snapshot_path": path}},
+        "patches": {},
         "diagnostics": {"hook_name": HOOK_NAME, "status": "success", "warnings": []},
-        "artifacts": {},
+        "artifacts": {"snapshot_path": path},
     }
