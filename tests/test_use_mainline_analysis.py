@@ -30,5 +30,5 @@ class UseMainlineAnalysisTest(unittest.TestCase):
         self.assertIn("hot_rank_weight", result["patches"]["derived"]["mainline_analysis"])
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["mainline_analysis"]["hook_name"],
-            "infer.mainline",
+            "infer.mainline_analysis",
         )

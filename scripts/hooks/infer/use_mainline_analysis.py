@@ -1,7 +1,7 @@
 from collections import Counter
 
 
-HOOK_NAME = "infer.mainline"
+HOOK_NAME = "infer.mainline_analysis"
 
 
 def run(ctx):
