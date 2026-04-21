@@ -28,3 +28,21 @@ class UseExecutionPermissionTest(unittest.TestCase):
         )
         self.assertIsInstance(result["diagnostics"]["duration_ms"], int)
         self.assertGreaterEqual(result["diagnostics"]["duration_ms"], 0)
+
+    def test_execution_permission_degrades_when_market_phase_is_missing(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "derived": {
+                    "mainline": {"primary_line": "机器人", "hot_rank_weight": 2}
+                }
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["diagnostics"]["status"], "degraded")
+        self.assertIn("missing derived.market_phase", result["diagnostics"]["warnings"])
