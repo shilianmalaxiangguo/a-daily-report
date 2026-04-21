@@ -1,0 +1,6 @@
+{
+  "derived": {
+    "market_phase": {"phase": "defend"},
+    "mainline": {"primary_line": "机器人", "hot_rank_weight": 2}
+  }
+}
