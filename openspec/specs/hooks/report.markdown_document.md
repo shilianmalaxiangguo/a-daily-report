@@ -7,7 +7,6 @@ Render the final markdown document from assembled report sections.
 ## Requires
 
 - `sections.*`
-- `derived.*`
 
 ## Provides
 
@@ -29,4 +28,3 @@ Render the final markdown document from assembled report sections.
 - `duration_ms`
 - `confidence`
 - `warnings`
-
