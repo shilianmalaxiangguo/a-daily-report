@@ -20,5 +20,6 @@ def run_pipeline(request, hooks):
             duration_ms=diagnostics.get("duration_ms", 0),
         )
 
+    trace.finish()
     ctx["runtime"]["trace_events"] = trace.events
     return ctx

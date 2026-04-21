@@ -35,4 +35,5 @@ class PipelineRunnerTest(unittest.TestCase):
 
         self.assertEqual(ctx["normalized"]["market_snapshot"]["hot_rank_count"], 1)
         self.assertEqual(ctx["rendered"]["markdown_document"], "# report")
-        self.assertEqual(len(ctx["runtime"]["trace_events"]) >= 3, True)
+        self.assertEqual(ctx["runtime"]["trace_events"][0]["status"], "started")
+        self.assertEqual(ctx["runtime"]["trace_events"][-1]["status"], "finished")
