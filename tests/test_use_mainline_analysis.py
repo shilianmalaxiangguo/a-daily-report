@@ -33,7 +33,8 @@ class UseMainlineAnalysisTest(unittest.TestCase):
             "infer.mainline",
         )
         self.assertEqual(result["patches"]["diagnostics"]["derivations"]["mainline"]["hot_rank_count"], 3)
-        self.assertEqual(result["diagnostics"]["duration_ms"], 0)
+        self.assertIsInstance(result["diagnostics"]["duration_ms"], int)
+        self.assertGreaterEqual(result["diagnostics"]["duration_ms"], 0)
         self.assertEqual(result["diagnostics"]["source_used"], "raw.hot_rank + normalized.market_snapshot")
         self.assertFalse(result["diagnostics"]["fallback_used"])
 
@@ -59,3 +60,24 @@ class UseMainlineAnalysisTest(unittest.TestCase):
             result["patches"]["diagnostics"]["derivations"]["mainline"]["hook_name"],
             "infer.mainline",
         )
+
+    def test_mainline_hook_uses_deterministic_tie_break_for_equal_sector_counts(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "raw": {
+                    "hot_rank": [
+                        {"code": "300001", "name": "Alpha", "sector": "机器人"},
+                        {"code": "300002", "name": "Beta", "sector": "消费"},
+                    ]
+                },
+                "normalized": {"market_snapshot": {"hot_rank_count": 2}},
+                "derived": {"market_phase": {"phase": "observe"}},
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["derived"]["mainline"]["primary_line"], "机器人")
+        self.assertEqual(result["patches"]["diagnostics"]["derivations"]["mainline"]["hot_rank_count"], 2)

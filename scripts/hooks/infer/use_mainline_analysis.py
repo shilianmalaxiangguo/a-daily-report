@@ -1,16 +1,22 @@
 from collections import Counter
+import time
 
 
 HOOK_NAME = "infer.mainline"
 
 
 def run(ctx):
+    started_at = time.perf_counter()
     hot_rank = ((ctx.get("raw") or {}).get("hot_rank") or [])
     market_snapshot = ((ctx.get("normalized") or {}).get("market_snapshot") or {})
     market_phase = ((ctx.get("derived") or {}).get("market_phase") or {})
     sectors = [item.get("sector", "未知") for item in hot_rank if item.get("sector")]
     counts = Counter(sectors)
-    primary_line, primary_count = counts.most_common(1)[0] if counts else ("未知", 0)
+    primary_line, primary_count = (
+        sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0]
+        if counts
+        else ("未知", 0)
+    )
     missing_inputs = []
     hot_rank_count = market_snapshot.get("hot_rank_count")
     if hot_rank_count is None:
@@ -54,7 +60,7 @@ def run(ctx):
         "diagnostics": {
             "hook_name": HOOK_NAME,
             "status": "degraded" if missing_inputs else "success",
-            "duration_ms": 0,
+            "duration_ms": int((time.perf_counter() - started_at) * 1000),
             "confidence": derivation["confidence"],
             "source_used": "raw.hot_rank + normalized.market_snapshot",
             "fallback_used": False,
