@@ -136,6 +136,10 @@ class ReportOrchestratorTest(unittest.TestCase):
             "infer.strategy_contract",
         )
         self.assertEqual(
+            ctx["diagnostics"]["derivations"]["action_plan"]["hook_name"],
+            "decision.action_plan",
+        )
+        self.assertEqual(
             ctx["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
             "infer.execution_permission",
         )
