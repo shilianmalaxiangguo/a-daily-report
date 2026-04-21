@@ -1,4 +1,5 @@
 import sys
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -6,6 +7,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from hooks.report.use_markdown_document import run as run_markdown_document
+from legacy.daily_report_entry_demo_legacy_bridge import build_legacy_sections
 from orchestrator.pipeline_runner import run_pipeline
 
 
@@ -40,20 +43,31 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ctx["runtime"]["trace_events"][-1]["status"], "finished")
 
     def test_run_pipeline_supports_legacy_new_mixed_hooks(self):
-        def legacy_mainline(ctx):
+        def legacy_sections_hook(ctx):
+            sections = build_legacy_sections({"source": "legacy"}, ctx["request"]["target_date"])
             return {
                 "value": {},
-                "patches": {"derived": {"mainline_analysis": {"primary_line": "legacy-line"}}},
-                "diagnostics": {"hook_name": "infer.mainline", "status": "success"},
+                "patches": {"sections": sections},
+                "diagnostics": {"hook_name": "legacy.bridge", "status": "success"},
                 "artifacts": {},
             }
 
-        ctx = run_pipeline(
-            request={"target_date": "2026-04-21"},
-            hooks=[("infer.mainline", legacy_mainline)],
-        )
+        fake_demo = types.ModuleType("daily_report_entry_demo")
+        fake_demo.generate_markdown_report = lambda *args, **kwargs: "# Legacy Preamble\n\nLegacy summary body"
 
-        self.assertEqual(ctx["derived"]["mainline_analysis"]["primary_line"], "legacy-line")
+        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}):
+            ctx = run_pipeline(
+                request={"target_date": "2026-04-21"},
+                hooks=[
+                    ("legacy.bridge", legacy_sections_hook),
+                    ("report.markdown_document", run_markdown_document),
+                ],
+            )
+
+        self.assertEqual(ctx["sections"]["preamble"], "# Legacy Preamble")
+        self.assertIn("Legacy summary body", ctx["sections"]["summary"])
+        self.assertIn("# Legacy Preamble", ctx["rendered"]["markdown_document"])
+        self.assertIn("Legacy summary body", ctx["rendered"]["markdown_document"])
 
     def test_run_pipeline_records_error_and_finishes_when_hook_raises(self):
         class StubTraceRuntime:
