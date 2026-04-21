@@ -39,6 +39,22 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ctx["runtime"]["trace_events"][0]["status"], "started")
         self.assertEqual(ctx["runtime"]["trace_events"][-1]["status"], "finished")
 
+    def test_run_pipeline_supports_legacy_new_mixed_hooks(self):
+        def legacy_mainline(ctx):
+            return {
+                "value": {},
+                "patches": {"derived": {"mainline_analysis": {"primary_line": "legacy-line"}}},
+                "diagnostics": {"hook_name": "infer.mainline", "status": "success"},
+                "artifacts": {},
+            }
+
+        ctx = run_pipeline(
+            request={"target_date": "2026-04-21"},
+            hooks=[("infer.mainline", legacy_mainline)],
+        )
+
+        self.assertEqual(ctx["derived"]["mainline_analysis"]["primary_line"], "legacy-line")
+
     def test_run_pipeline_records_error_and_finishes_when_hook_raises(self):
         class StubTraceRuntime:
             instances = []
