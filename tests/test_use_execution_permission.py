@@ -46,3 +46,21 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.market_phase", result["diagnostics"]["warnings"])
+
+    def test_execution_permission_degrades_when_mainline_is_missing(self):
+        ctx = build_empty_context({"target_date": "2026-04-21"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "derived": {
+                    "market_phase": {"phase": "observe"}
+                }
+            },
+        )
+
+        result = run(ctx)
+
+        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["diagnostics"]["status"], "degraded")
+        self.assertIn("missing derived.mainline", result["diagnostics"]["warnings"])
