@@ -1,4 +1,5 @@
 def run(ctx):
+    _ = ctx
     return {
         "value": {"exit_analysis": {}},
         "exports": {"exit_analysis": {}},

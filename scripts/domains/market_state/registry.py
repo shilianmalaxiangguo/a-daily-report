@@ -15,6 +15,7 @@ from domains.market_state.nodes.infer_sector_competition import run as run_secto
 
 
 def build_market_state_registry():
+    """Map semantic node keys to callables from infer_/assemble_ node modules."""
     return {
         NODE_MAINLINE_CANDIDATES: run_mainline_candidates,
         NODE_ENVIRONMENT_SIGNAL: run_environment_signal,

@@ -1,5 +1,7 @@
 WORKFLOW_KEY = "market_state_v1"
 
+# Node keys are semantic graph identifiers (not Python module names).
+# Node modules keep infer_/assemble_ filename prefixes for intent clarity.
 NODE_MAINLINE_CANDIDATES = "mainline_candidates"
 NODE_ENVIRONMENT_SIGNAL = "environment_signal"
 NODE_MAINLINE_CONTINUITY = "mainline_continuity"

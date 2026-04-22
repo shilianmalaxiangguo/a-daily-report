@@ -1,7 +1,8 @@
 def run(ctx):
+    _ = ctx
     return {
-        "value": {},
-        "exports": {},
+        "value": {"continuity_snapshot": {}},
+        "exports": {"continuity_snapshot": {}},
         "state_patch": {},
         "module_logs": [],
         "errors": [],

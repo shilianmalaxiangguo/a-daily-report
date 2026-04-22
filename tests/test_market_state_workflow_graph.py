@@ -50,10 +50,21 @@ class MarketStateWorkflowGraphTest(unittest.TestCase):
             "errors": [],
         }
 
-        result = run_market_state_analysis({"inputs": {"data": {}}})
+        ctx = {"inputs": {"data": {}}}
+        result = run_market_state_analysis(ctx)
 
         self.assertEqual(result["exports"]["exit_analysis"]["sector_name"], "军工")
         execute_mock.assert_called_once()
+        args, kwargs = execute_mock.call_args
+        self.assertEqual(kwargs, {})
+        self.assertEqual(len(args), 3)
+        self.assertIsInstance(args[0], dict)
+        self.assertIsInstance(args[1], dict)
+        self.assertIs(args[2], ctx)
+        self.assertEqual(args[0]["workflow_key"], WORKFLOW_KEY)
+        self.assertEqual(args[0]["exports"], MARKET_STATE_EXPORT_KEYS)
+        self.assertIn(NODE_MAINLINE_CANDIDATES, args[1])
+        self.assertIn(NODE_ASSEMBLE_EXIT_ANALYSIS, args[1])
 
 
 if __name__ == "__main__":
