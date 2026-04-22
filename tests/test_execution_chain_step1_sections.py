@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 from domains.execution_chain.step1_sections import (
     build_step1_watch_sections,
     inject_step0_research_sections,
@@ -58,6 +59,36 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertIn("**Step 1.3 异动后观察池**", rendered)
         self.assertIn("**Step 1 结论**:", rendered)
         self.assertIn("冷却股(000003)", rendered)
+
+    def test_build_step1_watch_sections_uses_registry_driven_stage_labels(self):
+        stage_lookup = build_execution_stage_lookup(
+            [
+                {"stage_key": "environment_follow", "title": "明日环境与跟随裁决"},
+                {"stage_key": "watch_pool", "title": "明天观察池"},
+                {"stage_key": "candidate_selection", "title": "明日核心标的"},
+            ]
+        )
+
+        lines = build_step1_watch_sections(
+            sector_trend_snapshot_step1=[],
+            mainline_competition_snapshot=[],
+            leader_memory_bank=[],
+            tracking_memory_status={},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            abnormal_projection_summary={},
+            filtered_by_a_kill=[],
+            display_mvp_mode=False,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            format_abnormal_observation_columns=lambda item: ("历史锚点", "次日边界"),
+            stage_meta=stage_lookup["watch_pool"],
+            stage_lookup=stage_lookup,
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("#### Step 1 - 明天观察池", rendered)
+        self.assertIn("**Step 1.1 明日预期强度排序**", rendered)
+        self.assertIn("- **接着做什么**: 进入Step 2，从观察池识别明日核心标的", rendered)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,6 @@
+from domains.execution_chain.stage_runtime import get_execution_stage_label
+
+
 def inject_step0_research_sections(
     report_lines,
     *,
@@ -38,6 +41,8 @@ def build_step1_watch_sections(
     display_mvp_mode,
     is_degraded_abnormal_snapshot,
     format_abnormal_observation_columns,
+    stage_meta=None,
+    stage_lookup=None,
 ):
     lines = []
     sector_trend_snapshot_step1 = sector_trend_snapshot_step1 or []
@@ -48,14 +53,21 @@ def build_step1_watch_sections(
     abnormal_watch_pool = abnormal_watch_pool or []
     abnormal_projection_summary = abnormal_projection_summary or {}
     filtered_by_a_kill = filtered_by_a_kill or []
+    stage_meta = stage_meta or {}
+    stage_lookup = stage_lookup or {}
+    stage_label = str(stage_meta.get("label", "") or "Step 1").strip() or "Step 1"
+    next_stage_label = get_execution_stage_label(stage_lookup, "candidate_selection") if stage_lookup else "Step 2"
 
-    lines.append("#### Step 1 - 明天观察池")
+    def _subheading(suffix, title, tail=""):
+        return f"**{stage_label}.{suffix} {title}**{tail}"
+
+    lines.append(f"#### {stage_label} - 明天观察池")
     lines.append("> **核心问题**：基于今日各种形态，预判哪些股票明天还有可能延续强势？")
     lines.append("> **预判逻辑**：首板启动 > 炸板反包 > 烂板弱转强 > 跟风套利")
     lines.append("")
 
     if sector_trend_snapshot_step1:
-        lines.append("**Step 1.0 主线趋势密度扫描**（先看哪条线里活跃趋势股最多）")
+        lines.append(_subheading("0", "主线趋势密度扫描", "（先看哪条线里活跃趋势股最多）"))
         lines.append("| 板块 | 活跃趋势股 | 强势候选 | 涨停家数 | 锚定龙头 | 结论 |")
         lines.append("|------|------------|----------|----------|----------|------|")
         sector_preview = sector_trend_snapshot_step1[:3] if display_mvp_mode else sector_trend_snapshot_step1
@@ -71,7 +83,7 @@ def build_step1_watch_sections(
         lines.append("")
 
     if mainline_competition_snapshot:
-        lines.append("**Step 1.01 主线竞争格局**（不是板块名单，而是能量争夺排序）")
+        lines.append(_subheading("01", "主线竞争格局", "（不是板块名单，而是能量争夺排序）"))
         lines.append("| 角色 | 方向 | 当前证据 | 判断 | 操作原则 |")
         lines.append("|------|------|----------|------|----------|")
         for item in mainline_competition_snapshot:
@@ -82,7 +94,7 @@ def build_step1_watch_sections(
         lines.append("")
 
     if leader_memory_bank:
-        lines.append("**Step 1.05 龙头记忆库**（第一次异动先记住，后面优先回看这些）")
+        lines.append(_subheading("05", "龙头记忆库", "（第一次异动先记住，后面优先回看这些）"))
         lines.append("| 股票 | 代码 | 板块 | 记忆理由 | 回看窗口 | 明日原则 |")
         lines.append("|------|------|------|----------|----------|----------|")
         for item in leader_memory_bank:
@@ -92,7 +104,7 @@ def build_step1_watch_sections(
             )
         lines.append("")
 
-    lines.append("**Step 1.06 跟踪记忆校验**（昨天的观察先验尸，活下来才允许继续跟）")
+    lines.append(_subheading("06", "跟踪记忆校验", "（昨天的观察先验尸，活下来才允许继续跟）"))
     lines.append(f"- **今日重新校验**: {tracking_memory_status.get('today_seen_count', 0)}只")
     lines.append(f"- **升级为可信记忆**: {len(tracking_memory_status.get('promoted_items', []))}只")
     lines.append(f"- **继续作为临时假设**: {len(tracking_memory_status.get('today_tentative_items', []))}只")
@@ -121,7 +133,7 @@ def build_step1_watch_sections(
         lines.append(f"- **今日自动清除**: {dropped_text}")
     lines.append("")
 
-    lines.append("**Step 1.1 明日预期强度排序**（按今日形态预判明日延续性）")
+    lines.append(_subheading("1", "明日预期强度排序", "（按今日形态预判明日延续性）"))
     lines.append("")
     if watchlist:
         lines.append("| 排名 | 股票 | 代码 | 所属板块 | 今日形态 | 预判分数 | 明日预期 | 核心逻辑 |")
@@ -137,7 +149,7 @@ def build_step1_watch_sections(
         lianban_expect = [item for item in watchlist if "连板" in item.get("tomorrow_expectation", "")][:5]
         premium_expect = [item for item in watchlist if "溢价" in item.get("tomorrow_expectation", "")][:3]
         fanbao_expect = [item for item in watchlist if "反包" in item.get("tomorrow_expectation", "")][:3]
-        lines.append("**Step 1.2 明日预期分组**:")
+        lines.append(_subheading("2", "明日预期分组", ":"))
         if lianban_expect:
             names = ", ".join([f"{item['name']}({item['code']})" for item in lianban_expect])
             lines.append(f"- **🔥 连板预期**（{len(lianban_expect)}只）: {names}")
@@ -153,7 +165,7 @@ def build_step1_watch_sections(
         lines.append("")
 
     if abnormal_watch_pool:
-        lines.append("**Step 1.3 异动后观察池**（不是追异动，而是看异动后能不能跌下去）")
+        lines.append(_subheading("3", "异动后观察池", "（不是追异动，而是看异动后能不能跌下去）"))
         lines.append("| 股票 | 代码 | 板块 | 异动日 | 标准Setup | 后续状态 | 历史异动锚点 | 次日观察边界 | 明日原则 |")
         lines.append("|------|------|------|--------|-----------|----------|--------------|--------------|----------|")
         abnormal_preview = abnormal_watch_pool[:3] if display_mvp_mode else abnormal_watch_pool
@@ -168,10 +180,10 @@ def build_step1_watch_sections(
             )
         lines.append("")
     else:
-        lines.append("**Step 1.3 异动后观察池**: 暂无明确的异动后跟踪对象，说明今天可记忆的异常K线还不够集中。")
+        lines.append(_subheading("3", "异动后观察池", ": 暂无明确的异动后跟踪对象，说明今天可记忆的异常K线还不够集中。"))
         lines.append("")
 
-    lines.append("**Step 1.35 异常投影总结**（用二维异常去反推更高维的状态变化）")
+    lines.append(_subheading("35", "异常投影总结", "（用二维异常去反推更高维的状态变化）"))
     lines.append(
         f"- **当前投影**: {abnormal_projection_summary.get('projection_label', '-')}"
         f"；承接{abnormal_projection_summary.get('resilient_count', 0)}只 / 转弱{abnormal_projection_summary.get('failed_count', 0)}只"
@@ -184,12 +196,12 @@ def build_step1_watch_sections(
     lines.append("")
 
     if filtered_by_a_kill:
-        lines.append(f"**Step 1.4 A杀过滤**（剔除{len(filtered_by_a_kill)}只）:")
+        lines.append(_subheading("4", "A杀过滤", f"（剔除{len(filtered_by_a_kill)}只）:"))
         for candidate, record in filtered_by_a_kill[:5]:
             lines.append(f"- ❌ {candidate.get('name')}({candidate.get('code')}) - A杀日{record.get('a_kill_date')} - 剩余{record.get('remaining_days')}天禁买")
         lines.append("")
 
-    lines.append("**Step 1 结论**:")
+    lines.append(f"**{stage_label} 结论**:")
     lines.append(f"- **明天观察池**: {len(watchlist)}只，按今日形态预判明日延续性排序")
     lines.append("- **核心逻辑**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选")
     if abnormal_watch_pool:
@@ -215,7 +227,7 @@ def build_step1_watch_sections(
         lines.append(f"- **历史可信跟踪**: {', '.join(trusted_memory_names)}（只影响优先回看，不直接给执行权）")
     elif tracking_memory_status.get("today_tentative_items"):
         lines.append("- **历史记忆状态**: 仍以临时假设为主，今天继续验证，不允许直接继承为买点")
-    lines.append("- **接着做什么**: 进入Step 2，从观察池识别明日核心标的")
+    lines.append(f"- **接着做什么**: 进入{next_stage_label}，从观察池识别明日核心标的")
     lines.append("- **重要**: 明日开盘前需重新确认这些标的的竞价情况")
     lines.append("")
     return lines

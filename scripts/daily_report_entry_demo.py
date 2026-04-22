@@ -83,10 +83,18 @@ from domains.market_activity.report_sections import (
     build_advanced_activity_report_sections,
     build_market_activity_report_sections,
 )
-from domains.execution_chain.step1_sections import (
-    build_step1_watch_sections,
-    inject_step0_research_sections,
+from domains.execution_chain.candidate_selection_stage import build_candidate_selection_stage
+from domains.execution_chain.environment_follow_stage import build_environment_follow_stage
+from domains.execution_chain.stage_registry import (
+    DEFAULT_EXECUTION_STAGE_SPECS,
+    build_execution_stage_specs,
 )
+from domains.execution_chain.stage_runtime import (
+    build_execution_stage_lookup,
+    get_execution_stage_label,
+    run_registered_execution_stages,
+)
+from domains.execution_chain.watch_pool_stage import build_watch_pool_stage
 from decision.market_phase_context import build_market_phase_context_contract
 from research.market_research_runtime import (
     build_market_research_snapshot_contract,
@@ -17392,6 +17400,12 @@ def generate_markdown_report(
     exchange_monitor_sections = build_exchange_monitor_sections_contract(data)
     report.extend(exchange_monitor_sections.get('lines', []))
 
+    execution_stage_lookup = build_execution_stage_lookup(DEFAULT_EXECUTION_STAGE_SPECS)
+    candidate_stage_label = get_execution_stage_label(execution_stage_lookup, "candidate_selection")
+    risk_stage_label = get_execution_stage_label(execution_stage_lookup, "risk_review")
+    entry_stage_label = get_execution_stage_label(execution_stage_lookup, "entry_plan")
+    pk_stage_label = get_execution_stage_label(execution_stage_lookup, "pk_decision")
+
     # 辅助函数：当Step 0预判为DIFFICULT且环境极端恶劣时，输出空仓结论
     def _build_no_trade_conclusion(report, target_date, prediction, reason, dt_count, up_down_ratio):
         # 此时report已经包含狙击手视角标题和Step 0内容，只需追加结论部分
@@ -17400,7 +17414,7 @@ def generate_markdown_report(
         report.append("|------|------|------|")
         report.append(f"| 明日环境预判 | 🔴 极度困难 | {reason} |")
         report.append("| 明天观察池 | 无 | 环境恶劣，没有活口 |")
-        report.append("| 明日核心股 | 无 | 未进入Step 2 |")
+        report.append(f"| 明日核心股 | 无 | 未进入{candidate_stage_label} |")
         report.append("| 明日策略 | 空仓观望 | 等待市场情绪修复 |")
         report.append("")
         report.append("**明日计划**: 等待市场情绪修复，跌停<15只、涨跌比>0.8时再评估。即使修复，也只轻仓试错。")
@@ -17446,17 +17460,6 @@ def generate_markdown_report(
     # 基于今日收盘数据 → 预判明日开盘环境 → 给出明日操作指引
     # ========================================
     
-    # Step 0 - 明日环境与跟随裁决（统一引用市场研究快照）
-    # ============================================================
-    report.append("#### Step 0 - 明日环境与跟随裁决")
-    report.append("> **核心问题**：今天的市场研究结果，到了明天开盘前，究竟是该跟、该等等，还是根本不该参与？")
-    report.append("> **重要提示**：T日收盘生成的报告，分析的是T+1日（明天）的操作。Step 0 不再单独猜市场，而是直接引用统一市场研究快照。")
-    report.append("")
-    report.append("> **📈 大盘中枢分析**：详见报告开头的\"明天仓位怎么放\"部分")
-    report.append("")
-    report.append("<!-- STEP0_FOLLOW_PLACEHOLDER -->")
-    report.append("<!-- MVP_FOCUS_SUMMARY_PLACEHOLDER -->")
-
     market_research_bundle = build_market_research_context_bundle(
         data,
         target_date,
@@ -17469,418 +17472,77 @@ def generate_markdown_report(
         secondary_sectors=secondary_sectors,
         dragon_stocks=dragon_stocks,
     )
-    zt_pool_by_sector = market_research_bundle.get('zt_pool_by_sector', {})
-    dt_pool_by_sector = market_research_bundle.get('dt_pool_by_sector', {})
-    zt_pool = market_research_bundle.get('zt_pool', [])
-    hot_stocks = market_research_bundle.get('hot_stocks', [])
-    active_a_kill_records = market_research_bundle.get('active_a_kill_records', [])
-    candidates = market_research_bundle.get('candidates', [])
-    watchlist = market_research_bundle.get('watchlist', [])
-    filtered_by_a_kill = market_research_bundle.get('filtered_by_a_kill', [])
-    mainline_name = market_research_bundle.get('mainline_name', '')
-    stock_meta_map = market_research_bundle.get('stock_meta_map', {})
-    abnormal_watch_pool_all = market_research_bundle.get('abnormal_watch_pool_all', [])
-    abnormal_watch_pool = market_research_bundle.get('abnormal_watch_pool', [])
-    abnormal_watch_map = market_research_bundle.get('abnormal_watch_map', {})
-    sector_trend_snapshot_step1 = market_research_bundle.get('sector_trend_snapshot_step1', [])
-    leader_memory_bank = market_research_bundle.get('leader_memory_bank', [])
-    tracking_memory_status = market_research_bundle.get('tracking_memory_status', {}) or {}
-    mainline_competition_snapshot = market_research_bundle.get('mainline_competition_snapshot', [])
-    observation_snapshot = market_research_bundle.get('observation_snapshot', {}) or {}
-    market_research_snapshot = market_research_bundle.get('market_research_snapshot', {}) or {}
-    market_state_snapshot = market_research_bundle.get('market_state_snapshot', {}) or {}
-    abnormal_projection_summary = market_research_bundle.get('abnormal_projection_summary', {}) or {}
-    step0_plan = market_research_bundle.get('step0_plan', {}) or {}
-    step0_prediction = step0_plan.get('step0_prediction', 'NEUTRAL')
-    step0_prediction_cn = step0_plan.get('step0_prediction_cn', step0_prediction)
-    step0_reason = step0_plan.get('step0_reason', '')
-    step0_action = step0_plan.get('step0_action', '')
-
-    inject_step0_research_sections(
-        report,
-        market_research_snapshot=market_research_snapshot,
-        step0_plan=step0_plan,
-        display_mvp_mode=DISPLAY_MVP_MODE,
-        render_market_research_snapshot_section=_render_market_research_snapshot_section,
-        render_step0_follow_section=_render_step0_follow_section,
+    execution_stage_specs = build_execution_stage_specs(
+        {
+            "environment_follow": build_environment_follow_stage,
+            "watch_pool": build_watch_pool_stage,
+            "candidate_selection": build_candidate_selection_stage,
+        },
+        enabled_stage_keys=["environment_follow", "watch_pool", "candidate_selection"],
     )
-    report.extend(
-        build_step1_watch_sections(
-            sector_trend_snapshot_step1=sector_trend_snapshot_step1,
-            mainline_competition_snapshot=mainline_competition_snapshot,
-            leader_memory_bank=leader_memory_bank,
-            tracking_memory_status=tracking_memory_status,
-            watchlist=watchlist,
-            abnormal_watch_pool=abnormal_watch_pool,
-            abnormal_projection_summary=abnormal_projection_summary,
-            filtered_by_a_kill=filtered_by_a_kill,
-            display_mvp_mode=DISPLAY_MVP_MODE,
-            is_degraded_abnormal_snapshot=_is_degraded_abnormal_snapshot,
-            format_abnormal_observation_columns=_format_abnormal_observation_columns,
-        )
+    execution_stage_result = run_registered_execution_stages(
+        execution_stage_specs,
+        stage_context={
+            "data": data,
+            "target_date": target_date,
+            "exit_analysis": exit_analysis,
+            "dragon_stocks": dragon_stocks,
+            "main_sectors": main_sectors,
+            "position_level": position_level,
+            "display_mvp_mode": DISPLAY_MVP_MODE,
+            "market_research_bundle": market_research_bundle,
+            "render_market_research_snapshot_section": _render_market_research_snapshot_section,
+            "render_step0_follow_section": _render_step0_follow_section,
+            "is_degraded_abnormal_snapshot": _is_degraded_abnormal_snapshot,
+            "format_abnormal_observation_columns": _format_abnormal_observation_columns,
+            "build_step2_candidate_bundle": build_step2_candidate_bundle,
+            "render_gem_breathing_step2_section": _render_gem_breathing_step2_section,
+            "safe_float": _safe_float,
+            "ai_analyze_sector_relationships": ai_analyze_sector_relationships,
+        },
+        stage_lookup=execution_stage_lookup,
     )
+    report.extend(execution_stage_result.get("lines", []))
+    data.setdefault("module_logs", []).extend(execution_stage_result.get("module_logs", []))
 
-    # Step 2 - 明日核心标的（预判谁明天最可能成为核心）
-    # ============================================================
-    # 输入：watchlist（已按明日预期排序）
-    # 处理：不是简单排序，而是基于今日数据预判明日竞价和开盘表现
-    # 输出：明日核心（最可能高开连板）+ 次核心（可能溢价），供Step 3消费
-    # ============================================================
-    report.append("#### Step 2 - 明日核心标的")
-    report.append("> **核心问题**：观察池里谁明天最有可能成为市场核心？基于今日封单强度、板块地位预判。")
-    report.append("> **预判维度**：明日竞价预期 > 板块龙一溢价 > 技术形态支撑 > 异动后抗跌性 > 跟风套利")
-    report.append("")
-
-    step2_bundle = build_step2_candidate_bundle(
-        data,
-        exit_analysis=exit_analysis,
-        candidates=candidates,
-        watchlist=watchlist,
-        abnormal_watch_map=abnormal_watch_map,
-        dragon_stocks=dragon_stocks,
-        zt_pool_by_sector=zt_pool_by_sector,
-        gem_breathing_candidates=market_research_bundle.get('gem_breathing_candidates', []),
-        target_date=target_date,
-    )
-    evaluated_stocks = step2_bundle.get('evaluated_stocks', [])
-    core_stocks = step2_bundle.get('core_stocks', [])
-    secondary_stocks = step2_bundle.get('secondary_stocks', [])
-    ignored_stocks = step2_bundle.get('ignored_stocks', [])
-    crossline_observation_stocks = step2_bundle.get('crossline_observation_stocks', [])
-    gem_observation_stocks = step2_bundle.get('gem_observation_stocks', [])
-    sector_trend_snapshot = step2_bundle.get('sector_trend_snapshot', [])
-    extreme_conviction_list = step2_bundle.get('extreme_conviction_list', [])
-    primary_mainline = (
-        step2_bundle.get('mainline_name', '')
-        or exit_analysis.get('sector_name', '')
-        or (main_sectors[0] if main_sectors else '')
-    )
-
-    # 2.3 输出明日核心预判
-    if sector_trend_snapshot:
-        report.append("**Step 2.0 主线趋势密度复核**（不只看单个龙头，还看一条线里有多少活口）:")
-        report.append("| 板块 | 活跃趋势股 | 核心候选 | 锚定龙头 | 密度分 | 交易含义 |")
-        report.append("|------|------------|----------|----------|--------|----------|")
-        for item in sector_trend_snapshot:
-            anchor_text = f"{item.get('anchor_name', '-')}"
-            if item.get('anchor_code'):
-                anchor_text += f"({item.get('anchor_code')})"
-            report.append(
-                f"| {item.get('sector', '-')} | {item.get('trend_count', 0)}只 | "
-                f"{item.get('core_count', 0)}只 | {anchor_text} | {item.get('density_score', 0)} | "
-                f"{item.get('anchor_reason', '-')} |"
-            )
-        report.append("")
-
-    report.append("**Step 2.1 明日核心预判**（主线内可执行候选）:")
-    report.append("> **异动加权纪律**：`跌不下去` 明显上调优先级，`缩量消化` 保留高位观察权，`已经转弱` 即使形态漂亮也会降级。")
-    if primary_mainline:
-        report.append(f"> **主线过滤**：当前主攻线先缩到`{primary_mainline}`这条线；跨线强票单列观察，不直接授予执行权。")
-    if core_stocks:
-        report.append("| 序号 | 股票 | 代码 | 板块 | 今日形态 | 异动跟踪 | 预判强度 | 核心级别 | 明日预判 |")
-        report.append("|------|------|------|------|----------|----------|----------|----------|----------|")
-        core_preview = core_stocks[:2] if DISPLAY_MVP_MODE else core_stocks
-        for i, c in enumerate(core_preview, 1):
-            report.append(
-                f"| {i} | {c.get('name', '-')} | {c.get('code', '-')} | {c.get('sector', '-')} | "
-                f"{c.get('pattern', '-')} | {c.get('abnormal_summary', '无明显异动')} | "
-                f"{c.get('tomorrow_strength', 0)}分 | {c.get('core_level', '-')} | {c.get('tmr_forecast', '-')} |"
-            )
-    else:
-        report.append("- 无明日核心股")
-    report.append("")
-
-    report.append("**Step 2.2 明日次核心预判**（主线内备选观察）:")
-    if secondary_stocks:
-        report.append("| 序号 | 股票 | 代码 | 板块 | 异动跟踪 | 预判强度 | 明日预期 |")
-        report.append("|------|------|------|------|----------|----------|----------|")
-        secondary_preview = secondary_stocks[:2] if DISPLAY_MVP_MODE else secondary_stocks
-        for i, c in enumerate(secondary_preview, 1):
-            report.append(
-                f"| {i} | {c.get('name', '-')} | {c.get('code', '-')} | {c.get('sector', '-')} | "
-                f"{c.get('abnormal_summary', '无明显异动')} | {c.get('tomorrow_strength', 0)}分 | {c.get('tmr_forecast', '-')} |"
-            )
-    else:
-        report.append("- 无次核心股")
-    report.append("")
-
-    if crossline_observation_stocks:
-        report.append("**Step 2.25 跨线观察候选**（只看能量迁移，不作为主线执行对象）:")
-        report.append("> **观察纪律**：跨线对象只用于确认资金是否外溢/切换，不代表主攻线已经切换。")
-        report.append("| 序号 | 股票 | 代码 | 板块 | 异动跟踪 | 预判强度 | 观察意义 | 明日原则 |")
-        report.append("|------|------|------|------|----------|----------|----------|----------|")
-        crossline_preview = (
-            crossline_observation_stocks[:2]
-            if DISPLAY_MVP_MODE
-            else crossline_observation_stocks[:4]
-        )
-        for i, c in enumerate(crossline_preview, 1):
-            crossline_sector = c.get('sector', '其他')
-            follow_state = c.get('abnormal_follow_state', '')
-            if follow_state in ['跌不下去', '缩量消化']:
-                observation_reason = f"{crossline_sector}承接偏强，观察是否形成竞争线"
-            else:
-                observation_reason = f"{crossline_sector}有异动，先看是否只是情绪脉冲"
-            report.append(
-                f"| {i} | {c.get('name', '-')} | {c.get('code', '-')} | {crossline_sector} | "
-                f"{c.get('abnormal_summary', '无明显异动')} | {c.get('tomorrow_strength', 0)}分 | "
-                f"{observation_reason} | 只看强弱，不直接给买入指令 |"
-            )
-        report.append("")
-
-    if ignored_stocks:
-        report.append(f"**Step 2.3 暂不关注**: {len(ignored_stocks)}只（预判明日强度不足）")
-        for c in ignored_stocks[:3]:
-            report.append(
-                f"- {c.get('name')}({c.get('code')}) - 强度{c.get('tomorrow_strength', 0)}分 - "
-                f"{c.get('abnormal_summary', '无明显异动')} - {c.get('tmr_forecast', '')}"
-            )
-        report.append("")
-
-    # 2.4 预判明日核心方向
-    core_sectors = {}
-    sector_strength = {}
-    for c in core_stocks + secondary_stocks:
-        sector = c.get('sector', '其他')
-        if sector in core_sectors:
-            core_sectors[sector] += 1
-            sector_strength[sector] += c.get('tomorrow_strength', 0)
-        else:
-            core_sectors[sector] = 1
-            sector_strength[sector] = c.get('tomorrow_strength', 0)
-
-    if primary_mainline:
-        mainline_count = len(core_stocks) + len(secondary_stocks)
-        mainline_strength = sum(_safe_float(c.get('tomorrow_strength', 0)) for c in core_stocks + secondary_stocks)
-        report.append(
-            f"**Step 2.4 明日核心方向预判**: {primary_mainline}"
-            f"（主线内{mainline_count}只，主线内强度{int(mainline_strength)}分）"
-        )
-        report.append(f"> **明日纪律**: 认准'{primary_mainline}'，只在主线里等最强对象自己走出来。")
-        if crossline_observation_stocks:
-            strongest_crossline = sorted(
-                crossline_observation_stocks,
-                key=lambda item: (
-                    _safe_float(item.get('tomorrow_strength', 0)),
-                    _safe_float(item.get('score', 0)),
-                ),
-                reverse=True,
-            )[0]
-            crossline_sector = strongest_crossline.get('sector', '其他')
-            report.append(
-                f"> **跨线补充**: {crossline_sector}里的{strongest_crossline.get('name', '-')}"
-                "更像承接观察对象，不视为主攻线切换。"
-            )
-        report.extend(
-            _render_gem_breathing_step2_section(
-                gem_observation_stocks,
-                filtered_out_gem_candidates=market_research_bundle.get('filtered_out_gem_breathing_candidates', []),
-                display_mvp_mode=DISPLAY_MVP_MODE,
-            )
-        )
-        report.append("")
-    elif core_sectors:
-        sorted_sectors = sorted(
-            core_sectors.items(),
-            key=lambda x: (x[1], sector_strength[x[0]]),
-            reverse=True,
-        )
-        main_sector = sorted_sectors[0]
-        report.append(
-            f"**Step 2.4 明日核心方向预判**: {main_sector[0]}"
-            f"（{main_sector[1]}只，板块强度{sector_strength.get(main_sector[0], 0)}分）"
-        )
-        report.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，就干该板块核心")
-        report.extend(
-            _render_gem_breathing_step2_section(
-                gem_observation_stocks,
-                filtered_out_gem_candidates=market_research_bundle.get('filtered_out_gem_breathing_candidates', []),
-                display_mvp_mode=DISPLAY_MVP_MODE,
-            )
-        )
-        report.append("")
-
-    report.append("**Step 2.5 极度看好名单**（只保留最心动的少数，其他只观察）:")
-    if extreme_conviction_list:
-        report.append("| 优先级 | 股票 | 代码 | 所属板块 | 极看理由 | 明日原则 |")
-        report.append("|--------|------|------|----------|----------|----------|")
-        for idx, stock in enumerate(extreme_conviction_list, 1):
-            report.append(
-                f"| {idx} | {stock.get('name', '-')} | {stock.get('code', '-')} | "
-                f"{stock.get('sector', '-')} | {stock.get('conviction_reason', '-')} | "
-                f"{stock.get('conviction_rule', '-')} |"
-            )
-    else:
-        report.append("- 暂无极度看好标的，说明当下更适合广泛观察而不是集中出手。")
-    report.append("")
-
-    report.append("**Step 2 结论**:")
-    report.append(f"- **主线核心**: {len(core_stocks)}只（主攻线内最值得盯的可执行候选）")
-    report.append(f"- **主线次核心**: {len(secondary_stocks)}只（主攻线内备选观察）")
-    report.append(f"- **跨线观察**: {len(crossline_observation_stocks)}只（只看资金迁移，不代表主线切换）")
-    report.append(f"- **创业板20cm预启动**: {len(gem_observation_stocks)}只（只先进观察池，等待右侧确认）")
-    report.append(f"- **暂不关注**: {len(ignored_stocks)}只（预判明日强度不足）")
-    report.append("- **接着做什么**: 进入Step 3，预判这些核心股明天有没有崩的风险")
-    report.append("")
-    
-    # 2.6 击球区判断（板块四象限分析）
-    report.append("**Step 2.6 击球区判断**（判断是否有势的核心标准）")
-    report.append("> **数据来源**: QuickTiny板块四象限API（20日高低+3日强弱）")
-    report.append("> **判断逻辑**: 只有处于击球区的板块才算'有势'，否则只是超跌反弹或弱势震荡")
-    report.append("")
-    
-    quadrant_data = data.get('sector_quadrant')
-    mainline_in_quadrant = None
-    mainline_score = 0
-    
-    if quadrant_data and quadrant_data.get('high_strong_analysis'):
-        hs_analysis = quadrant_data['high_strong_analysis']
-        
-        # 判断当前主线是否在击球区
-        if exit_analysis.get('sector_name'):
-            mainline_name = exit_analysis['sector_name']
-            for sector in hs_analysis.get('tier1_best', []):
-                if mainline_name in sector['name'] or sector['name'] in mainline_name:
-                    mainline_in_quadrant = "🏆 最佳击球区"
-                    mainline_score = sector.get('quality_score', 0)
-                    break
-            if not mainline_in_quadrant:
-                for sector in hs_analysis.get('tier2_good', []):
-                    if mainline_name in sector['name'] or sector['name'] in mainline_name:
-                        mainline_in_quadrant = "⭐ 优质击球区"
-                        mainline_score = sector.get('quality_score', 0)
-                        break
-            if not mainline_in_quadrant:
-                for sector in hs_analysis.get('tier3_normal', []):
-                    if mainline_name in sector['name'] or sector['name'] in mainline_name:
-                        mainline_in_quadrant = "✓ 普通击球区"
-                        mainline_score = sector.get('quality_score', 0)
-                        break
-            if not mainline_in_quadrant:
-                mainline_in_quadrant = "❌ 不在击球区"
-        
-        report.append("**击球区质量分层**:")
-        report.append(f"| 等级 | 得分范围 | 板块数 | 特征 |")
-        report.append(f"|------|----------|--------|------|")
-        report.append(f"| 🏆 最佳击球区 | 80-100分 | {hs_analysis.get('tier1_count', 0)}个 | 高位置+强动量+放量 |")
-        report.append(f"| ⭐ 优质击球区 | 60-79分 | {hs_analysis.get('tier2_count', 0)}个 | 至少两项强 |")
-        report.append(f"| ✓ 普通击球区 | 40-59分 | {hs_analysis.get('tier3_count', 0)}个 | 勉强符合 |")
-        report.append(f"| ⚠️ 边缘击球区 | <40分 | {hs_analysis.get('tier4_count', 0)}个 | 伪击球区，应过滤 |")
-        report.append("")
-        
-        if mainline_in_quadrant:
-            report.append(f"**主线位置判断**: 当前主线'{exit_analysis.get('sector_name', '未知')}'位于{mainline_in_quadrant}（得分{mainline_score}分）")
-            if mainline_in_quadrant == "🏆 最佳击球区":
-                report.append("- ✅ **结论**: 主线处于最佳击球区，第一波上攻猛烈，有持续性、有力度，属于有势个股/板块。继续跟踪，等待调整后的机会。")
-            elif mainline_in_quadrant == "⭐ 优质击球区":
-                report.append("- ✅ **结论**: 主线处于优质击球区，有势，但力度稍弱。可跟踪，但需更谨慎。")
-            elif mainline_in_quadrant == "✓ 普通击球区":
-                report.append("- ⚠️ **结论**: 主线处于普通击球区，有势但强度一般。风险较大，谨慎参与。")
-            else:
-                report.append("- ❌ **结论**: 主线不在击球区，无势或势已衰竭。这不是我们想要的目标，删除观察列表。")
-        report.append("")
-        
-        # 展示最佳击球区板块
-        tier1_best = hs_analysis.get('tier1_best', [])
-        if tier1_best:
-            report.append("**在击球区的板块（第一波强势，已锁定目标）**:")
-            report.append("| 板块 | 位置 | 3日涨幅 | 20日涨幅 | 量比 | 得分 |")
-            report.append("|------|------|---------|----------|------|------|")
-            for sector in tier1_best[:5]:
-                report.append(f"| {sector['name']} | {sector['positionInRange']}% | {sector['recentChange']:+.2f}% | {sector['periodChange']:+.2f}% | {sector['volumeRatio']:.2f} | {sector.get('quality_score', 0)} |")
-            report.append("")
-        
-        # 潜在新主线提示
-        potential_new_mainlines = []
-        current_mainline = exit_analysis.get('sector_name', '')
-        for sector in tier1_best + hs_analysis.get('tier2_good', []):
-            if current_mainline not in sector['name'] and sector['name'] not in current_mainline:
-                potential_new_mainlines.append(sector)
-        
-        if potential_new_mainlines:
-            report.append(f"**⚠️ 其他有势板块**（在击球区，可作为备选目标）:")
-            for i, sector in enumerate(potential_new_mainlines[:3], 1):
-                report.append(f"{i}. **{sector['name']}**: 位置{sector['positionInRange']}%，3日{sector['recentChange']:+.2f}%，得分{sector.get('quality_score', 0)}分")
-            report.append("")
-        
-        if not DISPLAY_MVP_MODE:
-            # Step 2.7 AI智能板块归一化分析（真正AI版）
-            # ========================================
-            report.append("**Step 2.7 AI智能板块归一化分析**")
-            report.append("> **分析目的**: 使用内置LLM识别表面标签分散、实则同源的板块聚集效应")
-            report.append("")
-            
-            # 收集所有相关板块标签
-            all_sector_names = []
-            
-            # 从龙头股收集板块
-            if dragon_stocks:
-                for stock in dragon_stocks[:5]:
-                    sector = stock.get('sector', '')
-                    if sector and sector not in all_sector_names:
-                        all_sector_names.append(sector)
-            
-            # 从击球区收集板块
-            if quadrant_data and quadrant_data.get('high_strong_analysis'):
-                hs = quadrant_data['high_strong_analysis']
-                for tier_key in ['tier1_best', 'tier2_good', 'tier3_normal']:
-                    for sector in hs.get(tier_key, []):
-                        sector_name = sector.get('name', '')
-                        if sector_name and sector_name not in all_sector_names:
-                            all_sector_names.append(sector_name)
-            
-            # 使用真正的AI分析
-            import datetime as _dt
-            context = f"市场环境: {position_level}, 日期: {_dt.datetime.now().strftime('%Y-%m-%d')}"
-            ai_analysis = ai_analyze_sector_relationships(all_sector_names, context)
-            
-            # 输出AI分析结果
-            if ai_analysis.get('groups'):
-                report.append("| 大方向 | 包含标签 | 产业链逻辑 | 资金博弈逻辑 |")
-                report.append("|--------|----------|------------|--------------|")
-                
-                for group in ai_analysis['groups']:
-                    sectors_str = '、'.join(group['sectors'][:3])
-                    if len(group['sectors']) > 3:
-                        sectors_str += f" 等{len(group['sectors'])}个"
-                    reason = group['reason']
-                    logic = group['investment_logic']
-                    report.append(f"| **{group['name']}** | {sectors_str} | {reason} | {logic} |")
-                
-                report.append("")
-                
-                # AI深度洞察
-                if ai_analysis.get('insights'):
-                    report.append("**🤖 AI深度洞察**:")
-                    for line in ai_analysis['insights'].split('\n'):
-                        if line.strip():
-                            report.append(f"{line}")
-                    report.append("")
-        
-        else:
-            report.append("**AI分析**: 未识别到明显板块聚集效应")
-            report.append("")
-    else:
-        report.append("**板块数据不足，跳过AI分析**")
-        report.append("")
-    
-    report.append("**Step 2 结论**: ")
-    if mainline_in_quadrant and "不在" not in mainline_in_quadrant:
-        mainline_name = exit_analysis.get('sector_name', '未知')
-        report.append(f"- 主线'{mainline_name}'{mainline_in_quadrant}，**有势**。接下来：先看调整是否有抗性，再等转折（Step 3-4）。")
-        report.append(f"- **🔥 核心纪律**: 看好'{mainline_name}'就干'{mainline_name}'，只做主线内核心标的，严禁看A做B、做C！")
-        report.append(f"- **🔥 趋势优先**: 只做第一波强势后还能站住的目标，不碰深跌反抽，不碰A杀冷却股。")
-        report.append(f"  - ❌ 禁止行为：看好'{mainline_name}'却去炒边缘概念、上游材料、下游应用")
-        report.append(f"  - ❌ 禁止行为：把'跌得多'当成安全边际，去捡下跌趋势中的票")
-        report.append(f"  - ✅ 正确做法：在'{mainline_name}'板块内找最强个股，直击核心")
-    else:
-        report.append(f"- 主线不在击球区，**无势**。删除观察列表，等待新的有势板块出现。")
-        report.append(f"- **纪律提醒**: 无势时宁可空仓，不做深跌票的幻想反弹。")
-    if extreme_conviction_list:
-        names = [f"{stock.get('name')}({stock.get('code')})" for stock in extreme_conviction_list]
-        report.append(f"- **极度看好名单**: {', '.join(names)}")
-        report.append("- **做减法**: 真正交易只优先盯这几只，其余标的先当观察票。")
-    report.append("")
+    execution_stage_context = execution_stage_result.get("context", {}) or {}
+    zt_pool_by_sector = execution_stage_context.get('zt_pool_by_sector', {}) or {}
+    dt_pool_by_sector = execution_stage_context.get('dt_pool_by_sector', {}) or {}
+    zt_pool = execution_stage_context.get('zt_pool', []) or []
+    hot_stocks = execution_stage_context.get('hot_stocks', []) or []
+    active_a_kill_records = execution_stage_context.get('active_a_kill_records', []) or []
+    candidates = execution_stage_context.get('candidates', []) or []
+    watchlist = execution_stage_context.get('watchlist', []) or []
+    filtered_by_a_kill = execution_stage_context.get('filtered_by_a_kill', []) or []
+    mainline_name = execution_stage_context.get('mainline_name', '')
+    stock_meta_map = execution_stage_context.get('stock_meta_map', {}) or {}
+    abnormal_watch_pool_all = execution_stage_context.get('abnormal_watch_pool_all', []) or []
+    abnormal_watch_pool = execution_stage_context.get('abnormal_watch_pool', []) or []
+    abnormal_watch_map = execution_stage_context.get('abnormal_watch_map', {}) or {}
+    sector_trend_snapshot_step1 = execution_stage_context.get('sector_trend_snapshot_step1', []) or []
+    leader_memory_bank = execution_stage_context.get('leader_memory_bank', []) or []
+    tracking_memory_status = execution_stage_context.get('tracking_memory_status', {}) or {}
+    mainline_competition_snapshot = execution_stage_context.get('mainline_competition_snapshot', []) or []
+    observation_snapshot = execution_stage_context.get('observation_snapshot', {}) or {}
+    market_research_snapshot = execution_stage_context.get('market_research_snapshot', {}) or {}
+    market_state_snapshot = execution_stage_context.get('market_state_snapshot', {}) or {}
+    abnormal_projection_summary = execution_stage_context.get('abnormal_projection_summary', {}) or {}
+    step0_plan = execution_stage_context.get('step0_plan', {}) or {}
+    step0_prediction = execution_stage_context.get('step0_prediction', 'NEUTRAL')
+    step0_prediction_cn = execution_stage_context.get('step0_prediction_cn', step0_prediction)
+    step0_reason = execution_stage_context.get('step0_reason', '')
+    step0_action = execution_stage_context.get('step0_action', '')
+    step2_bundle = execution_stage_context.get('step2_bundle', {}) or {}
+    evaluated_stocks = execution_stage_context.get('evaluated_stocks', []) or []
+    core_stocks = execution_stage_context.get('core_stocks', []) or []
+    secondary_stocks = execution_stage_context.get('secondary_stocks', []) or []
+    ignored_stocks = execution_stage_context.get('ignored_stocks', []) or []
+    crossline_observation_stocks = execution_stage_context.get('crossline_observation_stocks', []) or []
+    gem_observation_stocks = execution_stage_context.get('gem_observation_stocks', []) or []
+    sector_trend_snapshot = execution_stage_context.get('sector_trend_snapshot', []) or []
+    extreme_conviction_list = execution_stage_context.get('extreme_conviction_list', []) or []
+    mainline_in_quadrant = execution_stage_context.get('mainline_in_quadrant')
+    mainline_score = execution_stage_context.get('mainline_score', 0)
     
     # Step 3 - 明日风险预判（预判明天可能崩的）
     # ============================================================
@@ -17889,8 +17551,8 @@ def generate_markdown_report(
     # 输出：high_risk（明天先回避谁）、medium_risk（观察竞价）、low_risk（正常跟踪），供Step 4消费
     # ============================================================
     report.append("")
-    report.append("#### Step 3 - 明日风险预判")
-    report.append("> **核心问题**：Step 2挑出来的核心股，明天有没有可能崩？基于今日形态提前预判。")
+    report.append(f"#### {risk_stage_label} - 明日风险预判")
+    report.append(f"> **核心问题**：{candidate_stage_label}挑出来的核心股，明天有没有可能崩？基于今日形态提前预判。")
     report.append("> **预判逻辑**：烂板炸板→明日低开；缩量涨停→明日炸板；跟风后排→明日断板；高位放量滞涨→明日回调；异动后转弱→直接降级")
     report.append("")
 
@@ -17917,7 +17579,7 @@ def generate_markdown_report(
     structural_reason = step3_bundle.get('structural_reason', '')
     a_kill_blacklist_updates = step3_bundle.get('a_kill_blacklist_updates', [])
 
-    report.append("**Step 3.1 逐只预判明日风险**（基于今日形态）:")
+    report.append(f"**{risk_stage_label}.1 逐只预判明日风险**（基于今日形态）:")
     report.append("| 股票 | 代码 | 今日形态 | 异动灯号 | 明日风险预判 | 风险等级 | 去向 |")
     report.append("|------|------|----------|----------|--------------|----------|------|")
     for row in step3_bundle.get('stock_rows', []):
@@ -17930,7 +17592,7 @@ def generate_markdown_report(
     report.append("")
     
     # 3.2 板块级A杀预判
-    report.append("**Step 3.2 板块级A杀预判**（基于今日跌停分布预判明日）")
+    report.append(f"**{risk_stage_label}.2 板块级A杀预判**（基于今日跌停分布预判明日）")
     report.append("> **预判逻辑**：若某板块今日已有批量跌停，明日该板块跟风股大概率低开")
     report.append("")
 
@@ -17963,7 +17625,7 @@ def generate_markdown_report(
     report.append("")
 
     # 3.3 分组总结（隔日视角）
-    report.append("**Step 3.3 明日风险分组**")
+    report.append(f"**{risk_stage_label}.3 明日风险分组**")
     report.append("")
 
     if delete_group:
@@ -17988,7 +17650,7 @@ def generate_markdown_report(
         report.append("")
 
     # 3.4 板块级风险预判
-    report.append("**Step 3.4 板块级明日风险预判**:")
+    report.append(f"**{risk_stage_label}.4 板块级明日风险预判**:")
     if len(delete_group) >= 3:
         report.append(f"- ⚠️ 明天先回避组达{len(delete_group)}只，说明今日涨停质量差，明日整体风险偏高")
     else:
@@ -17996,12 +17658,12 @@ def generate_markdown_report(
     report.append(f"- **异动承接强不强**: 绿灯{abnormal_green_count}只，红灯{abnormal_red_count}只。绿灯代表“跌不下去”，红灯代表“异动后转弱”。")
     report.append("")
 
-    report.append("**Step 3 结论**:")
+    report.append(f"**{risk_stage_label} 结论**:")
     report.append(f"- **明天先回避谁**: {len(delete_group)}只（烂板/炸板/后排，预判明日风险高）")
     report.append(f"- **明天先观察谁**: {len(keep_group)}只（有风险信号，需看明日竞价强弱）")
-    report.append(f"- **明天重点候选**: {len(focus_group)}只（形态健康，允许进入Step 4继续筛到可买股）")
+    report.append(f"- **明天重点候选**: {len(focus_group)}只（形态健康，允许进入{entry_stage_label}继续筛到可买股）")
     if focus_group:
-        report.append(f"- **接着做什么**: 进入Step 4，为候选组预计算买点并筛出明天唯一能买的那只")
+        report.append(f"- **接着做什么**: 进入{entry_stage_label}，为候选组预计算买点并筛出明天唯一能买的那只")
     else:
         report.append(f"- **接着做什么**: 当前没有能下手的票，明日空仓观望")
     report.append("")
@@ -18019,13 +17681,13 @@ def generate_markdown_report(
     # 处理：基于今日中枢位置，预计算明日买点区域
     # 输出：明日买点预计算表（触发条件、目标价位、止损位），供Step 5消费
     # ============================================================
-    report.append("#### Step 4 - 明日买点预计算")
+    report.append(f"#### {entry_stage_label} - 明日买点预计算")
     report.append("> **核心问题**：基于今日收盘数据，明天什么价格可以买？预计算买点区域，明日盘中触发即执行。")
     report.append("> **预计算逻辑**：明日甜品区 = 今日ZD × (1±3%)，明日突破价 = 今日ZG × 1.02")
     report.append(f"> **怎么执行**：{get_execution_framework_text()}")
     report.append("> **说明**：日报这里只给日线结构预案，真正盘中执行时，买点要等首个60分钟K线确认，止损要落到30分钟结构上。")
     report.append("")
-    report.append("**Step 4.0 交易优先级纪律**:")
+    report.append(f"**{entry_stage_label}.0 交易优先级纪律**:")
     conviction_codes = {
         normalize_stock_code(stock.get('code', ''))
         for stock in (extreme_conviction_list or [])
@@ -18057,7 +17719,7 @@ def generate_markdown_report(
     rejected_stocks = []    # 已破位拒绝买入
 
     if QUANT_SYSTEM_AVAILABLE and focus_group:
-        report.append("**Step 4.1 明日买点预计算表**:")
+        report.append(f"**{entry_stage_label}.1 明日买点预计算表**:")
         report.append("| 股票 | 代码 | 买入资格 | 怎么买 | 日线预设区间 | 60分钟确认点 | 价格怎么盯 | 明天具体怎么做 |")
         report.append("|------|------|----------|----------|------------|--------------|----------|----------|")
         
@@ -18204,7 +17866,7 @@ def generate_markdown_report(
                 )
     else:
         # 量化系统不可用，使用原有逻辑
-        report.append("**Step 4.1 买点判断** (量化系统不可用，使用基础判断):")
+        report.append(f"**{entry_stage_label}.1 买点判断** (量化系统不可用，使用基础判断):")
         report.append("| 股票 | 代码 | 执行权限 | 今日涨幅 | 判断 | 60分钟确认点 | 价格怎么盯 | 动作 |")
         report.append("|------|------|----------|----------|------|--------------|----------|------|")
         
@@ -18374,7 +18036,7 @@ def generate_markdown_report(
     report.append("")
 
     # 4.2 明日触发条件汇总
-    report.append("**Step 4.2 明日触发条件汇总**:")
+    report.append(f"**{entry_stage_label}.2 明日触发条件汇总**:")
     if untradable_stocks:
         report.append(f"**强势但不可交易**（{len(untradable_stocks)}只，只做观察/记忆，不计执行）:")
         for item in untradable_stocks:
@@ -18470,7 +18132,7 @@ def generate_markdown_report(
     # 4.3 明日止损锚定
     # v2.3.40修复：只有允许买入时才显示止损锚定
     if final_gate.get('can_new_entry', False):
-        report.append("**Step 4.3 明日止损锚定**（买入后严格执行）:")
+        report.append(f"**{entry_stage_label}.3 明日止损锚定**（买入后严格执行）:")
         if executable_stocks:
             report.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 跌破动作 |")
             report.append("|------|----------|------------|----------|----------|------------|----------|")
@@ -18511,7 +18173,7 @@ def generate_markdown_report(
         else:
             report.append("- 无可执行股票，暂不设置止损")
     else:
-        report.append("**Step 4.3 明日止损锚定**:")
+        report.append(f"**{entry_stage_label}.3 明日止损锚定**:")
         report.append(f"- ⛔ {position_level}禁止买入，无需设置止损")
     report.append("")
 
@@ -18525,7 +18187,7 @@ def generate_markdown_report(
         target_date=target_date,
     )
 
-    report.append("**Step 4 结论**:")
+    report.append(f"**{entry_stage_label} 结论**:")
     report.append(f"- **现在是什么情况**: {step4_structure_layer_text}")
     if final_gate.get('can_new_entry', False) and executable_stocks:
         report.append("- **接着做什么**: 继续进入PK筛选，只允许一只可买股留下来")
@@ -18549,7 +18211,7 @@ def generate_markdown_report(
     # 核心逻辑：只有允许新开仓时，执行权候选才进入PK。
     # 若档位关闭新开仓，则不做PK，只给“观察优先锚点”。
     # ============================================================
-    report.append("#### Step 4.5 - PK决胜局（期望值模型）")
+    report.append(f"#### {pk_stage_label} - PK决胜局（期望值模型）")
     report.append("> **核心问题**：真正允许出手时，只能买一只，谁的期望值(EV)最高？")
     report.append("> **PK公式**: EV = 成功率 × 盈利空间 - 失败率 × 亏损空间")
     report.append("> **纪律补充**: 只有执行权候选才允许进入PK；观察权候选一律留在观察层。")
@@ -18970,7 +18632,7 @@ def generate_markdown_report(
                 "",
             ])
 
-    conclusion_lines = ["**Step 4.5 结论**:"]
+    conclusion_lines = [f"**{pk_stage_label} 结论**:"]
     if best_stock:
         signal = best_stock.get('signal')
         if signal:
