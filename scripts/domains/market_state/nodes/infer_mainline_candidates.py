@@ -22,19 +22,41 @@ def run(ctx):
 
     safe_float = helpers.get("safe_float", float)
 
-    def parse_float(value, default=0.0):
+    def _safe_float_with_default(value, default):
         try:
             return safe_float(value, default=default)
         except TypeError:
-            try:
-                return safe_float(value)
-            except (TypeError, ValueError):
-                return default
+            return None
         except (TypeError, ValueError):
             return default
 
-    inflow_map = {item.get("name", ""): parse_float(item.get("zljlr", 0), default=0.0) for item in inflow_sectors}
-    outflow_map = {item.get("name", ""): abs(parse_float(item.get("zljlr", 0), default=0.0)) for item in outflow_sectors}
+    def _safe_float_basic(value):
+        try:
+            return safe_float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def parse_float(value, default=0.0):
+        # Compatible with both helper styles:
+        # 1) safe_float(value, default=...)
+        # 2) safe_float(value)
+        with_default = _safe_float_with_default(value, default)
+        if with_default is not None:
+            return with_default
+        basic_value = _safe_float_basic(value)
+        if basic_value is not None:
+            return basic_value
+        return default
+
+    inflow_map = {}
+    for item in inflow_sectors:
+        sector_name = item.get("name", "")
+        inflow_map[sector_name] = parse_float(item.get("zljlr", 0), default=0.0)
+
+    outflow_map = {}
+    for item in outflow_sectors:
+        sector_name = item.get("name", "")
+        outflow_map[sector_name] = abs(parse_float(item.get("zljlr", 0), default=0.0))
     zt_pool_by_sector = data.get("zt_pool_by_sector", {}) or {}
     dt_pool_by_sector = data.get("dt_pool_by_sector", {}) or {}
 
@@ -66,6 +88,8 @@ def run(ctx):
         "inflow_history": inflow_history,
         "mainline_snapshot": mainline_snapshot,
     }
+    # Canonical workflow-level export key.
+    # Flat fields are kept for current downstream/state compatibility in Task 4.
     exports = {
         "mainline_candidates": mainline_candidates,
         "tracked_sector": tracked_sector,
