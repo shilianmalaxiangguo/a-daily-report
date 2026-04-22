@@ -115,12 +115,18 @@ from report.front_summary_builder import (
     render_core_mvp_digest_contract,
     render_mvp_focus_summary_contract,
 )
+from report.report_document_builder import (
+    build_prohibition_section_contract,
+    build_report_shell_contract,
+    replace_placeholder_lines,
+)
 from report.market_research_renderer import (
     render_gem_breathing_pool_section,
     render_gem_breathing_step2_section,
     render_market_research_snapshot_section,
     render_step0_follow_section,
 )
+from report.market_overview_builder import build_market_trend_sections_contract
 from report.pk_decision_renderer import render_pk_decision_section
 from report.single_stock_diagnostic_renderer import render_single_stock_diagnostic_markdown
 from report.strategy_performance_renderer import render_strategy_performance_section
@@ -16859,26 +16865,14 @@ def generate_markdown_report(
     print("=" * 60)
     data['target_date'] = target_date
     
-    report = []
-    report.extend(
-        markdown_hooks.use_report_preamble(
-            target_date,
-            run_mode=run_mode,
-            has_personal_positions=has_personal_positions,
-            compact=DISPLAY_MVP_MODE,
-        )
+    report_shell = build_report_shell_contract(
+        target_date,
+        run_mode=run_mode,
+        has_personal_positions=has_personal_positions,
+        compact=DISPLAY_MVP_MODE,
+        use_report_preamble=markdown_hooks.use_report_preamble,
     )
-    
-    # ========== 🚫 次日操作纪律（第一眼看这里） ==========
-    # 档位说明将在后面填充，这里先占位
-    report.append("## 🚫 次日操作纪律（第一眼看这里）")
-    report.append("")
-    report.append("次日早盘打开日报，第一眼看这里。不在允许清单里的，就是禁止的。")
-    report.append("")
-    # 档位和禁止清单内容将在确定档位后动态填充
-    _prohibition_list_placeholder = len(report)  # 记录位置以便后续插入
-    report.append("<!-- PROHIBITION_PLACEHOLDER -->")
-    report.append("")
+    report = report_shell.get('report', [])
     
     # ========== 提前计算最终档位（v2.3.51重构）==========
     # 目的：确保报告开头显示的档位和Step 4一致
@@ -17152,97 +17146,18 @@ def generate_markdown_report(
 
         report.append("")
     
-    # ========== 🚫 生成禁止操作清单内容（替换开头占位符） ==========
-    # 根据最终操作状态生成禁止清单内容
-    prohibition_content = []
-    
-    # 档位说明
     prohibition_position_level = display_position_level or position_level
     prohibition_operation_state = display_operation_state or final_gate.get('operation_state', '观察态')
-    if prohibition_position_level == "一档（空仓档）":
-        headline = environment_headline or '环境关闭，只做等待，不做新增参与'
-        prohibition_content.append(f"**次日市场环境**: {prohibition_position_level} / {prohibition_operation_state} - {headline}")
-        prohibition_content.append("")
-        prohibition_content.append("**禁止事项**:")
-        prohibition_content.append("- ✅ 禁止新开仓：当前不允许新增任何买入")
-        if has_personal_positions:
-            prohibition_content.append("- ✅ 禁止恋战：你的现有仓位只做退出，不做摊平和自救")
-        else:
-            prohibition_content.append("- ✅ 禁止恋战：若你有旧仓，只做退出，不做摊平和自救")
-        prohibition_content.append("- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开")
-        prohibition_content.append("- ✅ 禁止追高：不追涨任何股票")
-        prohibition_content.append("- ✅ 禁止做T：次日不做日内回转")
-        prohibition_content.append("- ✅ 禁止模式外交易：不在主线里的票不碰")
-    elif prohibition_position_level == "二档（防守档）":
-        headline = environment_headline or '先看特殊标的是否继续抗跌，只保留观察权/旧仓处理权'
-        prohibition_content.append(f"**次日市场环境**: {prohibition_position_level} / {prohibition_operation_state} - {headline}")
-        prohibition_content.append("")
-        prohibition_content.append("**禁止事项**:")
-        prohibition_content.append("- ✅ 禁止新开仓：二档不允许任何新增买入")
-        if final_gate.get('should_reduce'):
-            if has_personal_positions:
-                prohibition_content.append("- ✅ 禁止抱弱留弱：你的旧仓里，不在最强趋势的票要优先处理")
-            else:
-                prohibition_content.append("- ✅ 禁止抱弱留弱：若你有旧仓，不在最强趋势里的票要优先处理")
-        if main_sectors:
-            primary_mainline = main_sectors[0]
-            secondary_hint = main_sectors[1] if len(main_sectors) >= 2 else ''
-            if secondary_hint and secondary_hint != primary_mainline:
-                prohibition_content.append(
-                    f"- ⚠️ 主攻线只盯{primary_mainline}；{secondary_hint}只作竞争观察，不当执行方向"
-                )
-            else:
-                prohibition_content.append(f"- ⚠️ 只盯主攻线{primary_mainline}里最强的票：主线弱化时，杂毛先淘汰")
-        prohibition_content.append("- ✅ 禁止追高：不买昨天或大前天的最高点个股")
-        prohibition_content.append("- ✅ 禁止做T：次日只买一种，不做日内回转")
-        prohibition_content.append("- ✅ 禁止模式外交易：不在主线板块里的票不碰")
-        prohibition_content.append("")
-        prohibition_content.append("**允许事项**:")
-        if final_gate.get('should_reduce'):
-            if has_personal_positions:
-                prohibition_content.append("- ✅ 持有：你的旧仓里，只允许继续拿仍在主线、仍有承接、仍在趋势里的最强票")
-                prohibition_content.append("- ✅ 卖出：你的旧仓一旦转弱、失承接、跌破结构就卖，不犹豫")
-            else:
-                prohibition_content.append("- ✅ 持有：若你有旧仓，只允许继续拿仍在主线、仍有承接、仍在趋势里的最强票")
-                prohibition_content.append("- ✅ 卖出：若你有旧仓，一旦转弱、失承接、跌破结构就卖，不犹豫")
-        else:
-            if has_personal_positions:
-                prohibition_content.append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
-                prohibition_content.append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
-            else:
-                prohibition_content.append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
-                prohibition_content.append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
-    else:  # 三档进攻档
-        headline = environment_headline or '环境放行不等于立刻下单，先看特殊标的，再等市场缩到唯一对象'
-        prohibition_content.append(f"**次日市场环境**: {prohibition_position_level} / {prohibition_operation_state} - {headline}")
-        prohibition_content.append("")
-        prohibition_content.append("**禁止事项**:")
-        prohibition_content.append("- ✅ 禁止追高：不买昨天或大前天的最高点个股")
-        prohibition_content.append("- ✅ 禁止做T：次日只买一种，不做日内回转")
-        prohibition_content.append("- ✅ 禁止模式外交易：不在主线板块里的票不碰")
-        prohibition_content.append("- ✅ 禁止一看到市场转强就直接下单：没有缩到一只可买股之前，一律不开仓")
-        prohibition_content.append("")
-        prohibition_content.append("**允许事项**:")
-        prohibition_content.append("- ✅ 先看特殊标的：先判断它们是深跌还是抗跌，再决定这轮调整是继续收还是重新攻")
-        prohibition_content.append("- ✅ 新开仓前提：只有缩到一只可买股时，才允许按计划买入")
-        if has_personal_positions:
-            prohibition_content.append("- ✅ 持有：你的现有仓位继续持有")
-            prohibition_content.append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
-        else:
-            prohibition_content.append("- ✅ 持有：若你有仓位，可继续持有")
-            prohibition_content.append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
-    
-    # 风险板块（无论哪个档位都要提示）
-    risk_sectors = exit_analysis.get('risk_sectors', [])
-    if risk_sectors:
-        prohibition_content.append("")
-        prohibition_content.append(f"**风险板块（禁止碰）**: {'、'.join(risk_sectors[:5])}")
-    
-    # 替换开头的占位符
-    for i, line in enumerate(report):
-        if line == "<!-- PROHIBITION_PLACEHOLDER -->":
-            report[i:i+1] = prohibition_content
-            break
+    prohibition_result = build_prohibition_section_contract(
+        prohibition_position_level,
+        prohibition_operation_state,
+        environment_headline=environment_headline,
+        has_personal_positions=has_personal_positions,
+        final_gate=final_gate,
+        main_sectors=main_sectors,
+        exit_analysis=exit_analysis,
+    )
+    replace_placeholder_lines(report, "<!-- PROHIBITION_PLACEHOLDER -->", prohibition_result.get('lines', []))
     
     report.append("")
     
@@ -17423,65 +17338,8 @@ def generate_markdown_report(
         report.append("| - | 暂无重要事件 | - | - | - | - |")
     report.append("")
     
-    # 三、大盘趋势判断
-    report.append("## 三、大盘趋势判断")
-    report.append("### 1. 指数表现")
-    report.append("| 指数 | 收盘 | 涨跌幅 | 趋势判断 |")
-    report.append("|------|------|--------|----------|")
-    
-    if data.get('indices'):
-        for name, index_data in data['indices'].items():
-            point = (
-                index_data.get('点位')
-                or index_data.get('close')
-                or index_data.get('price')
-                or index_data.get('收盘')
-                or index_data.get('最新价')
-                or 0
-            )
-            change = index_data.get('涨跌幅', index_data.get('change_pct', 0))
-            trend = "弱势震荡" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
-            report.append(f"| {name} | {point:.2f}点 | {change:+.2f}% | {trend} |")
-    
-    if data.get('wind_a_alternative'):
-        wa = data['wind_a_alternative']
-        point = wa.get('点位', wa.get('price', 0))
-        change = wa.get('涨跌幅', wa.get('change_pct', 0))
-        trend = "全市场普跌" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
-        report.append(f"| 中证全指 | {point:.2f}点 | {change:+.2f}% | {trend} |")
-    report.append("")
-    
-    report.append("### 2. 量能分析")
-    report.append("| 日期 | 成交额 | 量能状态 | 判断 |")
-    report.append("|------|--------|---------|------|")
-    turnover = data.get('total_turnover', 0)
-    if turnover > 20000:
-        level = "放量"
-        judgment = "量能充沛，市场活跃"
-    elif turnover > 15000:
-        level = "正常轮动"
-        judgment = "量能适中，观望情绪"
-    else:
-        level = "缩量"
-        judgment = "量能萎缩，不做"
-    report.append(f"| {target_date} | {turnover:.2f}亿元 | {level} | {judgment} |")
-    report.append("")
-    
-    report.append("### 3. 市场情绪")
-    report.append("| 指标 | 数据 | 判断 |")
-    report.append("|------|------|------|")
-    zt_count = len(data.get('zt_pool', []))
-    dt_count = len(data.get('dt_pool', []))
-    report.append(f"| 涨停家数 | {zt_count}只 | {'赚钱效应尚可' if zt_count > 30 else '赚钱效应一般'} |")
-    report.append(f"| 跌停家数 | {dt_count}只 | {'恐慌情绪有限' if dt_count < 5 else '恐慌情绪蔓延'} |")
-    # 使用真实的涨跌家数计算涨跌比
-    _up_count = data.get('market_stats', {}).get('up_count', 0)
-    _down_count = data.get('market_stats', {}).get('down_count', 0)
-    zd_ratio = f"{_up_count}:{_down_count}" if _down_count > 0 else f"{_up_count}:0"
-    _rf_ratio = _up_count / _down_count if _down_count > 0 else 0
-    ratio_judgment = '多头占优' if _rf_ratio > 2 else ('空头占优' if _rf_ratio < 0.5 else '相对均衡')
-    report.append(f"| 涨跌比 | {zd_ratio} | {ratio_judgment} |")
-    report.append("")
+    market_trend_section = build_market_trend_sections_contract(data, target_date)
+    report.extend(market_trend_section.get('lines', []))
     
     # 四、热度前三十个股（使用正确的字段名和单位转换）
     report.append("## 四、热度前三十个股")
