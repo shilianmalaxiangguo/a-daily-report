@@ -126,6 +126,8 @@ from report.market_research_renderer import (
     render_market_research_snapshot_section,
     render_step0_follow_section,
 )
+from report.exchange_monitor_builder import build_exchange_monitor_sections_contract
+from report.market_analysis_builder import build_market_and_sector_analysis_contract
 from report.market_overview_builder import build_market_trend_sections_contract
 from report.pk_decision_renderer import render_pk_decision_section
 from report.single_stock_diagnostic_renderer import render_single_stock_diagnostic_markdown
@@ -17566,83 +17568,17 @@ def generate_markdown_report(
             report.append(f"| {rank} | {name} | {code} | {net_sell:.2f}亿 | {sector} | {change_pct:+.2f}% | {high:.2f} | {low:.2f} | {open_price:.2f} | {close:.2f} | {zt_status} | {pattern_name}({pattern_score}分) |")
     report.append("")
     
-    # 八、市场与板块分析（AI智能分析）
-    report.append("## 八、市场与板块分析")
-    report.append("")
-    
-    # 1. 市场整体状态
-    report.append("### 1. 市场整体状态")
-    report.append(f"- **现在是什么情况**: {market_analysis.get('market_status', '震荡整理')}")
-    report.append(f"- **主要指数**: 上证{sh_change:+.2f}%，深证{indices.get('深证成指', {}).get('涨跌幅', 0):+.2f}%，创业{indices.get('创业板指', {}).get('涨跌幅', 0):+.2f}%")
-    total_turnover = data.get('total_turnover', 0)
-    report.append(f"- **量能水平**: {total_turnover:.2f}亿元，{'量能充沛' if total_turnover > 18000 else '量能适中' if total_turnover > 12000 else '量能萎缩'}")
-    report.append("")
-    
-    # 2. 主线板块分析（v2.3.37修复：统一使用狙击手视角的主线判断）
-    report.append("### 2. 主线板块分析")
-    mainline_name = exit_analysis.get('sector_name', '') if exit_analysis else ''
-    if mainline_name and mainline_name != '暂无明确主线':
-        report.append(f"**当前主线**: {mainline_name}")
-        report.append(f"> 来源：统一执行链综合分析")
-    elif main_sectors_info:
-        report.append("**主线板块**（涨停潮≥15只 + 出阳线）：")
-        for i, sector in enumerate(main_sectors_info[:3], 1):
-            zt_count = sector.get('zt_count', 0)
-            change = sector.get('change', 0)
-            net_inflow = sector.get('net_inflow', 0)
-            report.append(f"{i}. **{sector['name']}**: 涨停{zt_count}只，涨幅{change:+.2f}%，净流入{net_inflow:.1f}亿")
-    else:
-        report.append("**暂无明确主线板块**（无涨停潮≥15只的板块）")
-    report.append("")
-    
-    # 3. 次强板块分析
-    report.append("### 3. 次强板块分析")
-    if secondary_sectors_info:
-        report.append("**次强板块**（涨停5-14只 + 出阳线）：")
-        for i, sector in enumerate(secondary_sectors_info[:5], 1):
-            zt_count = sector.get('zt_count', 0)
-            change = sector.get('change', 0)
-            net_inflow = sector.get('net_inflow', 0)
-            report.append(f"{i}. **{sector['name']}**: 涨停{zt_count}只，涨幅{change:+.2f}%，净流入{net_inflow:.1f}亿")
-    else:
-        report.append("**暂无明确次强板块**（无涨停5-14只的板块）")
-    report.append("")
-    
-    # 4. 风险板块分析
-    report.append("### 4. 风险板块分析")
-    risk_sectors = market_analysis.get('risk_sectors', [])
-    if risk_sectors:
-        for i, sector in enumerate(risk_sectors[:3], 1):
-            risk_level = "🔴高风险" if sector['risk_level'] == 'high' else "🟡中风险"
-            change = sector['change']
-            change_label = "跌幅" if change < 0 else "涨幅"
-            report.append(f"{i}. **{sector['name']}**: 净流出{sector['net_outflow']:.1f}亿，{change_label}{change:+.2f}% ({risk_level})")
-    else:
-        report.append("**暂无明确风险板块**")
-    report.append("")
-    
-    # 5. 市场关注度分析（热榜）
-    report.append("### 5. 市场关注度分析")
-    hot_sectors = market_analysis.get('hot_sectors', [])
-    if hot_sectors:
-        # AI归纳产业链
-        all_concepts = [sector for sector, _ in hot_sectors]
-        concept_chains = ai_group_concepts_into_chains(all_concepts)
-        
-        report.append("**热榜关注产业链**（AI归纳，热度前30个股概念分布）：")
-        for chain_name, concepts in concept_chains.items():
-            total_count = sum(count for sector, count in hot_sectors if sector in concepts)
-            if len(concepts) > 1:
-                report.append(f"- **{chain_name}**: {total_count}只股票 (包含: {', '.join(concepts)})")
-            else:
-                report.append(f"- **{chain_name}**: {total_count}只股票")
-    else:
-        report.append("**热榜数据暂无**")
-    report.append("")
-    
-    report.append("")
-    report.append("---")
-    report.append("")
+    market_and_sector_analysis = build_market_and_sector_analysis_contract(
+        data,
+        market_analysis,
+        sh_change,
+        indices,
+        exit_analysis,
+        main_sectors_info,
+        secondary_sectors_info,
+        ai_group_concepts_into_chains=ai_group_concepts_into_chains,
+    )
+    report.extend(market_and_sector_analysis.get('lines', []))
     
     # 九、连板梯队（选股通数据）
     report.append("## 九、连板梯队")
@@ -17977,95 +17913,8 @@ def generate_markdown_report(
     report.append("---")
     report.append("")
     
-    # 十二、异动监控
-    report.append("## 十二、异动监控")
-    report.append("> **数据来源**: 异动检测API（监控交易所异动规则）")
-    report.append("")
-    
-    # 当日异动预警
-    report.append("### 1. 当日异动预警")
-    report.append("**说明**: 当日涨幅达到触发条件将触发交易所异动监控")
-    report.append("")
-    
-    today_predictions = data.get('exchange_monitor_today', [])
-    if today_predictions:
-        report.append("| 股票 | 代码 | 偏离天数 | 偏离度 | 触发条件 | 实际涨幅 | 触发状态 | 风险等级 |")
-        report.append("|------|------|----------|--------|----------|----------|----------|----------|")
-        for pred in today_predictions:
-            name = pred.get('name', '?')
-            code = pred.get('code', '?')
-            deviation_days = pred.get('deviation_days', 0)
-            deviation_pct = pred.get('deviation_pct', 0)
-            trigger_pct = pred.get('trigger_pct', 0)
-            actual_change = pred.get('actual_change_pct')
-            is_triggered = pred.get('is_triggered')
-            
-            # 风险等级评估
-            if deviation_days >= 20:
-                risk_level = "🔴 高风险"
-            elif deviation_days >= 10:
-                risk_level = "🟡 中风险"
-            else:
-                risk_level = "🟢 低风险"
-            
-            # 实际涨幅显示
-            if actual_change is not None:
-                actual_change_str = f"{actual_change:+.2f}%"
-            else:
-                actual_change_str = "N/A"
-            
-            # 触发状态
-            if is_triggered is True:
-                trigger_status = "✅ 已触发"
-            elif is_triggered is False:
-                trigger_status = "⏳ 未触发"
-            else:
-                trigger_status = "❓ 未知"
-            
-            report.append(
-                f"| {name} | {code} | {deviation_days}天 | {deviation_pct:.2f}% | "
-                f"{trigger_pct:+.2f}% | {actual_change_str} | {trigger_status} | {risk_level} |"
-            )
-        report.append("")
-    else:
-        report.append("**暂无当日异动预警**")
-        report.append("")
-    
-    # 次日异动预警
-    report.append("### 2. 次日异动预警")
-    report.append("**说明**: 次日涨幅达到触发条件将触发交易所异动监控")
-    report.append("")
-    
-    nextday_predictions = data.get('exchange_monitor_nextday', [])
-    if nextday_predictions:
-        report.append("| 股票 | 代码 | 偏离天数 | 偏离度 | 触发条件 | 风险等级 |")
-        report.append("|------|------|----------|--------|----------|----------|")
-        for pred in nextday_predictions:
-            name = pred.get('name', '?')
-            code = pred.get('code', '?')
-            deviation_days = pred.get('deviation_days', 0)
-            deviation_pct = pred.get('deviation_pct', 0)
-            trigger_pct = pred.get('trigger_pct', 0)
-            
-            # 风险等级评估
-            if deviation_days >= 20:
-                risk_level = "🔴 高风险"
-            elif deviation_days >= 10:
-                risk_level = "🟡 中风险"
-            else:
-                risk_level = "🟢 低风险"
-            
-            report.append(
-                f"| {name} | {code} | {deviation_days}天 | {deviation_pct:.2f}% | "
-                f"涨幅达{trigger_pct:+.2f}%触发 | {risk_level} |"
-            )
-        report.append("")
-    else:
-        report.append("**暂无次日异动预警**")
-        report.append("")
-    
-    report.append("---")
-    report.append("")
+    exchange_monitor_sections = build_exchange_monitor_sections_contract(data)
+    report.extend(exchange_monitor_sections.get('lines', []))
 
     # 辅助函数：当Step 0预判为DIFFICULT且环境极端恶劣时，输出空仓结论
     def _build_no_trade_conclusion(report, target_date, prediction, reason, dt_count, up_down_ratio):
