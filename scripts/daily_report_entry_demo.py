@@ -90,6 +90,12 @@ from report.context_sections_renderer import (
 )
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.front_summary_renderer import render_front_digest, render_mvp_focus_summary
+from report.market_research_renderer import (
+    render_gem_breathing_pool_section,
+    render_gem_breathing_step2_section,
+    render_market_research_snapshot_section,
+    render_step0_follow_section,
+)
 from report.pk_decision_renderer import render_pk_decision_section
 from report.strategy_performance_renderer import render_strategy_performance_section
 
@@ -11858,71 +11864,22 @@ def _build_gem_20cm_observation_pool(gem_breathing_candidates=None, target_date=
 
 
 def _render_gem_breathing_step2_section(gem_observation_stocks=None, filtered_out_gem_candidates=None, display_mvp_mode=None):
-    gem_observation_stocks = gem_observation_stocks or []
-    filtered_out_gem_candidates = filtered_out_gem_candidates or []
-    if not gem_observation_stocks and not filtered_out_gem_candidates:
-        return []
-    if display_mvp_mode is None:
-        display_mvp_mode = DISPLAY_MVP_MODE
-    preview = gem_observation_stocks[:2] if display_mvp_mode else gem_observation_stocks[:4]
-    lines = [
-        '> **主线侧翼弹性层**：若主板强锚仍在，创业板20cm只作为主线白银弹性观察，不单列成独立战场。',
-        '> **观察纪律**：只先进观察池，先看均线粘合/蛇形走位能否继续走成右侧确认；确认前只观察不执行。',
-    ]
-    if filtered_out_gem_candidates:
-        filtered_preview = filtered_out_gem_candidates[:2] if display_mvp_mode else filtered_out_gem_candidates[:4]
-        filtered_text = '；'.join(
-            f"{item.get('name', '-')}({item.get('code', '-')})/{item.get('sector', '-')}：{item.get('filtered_reason', '-') or '-'}"
-            for item in filtered_preview
-        )
-        lines.append(f'> **主线过滤提示**：当前有20cm预启动样本，但因非主线被过滤：{filtered_text}')
-    if not preview:
-        lines.append('')
-        return lines
-    lines.extend([
-        '| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 预判强度 | 明日原则 |',
-        '|------|------|------|------|------------|----------|----------|----------|',
-    ])
-    for i, item in enumerate(preview, 1):
-        lines.append(
-            f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
-            f"{item.get('tier', '-') or '-'} | {item.get('abnormal_summary', item.get('note', '-')) or '-'} | "
-            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和60分钟确认，不满足继续观察 |"
-        )
-    lines.append('')
-    return lines
+    return render_gem_breathing_step2_section(
+        {
+            "gem_observation_stocks": gem_observation_stocks or [],
+            "filtered_out_gem_candidates": filtered_out_gem_candidates or [],
+            "display_mvp_mode": DISPLAY_MVP_MODE if display_mvp_mode is None else display_mvp_mode,
+        }
+    )
 
 
 def _render_gem_breathing_pool_section(gem_observation_stocks=None, filtered_out_gem_candidates=None):
-    gem_observation_stocks = gem_observation_stocks or []
-    filtered_out_gem_candidates = filtered_out_gem_candidates or []
-    if not gem_observation_stocks and not filtered_out_gem_candidates:
-        return []
-    lines = [
-        '#### Step 3.5 - 创业板20cm预启动观察池',
-        '> **核心问题**：哪些创业板20cm样本正在出现“均线粘合 + 蛇形走位 + K线呼吸感”，值得先保留观察权？',
-        '> **纪律**：这里只先进观察池，不直接给执行权；必须等后续右侧确认后，才评估是否升级到30%条件试错。',
-    ]
-    if filtered_out_gem_candidates:
-        filtered_text = '；'.join(
-            f"{item.get('name', '-')}({item.get('code', '-')})/{item.get('sector', '-')}：{item.get('filtered_reason', '-') or '-'}"
-            for item in filtered_out_gem_candidates[:4]
-        )
-        lines.append(f'> **主线过滤提示**：当前有20cm预启动样本，但因非主线被过滤：{filtered_text}')
-    lines.append('')
-    if not gem_observation_stocks:
-        return lines
-    lines.extend([
-        '| 股票 | 层级 | 预启动说明 | 观察动作 |',
-        '|------|------|------------|----------|',
-    ])
-    for item in gem_observation_stocks:
-        lines.append(
-            f"| {item.get('name', '-') }({item.get('code', '-')}) | {item.get('tier', '-') or item.get('core_level', '-')} | "
-            f"{item.get('note', item.get('abnormal_summary', '-'))} | {item.get('watch_anchor_note', item.get('tmr_forecast', '-'))} |"
-        )
-    lines.append('')
-    return lines
+    return render_gem_breathing_pool_section(
+        {
+            "gem_observation_stocks": gem_observation_stocks or [],
+            "filtered_out_gem_candidates": filtered_out_gem_candidates or [],
+        }
+    )
 
 
 def _build_gem_breathing_contract(candidate=None):
@@ -13459,133 +13416,39 @@ def _render_market_research_snapshot_section(market_research_snapshot, compact=F
         follow_verdict=follow_verdict,
         final_gate=market_research_snapshot.get('final_gate', {}) or {},
     )
-
-    if compact:
-        benchmark_change = _safe_float(observation.get('benchmark_change_pct', 0.0))
-        turnover = _safe_float(observation.get('turnover', 0.0))
-        competition_result = "主线待定"
-        competition_evidence = "先看趋势密度、异常承接和资金聚焦谁先胜出"
-        if competition_focus:
-            competition_result = f"{competition_focus.get('role', '观察线')} {competition_focus.get('sector', '-')}"
-            competition_evidence = competition_focus.get('evidence', competition_evidence)
-        lines = [
-            "### 🔬 市场研究快照",
-            f"- **盘面风险偏好**: 上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / 跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿",
-            f"- **主线焦点**: {competition_result}；{competition_evidence}",
-            f"- **风格背景**: {style_switch.get('style_label', '-') }；{style_switch.get('style_reason', '-')}",
-            f"- **异常承接证据**: {abnormal_projection.get('projection_label', '-')}；{abnormal_projection.get('projection_reason', '-')}",
-            f"- **明天能不能开仓**: {follow_verdict.get('label', '-') }；{follow_verdict.get('reason', '-')}",
-            f"- **统一状态判断**: {state_machine.get('energy_state', '-') }；{state_machine.get('state_reason', '-') }；{state_machine.get('flow_direction', '-')}",
-            "",
-        ]
-        return lines
-
-
-    benchmark_change = _safe_float(observation.get('benchmark_change_pct', 0.0))
-    turnover = _safe_float(observation.get('turnover', 0.0))
-    observation_result_parts = []
-    if state_machine.get('leading_line'):
-        observation_result_parts.append(f"热点聚焦{state_machine.get('leading_line')}")
-    elif observation.get('mainline_candidates'):
-        observation_result_parts.append(f"热点关注{observation.get('mainline_candidates', [''])[0]}")
-    if observation.get('densest_sector'):
-        observation_result_parts.append(
-            f"趋势密度最强{observation.get('densest_sector')}({observation.get('densest_sector_trend_count', 0)}只)"
-        )
-    observation_result_parts.append(
-        f"异常承接{observation.get('resilient_abnormal_count', 0)}强/{observation.get('failed_abnormal_count', 0)}弱"
-    )
-    observation_result = " / ".join([part for part in observation_result_parts if part]) or "热点和趋势仍待确认"
-
     competition_result = "主线待定"
     competition_evidence = "先看趋势密度、异常承接和资金聚焦谁先胜出"
-    competition_action = "研究优先于出手"
     if competition_focus:
         competition_result = f"{competition_focus.get('role', '观察线')} {competition_focus.get('sector', '-')}"
         competition_evidence = competition_focus.get('evidence', competition_evidence)
-        competition_action = competition_focus.get('action', competition_action)
 
-    risk_follow_hint = "先看风险偏好，再决定能否继续往下判断"
-    focus_follow_hint = "优先聚焦主线对象"
-    style_follow_hint = "背景参考，不直接触发动作"
-    abnormal_follow_hint = "允许继续进入下一步判断"
-    gate_follow_hint = "动作锚定到“明天能不能开仓”"
-
-    lines = [
-        "### 🔬 市场研究快照",
-        "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
-        "|----------|----------|----------|--------------|",
-        (
-            f"| 盘面风险偏好 | 热点/趋势/异常 | "
-            f"上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
-            f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / "
-            f"成交额{turnover:.0f}亿 | {risk_follow_hint} |"
-        ),
-        (
-            f"| 主线焦点 | {competition_result} | "
-            f"{competition_evidence} | {focus_follow_hint} |"
-        ),
-        (
-            f"| 主线内部轮动 | {rotation_snapshot.get('rotation_label', '-')} | "
-            f"{rotation_snapshot.get('summary_text', rotation_snapshot.get('rotation_reason', '-'))} | "
-            f"{rotation_snapshot.get('rotation_action', '-')} |"
-        ),
-        (
-            f"| 叙事节点 | {rotation_snapshot.get('narrative_label', '-')} | "
-            f"{rotation_snapshot.get('narrative_reason', '-')} | {rotation_snapshot.get('narrative_action', '-')} |"
-        ),
-        (
-            f"| 风格背景 | {style_switch.get('style_label', '-')} | "
-            f"{style_switch.get('evidence_text', '-')} | {style_follow_hint} |"
-        ),
-        (
-            f"| 异常承接证据 | {abnormal_projection.get('projection_label', '-')} | "
-            f"{abnormal_projection.get('projection_reason', '-')} | {abnormal_follow_hint} |"
-        ),
-        (
-            f"| 明天能不能开仓 | {follow_verdict.get('label', '-')} | "
-            f"{follow_verdict.get('reason', '-')} | {gate_follow_hint} |"
-        ),
-        "",
-        (
-            f"- **统一状态判断**: {state_machine.get('energy_state', '-')}；"
-            f"{state_machine.get('state_reason', '-')}；{state_machine.get('flow_direction', '-')}"
-        ),
-        (
-            f"- **龙头记忆**: 已保留{observation.get('leader_memory_count', 0)}只记忆资产，"
-            f"其中可信记忆{observation.get('trusted_tracking_count', 0)}只"
-        ),
-    ]
-    if observation.get('densest_sector'):
-        lines.append(
-            f"- **最强趋势密度**: {observation.get('densest_sector')} 当前有"
-            f"{observation.get('densest_sector_trend_count', 0)}只活跃趋势股"
-        )
-    if style_switch.get('style_reason'):
-        lines.append(f"- **风格说明**: {style_switch.get('style_reason')}")
-    if dialectical_decision:
-        lines.extend([
-            "### 🧠 辩证决策补充",
-            (
-                f"- **现在更像什么阶段**: {dialectical_decision.get('stage_label', '-')}；"
-                f"{dialectical_decision.get('stage_reason', '-')}"
-            ),
-            (
-                f"- **指数和赚钱效应是否背离**: {dialectical_decision.get('index_profit_relation', '-')}；"
-                f"{dialectical_decision.get('index_profit_reason', '-')}"
-            ),
-            (
-                f"- **赚钱效应现在往哪聚**: {dialectical_decision.get('focus_label', '-')}；"
-                f"{dialectical_decision.get('focus_action', '-') }"
-            ),
-            (
-                f"- **明天优先看哪类对象**: {dialectical_decision.get('candidate_focus', '-')}；"
-                f"{dialectical_decision.get('candidate_action', '-') }"
-            ),
-            f"- **什么情况下先不认这轮修复**: {' / '.join(dialectical_decision.get('falsification_conditions', []) or ['暂无'])}",
-        ])
-    lines.append("")
-    return lines
+    return render_market_research_snapshot_section(
+        {
+            "compact": compact,
+            "benchmark_change": _safe_float(observation.get('benchmark_change_pct', 0.0)),
+            "turnover": _safe_float(observation.get('turnover', 0.0)),
+            "observation": observation,
+            "competition_result": competition_result,
+            "competition_evidence": competition_evidence,
+            "rotation_label": rotation_snapshot.get('rotation_label', '-'),
+            "rotation_summary_text": rotation_snapshot.get('summary_text', rotation_snapshot.get('rotation_reason', '-')),
+            "rotation_action": rotation_snapshot.get('rotation_action', '-'),
+            "narrative_label": rotation_snapshot.get('narrative_label', '-'),
+            "narrative_reason": rotation_snapshot.get('narrative_reason', '-'),
+            "narrative_action": rotation_snapshot.get('narrative_action', '-'),
+            "style_label": style_switch.get('style_label', '-'),
+            "style_reason": style_switch.get('style_reason', '-'),
+            "style_evidence_text": style_switch.get('evidence_text', '-'),
+            "abnormal_projection_label": abnormal_projection.get('projection_label', '-'),
+            "abnormal_projection_reason": abnormal_projection.get('projection_reason', '-'),
+            "follow_verdict_label": follow_verdict.get('label', '-'),
+            "follow_verdict_reason": follow_verdict.get('reason', '-'),
+            "state_energy": state_machine.get('energy_state', '-'),
+            "state_reason": state_machine.get('state_reason', '-'),
+            "state_flow_direction": state_machine.get('flow_direction', '-'),
+            "dialectical_decision": dialectical_decision,
+        }
+    )
 
 
 def _render_step0_follow_section(step0_plan, market_research_snapshot, compact=False):
@@ -13595,63 +13458,26 @@ def _render_step0_follow_section(step0_plan, market_research_snapshot, compact=F
     style_switch = market_research_snapshot.get('style_switch', {}) or {}
     state_machine = market_research_snapshot.get('state_machine', {}) or {}
     abnormal_projection = market_research_snapshot.get('abnormal_projection', {}) or {}
-
-    if compact:
-        return [
-            f"**明日裁决**: {step0_plan.get('step0_prediction_cn', '-')}",
-            f"**裁决依据**: {step0_plan.get('step0_reason', '-')}",
-            f"**开盘前动作**: {step0_plan.get('step0_action', '-')}",
-            f"**盘面风险偏好**: 上证{observation.get('zt_count', 0)} / 跌停{observation.get('dt_count', 0)}；{state_machine.get('observation_summary', '-')}",
-            f"**主线焦点**: {observation.get('densest_sector', '暂无明确主线')}；趋势股{observation.get('densest_sector_trend_count', 0)}只",
-            f"**异常承接**: {observation.get('resilient_abnormal_count', 0)}强 / {observation.get('failed_abnormal_count', 0)}弱；{abnormal_projection.get('projection_label', '-')}",
-            f"**最终状态判断**: {state_machine.get('energy_state', '-') }；{state_machine.get('state_reason', '-')}",
-            "",
-            f"> **Step 0 结论**: {step0_plan.get('step0_reason', '-')}",
-            "",
-        ]
-
-    style_follow_hint = "背景参考，不直接触发动作"
-    risk_follow_hint = "先看风险偏好，再决定能否继续往下判断"
-    mainline_follow_hint = "优先聚焦主线对象"
-    abnormal_follow_hint = "允许继续进入下一步判断"
-    state_follow_hint = "动作锚定到“开盘前动作”"
-
-    lines = [
-        f"**明日裁决**: {step0_plan.get('step0_prediction_cn', '-')}",
-        f"**裁决依据**: {step0_plan.get('step0_reason', '-')}",
-        f"**开盘前动作**: {step0_plan.get('step0_action', '-')}",
-        "",
-        "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
-        "|----------|----------|----------|--------------|",
-        (
-            f"| 盘面风险偏好 | {observation.get('zt_count', 0)} / {observation.get('dt_count', 0)} | "
-            f"{state_machine.get('observation_summary', '-')} | {risk_follow_hint} |"
-        ),
-        (
-            f"| 风格背景 | {style_switch.get('style_label', '-')} | "
-            f"{style_switch.get('style_reason', '-')} | {style_follow_hint} |"
-        ),
-        (
-            f"| 主线焦点 | {observation.get('densest_sector', '暂无明确主线')} | "
-            f"趋势密度最强方向为{observation.get('densest_sector', '待确认')}，活跃趋势股"
-            f"{observation.get('densest_sector_trend_count', 0)}只 | {mainline_follow_hint} |"
-        ),
-        (
-            f"| 异常承接证据 | {observation.get('resilient_abnormal_count', 0)}强 / "
-            f"{observation.get('failed_abnormal_count', 0)}弱 | "
-            f"{abnormal_projection.get('projection_label', '-')} | {abnormal_follow_hint} |"
-        ),
-        (
-            f"| 最终状态判断 | {state_machine.get('energy_state', '-')} | "
-            f"{state_machine.get('state_reason', '-')} | {state_follow_hint} |"
-        ),
-        "",
-        f"> **Step 0 结论**: {step0_plan.get('step0_reason', '-')}",
-        "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日前30分钟先确认环境，真正买点一律等60分钟K线确认；买入后再用30分钟结构定止损。",
-        "",
-        "",
-    ]
-    return lines
+    return render_step0_follow_section(
+        {
+            "compact": compact,
+            "step0_prediction_cn": step0_plan.get('step0_prediction_cn', '-'),
+            "step0_reason": step0_plan.get('step0_reason', '-'),
+            "step0_action": step0_plan.get('step0_action', '-'),
+            "zt_count": observation.get('zt_count', 0),
+            "dt_count": observation.get('dt_count', 0),
+            "observation_summary": state_machine.get('observation_summary', '-'),
+            "style_label": style_switch.get('style_label', '-'),
+            "style_reason": style_switch.get('style_reason', '-'),
+            "densest_sector": observation.get('densest_sector', '暂无明确主线'),
+            "densest_sector_trend_count": observation.get('densest_sector_trend_count', 0),
+            "resilient_abnormal_count": observation.get('resilient_abnormal_count', 0),
+            "failed_abnormal_count": observation.get('failed_abnormal_count', 0),
+            "abnormal_projection_label": abnormal_projection.get('projection_label', '-'),
+            "state_energy": state_machine.get('energy_state', '-'),
+            "state_reason": state_machine.get('state_reason', '-'),
+        }
+    )
 
 
 def build_market_research_context_bundle(
