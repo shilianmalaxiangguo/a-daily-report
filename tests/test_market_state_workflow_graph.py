@@ -17,6 +17,10 @@ from domains.market_state.contracts import (
     WORKFLOW_KEY,
 )
 from domains.market_state.graph import build_market_state_graph
+from domains.market_state.registry import (
+    MarketStateRegistryBuildError,
+    build_market_state_registry,
+)
 from domains.market_state.runtime import run_market_state_analysis
 
 
@@ -65,6 +69,20 @@ class MarketStateWorkflowGraphTest(unittest.TestCase):
         self.assertEqual(args[0]["exports"], MARKET_STATE_EXPORT_KEYS)
         self.assertIn(NODE_MAINLINE_CANDIDATES, args[1])
         self.assertIn(NODE_ASSEMBLE_EXIT_ANALYSIS, args[1])
+
+    @patch("domains.market_state.registry.import_module")
+    @patch("domains.market_state.registry.build_market_state_node_module_map")
+    def test_build_market_state_registry_raises_clear_error_on_import_failure(
+        self, map_mock, import_mock
+    ):
+        map_mock.return_value = {NODE_MAINLINE_CANDIDATES: "missing_node_module"}
+        import_mock.side_effect = ImportError("boom")
+
+        with self.assertRaisesRegex(
+            MarketStateRegistryBuildError,
+            "Unable to load market_state node 'mainline_candidates'",
+        ):
+            build_market_state_registry()
 
 
 if __name__ == "__main__":
