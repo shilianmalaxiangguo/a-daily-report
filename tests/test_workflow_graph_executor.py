@@ -79,7 +79,10 @@ class WorkflowGraphExecutorTest(unittest.TestCase):
 
         self.assertEqual(result["errors"], ["node failed"])
         self.assertEqual(result["module_logs"][0], {"kind": "node-log"})
-        self.assertEqual(result["module_logs"][-1]["status"], "error")
+        executor_log = result["module_logs"][-1]
+        self.assertEqual(executor_log["module"], "workflow_graph.executor")
+        self.assertEqual(executor_log["node_key"], "start")
+        self.assertEqual(executor_log["status"], "error")
 
 
 if __name__ == "__main__":

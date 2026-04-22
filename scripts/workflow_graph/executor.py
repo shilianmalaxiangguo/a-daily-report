@@ -38,6 +38,12 @@ def _build_execution_order(workflow):
 
 
 def _normalize_result_collection(value):
+    """Normalize node result collections to a list.
+
+    - list/tuple values are copied to a list
+    - None becomes an empty list
+    - any other value becomes a single-item list containing that value
+    """
     if isinstance(value, (list, tuple)):
         return list(value)
     if value is None:
@@ -87,6 +93,11 @@ def execute_workflow_graph(workflow, registry, ctx=None):
             log_status = "error"
         elif not log_status:
             log_status = "success"
+        log_message = (
+            "workflow node completed with errors"
+            if node_errors
+            else "workflow node executed"
+        )
         state.update(result.get("state_patch") or {})
         node_results[node_key] = result
         module_logs.extend(node_module_logs)
@@ -97,7 +108,7 @@ def execute_workflow_graph(workflow, registry, ctx=None):
                 node_key,
                 f"run.{node_key}",
                 log_status,
-                "workflow node executed",
+                log_message,
                 export_keys=sorted((result.get("exports") or {}).keys()),
             )
         )
