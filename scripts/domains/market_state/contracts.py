@@ -18,6 +18,20 @@ MARKET_STATE_EXPORT_KEYS = [
     "exit_analysis",
 ]
 
+_NODE_MODULE_BY_KEY = {
+    NODE_MAINLINE_CANDIDATES: "infer_mainline_candidates",
+    NODE_ENVIRONMENT_SIGNAL: "infer_environment_signal",
+    NODE_MAINLINE_CONTINUITY: "infer_mainline_continuity",
+    NODE_RISK_PRESSURE: "infer_risk_pressure",
+    NODE_SECTOR_COMPETITION: "infer_sector_competition",
+    NODE_ASSEMBLE_EXIT_ANALYSIS: "assemble_exit_analysis",
+}
+
+
+def build_market_state_node_module_map():
+    """Map semantic node keys to node module basenames under domains.market_state.nodes."""
+    return dict(_NODE_MODULE_BY_KEY)
+
 
 def build_market_state_action_map():
     return {
