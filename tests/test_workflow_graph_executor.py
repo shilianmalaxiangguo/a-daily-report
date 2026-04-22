@@ -84,6 +84,55 @@ class WorkflowGraphExecutorTest(unittest.TestCase):
         self.assertEqual(executor_log["node_key"], "start")
         self.assertEqual(executor_log["status"], "error")
 
+    def test_execute_workflow_graph_rejects_cycle(self):
+        workflow = {
+            "workflow_key": "cycle_v1",
+            "nodes": [
+                {"key": "a", "kind": "infer"},
+                {"key": "b", "kind": "infer"},
+            ],
+            "edges": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "a"},
+            ],
+            "exports": [],
+        }
+
+        with self.assertRaises(ValueError):
+            execute_workflow_graph(workflow, {"a": lambda ctx: {}, "b": lambda ctx: {}}, {})
+
+    def test_execute_workflow_graph_skips_disabled_nodes_and_records_status(self):
+        workflow = {
+            "workflow_key": "skip_v1",
+            "nodes": [
+                {"key": "start", "kind": "infer"},
+                {"key": "optional", "kind": "infer", "enabled": False},
+            ],
+            "edges": [],
+            "exports": ["start_value"],
+        }
+
+        def start_node(ctx):
+            return {
+                "value": {"start_value": 1},
+                "exports": {"start_value": 1},
+                "state_patch": {"start_value": 1},
+                "module_logs": [],
+                "errors": [],
+                "control": {"status": "success"},
+            }
+
+        result = execute_workflow_graph(workflow, {"start": start_node}, {})
+
+        self.assertEqual(result["exports"]["start_value"], 1)
+        self.assertNotIn("optional", result["node_results"])
+        self.assertTrue(
+            any(
+                log.get("node_key") == "optional" and log.get("status") == "skipped"
+                for log in result["module_logs"]
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
