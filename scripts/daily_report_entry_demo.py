@@ -84,6 +84,7 @@ from risk.risk_bundle_runtime import build_risk_bundle_contract
 from report.action_plan_renderer import render_action_plan_section
 from report.appendix_renderer import render_execution_appendix
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
+from report.front_summary_renderer import render_front_digest, render_mvp_focus_summary
 from report.pk_decision_renderer import render_pk_decision_section
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
@@ -14297,60 +14298,34 @@ def _render_core_mvp_digest(
         fallback_mainline=exit_analysis.get('sector_name', ''),
     )
 
-    lines = [
-        "### 🧭 前台摘要",
-        f"- **先说结论**: {front_follow_action_text}",
-        f"- **市场现在什么状态**: {state_machine.get('energy_state', position_level)}；{state_machine.get('state_reason', position_reason)}",
-        f"- **明日主看方向**: {mainline_label}",
-    ]
-    if special_probe_text:
-        lines.append(f"- **特殊标的先看谁**: {special_probe_text}")
-    if philosophy_constraint_text:
-        lines.append(f"- **理念约束**: {philosophy_constraint_text}")
-    lines.append(f"- **底层逻辑**: {_get_contract_logic_digest_text()}")
-    if alignment_pool_text:
-        lines.append(f"- **方向站队池**: {alignment_pool_text}")
-    if rotation_snapshot.get('summary_text'):
-        lines.append(f"- **主线内部轮动**: {rotation_snapshot.get('summary_text')}")
-    if rotation_snapshot.get('narrative_text'):
-        lines.append(f"- **叙事节点**: {rotation_snapshot.get('narrative_text')}")
     weak_to_strong_context = _build_weak_to_strong_context(
         candidate=best_stock or watch_anchor,
         mainline_name=mainline_name,
         state_machine_snapshot=state_machine,
     )
-    if weak_to_strong_context.get('active'):
-        lines.append(f"- **弱转强先看谁**: {weak_to_strong_context.get('summary_text')}")
-    elif weak_to_strong_context.get('summary_text'):
-        lines.append(f"- **弱转强为什么先不做**: {weak_to_strong_context.get('summary_text')}")
-    lines.extend([
-        f"- **明天更适合怎么做**: {style_action_text}",
-        f"- **明天要防什么**: {' / '.join(risk_parts)}",
-        f"- **明天能不能开仓**: {can_open_text}",
-    ])
-    if dialectical_decision:
-        lines.append(
-            f"- **现在更像哪个阶段**: {dialectical_decision.get('stage_label', '-')}；{dialectical_decision.get('stage_action', '-')}"
-        )
-        lines.append(
-            f"- **指数和赚钱效应是否背离**: {dialectical_decision.get('index_profit_relation', '-')}"
-        )
-    if execution_framework_text:
-        lines.append(f"- **怎么执行**: {execution_framework_text}")
-    if compact:
-        keep_markers = (
-            "先说结论",
-            "市场现在什么状态",
-            "明日主看方向",
-            "特殊标的先看谁",
-            "明天更适合怎么做",
-            "明天要防什么",
-            "明天能不能开仓",
-            "怎么执行",
-        )
-        lines = [line for line in lines if line.startswith("###") or any(marker in line for marker in keep_markers)]
-    lines.append("")
-    return lines
+    return render_front_digest(
+        {
+            "headline": front_follow_action_text,
+            "state_text": f"{state_machine.get('energy_state', position_level)}；{state_machine.get('state_reason', position_reason)}",
+            "mainline_label": mainline_label,
+            "special_probe_text": special_probe_text,
+            "philosophy_constraint_text": philosophy_constraint_text,
+            "contract_logic_text": _get_contract_logic_digest_text(),
+            "alignment_pool_text": alignment_pool_text,
+            "rotation_summary_text": rotation_snapshot.get('summary_text', ''),
+            "rotation_narrative_text": rotation_snapshot.get('narrative_text', ''),
+            "weak_to_strong_active": bool(weak_to_strong_context.get('active')),
+            "weak_to_strong_summary_text": weak_to_strong_context.get('summary_text', ''),
+            "style_action_text": style_action_text,
+            "risk_parts": risk_parts,
+            "can_open_text": can_open_text,
+            "stage_label": dialectical_decision.get('stage_label', '') if dialectical_decision else '',
+            "stage_action": dialectical_decision.get('stage_action', '') if dialectical_decision else '',
+            "index_profit_relation": dialectical_decision.get('index_profit_relation', '') if dialectical_decision else '',
+            "execution_framework_text": execution_framework_text,
+            "compact": compact,
+        }
+    )
 
 
 def _render_mvp_focus_summary(
@@ -14432,87 +14407,80 @@ def _render_mvp_focus_summary(
         sector_ai_analysis=market_research_snapshot.get('sector_ai_analysis', {}) or {},
     )
 
-    lines = [
-        "### 🎯 明日MVP摘要",
-    ]
+    mainline_watch_preview = ""
+    crossline_watch_preview = ""
+    generic_watch_preview = ""
+    if watchlist:
+        mainline_watchlist, crossline_watchlist = _split_candidates_by_mainline(watchlist, mainline_name)
+        if mainline_watchlist:
+            mainline_watch_preview = _format_candidate_preview(
+                mainline_watchlist,
+                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
+                limit=2,
+            )
+        if crossline_watchlist:
+            crossline_watch_preview = _format_candidate_preview(
+                crossline_watchlist,
+                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
+                limit=2,
+            )
+        if not mainline_watchlist and not crossline_watchlist:
+            generic_watch_preview = _format_candidate_preview(
+                watchlist,
+                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
+                limit=3,
+            )
 
-    if special_probe_text:
-        lines.append(f"- **特殊标的先看谁**: {special_probe_text}")
-    if rotation_snapshot.get('summary_text'):
-        lines.append(f"- **主线内部轮动**: {rotation_snapshot.get('summary_text')}")
-    if rotation_snapshot.get('narrative_text'):
-        lines.append(f"- **叙事节点**: {rotation_snapshot.get('narrative_text')}")
+    gem_breathing_text = ""
+    filtered_gem_text = ""
     if gem_breathing_candidates:
         breathing_preview = " / ".join(
             f"{item.get('name', '-') }({item.get('code', '-')})[{item.get('tier', '-')}]"
             for item in gem_breathing_candidates[:2]
         )
         breathing_note = str(gem_breathing_candidates[0].get('note', '') or '').strip()
-        lines.append(f"- **创业板20cm预启动**: {breathing_preview}；{breathing_note}；只先进观察池，不直接给执行权")
+        gem_breathing_text = f"{breathing_preview}；{breathing_note}；只先进观察池，不直接给执行权"
     elif filtered_out_gem_candidates:
         filtered_preview = " / ".join(
             f"{item.get('name', '-')}({item.get('code', '-')})[{item.get('sector', '-')}]"
             for item in filtered_out_gem_candidates[:2]
         )
         filtered_note = str(filtered_out_gem_candidates[0].get('filtered_reason', '') or '').strip()
-        lines.append(f"- **创业板20cm预启动**: 当前有20cm预启动样本，但因非主线被过滤：{filtered_preview}；{filtered_note}")
+        filtered_gem_text = f"当前有20cm预启动样本，但因非主线被过滤：{filtered_preview}；{filtered_note}"
 
-    if watchlist:
-        mainline_watchlist, crossline_watchlist = _split_candidates_by_mainline(watchlist, mainline_name)
-        if mainline_watchlist:
-            watch_preview = _format_candidate_preview(
-                mainline_watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=2,
-            )
-            lines.append(f"- **主线研究对象**: {watch_preview}")
-        if crossline_watchlist:
-            cross_preview = _format_candidate_preview(
-                crossline_watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=2,
-            )
-            lines.append(f"- **其他方向谁在扛**: {cross_preview}")
-        if not mainline_watchlist and not crossline_watchlist:
-            watch_preview = _format_candidate_preview(
-                watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=3,
-            )
-            lines.append(f"- **观察池先看谁**: {watch_preview}")
-
+    abnormal_preview = ""
+    degraded_abnormal_text = ""
     if abnormal_watch_pool:
         abnormal_preview = " / ".join(
             f"{item.get('name', '-')}"
             f"({item.get('follow_state', '-')})"
             for item in abnormal_watch_pool[:3]
         )
-        lines.append(f"- **异常承接先看谁**: {abnormal_preview}")
     elif degraded_abnormal_watch_pool:
-        lines.append("- **异常承接先看谁**: 当前只有降级快照，先不把它当正式承接证据")
+        degraded_abnormal_text = "当前只有降级快照，先不把它当正式承接证据"
 
+    memory_preview = ""
     if leader_memory_bank:
         memory_preview = " / ".join(
             f"{item.get('name', '-')}"
             f"({item.get('sector', '-')})"
             for item in leader_memory_bank[:3]
         )
-        lines.append(f"- **龙头回看名单**: {memory_preview}")
 
+    core_preview = ""
     if core_stocks:
         core_preview = _format_candidate_preview(
             core_stocks,
             lambda item: f"{item.get('name', '-')}({item.get('core_level', '-')})",
             limit=2,
         )
-        lines.append(f"- **主线先盯谁**: {core_preview}")
+    cross_core_preview = ""
     if crossline_observation_stocks:
         cross_core_preview = _format_candidate_preview(
             crossline_observation_stocks,
             lambda item: f"{item.get('name', '-')}({item.get('core_level', '-')})",
             limit=2,
         )
-        lines.append(f"- **其他方向还看谁**: {cross_core_preview}")
 
     special_probe_verdict = _build_special_probe_verdict(
         abnormal_probe_group=abnormal_probe_group,
@@ -14554,72 +14522,68 @@ def _render_mvp_focus_summary(
     )
     branch_20cm = position_decision.get('branch_20cm', {}) or {}
     breathing_prep = branch_20cm.get('breathing_prep', {}) or {}
-    if special_probe_verdict.get('summary_text'):
-        lines.append(f"- **特殊探针**: {special_probe_verdict.get('summary_text')}")
+    special_probe_summary_text = special_probe_verdict.get('summary_text', '')
     if breathing_prep.get('active'):
         note = branch_20cm.get('reason') or breathing_prep.get('note') or '创业板20cm预启动观察。'
-        lines.append(f"- **创业板20cm预启动**: {note}；只先进观察池，不直接给执行权")
-
-    if structure_layer_text:
-        lines.append(f"- **明天能不能开仓**: {structure_layer_text}")
-    if cycle_triplet.get('observation_cycle'):
-        lines.append(f"- **观察周期**: {cycle_triplet.get('observation_cycle')}")
-    if cycle_triplet.get('intervention_cycle'):
-        lines.append(f"- **介入周期**: {cycle_triplet.get('intervention_cycle')}")
-    if cycle_triplet.get('exit_cycle'):
-        lines.append(f"- **退出周期**: {cycle_triplet.get('exit_cycle')}")
-
+        gem_breathing_text = f"{note}；只先进观察池，不直接给执行权"
+    delete_preview = ""
     if delete_group:
-        delete_preview = " / ".join(
-            f"{item.get('name', '-')}"
-            for item in delete_group[:2]
-        )
-        lines.append(f"- **明天先别碰谁**: {delete_preview}")
+        delete_preview = " / ".join(f"{item.get('name', '-')}" for item in delete_group[:2])
 
+    buy_target_text = ""
+    watch_target_text = ""
+    no_trade_text = ""
     if final_gate.get('can_new_entry') and best_stock:
-        lines.append(
-            f"- **如果要买只买谁**: {best_stock.get('name', '-')}({best_stock.get('code', '-')})，"
-            "只等60分钟确认，不追盘中情绪顶点"
-        )
+        buy_target_text = f"{best_stock.get('name', '-')}({best_stock.get('code', '-')})，只等60分钟确认，不追盘中情绪顶点"
     elif watch_anchor:
         watch_anchor_note = str(watch_anchor.get('watch_anchor_note', '') or '').strip()
         if final_gate.get('can_new_entry'):
-            lines.append(
-                f"- **明天先盯哪只**: {watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')})，"
+            watch_target_text = (
+                f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')})，"
                 "先看60分钟确认，只有走成明天唯一能买的那只才允许买入"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
             )
         else:
             watch_anchor_label = f'（{watch_anchor_type}）' if str(watch_anchor_type or '').strip() else ''
-            lines.append(
-                f"- **明天重点观察谁**: {watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')}){watch_anchor_label}，"
+            watch_target_text = (
+                f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')}){watch_anchor_label}，"
                 "只看强弱，不构成买入指令"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
             )
     else:
-        lines.append("- **明天到底怎么做**: 当前无新增执行对象，只保留市场研究与观察权")
+        no_trade_text = "当前无新增执行对象，只保留市场研究与观察权"
 
+    bridge_prep_label = ""
+    bridge_prep_text = ""
     if bridge_prep.get('active'):
-        bridge_label = '条件执行预备态（优先保留）' if bridge_prep.get('priority_keep') else '条件执行预备态'
-        lines.append(
-            f"- **{bridge_label}**: {bridge_prep.get('candidate_label', '-')}，{bridge_prep.get('upgrade_text', '-')}"
-        )
+        bridge_prep_label = '条件执行预备态（优先保留）' if bridge_prep.get('priority_keep') else '条件执行预备态'
+        bridge_prep_text = f"{bridge_prep.get('candidate_label', '-')}，{bridge_prep.get('upgrade_text', '-')}"
 
     mainline_abnormal_probe = abnormal_probe_group.get('mainline_abnormal_probe')
     crossline_abnormal_probe = abnormal_probe_group.get('crossline_abnormal_probe')
     validation_probe = abnormal_probe_group.get('validation_probe')
     fallback_watch_anchor = abnormal_probe_group.get('fallback_watch_anchor') or watch_anchor or {}
+    mainline_probe_text = ""
     if mainline_abnormal_probe or fallback_watch_anchor:
-        lines.append(
-            f"- **主线异动里先看谁**: {_format_abnormal_probe_text(mainline_abnormal_probe, role_label='主线异动里先看谁', mainline_name=mainline_name, fallback_watch_anchor=fallback_watch_anchor)}"
+        mainline_probe_text = _format_abnormal_probe_text(
+            mainline_abnormal_probe,
+            role_label='主线异动里先看谁',
+            mainline_name=mainline_name,
+            fallback_watch_anchor=fallback_watch_anchor,
         )
+    crossline_probe_text = ""
     if crossline_abnormal_probe:
-        lines.append(
-            f"- **跨线异动里先看谁**: {_format_abnormal_probe_text(crossline_abnormal_probe, role_label='跨线异动里先看谁', mainline_name=mainline_name)}"
+        crossline_probe_text = _format_abnormal_probe_text(
+            crossline_abnormal_probe,
+            role_label='跨线异动里先看谁',
+            mainline_name=mainline_name,
         )
+    validation_probe_text = ""
     if validation_probe:
-        lines.append(
-            f"- **承接验证先看谁**: {_format_abnormal_probe_text(validation_probe, role_label='承接验证先看谁', mainline_name=mainline_name)}"
+        validation_probe_text = _format_abnormal_probe_text(
+            validation_probe,
+            role_label='承接验证先看谁',
+            mainline_name=mainline_name,
         )
 
     front_follow_action_text = _build_front_follow_action_text(
@@ -14636,29 +14600,39 @@ def _render_mvp_focus_summary(
         target_date=target_date,
         special_probe_verdict=special_probe_verdict,
     )
-    lines.append(
-        f"- **明日唯一动作**: {front_follow_action_text}"
+    return render_mvp_focus_summary(
+        {
+            "special_probe_text": special_probe_text,
+            "rotation_summary_text": rotation_snapshot.get('summary_text', ''),
+            "rotation_narrative_text": rotation_snapshot.get('narrative_text', ''),
+            "gem_breathing_text": gem_breathing_text,
+            "filtered_gem_text": filtered_gem_text,
+            "mainline_watch_preview": mainline_watch_preview,
+            "crossline_watch_preview": crossline_watch_preview,
+            "generic_watch_preview": generic_watch_preview,
+            "abnormal_preview": abnormal_preview,
+            "degraded_abnormal_text": degraded_abnormal_text,
+            "memory_preview": memory_preview,
+            "core_preview": core_preview,
+            "cross_core_preview": cross_core_preview,
+            "special_probe_summary_text": special_probe_summary_text,
+            "structure_layer_text": structure_layer_text,
+            "observation_cycle": cycle_triplet.get('observation_cycle', ''),
+            "intervention_cycle": cycle_triplet.get('intervention_cycle', ''),
+            "exit_cycle": cycle_triplet.get('exit_cycle', ''),
+            "delete_preview": delete_preview,
+            "buy_target_text": buy_target_text,
+            "watch_target_text": watch_target_text,
+            "no_trade_text": no_trade_text,
+            "bridge_prep_label": bridge_prep_label,
+            "bridge_prep_text": bridge_prep_text,
+            "mainline_probe_text": mainline_probe_text,
+            "crossline_probe_text": crossline_probe_text,
+            "validation_probe_text": validation_probe_text,
+            "front_follow_action_text": front_follow_action_text,
+            "compact": compact,
+        }
     )
-    if compact:
-        keep_markers = (
-            "特殊标的先看谁",
-            "主线研究对象",
-            "观察池先看谁",
-            "异常承接先看谁",
-            "龙头回看名单",
-            "创业板20cm预启动",
-            "弱转强先看谁",
-            "弱转强为什么先不做",
-            "明天能不能开仓",
-            "观察周期",
-            "介入周期",
-            "退出周期",
-            "明天先别碰谁",
-            "明日唯一动作",
-        )
-        lines = [line for line in lines if line.startswith("###") or any(marker in line for marker in keep_markers)]
-    lines.append("")
-    return lines
 
 
 def _find_report_line_index(lines, marker, start=0, match_mode='equals'):
