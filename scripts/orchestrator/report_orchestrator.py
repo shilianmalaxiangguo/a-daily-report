@@ -8,6 +8,7 @@ from hooks.knowledge.use_trading_philosophy import run as run_trading_philosophy
 from hooks.persist.use_snapshot_persistence import run as run_snapshot_persistence
 from hooks.report.use_markdown_document import run as run_markdown_document
 from hooks.report.use_report_sections import run as run_report_sections
+from hooks.report.use_report_stages import run as run_report_stages
 from orchestrator.pipeline_runner import run_pipeline
 
 
@@ -20,6 +21,7 @@ def build_report(request):
         ("infer.execution_permission", run_execution_permission),
         ("knowledge.trading_philosophy", run_trading_philosophy),
         ("decision.action_plan", run_action_plan),
+        ("report.stages", run_report_stages),
         ("report.sections", run_report_sections),
         ("report.markdown_document", run_markdown_document),
         ("persist.snapshot", run_snapshot_persistence),

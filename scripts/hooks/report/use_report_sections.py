@@ -59,6 +59,11 @@ def _build_review_section(knowledge):
 
 
 def _build_summary_section(phase, primary_line, contract_label, permission, knowledge):
+    return _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, [])
+
+
+def _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, report_stages):
+    stage_keys = [str(item.get("stage_key", "") or "").strip() for item in (report_stages or []) if str(item.get("stage_key", "") or "").strip()]
     return "\n".join(
         [
             "## Summary",
@@ -67,6 +72,7 @@ def _build_summary_section(phase, primary_line, contract_label, permission, know
             f"- strategy_contract: {contract_label}",
             f"- execution_permission: {permission}",
             f"- philosophy_version: {knowledge.get('version', 'unknown')}",
+            f"- stage_keys: {', '.join(stage_keys) if stage_keys else '-'}",
         ]
     )
 
@@ -81,6 +87,7 @@ def run(ctx):
     market_phase = derived.get("market_phase") or {}
     mainline = derived.get("mainline") or {}
     strategy_contract = derived.get("strategy_contract") or {}
+    report_stages = derived.get("report_stages") or []
     action_plan = decision.get("action_plan") or {}
     execution_permission = decision.get("execution_permission") or derived.get("execution_permission") or {}
 
@@ -103,7 +110,7 @@ def run(ctx):
         "observation": _build_observation_section(primary_line, strategy_contract, knowledge),
         "execution": _build_execution_section(contract_label, permission, action_plan, knowledge),
         "review": _build_review_section(knowledge),
-        "summary": _build_summary_section(phase, primary_line, contract_label, permission, knowledge),
+        "summary": _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, report_stages),
     }
 
     return {

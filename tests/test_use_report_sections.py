@@ -22,6 +22,11 @@ class UseReportSectionsTest(unittest.TestCase):
                         "contract_label": "conditional_entry",
                         "contract_logic_digest_text": "先选边站队，再等确认",
                     },
+                    "report_stages": [
+                        {"stage_key": "market_environment", "title": "市场环境", "summary": "环境放行", "status": "ready"},
+                        {"stage_key": "selection_focus", "title": "主线与筛选", "summary": "军工最强", "status": "ready"},
+                        {"stage_key": "execution_gate", "title": "执行门控", "summary": "等60分钟确认", "status": "blocked"},
+                    ],
                 },
                 "decision": {
                     "execution_permission": {"label": "conditional_30"},
@@ -56,6 +61,7 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertIn("沿军工保留30%条件试错", sections["execution"])
         self.assertIn("交易思想版本：2026-04-22", sections["review"])
         self.assertIn("strategy_contract: conditional_entry", sections["summary"])
+        self.assertIn("market_environment", sections["summary"])
 
 
 if __name__ == "__main__":
