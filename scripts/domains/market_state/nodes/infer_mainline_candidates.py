@@ -12,13 +12,20 @@ def run(ctx):
     inflow_sectors = sector_fund_flow.get("inflow", []) or []
     outflow_sectors = sector_fund_flow.get("outflow", []) or []
 
+    def as_sector_item(item):
+        return item if isinstance(item, dict) else {}
+
     if enhanced_main_sectors:
         tracked_sector = str(enhanced_main_sectors[0] or "").strip()
     else:
         main_sectors = market_analysis.get("main_sectors", []) if market_analysis else []
         tracked_sector = str(((main_sectors[0] or {}).get("name", "")) if main_sectors else "").strip()
     if not tracked_sector and inflow_sectors:
-        tracked_sector = str((inflow_sectors[0] or {}).get("name", "") or "").strip()
+        for item in inflow_sectors:
+            sector_name = str(as_sector_item(item).get("name", "") or "").strip()
+            if sector_name:
+                tracked_sector = sector_name
+                break
 
     safe_float = helpers.get("safe_float", float)
 
@@ -27,7 +34,7 @@ def run(ctx):
             return safe_float(value, default=default)
         except TypeError:
             return None
-        except (TypeError, ValueError):
+        except ValueError:
             return default
 
     def _safe_float_basic(value):
@@ -50,13 +57,15 @@ def run(ctx):
 
     inflow_map = {}
     for item in inflow_sectors:
-        sector_name = item.get("name", "")
-        inflow_map[sector_name] = parse_float(item.get("zljlr", 0), default=0.0)
+        sector_item = as_sector_item(item)
+        sector_name = sector_item.get("name", "")
+        inflow_map[sector_name] = parse_float(sector_item.get("zljlr", 0), default=0.0)
 
     outflow_map = {}
     for item in outflow_sectors:
-        sector_name = item.get("name", "")
-        outflow_map[sector_name] = abs(parse_float(item.get("zljlr", 0), default=0.0))
+        sector_item = as_sector_item(item)
+        sector_name = sector_item.get("name", "")
+        outflow_map[sector_name] = abs(parse_float(sector_item.get("zljlr", 0), default=0.0))
     zt_pool_by_sector = data.get("zt_pool_by_sector", {}) or {}
     dt_pool_by_sector = data.get("dt_pool_by_sector", {}) or {}
 
@@ -100,8 +109,6 @@ def run(ctx):
         "hot_weight": hot_weight,
         "inflow_history": inflow_history,
         "mainline_snapshot": mainline_snapshot,
-        "zt_pool_by_sector": zt_pool_by_sector,
-        "dt_pool_by_sector": dt_pool_by_sector,
     }
     state_patch = dict(mainline_candidates)
     state_patch["mainline_candidates"] = mainline_candidates

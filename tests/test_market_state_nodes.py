@@ -24,8 +24,8 @@ class MarketStateNodesTest(unittest.TestCase):
                 "inputs": {
                     "data": {
                         "sector_fund_flow": {
-                            "inflow": [{"name": "军工", "zljlr": "12.5"}],
-                            "outflow": [{"name": "军工", "zljlr": "-3.2"}, {"name": "地产", "zljlr": None}],
+                            "inflow": [None, {"name": "军工", "zljlr": "12.5"}],
+                            "outflow": [None, {"name": "军工", "zljlr": "-3.2"}, {"name": "地产", "zljlr": None}],
                         },
                         "zt_pool_by_sector": {"军工": [{"name": "A"}, {"name": "B"}]},
                         "dt_pool_by_sector": {"军工": []},
@@ -59,6 +59,8 @@ class MarketStateNodesTest(unittest.TestCase):
         self.assertEqual(exports["mainline_snapshot"]["star_rank"], 4)
         self.assertIn("mainline_candidates", exports)
         self.assertEqual(exports["mainline_candidates"]["tracked_sector"], "军工")
+        self.assertNotIn("zt_pool_by_sector", exports)
+        self.assertNotIn("dt_pool_by_sector", exports)
         self.assertNotIn("zt_pool_by_sector", result["state_patch"])
         self.assertNotIn("dt_pool_by_sector", result["state_patch"])
 
