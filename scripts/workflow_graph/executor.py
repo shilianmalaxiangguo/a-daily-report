@@ -1,3 +1,15 @@
+"""Workflow graph executor for Task 1 happy-path orchestration.
+
+Node implementations are expected to return a dict that may include:
+- exports: values exposed for downstream nodes and workflow exports
+- state_patch: partial state updates merged into shared workflow state
+- module_logs: list of module log entries produced by the node
+- errors: list of error entries produced by the node
+- control.status (optional): explicit node status for executor trace logs
+"""
+
+from collections import deque
+
 from workflow_graph.registry import resolve_workflow_node
 from workflow_graph.trace import make_workflow_node_log
 
@@ -12,10 +24,10 @@ def _build_execution_order(workflow):
         target = edge["to"]
         children[source].append(target)
         indegree[target] += 1
-    queue = [key for key in nodes if indegree[key] == 0]
+    queue = deque([key for key in nodes if indegree[key] == 0])
     ordered = []
     while queue:
-        node_key = queue.pop(0)
+        node_key = queue.popleft()
         ordered.append(node_key)
         for child in children[node_key]:
             indegree[child] -= 1
@@ -34,8 +46,9 @@ def execute_workflow_graph(workflow, registry, ctx=None):
     module_logs = []
     errors = []
     edges = workflow.get("edges", [])
+    execution_order = _build_execution_order(workflow)
 
-    for node_key in _build_execution_order(workflow):
+    for node_key in execution_order:
         node_impl = resolve_workflow_node(registry, node_key)
         upstream = {}
         for edge in edges:
@@ -57,16 +70,21 @@ def execute_workflow_graph(workflow, registry, ctx=None):
             "config": config,
         }
         result = node_impl(node_ctx) or {}
+        node_errors = result.get("errors") or []
+        control = result.get("control") or {}
+        log_status = control.get("status")
+        if not log_status:
+            log_status = "error" if node_errors else "success"
         state.update(result.get("state_patch") or {})
         node_results[node_key] = result
         module_logs.extend(result.get("module_logs") or [])
-        errors.extend(result.get("errors") or [])
+        errors.extend(node_errors)
         module_logs.append(
             make_workflow_node_log(
                 "workflow_graph.executor",
                 node_key,
                 f"run.{node_key}",
-                "success",
+                log_status,
                 "workflow node executed",
                 export_keys=sorted((result.get("exports") or {}).keys()),
             )
@@ -74,7 +92,7 @@ def execute_workflow_graph(workflow, registry, ctx=None):
 
     exports = {}
     for export_key in workflow.get("exports", []):
-        for node_key in reversed(_build_execution_order(workflow)):
+        for node_key in reversed(execution_order):
             node_exports = (node_results.get(node_key) or {}).get("exports") or {}
             if export_key in node_exports:
                 exports[export_key] = node_exports[export_key]
