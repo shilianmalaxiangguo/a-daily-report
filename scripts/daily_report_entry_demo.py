@@ -119,6 +119,9 @@ from risk.a_kill_blacklist_store import (
 )
 from selection.candidate_bundle_runtime import build_candidate_bundle_contract
 from risk.risk_bundle_runtime import build_risk_bundle_contract
+from hooks.report.use_execution_appendix_tail import run as run_execution_appendix_tail
+from hooks.report.use_strategy_performance_tail import run as run_strategy_performance_tail
+from hooks.report.use_report_tail_summary import run as run_report_tail_summary
 from report.action_plan_renderer import render_action_plan_section
 from report.appendix_renderer import render_execution_appendix
 from report.context_sections_renderer import (
@@ -17643,185 +17646,124 @@ def generate_markdown_report(
         "<!-- MVP_FOCUS_SUMMARY_PLACEHOLDER -->",
         execution_stage_context.get("mvp_focus_summary_lines", []),
     )
-    abnormal_probe_parts = []
-    if abnormal_probe_group:
-        mainline_probe_text = _format_abnormal_probe_text(
-            abnormal_probe_group.get('mainline_abnormal_probe'),
-            role_label='主线异动里先看谁',
-            mainline_name=mainline_name,
-            fallback_watch_anchor=abnormal_probe_group.get('fallback_watch_anchor'),
-        )
-        crossline_probe_text = _format_abnormal_probe_text(
-            abnormal_probe_group.get('crossline_abnormal_probe'),
-            role_label='跨线异动里先看谁',
-            mainline_name=mainline_name,
-        )
-        validation_probe_text = _format_abnormal_probe_text(
-            abnormal_probe_group.get('validation_probe'),
-            role_label='承接验证先看谁',
-            mainline_name=mainline_name,
-        )
-        if mainline_probe_text:
-            abnormal_probe_parts.append(f"主线异动里先看谁：{mainline_probe_text}")
-        if crossline_probe_text:
-            abnormal_probe_parts.append(f"跨线异动里先看谁：{crossline_probe_text}")
-        if validation_probe_text:
-            abnormal_probe_parts.append(f"承接验证先看谁：{validation_probe_text}")
-
-    report.extend(
-        build_legacy_final_conclusion_lines(
-            {
+    tail_summary_result = run_report_tail_summary(
+        {
+            "inputs": {
                 "display_mvp_mode": DISPLAY_MVP_MODE,
                 "step0_prediction": step0_prediction,
                 "step0_prediction_cn": step0_prediction_cn,
                 "step0_action": step0_action,
                 "final_gate": final_gate,
                 "mainline_name": mainline_name,
-                "mainline_label": _build_front_mainline_label(
-                    market_research_snapshot,
-                    fallback_mainline=mainline_name or "",
-                ),
-                "watchlist_count": len(watchlist),
-                "core_count": len(core_stocks),
-                "secondary_count": len(secondary_stocks),
-                "crossline_count": len(step2_bundle.get('crossline_observation_stocks', [])),
-                "abnormal_watch_count": len(abnormal_watch_pool),
+                "market_research_snapshot": market_research_snapshot,
+                "watchlist": watchlist,
+                "core_stocks": core_stocks,
+                "secondary_stocks": secondary_stocks,
+                "step2_bundle": step2_bundle,
+                "abnormal_watch_pool": abnormal_watch_pool,
                 "front_structure_layer_text": front_structure_layer_text,
                 "trade_gate_open": trade_gate_open,
                 "best_stock": best_stock,
                 "watch_anchor": watch_anchor,
                 "watch_anchor_type": watch_anchor_type,
                 "front_follow_action_text": front_follow_action_text,
-                "abnormal_probe_parts": abnormal_probe_parts,
-            }
-        )
-    )
-    
-    # 核心交易哲学 / 补充视角 / AI市场洞察总结
-    mainline_name = exit_analysis.get('sector_name', '')
-    report.extend(render_mainline_discipline_section(mainline_name))
-    report.extend(render_supplementary_perspective_section(supplementary_perspective))
-
-    mainline_from_exit = exit_analysis.get('sector_name', '') if exit_analysis else ''
-    if mainline_from_exit:
-        main_sectors_str = mainline_from_exit
-    elif main_sectors_info:
-        main_sector_names = [s['name'] for s in main_sectors_info[:2]]
-        main_sectors_str = "、".join(main_sector_names)
-    else:
-        main_sectors_str = "暂无明确主线"
-    
-    if risk_sectors:
-        risk_sector_names = [s['name'] for s in risk_sectors[:2]]
-        risk_sectors_str = "、".join(risk_sector_names)
-    else:
-        risk_sectors_str = "暂无明确风险"
-
-    report.extend(
-        render_ai_market_insight_section(
-            {
+                "abnormal_probe_group": abnormal_probe_group,
+                "exit_analysis": exit_analysis,
+                "main_sectors_info": main_sectors_info,
+                "main_sectors": main_sectors,
+                "risk_sectors": risk_sectors,
                 "market_trend": market_trend,
                 "zt_count": zt_count,
                 "dt_count": dt_count,
-                "energy_state": market_state_snapshot.get('energy_state', '未知'),
-                "flow_direction": market_state_snapshot.get('flow_direction', '-'),
-                "mainline_text": main_sectors_str,
-                "risk_text": risk_sectors_str,
-                "focus_text": f"{main_sectors_str if main_sectors_str != '暂无明确主线' else '市场整体'}持续性，量能变化，板块轮动",
-            }
-        )
-    )
-
-    strategy_factor_snapshot = _build_strategy_factor_snapshot(
-        target_date,
-        data,
-        market_zhongshu,
-        final_gate,
-        exit_analysis,
-        position_level,
-        position_reason,
-        {
-            'best_stock': best_stock,
-            'runner_up': runner_up,
-            'watch_anchor': watch_anchor,
-            'watch_anchor_type': watch_anchor_type,
-            'abnormal_probe_group': abnormal_probe_group,
-            'market_research_snapshot': market_research_snapshot,
-            'abnormal_watch_pool': abnormal_watch_pool,
-            'leader_memory_bank': leader_memory_bank,
-            'tracking_memory_status': tracking_memory_status,
-            'sector_trend_snapshot': sector_trend_snapshot,
-            'main_sectors_info': main_sectors_info or [{'name': name} for name in main_sectors[:2]],
-            'secondary_sectors_info': secondary_sectors_info or [{'name': name} for name in secondary_sectors[:2]],
-            'mainline_in_quadrant': mainline_in_quadrant,
-            'mainline_score': mainline_score,
-            'scored_executable_stocks': scored_executable_stocks,
-            'position_decision': position_decision,
-        },
-    )
-    strategy_plan_context = _build_strategy_plan_context(
-        target_date,
-        data,
-        market_zhongshu,
-        final_gate,
-        exit_analysis,
-        position_level,
-        position_reason,
-        best_stock=best_stock,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        factor_snapshot=strategy_factor_snapshot,
-    )
-    if persist_strategy_tracking:
-        strategy_performance_summary = update_strategy_performance_book(
-            data,
-            target_date,
-            strategy_plan_context,
-            market_zhongshu,
-            ledger_mode=run_mode,
-        )
-        data['strategy_tracking'] = {
-            'plan': strategy_plan_context,
-            'performance_summary': strategy_performance_summary,
+                "market_state_snapshot": market_state_snapshot,
+                "supplementary_perspective": supplementary_perspective,
+            },
+            "helpers": {
+                "format_abnormal_probe_text": _format_abnormal_probe_text,
+                "build_front_mainline_label": _build_front_mainline_label,
+                "build_legacy_final_conclusion_lines": build_legacy_final_conclusion_lines,
+                "render_mainline_discipline_section": render_mainline_discipline_section,
+                "render_supplementary_perspective_section": render_supplementary_perspective_section,
+                "render_ai_market_insight_section": render_ai_market_insight_section,
+            },
         }
-    else:
-        strategy_tracking = data.get('strategy_tracking', {}) or {}
-        strategy_performance_summary = strategy_tracking.get('performance_summary')
-        if not strategy_performance_summary:
-            strategy_performance_summary = update_strategy_performance_book(
-                data,
-                target_date,
-                strategy_plan_context,
-                market_zhongshu,
-                ledger_mode=run_mode,
-            )
-            data['strategy_tracking'] = {
-                'plan': strategy_plan_context,
-                'performance_summary': strategy_performance_summary,
-            }
-    append_strategy_performance_section(report, strategy_performance_summary)
+    )
+    tail_summary_value = tail_summary_result.get("value", {}) or {}
+    tail_summary_exports = tail_summary_value.get("exports", {}) or {}
+    report.extend(tail_summary_value.get("lines", []))
+    data.setdefault("module_logs", []).extend(tail_summary_value.get("module_logs", []))
+    abnormal_probe_parts = tail_summary_exports.get("abnormal_probe_parts", [])
+
+    strategy_tail_result = run_strategy_performance_tail(
+        {
+            "inputs": {
+                "target_date": target_date,
+                "data": data,
+                "market_zhongshu": market_zhongshu,
+                "final_gate": final_gate,
+                "exit_analysis": exit_analysis,
+                "position_level": position_level,
+                "position_reason": position_reason,
+                "best_stock": best_stock,
+                "watch_anchor": watch_anchor,
+                "watch_anchor_type": watch_anchor_type,
+                "persist_strategy_tracking": persist_strategy_tracking,
+                "run_mode": run_mode,
+                "factor_context": {
+                    'best_stock': best_stock,
+                    'runner_up': runner_up,
+                    'watch_anchor': watch_anchor,
+                    'watch_anchor_type': watch_anchor_type,
+                    'abnormal_probe_group': abnormal_probe_group,
+                    'market_research_snapshot': market_research_snapshot,
+                    'abnormal_watch_pool': abnormal_watch_pool,
+                    'leader_memory_bank': leader_memory_bank,
+                    'tracking_memory_status': tracking_memory_status,
+                    'sector_trend_snapshot': sector_trend_snapshot,
+                    'main_sectors_info': main_sectors_info or [{'name': name} for name in main_sectors[:2]],
+                    'secondary_sectors_info': secondary_sectors_info or [{'name': name} for name in secondary_sectors[:2]],
+                    'mainline_in_quadrant': mainline_in_quadrant,
+                    'mainline_score': mainline_score,
+                    'scored_executable_stocks': scored_executable_stocks,
+                    'position_decision': position_decision,
+                },
+            },
+            "helpers": {
+                "build_strategy_factor_snapshot": _build_strategy_factor_snapshot,
+                "build_strategy_plan_context": _build_strategy_plan_context,
+                "update_strategy_performance_book": update_strategy_performance_book,
+                "append_strategy_performance_section": append_strategy_performance_section,
+            },
+        }
+    )
+    strategy_tail_value = strategy_tail_result.get("value", {}) or {}
+    report.extend(strategy_tail_value.get("lines", []))
+    data.setdefault("module_logs", []).extend(strategy_tail_value.get("module_logs", []))
     
     # 【已删除v2.3.34】十五、隔日操作计划（功能与狙击手视角重复，用户要求移除）
     
 
-    timer_summary = data.get('timer_summary', {})
-    step_status = data.get('step_status', {})
-    normalized_timer_steps = _normalize_report_timer_steps(timer_summary, step_status) if timer_summary else []
-    total_time = timer_summary.get('total_time', 0) if timer_summary else 0
     import datetime as _dt
-    report.extend(
-        render_execution_appendix(
-            {
+
+    execution_appendix_result = run_execution_appendix_tail(
+        {
+            "inputs": {
                 "data_status": data.get('data_status', {}),
-                "step_status": step_status,
-                "normalized_timer_steps": normalized_timer_steps,
-                "total_time": total_time,
+                "step_status": data.get('step_status', {}),
+                "timer_summary": data.get('timer_summary', {}),
                 "target_date": target_date,
                 "generated_at": _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "report_version": "v2.5.0",
-            }
-        )
+            },
+            "helpers": {
+                "normalize_report_timer_steps": _normalize_report_timer_steps,
+                "render_execution_appendix": render_execution_appendix,
+            },
+        }
     )
+    execution_appendix_value = execution_appendix_result.get("value", {}) or {}
+    report.extend(execution_appendix_value.get("lines", []))
+    data.setdefault("module_logs", []).extend(execution_appendix_value.get("module_logs", []))
 
     if DISPLAY_MVP_MODE:
         report = _compact_report_for_mvp(report)

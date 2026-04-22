@@ -50,6 +50,9 @@
 - [x] 把 `risk_review` 从入口移入独立 stage：`scripts/domains/execution_chain/risk_review_stage.py`
 - [x] 把 `entry_plan` 从入口移入独立 stage：`scripts/domains/execution_chain/entry_plan_stage.py`
 - [x] 把 `pk_decision` 从入口移入独立 stage：`scripts/domains/execution_chain/pk_decision_stage.py`
+- [x] 把“最终结论 + 洞察尾部”从入口移入独立 hook：`scripts/hooks/report/use_report_tail_summary.py`
+- [x] 把“策略账本尾部”从入口移入独立 hook：`scripts/hooks/report/use_strategy_performance_tail.py`
+- [x] 把“执行附录尾部”从入口移入独立 hook：`scripts/hooks/report/use_execution_appendix_tail.py`
 - [ ] 把 `build_legacy_final_conclusion_lines` 接入动态 stage label，不再依赖固定 Step 文案
 - [ ] 把 `_compact_report_for_mvp()` 的截取规则改成 registry/key 驱动，移除固定 `Step x.y` 锚点
 - [ ] 把入口收敛成少量 `run_*` 入口函数，最终让主入口文件小于 `1000` 行
