@@ -81,8 +81,8 @@ from research.market_research_runtime import (
 )
 from selection.candidate_bundle_runtime import build_candidate_bundle_contract
 from risk.risk_bundle_runtime import build_risk_bundle_contract
-from report.legacy_stage_summary import build_legacy_report_stage_rows
-from report.stage_registry import build_report_stages
+from report.appendix_renderer import render_execution_appendix
+from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
 MARKET_ZHONGSHU_MIN_KLINES = 5
@@ -21661,198 +21661,59 @@ def generate_markdown_report(
                 report.append(f"| {name}({code}) | {deviation_days}天 | 次日{trigger_pct:+.2f}% | - | 次日观察 |")
 
     report.append("")
-    # 最终结论 - v3.0隔日模式 + PK决胜
-    report.append("#### 最终结论")
-    report.append("> **注**：以下结论基于今日收盘数据，预判明日操作。明日前30分钟先确认环境，买点一律等60分钟确认。")
-    report.append("")
-    if DISPLAY_MVP_MODE:
-        mainline_label = _build_front_mainline_label(
-            market_research_snapshot,
-            fallback_mainline=mainline_name or "",
+    abnormal_probe_parts = []
+    if abnormal_probe_group:
+        mainline_probe_text = _format_abnormal_probe_text(
+            abnormal_probe_group.get('mainline_abnormal_probe'),
+            role_label='主线异动里先看谁',
+            mainline_name=mainline_name,
+            fallback_watch_anchor=abnormal_probe_group.get('fallback_watch_anchor'),
         )
-        report.append("| 维度 | 明日结论 |")
-        report.append("|------|----------|")
-        report.append(f"| 市场环境 | {step0_prediction_cn}；{step0_action} |")
-        report.append(f"| 明日主看方向 | {mainline_label} |")
-        report.append(
-            f"| 观察池焦点 | {len(watchlist)}只观察 / {len(core_stocks)}只主线核心 / "
-            f"{len(step2_bundle.get('crossline_observation_stocks', []))}只跨线观察 / "
-            f"{len(abnormal_watch_pool)}只异常承接 |"
+        crossline_probe_text = _format_abnormal_probe_text(
+            abnormal_probe_group.get('crossline_abnormal_probe'),
+            role_label='跨线异动里先看谁',
+            mainline_name=mainline_name,
         )
-        report.append(f"| 明天能不能开仓 | {front_structure_layer_text} |")
-        if abnormal_probe_group:
-            probe_parts = []
-            mainline_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('mainline_abnormal_probe'),
-                role_label='主线异动里先看谁',
-                mainline_name=mainline_name,
-                fallback_watch_anchor=abnormal_probe_group.get('fallback_watch_anchor'),
-            )
-            crossline_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('crossline_abnormal_probe'),
-                role_label='跨线异动里先看谁',
-                mainline_name=mainline_name,
-            )
-            validation_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('validation_probe'),
-                role_label='承接验证先看谁',
-                mainline_name=mainline_name,
-            )
-            if mainline_probe_text:
-                probe_parts.append(f"主线异动里先看谁：{mainline_probe_text}")
-            if crossline_probe_text:
-                probe_parts.append(f"跨线异动里先看谁：{crossline_probe_text}")
-            if validation_probe_text:
-                probe_parts.append(f"承接验证先看谁：{validation_probe_text}")
-            if probe_parts:
-                report.append(f"| 异常探针 | {'；'.join(probe_parts)} |")
-        if best_stock:
-            signal = best_stock.get('signal')
-            if signal:
-                entry_range = best_stock.get('entry_range', (signal.entry_price, signal.entry_price))
-                report.append(
-                    f"| 如果要买只买谁 | {best_stock.get('name')}({best_stock.get('code')})，"
-                    f"60分钟确认且触及{entry_range[0]:.2f}-{entry_range[1]:.2f}才允许买入 |"
-                )
-            else:
-                report.append(
-                    f"| 如果要买只买谁 | {best_stock.get('name')}({best_stock.get('code')})，60分钟确认后按条件触发 |"
-                )
-        elif watch_anchor:
-            watch_anchor_note = str(watch_anchor.get('watch_anchor_note', '') or '').strip()
-            if trade_gate_open:
-                report.append(
-                    f"| 明天先盯哪只 | {watch_anchor.get('name')}({watch_anchor.get('code')})，"
-                    f"先看60分钟确认，只有走成明天唯一能买的那只才允许买入"
-                    f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                )
-            else:
-                report.append(
-                    f"| 重点观察谁 | {watch_anchor.get('name')}({watch_anchor.get('code')})，"
-                    f"只看强弱，不构成买入指令"
-                    f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                )
-        else:
-            report.append("| 观察名单 | 当前没有可买对象，只保留观察名单 |")
-        front_follow_action_text = _build_front_follow_action_text(
-            final_gate=final_gate,
-            best_stock=best_stock,
-            watch_anchor=watch_anchor,
-            watch_anchor_type=watch_anchor_type,
-            fallback_text=final_gate.get('final_action', step0_action),
-            focus_group=focus_group,
-            keep_group=keep_group,
-            delete_group=delete_group,
-            position_level=position_level,
-            state_machine_snapshot=market_research_snapshot.get('state_machine', {}),
-            target_date=target_date,
-            special_probe_verdict=special_probe_verdict,
+        validation_probe_text = _format_abnormal_probe_text(
+            abnormal_probe_group.get('validation_probe'),
+            role_label='承接验证先看谁',
+            mainline_name=mainline_name,
         )
-        report.append(f"| 明日唯一动作 | {front_follow_action_text} |")
-        report.append("| 出手时怎么做 | 前30分钟只确认环境；买点必须等60分钟；买后用30分钟结构止损，最晚单笔-5% |")
-    else:
-        report.append("| stage_key | 模块 | 明日指引 |")
-        report.append("|-----------|------|----------|")
-        probe_parts = []
-        if abnormal_probe_group:
-            mainline_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('mainline_abnormal_probe'),
-                role_label='主线异动里先看谁',
-                mainline_name=mainline_name,
-                fallback_watch_anchor=abnormal_probe_group.get('fallback_watch_anchor'),
-            )
-            crossline_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('crossline_abnormal_probe'),
-                role_label='跨线异动里先看谁',
-                mainline_name=mainline_name,
-            )
-            validation_probe_text = _format_abnormal_probe_text(
-                abnormal_probe_group.get('validation_probe'),
-                role_label='承接验证先看谁',
-                mainline_name=mainline_name,
-            )
-            if mainline_probe_text:
-                probe_parts.append(f"主线异动里先看谁：{mainline_probe_text}")
-            if crossline_probe_text:
-                probe_parts.append(f"跨线异动里先看谁：{crossline_probe_text}")
-            if validation_probe_text:
-                probe_parts.append(f"承接验证先看谁：{validation_probe_text}")
-        report_stages = build_report_stages(
+        if mainline_probe_text:
+            abnormal_probe_parts.append(f"主线异动里先看谁：{mainline_probe_text}")
+        if crossline_probe_text:
+            abnormal_probe_parts.append(f"跨线异动里先看谁：{crossline_probe_text}")
+        if validation_probe_text:
+            abnormal_probe_parts.append(f"承接验证先看谁：{validation_probe_text}")
+
+    report.extend(
+        build_legacy_final_conclusion_lines(
             {
-                "derived": {
-                    "market_phase": {"phase": step0_prediction.lower()},
-                    "mainline": {"primary_line": mainline_name},
-                    "strategy_contract": {"contract_label": final_gate.get("gate_status", "")},
-                },
-                "decision": {
-                    "execution_permission": {"label": "conditional_30" if trade_gate_open else "watch_only"},
-                    "action_plan": {"trigger": front_follow_action_text},
-                },
-            }
-        )
-        stage_rows = build_legacy_report_stage_rows(
-            {
-                "report_stages": report_stages,
+                "display_mvp_mode": DISPLAY_MVP_MODE,
+                "step0_prediction": step0_prediction,
+                "step0_prediction_cn": step0_prediction_cn,
+                "step0_action": step0_action,
+                "final_gate": final_gate,
+                "mainline_name": mainline_name,
+                "mainline_label": _build_front_mainline_label(
+                    market_research_snapshot,
+                    fallback_mainline=mainline_name or "",
+                ),
                 "watchlist_count": len(watchlist),
                 "core_count": len(core_stocks),
                 "secondary_count": len(secondary_stocks),
                 "crossline_count": len(step2_bundle.get('crossline_observation_stocks', [])),
-                "risk_summary": front_structure_layer_text,
+                "abnormal_watch_count": len(abnormal_watch_pool),
+                "front_structure_layer_text": front_structure_layer_text,
                 "trade_gate_open": trade_gate_open,
                 "best_stock": best_stock,
                 "watch_anchor": watch_anchor,
                 "watch_anchor_type": watch_anchor_type,
-                "abnormal_probe_parts": probe_parts,
+                "front_follow_action_text": front_follow_action_text,
+                "abnormal_probe_parts": abnormal_probe_parts,
             }
         )
-        for row in stage_rows:
-            report.append(f"| {row.get('stage_key', '-')} | {row.get('title', '-')} | {row.get('guidance', '-')} |")
-
-        # 明日策略
-        if not final_gate.get('can_new_entry'):
-            if final_gate.get('should_reduce'):
-                report.append(f"| **明日策略** | **只处理旧仓** | 继续研究市场，但不新增参与；若你有旧仓先去弱留强 |")
-            else:
-                report.append(f"| **明日策略** | **不开新仓，只观察** | 当前裁决不允许新增跟随，先看环境和主线是否继续强化 |")
-        elif step0_prediction == "DIFFICULT":
-            report.append(f"| **明日策略** | **开盘再评估** | 环境仍需确认，前30分钟只看环境，60分钟后再定 |")
-        elif step0_prediction == "NEUTRAL":
-            if best_stock:
-                report.append(f"| **明日策略** | **唯一标的条件触发** | 只操作{best_stock.get('name')}，60分钟确认后再买，其他标的无论多诱人都禁止 |")
-            elif watch_anchor:
-                watch_anchor_note = str(watch_anchor.get('watch_anchor_note', '') or '').strip()
-                if trade_gate_open:
-                    report.append(
-                        f"| **明日策略** | **先盯重点盯盘股** | 只盯{watch_anchor.get('name')}，先做60分钟确认，只有走成明天唯一能买的那只才允许买入"
-                        f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                    )
-                else:
-                    report.append(
-                        f"| **明日策略** | **不开新仓，只观察** | {watch_anchor.get('name')}作为重点观察谁，只看强弱，不下买单"
-                        f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                    )
-            else:
-                report.append(f"| **明日策略** | **空仓观望** | 无符合条件标的 |")
-        else:  # CLEAR
-            if best_stock:
-                report.append(f"| **明日策略** | **执行唯一标的** | 只操作{best_stock.get('name')}，60分钟确认后执行，买后用30分钟结构止损，其他标的禁止 |")
-            elif watch_anchor:
-                watch_anchor_note = str(watch_anchor.get('watch_anchor_note', '') or '').strip()
-                if trade_gate_open:
-                    report.append(
-                        f"| **明日策略** | **先盯重点盯盘股** | 只盯{watch_anchor.get('name')}，先做60分钟确认，只有走成明天唯一能买的那只才允许买入"
-                        f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                    )
-                else:
-                    report.append(
-                        f"| **明日策略** | **不开新仓，只观察** | {watch_anchor.get('name')}作为重点观察谁，只看强弱，不下买单"
-                        f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
-                    )
-            else:
-                report.append(f"| **明日策略** | **空仓观望** | 无符合条件标的 |")
-    report.append("")
-    report.append("> **⚠️ 买点时效性**: 以上买点基于今日收盘数据，明日若直接高开离买点>5%，则放弃；即便价格命中，也要等60分钟确认后再买，买后再用30分钟结构止损。")
-    report.append("")
+    )
     
     # 核心交易哲学：看好A干A
     mainline_name = exit_analysis.get('sector_name', '')
@@ -21974,83 +21835,24 @@ def generate_markdown_report(
     # 【已删除v2.3.34】十五、隔日操作计划（功能与狙击手视角重复，用户要求移除）
     
 
-    # ========== 附录：数据获取与执行步骤清单 ==========
-    report.append("---")
-    report.append("")
-    report.append("## 附录：数据获取与执行步骤清单")
-    report.append("")
-    
-    # 数据获取清单
-    report.append("### 一、数据获取清单")
-    report.append("| 数据源 | 状态 | 说明 |")
-    report.append("|--------|------|------|")
-    
-    data_status = data.get('data_status', {})
-    if data_status:
-        for key, value in data_status.items():
-            status_icon = "✅" if value else "❌"
-            status_text = "成功" if value else "失败"
-            report.append(f"| {key} | {status_icon} {status_text} | {'数据正常' if value else '数据缺失或获取失败'} |")
-    else:
-        report.append("| 无状态数据 | ❌ 失败 | 状态跟踪未启用 |")
-    
-    report.append("")
-    
-    # 执行步骤清单
-    report.append("### 二、执行步骤清单")
-    report.append("| 步骤 | 状态 | 说明 |")
-    report.append("|------|------|------|")
-    
-    step_status = data.get('step_status', {})
-    if step_status:
-        for key, value in step_status.items():
-            status_icon = "✅" if value else "❌"
-            status_text = "已执行" if value else "跳过/失败"
-            report.append(f"| {key} | {status_icon} {status_text} | {'正常完成' if value else '未执行或失败'} |")
-    else:
-        report.append("| 无状态数据 | ❌ 失败 | 状态跟踪未启用 |")
-    
-    report.append("")
-    
-    # 统计信息
-    report.append("### 三、统计信息")
-    if data_status:
-        success_count = sum(1 for v in data_status.values() if v)
-        total_count = len(data_status)
-        success_rate = (success_count / total_count * 100) if total_count > 0 else 0
-        report.append(f"- **数据源获取成功率**: {success_count}/{total_count} ({success_rate:.1f}%)")
-    
-    if step_status:
-        step_success_count = sum(1 for v in step_status.values() if v)
-        step_total_count = len(step_status)
-        step_success_rate = (step_success_count / step_total_count * 100) if step_total_count > 0 else 0
-        report.append(f"- **步骤执行成功率**: {step_success_count}/{step_total_count} ({step_success_rate:.1f}%)")
-    
-    report.append("")
-    report.append("---")
-    report.append("")
-    import datetime as _dt
-    report.append(f"**报告生成时间**: {_dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append(f"**数据日期**: {target_date}")
-    report.append(f"**报告版本**: v2.5.0")
-    report.append("")
-    
-    # 添加执行时间统计
     timer_summary = data.get('timer_summary', {})
-    if timer_summary:
-        report.append("### 执行时间统计")
-        report.append("")
-        report.append("| 步骤 | 耗时 | 累计 | 占比 |")
-        report.append("|------|------|------|------|")
-        
-        total_time = timer_summary.get('total_time', 0)
-        normalized_timer_steps = _normalize_report_timer_steps(timer_summary, step_status)
-        for step_name, elapsed, cumulative in normalized_timer_steps:
-            percentage = (elapsed / total_time * 100) if total_time > 0 else 0
-            report.append(f"| {step_name} | {elapsed:.2f}s | {cumulative:.2f}s | {percentage:.1f}% |")
-        
-        report.append(f"| **总计** | - | **{total_time:.2f}s** | 100% |")
-        report.append("")
+    step_status = data.get('step_status', {})
+    normalized_timer_steps = _normalize_report_timer_steps(timer_summary, step_status) if timer_summary else []
+    total_time = timer_summary.get('total_time', 0) if timer_summary else 0
+    import datetime as _dt
+    report.extend(
+        render_execution_appendix(
+            {
+                "data_status": data.get('data_status', {}),
+                "step_status": step_status,
+                "normalized_timer_steps": normalized_timer_steps,
+                "total_time": total_time,
+                "target_date": target_date,
+                "generated_at": _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "report_version": "v2.5.0",
+            }
+        )
+    )
 
     if DISPLAY_MVP_MODE:
         report = _compact_report_for_mvp(report)
