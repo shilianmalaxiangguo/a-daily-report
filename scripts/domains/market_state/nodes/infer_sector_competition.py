@@ -1,3 +1,4 @@
+from domains.market_state.contracts import build_market_state_action_map
 from domains.market_state.trace import make_market_state_log
 
 
@@ -5,24 +6,28 @@ def run(ctx):
     inputs = ctx.get("inputs") or {}
     state = ctx.get("state") or {}
     helpers = ctx.get("helpers") or {}
-    action_map = helpers["action_map"]
+    action_map = helpers.get("action_map") or build_market_state_action_map()
+    safe_float = helpers.get("safe_float") or _safe_float
 
     data = inputs.get("data") or {}
     tracked_sector = state.get("tracked_sector", "")
-    sector_inflow = float(state.get("sector_inflow", 0) or 0)
-    hot_weight = float(state.get("hot_weight", 0) or 0)
+    sector_inflow = safe_float(state.get("sector_inflow", 0), 0.0)
+    hot_weight = safe_float(state.get("hot_weight", 0), 0.0)
     zt_pool_by_sector = state.get("zt_pool_by_sector", {}) or {}
+    get_sector_hotlist_weight = helpers.get("get_sector_hotlist_weight") or (lambda *args, **kwargs: 0.0)
     replacement_candidates = []
     for sector in (data.get("sector_fund_flow", {}) or {}).get("inflow", []):
         sector_name = sector.get("name", "")
         if not sector_name or sector_name == tracked_sector:
             continue
+        inflow = safe_float(sector.get("zljlr", 0), 0.0)
+        sector_hot_weight = safe_float(get_sector_hotlist_weight(sector_name, data.get("tag_distribution", {})), 0.0)
         replacement_candidates.append(
             {
                 "name": sector_name,
-                "inflow": sector.get("zljlr", 0),
+                "inflow": inflow,
                 "zt_count": len(zt_pool_by_sector.get(sector_name, []) or []),
-                "hot_weight": helpers["get_sector_hotlist_weight"](sector_name, data.get("tag_distribution", {})),
+                "hot_weight": sector_hot_weight,
             }
         )
     replacement_candidates.sort(
@@ -45,7 +50,7 @@ def run(ctx):
         "layer": "替代主线流向",
         "status": status,
         "level": level,
-        "action": action_map[level],
+        "action": action_map.get(level, ""),
     }
     return {
         "value": signal,
@@ -67,3 +72,10 @@ def run(ctx):
         "errors": [],
         "control": {"status": "success"},
     }
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

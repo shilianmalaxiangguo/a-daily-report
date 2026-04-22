@@ -4,7 +4,6 @@ from domains.market_state.trace import make_market_state_log
 
 def run(ctx):
     state = ctx.get("state") or {}
-    helpers = ctx.get("helpers") or {}
     action_map = build_market_state_action_map()
 
     tracked_sector = state.get("tracked_sector", "")
@@ -56,8 +55,6 @@ def run(ctx):
                 "龙头": round(float(continuity_snapshot.get("leader_score", 0) or 0), 1),
                 "结构": round(float(continuity_snapshot.get("structure_score", 0) or 0), 1),
                 "承接": round(float(continuity_snapshot.get("core_score", 0) or 0), 1),
-                "事件": 65.0 if risk_signal.get("level") == "黄灯" else 85.0,
-                "替代": 65.0 if competition_signal.get("level") == "黄灯" else 85.0,
             },
             "mainline_component_scores": (state.get("mainline_snapshot", {}) or {}).get("component_scores", {}),
             "mainline_trend_label": (state.get("mainline_snapshot", {}) or {}).get("trend_label", ""),
@@ -74,14 +71,17 @@ def run(ctx):
                 "当日放量大阳线为理想主动卖点：他人眼中的确定性买点，本模式作减仓/清仓点",
             ],
             "price_lines": None,
-            "signals": [
-                environment_signal,
-                leader_signal,
-                structure_signal,
-                core_signal,
-                risk_signal,
-                competition_signal,
-            ],
+            "signals": _collect_valid_signals(
+                [
+                    environment_signal,
+                    leader_signal,
+                    structure_signal,
+                    core_signal,
+                    risk_signal,
+                    competition_signal,
+                ],
+                action_map,
+            ),
         }
 
     return {
@@ -100,3 +100,25 @@ def run(ctx):
         "errors": [],
         "control": {"status": "success"},
     }
+
+
+def _collect_valid_signals(signals, action_map):
+    normalized_signals = []
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        layer = str(signal.get("layer", "") or "").strip()
+        status = str(signal.get("status", "") or "").strip()
+        level = str(signal.get("level", "") or "").strip()
+        if not layer or not status or not level:
+            continue
+        action = str(signal.get("action", "") or "").strip() or action_map.get(level, "")
+        normalized_signals.append(
+            {
+                "layer": layer,
+                "status": status,
+                "level": level,
+                "action": action,
+            }
+        )
+    return normalized_signals

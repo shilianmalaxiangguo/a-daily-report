@@ -8,6 +8,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from domains.market_state.nodes.assemble_exit_analysis import run as run_assemble_exit_analysis
+from domains.market_state.nodes.infer_sector_competition import run as run_infer_sector_competition
+
+
 def _build_stub_module(module_name, attrs):
     module = types.ModuleType(module_name)
     for key, value in attrs.items():
@@ -83,6 +87,63 @@ class MainlineExitAnalysisGraphWrapperTest(unittest.TestCase):
         self.assertEqual(result["overall_level"], "红灯")
         self.assertEqual(result["leader_name"], "-")
         self.assertEqual(len(result["signals"]), 6)
+
+    def test_infer_sector_competition_handles_non_numeric_inflow_values(self):
+        result = run_infer_sector_competition(
+            {
+                "inputs": {
+                    "data": {
+                        "sector_fund_flow": {
+                            "inflow": [
+                                {"name": "旧主线", "zljlr": "1.0"},
+                                {"name": "新主线A", "zljlr": "12.5"},
+                                {"name": "新主线B", "zljlr": None},
+                            ]
+                        },
+                        "tag_distribution": {},
+                    }
+                },
+                "state": {"tracked_sector": "旧主线", "sector_inflow": "1.5", "hot_weight": "1.0", "zt_pool_by_sector": {}},
+                "helpers": {
+                    "action_map": {"绿灯": "keep", "黄灯": "watch", "橙灯": "warn", "红灯": "exit"},
+                    "get_sector_hotlist_weight": lambda sector, _: {"新主线A": "3.5", "新主线B": None}.get(sector, 0),
+                    "safe_float": lambda value, default=0.0: float(value) if value not in (None, "") else default,
+                },
+            }
+        )
+
+        snapshot = result["exports"]["competition_snapshot"]
+        self.assertEqual(snapshot["replacement"]["name"], "新主线A")
+        self.assertEqual(snapshot["replacement"]["inflow"], 12.5)
+        self.assertEqual(result["exports"]["competition_signal"]["level"], "黄灯")
+
+    def test_assemble_exit_analysis_filters_invalid_signals_and_keeps_score_detail_consistent(self):
+        result = run_assemble_exit_analysis(
+            {
+                "state": {
+                    "tracked_sector": "军工",
+                    "mainline_score_pct": 72.0,
+                    "mainline_snapshot": {"star_level": "⭐⭐⭐⭐", "component_scores": {"资金": 80.0}, "trend_label": "主升"},
+                    "continuity_snapshot": {"leader_score": 70.0, "structure_score": 68.0, "core_score": 66.0, "leader_name": "龙头A"},
+                    "environment_signal": {"layer": "主线地位复核", "status": "主线稳定", "level": "绿灯", "action": "继续"},
+                    "leader_signal": {},
+                    "structure_signal": {"layer": "板块内部结构", "status": "结构可控", "level": "黄灯"},
+                    "core_signal": {"layer": "持仓个股承接", "status": "承接尚可", "level": "黄灯", "action": "盯盘"},
+                    "risk_signal": {"layer": "事件落地风险", "status": "无短线风险", "level": "绿灯", "action": "继续"},
+                    "competition_signal": {"layer": "替代主线流向", "status": "无明显替代", "level": "绿灯", "action": "继续"},
+                }
+            }
+        )
+
+        exit_analysis = result["exports"]["exit_analysis"]
+        self.assertNotIn("事件", exit_analysis["score_detail"])
+        self.assertNotIn("替代", exit_analysis["score_detail"])
+        self.assertEqual(len(exit_analysis["signals"]), 5)
+        for signal in exit_analysis["signals"]:
+            self.assertTrue(signal.get("layer"))
+            self.assertTrue(signal.get("status"))
+            self.assertTrue(signal.get("level"))
+            self.assertTrue(signal.get("action"))
 
 
 if __name__ == "__main__":
