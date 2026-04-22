@@ -74,6 +74,11 @@ from decision.runtime_contracts import (
     resolve_environment_display_contract,
     resolve_environment_reason_contract,
 )
+from decision.market_phase_context import build_market_phase_context_contract
+from research.market_research_runtime import (
+    build_market_research_snapshot_contract,
+    derive_step0_follow_plan_contract,
+)
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
 MARKET_ZHONGSHU_MIN_KLINES = 5
@@ -8317,173 +8322,26 @@ def merge_position_gate(position_level, exit_analysis):
 
 def build_market_phase_context(data, target_date, emit_logs=True):
     """构建日报/单票共用的市场环境上下文，避免不同入口各自推导。"""
+    result = build_market_phase_context_contract(
+        data,
+        target_date,
+        analyze_market_zhongshu=analyze_market_zhongshu,
+        analyze_market_and_sectors=analyze_market_and_sectors,
+        resolve_market_mainline_context=_resolve_market_mainline_context,
+        build_mainline_exit_analysis=build_mainline_exit_analysis,
+        merge_position_gate=merge_position_gate,
+        build_market_state_machine_snapshot=_build_market_state_machine_snapshot,
+        resolve_environment_display_contract=_resolve_environment_display_contract,
+        calculate_price_range=calculate_price_range,
+        market_zhongshu_lookback_days=MARKET_ZHONGSHU_LOOKBACK_DAYS,
+        market_zhongshu_min_klines=MARKET_ZHONGSHU_MIN_KLINES,
+    )
     if emit_logs:
-        print("   📊 分析大盘中枢结构...")
-
-    market_zhongshu = analyze_market_zhongshu(
-        index_code='sh.000001',
-        recent_days=MARKET_ZHONGSHU_LOOKBACK_DAYS,
-        min_zhongshu_klines=MARKET_ZHONGSHU_MIN_KLINES,
-        target_date=target_date,
-    )
-
-    market_analysis = analyze_market_and_sectors(data)
-    market_trend = market_analysis.get('market_status', '震荡整理')
-    mainline_context = _resolve_market_mainline_context(data, market_analysis)
-    main_sectors_info = mainline_context.get('main_sectors_info', [])
-    secondary_sectors_info = mainline_context.get('secondary_sectors_info', [])
-    main_sectors = mainline_context.get('main_sectors', [])
-    secondary_sectors = mainline_context.get('secondary_sectors', [])
-    dragon_stocks = mainline_context.get('dragon_stocks', [])
-
-    exit_analysis = build_mainline_exit_analysis(data, market_analysis, dragon_stocks, main_sectors)
-
-    turnover = data.get('total_turnover', 0)
-    zt_count = len(data.get('zt_pool', []))
-    dt_count = len(data.get('dt_pool', []))
-    indices = data.get('indices', {})
-    sh_change = indices.get('上证指数', {}).get('涨跌幅', 0) if indices else 0
-    market_stats = data.get('market_stats', {})
-    up_count = market_stats.get('up_count', 0)
-    down_count = market_stats.get('down_count', 0)
-    rise_fall_ratio = up_count / down_count if down_count > 0 else 0
-
-    zs_signal_type = None
-    zs_signal_status = None
-    if market_zhongshu and market_zhongshu.get('success'):
-        zs_signal = market_zhongshu.get('signal', {})
-        zs_signal_type = zs_signal.get('signal_type', '')
-        zs_signal_status = zs_signal.get('status', '')
-
-    dt_panic_threshold = 15
-    is_dt_panic = dt_count >= dt_panic_threshold
-
-    if zs_signal_type == "大盘突破":
-        if is_dt_panic:
-            position_level = "二档（防守档）"
-            position_reason = (
-                f"中枢已突破({zs_signal_status})，但跌停{dt_count}只≥{dt_panic_threshold}只为跌停潮(退潮期)，"
-                "不猛干，持有但不新增"
-            )
-        else:
-            position_level = "三档（进攻档）"
-            position_reason = f"中枢已突破({zs_signal_status})，无跌停潮(dt={dt_count}<{dt_panic_threshold})，积极做多"
-    elif zs_signal_type in ["跌破支撑", "暴跌至下一中枢"]:
-        position_level = "一档（空仓档）"
-        position_reason = f"中枢跌破({zs_signal_status})，半山腰接飞刀风险极高，必须空仓观望"
-    elif zs_signal_type is None:
-        if market_trend == "强势上涨" and zt_count > 40 and dt_count < 3 and len(main_sectors) >= 2:
-            position_level = "三档（进攻档）"
-            position_reason = "市场强势上涨，主线明确，赚钱效应明显（中枢数据不可用，纯情绪判断）"
-        elif market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 5 and len(main_sectors) >= 1:
-            position_level = "二档（防守档）"
-            position_reason = "市场震荡整理，有局部赚钱效应（中枢数据不可用，纯情绪判断）"
-        else:
-            position_level = "一档（空仓档）"
-            position_reason = "市场调整明显，赚钱效应不足（中枢数据不可用，纯情绪判断）"
-    else:
-        if market_trend == "强势上涨" and zt_count > 40 and not is_dt_panic:
-            position_level = "二档（防守档）"
-            position_reason = f"中枢内震荡({zs_signal_status})，但市场强势(涨停{zt_count}只)，可持有但不新增"
-        elif market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 10:
-            position_level = "二档（防守档）"
-            position_reason = f"中枢内震荡({zs_signal_status})，市场温和，精选个股持有"
-        else:
-            position_level = "一档（空仓档）"
-            position_reason = f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望"
-
-    base_position_level = position_level
-    base_position_reason = position_reason
-    final_gate = merge_position_gate(position_level, exit_analysis)
-
-    overall_level = exit_analysis.get('overall_level', '红灯')
-    sector_name = exit_analysis.get('sector_name', '')
-    if (
-        zs_signal_type == "大盘突破"
-        and not is_dt_panic
-        and not final_gate['can_new_entry']
-        and '暂无明确主线' in str(sector_name)
-    ):
-        final_gate = {
-            'gate_status': '放行',
-            'position_level': "三档（进攻档）",
-            'operation_state': '进攻态',
-            'can_new_entry': True,
-            'can_hold': True,
-            'should_reduce': False,
-            'final_action': f'中枢已突破({zs_signal_status})且非跌停潮，普涨行情允许围绕最强趋势参与',
-            'final_participation': '中枢突破是最高优先级信号，无单一主线的普涨行情也要敢于跟住强趋势',
-            'gate_reason': '中枢突破优先于“暂无明确主线”的表述，普涨行情本身就是可参与环境',
-        }
-        if emit_logs:
-            print(f"   ⚡ 中枢突破覆盖: {overall_level}(无主线)→绿灯(突破优先)")
-
-    position_level = final_gate.get('position_level', base_position_level)
-    gate_reason = final_gate.get('gate_reason', '')
-    if gate_reason and gate_reason not in base_position_reason:
-        position_reason = f"{base_position_reason}；{gate_reason}"
-    else:
-        position_reason = base_position_reason
-
-    if emit_logs and base_position_level != position_level:
-        print(f"   ⚡ 操作状态调整: {base_position_level}→{position_level}（主线灯号{overall_level}）")
-
-    preliminary_state_machine = _build_market_state_machine_snapshot(
-        data=data,
-        final_gate=final_gate,
-        position_level=position_level,
-        exit_analysis=exit_analysis,
-        main_sectors_info=main_sectors_info,
-        secondary_sectors_info=secondary_sectors_info,
-        sector_trend_snapshot=data.get('sector_trend_snapshot', []) or [],
-        abnormal_watch_pool=[],
-    )
-    environment_display = _resolve_environment_display_contract(
-        position_level=position_level,
-        final_gate=final_gate,
-        state_machine_snapshot=preliminary_state_machine,
-    )
-
-    price_info = None
-    if position_level not in ["一档（空仓档）", "二档（防守档）"]:
-        hot_rank_top30 = data.get('hot_rank_top30', [])
-        if hot_rank_top30:
-            price_info = calculate_price_range(hot_rank_top30[0])
-
-    return {
-        'market_zhongshu': market_zhongshu,
-        'market_analysis': market_analysis,
-        'market_trend': market_trend,
-        'mainline_context': mainline_context,
-        'main_sectors_info': main_sectors_info,
-        'secondary_sectors_info': secondary_sectors_info,
-        'main_sectors': main_sectors,
-        'secondary_sectors': secondary_sectors,
-        'dragon_stocks': dragon_stocks,
-        'exit_analysis': exit_analysis,
-        'turnover': turnover,
-        'zt_count': zt_count,
-        'dt_count': dt_count,
-        'indices': indices,
-        'sh_change': sh_change,
-        'market_stats': market_stats,
-        'up_count': up_count,
-        'down_count': down_count,
-        'rise_fall_ratio': rise_fall_ratio,
-        'zs_signal_type': zs_signal_type,
-        'zs_signal_status': zs_signal_status,
-        'is_dt_panic': is_dt_panic,
-        'dt_panic_threshold': dt_panic_threshold,
-        'base_position_level': base_position_level,
-        'base_position_reason': base_position_reason,
-        'position_level': position_level,
-        'position_reason': position_reason,
-        'final_gate': final_gate,
-        'overall_level': overall_level,
-        'price_info': price_info,
-        'preliminary_state_machine': preliminary_state_machine,
-        'environment_display': environment_display,
-    }
+        for log in result.get('module_logs', []):
+            message = str(log.get('message', '') or '').strip()
+            if message:
+                print(f"   🧩 {message}")
+    return result
 
 
 _daily_price_bar_cache = {}
@@ -13541,115 +13399,30 @@ def _build_dialectical_decision_snapshot(
 
 
 def _build_market_research_snapshot(data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date=''):
-    observation_snapshot = observation_snapshot or {}
-    sector_ai_analysis = data.get('sector_ai_analysis', {}) or {}
-    abnormal_projection = _build_abnormal_projection_summary(observation_snapshot.get('abnormal_watch_pool', []))
-    style_switch_snapshot = _build_market_style_switch_snapshot(
-        target_date,
-        data,
-        observation_snapshot=observation_snapshot,
-        abnormal_projection=abnormal_projection,
-    )
-    state_machine_snapshot = _build_market_state_machine_snapshot(
+    return build_market_research_snapshot_contract(
         data,
         final_gate,
         position_level,
         exit_analysis,
-        main_sectors_info=observation_snapshot.get('main_sectors_info', []),
-        secondary_sectors_info=observation_snapshot.get('secondary_sectors_info', []),
-        sector_trend_snapshot=observation_snapshot.get('sector_trend_snapshot', []),
-        abnormal_watch_pool=observation_snapshot.get('abnormal_watch_pool', []),
-    )
-    mainline_rotation_snapshot = _build_mainline_rotation_snapshot(
-        observation=observation_snapshot,
-        state_machine=state_machine_snapshot,
-        style_switch=style_switch_snapshot,
-        sector_ai_analysis=sector_ai_analysis,
-    )
-    special_probe_group = _build_abnormal_probe_group(
-        style_switch_snapshot=style_switch_snapshot,
-        abnormal_watch_pool=observation_snapshot.get('abnormal_watch_pool', []),
-        mainline_name=state_machine_snapshot.get('leading_line', ''),
-        watch_anchor={},
-    )
-    special_probe_verdict = _build_special_probe_verdict(
-        abnormal_probe_group=special_probe_group,
-        watch_anchor={},
-        watch_anchor_type='',
-        mainline_name=state_machine_snapshot.get('leading_line', ''),
+        observation_snapshot=observation_snapshot,
         target_date=target_date,
+        build_abnormal_projection_summary=_build_abnormal_projection_summary,
+        build_market_style_switch_snapshot=_build_market_style_switch_snapshot,
+        build_market_state_machine_snapshot=_build_market_state_machine_snapshot,
+        build_mainline_rotation_snapshot=_build_mainline_rotation_snapshot,
+        build_abnormal_probe_group=_build_abnormal_probe_group,
+        build_special_probe_verdict=_build_special_probe_verdict,
+        build_follow_verdict=_build_follow_verdict,
+        build_dialectical_decision_snapshot=_build_dialectical_decision_snapshot,
     )
-    follow_verdict = _build_follow_verdict(final_gate, position_level, state_machine_snapshot, special_probe_verdict=special_probe_verdict)
-    dialectical_decision = _build_dialectical_decision_snapshot(
-        observation=observation_snapshot,
-        style_switch=style_switch_snapshot,
-        state_machine=state_machine_snapshot,
-        follow_verdict=follow_verdict,
-        final_gate=final_gate,
-    )
-    return {
-        'observation': observation_snapshot,
-        'style_switch': style_switch_snapshot,
-        'state_machine': state_machine_snapshot,
-        'abnormal_projection': abnormal_projection,
-        'follow_verdict': follow_verdict,
-        'special_probe_verdict': special_probe_verdict,
-        'dialectical_decision': dialectical_decision,
-        'mainline_rotation_snapshot': mainline_rotation_snapshot,
-        'sector_ai_analysis': sector_ai_analysis,
-        'final_gate': final_gate,
-    }
 
 
 def _derive_step0_follow_plan(market_research_snapshot, final_gate, position_level):
-    market_research_snapshot = market_research_snapshot or {}
-    state_machine_snapshot = market_research_snapshot.get('state_machine', {}) or {}
-    follow_verdict = market_research_snapshot.get('follow_verdict', {}) or {}
-    style_switch = market_research_snapshot.get('style_switch', {}) or {}
-    special_probe_verdict = market_research_snapshot.get('special_probe_verdict', {}) or {}
-
-    step0_prediction = "NEUTRAL"
-    if not final_gate.get('can_new_entry'):
-        step0_prediction = "BLOCKED"
-    elif state_machine_snapshot.get('state_code') == 'expand':
-        step0_prediction = "CLEAR"
-    elif state_machine_snapshot.get('state_code') == 'contract':
-        step0_prediction = "DIFFICULT"
-
-    prediction_map = {
-        "BLOCKED": follow_verdict.get('label', '🚫 暂不跟随'),
-        "DIFFICULT": "⚠️ 先看环境",
-        "NEUTRAL": follow_verdict.get('label', '🟡 条件跟随'),
-        "CLEAR": follow_verdict.get('label', '🟢 跟随主线'),
-    }
-    step0_reason = follow_verdict.get('reason') or state_machine_snapshot.get('state_reason', '')
-    step0_action = follow_verdict.get('action') or state_machine_snapshot.get('reflection_focus', '')
-    style_action = style_switch.get('primary_action', '')
-    probe_action = str(special_probe_verdict.get('action', '') or '').strip()
-    probe_summary = str(special_probe_verdict.get('summary_text', '') or '').strip()
-    if probe_action and probe_action not in step0_action:
-        step0_action = f"先看特殊标的：{probe_action}" if not step0_action else f"先看特殊标的：{probe_action}；{step0_action}"
-    style_label = str(style_switch.get('style_label', '') or '').strip()
-    if style_action and style_action not in step0_action:
-        if step0_action:
-            style_note_prefix = f"市场层面的{style_label}只作背景参考" if style_label else "市场层面的风格分歧只作背景参考"
-            style_action_text = f"{style_note_prefix}：{style_action}"
-        else:
-            style_action_text = style_action
-        step0_action = f"{step0_action}；{style_action_text}" if step0_action else style_action_text
-    if probe_summary and probe_summary not in step0_reason:
-        step0_reason = f"{step0_reason}；{probe_summary}" if step0_reason else probe_summary
-
-    if step0_prediction == "DIFFICULT" and not step0_reason:
-        step0_reason = f"当前处于{state_machine_snapshot.get('energy_state', '未知状态')}，先确认环境，再决定是否继续跟随。"
-
-    return {
-        'step0_prediction': step0_prediction,
-        'step0_prediction_cn': prediction_map.get(step0_prediction, step0_prediction),
-        'step0_reason': step0_reason,
-        'step0_action': step0_action,
-        'position_level': position_level,
-    }
+    return derive_step0_follow_plan_contract(
+        market_research_snapshot,
+        final_gate,
+        position_level,
+    )
 
 
 def _render_market_research_snapshot_section(market_research_snapshot, compact=False):
