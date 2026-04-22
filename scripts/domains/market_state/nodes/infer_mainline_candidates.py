@@ -20,6 +20,8 @@ def run(ctx):
     else:
         main_sectors = market_analysis.get("main_sectors", []) if market_analysis else []
         tracked_sector = str(((main_sectors[0] or {}).get("name", "")) if main_sectors else "").strip()
+    # Intentional: fallback only uses inflow candidates because we are selecting
+    # the active/leading direction, not defensive or weak outflow directions.
     if not tracked_sector and inflow_sectors:
         for item in inflow_sectors:
             sector_name = str(as_sector_item(item).get("name", "") or "").strip()
@@ -58,13 +60,17 @@ def run(ctx):
     inflow_map = {}
     for item in inflow_sectors:
         sector_item = as_sector_item(item)
-        sector_name = sector_item.get("name", "")
+        sector_name = str(sector_item.get("name", "") or "").strip()
+        if not sector_name:
+            continue
         inflow_map[sector_name] = parse_float(sector_item.get("zljlr", 0), default=0.0)
 
     outflow_map = {}
     for item in outflow_sectors:
         sector_item = as_sector_item(item)
-        sector_name = sector_item.get("name", "")
+        sector_name = str(sector_item.get("name", "") or "").strip()
+        if not sector_name:
+            continue
         outflow_map[sector_name] = abs(parse_float(sector_item.get("zljlr", 0), default=0.0))
     zt_pool_by_sector = data.get("zt_pool_by_sector", {}) or {}
     dt_pool_by_sector = data.get("dt_pool_by_sector", {}) or {}
