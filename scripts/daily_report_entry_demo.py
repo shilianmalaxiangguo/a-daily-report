@@ -84,7 +84,13 @@ from research.market_research_runtime import (
     build_market_research_snapshot_contract,
     derive_step0_follow_plan_contract,
 )
+from research.market_research_context_bundle import build_market_research_context_bundle_contract
+from diagnostics.single_stock_runtime import (
+    build_single_stock_diagnostic_contract,
+    resolve_single_stock_snapshot_contract,
+)
 from portfolio.position_management_report import analyze_position_management_report
+from replay.report_replay import build_replay_snapshot_contract
 from risk.a_kill_blacklist_store import (
     get_active_a_kill_records,
     is_stock_in_a_kill_cooldown,
@@ -103,6 +109,12 @@ from report.context_sections_renderer import (
 )
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.front_summary_renderer import render_front_digest, render_mvp_focus_summary
+from report.front_summary_builder import (
+    build_front_mainline_label_contract,
+    build_front_style_action_text_contract,
+    render_core_mvp_digest_contract,
+    render_mvp_focus_summary_contract,
+)
 from report.market_research_renderer import (
     render_gem_breathing_pool_section,
     render_gem_breathing_step2_section,
@@ -13507,361 +13519,37 @@ def build_market_research_context_bundle(
     dragon_stocks=None,
 ):
     """构建 Step0/Step1 共用的市场研究上下文，供日报与单票诊断复用。"""
-    main_sectors_info = main_sectors_info or []
-    secondary_sectors_info = secondary_sectors_info or []
-    main_sectors = main_sectors or []
-    secondary_sectors = secondary_sectors or []
-    dragon_stocks = dragon_stocks or []
-
-    zt_pool_by_sector = data.get('zt_pool_by_sector', {})
-    dt_pool_by_sector = data.get('dt_pool_by_sector', {})
-    zt_pool = data.get('zt_pool', [])
-    hot_stocks = data.get('hot_rank_top30', [])
-    integrated_hot_list = data.get('integrated_hot_list', [])
-    active_a_kill_records = get_active_a_kill_records(target_date)
-
-    candidates = []
-    for stock in zt_pool[:30]:
-        code = normalize_stock_code(stock.get('代码', stock.get('code', '')))
-        name = stock.get('名称', stock.get('name', ''))
-        sector = stock.get('所属行业', stock.get('sector', ''))
-        change = stock.get('涨跌幅', 9.9)
-
-        open_price = stock.get('开盘价', stock.get('open', 0))
-        close_price = stock.get('最新价', stock.get('close', 0))
-        high_price = stock.get('最高价', stock.get('high', 0))
-        low_price = stock.get('最低价', stock.get('low', 0))
-        volume = stock.get('成交额', stock.get('volume', 0))
-
-        is_yizi = (open_price == close_price == high_price == low_price) and change >= 9.9
-        is_tzi = (open_price == high_price == close_price) and low_price < open_price and change >= 9.9
-        is_guangtou = (high_price == close_price) and (open_price < close_price) and change >= 9.9
-
-        score = 0
-        reason_text = ""
-        if is_yizi:
-            score += 40
-            reason_text = "一字板最强，明日大概率连板"
-        elif is_tzi:
-            score += 35
-            reason_text = "T字板分歧转一致，明日可能加速"
-        elif is_guangtou:
-            score += 30
-            reason_text = "光头涨停实体强，明日有溢价"
-        elif change >= 9.9:
-            score += 25
-            reason_text = "涨停但形态一般，明日看竞价"
-
-        if volume > 500000000:
-            score += 15
-            reason_text += "+放量"
-        elif volume > 100000000:
-            score += 10
-            reason_text += "+有量"
-
-        sector_count = len(zt_pool_by_sector.get(sector, []))
-        if sector_count > 0:
-            sector_stocks = zt_pool_by_sector.get(sector, [])
-            for idx, sector_stock in enumerate(sector_stocks):
-                if sector_stock.get('代码', sector_stock.get('code', '')) == code:
-                    if idx == 0:
-                        score += 20
-                        reason_text += "+板块龙一"
-                    elif idx <= 2:
-                        score += 10
-                        reason_text += "+板块前排"
-                    break
-
-        candidates.append({
-            'name': name,
-            'code': code,
-            'sector': sector,
-            'change': change,
-            'volume': volume,
-            'score': score,
-            'source': '涨停池',
-            'pattern': '一字板' if is_yizi else 'T字板' if is_tzi else '光头涨停' if is_guangtou else '普通涨停',
-            'reason': reason_text,
-            'tomorrow_expectation': '连板预期' if score >= 70 else '溢价预期' if score >= 50 else '观察竞价',
-        })
-
-    hot_codes = {c['code'] for c in candidates}
-    for i, stock in enumerate(hot_stocks[:15], 1):
-        code = normalize_stock_code(stock.get('code', ''))
-        if code and code not in hot_codes:
-            change = stock.get('change', 0)
-            if change >= 5:
-                candidates.append({
-                    'name': stock.get('name', ''),
-                    'code': code,
-                    'sector': stock.get('sector', stock.get('所属板块', '')),
-                    'change': change,
-                    'score': max(0, 30 - i * 2) + (10 if change >= 7 else 0),
-                    'source': f'热榜第{i}',
-                    'pattern': '放量冲高',
-                    'reason': f'热榜第{i}+涨幅{change:.1f}%，明日可能反包' if change < 9.9 else f'热榜第{i}',
-                    'tomorrow_expectation': '反包预期' if change < 9.9 else '连板预期',
-                })
-
-    candidates.sort(key=lambda x: x.get('score', 0), reverse=True)
-
-    watchlist = []
-    filtered_by_a_kill = []
-    for candidate in candidates:
-        in_cooldown, cooldown_record = is_stock_in_a_kill_cooldown(candidate, active_a_kill_records)
-        if in_cooldown:
-            filtered_by_a_kill.append((candidate, cooldown_record))
-        else:
-            watchlist.append(candidate)
-    watchlist = watchlist[:15]
-
-    mainline_name = exit_analysis.get('sector_name', '') if exit_analysis else ''
-    stock_meta_map = {}
-
-    def register_stock_meta(stock):
-        code = normalize_stock_code(stock.get('code', stock.get('代码', '')))
-        if not code:
-            return
-        existing = stock_meta_map.get(code, {})
-
-        def _merge_text_list(*values):
-            merged = []
-            seen = set()
-            for value in values:
-                if isinstance(value, (list, tuple, set)):
-                    items = value
-                elif value:
-                    items = [value]
-                else:
-                    items = []
-                for item in items:
-                    text = str(item or '').strip()
-                    if text and text not in seen:
-                        seen.add(text)
-                        merged.append(text)
-            return merged
-
-        sector_tags = _merge_text_list(
-            existing.get('sector_tags', []),
-            stock.get('sector_tags', []),
-            stock.get('hot_tags', []),
-        )
-        concepts = _merge_text_list(
-            existing.get('concepts', []),
-            stock.get('concepts', []),
-            stock.get('concept_list', []),
-        )
-        if not sector_tags and concepts:
-            sector_tags = list(concepts)
-        stock_meta_map[code] = {
-            'name': stock.get('name', stock.get('名称', '')) or existing.get('name', ''),
-            'code': code,
-            'sector': (
-                stock.get('sector', '')
-                or stock.get('所属行业', '')
-                or stock.get('所属板块', '')
-                or existing.get('sector', '')
-                or (sector_tags[0] if sector_tags else '')
-            ),
-            'industry': stock.get('industry', stock.get('所属行业', existing.get('industry', ''))),
-            'sector_tags': sector_tags,
-            'concepts': concepts,
-            'concept_list': list(concepts),
-            'score': _safe_float(stock.get('tomorrow_strength', stock.get('score', existing.get('score', 0)))),
-            'source': stock.get('source', existing.get('source', '')),
-        }
-
-    for source_list in (
-        watchlist,
-        hot_stocks[:15],
-        integrated_hot_list[:50],
-        dragon_stocks[:10],
-        data.get('stocks_with_history', [])[:20],
-        data.get('turnover_rank', [])[:20],
-        zt_pool[:20],
-    ):
-        for item in source_list or []:
-            register_stock_meta(item)
-
-    abnormal_candidates = []
-    abnormal_candidate_codes = set()
-
-    def add_abnormal_candidate(stock):
-        code = normalize_stock_code(stock.get('code', ''))
-        if not code or code in abnormal_candidate_codes:
-            return
-        abnormal_candidate_codes.add(code)
-        abnormal_candidates.append({
-            'name': stock.get('name', ''),
-            'code': code,
-            'sector': stock.get('sector', ''),
-            'score': _safe_float(stock.get('score', 0)),
-            'source': stock.get('source', ''),
-        })
-
-    for stock in watchlist[:10]:
-        add_abnormal_candidate(stock)
-
-    for anomaly in data.get('volume_anomalies', [])[:6]:
-        if isinstance(anomaly, dict):
-            anomaly_code = normalize_stock_code(anomaly.get('stock_code', anomaly.get('code', '')))
-            anomaly_name = anomaly.get('stock_name', anomaly.get('name', ''))
-        else:
-            anomaly_code = normalize_stock_code(getattr(anomaly, 'stock_code', ''))
-            anomaly_name = getattr(anomaly, 'stock_name', '')
-
-        if not anomaly_code:
-            continue
-
-        meta = stock_meta_map.get(anomaly_code, {})
-        add_abnormal_candidate({
-            'name': anomaly_name or meta.get('name', ''),
-            'code': anomaly_code,
-            'sector': meta.get('sector', ''),
-            'score': meta.get('score', 0),
-            'source': '放量异常',
-        })
-
-    for stock in dragon_stocks[:8]:
-        sector = stock.get('sector', '')
-        lianban = int(stock.get('lianban', stock.get('连板数', 0)) or 0)
-        if (mainline_name and sector_name_matches(sector, mainline_name)) or lianban >= 2:
-            add_abnormal_candidate({
-                'name': stock.get('name', ''),
-                'code': stock.get('code', ''),
-                'sector': sector,
-                'score': 70 + lianban * 5,
-                'source': '龙头锚定',
-            })
-
-    abnormal_watch_pool_all = build_abnormal_watch_pool(
-        target_date,
-        abnormal_candidates,
-        mainline_name=mainline_name,
-        top_n=max(len(abnormal_candidates), 5),
-        scan_limit=None,
-        allow_degraded_snapshot=(not DECISION_STRICT_MODE and ALLOW_DISPLAY_DEGRADED_ABNORMAL_SNAPSHOT),
-        fast_fail=not DECISION_STRICT_MODE,
-    )
-    abnormal_watch_pool = abnormal_watch_pool_all[:5]
-    abnormal_watch_map = {
-        normalize_stock_code(item.get('code', '')): item
-        for item in abnormal_watch_pool_all
-        if item.get('code') and not _is_degraded_abnormal_snapshot(item)
-    }
-
-    sector_trend_snapshot_step1 = build_sector_trend_snapshot(
-        candidates,
-        watchlist,
-        [],
-        dragon_stocks,
-        zt_pool_by_sector=zt_pool_by_sector,
-        top_n=5,
-    )
-    leader_memory_bank = build_leader_memory_bank(
-        sector_trend_snapshot_step1,
-        watchlist,
-        dragon_stocks,
-        hot_rank_top30=hot_stocks,
-        top_n=5,
-    )
-    tracking_memory_status = refresh_tracking_memory(
-        target_date,
-        watchlist,
-        leader_memory_bank,
-        abnormal_watch_pool_all,
-        stock_meta_map=stock_meta_map,
-    )
-    all_gem_breathing_candidates = _discover_all_gem_breathing_candidates(
-        stock_meta_map,
-        target_date=target_date,
-    )
-    gem_breathing_candidates = [
-        item for item in all_gem_breathing_candidates
-        if (not mainline_name) or _candidate_matches_mainline(item, mainline_name)
-    ][:3]
-    filtered_out_gem_breathing_candidates = [
-        {
-            **item,
-            'filtered_reason': f'当前主线是{mainline_name}，该样本不在主线内，因此不纳入正式观察池。',
-        }
-        for item in all_gem_breathing_candidates
-        if mainline_name and not _candidate_matches_mainline(item, mainline_name)
-    ][:3]
-    gem_observation_stocks = _build_gem_20cm_observation_pool(gem_breathing_candidates, target_date=target_date)
-    validated_tracking_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in tracking_memory_status.get('today_validated_items', [])
-        if item.get('code')
-    }
-    if validated_tracking_codes:
-        for item in leader_memory_bank:
-            code = normalize_stock_code(item.get('code', ''))
-            if code in validated_tracking_codes:
-                item['remember_score'] = round(_safe_float(item.get('remember_score', 0)) + 10, 1)
-                item['remember_reason'] = f"{item.get('remember_reason', '')} / 历史跟踪已二次确认".strip(" /")
-                item['action_rule'] = "它不是临时起意的新故事，只有今天再次转强才保留优先回看权"
-        leader_memory_bank.sort(
-            key=lambda item: (item.get('remember_score', 0), item.get('sector', '')),
-            reverse=True,
-        )
-        leader_memory_bank = leader_memory_bank[:5]
-
-    mainline_competition_snapshot = _build_mainline_competition_snapshot(
-        main_sectors_info=main_sectors_info or [{'name': name} for name in main_sectors[:2]],
-        secondary_sectors_info=secondary_sectors_info or [{'name': name} for name in secondary_sectors[:2]],
-        sector_trend_snapshot=sector_trend_snapshot_step1,
-        risk_sectors=exit_analysis.get('risk_sectors', []),
-    )
-    observation_snapshot = _build_market_observation_snapshot(
+    return build_market_research_context_bundle_contract(
         data,
-        main_sectors_info=main_sectors_info or [{'name': name} for name in main_sectors[:2]],
-        secondary_sectors_info=secondary_sectors_info or [{'name': name} for name in secondary_sectors[:2]],
-        sector_trend_snapshot=sector_trend_snapshot_step1,
-        abnormal_watch_pool=abnormal_watch_pool,
-        leader_memory_bank=leader_memory_bank,
-        tracking_memory_status=tracking_memory_status,
-        mainline_competition_snapshot=mainline_competition_snapshot,
-    )
-    market_research_snapshot = _build_market_research_snapshot(
-        data,
+        target_date,
+        exit_analysis,
         final_gate,
         position_level,
-        exit_analysis,
-        observation_snapshot=observation_snapshot,
-        target_date=target_date,
+        main_sectors_info=main_sectors_info,
+        secondary_sectors_info=secondary_sectors_info,
+        main_sectors=main_sectors,
+        secondary_sectors=secondary_sectors,
+        dragon_stocks=dragon_stocks,
+        get_active_a_kill_records=get_active_a_kill_records,
+        normalize_stock_code=normalize_stock_code,
+        safe_float=_safe_float,
+        is_stock_in_a_kill_cooldown=is_stock_in_a_kill_cooldown,
+        sector_name_matches=sector_name_matches,
+        build_abnormal_watch_pool=build_abnormal_watch_pool,
+        decision_strict_mode=DECISION_STRICT_MODE,
+        allow_display_degraded_abnormal_snapshot=ALLOW_DISPLAY_DEGRADED_ABNORMAL_SNAPSHOT,
+        is_degraded_abnormal_snapshot=_is_degraded_abnormal_snapshot,
+        build_sector_trend_snapshot=build_sector_trend_snapshot,
+        build_leader_memory_bank=build_leader_memory_bank,
+        refresh_tracking_memory=refresh_tracking_memory,
+        discover_all_gem_breathing_candidates=_discover_all_gem_breathing_candidates,
+        candidate_matches_mainline=_candidate_matches_mainline,
+        build_gem_observation_pool=_build_gem_20cm_observation_pool,
+        build_mainline_competition_snapshot=_build_mainline_competition_snapshot,
+        build_market_observation_snapshot=_build_market_observation_snapshot,
+        build_market_research_snapshot=_build_market_research_snapshot,
+        derive_step0_follow_plan=_derive_step0_follow_plan,
     )
-    market_state_snapshot = market_research_snapshot.get('state_machine', {}) or {}
-    abnormal_projection_summary = market_research_snapshot.get('abnormal_projection', {}) or {}
-    step0_plan = _derive_step0_follow_plan(market_research_snapshot, final_gate, position_level)
-
-    return {
-        'zt_pool_by_sector': zt_pool_by_sector,
-        'dt_pool_by_sector': dt_pool_by_sector,
-        'zt_pool': zt_pool,
-        'hot_stocks': hot_stocks,
-        'active_a_kill_records': active_a_kill_records,
-        'candidates': candidates,
-        'watchlist': watchlist,
-        'filtered_by_a_kill': filtered_by_a_kill,
-        'mainline_name': mainline_name,
-        'stock_meta_map': stock_meta_map,
-        'abnormal_watch_pool_all': abnormal_watch_pool_all,
-        'abnormal_watch_pool': abnormal_watch_pool,
-        'abnormal_watch_map': abnormal_watch_map,
-        'sector_trend_snapshot_step1': sector_trend_snapshot_step1,
-        'leader_memory_bank': leader_memory_bank,
-        'tracking_memory_status': tracking_memory_status,
-        'gem_breathing_candidates': gem_breathing_candidates,
-        'filtered_out_gem_breathing_candidates': filtered_out_gem_breathing_candidates,
-        'gem_observation_stocks': gem_observation_stocks,
-        'mainline_competition_snapshot': mainline_competition_snapshot,
-        'observation_snapshot': observation_snapshot,
-        'market_research_snapshot': market_research_snapshot,
-        'market_state_snapshot': market_state_snapshot,
-        'abnormal_projection_summary': abnormal_projection_summary,
-        'step0_plan': step0_plan,
-    }
 
 
 def build_step2_candidate_bundle(
@@ -14031,46 +13719,17 @@ def build_step3_risk_bundle(
 
 
 def _build_front_mainline_label(market_research_snapshot, fallback_mainline=''):
-    market_research_snapshot = market_research_snapshot or {}
-    observation = market_research_snapshot.get('observation', {}) or {}
-    state_machine = market_research_snapshot.get('state_machine', {}) or {}
-
-    leading_line = state_machine.get('leading_line') or fallback_mainline or ''
-    densest_sector = observation.get('densest_sector', '')
-    densest_count = observation.get('densest_sector_trend_count', 0)
-
-    parts = []
-    if leading_line:
-        parts.append(f"主攻线{leading_line}")
-    if densest_sector:
-        densest_label = f"趋势密度最强{densest_sector}"
-        if densest_count:
-            densest_label += f"({densest_count}只)"
-        if densest_sector != leading_line:
-            parts.append(densest_label)
-        elif not parts:
-            parts.append(densest_label)
-
-    return "；".join(parts) if parts else "主线待确认"
+    return build_front_mainline_label_contract(market_research_snapshot, fallback_mainline=fallback_mainline)
 
 
 def _build_front_style_action_text(style_switch=None, final_gate=None, best_stock=None, watch_anchor=None, watch_anchor_type=''):
-    style_switch = style_switch or {}
-    final_gate = final_gate or {}
-    style_label = str(style_switch.get('style_label', '待确认') or '待确认').strip()
-    primary_action = str(style_switch.get('primary_action', '先看量能再决定跟随哪一侧') or '先看量能再决定跟随哪一侧').strip()
-    watch_anchor_type = str(watch_anchor_type or '').strip()
-
-    if best_stock:
-        name = str(best_stock.get('name', '-') or '-').strip()
-        code = str(best_stock.get('code', '') or '').strip()
-        stock_label = f"{name}({code})" if code else name
-        return f"{style_label}；市场层仍可参考{primary_action}，但执行层已只剩{stock_label}这一只，其余风格讨论不再构成动作建议"
-    if watch_anchor and '异常' in watch_anchor_type:
-        if '跨线' in watch_anchor_type:
-            return f"{style_label}；市场层先看{primary_action}，但跨线对象只保留观察，不把新故事直接当成买入理由"
-        return f"{style_label}；市场层先看{primary_action}，但没有缩到唯一对象前，这些风格讨论都不构成出手指令"
-    return f"{style_label}；{primary_action}"
+    return build_front_style_action_text_contract(
+        style_switch=style_switch,
+        final_gate=final_gate,
+        best_stock=best_stock,
+        watch_anchor=watch_anchor,
+        watch_anchor_type=watch_anchor_type,
+    )
 
 
 def _render_core_mvp_digest(
@@ -14091,86 +13750,33 @@ def _render_core_mvp_digest(
     target_date='',
     compact=False,
 ):
-    market_research_snapshot = market_research_snapshot or {}
-    final_gate = final_gate or {}
-    exit_analysis = exit_analysis or {}
-    observation = market_research_snapshot.get('observation', {}) or {}
-    style_switch = market_research_snapshot.get('style_switch', {}) or {}
-    state_machine = market_research_snapshot.get('state_machine', {}) or {}
-    follow_verdict = market_research_snapshot.get('follow_verdict', {}) or {}
-    dialectical_decision = market_research_snapshot.get('dialectical_decision', {}) or {}
-
-    mainline_label = _build_front_mainline_label(
+    return render_core_mvp_digest_contract(
         market_research_snapshot,
-        fallback_mainline=exit_analysis.get('sector_name', ''),
-    )
-    overall_level = exit_analysis.get('overall_level', '未知')
-    dt_count = observation.get('dt_count', 0)
-    front_high_board_count = max(
-        int(_safe_float(high_board_count)),
-        int(_safe_float(style_switch.get('high_board_count', 0))),
-    )
-    risk_parts = [f"主线状态{overall_level}"]
-    if dt_count:
-        risk_parts.append(f"跌停{dt_count}只")
-    risk_parts.append(f"高位连板{front_high_board_count}只")
-    front_follow_action_text = str(front_follow_action_text or final_gate.get('final_action', position_reason) or '').strip()
-    can_open_text = str(structure_layer_text or follow_verdict.get('label', position_level) or '').strip()
-    textbook_next_step_text = _build_gem_textbook_next_step_text(watch_anchor, position_decision={})
-    if textbook_next_step_text and textbook_next_step_text not in front_follow_action_text:
-        front_follow_action_text = (
-            f"{front_follow_action_text}；{textbook_next_step_text}"
-            if front_follow_action_text else textbook_next_step_text
-        )
-    style_action_text = _build_front_style_action_text(
-        style_switch=style_switch,
-        final_gate=final_gate,
+        final_gate,
+        position_level,
+        position_reason,
+        exit_analysis=exit_analysis,
+        execution_framework_text=execution_framework_text,
+        high_board_count=high_board_count,
+        structure_layer_text=structure_layer_text,
+        front_follow_action_text=front_follow_action_text,
+        special_probe_text=special_probe_text,
+        philosophy_constraint_text=philosophy_constraint_text,
         best_stock=best_stock,
         watch_anchor=watch_anchor,
         watch_anchor_type=watch_anchor_type,
-    )
-    alignment_pool_text = _build_alignment_pool_text(
-        market_research_snapshot=market_research_snapshot,
-        watch_anchor=watch_anchor,
-    )
-    rotation_snapshot = market_research_snapshot.get('mainline_rotation_snapshot', {}) or _build_mainline_rotation_snapshot(
-        observation=observation,
-        state_machine=state_machine,
-        style_switch=style_switch,
-        sector_ai_analysis=market_research_snapshot.get('sector_ai_analysis', {}) or {},
-    )
-    mainline_name = _resolve_primary_mainline_name(
-        market_research_snapshot,
-        fallback_mainline=exit_analysis.get('sector_name', ''),
-    )
-
-    weak_to_strong_context = _build_weak_to_strong_context(
-        candidate=best_stock or watch_anchor,
-        mainline_name=mainline_name,
-        state_machine_snapshot=state_machine,
-    )
-    return render_front_digest(
-        {
-            "headline": front_follow_action_text,
-            "state_text": f"{state_machine.get('energy_state', position_level)}；{state_machine.get('state_reason', position_reason)}",
-            "mainline_label": mainline_label,
-            "special_probe_text": special_probe_text,
-            "philosophy_constraint_text": philosophy_constraint_text,
-            "contract_logic_text": _get_contract_logic_digest_text(),
-            "alignment_pool_text": alignment_pool_text,
-            "rotation_summary_text": rotation_snapshot.get('summary_text', ''),
-            "rotation_narrative_text": rotation_snapshot.get('narrative_text', ''),
-            "weak_to_strong_active": bool(weak_to_strong_context.get('active')),
-            "weak_to_strong_summary_text": weak_to_strong_context.get('summary_text', ''),
-            "style_action_text": style_action_text,
-            "risk_parts": risk_parts,
-            "can_open_text": can_open_text,
-            "stage_label": dialectical_decision.get('stage_label', '') if dialectical_decision else '',
-            "stage_action": dialectical_decision.get('stage_action', '') if dialectical_decision else '',
-            "index_profit_relation": dialectical_decision.get('index_profit_relation', '') if dialectical_decision else '',
-            "execution_framework_text": execution_framework_text,
-            "compact": compact,
-        }
+        target_date=target_date,
+        compact=compact,
+        build_front_mainline_label=_build_front_mainline_label,
+        build_gem_textbook_next_step_text=_build_gem_textbook_next_step_text,
+        build_front_style_action_text=_build_front_style_action_text,
+        build_alignment_pool_text=_build_alignment_pool_text,
+        build_mainline_rotation_snapshot=_build_mainline_rotation_snapshot,
+        resolve_primary_mainline_name=_resolve_primary_mainline_name,
+        build_weak_to_strong_context=_build_weak_to_strong_context,
+        get_contract_logic_digest_text=_get_contract_logic_digest_text,
+        render_front_digest=render_front_digest,
+        safe_float=_safe_float,
     )
 
 
@@ -14196,288 +13802,43 @@ def _render_mvp_focus_summary(
     target_date='',
     compact=False,
 ):
-    market_research_snapshot = market_research_snapshot or {}
-    state_machine = market_research_snapshot.get('state_machine', {}) or {}
-    mainline_name = _resolve_primary_mainline_name(market_research_snapshot)
-    watchlist = watchlist or []
-    abnormal_watch_pool, degraded_abnormal_watch_pool = _split_abnormal_watch_pool(abnormal_watch_pool)
-    leader_memory_bank = leader_memory_bank or []
-    core_stocks = core_stocks or []
-    crossline_observation_stocks = crossline_observation_stocks or []
-    gem_breathing_candidates = gem_breathing_candidates or []
-    filtered_out_gem_candidates = filtered_out_gem_candidates or []
-    focus_group = focus_group or []
-    keep_group = keep_group or []
-    delete_group = delete_group or []
-    abnormal_probe_group = abnormal_probe_group or {}
-    final_gate = final_gate or {}
-    bridge_prep = _build_bridge_prep_context(
-        position_level=position_level,
-        final_gate=final_gate,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        state_machine_snapshot=state_machine,
-    )
-
-    if not structure_layer_text:
-        structure_layer_text = _build_front_structure_layer_text(
-            final_gate=final_gate,
-            focus_group=focus_group,
-            keep_group=keep_group,
-            delete_group=delete_group,
-            best_stock=best_stock,
-            watch_anchor=watch_anchor,
-            watch_anchor_type=watch_anchor_type,
-            position_level=position_level,
-            state_machine_snapshot=state_machine,
-            target_date=target_date,
-            special_probe_verdict=_build_special_probe_verdict(
-                abnormal_probe_group=abnormal_probe_group,
-                watch_anchor=watch_anchor,
-                watch_anchor_type=watch_anchor_type,
-                mainline_name=mainline_name,
-                target_date=target_date,
-            ),
-        )
-    special_probe_text = _build_special_probe_focus_text(
-        abnormal_probe_group=abnormal_probe_group,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        mainline_name=mainline_name,
-        target_date=target_date,
-    )
-    rotation_snapshot = market_research_snapshot.get('mainline_rotation_snapshot', {}) or _build_mainline_rotation_snapshot(
-        observation=market_research_snapshot.get('observation', {}) or {},
-        state_machine=state_machine,
-        style_switch=market_research_snapshot.get('style_switch', {}) or {},
-        sector_ai_analysis=market_research_snapshot.get('sector_ai_analysis', {}) or {},
-    )
-
-    mainline_watch_preview = ""
-    crossline_watch_preview = ""
-    generic_watch_preview = ""
-    if watchlist:
-        mainline_watchlist, crossline_watchlist = _split_candidates_by_mainline(watchlist, mainline_name)
-        if mainline_watchlist:
-            mainline_watch_preview = _format_candidate_preview(
-                mainline_watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=2,
-            )
-        if crossline_watchlist:
-            crossline_watch_preview = _format_candidate_preview(
-                crossline_watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=2,
-            )
-        if not mainline_watchlist and not crossline_watchlist:
-            generic_watch_preview = _format_candidate_preview(
-                watchlist,
-                lambda item: f"{item.get('name', '-')}({item.get('sector', '-')})",
-                limit=3,
-            )
-
-    gem_breathing_text = ""
-    filtered_gem_text = ""
-    if gem_breathing_candidates:
-        breathing_preview = " / ".join(
-            f"{item.get('name', '-') }({item.get('code', '-')})[{item.get('tier', '-')}]"
-            for item in gem_breathing_candidates[:2]
-        )
-        breathing_note = str(gem_breathing_candidates[0].get('note', '') or '').strip()
-        gem_breathing_text = f"{breathing_preview}；{breathing_note}；只先进观察池，不直接给执行权"
-    elif filtered_out_gem_candidates:
-        filtered_preview = " / ".join(
-            f"{item.get('name', '-')}({item.get('code', '-')})[{item.get('sector', '-')}]"
-            for item in filtered_out_gem_candidates[:2]
-        )
-        filtered_note = str(filtered_out_gem_candidates[0].get('filtered_reason', '') or '').strip()
-        filtered_gem_text = f"当前有20cm预启动样本，但因非主线被过滤：{filtered_preview}；{filtered_note}"
-
-    abnormal_preview = ""
-    degraded_abnormal_text = ""
-    if abnormal_watch_pool:
-        abnormal_preview = " / ".join(
-            f"{item.get('name', '-')}"
-            f"({item.get('follow_state', '-')})"
-            for item in abnormal_watch_pool[:3]
-        )
-    elif degraded_abnormal_watch_pool:
-        degraded_abnormal_text = "当前只有降级快照，先不把它当正式承接证据"
-
-    memory_preview = ""
-    if leader_memory_bank:
-        memory_preview = " / ".join(
-            f"{item.get('name', '-')}"
-            f"({item.get('sector', '-')})"
-            for item in leader_memory_bank[:3]
-        )
-
-    core_preview = ""
-    if core_stocks:
-        core_preview = _format_candidate_preview(
-            core_stocks,
-            lambda item: f"{item.get('name', '-')}({item.get('core_level', '-')})",
-            limit=2,
-        )
-    cross_core_preview = ""
-    if crossline_observation_stocks:
-        cross_core_preview = _format_candidate_preview(
-            crossline_observation_stocks,
-            lambda item: f"{item.get('name', '-')}({item.get('core_level', '-')})",
-            limit=2,
-        )
-
-    special_probe_verdict = _build_special_probe_verdict(
-        abnormal_probe_group=abnormal_probe_group,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        mainline_name=mainline_name,
-        target_date=target_date,
-    )
-    mainline_anchor = {}
-    for item in (core_stocks or []):
-        if _candidate_matches_mainline(item, mainline_name):
-            mainline_anchor = item
-            break
-    if not mainline_anchor:
-        for item in (leader_memory_bank or []):
-            if _candidate_matches_mainline(item, mainline_name):
-                mainline_anchor = item
-                break
-    position_decision = _build_position_sizing_decision(
-        final_gate=final_gate,
-        state_machine_snapshot=state_machine,
-        best_stock=best_stock,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        mainline_name=mainline_name,
-        target_date=target_date,
-        special_probe_verdict=special_probe_verdict,
-        mainline_anchor=mainline_anchor,
-    )
-    cycle_triplet = _build_cycle_triplet_texts(
-        position_decision=position_decision,
-        candidate=best_stock or watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-    )
-    execute_anchor_window_text = _build_execute_anchor_window_text(
-        position_decision=position_decision,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-    )
-    branch_20cm = position_decision.get('branch_20cm', {}) or {}
-    breathing_prep = branch_20cm.get('breathing_prep', {}) or {}
-    special_probe_summary_text = special_probe_verdict.get('summary_text', '')
-    if breathing_prep.get('active'):
-        note = branch_20cm.get('reason') or breathing_prep.get('note') or '创业板20cm预启动观察。'
-        gem_breathing_text = f"{note}；只先进观察池，不直接给执行权"
-    delete_preview = ""
-    if delete_group:
-        delete_preview = " / ".join(f"{item.get('name', '-')}" for item in delete_group[:2])
-
-    buy_target_text = ""
-    watch_target_text = ""
-    no_trade_text = ""
-    if final_gate.get('can_new_entry') and best_stock:
-        buy_target_text = f"{best_stock.get('name', '-')}({best_stock.get('code', '-')})，只等60分钟确认，不追盘中情绪顶点"
-    elif watch_anchor:
-        watch_anchor_note = str(watch_anchor.get('watch_anchor_note', '') or '').strip()
-        if final_gate.get('can_new_entry'):
-            watch_target_text = (
-                f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')})，"
-                "先看60分钟确认，只有走成明天唯一能买的那只才允许买入"
-                f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
-            )
-        else:
-            watch_anchor_label = f'（{watch_anchor_type}）' if str(watch_anchor_type or '').strip() else ''
-            watch_target_text = (
-                f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')}){watch_anchor_label}，"
-                "只看强弱，不构成买入指令"
-                f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
-            )
-    else:
-        no_trade_text = "当前无新增执行对象，只保留市场研究与观察权"
-
-    bridge_prep_label = ""
-    bridge_prep_text = ""
-    if bridge_prep.get('active'):
-        bridge_prep_label = '条件执行预备态（优先保留）' if bridge_prep.get('priority_keep') else '条件执行预备态'
-        bridge_prep_text = f"{bridge_prep.get('candidate_label', '-')}，{bridge_prep.get('upgrade_text', '-')}"
-
-    mainline_abnormal_probe = abnormal_probe_group.get('mainline_abnormal_probe')
-    crossline_abnormal_probe = abnormal_probe_group.get('crossline_abnormal_probe')
-    validation_probe = abnormal_probe_group.get('validation_probe')
-    fallback_watch_anchor = abnormal_probe_group.get('fallback_watch_anchor') or watch_anchor or {}
-    mainline_probe_text = ""
-    if mainline_abnormal_probe or fallback_watch_anchor:
-        mainline_probe_text = _format_abnormal_probe_text(
-            mainline_abnormal_probe,
-            role_label='主线异动里先看谁',
-            mainline_name=mainline_name,
-            fallback_watch_anchor=fallback_watch_anchor,
-        )
-    crossline_probe_text = ""
-    if crossline_abnormal_probe:
-        crossline_probe_text = _format_abnormal_probe_text(
-            crossline_abnormal_probe,
-            role_label='跨线异动里先看谁',
-            mainline_name=mainline_name,
-        )
-    validation_probe_text = ""
-    if validation_probe:
-        validation_probe_text = _format_abnormal_probe_text(
-            validation_probe,
-            role_label='承接验证先看谁',
-            mainline_name=mainline_name,
-        )
-
-    front_follow_action_text = _build_front_follow_action_text(
-        final_gate=final_gate,
-        best_stock=best_stock,
-        watch_anchor=watch_anchor,
-        watch_anchor_type=watch_anchor_type,
-        fallback_text=final_gate.get('final_action', state_machine.get('reflection_focus', '-')),
+    return render_mvp_focus_summary_contract(
+        market_research_snapshot,
+        watchlist=watchlist,
+        abnormal_watch_pool=abnormal_watch_pool,
+        leader_memory_bank=leader_memory_bank,
+        core_stocks=core_stocks,
+        crossline_observation_stocks=crossline_observation_stocks,
+        gem_breathing_candidates=gem_breathing_candidates,
+        filtered_out_gem_candidates=filtered_out_gem_candidates,
+        structure_layer_text=structure_layer_text,
         focus_group=focus_group,
         keep_group=keep_group,
         delete_group=delete_group,
+        best_stock=best_stock,
+        watch_anchor=watch_anchor,
+        watch_anchor_type=watch_anchor_type,
+        abnormal_probe_group=abnormal_probe_group,
+        final_gate=final_gate,
         position_level=position_level,
-        state_machine_snapshot=state_machine,
         target_date=target_date,
-        special_probe_verdict=special_probe_verdict,
-    )
-    return render_mvp_focus_summary(
-        {
-            "special_probe_text": special_probe_text,
-            "rotation_summary_text": rotation_snapshot.get('summary_text', ''),
-            "rotation_narrative_text": rotation_snapshot.get('narrative_text', ''),
-            "gem_breathing_text": gem_breathing_text,
-            "filtered_gem_text": filtered_gem_text,
-            "mainline_watch_preview": mainline_watch_preview,
-            "crossline_watch_preview": crossline_watch_preview,
-            "generic_watch_preview": generic_watch_preview,
-            "abnormal_preview": abnormal_preview,
-            "degraded_abnormal_text": degraded_abnormal_text,
-            "memory_preview": memory_preview,
-            "core_preview": core_preview,
-            "cross_core_preview": cross_core_preview,
-            "special_probe_summary_text": special_probe_summary_text,
-            "structure_layer_text": structure_layer_text,
-            "observation_cycle": cycle_triplet.get('observation_cycle', ''),
-            "intervention_cycle": cycle_triplet.get('intervention_cycle', ''),
-            "exit_cycle": cycle_triplet.get('exit_cycle', ''),
-            "delete_preview": delete_preview,
-            "buy_target_text": buy_target_text,
-            "watch_target_text": watch_target_text,
-            "no_trade_text": no_trade_text,
-            "bridge_prep_label": bridge_prep_label,
-            "bridge_prep_text": bridge_prep_text,
-            "mainline_probe_text": mainline_probe_text,
-            "crossline_probe_text": crossline_probe_text,
-            "validation_probe_text": validation_probe_text,
-            "front_follow_action_text": front_follow_action_text,
-            "compact": compact,
-        }
+        compact=compact,
+        resolve_primary_mainline_name=_resolve_primary_mainline_name,
+        split_abnormal_watch_pool=_split_abnormal_watch_pool,
+        build_bridge_prep_context=_build_bridge_prep_context,
+        build_front_structure_layer_text=_build_front_structure_layer_text,
+        build_special_probe_verdict=_build_special_probe_verdict,
+        build_special_probe_focus_text=_build_special_probe_focus_text,
+        build_mainline_rotation_snapshot=_build_mainline_rotation_snapshot,
+        split_candidates_by_mainline=_split_candidates_by_mainline,
+        format_candidate_preview=_format_candidate_preview,
+        candidate_matches_mainline=_candidate_matches_mainline,
+        build_position_sizing_decision=_build_position_sizing_decision,
+        build_cycle_triplet_texts=_build_cycle_triplet_texts,
+        build_execute_anchor_window_text=_build_execute_anchor_window_text,
+        format_abnormal_probe_text=_format_abnormal_probe_text,
+        build_front_follow_action_text=_build_front_follow_action_text,
+        render_mvp_focus_summary=render_mvp_focus_summary,
     )
 
 
@@ -21241,84 +20602,15 @@ def analyze_position_management(data, target_date, positions):
 
 def replay_from_snapshot(target_date, refresh_sources=None):
     """从快照读数据，只重新拉指定数据源，然后用最新skill逻辑重新生成报告"""
-    if refresh_sources is None:
-        refresh_sources = ['calendar_events']
-
-    def _mark_replayed_step_success(step_name):
-        timer_summary = snapshot_data.setdefault('timer_summary', {}) or {}
-        raw_steps = timer_summary.get('steps', []) or []
-        normalized_steps = []
-        matched = False
-
-        for item in raw_steps:
-            if not isinstance(item, (list, tuple)) or len(item) < 3:
-                continue
-            name = str(item[0] or '').strip()
-            elapsed = _safe_float(item[1])
-            cumulative = _safe_float(item[2])
-            base_name = name.replace('(失败)', '').replace('(回补)', '').strip()
-            if base_name == step_name:
-                name = step_name
-                matched = True
-            normalized_steps.append([name, elapsed, cumulative])
-
-        if not matched:
-            prev_cumulative = normalized_steps[-1][2] if normalized_steps else 0.0
-            normalized_steps.append([step_name, 0.0, prev_cumulative])
-
-        timer_summary['steps'] = normalized_steps
-        if 'total_time' not in timer_summary:
-            timer_summary['total_time'] = normalized_steps[-1][2] if normalized_steps else 0.0
-        snapshot_data['timer_summary'] = timer_summary
-
-    print(f"\n{'=' * 60}")
-    print(f"🔄 复盘模式：从快照读取 {target_date} 数据")
-    print(f"   刷新数据源: {', '.join(refresh_sources)}")
-    print(f"{'=' * 60}")
-
-    snapshot_data, supplementary = load_data_snapshot(target_date)
-    if not snapshot_data:
-        print(f"❌ 快照不存在: {target_date}，无法复盘")
-        return None, target_date
-
-    if 'calendar_events' in refresh_sources:
-        print(f"   🔄 重新拉取财联社预期日历...")
-        try:
-            tencent = TencentFinanceData()
-            # 传入target_date以启用智能flag判断（复盘用本月全部数据）
-            calendar = tencent.get_calendar_events(target_date=target_date)
-            if calendar:
-                snapshot_data['calendar_events'] = calendar
-                print(f"   ✅ 预期日历刷新成功: {len(calendar)} 条")
-            else:
-                print(f"   ⚠️ 预期日历返回空，保留快照中的旧数据")
-        except Exception as e:
-            print(f"   ⚠️ 预期日历拉取失败: {e}，保留快照中的旧数据")
-
-    data_status = snapshot_data.setdefault('data_status', {})
-    step_status = snapshot_data.setdefault('step_status', {})
-    major_indices_missing = (
-        'major_indices' in refresh_sources
-        or not data_status.get('主要指数')
-        or not snapshot_data.get('indices')
+    result = build_replay_snapshot_contract(
+        target_date,
+        refresh_sources=refresh_sources,
+        load_data_snapshot=load_data_snapshot,
+        tencent_factory=TencentFinanceData,
+        get_major_indices_from_iwencai=get_major_indices_from_iwencai,
+        safe_float=_safe_float,
     )
-    if major_indices_missing:
-        print(f"   🔄 回补主要指数...")
-        try:
-            indices = get_major_indices_from_iwencai(target_date=target_date)
-            if indices:
-                snapshot_data['indices'] = indices
-                data_status['主要指数'] = True
-                step_status['主要指数获取'] = True
-                _mark_replayed_step_success('主要指数获取')
-                print(f"   ✅ 主要指数回补成功: {len(indices)} 个")
-            else:
-                print(f"   ⚠️ 主要指数回补失败，保留快照中的旧数据")
-        except Exception as e:
-            print(f"   ⚠️ 主要指数回补失败: {e}，保留快照中的旧数据")
-
-    print(f"   ✅ 快照数据加载完成，开始用最新skill生成报告")
-    return snapshot_data, target_date
+    return result.get('data'), result.get('target_date', target_date)
 
 
 def _inject_report_variant_banner(report_text, variant):
@@ -21393,167 +20685,20 @@ def save_stock_diagnostic_output(report_text, target_date, stock_code, mode=LEDG
     return _save_stock_diagnostic_output_impl(report_text, target_date, stock_code, mode=mode)
 
 
-def _absorb_single_stock_snapshot(base, item, source_tag=''):
-    if not item:
-        return
-
-    mappings = {
-        'name': ['name', '名称'],
-        'sector': ['sector', '所属行业', '所属板块'],
-        'change': ['change', '涨跌幅', 'change_pct'],
-        'close': ['close', '最新价', 'price'],
-        'open': ['open', '开盘价'],
-        'high': ['high', '最高价'],
-        'low': ['low', '最低价'],
-        'volume': ['volume', '成交额', 'amount'],
-        'score': ['score'],
-        'pattern': ['pattern'],
-        'source': ['source'],
-        'tomorrow_expectation': ['tomorrow_expectation'],
-        'tomorrow_strength': ['tomorrow_strength'],
-        'core_level': ['core_level'],
-        'tmr_forecast': ['tmr_forecast'],
-        'reason': ['reason'],
-        'abnormal_follow_state': ['abnormal_follow_state', 'follow_state'],
-        'abnormal_type': ['abnormal_type'],
-        'abnormal_summary': ['abnormal_summary'],
-        'abnormal_setup_signal_id': ['abnormal_setup_signal_id', 'setup_signal_id'],
-        'abnormal_setup_signal_label': ['abnormal_setup_signal_label', 'setup_signal_label'],
-        'abnormal_is_degraded_snapshot': ['abnormal_is_degraded_snapshot', 'is_degraded_snapshot'],
-    }
-
-    for target_key, source_keys in mappings.items():
-        current_value = base.get(target_key)
-        if current_value not in (None, '', 0, 0.0, False):
-            continue
-        for source_key in source_keys:
-            value = item.get(source_key)
-            if value not in (None, '', 0, 0.0, False):
-                base[target_key] = value
-                break
-
-    if source_tag:
-        base.setdefault('source_tags', [])
-        if source_tag not in base['source_tags']:
-            base['source_tags'].append(source_tag)
-
-
 def resolve_single_stock_snapshot(data, stock_code, stock_name='', market_research_bundle=None, step2_bundle=None):
-    code = normalize_stock_code(stock_code)
-    stock = {
-        'code': code,
-        'name': stock_name or '',
-        'source_tags': [],
-    }
-    market_research_bundle = market_research_bundle or {}
-    step2_bundle = step2_bundle or {}
-
-    def maybe_absorb(item, source_tag):
-        item_code = normalize_stock_code(item.get('code', item.get('代码', '')))
-        item_name = item.get('name', item.get('名称', ''))
-        if item_code and item_code == code:
-            _absorb_single_stock_snapshot(stock, item, source_tag)
-            return True
-        if not code and stock_name and item_name == stock_name:
-            _absorb_single_stock_snapshot(stock, item, source_tag)
-            return True
-        return False
-
-    for source_tag, items in (
-        ('step2_evaluated', step2_bundle.get('evaluated_stocks', [])),
-        ('step1_watchlist', market_research_bundle.get('watchlist', [])),
-        ('abnormal_watch', market_research_bundle.get('abnormal_watch_pool_all', [])),
-        ('leader_memory', market_research_bundle.get('leader_memory_bank', [])),
-        ('hot_rank', market_research_bundle.get('hot_stocks', [])),
-        ('zt_pool', data.get('zt_pool', [])),
-        ('turnover_rank', data.get('turnover_rank', [])),
-        ('stocks_with_history', data.get('stocks_with_history', [])),
-    ):
-        for item in items or []:
-            maybe_absorb(item, source_tag)
-
-    if not stock.get('sector'):
-        stock['sector'] = get_stock_sector(
-            stock.get('name', ''),
-            code,
-            hot_rank_data=data.get('hot_rank_top30', []),
-            zt_pool_data=data.get('zt_pool_by_sector', {}),
-            lianban_data=(data.get('lianban_data', {}) or {}).get('stocks', []),
-            lhb_data=data.get('lhb_details', []),
-            sector_fund_flow=data.get('sector_fund_flow'),
-            zt_pool_raw=data.get('zt_pool', []),
-            dt_pool_raw=data.get('dt_pool', []),
-            skip_api_call=True,
-        )
-
-    if (_safe_float(stock.get('close')) <= 0 or stock.get('change') in (None, '')) and code:
-        recent_bars = fetch_recent_price_bars(code, data.get('target_date', ''), lookback_days=3)
-        if recent_bars:
-            latest_bar = recent_bars[-1]
-            prev_bar = recent_bars[-2] if len(recent_bars) >= 2 else {}
-            stock.setdefault('open', latest_bar.get('open'))
-            stock.setdefault('high', latest_bar.get('high'))
-            stock.setdefault('low', latest_bar.get('low'))
-            stock['close'] = _safe_float(stock.get('close') or latest_bar.get('close'))
-            if stock.get('change') in (None, ''):
-                stock['change'] = round(_compute_bar_change_pct(latest_bar, prev_bar), 2)
-            if _safe_float(stock.get('volume')) <= 0:
-                stock['volume'] = _safe_float(latest_bar.get('amount') or latest_bar.get('volume'))
-
-    return stock
-
-
-def _compose_single_stock_final_verdict(
-    phase_context,
-    stock,
-    permission,
-    tradability_guard,
-    risk_signal,
-    risk_row,
-    quant_signal,
-):
-    final_gate = (phase_context or {}).get('final_gate', {}) or {}
-    risk_group = risk_row.get('dest', '系统外')
-    risk_level = risk_row.get('risk_level', '-')
-    risk_reason_text = risk_row.get('reason', '-')
-    risk_tomorrow_text = risk_row.get('tomorrow_risk', '-')
-
-    if not tradability_guard.get('can_trade', True):
-        return "观察，不买", f"卡在可交易性：{tradability_guard.get('reason', '')}"
-
-    if risk_group == '明天先回避谁':
-        return "回避", f"卡在个股风险层：{risk_tomorrow_text or risk_reason_text}"
-
-    if risk_signal.get('light') == '🔴 红灯' or stock.get('abnormal_follow_state') == '已经转弱':
-        return "回避", f"卡在触发层：{risk_signal.get('forecast') or permission.get('permission_reason', '')}"
-
-    if not final_gate.get('can_new_entry', False):
-        passed_parts = []
-        if risk_level and risk_group and risk_group != '系统外':
-            passed_parts.append(f"{risk_level}/{risk_group}")
-        if permission.get('can_execute') and permission.get('permission_label'):
-            passed_parts.append(permission.get('permission_label'))
-        if tradability_guard.get('can_trade', True) and tradability_guard.get('status_label'):
-            passed_parts.append(tradability_guard.get('status_label'))
-        passed_text = " / ".join([part for part in passed_parts if part])
-        if passed_text:
-            prefix = "个股层已通过" if risk_group == '可按计划' else "个股层仍保留跟踪价值"
-            return "环境未开，不买", f"{prefix}（{passed_text}），但环境层未开：{final_gate.get('final_action', '')}"
-        return "环境未开，不买", f"环境层未开：{final_gate.get('final_action', '')}"
-
-    if not permission.get('can_execute'):
-        return "观察，等确认", f"卡在执行权限层：{permission.get('permission_reason', '') or '条件未齐，不抢跑'}"
-
-    if quant_signal and quant_signal.is_valid:
-        return "进入执行等待区", f"环境已开，且执行层通过：{permission.get('permission_reason', '')}；{quant_signal.reason}"
-
-    if quant_signal and not quant_signal.is_valid and '跌破' in str(quant_signal.reason or ''):
-        return "回避", f"结构层转弱：{quant_signal.reason}"
-
-    if quant_signal and getattr(quant_signal, 'reason', ''):
-        return "观察，等确认", f"环境已开，但结构触发未完成：{quant_signal.reason}"
-
-    return "观察，等确认", f"环境已开，但当前还没走出明确结构预案；{permission.get('permission_reason', '') or '继续等确认'}"
+    result = resolve_single_stock_snapshot_contract(
+        data,
+        stock_code,
+        stock_name=stock_name,
+        market_research_bundle=market_research_bundle,
+        step2_bundle=step2_bundle,
+        normalize_stock_code=normalize_stock_code,
+        get_stock_sector=get_stock_sector,
+        fetch_recent_price_bars=fetch_recent_price_bars,
+        safe_float=_safe_float,
+        compute_bar_change_pct=_compute_bar_change_pct,
+    )
+    return result.get('stock', {})
 
 
 def generate_single_stock_diagnostic_markdown(
@@ -21564,222 +20709,36 @@ def generate_single_stock_diagnostic_markdown(
     run_mode=LEDGER_MODE_FROZEN,
 ):
     """生成和日报同一推导链的单票诊断。"""
-    phase_context = build_market_phase_context(data, target_date, emit_logs=False)
-    market_research_bundle = build_market_research_context_bundle(
+    result = build_single_stock_diagnostic_contract(
         data,
         target_date,
-        exit_analysis=phase_context.get('exit_analysis', {}),
-        final_gate=phase_context.get('final_gate', {}),
-        position_level=phase_context.get('position_level', ''),
-        main_sectors_info=phase_context.get('main_sectors_info', []),
-        secondary_sectors_info=phase_context.get('secondary_sectors_info', []),
-        main_sectors=phase_context.get('main_sectors', []),
-        secondary_sectors=phase_context.get('secondary_sectors', []),
-        dragon_stocks=phase_context.get('dragon_stocks', []),
-    )
-    step2_bundle = build_step2_candidate_bundle(
-        data,
-        exit_analysis=phase_context.get('exit_analysis', {}),
-        candidates=market_research_bundle.get('candidates', []),
-        watchlist=market_research_bundle.get('watchlist', []),
-        abnormal_watch_map=market_research_bundle.get('abnormal_watch_map', {}),
-        dragon_stocks=phase_context.get('dragon_stocks', []),
-        zt_pool_by_sector=market_research_bundle.get('zt_pool_by_sector', {}),
-        gem_breathing_candidates=market_research_bundle.get('gem_breathing_candidates', []),
-        target_date=target_date,
-    )
-    step3_bundle = build_step3_risk_bundle(
-        data,
-        target_date,
-        mainline_name=market_research_bundle.get('mainline_name', ''),
-        core_stocks=step2_bundle.get('core_stocks', []),
-        secondary_stocks=step2_bundle.get('secondary_stocks', []),
-        gem_observation_stocks=step2_bundle.get('gem_observation_stocks', []),
-        zt_pool_by_sector=market_research_bundle.get('zt_pool_by_sector', {}),
-        dt_pool_by_sector=market_research_bundle.get('dt_pool_by_sector', {}),
-        persist_a_kill=False,
-    )
-
-    stock = resolve_single_stock_snapshot(
-        data,
         stock_code,
         stock_name=stock_name,
-        market_research_bundle=market_research_bundle,
-        step2_bundle=step2_bundle,
+        run_mode=run_mode,
+        build_market_phase_context=build_market_phase_context,
+        build_market_research_context_bundle=build_market_research_context_bundle,
+        build_step2_candidate_bundle=build_step2_candidate_bundle,
+        build_step3_risk_bundle=build_step3_risk_bundle,
+        resolve_single_stock_snapshot=resolve_single_stock_snapshot,
+        normalize_stock_code=normalize_stock_code,
+        get_trade_permission=get_trade_permission,
+        fetch_recent_price_bars=fetch_recent_price_bars,
+        evaluate_live_tradability=evaluate_live_tradability,
+        get_abnormal_follow_risk_signal=get_abnormal_follow_risk_signal,
+        safe_float=_safe_float,
+        analyze_buy_signal=analyze_buy_signal,
+        quant_system_available=QUANT_SYSTEM_AVAILABLE,
+        build_intraday_execution_plan=build_intraday_execution_plan,
+        build_stop_execution_plan=build_stop_execution_plan,
+        enrich_stop_plan_with_reference_anchors=_enrich_stop_plan_with_reference_anchors,
+        stop_prior_low_trading_days=STOP_PRIOR_LOW_TRADING_DAYS,
+        score_candidate_decision_stack=score_candidate_decision_stack,
+        score_execution_candidate=score_execution_candidate,
+        build_strategy_ev_calibration=build_strategy_ev_calibration,
+        build_trade_price_focus=_build_trade_price_focus,
+        render_single_stock_diagnostic_markdown=render_single_stock_diagnostic_markdown,
     )
-    code = normalize_stock_code(stock.get('code', stock_code))
-    name = stock.get('name') or stock_name or code
-
-    core_codes = {normalize_stock_code(item.get('code', '')) for item in step2_bundle.get('core_stocks', []) if item.get('code')}
-    secondary_codes = {normalize_stock_code(item.get('code', '')) for item in step2_bundle.get('secondary_stocks', []) if item.get('code')}
-    crossline_observation_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in step2_bundle.get('crossline_observation_stocks', [])
-        if item.get('code')
-    }
-    gem_observation_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in step2_bundle.get('gem_observation_stocks', [])
-        if item.get('code')
-    }
-    watch_codes = {normalize_stock_code(item.get('code', '')) for item in market_research_bundle.get('watchlist', []) if item.get('code')}
-    conviction_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in step2_bundle.get('extreme_conviction_list', [])
-        if item.get('code')
-    }
-    leader_memory_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in market_research_bundle.get('leader_memory_bank', [])
-        if item.get('code')
-    }
-
-    abnormal_item = market_research_bundle.get('abnormal_watch_map', {}).get(code, {})
-    if abnormal_item:
-        _absorb_single_stock_snapshot(stock, abnormal_item, 'abnormal_watch')
-
-    if code in conviction_codes:
-        system_role = '极度看好名单'
-    elif code in core_codes:
-        system_role = '明日核心'
-    elif code in secondary_codes:
-        system_role = '明日次核心'
-    elif code in crossline_observation_codes:
-        system_role = '跨线观察对象'
-    elif code in gem_observation_codes:
-        system_role = '创业板20cm预启动观察'
-    elif code in leader_memory_codes:
-        system_role = '龙头记忆'
-    elif code in watch_codes:
-        system_role = '观察池'
-    else:
-        system_role = '系统外对象'
-
-    permission = get_trade_permission(
-        stock,
-        mainline_name=market_research_bundle.get('mainline_name', ''),
-        conviction_codes=conviction_codes,
-        leader_memory_codes=leader_memory_codes,
-        final_gate=phase_context.get('final_gate', {}),
-        state_machine_snapshot=market_research_bundle.get('market_state_snapshot', {}),
-    )
-
-    recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4) if code else []
-    daily_anchor_bars = fetch_recent_price_bars(
-        code, target_date, lookback_days=max(STOP_PRIOR_LOW_TRADING_DAYS + 5, 10)
-    ) if code else []
-    tradability_guard = evaluate_live_tradability(stock, target_date, recent_bars=recent_bars)
-    risk_signal = get_abnormal_follow_risk_signal(stock)
-
-    close_price = _safe_float(stock.get('close'))
-    volume_value = _safe_float(stock.get('volume'))
-    quant_signal = analyze_buy_signal(code, name, close_price, volume_value) if (QUANT_SYSTEM_AVAILABLE and close_price > 0 and code) else None
-    minute_plan = build_intraday_execution_plan(
-        code,
-        target_date,
-        close_price,
-        signal_type=(getattr(quant_signal, 'signal_type', '') if quant_signal and quant_signal.is_valid else ''),
-        fallback_stop=None,
-    ) if close_price > 0 and code else {}
-    stop_plan = (minute_plan.get('stop_plan') if minute_plan else None) or (
-        build_stop_execution_plan(close_price) if close_price > 0 else None
-    )
-    stop_plan = _enrich_stop_plan_with_reference_anchors(
-        stop_plan,
-        code,
-        target_date,
-        recent_bars=daily_anchor_bars,
-    )
-
-    scored_candidate = score_candidate_decision_stack(
-        score_execution_candidate(
-            {
-                **stock,
-                'entry_price': close_price,
-                'stop_loss': stop_plan.get('effective_stop') if stop_plan else 0,
-                'permission_label': permission.get('permission_label', ''),
-                'minute_plan': minute_plan,
-                'stop_plan': stop_plan,
-                'tradability_guard': tradability_guard,
-                'signal': quant_signal if quant_signal and quant_signal.is_valid else None,
-            },
-            build_strategy_ev_calibration(target_date, ledger_mode=run_mode),
-        ),
-        final_gate=phase_context.get('final_gate', {}),
-        mainline_name=market_research_bundle.get('mainline_name', ''),
-        conviction_codes=conviction_codes,
-        leader_memory_codes=leader_memory_codes,
-        state_machine_snapshot=market_research_bundle.get('market_state_snapshot', {}),
-        target_date=target_date,
-    )
-    decision_stack = scored_candidate.get('decision_stack', {}) or {}
-    risk_row = (step3_bundle.get('by_code', {}) or {}).get(code, {})
-    risk_group = risk_row.get('dest', '系统外')
-    risk_level = risk_row.get('risk_level', '-')
-    risk_tomorrow_text = risk_row.get('tomorrow_risk', '-')
-    risk_reason_text = risk_row.get('reason', '-')
-    final_verdict, final_reason = _compose_single_stock_final_verdict(
-        phase_context,
-        stock,
-        permission,
-        tradability_guard,
-        risk_signal,
-        risk_row,
-        quant_signal,
-    )
-
-    price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-    confirm_text = f"{minute_plan.get('confirm_price_60m'):.2f}" if minute_plan.get('confirm_price_60m') else '-'
-    ev_stack_text = f"{_safe_float(decision_stack.get('ev_score')):.1f}" if decision_stack.get('ev_score') not in (None, '') else '-'
-
-    return render_single_stock_diagnostic_markdown(
-        {
-            "target_date": target_date,
-            "name": name,
-            "code": code,
-            "position_level": phase_context.get('position_level', '-'),
-            "final_action": phase_context.get('final_gate', {}).get('final_action', '-'),
-            "mainline_name": market_research_bundle.get('mainline_name', '-'),
-            "driver_type": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('driver_type', '-'),
-            "pulse_stage": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_stage', '-'),
-            "acceptance_quality": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('acceptance_quality', '-'),
-            "pulse_action_bias": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_action_bias', '-'),
-            "energy_state": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('energy_state', '-'),
-            "step0_prediction_cn": (market_research_bundle.get('step0_plan', {}) or {}).get('step0_prediction_cn', '-'),
-            "system_role": system_role,
-            "sector": stock.get('sector', '未知'),
-            "change_pct": _safe_float(stock.get('change')),
-            "pattern": stock.get('pattern', '-'),
-            "abnormal_follow_state": stock.get('abnormal_follow_state', '无明确异动跟踪'),
-            "risk_light": risk_signal.get('light', '-'),
-            "risk_reason": risk_signal.get('reason', '-'),
-            "permission_label": permission.get('permission_label', '-'),
-            "permission_reason": permission.get('permission_reason', '-'),
-            "risk_level": risk_level,
-            "risk_group": risk_group,
-            "risk_reason_text": risk_reason_text,
-            "risk_penalty_count": len(risk_row.get('risk_penalties', []) or []),
-            "repair_buffer_count": len(risk_row.get('repair_buffers', []) or []),
-            "raw_risk_score": risk_row.get('raw_risk_score', '-'),
-            "risk_score": risk_row.get('risk_score', '-'),
-            "tradability_status": tradability_guard.get('status_label', '-'),
-            "tradability_reason": tradability_guard.get('reason', '-'),
-            "quant_signal_type": getattr(quant_signal, 'signal_type', '-') if quant_signal else '-',
-            "quant_reason": quant_signal.reason if quant_signal else '暂无量化信号',
-            "confirm_text": confirm_text,
-            "key_zone_display": price_focus.get('key_zone_display', '-'),
-            "execution_stop_display": price_focus.get('execution_stop_display', '-'),
-            "hard_stop_display": price_focus.get('hard_stop_display', '-'),
-            "price_note_text": price_focus.get('note_text', '-'),
-            "decision_stack": decision_stack,
-            "ev_stack_text": ev_stack_text,
-            "final_verdict": final_verdict,
-            "final_reason": final_reason or '-',
-            "risk_tomorrow_text": risk_tomorrow_text,
-            "tmr_forecast": stock.get('tmr_forecast'),
-            "source_tags": stock.get('source_tags', []),
-        }
-    )
+    return result.get('markdown', '')
 
 
 def main():
