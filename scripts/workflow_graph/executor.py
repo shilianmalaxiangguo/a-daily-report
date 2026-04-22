@@ -40,9 +40,9 @@ def execute_workflow_graph(workflow, registry, ctx=None):
     node_results = {}
     module_logs = []
     errors = []
-    edges = workflow.get("edges", [])
+    edges = workflow.get("edges") or []
     execution_order = build_execution_order(workflow)
-    node_meta_map = {item["key"]: item for item in workflow.get("nodes", [])}
+    node_meta_map = {item["key"]: item for item in (workflow.get("nodes") or [])}
 
     for node_key in execution_order:
         node_meta = node_meta_map[node_key]
@@ -102,7 +102,7 @@ def execute_workflow_graph(workflow, registry, ctx=None):
         )
 
     exports = {}
-    for export_key in workflow.get("exports", []):
+    for export_key in (workflow.get("exports") or []):
         for node_key in reversed(execution_order):
             node_exports = (node_results.get(node_key) or {}).get("exports") or {}
             if export_key in node_exports:

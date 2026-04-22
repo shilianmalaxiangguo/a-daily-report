@@ -133,6 +133,70 @@ class WorkflowGraphExecutorTest(unittest.TestCase):
             )
         )
 
+    def test_execute_workflow_graph_rejects_duplicate_node_keys(self):
+        workflow = {
+            "workflow_key": "dup_v1",
+            "nodes": [
+                {"key": "start", "kind": "infer"},
+                {"key": "start", "kind": "infer"},
+            ],
+            "edges": [],
+            "exports": [],
+        }
+
+        with self.assertRaises(ValueError):
+            execute_workflow_graph(workflow, {"start": lambda ctx: {}}, {})
+
+    def test_execute_workflow_graph_rejects_unknown_edge_endpoints(self):
+        workflow = {
+            "workflow_key": "unknown_edge_v1",
+            "nodes": [{"key": "start", "kind": "infer"}],
+            "edges": [{"from": "start", "to": "missing"}],
+            "exports": [],
+        }
+
+        with self.assertRaises(ValueError):
+            execute_workflow_graph(workflow, {"start": lambda ctx: {}}, {})
+
+    def test_execute_workflow_graph_rejects_malformed_workflow_with_value_error(self):
+        malformed_workflows = [
+            {
+                "workflow_key": "nodes_none_v1",
+                "nodes": None,
+                "edges": [],
+                "exports": [],
+            },
+            {
+                "workflow_key": "edges_none_v1",
+                "nodes": [{"key": "start", "kind": "infer"}],
+                "edges": None,
+                "exports": [],
+            },
+            {
+                "workflow_key": "missing_key_v1",
+                "nodes": [{"kind": "infer"}],
+                "edges": [],
+                "exports": [],
+            },
+            {
+                "workflow_key": "node_not_dict_v1",
+                "nodes": ["start"],
+                "edges": [],
+                "exports": [],
+            },
+            {
+                "workflow_key": "edge_not_dict_v1",
+                "nodes": [{"key": "start", "kind": "infer"}],
+                "edges": ["start->end"],
+                "exports": [],
+            },
+        ]
+
+        for workflow in malformed_workflows:
+            with self.subTest(workflow_key=workflow["workflow_key"]):
+                with self.assertRaises(ValueError):
+                    execute_workflow_graph(workflow, {}, {})
+
 
 if __name__ == "__main__":
     unittest.main()

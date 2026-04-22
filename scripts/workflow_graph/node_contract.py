@@ -1,4 +1,8 @@
+"""Node context contract helpers for workflow execution."""
+
+
 def build_node_context(node_key, workflow_key, run_id, inputs, state, upstream, helpers, config):
+    """Build the normalized node context passed to node implementations."""
     return {
         "node": {
             "key": node_key,
