@@ -83,6 +83,10 @@ from domains.market_activity.report_sections import (
     build_advanced_activity_report_sections,
     build_market_activity_report_sections,
 )
+from domains.execution_chain.step1_sections import (
+    build_step1_watch_sections,
+    inject_step0_research_sections,
+)
 from decision.market_phase_context import build_market_phase_context_contract
 from research.market_research_runtime import (
     build_market_research_snapshot_contract,
@@ -17492,202 +17496,29 @@ def generate_markdown_report(
     step0_reason = step0_plan.get('step0_reason', '')
     step0_action = step0_plan.get('step0_action', '')
 
-    # Step 1 - 明天观察池（基于今日数据预判明日机会）
-    # ============================================================
-    report.append("#### Step 1 - 明天观察池")
-    report.append("> **核心问题**：基于今日各种形态，预判哪些股票明天还有可能延续强势？")
-    report.append("> **预判逻辑**：首板启动 > 炸板反包 > 烂板弱转强 > 跟风套利")
-    report.append("")
-
-    for i, line in enumerate(report):
-        if line == "<!-- MARKET_RESEARCH_SNAPSHOT_PLACEHOLDER -->":
-            report[i:i+1] = _render_market_research_snapshot_section(market_research_snapshot, compact=DISPLAY_MVP_MODE)
-            break
-
-    # 前台摘要依赖后续挑出的特殊标的/唯一动作，延后到生成 watch_anchor 后再替换占位符。
-
-    for i, line in enumerate(report):
-        if line == "<!-- STEP0_FOLLOW_PLACEHOLDER -->":
-            report[i:i+1] = _render_step0_follow_section(step0_plan, market_research_snapshot, compact=DISPLAY_MVP_MODE)
-            break
-    
-    # 1.4 输出观察池（展示预判逻辑）
-    if sector_trend_snapshot_step1:
-        report.append("**Step 1.0 主线趋势密度扫描**（先看哪条线里活跃趋势股最多）")
-        report.append("| 板块 | 活跃趋势股 | 强势候选 | 涨停家数 | 锚定龙头 | 结论 |")
-        report.append("|------|------------|----------|----------|----------|------|")
-        sector_preview = sector_trend_snapshot_step1[:3] if DISPLAY_MVP_MODE else sector_trend_snapshot_step1
-        for item in sector_preview:
-            anchor_text = f"{item.get('anchor_name', '-')}"
-            if item.get('anchor_code'):
-                anchor_text += f"({item.get('anchor_code')})"
-            report.append(
-                f"| {item.get('sector', '-')} | {item.get('trend_count', 0)}只 | "
-                f"{item.get('strong_count', 0)}只 | {item.get('limit_up_count', 0)}只 | "
-                f"{anchor_text} | {item.get('anchor_reason', '-')} |"
-            )
-        report.append("")
-
-    if mainline_competition_snapshot:
-        report.append("**Step 1.01 主线竞争格局**（不是板块名单，而是能量争夺排序）")
-        report.append("| 角色 | 方向 | 当前证据 | 判断 | 操作原则 |")
-        report.append("|------|------|----------|------|----------|")
-        for item in mainline_competition_snapshot:
-            report.append(
-                f"| {item.get('role', '-')} | {item.get('sector', '-')} | {item.get('evidence', '-')} | "
-                f"{item.get('judgement', '-')} | {item.get('action', '-')} |"
-            )
-        report.append("")
-
-    if leader_memory_bank:
-        report.append("**Step 1.05 龙头记忆库**（第一次异动先记住，后面优先回看这些）")
-        report.append("| 股票 | 代码 | 板块 | 记忆理由 | 回看窗口 | 明日原则 |")
-        report.append("|------|------|------|----------|----------|----------|")
-        for item in leader_memory_bank:
-            report.append(
-                f"| {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
-                f"{item.get('remember_reason', '-')} | {item.get('remember_window', '-')} | "
-                f"{item.get('action_rule', '-')} |"
-            )
-        report.append("")
-
-    report.append("**Step 1.06 跟踪记忆校验**（昨天的观察先验尸，活下来才允许继续跟）")
-    report.append(f"- **今日重新校验**: {tracking_memory_status.get('today_seen_count', 0)}只")
-    report.append(f"- **升级为可信记忆**: {len(tracking_memory_status.get('promoted_items', []))}只")
-    report.append(f"- **继续作为临时假设**: {len(tracking_memory_status.get('today_tentative_items', []))}只")
-    report.append(f"- **今日剔除旧记忆**: {len(tracking_memory_status.get('dropped_items', []))}只")
-    report.append("- **防错纪律**: 历史记忆只影响跟踪优先级，不直接产生买点；今天没再出现或今天已经转弱，就自动降级/清除。")
-    trusted_items = tracking_memory_status.get('today_validated_items', [])[:3]
-    if trusted_items:
-        report.append("| 可信记忆 | 代码 | 状态 | 今日证据 | 原则 |")
-        report.append("|----------|------|------|----------|------|")
-        for item in trusted_items:
-            sources = " / ".join(item.get('sources', [])[:3]) or "-"
-            follow_state = item.get('follow_state', '') or '今日再次入池'
-            report.append(
-                f"| {item.get('name', '-')} | {item.get('code', '-')} | 已二次确认 | {sources} + {follow_state} | "
-                f"只保留优先回看权，不直接给执行权 |"
-            )
-    elif tracking_memory_status.get('new_items'):
-        report.append("- **现在是什么情况**: 还没有形成可信记忆，今天出现的更多是新假设，不能直接当真。")
-    else:
-        report.append("- **现在是什么情况**: 暂无可信记忆资产，说明系统宁可不记，也不强行继承旧判断。")
-    if tracking_memory_status.get('dropped_items'):
-        dropped_preview = tracking_memory_status.get('dropped_items', [])[:3]
-        dropped_text = "；".join(
-            f"{item.get('name', '-') or item.get('code', '-') }({item.get('code', '-')}) {item.get('reason', '')}"
-            for item in dropped_preview
-        )
-        report.append(f"- **今日自动清除**: {dropped_text}")
-    report.append("")
-
-    report.append("**Step 1.1 明日预期强度排序**（按今日形态预判明日延续性）")
-    report.append("")
-    
-    if watchlist:
-        report.append("| 排名 | 股票 | 代码 | 所属板块 | 今日形态 | 预判分数 | 明日预期 | 核心逻辑 |")
-        report.append("|------|------|------|----------|----------|----------|----------|----------|")
-        watchlist_preview = watchlist[:5] if DISPLAY_MVP_MODE else watchlist[:12]
-        for i, c in enumerate(watchlist_preview, 1):
-            report.append(f"| {i} | {c.get('name', '-')} | {c.get('code', '-')} | {c.get('sector', '-')} | {c.get('pattern', '-')} | {c.get('score', 0)}分 | {c.get('tomorrow_expectation', '-')} | {c.get('reason', '-')} |")
-        report.append("")
-        
-        # 分组展示
-        lianban_expect = [c for c in watchlist if '连板' in c.get('tomorrow_expectation', '')][:5]
-        premium_expect = [c for c in watchlist if '溢价' in c.get('tomorrow_expectation', '')][:3]
-        fanbao_expect = [c for c in watchlist if '反包' in c.get('tomorrow_expectation', '')][:3]
-        
-        report.append("**Step 1.2 明日预期分组**:")
-        if lianban_expect:
-            names = [f"{c['name']}({c['code']})" for c in lianban_expect]
-            report.append(f"- **🔥 连板预期**（{len(lianban_expect)}只）: {', '.join(names)}")
-        if premium_expect:
-            names = [f"{c['name']}({c['code']})" for c in premium_expect]
-            report.append(f"- **⭐ 溢价预期**（{len(premium_expect)}只）: {', '.join(names)}")
-        if fanbao_expect:
-            names = [f"{c['name']}({c['code']})" for c in fanbao_expect]
-            report.append(f"- **🔄 反包预期**（{len(fanbao_expect)}只）: {', '.join(names)}")
-        report.append("")
-    else:
-        report.append("**观察池为空**: 今日没有符合明日延续预期的标的。")
-        report.append("")
-
-    if abnormal_watch_pool:
-        report.append("**Step 1.3 异动后观察池**（不是追异动，而是看异动后能不能跌下去）")
-        report.append("| 股票 | 代码 | 板块 | 异动日 | 标准Setup | 后续状态 | 历史异动锚点 | 次日观察边界 | 明日原则 |")
-        report.append("|------|------|------|--------|-----------|----------|--------------|--------------|----------|")
-        abnormal_preview = abnormal_watch_pool[:3] if DISPLAY_MVP_MODE else abnormal_watch_pool
-        for item in abnormal_preview:
-            setup_label = item.get('setup_signal_label', item.get('abnormal_type', '-'))
-            if _is_degraded_abnormal_snapshot(item):
-                setup_label = f"{setup_label}（降级快照，仅观察）"
-            history_anchor_text, nextday_guard_text = _format_abnormal_observation_columns(item)
-            report.append(
-                f"| {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
-                f"{item.get('abnormal_date', '-')} | {setup_label} | {item.get('follow_state', '-')} | "
-                f"{history_anchor_text} | {nextday_guard_text} | {item.get('action_rule', '-')} |"
-            )
-        report.append("")
-    else:
-        report.append("**Step 1.3 异动后观察池**: 暂无明确的异动后跟踪对象，说明今天可记忆的异常K线还不够集中。")
-        report.append("")
-
-    report.append("**Step 1.35 异常投影总结**（用二维异常去反推更高维的状态变化）")
-    report.append(
-        f"- **当前投影**: {abnormal_projection_summary.get('projection_label', '-')}"
-        f"；承接{abnormal_projection_summary.get('resilient_count', 0)}只 / 转弱{abnormal_projection_summary.get('failed_count', 0)}只"
+    inject_step0_research_sections(
+        report,
+        market_research_snapshot=market_research_snapshot,
+        step0_plan=step0_plan,
+        display_mvp_mode=DISPLAY_MVP_MODE,
+        render_market_research_snapshot_section=_render_market_research_snapshot_section,
+        render_step0_follow_section=_render_step0_follow_section,
     )
-    report.append(f"- **投影解释**: {abnormal_projection_summary.get('projection_reason', '-')}")
-    if abnormal_projection_summary.get('setup_breakdown'):
-        setup_text = " / ".join(
-            f"{label}{count}只" for label, count in abnormal_projection_summary.get('setup_breakdown', [])
+    report.extend(
+        build_step1_watch_sections(
+            sector_trend_snapshot_step1=sector_trend_snapshot_step1,
+            mainline_competition_snapshot=mainline_competition_snapshot,
+            leader_memory_bank=leader_memory_bank,
+            tracking_memory_status=tracking_memory_status,
+            watchlist=watchlist,
+            abnormal_watch_pool=abnormal_watch_pool,
+            abnormal_projection_summary=abnormal_projection_summary,
+            filtered_by_a_kill=filtered_by_a_kill,
+            display_mvp_mode=DISPLAY_MVP_MODE,
+            is_degraded_abnormal_snapshot=_is_degraded_abnormal_snapshot,
+            format_abnormal_observation_columns=_format_abnormal_observation_columns,
         )
-        report.append(f"- **Setup分布**: {setup_text}")
-    report.append(f"- **接着做什么**: {abnormal_projection_summary.get('action', '-')}")
-    report.append("")
-
-    if filtered_by_a_kill:
-        report.append(f"**Step 1.4 A杀过滤**（剔除{len(filtered_by_a_kill)}只）:")
-        for c, record in filtered_by_a_kill[:5]:
-            report.append(f"- ❌ {c.get('name')}({c.get('code')}) - A杀日{record.get('a_kill_date')} - 剩余{record.get('remaining_days')}天禁买")
-        report.append("")
-    
-    report.append("**Step 1 结论**:")
-    report.append(f"- **明天观察池**: {len(watchlist)}只，按今日形态预判明日延续性排序")
-    report.append(f"- **核心逻辑**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选")
-    if abnormal_watch_pool:
-        resilient_count = len([item for item in abnormal_watch_pool if item.get('follow_state') in ['跌不下去', '缩量消化']])
-        report.append(
-            f"- **异动后跟踪**: {len(abnormal_watch_pool)}只里有{resilient_count}只处于“跌不下去/缩量消化”，"
-            "优先留给明日60分钟确认"
-        )
-    if mainline_competition_snapshot:
-        report.append(
-            f"- **主线竞争格局**: {mainline_competition_snapshot[0].get('sector', '未知')}目前是主攻线，"
-            "其他方向先看是否能继续争夺能量。"
-        )
-    if abnormal_projection_summary:
-        report.append(f"- **异常投影视角**: {abnormal_projection_summary.get('projection_label', '-')}")
-    if sector_trend_snapshot_step1:
-        densest_sector = sector_trend_snapshot_step1[0]
-        report.append(
-            f"- **趋势密度最高**: {densest_sector.get('sector', '未知')}，当前活跃趋势股"
-            f"{densest_sector.get('trend_count', 0)}只，优先盯{densest_sector.get('anchor_name', '锚定龙头')}"
-        )
-    if leader_memory_bank:
-        memory_names = [f"{item.get('name')}({item.get('code')})" for item in leader_memory_bank[:3]]
-        report.append(f"- **龙头记忆优先**: {', '.join(memory_names)}")
-    trusted_memory_names = [
-        f"{item.get('name')}({item.get('code')})"
-        for item in tracking_memory_status.get('today_validated_items', [])[:3]
-    ]
-    if trusted_memory_names:
-        report.append(f"- **历史可信跟踪**: {', '.join(trusted_memory_names)}（只影响优先回看，不直接给执行权）")
-    elif tracking_memory_status.get('today_tentative_items'):
-        report.append("- **历史记忆状态**: 仍以临时假设为主，今天继续验证，不允许直接继承为买点")
-    report.append("- **接着做什么**: 进入Step 2，从观察池识别明日核心标的")
-    report.append("- **重要**: 明日开盘前需重新确认这些标的的竞价情况")
-    report.append("")
+    )
 
     # Step 2 - 明日核心标的（预判谁明天最可能成为核心）
     # ============================================================
