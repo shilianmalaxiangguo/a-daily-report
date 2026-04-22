@@ -58,6 +58,29 @@ class WorkflowGraphExecutorTest(unittest.TestCase):
         self.assertEqual(result["state"]["start_value"], 3)
         self.assertEqual(result["state"]["double_value"], 6)
 
+    def test_execute_workflow_graph_normalizes_collections_and_errors_override_status(self):
+        workflow = {
+            "workflow_key": "demo_v1",
+            "nodes": [{"key": "start", "kind": "infer"}],
+            "edges": [],
+            "exports": [],
+        }
+
+        def start_node(ctx):
+            return {
+                "exports": {},
+                "state_patch": {},
+                "module_logs": {"kind": "node-log"},
+                "errors": "node failed",
+                "control": {"status": "success"},
+            }
+
+        result = execute_workflow_graph(workflow, {"start": start_node}, {})
+
+        self.assertEqual(result["errors"], ["node failed"])
+        self.assertEqual(result["module_logs"][0], {"kind": "node-log"})
+        self.assertEqual(result["module_logs"][-1]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()

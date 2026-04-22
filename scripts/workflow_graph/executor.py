@@ -15,6 +15,7 @@ from workflow_graph.trace import make_workflow_node_log
 
 
 def _build_execution_order(workflow):
+    # Cycle and edge validation are intentionally deferred to Task 2.
     nodes = [item["key"] for item in workflow.get("nodes", [])]
     edges = workflow.get("edges", [])
     indegree = {key: 0 for key in nodes}
@@ -34,6 +35,14 @@ def _build_execution_order(workflow):
             if indegree[child] == 0:
                 queue.append(child)
     return ordered
+
+
+def _normalize_result_collection(value):
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    if value is None:
+        return []
+    return [value]
 
 
 def execute_workflow_graph(workflow, registry, ctx=None):
@@ -70,14 +79,17 @@ def execute_workflow_graph(workflow, registry, ctx=None):
             "config": config,
         }
         result = node_impl(node_ctx) or {}
-        node_errors = result.get("errors") or []
+        node_module_logs = _normalize_result_collection(result.get("module_logs"))
+        node_errors = _normalize_result_collection(result.get("errors"))
         control = result.get("control") or {}
         log_status = control.get("status")
-        if not log_status:
-            log_status = "error" if node_errors else "success"
+        if node_errors:
+            log_status = "error"
+        elif not log_status:
+            log_status = "success"
         state.update(result.get("state_patch") or {})
         node_results[node_key] = result
-        module_logs.extend(result.get("module_logs") or [])
+        module_logs.extend(node_module_logs)
         errors.extend(node_errors)
         module_logs.append(
             make_workflow_node_log(
