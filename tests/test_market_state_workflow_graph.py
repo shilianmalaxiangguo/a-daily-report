@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,20 @@ class MarketStateWorkflowGraphTest(unittest.TestCase):
         with self.assertRaisesRegex(
             MarketStateRegistryBuildError,
             "Unable to load market_state node 'mainline_candidates'",
+        ):
+            build_market_state_registry()
+
+    @patch("domains.market_state.registry.import_module")
+    @patch("domains.market_state.registry.build_market_state_node_module_map")
+    def test_build_market_state_registry_raises_clear_error_on_non_callable_run(
+        self, map_mock, import_mock
+    ):
+        map_mock.return_value = {NODE_MAINLINE_CANDIDATES: "infer_mainline_candidates"}
+        import_mock.return_value = SimpleNamespace(run="not-callable")
+
+        with self.assertRaisesRegex(
+            MarketStateRegistryBuildError,
+            "must expose callable run\\(ctx\\)",
         ):
             build_market_state_registry()
 
