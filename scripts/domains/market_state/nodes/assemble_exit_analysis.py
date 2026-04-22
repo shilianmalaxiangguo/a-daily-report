@@ -33,12 +33,15 @@ def run(ctx):
         competition_signal = state.get("competition_signal", {})
         environment_signal = state.get("environment_signal", {})
         continuity_snapshot = state.get("continuity_snapshot", {})
-        mainline_score_pct = float(state.get("mainline_score_pct", 0) or 0)
+        mainline_score_pct = _safe_float(state.get("mainline_score_pct", 0), 0.0)
+        leader_score = _safe_float(continuity_snapshot.get("leader_score", 0), 0.0)
+        structure_score = _safe_float(continuity_snapshot.get("structure_score", 0), 0.0)
+        core_score = _safe_float(continuity_snapshot.get("core_score", 0), 0.0)
         overall_score = round(
             mainline_score_pct * 0.4
-            + continuity_snapshot.get("leader_score", 0) * 0.2
-            + continuity_snapshot.get("structure_score", 0) * 0.15
-            + continuity_snapshot.get("core_score", 0) * 0.15,
+            + leader_score * 0.2
+            + structure_score * 0.15
+            + core_score * 0.15,
             1,
         )
         overall_level = "绿灯" if overall_score >= 70 else "黄灯" if overall_score >= 50 else "橙灯"
@@ -52,9 +55,9 @@ def run(ctx):
             "mainline_score_pct": round(mainline_score_pct, 1),
             "score_detail": {
                 "主线": round(mainline_score_pct, 1),
-                "龙头": round(float(continuity_snapshot.get("leader_score", 0) or 0), 1),
-                "结构": round(float(continuity_snapshot.get("structure_score", 0) or 0), 1),
-                "承接": round(float(continuity_snapshot.get("core_score", 0) or 0), 1),
+                "龙头": round(leader_score, 1),
+                "结构": round(structure_score, 1),
+                "承接": round(core_score, 1),
             },
             "mainline_component_scores": (state.get("mainline_snapshot", {}) or {}).get("component_scores", {}),
             "mainline_trend_label": (state.get("mainline_snapshot", {}) or {}).get("trend_label", ""),
@@ -122,3 +125,10 @@ def _collect_valid_signals(signals, action_map):
             }
         )
     return normalized_signals
+
+
+def _safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

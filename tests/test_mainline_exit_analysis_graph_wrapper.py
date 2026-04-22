@@ -122,9 +122,14 @@ class MainlineExitAnalysisGraphWrapperTest(unittest.TestCase):
             {
                 "state": {
                     "tracked_sector": "军工",
-                    "mainline_score_pct": 72.0,
+                    "mainline_score_pct": "72.0",
                     "mainline_snapshot": {"star_level": "⭐⭐⭐⭐", "component_scores": {"资金": 80.0}, "trend_label": "主升"},
-                    "continuity_snapshot": {"leader_score": 70.0, "structure_score": 68.0, "core_score": 66.0, "leader_name": "龙头A"},
+                    "continuity_snapshot": {
+                        "leader_score": "70.0",
+                        "structure_score": None,
+                        "core_score": "66.0",
+                        "leader_name": "龙头A",
+                    },
                     "environment_signal": {"layer": "主线地位复核", "status": "主线稳定", "level": "绿灯", "action": "继续"},
                     "leader_signal": {},
                     "structure_signal": {"layer": "板块内部结构", "status": "结构可控", "level": "黄灯"},
@@ -138,6 +143,8 @@ class MainlineExitAnalysisGraphWrapperTest(unittest.TestCase):
         exit_analysis = result["exports"]["exit_analysis"]
         self.assertNotIn("事件", exit_analysis["score_detail"])
         self.assertNotIn("替代", exit_analysis["score_detail"])
+        self.assertEqual(exit_analysis["overall_score"], 52.7)
+        self.assertEqual(exit_analysis["score_detail"]["结构"], 0.0)
         self.assertEqual(len(exit_analysis["signals"]), 5)
         for signal in exit_analysis["signals"]:
             self.assertTrue(signal.get("layer"))
