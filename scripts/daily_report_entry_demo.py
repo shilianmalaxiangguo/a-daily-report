@@ -126,6 +126,7 @@ from report.market_research_renderer import (
     render_market_research_snapshot_section,
     render_step0_follow_section,
 )
+from report.board_tag_analysis_builder import build_board_tag_analysis_sections_contract
 from report.exchange_monitor_builder import build_exchange_monitor_sections_contract
 from report.market_analysis_builder import build_market_and_sector_analysis_contract
 from report.market_overview_builder import build_market_trend_sections_contract
@@ -17886,32 +17887,11 @@ def generate_markdown_report(
     report.append("---")
     report.append("")
     
-    # 十一、板块标签分析（整合热榜核心分析）
-    report.append("## 十一、板块标签分析")
-    report.append("> **数据来源**: 同花顺热榜API（基于热度前30个股的板块标签统计）")
-    report.append("> **说明**: 热度前30个股详情见第四章，本章聚焦板块分布与资金偏好分析")
-    report.append("")
-    
-    tag_distribution = data.get('tag_distribution', {})
-    status_distribution = data.get('status_distribution', {})
-    high_lianban_stocks = data.get('high_lianban_stocks', [])
-    
-    # 板块分布AI分析
-    report.append("### 板块分布AI分析")
-    report.append("> **分析维度**: 热榜特征、热度分布、热榜偏好、资金偏好")
-    report.append("")
-    
-    if tag_distribution:
-        # 调用AI分析函数（传入大盘涨跌统计）
-        market_stats = data.get('market_stats', {})
-        analysis_text = analyze_sector_distribution(tag_distribution, status_distribution, high_lianban_stocks, top_n=15, market_stats=market_stats)
-        report.append(analysis_text)
-    else:
-        report.append("**暂无板块分布数据**")
-    report.append("")
-    
-    report.append("---")
-    report.append("")
+    board_tag_analysis_sections = build_board_tag_analysis_sections_contract(
+        data,
+        analyze_sector_distribution=analyze_sector_distribution,
+    )
+    report.extend(board_tag_analysis_sections.get('lines', []))
     
     exchange_monitor_sections = build_exchange_monitor_sections_contract(data)
     report.extend(exchange_monitor_sections.get('lines', []))
