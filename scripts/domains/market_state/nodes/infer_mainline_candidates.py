@@ -20,8 +20,21 @@ def run(ctx):
     if not tracked_sector and inflow_sectors:
         tracked_sector = str((inflow_sectors[0] or {}).get("name", "") or "").strip()
 
-    inflow_map = {item.get("name", ""): item.get("zljlr", 0) for item in inflow_sectors}
-    outflow_map = {item.get("name", ""): abs(item.get("zljlr", 0)) for item in outflow_sectors}
+    safe_float = helpers.get("safe_float", float)
+
+    def parse_float(value, default=0.0):
+        try:
+            return safe_float(value, default=default)
+        except TypeError:
+            try:
+                return safe_float(value)
+            except (TypeError, ValueError):
+                return default
+        except (TypeError, ValueError):
+            return default
+
+    inflow_map = {item.get("name", ""): parse_float(item.get("zljlr", 0), default=0.0) for item in inflow_sectors}
+    outflow_map = {item.get("name", ""): abs(parse_float(item.get("zljlr", 0), default=0.0)) for item in outflow_sectors}
     zt_pool_by_sector = data.get("zt_pool_by_sector", {}) or {}
     dt_pool_by_sector = data.get("dt_pool_by_sector", {}) or {}
 
@@ -43,7 +56,18 @@ def run(ctx):
         inflow_history=inflow_history,
     ) if tracked_sector else {}
 
+    mainline_candidates = {
+        "tracked_sector": tracked_sector,
+        "sector_inflow": sector_inflow,
+        "sector_outflow": sector_outflow,
+        "sector_zt_count": sector_zt_count,
+        "sector_dt_count": sector_dt_count,
+        "hot_weight": hot_weight,
+        "inflow_history": inflow_history,
+        "mainline_snapshot": mainline_snapshot,
+    }
     exports = {
+        "mainline_candidates": mainline_candidates,
         "tracked_sector": tracked_sector,
         "sector_inflow": sector_inflow,
         "sector_outflow": sector_outflow,
@@ -55,10 +79,12 @@ def run(ctx):
         "zt_pool_by_sector": zt_pool_by_sector,
         "dt_pool_by_sector": dt_pool_by_sector,
     }
+    state_patch = dict(mainline_candidates)
+    state_patch["mainline_candidates"] = mainline_candidates
     return {
         "value": exports,
         "exports": exports,
-        "state_patch": exports,
+        "state_patch": state_patch,
         "module_logs": [
             make_market_state_log(
                 "mainline_candidates",

@@ -13,13 +13,19 @@ from domains.market_state.nodes.infer_mainline_continuity import run as run_main
 
 class MarketStateNodesTest(unittest.TestCase):
     def test_infer_mainline_candidates_selects_tracked_sector_and_snapshot(self):
+        def safe_float(value, default=0.0):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         result = run_mainline_candidates(
             {
                 "inputs": {
                     "data": {
                         "sector_fund_flow": {
-                            "inflow": [{"name": "军工", "zljlr": 12.5}],
-                            "outflow": [{"name": "地产", "zljlr": -8.1}],
+                            "inflow": [{"name": "军工", "zljlr": "12.5"}],
+                            "outflow": [{"name": "军工", "zljlr": "-3.2"}, {"name": "地产", "zljlr": None}],
                         },
                         "zt_pool_by_sector": {"军工": [{"name": "A"}, {"name": "B"}]},
                         "dt_pool_by_sector": {"军工": []},
@@ -40,7 +46,7 @@ class MarketStateNodesTest(unittest.TestCase):
                         "trend_label": "主升延续",
                         "component_scores": {"资金": 85.0},
                     },
-                    "safe_float": float,
+                    "safe_float": safe_float,
                 },
             }
         )
@@ -48,8 +54,13 @@ class MarketStateNodesTest(unittest.TestCase):
         exports = result["exports"]
         self.assertEqual(exports["tracked_sector"], "军工")
         self.assertEqual(exports["sector_inflow"], 12.5)
+        self.assertEqual(exports["sector_outflow"], 3.2)
         self.assertEqual(exports["sector_zt_count"], 2)
         self.assertEqual(exports["mainline_snapshot"]["star_rank"], 4)
+        self.assertIn("mainline_candidates", exports)
+        self.assertEqual(exports["mainline_candidates"]["tracked_sector"], "军工")
+        self.assertNotIn("zt_pool_by_sector", result["state_patch"])
+        self.assertNotIn("dt_pool_by_sector", result["state_patch"])
 
     def test_infer_environment_signal_generates_mainline_review_signal(self):
         result = run_environment_signal(
@@ -80,12 +91,25 @@ class MarketStateNodesTest(unittest.TestCase):
         self.assertIn("军工", signal["status"])
 
     def test_infer_mainline_continuity_generates_leader_structure_and_core_signals(self):
+        captured = {}
+
+        def get_sector_leader(tracked_sector, dragon_stocks, dt_pool_by_sector):
+            _ = tracked_sector, dragon_stocks
+            captured["dt_pool_by_sector"] = dt_pool_by_sector
+            return {
+                "name": "军工一号",
+                "code": "SZ000001",
+                "zt_type": "换手板",
+                "lianban": 3,
+                "is_limit_down": False,
+            }
+
         result = run_mainline_continuity(
             {
                 "inputs": {
                     "data": {
-                        "lhb_net_sell_top10": [],
-                        "stock_full_info": {"000001": {"open": 10.0, "high": 10.8, "low": 9.8, "close": 10.5}},
+                        "lhb_net_sell_top10": [{"code": "000001"}],
+                        "dt_pool_by_sector": {"军工": [{"name": "X"}]},
                         "hot_rank_top30": [{"name": "军工一号", "code": "000001"}],
                         "target_date": "2026-04-22",
                     }
@@ -98,24 +122,14 @@ class MarketStateNodesTest(unittest.TestCase):
                 },
                 "helpers": {
                     "action_map": build_market_state_action_map(),
-                    "get_sector_leader": lambda tracked_sector, dragon_stocks, dt_pool_by_sector: {
-                        "name": "军工一号",
-                        "code": "000001",
-                        "zt_type": "换手板",
-                        "lianban": 3,
-                        "is_limit_down": False,
-                    },
+                    "get_sector_leader": get_sector_leader,
                     "get_sector_core_hot_stock": lambda tracked_sector, hot_rank_top30: {
                         "name": "军工一号",
                         "code": "000001",
                         "hot_rank": 4,
                         "change_pct": 5.2,
                     },
-                    "normalize_stock_code": lambda code: code,
-                    "calculate_exit_price_lines": lambda price_anchor_stock, stock_full_info: {"anchor_name": "军工一号"},
-                    "fetch_recent_price_bars": lambda code, target_date, lookback_days=13: [{"low": 9.5}],
-                    "compute_stop_loss_mainline_anchor": lambda recent_bars: (9.5, "2026-04-18", "最近前低"),
-                    "safe_float": float,
+                    "normalize_stock_code": lambda code: str(code).replace("SZ", ""),
                     "clamp": lambda value, lower, upper: max(lower, min(value, upper)),
                     "level_to_score": lambda level: {"绿灯": 85.0, "黄灯": 65.0, "橙灯": 35.0, "红灯": 10.0}[level],
                 },
@@ -123,9 +137,10 @@ class MarketStateNodesTest(unittest.TestCase):
         )
 
         exports = result["exports"]
-        self.assertEqual(exports["leader_signal"]["level"], "绿灯")
+        self.assertEqual(exports["leader_signal"]["level"], "橙灯")
         self.assertEqual(exports["structure_signal"]["level"], "黄灯")
         self.assertEqual(exports["core_signal"]["level"], "绿灯")
+        self.assertEqual(captured["dt_pool_by_sector"], {"军工": [{"name": "X"}]})
 
 
 if __name__ == "__main__":

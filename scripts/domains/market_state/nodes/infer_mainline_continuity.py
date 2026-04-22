@@ -15,17 +15,19 @@ def run(ctx):
     sector_dt_count = int(state.get("sector_dt_count", 0) or 0)
     hot_weight = float(state.get("hot_weight", 0) or 0)
     dragon_stocks = list(inputs.get("dragon_stocks") or [])
-    dt_pool_by_sector = state.get("dt_pool_by_sector", {}) or {}
+    dt_pool_by_sector = data.get("dt_pool_by_sector", {}) or {}
 
+    normalize_stock_code = helpers["normalize_stock_code"]
     leader = helpers["get_sector_leader"](tracked_sector, dragon_stocks, dt_pool_by_sector)
     lhb_net_sell_codes = {
-        helpers["normalize_stock_code"](item.get("code", ""))
+        normalize_stock_code(item.get("code", ""))
         for item in data.get("lhb_net_sell_top10", [])
     }
+    leader_code = normalize_stock_code(leader.get("code", "")) if leader else ""
     if leader and leader.get("is_limit_down"):
         leader_level = "红灯"
         leader_status = f"{leader.get('name', '-')}({leader.get('zt_type', '-')})，龙头已跌停失守"
-    elif leader and leader.get("code", "") in lhb_net_sell_codes:
+    elif leader and leader_code in lhb_net_sell_codes:
         leader_level = "橙灯"
         leader_status = f"{leader.get('name', '-')}({leader.get('zt_type', '-')})，龙虎榜出现净卖出"
     elif leader and float(leader.get("lianban", 0) or 0) >= 3:
