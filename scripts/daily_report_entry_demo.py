@@ -81,8 +81,10 @@ from research.market_research_runtime import (
 )
 from selection.candidate_bundle_runtime import build_candidate_bundle_contract
 from risk.risk_bundle_runtime import build_risk_bundle_contract
+from report.action_plan_renderer import render_action_plan_section
 from report.appendix_renderer import render_execution_appendix
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
+from report.pk_decision_renderer import render_pk_decision_section
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
 MARKET_ZHONGSHU_MIN_KLINES = 5
@@ -21134,177 +21136,77 @@ def generate_markdown_report(
             )
             break
 
-    if scored_executable_stocks:
-        report.append(f"**Step 4.5.0 决策栈排序**（{DECISION_STACK_ORDER_TEXT}）:")
-        report.append("| 股票 | 环境 | 主线 | 记忆 | 触发 | 可交易性 | EV | 备注 |")
-        report.append("|------|------|------|------|------|----------|----|------|")
-        for item in scored_executable_stocks:
-            stack = item.get('decision_stack', {}) or {}
-            note = item.get('permission_label', '-') or '-'
-            if item.get('abnormal_setup_signal_label'):
-                note = f"{note} / {item.get('abnormal_setup_signal_label')}"
-            report.append(
-                f"| {item.get('name', '-')} | {stack.get('environment_score', '-')} | "
-                f"{stack.get('mainline_score', '-')} | {stack.get('memory_score', '-')} | "
-                f"{stack.get('trigger_score', '-')} | {stack.get('tradability_score', '-')} | "
-                f"{stack.get('ev_score', '-')} | {note} |"
-            )
-        report.append("")
-
-    if len(pk_candidates) == 1:
-        best_stock = pk_candidates[0]
-        signal = best_stock.get('signal')
-        if signal:
-            report.append(f"**✅ 明天唯一能买的那只**: {best_stock.get('name')}({best_stock.get('code')})")
-            report.append(f"> **买点**: {signal.signal_type}")
-            report.append(f"> **大概成功率**: {best_stock.get('win_rate', 0) * 100:.0f}% | **赚赔比**: 1:{best_stock.get('r_reward_ratio', 0):.1f}")
-            report.append(f"> **这笔值不值得做**: {best_stock.get('ev', 0):.2f}元/股")
-            report.append(f"> **成功率是按什么算的**: {best_stock.get('ev_model_source', '类型先验')}")
-            report.append("> **真到盘中怎么做**: 明日仍需60分钟确认后再买，买后用30分钟结构止损")
-        else:
-            report.append(f"**✅ 明天唯一能买的那只**: {best_stock.get('name')}({best_stock.get('code')})")
-            report.append("> **真到盘中怎么做**: 明日仅在60分钟确认后按条件触发，买后用30分钟结构止损")
-        report.append("")
-    elif len(pk_candidates) >= 2:
-        report.append(f"**Step 4.5.1 成功率收益对比表**（{len(pk_candidates)}只进入PK）:")
-        report.append("| 股票 | 买点 | 从什么价开始算 | 大概止损放哪 | 大概成功率 | 赚赔比 | 这笔值不值得做 | 参考记录 | EV排名 |")
-        report.append("|------|------|--------|--------|------|--------|----------|------|--------|")
-
-        for i, e in enumerate(pk_candidates, 1):
-            signal = e.get('signal')
-            if signal:
-                buy_type_map = {'sweet_zone': '甜品区', 'breakout': '突破', 'panic_buy': '恐慌盘'}
-                buy_type = buy_type_map.get(signal.signal_type, signal.signal_type)
-                entry = signal.entry_price
-                stop = e.get('stop_loss', signal.stop_loss)
-            else:
-                buy_type = '基础'
-                entry = e.get('entry_price', e.get('close', 0))
-                stop = e.get('stop_loss', entry * 0.95)
-
-            wr = e.get('win_rate', 0.5) * 100
-            rr = e.get('r_reward_ratio', 2.0)
-            ev_val = e.get('ev', 0)
-            sample_text = f"{int(_safe_float(e.get('ev_sample_size', 0)))} / {int(_safe_float(e.get('ev_global_sample_size', 0)))}"
-            report.append(f"| {e.get('name')} | {buy_type} | {entry:.2f} | {stop:.2f} | {wr:.0f}% | 1:{rr:.1f} | {ev_val:.2f} | {sample_text} | 第{i}名 |")
-
-        report.append("")
-
-        best_stock = pk_candidates[0]
-        best_signal = best_stock.get('signal')
-        report.append(f"**🏆 PK结果**: **{best_stock.get('name')}({best_stock.get('code')})** 胜出！")
-        report.append("")
-        report.append("**胜出者详细分析**:")
-        if best_signal:
-            entry = best_signal.entry_price
-            stop = best_stock.get('stop_loss', best_signal.stop_loss)
-            profit = best_stock.get('profit_space', 0)
-            loss = best_stock.get('loss_space', 0)
-            wr = best_stock.get('win_rate', 0.5)
-            rr = best_stock.get('r_reward_ratio', 2.0)
-            ev = best_stock.get('ev', 0)
-
-            type_map = {'panic_buy': '恐慌盘', 'sweet_zone': '甜品区', 'breakout': '放量突破'}
-            report.append(f"- **怎么买**: {best_signal.signal_type}")
-            report.append(f"- **从什么价开始算**: {entry:.2f} | **大概止损放哪**: {stop:.2f}")
-            report.append(f"- **做对大概能赚多少**: +{profit:.2f} ({rr:.1f}倍赚赔比)")
-            report.append(f"- **最差会亏多少**: -{loss:.2f} (跌破止损)")
-            report.append(f"- **成功率大概多少**: {wr*100:.0f}% (基于{type_map.get(best_signal.signal_type, '数据')}的账本/先验校准)")
-            report.append(f"- **这笔值不值得做**: {ev:.2f}元/股 = ({wr*100:.0f}% × {profit:.2f}) - ({(1-wr)*100:.0f}% × {loss:.2f})")
-            report.append(f"- **成功率是按什么算的**: {best_stock.get('ev_model_source', '类型先验')}")
-            display_position_pct = _safe_float(best_stock.get('position_pct', best_signal.position_pct))
-            report.append(f"- **仓位放多少**: {display_position_pct:.0f}%")
-            report.append("- **真到盘中怎么做**: 明日真正入场仍需60分钟确认，买后立刻切到30分钟结构止损")
-
-        if runner_up:
-            gap = best_stock.get('composite_score', 0) - runner_up.get('composite_score', 0)
-            report.append(f"- **为什么它排第一**: 比第二名高{gap:.2f}分")
-        report.append("")
-
-        if runner_up:
-            report.append("**Step 4.5.2 为什么没选它**:")
-            report.append(f"| 对比项 | 🏆 {best_stock.get('name')} | ❌ {runner_up.get('name')} | 差距 |")
-            report.append("|--------|---------------------------|---------------------------|------|")
-            report.append(f"| 这笔值不值得做 | {best_stock.get('ev', 0):.2f} | {runner_up.get('ev', 0):.2f} | +{best_stock.get('ev', 0) - runner_up.get('ev', 0):.2f} |")
-            report.append(f"| 大概成功率 | {best_stock.get('win_rate', 0) * 100:.0f}% | {runner_up.get('win_rate', 0) * 100:.0f}% | {(best_stock.get('win_rate', 0) - runner_up.get('win_rate', 0)) * 100:.0f}% |")
-            report.append(f"| 赚赔比 | 1:{best_stock.get('r_reward_ratio', 0):.1f} | 1:{runner_up.get('r_reward_ratio', 0):.1f} | - |")
-            report.append(f"| 综合评分 | {best_stock.get('composite_score', 0):.2f} | {runner_up.get('composite_score', 0):.2f} | +{best_stock.get('composite_score', 0) - runner_up.get('composite_score', 0):.2f} |")
-            report.append("")
-            report.append("**淘汰原因**:")
-            for e in pk_candidates[1:]:
-                ev_diff = best_stock.get('ev', 0) - e.get('ev', 0)
-                report.append(f"- ❌ {e.get('name')}({e.get('code')}) - EV {e.get('ev', 0):.2f} < 冠军{best_stock.get('ev', 0):.2f}，差距{ev_diff:.2f}，明日不操作")
-        report.append("")
-    elif trade_gate_open:
+    pending_lines = []
+    if trade_gate_open:
         if display_pending_candidates:
             if len(display_pending_candidates) >= 2:
-                report.append(f"**重点盯盘股排序**（{len(display_pending_candidates)}只，先看谁最可能走成明天唯一能买的那只）:")
-                report.append("| 股票 | 来源 | 60分钟确认点 | 候选顺位 | 说明 |")
-                report.append("|------|------|--------------|----------|------|")
-                for i, e in enumerate(display_pending_candidates[:5], 1):
-                    minute_plan = e.get('minute_plan') or {}
+                pending_lines.append(f"**重点盯盘股排序**（{len(display_pending_candidates)}只，先看谁最可能走成明天唯一能买的那只）:")
+                pending_lines.append("| 股票 | 来源 | 60分钟确认点 | 候选顺位 | 说明 |")
+                pending_lines.append("|------|------|--------------|----------|------|")
+                for i, candidate in enumerate(display_pending_candidates[:5], 1):
+                    minute_plan = candidate.get('minute_plan') or {}
                     confirm_price = minute_plan.get('confirm_price_60m')
                     confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-                    source_text = e.get('permission_label', '候选')
-                    note = e.get('reason', e.get('permission_reason', '等待盘中确认'))
-                    report.append(
-                        f"| {e.get('name')} | {source_text} | {confirm_text} | 第{i}顺位 | {note} |"
+                    source_text = candidate.get('permission_label', '候选')
+                    note = candidate.get('reason', candidate.get('permission_reason', '等待盘中确认'))
+                    pending_lines.append(
+                        f"| {candidate.get('name')} | {source_text} | {confirm_text} | 第{i}顺位 | {note} |"
                     )
-                report.append("")
+                pending_lines.append("")
             top_pending = display_pending_candidates[0]
             top_minute_plan = top_pending.get('minute_plan') or {}
             top_stop_plan = top_pending.get('stop_plan')
             top_price_focus = _build_trade_price_focus(top_minute_plan, top_stop_plan)
             top_confirm_price = top_minute_plan.get('confirm_price_60m')
             top_price_focus_text = _build_observation_price_focus_text(top_price_focus)
-            report.append(f"**明天先盯哪只**: {top_pending.get('name')}({top_pending.get('code')})")
-            report.append(
+            pending_lines.append(f"**明天先盯哪只**: {top_pending.get('name')}({top_pending.get('code')})")
+            pending_lines.append(
                 f"- **原因**: {top_pending.get('permission_reason', top_pending.get('reason', '当前先看它能否继续证明自己'))}"
             )
             if top_confirm_price:
-                report.append(f"- **60分钟确认点**: {top_confirm_price:.2f}")
+                pending_lines.append(f"- **60分钟确认点**: {top_confirm_price:.2f}")
             if top_price_focus_text and top_price_focus_text != '-':
-                report.append(f"- **价格怎么盯**: {top_price_focus_text}")
+                pending_lines.append(f"- **价格怎么盯**: {top_price_focus_text}")
             if _should_surface_price_note(top_price_focus):
-                report.append(f"- **价格怎么看**: {_build_observation_price_note_text(top_price_focus)}")
-            report.append("- **升级条件**: 明日先完成60分钟确认，再走成明天唯一能买的那只，不能直接追价")
-            report.append("")
+                pending_lines.append(f"- **价格怎么看**: {_build_observation_price_note_text(top_price_focus)}")
+            pending_lines.append("- **升级条件**: 明日先完成60分钟确认，再走成明天唯一能买的那只，不能直接追价")
+            pending_lines.append("")
         else:
-            report.append("**当前没有能下手的票**: 无需PK")
-            report.append("")
-    else:
-        report.append(f"**⛔ 当前先不开新仓**: {position_level}，本轮不做PK出手结论。")
+            pending_lines.extend(["**当前没有能下手的票**: 无需PK", ""])
+
+    observation_lines = []
+    if not trade_gate_open:
         if display_observation_candidates:
+            observation_lines.append(f"**⛔ 当前先不开新仓**: {position_level}，本轮不做PK出手结论。")
             if len(display_observation_candidates) >= 2:
-                report.append(f"**先看谁排第几**（{len(display_observation_candidates)}只，优先盯强分歧但没坏的对象）:")
-                report.append("| 股票 | 来源 | 买点 | 60分钟确认点 | 先看顺序 | 说明 |")
-                report.append("|------|------|------|--------------|------------|------|")
+                observation_lines.append(f"**先看谁排第几**（{len(display_observation_candidates)}只，优先盯强分歧但没坏的对象）:")
+                observation_lines.append("| 股票 | 来源 | 买点 | 60分钟确认点 | 先看顺序 | 说明 |")
+                observation_lines.append("|------|------|------|--------------|------------|------|")
                 source_label_map = {
                     'execute_layer': '执行层',
                     'keep_group_watch': '观察组',
                     'waiting_layer': '等待层',
                     'abnormal_probe': '异常层',
                 }
-                for i, e in enumerate(display_observation_candidates[:5], 1):
-                    signal = e.get('signal')
-                    minute_plan = e.get('minute_plan') or {}
+                for i, candidate in enumerate(display_observation_candidates[:5], 1):
+                    signal = candidate.get('signal')
+                    minute_plan = candidate.get('minute_plan') or {}
                     confirm_price = minute_plan.get('confirm_price_60m')
                     confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
                     buy_type_map = {'sweet_zone': '甜品区', 'breakout': '突破', 'panic_buy': '恐慌盘'}
                     buy_type = buy_type_map.get(signal.signal_type, signal.signal_type) if signal else '基础'
-                    source_text = source_label_map.get(e.get('watch_source', ''), '观察')
-                    note = e.get('watch_priority_label', '观察')
+                    source_text = source_label_map.get(candidate.get('watch_source', ''), '观察')
+                    note = candidate.get('watch_priority_label', '观察')
                     if i == 1:
                         note = f"{note}，优先看它能否继续证明自己"
-                    report.append(
-                        f"| {e.get('name')} | {source_text} | {buy_type} | {confirm_text} | "
-                        f"第{i}顺位 | {note} |"
+                    observation_lines.append(
+                        f"| {candidate.get('name')} | {source_text} | {buy_type} | {confirm_text} | 第{i}顺位 | {note} |"
                     )
-                report.append("")
+                observation_lines.append("")
             top_watch = display_observation_candidates[0]
             top_signal = top_watch.get('signal')
-            report.append(f"**观察优先锚点**: {top_watch.get('name')}({top_watch.get('code')})")
-            report.append(
+            observation_lines.append(f"**观察优先锚点**: {top_watch.get('name')}({top_watch.get('code')})")
+            observation_lines.append(
                 f"- **原因**: {top_watch.get('watch_priority_label', '观察优先')}；"
                 f"{top_watch.get('reason', top_watch.get('tomorrow_risk', '当前优先盯它的承接变化'))}"
             )
@@ -21315,32 +21217,35 @@ def generate_markdown_report(
                 price_focus = _build_trade_price_focus(minute_plan, stop_plan)
                 confirm_price = minute_plan.get('confirm_price_60m')
                 observation_price_focus_text = _build_observation_price_focus_text(price_focus)
-                report.append(f"- **跟踪区间**: {entry_range[0]:.2f}-{entry_range[1]:.2f}")
+                observation_lines.append(f"- **跟踪区间**: {entry_range[0]:.2f}-{entry_range[1]:.2f}")
                 if confirm_price:
-                    report.append(f"- **60分钟确认点**: {confirm_price:.2f}")
+                    observation_lines.append(f"- **60分钟确认点**: {confirm_price:.2f}")
                 if observation_price_focus_text and observation_price_focus_text != '-':
-                    report.append(f"- **价格怎么盯**: {observation_price_focus_text}")
+                    observation_lines.append(f"- **价格怎么盯**: {observation_price_focus_text}")
                 if _should_surface_price_note(price_focus):
-                    report.append(f"- **价格怎么看**: {_build_observation_price_note_text(price_focus)}")
-                report.append(f"- **EV校准**: {top_watch.get('ev_model_source', '类型先验')}")
-                report.append("- **观察纪律**: 只记录是否继续走强，不构成明日买入指令")
-            report.append("")
+                    observation_lines.append(f"- **价格怎么看**: {_build_observation_price_note_text(price_focus)}")
+                observation_lines.append(f"- **EV校准**: {top_watch.get('ev_model_source', '类型先验')}")
+                observation_lines.append("- **观察纪律**: 只记录是否继续走强，不构成明日买入指令")
+            observation_lines.append("")
         else:
-            report.append("**无执行权候选**: 当前没有进入执行层的标的，只保留观察池")
-            report.append("")
+            observation_lines.extend([
+                f"**⛔ 当前先不开新仓**: {position_level}，本轮不做PK出手结论。",
+                "**无执行权候选**: 当前没有进入执行层的标的，只保留观察池",
+                "",
+            ])
 
-    report.append("**Step 4.5 结论**:")
+    conclusion_lines = ["**Step 4.5 结论**:"]
     if best_stock:
         signal = best_stock.get('signal')
         if signal:
             entry_range = best_stock.get('entry_range', (signal.entry_price, signal.entry_price))
             buy_type_map = {'sweet_zone': '甜品区买入', 'breakout': '放量突破买入', 'panic_buy': '恐慌盘买入'}
             buy_type = buy_type_map.get(signal.signal_type, signal.signal_type)
-            report.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
-            report.append(f"- **怎么买**: {buy_type}")
-            report.append(f"- **到什么价位再动手**: {entry_range[0]:.2f}-{entry_range[1]:.2f}")
+            conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
+            conclusion_lines.append(f"- **怎么买**: {buy_type}")
+            conclusion_lines.append(f"- **到什么价位再动手**: {entry_range[0]:.2f}-{entry_range[1]:.2f}")
             display_position_pct = _safe_float(best_stock.get('position_pct', signal.position_pct))
-            report.append(f"- **仓位放多少**: {display_position_pct:.0f}%")
+            conclusion_lines.append(f"- **仓位放多少**: {display_position_pct:.0f}%")
             stop_plan = best_stock.get('stop_plan') or build_stop_execution_plan(
                 signal.entry_price,
                 best_stock.get('stop_loss', signal.stop_loss),
@@ -21350,22 +21255,22 @@ def generate_markdown_report(
             price_focus = _build_trade_price_focus(minute_plan, stop_plan)
             confirm_price = minute_plan.get('confirm_price_60m')
             if confirm_price:
-                report.append(f"- **60分钟确认点**: {confirm_price:.2f}")
-            report.append(f"- **价格怎么盯**: {price_focus.get('compact_text', '-')}")
+                conclusion_lines.append(f"- **60分钟确认点**: {confirm_price:.2f}")
+            conclusion_lines.append(f"- **价格怎么盯**: {price_focus.get('compact_text', '-')}")
             if _should_surface_price_note(price_focus):
-                report.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
-            report.append(f"- **成功率是按什么算的**: {best_stock.get('ev_model_source', '类型先验')}")
-            report.append("- **出手时怎么做**: 明日仅在60分钟确认后买入，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
+                conclusion_lines.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
+            conclusion_lines.append(f"- **成功率是按什么算的**: {best_stock.get('ev_model_source', '类型先验')}")
+            conclusion_lines.append("- **出手时怎么做**: 明日仅在60分钟确认后买入，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
         else:
-            report.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
-            report.append("- **出手时怎么做**: 明日仅在60分钟确认后按条件触发买入，买后用30分钟结构止损，其他标的禁止操作")
+            conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
+            conclusion_lines.append("- **出手时怎么做**: 明日仅在60分钟确认后按条件触发买入，买后用30分钟结构止损，其他标的禁止操作")
     else:
         if trade_gate_open and watch_anchor:
-            report.append(f"- **明天先盯哪只**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
-            report.append("- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明")
+            conclusion_lines.append(f"- **明天先盯哪只**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
+            conclusion_lines.append("- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明")
         else:
-            report.append("- **明天没有可买对象**: 明日不产生买入动作")
-        report.append(f"- **明天能不能开仓**: {front_structure_layer_text}")
+            conclusion_lines.append("- **明天没有可买对象**: 明日不产生买入动作")
+        conclusion_lines.append(f"- **明天能不能开仓**: {front_structure_layer_text}")
         if watch_anchor:
             minute_plan = watch_anchor.get('minute_plan') or {}
             stop_plan = watch_anchor.get('stop_plan')
@@ -21373,37 +21278,38 @@ def generate_markdown_report(
             confirm_price = minute_plan.get('confirm_price_60m')
             confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
             observation_price_focus_text = _build_observation_price_focus_text(price_focus)
-            report.append(f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
-            report.append(
-                f"- **{'现在重点盯什么' if trade_gate_open else '现在重点看什么'}**: {_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+            conclusion_lines.append(f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
+            conclusion_lines.append(
+                f"- **{'现在重点盯什么' if trade_gate_open else '现在重点看什么'}**: "
+                f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
             )
-            _append_watch_anchor_note(report, watch_anchor)
+            _append_watch_anchor_note(conclusion_lines, watch_anchor)
             if _should_surface_price_note(price_focus):
-                report.append(f"- **价格怎么看**: {_build_observation_price_note_text(price_focus)}")
+                conclusion_lines.append(f"- **价格怎么看**: {_build_observation_price_note_text(price_focus)}")
             if trade_gate_open:
-                report.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
+                conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
             else:
-                report.append(f"- **为什么先不买**: {position_level}，当前只允许观察，不允许新买入")
+                conclusion_lines.append(f"- **为什么先不买**: {position_level}，当前只允许观察，不允许新买入")
         else:
-            report.append("- **明天先怎么观察**: 空仓观望")
-    report.append("")
-    
-    # Step 5 - 明日操作计划（输出明日执行计划）
-    # ============================================================
-    # 输入：明日可触发股票 + 明日观察股票
-    # 处理：汇总明日操作计划，包括盘前准备、开盘30分钟、盘中执行
-    # 输出：完整的明日操作指引
-    # ============================================================
-    report.append("#### Step 5 - 明日操作计划")
-    report.append("> **核心问题**：明天具体怎么执行？盘前准备什么？开盘看什么？盘中怎么买？")
-    report.append("")
+            conclusion_lines.append("- **明天先怎么观察**: 空仓观望")
+    conclusion_lines.append("")
 
-    # 5.1 最终动作表（只显示真正可执行的对象）
-    report.append("**Step 5.1 最终动作表**（只展示真正可执行对象）:")
-    report.append("")
-    report.append("| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |")
-    report.append("|----------|------|------|----------|-----------|")
+    report.extend(
+        render_pk_decision_section(
+            {
+                "decision_stack_order_text": DECISION_STACK_ORDER_TEXT,
+                "scored_executable_stocks": scored_executable_stocks,
+                "pk_candidates": pk_candidates,
+                "trade_gate_open": trade_gate_open,
+                "position_level": position_level,
+                "pending_lines": pending_lines,
+                "observation_lines": observation_lines,
+                "conclusion_lines": conclusion_lines,
+            }
+        )
+    )
 
+    action_rows = []
     if best_stock:
         if 'signal' in best_stock:
             signal = best_stock['signal']
@@ -21415,132 +21321,157 @@ def generate_markdown_report(
                 structure_label='日线预估结构止损'
             )
             exit_rules = _build_candidate_exit_rules(best_stock, stop_plan)
-            stop_text = stop_plan['summary'] if stop_plan else f"预估{best_stock.get('stop_loss', signal.stop_loss):.2f}"
-            trigger_text = f"明日首个60分钟站上{confirm_price:.2f}" if confirm_price else "明日60分钟确认后触发"
-            report.append(
-                f"| 🔥 唯一买入 | {best_stock.get('name')} | {best_stock.get('code')} | "
-                f"{trigger_text} | {stop_text} / {_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))} |"
+            stop_summary_text = (stop_plan or {}).get('summary')
+            if not stop_summary_text:
+                stop_summary_text = f"预估{best_stock.get('stop_loss', signal.stop_loss):.2f}"
+            action_rows.append(
+                {
+                    "action": "🔥 唯一买入",
+                    "name": best_stock.get('name'),
+                    "code": best_stock.get('code'),
+                    "trigger": f"明日首个60分钟站上{confirm_price:.2f}" if confirm_price else "明日60分钟确认后触发",
+                    "risk_window": f"{stop_summary_text} / "
+                    f"{_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
+                }
             )
         else:
             stop_plan = best_stock.get('stop_plan')
             minute_plan = best_stock.get('minute_plan') or {}
             confirm_price = minute_plan.get('confirm_price_60m')
-            stop_text = stop_plan['summary'] if stop_plan else "先看30分钟结构 / 最晚-5%"
-            trigger_text = f"明日首个60分钟站上{confirm_price:.2f}后按{best_stock.get('trigger', '条件')}执行" if confirm_price else f"明日60分钟确认后按{best_stock.get('trigger', '条件')}执行"
             exit_rules = _build_candidate_exit_rules(best_stock, stop_plan)
-            report.append(
-                f"| 🔥 唯一买入 | {best_stock.get('name')} | {best_stock.get('code')} | "
-                f"{trigger_text} | {stop_text} / {_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))} |"
+            action_rows.append(
+                {
+                    "action": "🔥 唯一买入",
+                    "name": best_stock.get('name'),
+                    "code": best_stock.get('code'),
+                    "trigger": (
+                        f"明日首个60分钟站上{confirm_price:.2f}后按{best_stock.get('trigger', '条件')}执行"
+                        if confirm_price else f"明日60分钟确认后按{best_stock.get('trigger', '条件')}执行"
+                    ),
+                    "risk_window": f"{(stop_plan or {}).get('summary', '先看30分钟结构 / 最晚-5%')} / "
+                    f"{_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
+                }
             )
     elif trade_gate_open and watch_anchor:
         minute_plan = watch_anchor.get('minute_plan') or {}
         stop_plan = watch_anchor.get('stop_plan')
         price_focus = _build_trade_price_focus(minute_plan, stop_plan)
         confirm_price = minute_plan.get('confirm_price_60m')
-        if confirm_price:
-            trigger_text = f"首个60分钟站上{confirm_price:.2f}后，再看是否走成明天唯一能买的那只"
-        else:
-            trigger_text = "先看60分钟确认，再看是否走成明天唯一能买的那只"
-        stop_text = price_focus.get('key_zone_display', '-') if price_focus else '-'
         exit_rules = _build_candidate_exit_rules(watch_anchor, stop_plan)
-        report.append(
-            f"| 👀 明天先盯哪只 | {watch_anchor.get('name')} | {watch_anchor.get('code')} | "
-            f"{trigger_text} | {stop_text} / {_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))} |"
+        action_rows.append(
+            {
+                "action": "👀 明天先盯哪只",
+                "name": watch_anchor.get('name'),
+                "code": watch_anchor.get('code'),
+                "trigger": (
+                    f"首个60分钟站上{confirm_price:.2f}后，再看是否走成明天唯一能买的那只"
+                    if confirm_price else "先看60分钟确认，再看是否走成明天唯一能买的那只"
+                ),
+                "risk_window": f"{(price_focus or {}).get('key_zone_display', '-')} / "
+                f"{_format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
+            }
         )
     else:
-        no_trade_reason = f"⛔{position_level}禁止新开仓" if not trade_gate_open else "无符合条件标的"
-        report.append(f"| ❌ 明天没有可买对象 | - | - | {no_trade_reason} | - |")
+        action_rows.append(
+            {
+                "action": "❌ 明天没有可买对象",
+                "name": "-",
+                "code": "-",
+                "trigger": f"⛔{position_level}禁止新开仓" if not trade_gate_open else "无符合条件标的",
+                "risk_window": "-",
+            }
+        )
 
-    report.append("")
-
+    observation_priority_lines = []
     if not trade_gate_open and display_observation_candidates:
-        report.append("**先看顺序**（优先盯最能反映主线承接的对象）:")
-        for e in display_observation_candidates[:3]:
-            minute_plan = e.get('minute_plan') or {}
-            stop_plan = e.get('stop_plan')
+        for candidate in display_observation_candidates[:3]:
+            minute_plan = candidate.get('minute_plan') or {}
+            stop_plan = candidate.get('stop_plan')
             price_focus = _build_trade_price_focus(minute_plan, stop_plan)
             confirm_price = minute_plan.get('confirm_price_60m')
             confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
             observation_price_focus_text = _build_observation_price_focus_text(price_focus)
-            report.append(
-                f"- 👀 {e.get('name')}({e.get('code')}) - {e.get('watch_anchor_type', e.get('permission_label', '观察权'))}，"
+            observation_priority_lines.append(
+                f"- 👀 {candidate.get('name')}({candidate.get('code')}) - "
+                f"{candidate.get('watch_anchor_type', candidate.get('permission_label', '观察权'))}，"
                 f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
             )
-            _append_watch_anchor_note(report, e, prefix='  ')
-            _append_observation_price_focus_note(report, price_focus, prefix='  ')
-        report.append("")
+            _append_watch_anchor_note(observation_priority_lines, candidate, prefix='  ')
+            _append_observation_price_focus_note(observation_priority_lines, price_focus, prefix='  ')
 
-    # 其他标的在PK中已被淘汰，或仍处观察层，不在最终动作表中显示
-    if waiting_stocks:
-        report.append("**备用观察**（买点未触发，明日不操作）:")
-        for w in waiting_stocks[:3]:
-            minute_plan = w.get('minute_plan') or {}
-            stop_plan = w.get('stop_plan')
-            price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-            confirm_price = minute_plan.get('confirm_price_60m')
-            confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-            observation_price_focus_text = _build_observation_price_focus_text(price_focus)
-            report.append(
-                f"- ⏳ {w.get('name')}({w.get('code')}) - 等买点出现，"
-                f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
-            )
-            _append_observation_price_focus_note(report, price_focus, prefix='  ')
-        report.append("")
+    backup_observation_lines = []
+    for candidate in waiting_stocks[:3]:
+        minute_plan = candidate.get('minute_plan') or {}
+        stop_plan = candidate.get('stop_plan')
+        price_focus = _build_trade_price_focus(minute_plan, stop_plan)
+        confirm_price = minute_plan.get('confirm_price_60m')
+        confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
+        observation_price_focus_text = _build_observation_price_focus_text(price_focus)
+        backup_observation_lines.append(
+            f"- ⏳ {candidate.get('name')}({candidate.get('code')}) - 等买点出现，"
+            f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+        )
+        _append_observation_price_focus_note(backup_observation_lines, price_focus, prefix='  ')
 
-    # 5.2 明天仓位怎么放
-    report.append("**Step 5.2 明天仓位怎么放**:")
-    report.append(f"- **市场环境档位**: {position_level}")
-    report.append(f"- **明日裁决**: {step0_prediction_cn}")
-    report.append(f"- **怎么执行**: {get_execution_framework_text()}")
-    
-    # v2.3.40修复：档位优先于预判
+    position_section_lines = [
+        f"- **市场环境档位**: {position_level}",
+        f"- **明日裁决**: {step0_prediction_cn}",
+        f"- **怎么执行**: {get_execution_framework_text()}",
+    ]
     if position_level == "一档（空仓档）":
-        report.append("- **现在到底是什么状态**: 空仓")
-        report.append("- **明天仓位放多少**: 0%（必须空仓）")
-        report.append("- **明天具体怎么做**: 清仓或保持空仓，禁止任何买入")
+        position_section_lines.extend([
+            "- **现在到底是什么状态**: 空仓",
+            "- **明天仓位放多少**: 0%（必须空仓）",
+            "- **明天具体怎么做**: 清仓或保持空仓，禁止任何买入",
+        ])
     elif position_level == "二档（防守档）":
-        report.append("- **现在到底是什么状态**: 防守观察")
+        position_section_lines.append("- **现在到底是什么状态**: 防守观察")
         if final_gate.get('should_reduce'):
-            report.append("- **明天仓位放多少**: 最多30%（只留强者，不做新增）")
-            if has_personal_positions:
-                report.append("- **明天具体怎么做**: 只处理你的旧仓，去弱留强，禁止新开仓")
-            else:
-                report.append("- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，禁止新开仓")
+            position_section_lines.append("- **明天仓位放多少**: 最多30%（只留强者，不做新增）")
+            position_section_lines.append(
+                "- **明天具体怎么做**: 只处理你的旧仓，去弱留强，禁止新开仓"
+                if has_personal_positions else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，禁止新开仓"
+            )
         else:
-            report.append("- **明天仓位放多少**: 最多30%（持有但不新增）")
-            if has_personal_positions:
-                report.append("- **明天具体怎么做**: 持有你的现有强仓，禁止新开仓")
-            else:
-                report.append("- **明天具体怎么做**: 若你有现有强仓可继续持有，禁止新开仓")
-    else:  # 三档（进攻档）
+            position_section_lines.append("- **明天仓位放多少**: 最多30%（持有但不新增）")
+            position_section_lines.append(
+                "- **明天具体怎么做**: 持有你的现有强仓，禁止新开仓"
+                if has_personal_positions else "- **明天具体怎么做**: 若你有现有强仓可继续持有，禁止新开仓"
+            )
+    else:
         if not best_stock:
             if watch_anchor:
-                report.append("- **现在到底是什么状态**: 还没有缩到一只可买股")
-                report.append("- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）")
-                report.append("- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买")
+                position_section_lines.extend([
+                    "- **现在到底是什么状态**: 还没有缩到一只可买股",
+                    "- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）",
+                    "- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买",
+                ])
             else:
-                report.append("- **现在到底是什么状态**: 市场允许出手但还没有对象")
-                report.append("- **明天仓位放多少**: 0%（没有标的可买）")
-                report.append("- **明天具体怎么做**: 空仓等待，不做任何试错买入")
+                position_section_lines.extend([
+                    "- **现在到底是什么状态**: 市场允许出手但还没有对象",
+                    "- **明天仓位放多少**: 0%（没有标的可买）",
+                    "- **明天具体怎么做**: 空仓等待，不做任何试错买入",
+                ])
         elif step0_prediction == "DIFFICULT":
-            report.append("- **现在到底是什么状态**: 等开盘再确认")
-            report.append("- **明天仓位放多少**: 开盘前重新评估后再定")
-            report.append("- **明天具体怎么做**: 观望为主，不急于开仓")
+            position_section_lines.extend([
+                "- **现在到底是什么状态**: 等开盘再确认",
+                "- **明天仓位放多少**: 开盘前重新评估后再定",
+                "- **明天具体怎么做**: 观望为主，不急于开仓",
+            ])
         elif step0_prediction == "NEUTRAL":
-            report.append("- **现在到底是什么状态**: 已经缩到一只可买股")
-            report.append("- **明天仓位放多少**: 最多30%（轻仓试错）")
-            report.append("- **明天具体怎么做**: 严格按买点触发，不追涨")
-        else:  # CLEAR
-            report.append("- **现在到底是什么状态**: 已经缩到一只可买股")
-            report.append("- **明天仓位放多少**: 最多50%（正常参与）")
-            report.append("- **明天具体怎么做**: 积极执行买点计划")
-    report.append("")
+            position_section_lines.extend([
+                "- **现在到底是什么状态**: 已经缩到一只可买股",
+                "- **明天仓位放多少**: 最多30%（轻仓试错）",
+                "- **明天具体怎么做**: 严格按买点触发，不追涨",
+            ])
+        else:
+            position_section_lines.extend([
+                "- **现在到底是什么状态**: 已经缩到一只可买股",
+                "- **明天仓位放多少**: 最多50%（正常参与）",
+                "- **明天具体怎么做**: 积极执行买点计划",
+            ])
 
-    # 5.3 明日执行时间表
-    report.append("**Step 5.3 明日执行时间表**:")
-    report.append("")
-    report.append("**盘前准备（08:30-09:15）**:")
-    # v2.3.40修复：根据档位调整措辞
+    pre_market_lines = []
     if best_stock:
         if 'signal' in best_stock:
             signal = best_stock['signal']
@@ -21548,117 +21479,134 @@ def generate_markdown_report(
             confirm_price = minute_plan.get('confirm_price_60m')
             structure_stop_30m = minute_plan.get('structure_stop_30m')
             if confirm_price:
-                report.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 首个60分钟站上{confirm_price:.2f}提醒")
+                pre_market_lines.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 首个60分钟站上{confirm_price:.2f}提醒")
             else:
                 entry_range = best_stock.get('entry_range', (signal.entry_price, signal.entry_price))
-                report.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 触及{entry_range[0]:.2f}-{entry_range[1]:.2f}提醒")
+                pre_market_lines.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 触及{entry_range[0]:.2f}-{entry_range[1]:.2f}提醒")
             if structure_stop_30m:
-                report.append(f"- **止损预埋**: 若买入，30分钟结构止损先盯{structure_stop_30m:.2f}")
+                pre_market_lines.append(f"- **止损预埋**: 若买入，30分钟结构止损先盯{structure_stop_30m:.2f}")
         else:
             minute_plan = best_stock.get('minute_plan') or {}
             confirm_price = minute_plan.get('confirm_price_60m')
-            if confirm_price:
-                report.append(f"- **关注标的**: {best_stock.get('name')}({best_stock.get('code')}) - 首个60分钟站上{confirm_price:.2f}后按条件触发")
-            else:
-                report.append(f"- **关注标的**: {best_stock.get('name')}({best_stock.get('code')}) - 按条件触发")
-    else:
-        if watch_anchor:
-            minute_plan = watch_anchor.get('minute_plan') or {}
-            stop_plan = watch_anchor.get('stop_plan')
-            price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-            confirm_price = minute_plan.get('confirm_price_60m')
-            confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-            observation_price_focus_text = _build_observation_price_focus_text(price_focus)
-            report.append(
-                f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')}) - "
-                f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+            pre_market_lines.append(
+                f"- **关注标的**: {best_stock.get('name')}({best_stock.get('code')}) - "
+                f"{'首个60分钟站上' + format(confirm_price, '.2f') + '后按条件触发' if confirm_price else '按条件触发'}"
             )
-            _append_watch_anchor_note(report, watch_anchor)
-            _append_observation_price_focus_note(report, price_focus)
-        else:
-            report.append("- **空仓准备**: 无操作标的，准备观望")
-    report.append("- 查看隔夜消息、外围市场、期货走势")
-    report.append("- 确认A杀冷却池无变化")
-    report.append("")
-    
-    report.append("**开盘前30分钟（09:30-10:00）**:")
-    report.append("- 观察涨跌比、昨日涨停溢价率")
-    report.append("- 重新评估Step 0裁决是否仍然成立")
-    report.append("- 观察观察池个股的竞价情况")
-    report.append("- 这30分钟只确认环境，不抢买点")
-    report.append("")
-    
-    report.append("**首个60分钟确认（09:30-10:30）**:")
-    if trade_gate_open and best_stock:
-        report.append("- 日线环境未被破坏 + 60分钟结构确认 → 才允许执行买点")
-        report.append("- 直接高开离买点>5% 或 60分钟走弱 → 放弃，等新的买点")
-    elif trade_gate_open and watch_anchor:
-        report.append("- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否完成60分钟确认")
-        report.append("- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入买入流程")
+    elif watch_anchor:
+        minute_plan = watch_anchor.get('minute_plan') or {}
+        stop_plan = watch_anchor.get('stop_plan')
+        price_focus = _build_trade_price_focus(minute_plan, stop_plan)
+        confirm_price = minute_plan.get('confirm_price_60m')
+        confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
+        observation_price_focus_text = _build_observation_price_focus_text(price_focus)
+        pre_market_lines.append(
+            f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')}) - "
+            f"{_compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+        )
+        _append_watch_anchor_note(pre_market_lines, watch_anchor)
+        _append_observation_price_focus_note(pre_market_lines, price_focus)
     else:
-        report.append("- 当前门控不允许新开仓，本时段只确认环境是否继续支持持仓/观察")
-        report.append("- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增")
-    report.append("")
+        pre_market_lines.append("- **空仓准备**: 无操作标的，准备观望")
+    pre_market_lines.extend([
+        "- 查看隔夜消息、外围市场、期货走势",
+        "- 确认A杀冷却池无变化",
+    ])
 
-    report.append("**盘中执行（10:30-14:30）**:")
+    opening_lines = [
+        "- 观察涨跌比、昨日涨停溢价率",
+        "- 重新评估Step 0裁决是否仍然成立",
+        "- 观察观察池个股的竞价情况",
+        "- 这30分钟只确认环境，不抢买点",
+    ]
     if trade_gate_open and best_stock:
-        report.append("- 60分钟确认后，触及买点区间且大盘不崩 → 按预设仓位买入")
-        report.append("- 买入后用30分钟结构设置止损；若结构止损过深，则直接用单笔-5%硬止损")
-        report.append("- 跌破执行止损线 → 无条件止损")
+        first_hour_lines = [
+            "- 日线环境未被破坏 + 60分钟结构确认 → 才允许执行买点",
+            "- 直接高开离买点>5% 或 60分钟走弱 → 放弃，等新的买点",
+        ]
+        intraday_lines = [
+            "- 60分钟确认后，触及买点区间且大盘不崩 → 按预设仓位买入",
+            "- 买入后用30分钟结构设置止损；若结构止损过深，则直接用单笔-5%硬止损",
+            "- 跌破执行止损线 → 无条件止损",
+        ]
     elif trade_gate_open and watch_anchor:
-        report.append("- 继续只盯明天先盯哪只，不做多票分散")
-        report.append("- 它如果始终走不成明天唯一能买的那只 → 当天继续等待，不抢跑")
-        report.append("- 若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格")
+        first_hour_lines = [
+            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否完成60分钟确认",
+            "- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入买入流程",
+        ]
+        intraday_lines = [
+            "- 继续只盯明天先盯哪只，不做多票分散",
+            "- 它如果始终走不成明天唯一能买的那只 → 当天继续等待，不抢跑",
+            "- 若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格",
+        ]
     else:
-        report.append("- 以观察和处理持仓为主，不做新开仓")
-        report.append("- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损")
-        report.append("- 若观察标的全天未形成更强确认 → 继续等待")
-    report.append("")
-    
-    report.append("**尾盘（14:30-15:00）**:")
-    report.append("- 未买入的保持观望")
+        first_hour_lines = [
+            "- 当前门控不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
+            "- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增",
+        ]
+        intraday_lines = [
+            "- 以观察和处理持仓为主，不做新开仓",
+            "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
+            "- 若观察标的全天未形成更强确认 → 继续等待",
+        ]
+
+    closing_lines = ["- 未买入的保持观望"]
     if trade_gate_open and best_stock:
-        report.append("- 已买入的确认30分钟止损线是否需要上移")
+        closing_lines.append("- 已买入的确认30分钟止损线是否需要上移")
     else:
-        report.append("- 若你有旧仓，确认30分钟结构止损线是否需要上移")
-    report.append("")
-    
-    if today_predictions or nextday_predictions:
-        report.append("")
-        report.append("**⚠️ 异动预警**:")
-        report.append("| 股票 | 偏离天数 | 触发条件 | 实际涨幅 | 状态 |")
-        report.append("|------|----------|----------|----------|------|")
-        if today_predictions:
-            for pred in today_predictions[:3]:
-                name = pred.get('name', '?')
-                code = pred.get('code', '?')
-                deviation_days = pred.get('deviation_days', 0)
-                trigger_pct = pred.get('trigger_pct', 0)
-                actual_change = pred.get('actual_change_pct')
-                is_triggered = pred.get('is_triggered')
-                
-                # 构建触发条件字符串
-                trigger_info = f"{trigger_pct:+.2f}%"
-                
-                # 添加实际涨幅和触发状态（当日预警）
-                if actual_change is not None:
-                    actual_change_str = f"{actual_change:+.2f}%"
-                    if is_triggered is True:
-                        trigger_status = "✅已触发"
-                    elif is_triggered is False:
-                        trigger_status = "⏳未触发"
-                    else:
-                        trigger_status = "❓未知"
-                    report.append(f"| {name}({code}) | {deviation_days}天 | {trigger_info} | {actual_change_str} | {trigger_status} |")
-                else:
-                    report.append(f"| {name}({code}) | {deviation_days}天 | {trigger_info} | - | 待观察 |")
-        if nextday_predictions:
-            for pred in nextday_predictions[:2]:
-                name = pred.get('name', '?')
-                code = pred.get('code', '?')
-                deviation_days = pred.get('deviation_days', 0)
-                trigger_pct = pred.get('trigger_pct', 0)
-                report.append(f"| {name}({code}) | {deviation_days}天 | 次日{trigger_pct:+.2f}% | - | 次日观察 |")
+        closing_lines.append("- 若你有旧仓，确认30分钟结构止损线是否需要上移")
+
+    alert_rows = []
+    for pred in (today_predictions or [])[:3]:
+        actual_change = pred.get('actual_change_pct')
+        if actual_change is not None:
+            actual_change_str = f"{actual_change:+.2f}%"
+            if pred.get('is_triggered') is True:
+                trigger_status = "✅已触发"
+            elif pred.get('is_triggered') is False:
+                trigger_status = "⏳未触发"
+            else:
+                trigger_status = "❓未知"
+        else:
+            actual_change_str = "-"
+            trigger_status = "待观察"
+        alert_rows.append(
+            {
+                "name": pred.get('name', '?'),
+                "code": pred.get('code', '?'),
+                "deviation_days": pred.get('deviation_days', 0),
+                "trigger_info": f"{pred.get('trigger_pct', 0):+.2f}%",
+                "actual_change_str": actual_change_str,
+                "trigger_status": trigger_status,
+            }
+        )
+    for pred in (nextday_predictions or [])[:2]:
+        alert_rows.append(
+            {
+                "name": pred.get('name', '?'),
+                "code": pred.get('code', '?'),
+                "deviation_days": pred.get('deviation_days', 0),
+                "trigger_info": f"次日{pred.get('trigger_pct', 0):+.2f}%",
+                "actual_change_str": "-",
+                "trigger_status": "次日观察",
+            }
+        )
+
+    report.extend(
+        render_action_plan_section(
+            {
+                "action_rows": action_rows,
+                "observation_priority_lines": observation_priority_lines,
+                "backup_observation_lines": backup_observation_lines,
+                "position_section_lines": position_section_lines,
+                "pre_market_lines": pre_market_lines,
+                "opening_lines": opening_lines,
+                "first_hour_lines": first_hour_lines,
+                "intraday_lines": intraday_lines,
+                "closing_lines": closing_lines,
+                "alert_rows": alert_rows,
+            }
+        )
+    )
 
     report.append("")
     abnormal_probe_parts = []
