@@ -79,6 +79,8 @@ from research.market_research_runtime import (
     build_market_research_snapshot_contract,
     derive_step0_follow_plan_contract,
 )
+from selection.candidate_bundle_runtime import build_candidate_bundle_contract
+from risk.risk_bundle_runtime import build_risk_bundle_contract
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
 MARKET_ZHONGSHU_MIN_KLINES = 5
@@ -14023,161 +14025,23 @@ def build_step2_candidate_bundle(
     target_date='',
 ):
     """构建 Step2 共用候选上下文，供日报与单票诊断复用。"""
-    zt_pool_by_sector = zt_pool_by_sector or {}
-    gem_breathing_candidates = gem_breathing_candidates or []
-
-    lianban_data = data.get('lianban_data', {})
-    lb_stocks_map = {}
-    if lianban_data and 'stocks' in lianban_data:
-        for lb_stock in lianban_data['stocks']:
-            code = normalize_stock_code(lb_stock.get('code', ''))
-            lb_stocks_map[code] = {
-                '连板数': lb_stock.get('连板数', 1),
-                '昨日涨停价': lb_stock.get('昨日涨停价', 0),
-                '涨停原因': lb_stock.get('涨停原因', ''),
-            }
-
-    evaluated_stocks = []
-    for stock in watchlist:
-        item = dict(stock)
-        code = item.get('code', '')
-        base_score = item.get('score', 0)
-        abnormal_item = abnormal_watch_map.get(code, {})
-        abnormal_bonus, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
-        lb_info = lb_stocks_map.get(code, {})
-        lb_count = lb_info.get('连板数', 1)
-        tomorrow_strength = base_score
-
-        if lb_count >= 3:
-            tomorrow_strength += 25
-            core_level = "🔥🔥 高标核心"
-            tmr_forecast = f"{lb_count}进{lb_count+1}，若竞价高开可能继续"
-        elif lb_count == 2:
-            tomorrow_strength += 20
-            core_level = "🔥 连板核心"
-            tmr_forecast = "2进3，观察竞价是否超预期"
-        elif lb_count == 1 and base_score >= 70:
-            tomorrow_strength += 15
-            core_level = "⭐ 首板强芯"
-            tmr_forecast = "首板形态好，明日有连板预期"
-        elif base_score >= 50:
-            core_level = "✓ 溢价候选"
-            tmr_forecast = "明日可能高开溢价"
-        else:
-            core_level = "○ 观察备选"
-            tmr_forecast = "需看明日竞价强弱"
-
-        tomorrow_strength += abnormal_bonus
-        if abnormal_bonus >= 18 and "高标核心" not in core_level and "连板核心" not in core_level:
-            core_level = "🔥 异动抗跌核心"
-        elif abnormal_bonus >= 10 and core_level in ["✓ 溢价候选", "○ 观察备选"]:
-            core_level = "⭐ 抗跌观察芯"
-        elif abnormal_bonus < 0:
-            core_level = "○ 转弱观察"
-
-        if abnormal_item:
-            if abnormal_item.get('follow_state') == '跌不下去':
-                tmr_forecast = f"{tmr_forecast}；异动后承接强，优先等60分钟确认"
-            elif abnormal_item.get('follow_state') == '缩量消化':
-                tmr_forecast = f"{tmr_forecast}；异动后缩量消化，可继续跟"
-            elif abnormal_item.get('follow_state') == '已经转弱':
-                tmr_forecast = f"{tmr_forecast}；但异动后承接差，只能降级观察"
-            elif abnormal_item.get('follow_state') == '新异动待观察':
-                tmr_forecast = f"{tmr_forecast}；异动刚出现，先看次日承接"
-
-        item['tomorrow_strength'] = tomorrow_strength
-        item['core_level'] = core_level
-        item['tmr_forecast'] = tmr_forecast
-        item['连板数'] = lb_count
-        item['abnormal_bonus'] = abnormal_bonus
-        item['abnormal_summary'] = abnormal_summary
-        item['abnormal_rule'] = abnormal_rule
-        item['abnormal_follow_state'] = abnormal_item.get('follow_state', '')
-        item['abnormal_type'] = abnormal_item.get('abnormal_type', '')
-        item['abnormal_setup_signal_id'] = abnormal_item.get('setup_signal_id', '')
-        item['abnormal_setup_signal_label'] = abnormal_item.get('setup_signal_label', '')
-        item['abnormal_setup_signal_phase'] = abnormal_item.get('setup_signal_phase', '')
-        item['abnormal_is_degraded_snapshot'] = bool(abnormal_item.get('is_degraded_snapshot', False))
-        evaluated_stocks.append(item)
-
-    evaluated_stocks.sort(
-        key=lambda item: (
-            item.get('tomorrow_strength', 0),
-            item.get('abnormal_bonus', 0),
-            item.get('score', 0),
-        ),
-        reverse=True,
-    )
-
-    primary_mainline = str(exit_analysis.get('sector_name', '') or '').strip()
-    if primary_mainline:
-        mainline_evaluated_stocks, crossline_evaluated_stocks = _split_candidates_by_mainline(
-            evaluated_stocks,
-            primary_mainline,
-        )
-        if not mainline_evaluated_stocks:
-            mainline_evaluated_stocks = list(evaluated_stocks)
-            crossline_evaluated_stocks = []
-    else:
-        mainline_evaluated_stocks = list(evaluated_stocks)
-        crossline_evaluated_stocks = []
-
-    crossline_observation_stocks = crossline_evaluated_stocks[:4]
-    gem_observation_stocks = _build_gem_20cm_observation_pool(gem_breathing_candidates, target_date=target_date)
-
-    core_stocks = (
-        mainline_evaluated_stocks[:3]
-        if len(mainline_evaluated_stocks) >= 3
-        else mainline_evaluated_stocks
-    )
-    secondary_stocks = (
-        mainline_evaluated_stocks[3:6]
-        if len(mainline_evaluated_stocks) >= 6
-        else mainline_evaluated_stocks[3:]
-    )
-    ignored_stocks = mainline_evaluated_stocks[6:]
-    crossline_core_stocks = (
-        crossline_observation_stocks[:2]
-        if len(crossline_observation_stocks) >= 2
-        else crossline_observation_stocks
-    )
-    crossline_secondary_stocks = (
-        crossline_observation_stocks[2:4]
-        if len(crossline_observation_stocks) >= 4
-        else crossline_observation_stocks[2:]
-    )
-    crossline_ignored_stocks = crossline_evaluated_stocks[4:]
-    sector_trend_snapshot = build_sector_trend_snapshot(
+    return build_candidate_bundle_contract(
+        data,
+        exit_analysis,
         candidates,
         watchlist,
-        evaluated_stocks,
+        abnormal_watch_map,
         dragon_stocks,
         zt_pool_by_sector=zt_pool_by_sector,
-        top_n=5,
+        gem_breathing_candidates=gem_breathing_candidates,
+        target_date=target_date,
+        normalize_stock_code=normalize_stock_code,
+        get_abnormal_rank_adjustment=get_abnormal_rank_adjustment,
+        split_candidates_by_mainline=_split_candidates_by_mainline,
+        build_gem_observation_pool=_build_gem_20cm_observation_pool,
+        build_sector_trend_snapshot=build_sector_trend_snapshot,
+        build_extreme_conviction_list=build_extreme_conviction_list,
     )
-    extreme_conviction_list = build_extreme_conviction_list(
-        evaluated_stocks,
-        exit_analysis.get('sector_name', ''),
-        sector_snapshot=sector_trend_snapshot,
-        top_n=3,
-    )
-
-    return {
-        'evaluated_stocks': evaluated_stocks,
-        'mainline_name': primary_mainline,
-        'mainline_evaluated_stocks': mainline_evaluated_stocks,
-        'core_stocks': core_stocks,
-        'secondary_stocks': secondary_stocks,
-        'ignored_stocks': ignored_stocks,
-        'crossline_evaluated_stocks': crossline_evaluated_stocks,
-        'crossline_observation_stocks': crossline_observation_stocks,
-        'gem_observation_stocks': gem_observation_stocks,
-        'crossline_core_stocks': crossline_core_stocks,
-        'crossline_secondary_stocks': crossline_secondary_stocks,
-        'crossline_ignored_stocks': crossline_ignored_stocks,
-        'sector_trend_snapshot': sector_trend_snapshot,
-        'extreme_conviction_list': extreme_conviction_list,
-    }
 
 
 def _append_unique_text(container, text):
@@ -14296,280 +14160,23 @@ def build_step3_risk_bundle(
     persist_a_kill=False,
 ):
     """构建 Step3 风险预判上下文，供日报与单票诊断共用。"""
-    zt_pool_by_sector = zt_pool_by_sector or data.get('zt_pool_by_sector', {}) or {}
-    dt_pool_by_sector = dt_pool_by_sector or data.get('dt_pool_by_sector', {}) or {}
-    gem_observation_stocks = gem_observation_stocks or []
-
-    all_check_stocks = []
-    seen_codes = set()
-    for stock in list(core_stocks or []) + list(secondary_stocks or []) + list(gem_observation_stocks or []):
-        code = normalize_stock_code((stock or {}).get('code', ''))
-        if code and code in seen_codes:
-            continue
-        if code:
-            seen_codes.add(code)
-        all_check_stocks.append(dict(stock or {}))
-    delete_group = []
-    keep_group = []
-    focus_group = []
-    stock_rows = []
-
-    stock_info_map = {}
-    for stock in data.get('zt_pool', []) or []:
-        code = normalize_stock_code(stock.get('代码', stock.get('code', '')))
-        if code:
-            stock_info_map[code] = {
-                'close': stock.get('最新价', stock.get('close', 0)),
-                'volume': stock.get('成交额', stock.get('volume', 0)),
-                'open': stock.get('开盘价', stock.get('open', 0)),
-                'high': stock.get('最高价', stock.get('high', 0)),
-                'low': stock.get('最低价', stock.get('low', 0)),
-                '封单额': stock.get('封单额', stock.get('封单资金', 0)),
-                '换手': stock.get('换手率', stock.get('换手', 0)),
-                '炸板次数': stock.get('炸板次数', 0),
-                '首次封板时间': stock.get('首次封板时间', stock.get('first_limit_time', '')),
-                '最后封板时间': stock.get('最后封板时间', stock.get('last_limit_time', '')),
-            }
-
-    abnormal_green_count = 0
-    abnormal_red_count = 0
-    by_code = {}
-
-    for original in all_check_stocks:
-        stock = dict(original or {})
-        code = stock.get('code', '')
-        name = stock.get('name', '')
-        pattern = stock.get('pattern', '未知')
-
-        info = stock_info_map.get(code, {})
-        stock['close'] = stock.get('close', 0) or info.get('close', 0)
-        stock['volume'] = stock.get('volume', 0) or info.get('volume', 0)
-        stock['high'] = info.get('high', 0)
-        stock['low'] = info.get('low', 0)
-        stock['open'] = info.get('open', 0)
-
-        fengdan = info.get('封单额', 0)
-        huanshou = info.get('换手', 0)
-        zhaban = info.get('炸板次数', 0)
-        last_limit_time = info.get('最后封板时间', '')
-        change = stock.get('change', stock.get('change_pct', 0))
-        abnormal_signal = get_abnormal_follow_risk_signal(stock)
-        abnormal_light = abnormal_signal.get('light', '🟡 黄灯')
-        abnormal_delta = int(abnormal_signal.get('delta', 0) or 0)
-        abnormal_reason = abnormal_signal.get('reason', '')
-        abnormal_forecast = abnormal_signal.get('forecast', '')
-
-        risk_score = 0
-        raw_risk_score = 0
-        risk_penalties = []
-        repair_buffers = []
-        tomorrow_risk = ""
-
-        friction_snapshot = _evaluate_limit_up_friction(
-            zhaban,
-            last_limit_time=last_limit_time,
-            turnover=huanshou,
-            board_count=stock.get('连板数', 1),
-        )
-        friction_penalty = int(friction_snapshot.get('penalty', 0) or 0)
-        friction_reason = friction_snapshot.get('reason', '')
-        if friction_penalty > 0:
-            risk_score += friction_penalty
-            raw_risk_score += friction_penalty
-            _append_unique_text(risk_penalties, friction_reason)
-            if friction_penalty >= 34:
-                tomorrow_risk = "明日低开风险大"
-            elif friction_penalty >= 22:
-                tomorrow_risk = "明日分歧可能继续放大"
-            elif friction_penalty >= 10:
-                tomorrow_risk = "明日可能低开"
-
-        if pattern == '一字板' and fengdan < 100000000:
-            risk_score += 25
-            raw_risk_score += 25
-            _append_unique_text(risk_penalties, "一字板封单弱")
-            tomorrow_risk = "明日可能开板即炸"
-
-        if stock.get('连板数', 1) >= 3 and huanshou > 30:
-            risk_score += 20
-            raw_risk_score += 20
-            _append_unique_text(risk_penalties, "高换手连板")
-            tomorrow_risk = "明日分歧可能加大"
-
-        sector = stock.get('sector', '')
-        sector_rank = 0
-        for idx, sector_stock in enumerate(zt_pool_by_sector.get(sector, []) or []):
-            if sector_stock.get('代码', sector_stock.get('code', '')) == code:
-                sector_rank = idx + 1
-                break
-        if sector_rank > 3:
-            risk_score += 15
-            raw_risk_score += 15
-            _append_unique_text(risk_penalties, f"板块后排第{sector_rank}")
-            if not tomorrow_risk:
-                tomorrow_risk = "明日可能断板"
-
-        if 0 < change < 5:
-            risk_score += 10
-            raw_risk_score += 10
-            _append_unique_text(risk_penalties, "涨幅不足")
-            if not tomorrow_risk:
-                tomorrow_risk = "明日可能走弱"
-
-        risk_score += abnormal_delta
-        if abnormal_reason and abnormal_reason != '无异动承接信息':
-            if abnormal_delta < 0:
-                _append_unique_text(repair_buffers, abnormal_reason)
-            else:
-                raw_risk_score += abnormal_delta
-                _append_unique_text(risk_penalties, abnormal_reason)
-        if abnormal_light == '🟢 绿灯':
-            abnormal_green_count += 1
-        elif abnormal_light == '🔴 红灯':
-            abnormal_red_count += 1
-
-        if abnormal_light == '🔴 红灯':
-            tomorrow_risk = abnormal_forecast or tomorrow_risk or "异动后承接转弱，明日易低开或继续下杀"
-        elif abnormal_light == '🟠 橙灯' and not tomorrow_risk:
-            tomorrow_risk = abnormal_forecast or "异动刚出现，明日先看承接"
-        elif abnormal_light in ['🟢 绿灯', '🟡 黄灯'] and abnormal_forecast and not tomorrow_risk:
-            tomorrow_risk = abnormal_forecast
-
-        if not tomorrow_risk:
-            tomorrow_risk = "形态正常，明日看竞价"
-
-        risk_score = max(risk_score, 0)
-        if abnormal_light == '🟢 绿灯' and risk_score < 20:
-            tomorrow_risk = "异动后承接强，明日即使低开也先看60分钟确认"
-        elif abnormal_light == '🟡 黄灯' and risk_score < 20 and '低开风险' in tomorrow_risk:
-            tomorrow_risk = "异动后仍在消化，明日先看竞价与承接是否继续稳定"
-        elif abnormal_light == '🟠 橙灯' and risk_score < 40 and '低开风险' in tomorrow_risk:
-            tomorrow_risk = "异动刚出现且承接未验证，明日先看是否跌得下去"
-
-        if abnormal_light == '🟢 绿灯' and raw_risk_score >= 30:
-            tomorrow_risk = "盘中分歧不小，但承接仍在；明日只看竞价和60分钟确认，不宜直接乐观"
-        elif abnormal_light == '🟢 绿灯' and raw_risk_score >= 12 and risk_score < 20:
-            tomorrow_risk = "分歧已出现但承接尚可，明日只看回踩后的60分钟确认"
-        elif abnormal_light == '🟡 黄灯' and raw_risk_score >= 20:
-            tomorrow_risk = abnormal_forecast or "仍在消化分歧，明日先看竞价与承接"
-
-        enriched = {
-            **stock,
-            'reason': '风险可控',
-            'tomorrow_risk': tomorrow_risk,
-            'risk_score': risk_score,
-            'raw_risk_score': raw_risk_score,
-            'abnormal_light': abnormal_light,
-            'risk_penalties': risk_penalties,
-            'repair_buffers': repair_buffers,
-        }
-
-        if risk_score >= 40:
-            risk_level = "🔴 高风险"
-            dest = "明天先回避谁"
-            delete_group.append(enriched)
-        elif risk_score >= 20:
-            risk_level = "🟡 中风险"
-            dest = "观察竞价"
-            keep_group.append(enriched)
-        else:
-            risk_level = "🟢 低风险"
-            dest = "可按计划"
-            focus_group.append(enriched)
-
-        enriched['reason'] = _format_step3_risk_reason(
-            risk_penalties=risk_penalties,
-            repair_buffers=repair_buffers,
-            risk_level=risk_level,
-        )
-        enriched['risk_level'] = risk_level
-        enriched['dest'] = dest
-
-        row = {
-            **enriched,
-            'risk_level': risk_level,
-            'dest': dest,
-            'pattern': pattern,
-            'name': name,
-            'code': code,
-        }
-        stock_rows.append(row)
-        if code:
-            by_code[normalize_stock_code(code)] = row
-
-    risk_sectors_from_dt = []
-    for sector_name, stocks in dt_pool_by_sector.items():
-        if len(stocks or []) >= 3:
-            risk_sectors_from_dt.append({
-                'sector': sector_name,
-                'count': len(stocks),
-                'stocks': [item.get('name', item.get('名称', '')) for item in stocks[:3]],
-            })
-
-    mainline_a_kill = False
-    mainline_dt_stocks = []
-    for sector_name, stocks in dt_pool_by_sector.items():
-        if mainline_name and (mainline_name in sector_name or sector_name in mainline_name):
-            mainline_dt_stocks = stocks
-            break
-
-    mainline_zt_count = 0
-    for sector_name, stocks in zt_pool_by_sector.items():
-        if mainline_name and (mainline_name in sector_name or sector_name in mainline_name):
-            mainline_zt_count = len(stocks)
-            break
-
-    mainline_change = 0
-    sector_fund_flow = data.get('sector_fund_flow', {}) or {}
-    if sector_fund_flow:
-        for sector in sector_fund_flow.get('inflow', []) or []:
-            sector_name = sector.get('name', '')
-            if mainline_name and (mainline_name in sector_name or sector_name in mainline_name):
-                mainline_change = sector.get('zdf', 0)
-                break
-        if mainline_change == 0:
-            for sector in sector_fund_flow.get('outflow', []) or []:
-                sector_name = sector.get('name', '')
-                if mainline_name and (mainline_name in sector_name or sector_name in mainline_name):
-                    mainline_change = sector.get('zdf', 0)
-                    break
-
-    structural_a_kill = False
-    structural_reason = ""
-    if mainline_change <= -5:
-        structural_a_kill = True
-        structural_reason = f"主线当日跌幅{mainline_change:+.2f}%过深，已接近结构破坏"
-    elif mainline_change <= -3 and mainline_zt_count == 0 and len(mainline_dt_stocks) >= 1:
-        structural_a_kill = True
-        structural_reason = f"主线转弱且板块内已出现跌停，缺乏修复承接"
-
-    if len(mainline_dt_stocks) >= 3:
-        mainline_a_kill = True
-    elif structural_a_kill:
-        mainline_a_kill = True
-
-    a_kill_blacklist_updates = []
-    if persist_a_kill and mainline_a_kill:
-        a_kill_blacklist_updates = update_a_kill_blacklist(target_date, mainline_dt_stocks, mainline_name)
-
-    return {
-        'all_check_stocks': all_check_stocks,
-        'stock_rows': stock_rows,
-        'by_code': by_code,
-        'delete_group': delete_group,
-        'keep_group': keep_group,
-        'focus_group': focus_group,
-        'abnormal_green_count': abnormal_green_count,
-        'abnormal_red_count': abnormal_red_count,
-        'risk_sectors_from_dt': risk_sectors_from_dt,
-        'mainline_a_kill': mainline_a_kill,
-        'mainline_dt_stocks': mainline_dt_stocks,
-        'mainline_zt_count': mainline_zt_count,
-        'mainline_change': mainline_change,
-        'structural_a_kill': structural_a_kill,
-        'structural_reason': structural_reason,
-        'a_kill_blacklist_updates': a_kill_blacklist_updates,
-    }
+    return build_risk_bundle_contract(
+        data,
+        target_date,
+        mainline_name,
+        core_stocks,
+        secondary_stocks,
+        gem_observation_stocks=gem_observation_stocks,
+        zt_pool_by_sector=zt_pool_by_sector,
+        dt_pool_by_sector=dt_pool_by_sector,
+        persist_a_kill=persist_a_kill,
+        normalize_stock_code=normalize_stock_code,
+        safe_float=_safe_float,
+        clamp=_clamp,
+        get_abnormal_follow_risk_signal=get_abnormal_follow_risk_signal,
+        format_risk_reason=_format_step3_risk_reason,
+        update_a_kill_blacklist=update_a_kill_blacklist,
+    )
 
 
 def _build_front_mainline_label(market_research_snapshot, fallback_mainline=''):
