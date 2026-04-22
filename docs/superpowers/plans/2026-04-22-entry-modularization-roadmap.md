@@ -49,7 +49,7 @@
 - [ ] 统一 trace/log 契约：请求层、分析层、输出层都产出一致的 `module_logs`
 - [x] 把 `risk_review` 从入口移入独立 stage：`scripts/domains/execution_chain/risk_review_stage.py`
 - [x] 把 `entry_plan` 从入口移入独立 stage：`scripts/domains/execution_chain/entry_plan_stage.py`
-- [ ] 把 `pk_decision` 从入口移入独立 stage：`scripts/domains/execution_chain/pk_decision_stage.py`
+- [x] 把 `pk_decision` 从入口移入独立 stage：`scripts/domains/execution_chain/pk_decision_stage.py`
 - [ ] 把 `build_legacy_final_conclusion_lines` 接入动态 stage label，不再依赖固定 Step 文案
 - [ ] 把 `_compact_report_for_mvp()` 的截取规则改成 registry/key 驱动，移除固定 `Step x.y` 锚点
 - [ ] 把入口收敛成少量 `run_*` 入口函数，最终让主入口文件小于 `1000` 行
