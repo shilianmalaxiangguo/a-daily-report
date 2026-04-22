@@ -79,6 +79,7 @@ from research.market_research_runtime import (
     build_market_research_snapshot_contract,
     derive_step0_follow_plan_contract,
 )
+from portfolio.position_management_report import analyze_position_management_report
 from selection.candidate_bundle_runtime import build_candidate_bundle_contract
 from risk.risk_bundle_runtime import build_risk_bundle_contract
 from report.action_plan_renderer import render_action_plan_section
@@ -97,6 +98,7 @@ from report.market_research_renderer import (
     render_step0_follow_section,
 )
 from report.pk_decision_renderer import render_pk_decision_section
+from report.single_stock_diagnostic_renderer import render_single_stock_diagnostic_markdown
 from report.strategy_performance_renderer import render_strategy_performance_section
 
 MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
@@ -21218,247 +21220,12 @@ def parse_position_string(position_str):
 
 
 def analyze_position_management(data, target_date, positions):
-    """分析持仓管理
-    
-    Args:
-        data: 日报数据
-        target_date: 目标日期
-        positions: 持仓列表
-    
-    Returns:
-        str: 持仓管理报告（Markdown格式）
-    """
-    if not positions:
-        return ""
-    
-    report = []
-    report.append("")
-    report.append("---")
-    report.append("")
-    report.append("## 【个人持仓管理】（私密信息，仅供参考）")
-    report.append("")
-    report.append("> **交易策略**: 看大做小。日线中枢定环境，60分钟定买点，30分钟定止损；结构止损优先，最晚不超过单笔-5%。日报盘前若无30分钟数据，则先用锚定股近5个交易日最低价做大概止损放哪。")
-    for philosophy_line in _build_trading_philosophy_lines(include_system_requirement=False, compact=DISPLAY_MVP_MODE):
-        report.append(f"> {philosophy_line[2:]}")
-    report.append("")
-    
-    # 获取板块资金流向
-    sector_fund_flow = data.get('sector_fund_flow', {})
-    
-    # 获取涨停池和跌停池
-    zt_pool = data.get('zt_pool', [])
-    dt_pool = data.get('dt_pool', [])
-    
-    # 获取热榜数据
-    hot_rank_top30 = data.get('hot_rank_top30', [])
-    
-    # 获取成交额排名数据
-    turnover_rank = data.get('turnover_rank', [])
-    
-    # 获取龙虎榜数据
-    lhb_net_buy_top10 = data.get('lhb_net_buy_top10', [])
-    lhb_net_sell_top10 = data.get('lhb_net_sell_top10', [])
-    
-    # 表格头部
-    report.append("### 持仓详情")
-    report.append("")
-    report.append("| 股票 | 仓位 | 所属板块 | 涨跌幅 | 持有天数 | 板块趋势 | 操作建议 |")
-    report.append("|------|------|----------|--------|----------|----------|----------|")
-    
-    # 分析每只股票
-    for pos in positions:
-        stock_name = pos['name']
-        position_pct = pos['position']
-        
-        # 从多个数据源查找股票信息
-        stock_info = None
-        
-        # 1. 从热榜数据中查找
-        for stock in hot_rank_top30:
-            if stock.get('name') == stock_name:
-                stock_info = {
-                    'name': stock_name,
-                    'code': stock.get('code', ''),
-                    'change_pct': stock.get('change_pct', 0),
-                    'sector': stock.get('sector', '未知')
-                }
-                break
-        
-        # 2. 从成交额排名中查找
-        if not stock_info:
-            for stock in turnover_rank:
-                if stock.get('name') == stock_name:
-                    stock_info = {
-                        'name': stock_name,
-                        'code': stock.get('code', ''),
-                        'change_pct': stock.get('change_pct', 0),
-                        'sector': stock.get('sector', '未知')
-                    }
-                    break
-        
-        # 3. 从涨停池找
-        if not stock_info:
-            for stock in zt_pool:
-                if stock.get('名称') == stock_name:
-                    stock_info = {
-                        'name': stock_name,
-                        'code': stock.get('代码', ''),
-                        'change_pct': stock.get('涨跌幅', 0),
-                        'sector': stock.get('所属行业', '未知')
-                    }
-                    break
-        
-        # 4. 从跌停池找
-        if not stock_info:
-            for stock in dt_pool:
-                if stock.get('名称') == stock_name:
-                    stock_info = {
-                        'name': stock_name,
-                        'code': stock.get('代码', ''),
-                        'change_pct': stock.get('涨跌幅', 0),
-                        'sector': stock.get('所属行业', '未知')
-                    }
-                    break
-        
-        # 5. 从龙虎榜净买入找
-        if not stock_info:
-            for stock in lhb_net_buy_top10:
-                if stock.get('name') == stock_name:
-                    stock_info = {
-                        'name': stock_name,
-                        'code': stock.get('code', ''),
-                        'change_pct': stock.get('change_pct', 0),
-                        'sector': stock.get('sector', '未知')
-                    }
-                    break
-        
-        # 6. 从龙虎榜净卖出找
-        if not stock_info:
-            for stock in lhb_net_sell_top10:
-                if stock.get('name') == stock_name:
-                    stock_info = {
-                        'name': stock_name,
-                        'code': stock.get('code', ''),
-                        'change_pct': stock.get('change_pct', 0),
-                        'sector': stock.get('sector', '未知')
-                    }
-                    break
-        
-        # 如果都没找到，尝试从实时行情API获取
-        if not stock_info:
-            try:
-                import akshare as ak
-                # 尝试获取股票实时行情
-                df = ak.stock_zh_a_spot_em()
-                stock_df = df[df['名称'] == stock_name]
-                if not stock_df.empty:
-                    row = stock_df.iloc[0]
-                    stock_info = {
-                        'name': stock_name,
-                        'code': row.get('代码', ''),
-                        'change_pct': row.get('涨跌幅', 0),
-                        'sector': '未知'  # akshare实时行情不包含板块信息
-                    }
-            except:
-                pass
-        
-        # 如果都没找到，使用默认值
-        if not stock_info:
-            stock_info = {
-                'name': stock_name,
-                'code': '',
-                'change_pct': 0,
-                'sector': '未知'
-            }
-        
-        # 获取板块信息
-        sector = stock_info.get('sector', '未知')
-        change_pct = stock_info.get('change_pct', 0)
-        
-        # 计算持有天数（需要用户提供买入日期，这里暂时显示"未知"）
-        hold_days = "未知"
-        
-        # 分析板块趋势
-        sector_trend = "未知"
-        sector_fund = 0
-        
-        # sector_fund_flow是字典，包含inflow和outflow两个列表
-        inflow_list = sector_fund_flow.get('inflow', [])
-        outflow_list = sector_fund_flow.get('outflow', [])
-        
-        # 在流入列表中查找
-        for flow in inflow_list:
-            if flow.get('name') == sector:
-                sector_fund = flow.get('zljlr', 0)
-                if sector_fund > 10:
-                    sector_trend = "🔥 强势流入"
-                elif sector_fund > 0:
-                    sector_trend = "🟢 温和流入"
-                elif sector_fund > -10:
-                    sector_trend = "🟡 温和流出"
-                else:
-                    sector_trend = "❄️ 大幅流出"
-                break
-        
-        # 如果在流入列表没找到，在流出列表中查找
-        if sector_trend == "未知":
-            for flow in outflow_list:
-                if flow.get('name') == sector:
-                    sector_fund = flow.get('zljlr', 0)
-                    if sector_fund > 10:
-                        sector_trend = "🔥 强势流入"
-                    elif sector_fund > 0:
-                        sector_trend = "🟢 温和流入"
-                    elif sector_fund > -10:
-                        sector_trend = "🟡 温和流出"
-                    else:
-                        sector_trend = "❄️ 大幅流出"
-                    break
-        
-        # 生成操作建议
-        operation_advice = "持有"
-        
-        # 规则1：跌停 → 立即卖出
-        if change_pct <= -9.9:
-            operation_advice = "🔴 **立即卖出**（跌停）"
-        # 规则2：板块大幅流出 + 个股下跌 → 建议卖出
-        elif sector_fund < -20 and change_pct < -3:
-            operation_advice = "🟠 **建议卖出**（板块大幅流出+个股下跌）"
-        # 规则3：大涨 → 考虑卖出（大阳线卖出）
-        elif change_pct > 5:
-            operation_advice = "🟢 **考虑卖出**（大阳线，理想卖点）"
-        # 规则4：板块强势流入 + 个股上涨 → 持有
-        elif sector_fund > 10 and change_pct > 0:
-            operation_advice = "✅ **持有**（板块强势+个股上涨）"
-        # 规则5：其他情况 → 观察
-        else:
-            operation_advice = "⚠️ **观察**（等待确认）"
-        
-        # 添加到表格
-        report.append(f"| {stock_name} | {position_pct}% | {sector} | {change_pct:+.2f}% | {hold_days}天 | {sector_trend} | {operation_advice} |")
-    
-    report.append("")
-    
-    # 添加交易策略说明
-    report.append("### 交易策略说明")
-    report.append("")
-    report.append("**观察期规则**（3~5个交易日，与个人纪律一致）：")
-    report.append("- 买入逻辑：先看日线环境，再等60分钟确认后介入")
-    report.append("- 止损逻辑：买后以30分钟结构止损为主；若盘前无30分钟数据，日报先用锚定股近5个交易日最低价给预估锚点；最晚不超过单笔-5%")
-    report.append("- 观察期内走势不及预期 → 卖出，不拖")
-    report.append("- 当日放量大阳线 → 理想主动卖点（他人确定性买点即本模式卖点）")
-    report.append("")
-    report.append("**禁止操作**：")
-    report.append("- ❌ 禁止做T（会亏两份钱）")
-    report.append("- ❌ 禁止追高（不买昨天/大前天的最佳个股）")
-    report.append("- ❌ 禁止买入板块急剧下跌或利空的股票")
-    report.append("")
-    report.append("**板块监控**：")
-    report.append("- 如果板块出现严重利空（如今天航天起飞失败），该板块所有股票都可不参与")
-    report.append("- 量化喜欢参与新题材，有新的出来，老的可以不看")
-    report.append("")
-    
-    return "\n".join(report)
+    return analyze_position_management_report(
+        data=data,
+        positions=positions,
+        build_trading_philosophy_lines=_build_trading_philosophy_lines,
+        display_mvp_mode=DISPLAY_MVP_MODE,
+    )
 
 def replay_from_snapshot(target_date, refresh_sources=None):
     """从快照读数据，只重新拉指定数据源，然后用最新skill逻辑重新生成报告"""
@@ -21953,61 +21720,54 @@ def generate_single_stock_diagnostic_markdown(
     confirm_text = f"{minute_plan.get('confirm_price_60m'):.2f}" if minute_plan.get('confirm_price_60m') else '-'
     ev_stack_text = f"{_safe_float(decision_stack.get('ev_score')):.1f}" if decision_stack.get('ev_score') not in (None, '') else '-'
 
-    lines = [
-        f"# {target_date} 单票诊断 - {name}({code})",
-        "",
-        "> **口径说明**：本诊断与日报共用同一套市场环境、主线、异常承接、可交易性与执行权限状态机，不走旁路判断。",
-        "",
-        "## 一、市场层",
-        f"- **环境档位**: {phase_context.get('position_level', '-')}",
-        f"- **最终门控**: {phase_context.get('final_gate', {}).get('final_action', '-')}",
-        f"- **主攻线**: {market_research_bundle.get('mainline_name', '-')}",
-        f"- **主线驱动**: {(market_research_bundle.get('market_state_snapshot', {}) or {}).get('driver_type', '-')}",
-        f"- **脉冲阶段**: {(market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_stage', '-')}",
-        f"- **承接质量**: {(market_research_bundle.get('market_state_snapshot', {}) or {}).get('acceptance_quality', '-')}",
-        f"- **当前动作偏置**: {(market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_action_bias', '-')}",
-        f"- **状态机**: {(market_research_bundle.get('market_state_snapshot', {}) or {}).get('energy_state', '-')}",
-        f"- **Step 0裁决**: {(market_research_bundle.get('step0_plan', {}) or {}).get('step0_prediction_cn', '-')}",
-        "",
-        "## 二、个股层",
-        f"- **系统角色**: {system_role}",
-        f"- **所属板块**: {stock.get('sector', '未知')}",
-        f"- **今日涨跌**: {_safe_float(stock.get('change')):+.2f}%",
-        f"- **今日形态**: {stock.get('pattern', '-')}",
-        f"- **异动状态**: {stock.get('abnormal_follow_state', '无明确异动跟踪')}",
-        f"- **异动灯号**: {risk_signal.get('light', '-')} / {risk_signal.get('reason', '-')}",
-        f"- **执行权限**: {permission.get('permission_label', '-')}",
-        f"- **权限说明**: {permission.get('permission_reason', '-')}",
-        f"- **Step 3分组**: {risk_level} / {risk_group}",
-        f"- **Step 3理由**: {risk_reason_text}",
-        f"- **风险归因**: 风险项{len(risk_row.get('risk_penalties', []) or [])}条 / 修复项{len(risk_row.get('repair_buffers', []) or [])}条 / 原始分{risk_row.get('raw_risk_score', '-')} / 净分{risk_row.get('risk_score', '-')}",
-        "",
-        "## 三、执行层",
-        f"- **可交易性**: {tradability_guard.get('status_label', '-')}",
-        f"- **可交易性说明**: {tradability_guard.get('reason', '-')}",
-        f"- **量化信号**: {getattr(quant_signal, 'signal_type', '-') if quant_signal else '-'}",
-        f"- **量化判断**: {quant_signal.reason if quant_signal else '暂无量化信号'}",
-        f"- **60分钟确认点**: {confirm_text}",
-        f"- **关键位/带**: {price_focus.get('key_zone_display', '-')}",
-        f"- **执行止损**: {price_focus.get('execution_stop_display', '-')}",
-        f"- **最晚硬止损**: {price_focus.get('hard_stop_display', '-')}",
-        f"- **价格怎么看**: {price_focus.get('note_text', '-')}",
-        f"- **决策栈**: 环境{decision_stack.get('environment_score', '-')} / 主线{decision_stack.get('mainline_score', '-')} / 记忆{decision_stack.get('memory_score', '-')} / 触发{decision_stack.get('trigger_score', '-')} / 可交易性{decision_stack.get('tradability_score', '-')} / EV{ev_stack_text}",
-        "",
-        "## 四、结论",
-        f"- **最终裁决**: {final_verdict}",
-        f"- **裁决理由**: {final_reason or '-'}",
-    ]
-
-    if risk_tomorrow_text and risk_tomorrow_text != '-':
-        lines.append(f"- **明日预判**: {risk_tomorrow_text}")
-    elif stock.get('tmr_forecast'):
-        lines.append(f"- **明日预判**: {stock.get('tmr_forecast')}")
-    if stock.get('source_tags'):
-        lines.append(f"- **命中来源**: {' / '.join(stock.get('source_tags', []))}")
-
-    lines.append("")
-    return "\n".join(lines)
+    return render_single_stock_diagnostic_markdown(
+        {
+            "target_date": target_date,
+            "name": name,
+            "code": code,
+            "position_level": phase_context.get('position_level', '-'),
+            "final_action": phase_context.get('final_gate', {}).get('final_action', '-'),
+            "mainline_name": market_research_bundle.get('mainline_name', '-'),
+            "driver_type": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('driver_type', '-'),
+            "pulse_stage": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_stage', '-'),
+            "acceptance_quality": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('acceptance_quality', '-'),
+            "pulse_action_bias": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('pulse_action_bias', '-'),
+            "energy_state": (market_research_bundle.get('market_state_snapshot', {}) or {}).get('energy_state', '-'),
+            "step0_prediction_cn": (market_research_bundle.get('step0_plan', {}) or {}).get('step0_prediction_cn', '-'),
+            "system_role": system_role,
+            "sector": stock.get('sector', '未知'),
+            "change_pct": _safe_float(stock.get('change')),
+            "pattern": stock.get('pattern', '-'),
+            "abnormal_follow_state": stock.get('abnormal_follow_state', '无明确异动跟踪'),
+            "risk_light": risk_signal.get('light', '-'),
+            "risk_reason": risk_signal.get('reason', '-'),
+            "permission_label": permission.get('permission_label', '-'),
+            "permission_reason": permission.get('permission_reason', '-'),
+            "risk_level": risk_level,
+            "risk_group": risk_group,
+            "risk_reason_text": risk_reason_text,
+            "risk_penalty_count": len(risk_row.get('risk_penalties', []) or []),
+            "repair_buffer_count": len(risk_row.get('repair_buffers', []) or []),
+            "raw_risk_score": risk_row.get('raw_risk_score', '-'),
+            "risk_score": risk_row.get('risk_score', '-'),
+            "tradability_status": tradability_guard.get('status_label', '-'),
+            "tradability_reason": tradability_guard.get('reason', '-'),
+            "quant_signal_type": getattr(quant_signal, 'signal_type', '-') if quant_signal else '-',
+            "quant_reason": quant_signal.reason if quant_signal else '暂无量化信号',
+            "confirm_text": confirm_text,
+            "key_zone_display": price_focus.get('key_zone_display', '-'),
+            "execution_stop_display": price_focus.get('execution_stop_display', '-'),
+            "hard_stop_display": price_focus.get('hard_stop_display', '-'),
+            "price_note_text": price_focus.get('note_text', '-'),
+            "decision_stack": decision_stack,
+            "ev_stack_text": ev_stack_text,
+            "final_verdict": final_verdict,
+            "final_reason": final_reason or '-',
+            "risk_tomorrow_text": risk_tomorrow_text,
+            "tmr_forecast": stock.get('tmr_forecast'),
+            "source_tags": stock.get('source_tags', []),
+        }
+    )
 
 
 def main():
