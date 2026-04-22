@@ -197,6 +197,33 @@ class WorkflowGraphExecutorTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     execute_workflow_graph(workflow, {}, {})
 
+    def test_execute_workflow_graph_rejects_falsy_non_dict_workflow_inputs(self):
+        for workflow in ([], ""):
+            with self.subTest(workflow_type=type(workflow).__name__):
+                with self.assertRaises(ValueError):
+                    execute_workflow_graph(workflow, {}, {})
+
+    def test_execute_workflow_graph_rejects_unhashable_or_invalid_node_keys(self):
+        malformed_workflows = [
+            {
+                "workflow_key": "unhashable_key_v1",
+                "nodes": [{"key": [], "kind": "infer"}],
+                "edges": [],
+                "exports": [],
+            },
+            {
+                "workflow_key": "non_string_key_v1",
+                "nodes": [{"key": 123, "kind": "infer"}],
+                "edges": [],
+                "exports": [],
+            },
+        ]
+
+        for workflow in malformed_workflows:
+            with self.subTest(workflow_key=workflow["workflow_key"]):
+                with self.assertRaises(ValueError):
+                    execute_workflow_graph(workflow, {}, {})
+
 
 if __name__ == "__main__":
     unittest.main()

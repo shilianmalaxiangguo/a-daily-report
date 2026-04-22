@@ -30,7 +30,7 @@ def _normalize_result_collection(value):
 
 
 def execute_workflow_graph(workflow, registry, ctx=None):
-    workflow = workflow or {}
+    workflow = {} if workflow is None else workflow
     ctx = ctx or {}
     inputs = dict(ctx.get("inputs") or {})
     state = dict(ctx.get("state") or {})
@@ -40,8 +40,8 @@ def execute_workflow_graph(workflow, registry, ctx=None):
     node_results = {}
     module_logs = []
     errors = []
-    edges = workflow.get("edges") or []
     execution_order = build_execution_order(workflow)
+    edges = workflow.get("edges") or []
     node_meta_map = {item["key"]: item for item in (workflow.get("nodes") or [])}
 
     for node_key in execution_order:

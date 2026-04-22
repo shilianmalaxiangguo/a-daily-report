@@ -1,9 +1,16 @@
 from collections import deque
 
 
-def _normalize_workflow_lists(workflow):
+def _normalize_workflow(workflow):
+    if workflow is None:
+        return {}
     if not isinstance(workflow, dict):
         raise ValueError("workflow graph must be a dict")
+    return workflow
+
+
+def _normalize_workflow_lists(workflow):
+    workflow = _normalize_workflow(workflow)
 
     if "nodes" in workflow and workflow.get("nodes") is None:
         raise ValueError("workflow graph nodes must not be null")
@@ -22,7 +29,6 @@ def _normalize_workflow_lists(workflow):
 
 
 def validate_workflow_graph(workflow):
-    workflow = workflow or {}
     nodes, edges = _normalize_workflow_lists(workflow)
 
     node_keys = []
@@ -30,8 +36,8 @@ def validate_workflow_graph(workflow):
         if not isinstance(node, dict):
             raise ValueError("workflow graph node entry must be a dict")
         node_key = node.get("key")
-        if not node_key:
-            raise ValueError("workflow graph node is missing key")
+        if not isinstance(node_key, str) or not node_key:
+            raise ValueError("workflow graph node key must be a non-empty string")
         node_keys.append(node_key)
 
     if len(node_keys) != len(set(node_keys)):
