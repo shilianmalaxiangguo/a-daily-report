@@ -17139,8 +17139,8 @@ def generate_markdown_report(
             "render_pk_decision_section": render_pk_decision_section,
             "render_action_plan_section": render_action_plan_section,
             "decision_stack_order_text": DECISION_STACK_ORDER_TEXT,
-            "today_predictions": today_predictions if 'today_predictions' in locals() else [],
-            "nextday_predictions": nextday_predictions if 'nextday_predictions' in locals() else [],
+            "today_predictions": today_predictions,
+            "nextday_predictions": nextday_predictions,
         },
         stage_lookup=execution_stage_lookup,
     )
