@@ -30,6 +30,7 @@
 
 ## 当前 Todo
 
+- [ ] 修复旧入口直跑阻塞问题：[`2026-04-22-follow-up-todo.md`](/Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/docs/superpowers/plans/2026-04-22-follow-up-todo.md) 中记录的 `data_collector` 模块缺失
 - [x] 提取复盘回放模块：`scripts/replay/report_replay.py`
 - [x] 提取单票诊断模块：`scripts/diagnostics/single_stock_runtime.py`
 - [x] 提取市场研究上下文模块：`scripts/research/market_research_context_bundle.py`
