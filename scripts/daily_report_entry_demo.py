@@ -83,6 +83,11 @@ from selection.candidate_bundle_runtime import build_candidate_bundle_contract
 from risk.risk_bundle_runtime import build_risk_bundle_contract
 from report.action_plan_renderer import render_action_plan_section
 from report.appendix_renderer import render_execution_appendix
+from report.context_sections_renderer import (
+    render_ai_market_insight_section,
+    render_mainline_discipline_section,
+    render_supplementary_perspective_section,
+)
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.front_summary_renderer import render_front_digest, render_mvp_focus_summary
 from report.pk_decision_renderer import render_pk_decision_section
@@ -21637,32 +21642,11 @@ def generate_markdown_report(
         )
     )
     
-    # 核心交易哲学：看好A干A
+    # 核心交易哲学 / 补充视角 / AI市场洞察总结
     mainline_name = exit_analysis.get('sector_name', '')
-    if mainline_name:
-        report.append("#### 💡 核心交易哲学：看好A，干A！")
-        report.append(f"> **主线**: {mainline_name}")
-        report.append("")
-        report.append("**为什么只看主线，不做B/C？**")
-        report.append("1. **龙头效应**: 市场资金聚焦主线，边缘板块流动性差")
-        report.append("2. **时间成本**: A涨的时候B未必跟涨，但A跌的时候B一定先跌")
-        report.append("3. **确定性**: 主线有板块效应支撑，个股更安全；边缘板块缺乏支撑")
-        report.append("")
-        report.append(f"**今日纪律**: 认准'{mainline_name}'，就在'{mainline_name}'里找机会，绝不被'相关概念'分散火力！")
-        report.append("")
-    
-    # 十三点五、补充视角（复盘时由用户提供）
-    if supplementary_perspective and supplementary_perspective.strip():
-        report.append("## 十三点五、补充视角（复盘参考）")
-        report.append(f"> *以下为复盘时补充的市场观点，供交叉验证参考*")
-        report.append("")
-        for line in supplementary_perspective.strip().split('\n'):
-            report.append(line)
-        report.append("")
-    
-    # 十四、AI市场洞察总结
-    report.append("## 十四、AI市场洞察总结")
-    # 基于智能分析生成总结（v2.3.36修复：优先使用exit_analysis的主线判断，确保与狙击手视角一致）
+    report.extend(render_mainline_discipline_section(mainline_name))
+    report.extend(render_supplementary_perspective_section(supplementary_perspective))
+
     mainline_from_exit = exit_analysis.get('sector_name', '') if exit_analysis else ''
     if mainline_from_exit:
         main_sectors_str = mainline_from_exit
@@ -21677,13 +21661,21 @@ def generate_markdown_report(
         risk_sectors_str = "、".join(risk_sector_names)
     else:
         risk_sectors_str = "暂无明确风险"
-    
-    report.append(f"- **核心特征**: {market_trend}，涨停{zt_count}只，跌停{dt_count}只")
-    report.append(f"- **能量状态**: {market_state_snapshot.get('energy_state', '未知')} - {market_state_snapshot.get('flow_direction', '-')}")
-    report.append(f"- **资金主线**: {main_sectors_str}")
-    report.append(f"- **风险点**: {risk_sectors_str}")
-    report.append(f"- **关注重点**: {main_sectors_str if main_sectors_str != '暂无明确主线' else '市场整体'}持续性，量能变化，板块轮动")
-    report.append("")
+
+    report.extend(
+        render_ai_market_insight_section(
+            {
+                "market_trend": market_trend,
+                "zt_count": zt_count,
+                "dt_count": dt_count,
+                "energy_state": market_state_snapshot.get('energy_state', '未知'),
+                "flow_direction": market_state_snapshot.get('flow_direction', '-'),
+                "mainline_text": main_sectors_str,
+                "risk_text": risk_sectors_str,
+                "focus_text": f"{main_sectors_str if main_sectors_str != '暂无明确主线' else '市场整体'}持续性，量能变化，板块轮动",
+            }
+        )
+    )
 
     strategy_factor_snapshot = _build_strategy_factor_snapshot(
         target_date,
