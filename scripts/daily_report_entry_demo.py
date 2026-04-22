@@ -84,6 +84,7 @@ from domains.market_activity.report_sections import (
     build_market_activity_report_sections,
 )
 from domains.execution_chain.candidate_selection_stage import build_candidate_selection_stage
+from domains.execution_chain.entry_plan_stage import build_entry_plan_stage
 from domains.execution_chain.environment_follow_stage import build_environment_follow_stage
 from domains.execution_chain.risk_review_stage import build_risk_review_stage
 from domains.execution_chain.stage_registry import (
@@ -17403,8 +17404,6 @@ def generate_markdown_report(
 
     execution_stage_lookup = build_execution_stage_lookup(DEFAULT_EXECUTION_STAGE_SPECS)
     candidate_stage_label = get_execution_stage_label(execution_stage_lookup, "candidate_selection")
-    risk_stage_label = get_execution_stage_label(execution_stage_lookup, "risk_review")
-    entry_stage_label = get_execution_stage_label(execution_stage_lookup, "entry_plan")
     pk_stage_label = get_execution_stage_label(execution_stage_lookup, "pk_decision")
 
     # 辅助函数：当Step 0预判为DIFFICULT且环境极端恶劣时，输出空仓结论
@@ -17479,8 +17478,9 @@ def generate_markdown_report(
             "watch_pool": build_watch_pool_stage,
             "candidate_selection": build_candidate_selection_stage,
             "risk_review": build_risk_review_stage,
+            "entry_plan": build_entry_plan_stage,
         },
-        enabled_stage_keys=["environment_follow", "watch_pool", "candidate_selection", "risk_review"],
+        enabled_stage_keys=["environment_follow", "watch_pool", "candidate_selection", "risk_review", "entry_plan"],
     )
     execution_stage_result = run_registered_execution_stages(
         execution_stage_specs,
@@ -17493,6 +17493,7 @@ def generate_markdown_report(
             "position_level": position_level,
             "display_mvp_mode": DISPLAY_MVP_MODE,
             "market_research_bundle": market_research_bundle,
+            "final_gate": final_gate,
             "render_market_research_snapshot_section": _render_market_research_snapshot_section,
             "render_step0_follow_section": _render_step0_follow_section,
             "is_degraded_abnormal_snapshot": _is_degraded_abnormal_snapshot,
@@ -17501,6 +17502,25 @@ def generate_markdown_report(
             "render_gem_breathing_step2_section": _render_gem_breathing_step2_section,
             "build_step3_risk_bundle": build_step3_risk_bundle,
             "render_gem_breathing_pool_section": _render_gem_breathing_pool_section,
+            "quant_system_available": QUANT_SYSTEM_AVAILABLE,
+            "stop_prior_low_trading_days": STOP_PRIOR_LOW_TRADING_DAYS,
+            "normalize_stock_code": normalize_stock_code,
+            "get_execution_framework_text": get_execution_framework_text,
+            "get_trade_permission": get_trade_permission,
+            "fetch_recent_price_bars": fetch_recent_price_bars,
+            "evaluate_live_tradability": evaluate_live_tradability,
+            "build_intraday_execution_plan": build_intraday_execution_plan,
+            "build_stop_execution_plan": build_stop_execution_plan,
+            "enrich_stop_plan_with_reference_anchors": _enrich_stop_plan_with_reference_anchors,
+            "build_waiting_stock_plan": build_waiting_stock_plan,
+            "finalize_waiting_candidate": _finalize_waiting_candidate,
+            "build_trade_price_focus": _build_trade_price_focus,
+            "build_observation_price_focus_text": _build_observation_price_focus_text,
+            "append_price_focus_note": _append_price_focus_note,
+            "append_observation_price_focus_note": _append_observation_price_focus_note,
+            "compose_observation_focus_text": _compose_observation_focus_text,
+            "build_front_structure_layer_text": _build_front_structure_layer_text,
+            "analyze_buy_signal": analyze_buy_signal if QUANT_SYSTEM_AVAILABLE else None,
             "safe_float": _safe_float,
             "ai_analyze_sector_relationships": ai_analyze_sector_relationships,
         },
@@ -17559,537 +17579,12 @@ def generate_markdown_report(
     structural_a_kill = execution_stage_context.get('structural_a_kill', False)
     structural_reason = execution_stage_context.get('structural_reason', '')
     a_kill_blacklist_updates = execution_stage_context.get('a_kill_blacklist_updates', []) or []
-
-    # Step 4 - 明日买点预计算（基于今日数据计算明日买点区域）
-    # ============================================================
-    # 输入：Step 3筛选后的低风险股
-    # 处理：基于今日中枢位置，预计算明日买点区域
-    # 输出：明日买点预计算表（触发条件、目标价位、止损位），供Step 5消费
-    # ============================================================
-    report.append(f"#### {entry_stage_label} - 明日买点预计算")
-    report.append("> **核心问题**：基于今日收盘数据，明天什么价格可以买？预计算买点区域，明日盘中触发即执行。")
-    report.append("> **预计算逻辑**：明日甜品区 = 今日ZD × (1±3%)，明日突破价 = 今日ZG × 1.02")
-    report.append(f"> **怎么执行**：{get_execution_framework_text()}")
-    report.append("> **说明**：日报这里只给日线结构预案，真正盘中执行时，买点要等首个60分钟K线确认，止损要落到30分钟结构上。")
-    report.append("")
-    report.append(f"**{entry_stage_label}.0 交易优先级纪律**:")
-    conviction_codes = {
-        normalize_stock_code(stock.get('code', ''))
-        for stock in (extreme_conviction_list or [])
-        if stock.get('code')
-    }
-    leader_memory_codes = {
-        normalize_stock_code(stock.get('code', ''))
-        for stock in (leader_memory_bank or [])
-        if stock.get('code')
-    }
-    if extreme_conviction_list:
-        names = [f"{stock.get('name')}({stock.get('code')})" for stock in extreme_conviction_list]
-        report.append(f"- **极度看好优先**: {', '.join(names)}")
-        report.append("- **先后顺序怎么排**: 先做主线锚定龙，再看普通候选；若极度看好名单全天都不给确认，其余标的宁可继续观察。")
-    else:
-        report.append("- **现在先按什么原则**: 没有极度看好的少数标的时，宁可降低频率，也不扩大出手范围。")
-    if leader_memory_bank:
-        memory_names = [f"{stock.get('name')}({stock.get('code')})" for stock in leader_memory_bank[:3]]
-        report.append(f"- **龙头回看名单**: {', '.join(memory_names)}")
-    report.append("- **盯盘优先级**: 核心可买 > 龙头回看 > 主线盯盘 > 普通观察。没有买入资格，买点到了也只能看。")
-    report.append("- **盘中异动怎么处理**: 绿灯可进入执行层，黄灯保留观察，橙灯先看是否跌得下去，红灯直接取消执行。")
-    report.append("- **纪律补充**: 强者恒强阶段只做领先核心，不为“低位没涨”找理由。")
-    report.append("")
-
-    # 4.1 量化买点判断
-    executable_stocks = []  # 可执行
-    waiting_stocks = []     # 等条件
-    untradable_stocks = []  # 强但买不进去，只做观察/记忆
-    rejected_stocks = []    # 已破位拒绝买入
-
-    if QUANT_SYSTEM_AVAILABLE and focus_group:
-        report.append(f"**{entry_stage_label}.1 明日买点预计算表**:")
-        report.append("| 股票 | 代码 | 买入资格 | 怎么买 | 日线预设区间 | 60分钟确认点 | 价格怎么盯 | 明天具体怎么做 |")
-        report.append("|------|------|----------|----------|------------|--------------|----------|----------|")
-        
-        for f in focus_group:
-            code = f.get('code', '')
-            name = f.get('name', '')
-            close = f.get('close', 0)
-            volume = f.get('volume', 0)
-            permission = get_trade_permission(
-                f,
-                mainline_name=mainline_name,
-                conviction_codes=conviction_codes,
-                leader_memory_codes=leader_memory_codes,
-                final_gate=final_gate,
-                state_machine_snapshot=market_research_snapshot.get('state_machine', {}),
-            )
-            recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4)
-            daily_anchor_bars = fetch_recent_price_bars(
-                code, target_date, lookback_days=max(STOP_PRIOR_LOW_TRADING_DAYS + 5, 10)
-            )
-            tradability_guard = evaluate_live_tradability(f, target_date, recent_bars=recent_bars)
-
-            if not tradability_guard.get('can_trade', True):
-                untradable_stocks.append({
-                    **f,
-                    'reason': tradability_guard.get('reason', ''),
-                    'permission_label': permission.get('permission_label', ''),
-                    'permission_reason': permission.get('permission_reason', ''),
-                    'tradability_guard': tradability_guard,
-                    'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                })
-                report.append(
-                    f"| {name} | {code} | {permission.get('permission_label', '-')} | 不可交易 | - | - | - | ⚠️{tradability_guard.get('status_label', '不可交易')} |"
-                )
-                continue
-            
-            # 调用量化交易系统分析
-            signal = analyze_buy_signal(code, name, close, volume)
-            
-            if signal and not signal.is_valid and '跌破' in signal.reason:
-                rejected_stocks.append({
-                    **f,
-                    'reason': signal.reason,
-                    'permission_label': permission.get('permission_label', ''),
-                    'permission_reason': permission.get('permission_reason', ''),
-                })
-                report.append(
-                    f"| {name} | {code} | {permission.get('permission_label', '-')} | - | - | - | - | ❌已破位，明日不碰 |"
-                )
-            elif signal and signal.is_valid and permission.get('can_execute'):
-                # 可执行
-                signal_type_map = {
-                    'panic_buy': '🚨恐慌盘',
-                    'sweet_zone': '甜品区',
-                    'breakout': '放量突破'
-                }
-                buy_type = signal_type_map.get(signal.signal_type, signal.signal_type)
-                
-                # 计算明日到什么价位再动手（基于今日买点±3%）
-                entry_low = signal.entry_price * 0.97
-                entry_high = signal.entry_price * 1.03
-                trigger_range = f"{entry_low:.2f}-{entry_high:.2f}"
-                minute_plan = build_intraday_execution_plan(
-                    code,
-                    target_date,
-                    signal.entry_price,
-                    signal.signal_type,
-                    fallback_stop=signal.stop_loss,
-                )
-                stop_plan = minute_plan.get('stop_plan') or build_stop_execution_plan(
-                    signal.entry_price,
-                    signal.stop_loss,
-                    structure_label='日线预估结构止损'
-                )
-                stop_plan = _enrich_stop_plan_with_reference_anchors(
-                    stop_plan,
-                    code,
-                    target_date,
-                    recent_bars=daily_anchor_bars,
-                )
-                
-                executable_stocks.append({
-                    **f, 
-                    'signal': signal,
-                    'entry_price': signal.entry_price,
-                    'entry_range': (entry_low, entry_high),
-                    'stop_loss': stop_plan['effective_stop'] if stop_plan else signal.stop_loss,
-                    'stop_plan': stop_plan,
-                    'minute_plan': minute_plan,
-                    'position_pct': signal.position_pct,
-                    'permission_label': permission.get('permission_label', ''),
-                    'permission_reason': permission.get('permission_reason', ''),
-                    'tradability_guard': tradability_guard,
-                    'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                    'watch_source': 'execute_layer',
-                })
-                
-                price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                confirm_price = minute_plan.get('confirm_price_60m')
-                confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                action_text = "60分钟确认后买入" if final_gate.get('can_new_entry', False) else "仅保留执行预案（禁买）"
-                price_focus_text = (
-                    price_focus.get('compact_text', '-')
-                    if final_gate.get('can_new_entry', False)
-                    else _build_observation_price_focus_text(price_focus)
-                )
-                report.append(
-                    f"| {name} | {code} | {permission.get('permission_label', '-')} | {buy_type} | "
-                    f"{trigger_range} | {confirm_text} | {price_focus_text} | {action_text} |"
-                )
-            else:
-                # 无买点，等待
-                base_reason = signal.reason if signal else '无结构中枢或无买点'
-                wait_reason = permission.get('permission_reason') or base_reason
-                if signal and signal.is_valid and not permission.get('can_execute'):
-                    wait_reason = f"{permission.get('permission_reason')}；结构预案已出现，但当前只保留观察权"
-                elif not signal and permission.get('can_execute'):
-                    wait_reason = f"{permission.get('permission_reason')}；但当前还没走出明确结构预案"
-                elif signal and not signal.is_valid and permission.get('can_execute'):
-                    wait_reason = f"{permission.get('permission_reason')}；{signal.reason}"
-                waiting_item = build_waiting_stock_plan(
-                    {
-                        **f,
-                        'condition': wait_reason,
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'tradability_guard': tradability_guard,
-                    },
-                    target_date,
-                    reason=wait_reason,
-                    signal_type=getattr(signal, 'signal_type', '') if signal else '',
-                    recent_bars=daily_anchor_bars,
-                )
-                waiting_item = _finalize_waiting_candidate(waiting_item, f, permission)
-                waiting_stocks.append(waiting_item)
-                minute_plan = waiting_item.get('minute_plan') or {}
-                stop_plan = waiting_item.get('stop_plan')
-                price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                confirm_price = minute_plan.get('confirm_price_60m')
-                confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                price_focus_text = _build_observation_price_focus_text(price_focus)
-                report.append(
-                    f"| {name} | {code} | {permission.get('permission_label', '-')} | 观察 | - | "
-                    f"{confirm_text} | {price_focus_text} | ⏳明日继续观察 |"
-                )
-    else:
-        # 量化系统不可用，使用原有逻辑
-        report.append(f"**{entry_stage_label}.1 买点判断** (量化系统不可用，使用基础判断):")
-        report.append("| 股票 | 代码 | 执行权限 | 今日涨幅 | 判断 | 60分钟确认点 | 价格怎么盯 | 动作 |")
-        report.append("|------|------|----------|----------|------|--------------|----------|------|")
-        
-        for f in focus_group:
-            change = f.get('change', 0)
-            name = f.get('name', '')
-            code = f.get('code', '')
-            waiting_item = None
-            permission = get_trade_permission(
-                f,
-                mainline_name=mainline_name,
-                conviction_codes=conviction_codes,
-                leader_memory_codes=leader_memory_codes,
-                final_gate=final_gate,
-                state_machine_snapshot=market_research_snapshot.get('state_machine', {}),
-            )
-            recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4)
-            daily_anchor_bars = fetch_recent_price_bars(
-                code, target_date, lookback_days=max(STOP_PRIOR_LOW_TRADING_DAYS + 5, 10)
-            )
-            tradability_guard = evaluate_live_tradability(f, target_date, recent_bars=recent_bars)
-
-            if not tradability_guard.get('can_trade', True):
-                untradable_stocks.append({
-                    **f,
-                    'reason': tradability_guard.get('reason', ''),
-                    'permission_label': permission.get('permission_label', ''),
-                    'permission_reason': permission.get('permission_reason', ''),
-                    'tradability_guard': tradability_guard,
-                    'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                })
-                report.append(f"| {name} | {code} | {permission.get('permission_label', '-')} | {change:+.2f}% | 不可交易 | - | - | ⚠️{tradability_guard.get('status_label', '不可交易')} |")
-                continue
-
-            if change >= 9:
-                judgment = "🔥 涨停"
-                minute_plan = build_intraday_execution_plan(code, target_date, f.get('close', 0), fallback_stop=None)
-                stop_plan = minute_plan.get('stop_plan') or build_stop_execution_plan(f.get('close', 0))
-                stop_plan = _enrich_stop_plan_with_reference_anchors(
-                    stop_plan,
-                    code,
-                    target_date,
-                    recent_bars=daily_anchor_bars,
-                )
-                if permission.get('can_execute'):
-                    action = "可执行" if final_gate.get('can_new_entry', False) else "预案观察"
-                    executable_stocks.append({
-                        **f,
-                        'trigger': '涨停',
-                        'entry_price': f.get('close', 0),
-                        'stop_plan': stop_plan,
-                        'minute_plan': minute_plan,
-                        'stop_loss': stop_plan['effective_stop'] if stop_plan else 0,
-                        'permission_label': permission.get('permission_label', ''),
-                        'permission_reason': permission.get('permission_reason', ''),
-                        'tradability_guard': tradability_guard,
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'watch_source': 'execute_layer',
-                    })
-                else:
-                    action = "等权限"
-                    waiting_item = build_waiting_stock_plan(
-                    {
-                        **f,
-                        'condition': permission.get('permission_reason', '等待权限'),
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'tradability_guard': tradability_guard,
-                    },
-                    target_date,
-                    reason=permission.get('permission_reason', '等待权限'),
-                    recent_bars=daily_anchor_bars,
-                )
-                    waiting_item = _finalize_waiting_candidate(waiting_item, f, permission)
-                    waiting_stocks.append(waiting_item)
-            elif change >= 5:
-                judgment = "✅ 大涨"
-                minute_plan = build_intraday_execution_plan(code, target_date, f.get('close', 0), fallback_stop=None)
-                stop_plan = minute_plan.get('stop_plan') or build_stop_execution_plan(f.get('close', 0))
-                stop_plan = _enrich_stop_plan_with_reference_anchors(
-                    stop_plan,
-                    code,
-                    target_date,
-                    recent_bars=daily_anchor_bars,
-                )
-                if permission.get('can_execute'):
-                    action = "可执行" if final_gate.get('can_new_entry', False) else "预案观察"
-                    executable_stocks.append({
-                        **f,
-                        'trigger': f'涨{change:.1f}%',
-                        'entry_price': f.get('close', 0),
-                        'stop_plan': stop_plan,
-                        'minute_plan': minute_plan,
-                        'stop_loss': stop_plan['effective_stop'] if stop_plan else 0,
-                        'permission_label': permission.get('permission_label', ''),
-                        'permission_reason': permission.get('permission_reason', ''),
-                        'tradability_guard': tradability_guard,
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'watch_source': 'execute_layer',
-                    })
-                else:
-                    action = "等权限"
-                    waiting_item = build_waiting_stock_plan(
-                    {
-                        **f,
-                        'condition': permission.get('permission_reason', '等待权限'),
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'tradability_guard': tradability_guard,
-                    },
-                    target_date,
-                    reason=permission.get('permission_reason', '等待权限'),
-                    recent_bars=daily_anchor_bars,
-                )
-                    waiting_item = _finalize_waiting_candidate(waiting_item, f, permission)
-                    waiting_stocks.append(waiting_item)
-            elif change >= 2:
-                judgment = "🟡 小涨"
-                action = "等次日"
-                waiting_item = build_waiting_stock_plan(
-                    {
-                        **f,
-                        'condition': permission.get('permission_reason', '等待放量突破'),
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'tradability_guard': tradability_guard,
-                    },
-                    target_date,
-                    reason=permission.get('permission_reason', '等待放量突破'),
-                    recent_bars=daily_anchor_bars,
-                )
-                waiting_item = _finalize_waiting_candidate(waiting_item, f, permission)
-                waiting_stocks.append(waiting_item)
-            else:
-                judgment = "🟠 震荡"
-                action = "等信号"
-                waiting_item = build_waiting_stock_plan(
-                    {
-                        **f,
-                        'condition': permission.get('permission_reason', '等待转折确认'),
-                        'report_day_is_one_word': tradability_guard.get('report_day_is_one_word', False),
-                        'tradability_guard': tradability_guard,
-                    },
-                    target_date,
-                    reason=permission.get('permission_reason', '等待转折确认'),
-                    recent_bars=daily_anchor_bars,
-                )
-                waiting_item = _finalize_waiting_candidate(waiting_item, f, permission)
-                waiting_stocks.append(waiting_item)
-
-            if change >= 5:
-                confirm_price = minute_plan.get('confirm_price_60m') if minute_plan else None
-                price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                price_focus_text = (
-                    price_focus.get('compact_text', '-')
-                    if final_gate.get('can_new_entry', False)
-                    else _build_observation_price_focus_text(price_focus)
-                )
-                report.append(f"| {name} | {code} | {permission.get('permission_label', '-')} | {change:+.2f}% | {judgment} | {confirm_text} | {price_focus_text} | {action} |")
-            else:
-                minute_plan = waiting_item.get('minute_plan') if waiting_item else {}
-                stop_plan = waiting_item.get('stop_plan') if waiting_item else None
-                price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                confirm_price = minute_plan.get('confirm_price_60m') if minute_plan else None
-                confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                price_focus_text = _build_observation_price_focus_text(price_focus)
-                report.append(f"| {name} | {code} | {permission.get('permission_label', '-')} | {change:+.2f}% | {judgment} | {confirm_text} | {price_focus_text} | {action} |")
-
-    report.append("")
-
-    # 4.2 明日触发条件汇总
-    report.append(f"**{entry_stage_label}.2 明日触发条件汇总**:")
-    if untradable_stocks:
-        report.append(f"**强势但不可交易**（{len(untradable_stocks)}只，只做观察/记忆，不计执行）:")
-        for item in untradable_stocks:
-            report.append(
-                f"- ⚠️ {item.get('name')}({item.get('code')}) - "
-                f"{(item.get('tradability_guard') or {}).get('status_label', '不可交易')}：{item.get('reason', '')}"
-            )
-        report.append("")
-    if executable_stocks:
-        # v2.3.40修复：根据档位调整措辞
-        if final_gate.get('can_new_entry', False):
-            report.append(f"**明日可触发**（{len(executable_stocks)}只，满足条件即可买入）:")
-        else:
-            report.append(f"**明天先观察谁**（{len(executable_stocks)}只，仅供观察，⛔{position_level}禁止买入）:")
-        
-        for e in executable_stocks:
-            if 'signal' in e:
-                # 量化系统结果
-                signal = e['signal']
-                entry_range = e.get('entry_range', (signal.entry_price, signal.entry_price))
-                buy_type_map = {'panic_buy': '恐慌盘买入', 'sweet_zone': '甜品区买入', 'breakout': '放量突破'}
-                buy_type = buy_type_map.get(signal.signal_type, signal.signal_type)
-                stop_plan = e.get('stop_plan') or build_stop_execution_plan(
-                    e.get('entry_price', signal.entry_price),
-                    e.get('stop_loss'),
-                    structure_label='日线预估结构止损'
-                )
-                minute_plan = e.get('minute_plan') or {}
-                price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                confirm_price = minute_plan.get('confirm_price_60m')
-                confirm_rule = minute_plan.get('confirm_rule_60m', '')
-                confirm_text = f"{confirm_price:.2f}" if confirm_price else f"{entry_range[0]:.2f}-{entry_range[1]:.2f}"
-                price_focus_text = (
-                    price_focus.get('compact_text', '-')
-                    if final_gate.get('can_new_entry', False)
-                    else _build_observation_price_focus_text(price_focus)
-                )
-                
-                if final_gate.get('can_new_entry', False):
-                    display_position_pct = _safe_float(e.get('position_pct', signal.position_pct))
-                    report.append(f"- ✅ {e.get('name')}({e.get('code')}) - {buy_type}，日线预设区间{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日首个60分钟确认点{confirm_text}，仓位{display_position_pct:.0f}%")
-                    if confirm_rule:
-                        report.append(f"  {e.get('permission_label', '执行权')}；{confirm_rule}；{price_focus_text}")
-                    elif price_focus_text != '-':
-                        report.append(f"  {e.get('permission_label', '执行权')}；{price_focus_text}")
-                    _append_price_focus_note(report, price_focus)
-                else:
-                    report.append(f"- ⏳ {e.get('name')}({e.get('code')}) - {buy_type}，日线预设区间{entry_range[0]:.2f}-{entry_range[1]:.2f}，60分钟确认点{confirm_text}，仅观察，禁止买入")
-                    if price_focus_text != '-':
-                        report.append(f"  {price_focus_text}")
-                    _append_observation_price_focus_note(report, price_focus)
-            else:
-                # 基础判断结果
-                if final_gate.get('can_new_entry', False):
-                    stop_plan = e.get('stop_plan')
-                    minute_plan = e.get('minute_plan') or {}
-                    price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                    confirm_price = minute_plan.get('confirm_price_60m')
-                    confirm_rule = minute_plan.get('confirm_rule_60m', '')
-                    price_focus_text = price_focus.get('compact_text', '-')
-                    confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-                    report.append(f"- ✅ {e.get('name')}({e.get('code')}) - {e.get('permission_label', '执行权')}，明日60分钟确认点{confirm_text}后按{e.get('trigger')}执行")
-                    if confirm_rule:
-                        report.append(f"  {confirm_rule}；{price_focus_text}")
-                    elif price_focus_text != '-':
-                        report.append(f"  {price_focus_text}")
-                    _append_price_focus_note(report, price_focus)
-                else:
-                    report.append(f"- ⏳ {e.get('name')}({e.get('code')}) - 仅供观察：{e.get('trigger')}，禁止买入")
-        report.append("")
-    
-    if rejected_stocks:
-        report.append(f"**明天先回避谁**（{len(rejected_stocks)}只，已破位不碰）:")
-        for r in rejected_stocks:
-            report.append(f"- ❌ {r.get('name')}({r.get('code')}) - {r.get('reason')}，明日不关注")
-        report.append("")
-
-    if waiting_stocks:
-        report.append(f"**明日继续观察**（{len(waiting_stocks)}只，等买点出现）:")
-        for w in waiting_stocks:
-            reason = w.get('reason', '等待信号')
-            minute_plan = w.get('minute_plan') or {}
-            stop_plan = w.get('stop_plan')
-            price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-            confirm_price = minute_plan.get('confirm_price_60m')
-            confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-            price_focus_text = _build_observation_price_focus_text(price_focus)
-            report.append(f"- ⏳ {w.get('name')}({w.get('code')}) - {w.get('permission_label', '观察权')}：{reason}")
-            report.append(f"  {_compose_observation_focus_text(confirm_text, price_focus_text)}")
-            _append_observation_price_focus_note(report, price_focus)
-        report.append("")
-
-    # 4.3 明日止损锚定
-    # v2.3.40修复：只有允许买入时才显示止损锚定
-    if final_gate.get('can_new_entry', False):
-        report.append(f"**{entry_stage_label}.3 明日止损锚定**（买入后严格执行）:")
-        if executable_stocks:
-            report.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 跌破动作 |")
-            report.append("|------|----------|------------|----------|----------|------------|----------|")
-            for e in executable_stocks:
-                if 'signal' in e:
-                    # 量化系统止损
-                    signal = e['signal']
-                    buy_type_map = {'panic_buy': '🚨恐慌盘', 'sweet_zone': '甜品区', 'breakout': '放量突破'}
-                    buy_type = buy_type_map.get(signal.signal_type, signal.signal_type)
-                    stop_plan = e.get('stop_plan') or build_stop_execution_plan(
-                        e.get('entry_price', signal.entry_price),
-                        e.get('stop_loss'),
-                        structure_label='日线预估结构止损'
-                    )
-                    minute_plan = e.get('minute_plan') or {}
-                    price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                    confirm_price = minute_plan.get('confirm_price_60m')
-                    confirm_text = f"站上{confirm_price:.2f}" if confirm_price else f"{e['entry_price']:.2f}"
-                    report.append(
-                        f"| {e.get('name')} | {buy_type} | {confirm_text} | "
-                        f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | 跌破执行止损立即卖 |"
-                    )
-                else:
-                    # 基础止损
-                    stop_plan = e.get('stop_plan')
-                    minute_plan = e.get('minute_plan') or {}
-                    price_focus = _build_trade_price_focus(minute_plan, stop_plan)
-                    confirm_price = minute_plan.get('confirm_price_60m')
-                    confirm_text = f"站上{confirm_price:.2f}" if confirm_price else "待盘中确认"
-                    report.append(
-                        f"| {e.get('name')} | 基础判断 | {confirm_text} | "
-                        f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | 跌破执行止损立即卖 |"
-                    )
-            report.append("")
-            report.append("- 前台把前低/支撑/止损压缩成同一个关键位/带；真正动作只看执行止损，最晚不超过单笔-5%。")
-        else:
-            report.append("- 无可执行股票，暂不设置止损")
-    else:
-        report.append(f"**{entry_stage_label}.3 明日止损锚定**:")
-        report.append(f"- ⛔ {position_level}禁止买入，无需设置止损")
-    report.append("")
-
-    step4_structure_layer_text = _build_front_structure_layer_text(
-        final_gate=final_gate,
-        focus_group=focus_group,
-        keep_group=keep_group,
-        delete_group=delete_group,
-        position_level=position_level,
-        state_machine_snapshot=market_research_snapshot.get('state_machine', {}),
-        target_date=target_date,
-    )
-
-    report.append(f"**{entry_stage_label} 结论**:")
-    report.append(f"- **现在是什么情况**: {step4_structure_layer_text}")
-    if final_gate.get('can_new_entry', False) and executable_stocks:
-        report.append("- **接着做什么**: 继续进入PK筛选，只允许一只可买股留下来")
-    elif waiting_stocks:
-        report.append("- **接着做什么**: 当前还在等待层，先等买点自己长出来")
-    elif keep_group or executable_stocks:
-        report.append("- **接着做什么**: 当前只保留观察权，不做任何新买入")
-    else:
-        report.append("- **明天先怎么观察**: 当前没有需要特别盯的执行记录，先看市场自己给答案")
-    if untradable_stocks:
-        report.append(f"- **哪些票看着强但买不进去**: {len(untradable_stocks)}只（如一字/连续一字，只记观察不计执行收益）")
-    report.append(f"- **执行节奏**: {get_execution_framework_text()}")
-    if final_gate.get('can_new_entry', False):
-        report.append("- **⚠️ 重要**: 以上买点基于今日收盘数据预计算，明日若直接高开离买点>5%，则放弃；即便满足价格条件，也要等60分钟确认后再买")
-    else:
-        report.append(f"- **⛔ 档位限制**: {position_level}，禁止任何买入操作")
-    report.append("")
+    conviction_codes = execution_stage_context.get('conviction_codes', set()) or set()
+    leader_memory_codes = execution_stage_context.get('leader_memory_codes', set()) or set()
+    executable_stocks = execution_stage_context.get('executable_stocks', []) or []
+    waiting_stocks = execution_stage_context.get('waiting_stocks', []) or []
+    untradable_stocks = execution_stage_context.get('untradable_stocks', []) or []
+    rejected_stocks = execution_stage_context.get('rejected_stocks', []) or []
 
     # Step 4.5 - PK决胜局（只对真正可执行的候选做PK）
     # ============================================================
