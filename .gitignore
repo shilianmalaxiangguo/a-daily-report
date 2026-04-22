@@ -1,0 +1,30 @@
+# Local runtime data and generated outputs
+/reports/
+/reports/**
+/replay/
+/replay/**
+/data/
+/data/**
+/snapshots/
+/snapshots/**
+
+# Local environment and machine-specific files
+/.env
+/.hermes/
+/venv/
+/venv/**
+.DS_Store
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Local tool caches
+/scripts/cache/
+/scripts/cache/**
+/scripts/.workbuddy/
+/scripts/.workbuddy/**
+/scripts/.codebuddy/
+/scripts/.codebuddy/**
