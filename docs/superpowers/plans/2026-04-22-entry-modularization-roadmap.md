@@ -43,9 +43,10 @@
 - [x] 让入口通过 registry 挂载 `environment_follow / watch_pool / candidate_selection`
 - [ ] 提取输出文档骨架 builder：日报开头、纪律块、占位替换等基础文档装配逻辑
 - [ ] 落地第一个业务域：`market_activity`，把热榜/成交额/龙虎榜/连板/量化活跃度收敛到同一域
-- [ ] 落地 `market_state`，把环境判断相关的请求/推导/输出收敛到同一域
+- [x] 落地 `market_state` 首域 graph：`scripts/domains/market_state/graph.py`
+- [x] 把 `build_mainline_exit_analysis()` 迁移成 graph wrapper：`scripts/domains/market_state/runtime.py`
+- [ ] 继续细化 `market_state` node：把连续性、风险、替代主线判断从粗节点升级成更细粒度 node
 - [ ] 提取请求层第一批模块：从 `get_daily_data()` 拆出指数、热榜、日历、龙虎榜等请求单元
-- [ ] 提取分析层第一批模块：从 `build_mainline_exit_analysis()` 拆出连续性、风险、主线判定子模块
 - [ ] 统一 trace/log 契约：请求层、分析层、输出层都产出一致的 `module_logs`
 - [x] 把 `risk_review` 从入口移入独立 stage：`scripts/domains/execution_chain/risk_review_stage.py`
 - [x] 把 `entry_plan` 从入口移入独立 stage：`scripts/domains/execution_chain/entry_plan_stage.py`

@@ -83,6 +83,7 @@ from domains.market_activity.report_sections import (
     build_advanced_activity_report_sections,
     build_market_activity_report_sections,
 )
+from domains.market_state.runtime import run_market_state_analysis
 from domains.execution_chain.candidate_selection_stage import build_candidate_selection_stage
 from domains.execution_chain.entry_plan_stage import build_entry_plan_stage
 from domains.execution_chain.environment_follow_stage import build_environment_follow_stage
@@ -7936,460 +7937,39 @@ def get_trade_permission(
 
 
 def build_mainline_exit_analysis(data, market_analysis, dragon_stocks, enhanced_main_sectors=None):
-    """构建主线衰竭跟踪表和退出等级
-    
-    Args:
-        data: 全量数据
-        market_analysis: AI分析结果(原始)
-        dragon_stocks: 连板龙头股列表
-        enhanced_main_sectors: 增强版主线名称列表（含资金流向fallback），与报告开头一致
-    """
-    # 灯号语义映射（趋势狙击版）
-    # 绿灯=主线健康，黄灯=主升强化，橙灯=退潮预警，红灯=退潮确认
-    action_map = {
-        '绿灯': '主线健康，可继续做',
-        '黄灯': '主升强化，优先做核心',
-        '橙灯': '退潮预警，禁止新增',
-        '红灯': '退潮确认，尽快退出'
-    }
-    severity_map = {'绿灯': 0, '黄灯': 1, '橙灯': 2, '红灯': 3}
-
-    sector_fund_flow = data.get('sector_fund_flow', {})
-    inflow_sectors = sector_fund_flow.get('inflow', []) if sector_fund_flow else []
-    outflow_sectors = sector_fund_flow.get('outflow', []) if sector_fund_flow else []
-    
-    # v2.3.33统一：优先使用增强版主线（与报告开头一致）
-    if enhanced_main_sectors:
-        tracked_sector = enhanced_main_sectors[0] if enhanced_main_sectors else ''
-    else:
-        main_sectors = market_analysis.get('main_sectors', []) if market_analysis else []
-        tracked_sector = main_sectors[0].get('name', '') if main_sectors else ''
-    
-    if not tracked_sector and inflow_sectors:
-        tracked_sector = inflow_sectors[0].get('name', '')
-
-    if not tracked_sector:
-        return {
-            'sector_name': '暂无明确主线',
-            'star_level': '-',
-            'leader_name': '-',
-            'event_risk_summary': '无主线，无需评估事件兑现风险',
-            'overall_level': '红灯',
-            'overall_action': action_map['红灯'],
-            'exit_conditions': ['暂无明确主线，不值得死在里面，优先空仓或等待新主线'],
-            'signals': [
-                {'layer': '主线地位复核', 'status': '暂无明确主线', 'level': '红灯', 'action': '没有主线就不能参与，已有仓位也要退出'},
-                {'layer': '龙头健康度', 'status': '无可跟踪龙头', 'level': '红灯', 'action': '不能新开仓，已有仓位不做旧线自救'},
-                {'layer': '板块内部结构', 'status': '主线结构不存在', 'level': '红灯', 'action': '不参与杂毛补涨，已有仓位按退场处理'},
-                {'layer': '持仓个股承接', 'status': '无主线核心可跟踪', 'level': '红灯', 'action': '没有承接就不参与，已有仓位直接退出'},
-                {'layer': '事件落地风险', 'status': '无主线，无需评估事件风险', 'level': '黄灯', 'action': action_map['黄灯']},
-                {'layer': '替代主线流向', 'status': '等待新主线承接', 'level': '黄灯', 'action': action_map['黄灯']},
-            ]
+    result = run_market_state_analysis(
+        {
+            "inputs": {
+                "data": data,
+                "market_analysis": market_analysis,
+                "dragon_stocks": dragon_stocks,
+                "enhanced_main_sectors": enhanced_main_sectors or [],
+            },
+            "helpers": {
+                "action_map": {
+                    "绿灯": "主线健康，可继续做",
+                    "黄灯": "主升强化，优先做核心",
+                    "橙灯": "退潮预警，禁止新增",
+                    "红灯": "退潮确认，尽快退出",
+                },
+                "get_sector_hotlist_weight": get_sector_hotlist_weight,
+                "load_recent_sector_flow_history": load_recent_sector_flow_history,
+                "get_mainline_star_level": get_mainline_star_level,
+                "score_to_level": _score_to_level,
+                "level_to_score": _level_to_score,
+                "safe_float": _safe_float,
+                "clamp": _clamp,
+                "get_sector_leader": get_sector_leader,
+                "get_sector_core_hot_stock": get_sector_core_hot_stock,
+                "normalize_stock_code": normalize_stock_code,
+                "calculate_exit_price_lines": calculate_exit_price_lines,
+                "fetch_recent_price_bars": fetch_recent_price_bars,
+                "compute_stop_loss_mainline_anchor": compute_stop_loss_mainline_anchor,
+                "analyze_event_sector": analyze_event_sector,
+            },
         }
-
-    inflow_map = {s.get('name', ''): s.get('zljlr', 0) for s in inflow_sectors}
-    outflow_map = {s.get('name', ''): abs(s.get('zljlr', 0)) for s in outflow_sectors}
-
-    target_date = str(data.get('target_date', '') or '')
-    sector_inflow = inflow_map.get(tracked_sector, 0)
-    sector_outflow = outflow_map.get(tracked_sector, 0)
-    zt_pool_by_sector = data.get('zt_pool_by_sector', {})
-    dt_pool_by_sector = data.get('dt_pool_by_sector', {})
-    sector_zt_count = len(zt_pool_by_sector.get(tracked_sector, []))
-    sector_dt_count = len(dt_pool_by_sector.get(tracked_sector, []))
-    hot_weight = get_sector_hotlist_weight(tracked_sector, data.get('tag_distribution', {}))
-    inflow_history = load_recent_sector_flow_history(target_date, tracked_sector, lookback_days=2)
-    mainline_snapshot = get_mainline_star_level(
-        sector_inflow,
-        sector_zt_count,
-        dt_count=sector_dt_count,
-        hot_weight=hot_weight,
-        inflow_history=inflow_history,
     )
-    star_level = mainline_snapshot.get('star_level', '⭐')
-    star_rank = mainline_snapshot.get('star_rank', 1)
-    mainline_score_pct = _safe_float(mainline_snapshot.get('score_pct'))
-
-    prev_inflow = inflow_history[-1]['inflow'] if inflow_history else None
-    prev2_inflow = inflow_history[-2]['inflow'] if len(inflow_history) >= 2 else None
-    inflow_shrinking_two_days = mainline_snapshot.get('flow_trend') == 'shrinking'
-
-    signals = []
-
-    # 1. 主线地位复核
-    mainline_status = (
-        f"{tracked_sector} {star_level}（综合{mainline_score_pct:.0f}分），"
-        f"净流入{sector_inflow:+.1f}亿，涨停{sector_zt_count}只，跌停{sector_dt_count}只，热榜占比{hot_weight:.1f}%"
-    )
-    if sector_outflow > 12 and sector_dt_count >= 2:
-        mainline_level = '红灯'
-    else:
-        mainline_level = _score_to_level(mainline_score_pct)
-    if inflow_shrinking_two_days and mainline_level == '绿灯':
-        mainline_level = '黄灯'
-    elif inflow_shrinking_two_days and mainline_level == '黄灯':
-        mainline_level = '橙灯'
-    if mainline_snapshot.get('trend_label'):
-        mainline_status += f"，{mainline_snapshot.get('trend_label')}"
-    signals.append({
-        'layer': '主线地位复核',
-        'status': mainline_status,
-        'level': mainline_level,
-        'action': action_map[mainline_level]
-    })
-
-    # 2. 龙头健康度
-    leader = get_sector_leader(tracked_sector, dragon_stocks, dt_pool_by_sector)
-    lhb_net_sell_codes = {
-        normalize_stock_code(item.get('code', ''))
-        for item in data.get('lhb_net_sell_top10', [])
-    }
-    leader_name = '-'
-    if leader:
-        leader_name = leader.get('name', '-')
-        leader_status = f"{leader.get('name', '-')}" \
-                        f"({leader.get('zt_type', '-')})"
-        if leader.get('is_limit_down'):
-            leader_level = '红灯'
-            leader_status += "，龙头已跌停失守"
-        elif leader.get('code', '') in lhb_net_sell_codes:
-            leader_level = '橙灯'
-            leader_status += "，龙虎榜出现净卖出"
-        elif leader.get('lianban', 0) >= 3:
-            leader_level = '绿灯'
-            leader_status += f"，连板高度{leader.get('lianban', 0)}板"
-        else:
-            leader_level = '黄灯'
-            leader_status += "，出现分歧但未失守"
-    else:
-        leader_level = '红灯' if sector_dt_count >= 1 else '橙灯'
-        leader_status = f"{tracked_sector}暂无明确涨停龙头，板块承接偏弱"
-    signals.append({
-        'layer': '龙头健康度',
-        'status': leader_status,
-        'level': leader_level,
-        'action': action_map[leader_level]
-    })
-
-    # 3. 板块内部结构
-    structure_status = f"涨停{sector_zt_count}只 / 跌停{sector_dt_count}只"
-    if sector_zt_count >= 15 and sector_dt_count == 0:
-        structure_level = '绿灯'
-        structure_status += "，主升结构完整"
-    elif sector_zt_count >= 5 and sector_dt_count <= 1:
-        structure_level = '黄灯'
-        structure_status += "，正常分歧，仍有反复空间"
-    elif sector_dt_count >= 3 or (sector_outflow > 10 and sector_zt_count < 5):
-        structure_level = '红灯'
-        structure_status += "，跌停扩散，退潮明显"
-    else:
-        structure_level = '橙灯'
-        structure_status += "，涨停回落，结构开始松动"
-    signals.append({
-        'layer': '板块内部结构',
-        'status': structure_status,
-        'level': structure_level,
-        'action': action_map[structure_level]
-    })
-
-    # 4. 持仓个股承接（用主线核心股代理）
-    core_stock = get_sector_core_hot_stock(tracked_sector, data.get('hot_rank_top30', []))
-    price_lines = None
-    price_anchor_stock = leader if leader else None
-    if core_stock:
-        change_pct = core_stock.get('change_pct', 0)
-        hot_rank = core_stock.get('hot_rank', 0)
-        core_status = f"{core_stock.get('name', '-')}" \
-                      f"热榜第{hot_rank}，涨幅{change_pct:+.2f}%"
-        if not price_anchor_stock:
-            price_anchor_stock = core_stock
-        price_lines = calculate_exit_price_lines(price_anchor_stock, data.get('stock_full_info', {}))
-        recent_bars = fetch_recent_price_bars(
-            price_anchor_stock.get('code', ''), target_date, lookback_days=max(STOP_PRIOR_LOW_TRADING_DAYS + 8, 15)
-        )
-        stop_loss, anchor_d, rule_hint = compute_stop_loss_mainline_anchor(recent_bars)
-        if price_lines and stop_loss:
-            price_lines.update({
-                'anchor_name': price_anchor_stock.get('name', '-'),
-                'stop_loss': stop_loss,
-                'stop_anchor_date': anchor_d,
-                'stop_rule': f"跌破{stop_loss:.2f}直接卖出（{rule_hint}）",
-            })
-        elif price_lines:
-            price_lines.update({
-                'anchor_name': price_anchor_stock.get('name', '-'),
-                'stop_rule': 'K线不足，暂用行情低点作参考，有完整K线后按近5个交易日前低/阴线规则重算',
-            })
-        if change_pct <= -9.5:
-            core_level = '红灯'
-            core_status += "，核心股跌停"
-        elif hot_rank <= 10 and change_pct > 0:
-            core_level = '绿灯'
-            core_status += "，仍是板块交易核心"
-        elif hot_rank <= 20 and change_pct >= -2:
-            core_level = '黄灯'
-            core_status += "，承接尚可但需要盯紧"
-        else:
-            core_level = '橙灯'
-            core_status += "，放量不涨或失去核心地位"
-    else:
-        core_status = f"{tracked_sector}在热榜核心区缺少明确承接"
-        if hot_weight >= 3:
-            core_level = '黄灯'
-            core_status += f"，但热榜占比仍有{hot_weight:.1f}%"
-        elif hot_weight >= 1:
-            core_level = '橙灯'
-            core_status += f"，热榜占比仅{hot_weight:.1f}%"
-        else:
-            core_level = '红灯'
-            core_status += "，主线关注度明显流失"
-    signals.append({
-        'layer': '持仓个股承接',
-        'status': core_status,
-        'level': core_level,
-        'action': action_map[core_level]
-    })
-
-    # 5. 事件落地风险
-    event_level = '绿灯'
-    event_status = "未发现与当前主线强相关的临近兑现事件"
-    target_dt = None
-    try:
-        target_dt = datetime.datetime.strptime(str(data.get('target_date', '') or ''), "%Y-%m-%d").date()
-    except Exception:
-        target_dt = None
-
-    related_event_hits = []
-    xuangubao_data = data.get('xuangubao_data')
-    hot_rank_data = data.get('hot_rank_top30', [])
-    for event in data.get('calendar_events', [])[:10]:
-        event_title = event.get('title', '')
-        if not event_title:
-            continue
-        event_sector = analyze_event_sector(event_title, "", xuangubao_data, hot_rank_data)
-        if not event_sector:
-            continue
-        if tracked_sector not in event_sector and event_sector not in tracked_sector:
-            continue
-
-        event_date_raw = str(event.get('date', '') or '')
-        days_to_event = None
-        if target_dt and event_date_raw:
-            try:
-                clean_date = event_date_raw.replace('/', '-')
-                event_dt = datetime.datetime.strptime(clean_date, "%Y-%m-%d").date()
-                days_to_event = (event_dt - target_dt).days
-            except Exception:
-                days_to_event = None
-
-        star = event.get('star', 0) or 0
-        if days_to_event is not None and days_to_event <= 2 and star >= 4 and (sector_inflow <= 0 or sector_dt_count >= 1):
-            risk_level = '红灯'
-            summary = f"{event_title}临近且{tracked_sector}承接失败，警惕利好出尽"
-        elif days_to_event is not None and days_to_event <= 2 and star >= 4:
-            risk_level = '橙灯'
-            summary = f"{event_title}临近，{tracked_sector}已进入兑现敏感区"
-        elif days_to_event is not None and days_to_event <= 5 and star >= 3:
-            risk_level = '黄灯'
-            summary = f"{event_title}进入博弈窗口，注意抢跑后兑现"
-        else:
-            risk_level = '绿灯'
-            summary = f"{event_title}仍属中期催化，暂未进入兑现压力区"
-
-        related_event_hits.append({
-            'level': risk_level,
-            'summary': summary,
-            'days_to_event': days_to_event if days_to_event is not None else 99,
-            'star': star
-        })
-
-    if related_event_hits:
-        related_event_hits.sort(
-            key=lambda x: (severity_map[x['level']], -x['star'], -x['days_to_event']),
-            reverse=True
-        )
-        top_event_hit = related_event_hits[0]
-        event_level = top_event_hit['level']
-        event_status = top_event_hit['summary']
-
-    if leader and leader.get('is_limit_down') and event_level in ('黄灯', '橙灯'):
-        event_level = '红灯'
-        event_status = f"{leader.get('name', tracked_sector)}首次跌停且事件临近，直接按退潮处理"
-    elif inflow_shrinking_two_days and event_level in ('黄灯', '橙灯'):
-        event_level = '橙灯'
-        event_status = (
-            f"{tracked_sector}资金连续两天收缩且事件临近"
-            f"（{prev2_inflow:+.1f}亿→{prev_inflow:+.1f}亿→{sector_inflow:+.1f}亿）"
-        )
-
-    signals.append({
-        'layer': '事件落地风险',
-        'status': event_status,
-        'level': event_level,
-        'action': action_map[event_level]
-    })
-
-    # 6. 替代主线流向
-    replacement_candidates = []
-    for sector in inflow_sectors:
-        sector_name = sector.get('name', '')
-        if not sector_name or sector_name == tracked_sector:
-            continue
-        replacement_candidates.append({
-            'name': sector_name,
-            'inflow': sector.get('zljlr', 0),
-            'zt_count': len(zt_pool_by_sector.get(sector_name, [])),
-            'hot_weight': get_sector_hotlist_weight(sector_name, data.get('tag_distribution', {}))
-        })
-    replacement_candidates.sort(
-        key=lambda x: (x.get('inflow', 0), x.get('zt_count', 0), x.get('hot_weight', 0)),
-        reverse=True
-    )
-
-    replacement_sector = replacement_candidates[0] if replacement_candidates else None
-    replacement_name = ''
-    if not replacement_sector:
-        replacement_level = '绿灯'
-        replacement_status = "未见明显替代主线，资金仍未完成切换"
-    else:
-        replacement_name = replacement_sector.get('name', '')
-        replacement_status = (
-            f"{replacement_name} 净流入+{replacement_sector.get('inflow', 0):.1f}亿，"
-            f"涨停{replacement_sector.get('zt_count', 0)}只，"
-            f"热榜占比{replacement_sector.get('hot_weight', 0):.1f}%"
-        )
-        if sector_inflow <= 0 and replacement_sector.get('inflow', 0) > 5 and replacement_sector.get('zt_count', 0) >= 5:
-            replacement_level = '红灯'
-            replacement_status += "，新主线已明显承接旧主线资金"
-        elif replacement_sector.get('inflow', 0) > sector_inflow and replacement_sector.get('zt_count', 0) >= max(5, sector_zt_count):
-            replacement_level = '橙灯'
-            replacement_status += "，资金开始切向替代主线"
-        elif replacement_sector.get('inflow', 0) > sector_inflow or replacement_sector.get('hot_weight', 0) > hot_weight + 1:
-            replacement_level = '黄灯'
-            replacement_status += "，替代方向开始试探"
-        else:
-            replacement_level = '绿灯'
-            replacement_status += "，暂未形成有效替代"
-    signals.append({
-        'layer': '替代主线流向',
-        'status': replacement_status,
-        'level': replacement_level,
-        'action': action_map[replacement_level]
-    })
-
-    leader_lianban = _safe_float(leader.get('lianban', 0)) if leader else 0.0
-    leader_score = _clamp(
-        _level_to_score(leader_level)
-        + max(leader_lianban - 2, 0) * 6.0
-        - (10.0 if leader and leader.get('code', '') in lhb_net_sell_codes else 0.0),
-        0.0,
-        100.0,
-    )
-    structure_score = _clamp(
-        _level_to_score(structure_level)
-        + min(sector_zt_count, 15) * 1.2
-        - min(sector_dt_count, 4) * 8.0,
-        0.0,
-        100.0,
-    )
-    core_score = _clamp(
-        _level_to_score(core_level)
-        + (_safe_float(core_stock.get('change_pct')) * 2.0 if core_stock else -6.0)
-        - (6.0 if not core_stock else 0.0),
-        0.0,
-        100.0,
-    )
-    event_score = _clamp(_level_to_score(event_level), 0.0, 100.0)
-    replacement_score = _clamp(_level_to_score(replacement_level), 0.0, 100.0)
-    overall_score = (
-        mainline_score_pct * 0.26
-        + leader_score * 0.18
-        + structure_score * 0.18
-        + core_score * 0.16
-        + event_score * 0.12
-        + replacement_score * 0.10
-    )
-
-    core_signal_levels = [signals[0]['level'], signals[1]['level'], signals[2]['level'], signals[4]['level']]
-    core_orange_or_red = sum(1 for level in core_signal_levels if severity_map[level] >= 2)
-    max_level = max(signals, key=lambda x: severity_map[x['level']])['level']
-
-    if event_level == '红灯' or leader_level == '红灯' or structure_level == '红灯':
-        overall_level = '红灯'
-    elif overall_score < 32:
-        overall_level = '红灯'
-    elif event_level == '橙灯' and mainline_level in ('黄灯', '橙灯', '红灯'):
-        overall_level = '橙灯'
-    elif replacement_level in ('橙灯', '红灯') and mainline_level in ('黄灯', '橙灯', '红灯'):
-        overall_level = '橙灯'
-    elif overall_score < 52 or core_orange_or_red >= 2:
-        overall_level = '橙灯'
-    elif overall_score < 70 or severity_map[max_level] >= 2:
-        overall_level = '黄灯'
-    else:
-        overall_level = '绿灯'
-
-    personal_exit = [
-        '跌破止损线（最近前低）立即卖出，不讨论',
-        '买入后仅3~5个交易日观察期，走势不及预期即卖（卖出线即止损线）',
-        '当日放量大阳线为理想主动卖点：他人眼中的确定性买点，本模式作减仓/清仓点',
-    ]
-    exit_conditions = []
-    if sector_inflow <= 0 or star_rank <= 2:
-        exit_conditions.append(f"{tracked_sector}资金转负或主线星级跌破⭐⭐⭐")
-    if leader and leader.get('is_limit_down'):
-        exit_conditions.append(f"{leader.get('name', tracked_sector)}首次跌停或龙头失守")
-    elif leader and leader.get('code', '') in lhb_net_sell_codes:
-        exit_conditions.append(f"{leader.get('name', tracked_sector)}出现龙虎榜净卖出")
-    if event_level in ('橙灯', '红灯'):
-        exit_conditions.append(event_status)
-    if sector_dt_count >= 2:
-        exit_conditions.append(f"{tracked_sector}板块跌停扩散到{sector_dt_count}只")
-    if replacement_name and replacement_level in ('橙灯', '红灯'):
-        exit_conditions.append(f"资金切向{replacement_name}，旧主线不再独占")
-    if not exit_conditions:
-        exit_conditions.append(f"{tracked_sector}仍是主线，允许正常分歧，继续待在主线里")
-    exit_conditions = personal_exit + exit_conditions
-
-    # 灯号语义映射（趋势狙击版）
-    action_map = {
-        '绿灯': '主线健康，可继续做',
-        '黄灯': '主升强化，优先做核心',
-        '橙灯': '退潮预警，禁止新增',
-        '红灯': '退潮确认，尽快退出'
-    }
-    
-    participation_advice = {
-        '绿灯': "可参与，可继续粘住最强趋势",
-        '黄灯': "优先围绕主线核心，继续持有最强",
-        '橙灯': "禁止新增，旧仓去弱留强，不强就卖",
-        '红灯': "停止参与，已有仓位尽快退出"
-    }
-
-    return {
-        'sector_name': tracked_sector,
-        'star_level': star_level,
-        'leader_name': leader_name,
-        'event_risk_summary': event_status,
-        'overall_level': overall_level,
-        'overall_score': round(overall_score, 1),
-        'mainline_score_pct': round(mainline_score_pct, 1),
-        'score_detail': {
-            '主线': round(mainline_score_pct, 1),
-            '龙头': round(leader_score, 1),
-            '结构': round(structure_score, 1),
-            '承接': round(core_score, 1),
-            '事件': round(event_score, 1),
-            '替代': round(replacement_score, 1),
-        },
-        'mainline_component_scores': mainline_snapshot.get('component_scores', {}),
-        'mainline_trend_label': mainline_snapshot.get('trend_label', ''),
-        'overall_action': action_map[overall_level],
-        'participation_advice': participation_advice[overall_level],
-        'exit_conditions': exit_conditions[:8],
-        'price_lines': price_lines,
-        'signals': signals
-    }
+    return (result.get("exports") or {}).get("exit_analysis") or {}
 
 
 def merge_position_gate(position_level, exit_analysis):
@@ -17559,8 +17139,8 @@ def generate_markdown_report(
             "render_pk_decision_section": render_pk_decision_section,
             "render_action_plan_section": render_action_plan_section,
             "decision_stack_order_text": DECISION_STACK_ORDER_TEXT,
-            "today_predictions": today_predictions,
-            "nextday_predictions": nextday_predictions,
+            "today_predictions": today_predictions if 'today_predictions' in locals() else [],
+            "nextday_predictions": nextday_predictions if 'nextday_predictions' in locals() else [],
         },
         stage_lookup=execution_stage_lookup,
     )

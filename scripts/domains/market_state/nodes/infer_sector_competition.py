@@ -1,10 +1,69 @@
+from domains.market_state.trace import make_market_state_log
+
+
 def run(ctx):
-    _ = ctx
+    inputs = ctx.get("inputs") or {}
+    state = ctx.get("state") or {}
+    helpers = ctx.get("helpers") or {}
+    action_map = helpers["action_map"]
+
+    data = inputs.get("data") or {}
+    tracked_sector = state.get("tracked_sector", "")
+    sector_inflow = float(state.get("sector_inflow", 0) or 0)
+    hot_weight = float(state.get("hot_weight", 0) or 0)
+    zt_pool_by_sector = state.get("zt_pool_by_sector", {}) or {}
+    replacement_candidates = []
+    for sector in (data.get("sector_fund_flow", {}) or {}).get("inflow", []):
+        sector_name = sector.get("name", "")
+        if not sector_name or sector_name == tracked_sector:
+            continue
+        replacement_candidates.append(
+            {
+                "name": sector_name,
+                "inflow": sector.get("zljlr", 0),
+                "zt_count": len(zt_pool_by_sector.get(sector_name, []) or []),
+                "hot_weight": helpers["get_sector_hotlist_weight"](sector_name, data.get("tag_distribution", {})),
+            }
+        )
+    replacement_candidates.sort(
+        key=lambda item: (item.get("inflow", 0), item.get("zt_count", 0), item.get("hot_weight", 0)),
+        reverse=True,
+    )
+
+    replacement = replacement_candidates[0] if replacement_candidates else None
+    if not replacement:
+        level = "绿灯"
+        status = "未见明显替代主线，资金仍未完成切换"
+    elif replacement.get("inflow", 0) > sector_inflow or replacement.get("hot_weight", 0) > hot_weight + 1:
+        level = "黄灯"
+        status = f"{replacement.get('name', '')}开始试探承接旧主线资金"
+    else:
+        level = "绿灯"
+        status = f"{replacement.get('name', '')}暂未形成有效替代"
+
+    signal = {
+        "layer": "替代主线流向",
+        "status": status,
+        "level": level,
+        "action": action_map[level],
+    }
     return {
-        "value": {"competition_snapshot": {}},
-        "exports": {"competition_snapshot": {}},
-        "state_patch": {},
-        "module_logs": [],
+        "value": signal,
+        "exports": {"competition_signal": signal, "competition_snapshot": {"replacement": replacement or {}, "level": level}},
+        "state_patch": {
+            "competition_signal": signal,
+            "competition_snapshot": {"replacement": replacement or {}, "level": level},
+        },
+        "module_logs": [
+            make_market_state_log(
+                "sector_competition",
+                "infer.sector_competition",
+                "success",
+                "competition signal derived",
+                tracked_sector=tracked_sector,
+                level=level,
+            )
+        ],
         "errors": [],
         "control": {"status": "success"},
     }
