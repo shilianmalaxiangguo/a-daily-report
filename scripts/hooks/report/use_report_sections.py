@@ -1,6 +1,7 @@
 import time
 
 from knowledge.trading_philosophy import build_trading_philosophy_snapshot
+from report.stage_renderer import render_stage_board
 
 
 HOOK_NAME = "report.sections"
@@ -17,17 +18,20 @@ def _build_environment_section(phase, primary_line, knowledge):
     )
 
 
-def _build_observation_section(primary_line, strategy_contract, knowledge):
+def _build_observation_section(primary_line, strategy_contract, knowledge, report_stages):
     digest = str(
         strategy_contract.get("contract_logic_digest_text", "")
         or knowledge.get("contract_logic_digest_text", "")
         or ""
     ).strip()
+    stage_board = render_stage_board(report_stages)
     return "\n".join(
         [
             "## 观察",
             f"- 当前聚焦：{primary_line}",
             f"- 交易链核心：{digest}",
+            "",
+            stage_board,
         ]
     )
 
@@ -107,7 +111,7 @@ def run(ctx):
     sections = {
         "preamble": preamble,
         "environment": _build_environment_section(phase, primary_line, knowledge),
-        "observation": _build_observation_section(primary_line, strategy_contract, knowledge),
+        "observation": _build_observation_section(primary_line, strategy_contract, knowledge, report_stages),
         "execution": _build_execution_section(contract_label, permission, action_plan, knowledge),
         "review": _build_review_section(knowledge),
         "summary": _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, report_stages),

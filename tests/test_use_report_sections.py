@@ -57,6 +57,8 @@ class UseReportSectionsTest(unittest.TestCase):
         sections = result["patches"]["sections"]
         self.assertIn("交易理念底线", sections["preamble"])
         self.assertIn("主推导链", sections["environment"])
+        self.assertIn("阶段看板", sections["observation"])
+        self.assertIn("selection_focus", sections["observation"])
         self.assertIn("先选边站队，再等确认", sections["observation"])
         self.assertIn("沿军工保留30%条件试错", sections["execution"])
         self.assertIn("交易思想版本：2026-04-22", sections["review"])
