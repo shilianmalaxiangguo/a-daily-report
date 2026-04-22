@@ -1,6 +1,7 @@
 from hooks.trace.trace_runtime import TraceRuntime
 
 from orchestrator.context_store import build_empty_context, merge_hook_patches
+from orchestrator.module_log_runtime import make_module_log
 
 
 def run_pipeline(request, hooks):
@@ -14,9 +15,20 @@ def run_pipeline(request, hooks):
                 result = hook_fn(ctx)
             except Exception as error:
                 trace.on_error(hook_name, [], error)
+                ctx["runtime"].setdefault("module_logs", []).append(
+                    make_module_log(hook_name, status="error", error=error)
+                )
                 raise
             ctx = merge_hook_patches(ctx, result.get("patches") or {})
             diagnostics = result.get("diagnostics") or {}
+            ctx["runtime"].setdefault("module_logs", []).append(
+                make_module_log(
+                    hook_name,
+                    diagnostics=diagnostics,
+                    patches=result.get("patches") or {},
+                    artifacts=result.get("artifacts") or {},
+                )
+            )
             trace.after_hook(
                 hook_name,
                 list((result.get("patches") or {}).keys()),

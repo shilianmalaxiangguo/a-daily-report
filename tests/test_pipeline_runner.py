@@ -40,6 +40,11 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ctx["rendered"]["markdown_document"], "# report")
         self.assertEqual(ctx["runtime"]["trace_events"][0]["status"], "started")
         self.assertEqual(ctx["runtime"]["trace_events"][-1]["status"], "finished")
+        self.assertEqual(len(ctx["runtime"]["module_logs"]), 2)
+        self.assertEqual(ctx["runtime"]["module_logs"][0]["hook_name"], "input.hot_rank")
+        self.assertEqual(ctx["runtime"]["module_logs"][0]["status"], "success")
+        self.assertEqual(ctx["runtime"]["module_logs"][1]["hook_name"], "report.markdown_document")
+        self.assertIn("rendered", ctx["runtime"]["module_logs"][1]["output_zones"])
 
     def test_run_pipeline_supports_legacy_new_mixed_hooks(self):
         def legacy_sections_hook(ctx):
@@ -123,3 +128,33 @@ class PipelineRunnerTest(unittest.TestCase):
         events = StubTraceRuntime.instances[0].events
         self.assertEqual(events[-2]["status"], "error")
         self.assertEqual(events[-1]["status"], "finished")
+
+    def test_run_pipeline_records_module_error_log(self):
+        ctx = {
+            "request": {"target_date": "2026-04-21"},
+            "raw": {},
+            "normalized": {},
+            "derived": {},
+            "decision": {},
+            "knowledge": {},
+            "sections": {},
+            "rendered": {},
+            "diagnostics": {},
+            "runtime": {"module_logs": []},
+        }
+
+        def boom(ctx):
+            raise RuntimeError("hook failed")
+
+        with patch("orchestrator.pipeline_runner.build_empty_context", return_value=ctx):
+            try:
+                run_pipeline(request={"target_date": "2026-04-21"}, hooks=[("input.hot_rank", boom)])
+            except RuntimeError as exc:
+                self.assertEqual(str(exc), "hook failed")
+            else:
+                self.fail("expected RuntimeError")
+
+        self.assertEqual(len(ctx["runtime"]["module_logs"]), 1)
+        self.assertEqual(ctx["runtime"]["module_logs"][0]["hook_name"], "input.hot_rank")
+        self.assertEqual(ctx["runtime"]["module_logs"][0]["status"], "error")
+        self.assertIn("hook failed", ctx["runtime"]["module_logs"][0]["error"])

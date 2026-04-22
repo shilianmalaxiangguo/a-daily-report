@@ -35,7 +35,7 @@ def build_empty_context(request):
         "sections": {},
         "rendered": {},
         "diagnostics": {},
-        "runtime": {},
+        "runtime": {"module_logs": []},
     }
 
 

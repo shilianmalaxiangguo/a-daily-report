@@ -20,6 +20,11 @@ class UseSnapshotPersistenceTest(unittest.TestCase):
                 {
                     "rendered": {"markdown_document": "# report"},
                     "decision": {"execution_permission": {"label": "watch_only"}},
+                    "runtime": {
+                        "module_logs": [
+                            {"hook_name": "infer.execution_permission", "status": "success"}
+                        ]
+                    },
                 },
             )
 
@@ -30,6 +35,10 @@ class UseSnapshotPersistenceTest(unittest.TestCase):
             "rendered": {"markdown_document": "# report"},
             "decision": {"execution_permission": {"label": "watch_only"}},
             "diagnostics": {},
+            "runtime": {
+                "module_logs": [{"hook_name": "infer.execution_permission", "status": "success"}],
+                "trace_events": [],
+            },
         }
         self.assertEqual(result["value"]["snapshot_path"], str(Path(tmpdir) / "snap.json"))
         self.assertEqual(result["artifacts"]["snapshot_path"], str(Path(tmpdir) / "snap.json"))

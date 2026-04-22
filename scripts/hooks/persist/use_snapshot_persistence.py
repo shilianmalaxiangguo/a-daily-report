@@ -10,6 +10,10 @@ def run(ctx):
         "rendered": ctx.get("rendered") or {},
         "decision": ctx.get("decision") or {},
         "diagnostics": ctx.get("diagnostics") or {},
+        "runtime": {
+            "module_logs": ((ctx.get("runtime") or {}).get("module_logs") or []),
+            "trace_events": ((ctx.get("runtime") or {}).get("trace_events") or []),
+        },
     }
     path = _save_data_snapshot(payload, target_date)
     return {
