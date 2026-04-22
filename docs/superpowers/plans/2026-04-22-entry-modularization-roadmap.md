@@ -10,6 +10,24 @@
 - `输出层`: 只负责日报、单票、复盘文档的结构化渲染。
 - `追踪层`: 统一模块日志、错误追踪、执行耗时和关键输入输出摘要。
 
+## 新拆分原则
+
+- 不再按章节号暴力切文件。
+- 改为 `业务域 × 功能域` 的混合矩阵拆分。
+- 先问“它属于哪个业务域”，再问“它在这个域里是 request / infer / report / persist / trace 哪一类”。
+
+### 当前业务域规划
+
+- `market_state`
+- `market_activity`
+- `calendar_events`
+- `watch_candidates`
+- `execution_chain`
+- `snapshot_replay`
+- `single_stock_diagnostic`
+- `report_shell`
+- `monitoring`
+
 ## 当前 Todo
 
 - [x] 提取复盘回放模块：`scripts/replay/report_replay.py`
@@ -17,7 +35,8 @@
 - [x] 提取市场研究上下文模块：`scripts/research/market_research_context_bundle.py`
 - [x] 提取前台摘要 builder：`scripts/report/front_summary_builder.py`
 - [ ] 提取输出文档骨架 builder：日报开头、纪律块、占位替换等基础文档装配逻辑
-- [ ] 提取输出文档分段 builder：把 `generate_markdown_report()` 按章节切成独立 builder
+- [ ] 落地第一个业务域：`market_activity`，把热榜/成交额/龙虎榜/连板/量化活跃度收敛到同一域
+- [ ] 落地 `market_state`，把环境判断相关的请求/推导/输出收敛到同一域
 - [ ] 提取请求层第一批模块：从 `get_daily_data()` 拆出指数、热榜、日历、龙虎榜等请求单元
 - [ ] 提取分析层第一批模块：从 `build_mainline_exit_analysis()` 拆出连续性、风险、主线判定子模块
 - [ ] 统一 trace/log 契约：请求层、分析层、输出层都产出一致的 `module_logs`
@@ -25,7 +44,8 @@
 
 ## 当前执行顺序
 
-1. 先继续拆 `输出层`
-2. 再拆 `请求层`
-3. 再拆 `分析层`
-4. 最后压缩 `入口层`
+1. 先按业务域落地 `market_activity`
+2. 再按业务域落地 `market_state`
+3. 再拆 `请求层`
+4. 再拆 `分析层`
+5. 最后压缩 `入口层`
