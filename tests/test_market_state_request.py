@@ -1,0 +1,53 @@
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from domains.market_state.request import collect_market_state_request_bundle
+
+
+class _TimerStub:
+    def __init__(self):
+        self.records = []
+
+    def record(self, label, order):
+        self.records.append((label, order))
+        return 0.1, 0.2
+
+
+class MarketStateRequestTest(unittest.TestCase):
+    def test_collect_market_state_request_bundle_collects_first_request_slice(self):
+        timer = _TimerStub()
+        emitted = []
+        request_registry = {
+            "total_turnover": lambda *, target_date: 12345.6,
+            "major_indices": lambda *, target_date: [{"code": "000001", "change_pct": 1.2}],
+            "wind_a": lambda *, target_date: {"price": 5432.1, "change_pct": 0.8},
+        }
+
+        result = collect_market_state_request_bundle(
+            "2026-04-22",
+            request_registry=request_registry,
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(result["results"]["total_turnover"], 12345.6)
+        self.assertEqual(result["results"]["turnover_data"]["date"], "2026-04-22")
+        self.assertEqual(result["results"]["indices"][0]["code"], "000001")
+        self.assertEqual(result["results"]["wind_a_alternative"]["price"], 5432.1)
+        self.assertTrue(result["data_status"]["两市成交额"])
+        self.assertTrue(result["data_status"]["主要指数"])
+        self.assertTrue(result["data_status"]["中证全指"])
+        self.assertTrue(result["step_status"]["两市成交额获取"])
+        self.assertTrue(result["step_status"]["主要指数获取"])
+        self.assertTrue(result["step_status"]["中证全指获取"])
+        self.assertEqual(len(result["module_logs"]), 3)
+        self.assertEqual(timer.records[0], ("两市成交额获取", 1))
+        self.assertTrue(any("两市成交额" in line for line in emitted))
+
+
+if __name__ == "__main__":
+    unittest.main()

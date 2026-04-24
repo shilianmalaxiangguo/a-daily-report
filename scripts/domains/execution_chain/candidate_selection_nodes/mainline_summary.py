@@ -1,0 +1,107 @@
+def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_candidates=None, display_mvp_mode=False):
+    gem_observation_stocks = gem_observation_stocks or []
+    filtered_out_gem_candidates = filtered_out_gem_candidates or []
+    if not gem_observation_stocks and not filtered_out_gem_candidates:
+        return []
+
+    preview = gem_observation_stocks[:2] if display_mvp_mode else gem_observation_stocks[:4]
+    lines = [
+        "> **主线侧翼弹性层**：若主板强锚仍在，创业板20cm只作为主线白银弹性观察，不单列成独立战场。",
+        "> **观察纪律**：只先进观察池，先看均线粘合/蛇形走位能否继续走成右侧确认；确认前只观察不执行。",
+    ]
+    if filtered_out_gem_candidates:
+        filtered_preview = filtered_out_gem_candidates[:2] if display_mvp_mode else filtered_out_gem_candidates[:4]
+        filtered_text = "；".join(
+            f"{item.get('name', '-')}({item.get('code', '-')})/{item.get('sector', '-')}：{item.get('filtered_reason', '-') or '-'}"
+            for item in filtered_preview
+        )
+        lines.append(f"> **主线过滤提示**：当前有20cm预启动样本，但因非主线被过滤：{filtered_text}")
+    if not preview:
+        lines.append("")
+        return lines
+
+    lines.extend(
+        [
+            "| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 预判强度 | 明日原则 |",
+            "|------|------|------|------|------------|----------|----------|----------|",
+        ]
+    )
+    for i, item in enumerate(preview, 1):
+        lines.append(
+            f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
+            f"{item.get('tier', '-') or '-'} | {item.get('abnormal_summary', item.get('note', '-')) or '-'} | "
+            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和60分钟确认，不满足继续观察 |"
+        )
+    lines.append("")
+    return lines
+
+
+def _render_gem_breathing_step2_section(context, gem_observation_stocks, filtered_out_gem_candidates, display_mvp_mode):
+    return _render_gem_breathing_step2_lines(
+        gem_observation_stocks,
+        filtered_out_gem_candidates=filtered_out_gem_candidates,
+        display_mvp_mode=display_mvp_mode,
+    )
+
+
+def build_candidate_selection_mainline_summary_node(context, node_meta=None, node_lookup=None):
+    core_stocks = context.get("core_stocks", []) or []
+    secondary_stocks = context.get("secondary_stocks", []) or []
+    crossline_observation_stocks = context.get("crossline_observation_stocks", []) or []
+    gem_observation_stocks = context.get("gem_observation_stocks", []) or []
+    filtered_out_gem_candidates = context.get("filtered_out_gem_candidates", []) or []
+    primary_mainline = str(context.get("primary_mainline", "") or "").strip()
+    display_mvp_mode = bool(context.get("display_mvp_mode", False))
+    safe_float = context["safe_float"]
+
+    core_sectors = {}
+    sector_strength = {}
+    for stock in core_stocks + secondary_stocks:
+        sector = stock.get("sector", "其他")
+        core_sectors[sector] = core_sectors.get(sector, 0) + 1
+        sector_strength[sector] = sector_strength.get(sector, 0) + stock.get("tomorrow_strength", 0)
+
+    lines = []
+    if primary_mainline:
+        mainline_count = len(core_stocks) + len(secondary_stocks)
+        mainline_strength = sum(safe_float(stock.get("tomorrow_strength", 0)) for stock in core_stocks + secondary_stocks)
+        lines.append(f"**明日核心方向预判**: {primary_mainline}（主线内{mainline_count}只，主线内强度{int(mainline_strength)}分）")
+        lines.append(f"> **明日纪律**: 认准'{primary_mainline}'，只在主线里等最强对象自己走出来。")
+        if crossline_observation_stocks:
+            strongest_crossline = sorted(
+                crossline_observation_stocks,
+                key=lambda item: (safe_float(item.get("tomorrow_strength", 0)), safe_float(item.get("score", 0))),
+                reverse=True,
+            )[0]
+            lines.append(
+                f"> **跨线补充**: {strongest_crossline.get('sector', '其他')}里的{strongest_crossline.get('name', '-')}"
+                "更像承接观察对象，不视为主攻线切换。"
+            )
+        lines.extend(
+            _render_gem_breathing_step2_section(
+                context,
+                gem_observation_stocks,
+                filtered_out_gem_candidates,
+                display_mvp_mode,
+            )
+        )
+        lines.append("")
+        return {"lines": lines, "exports": {}, "module_logs": []}
+
+    if core_sectors:
+        sorted_sectors = sorted(core_sectors.items(), key=lambda item: (item[1], sector_strength[item[0]]), reverse=True)
+        main_sector = sorted_sectors[0]
+        lines.append(f"**明日核心方向预判**: {main_sector[0]}（{main_sector[1]}只，板块强度{sector_strength.get(main_sector[0], 0)}分）")
+        lines.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，就干该板块核心")
+        lines.extend(
+            _render_gem_breathing_step2_section(
+                context,
+                gem_observation_stocks,
+                filtered_out_gem_candidates,
+                display_mvp_mode,
+            )
+        )
+        lines.append("")
+        return {"lines": lines, "exports": {}, "module_logs": []}
+
+    return {"lines": [], "exports": {}, "module_logs": []}

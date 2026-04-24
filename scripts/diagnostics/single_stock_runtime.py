@@ -1,3 +1,78 @@
+__all__ = [
+    "build_single_stock_diagnostic_contract",
+    "compose_single_stock_final_verdict_contract",
+    "generate_single_stock_diagnostic_markdown",
+    "resolve_single_stock_snapshot",
+    "resolve_single_stock_snapshot_contract",
+]
+
+_MISSING = object()
+
+
+def _install_runtime_bindings(bindings):
+    previous = {}
+    module_globals = globals()
+    for key, value in (bindings or {}).items():
+        if key.startswith("__") and key.endswith("__"):
+            continue
+        previous[key] = module_globals.get(key, _MISSING)
+        module_globals[key] = value
+    return previous
+
+
+def _restore_runtime_bindings(previous):
+    module_globals = globals()
+    for key, value in (previous or {}).items():
+        if value is _MISSING:
+            module_globals.pop(key, None)
+        else:
+            module_globals[key] = value
+
+
+def resolve_single_stock_snapshot(
+    data,
+    stock_code,
+    stock_name="",
+    market_research_bundle=None,
+    step2_bundle=None,
+    *,
+    helpers=None,
+):
+    previous = _install_runtime_bindings(helpers or {})
+    try:
+        return _resolve_single_stock_snapshot_legacy_body(
+            data,
+            stock_code,
+            stock_name=stock_name,
+            market_research_bundle=market_research_bundle,
+            step2_bundle=step2_bundle,
+        )
+    finally:
+        _restore_runtime_bindings(previous)
+
+
+def generate_single_stock_diagnostic_markdown(
+    data,
+    target_date,
+    stock_code,
+    stock_name="",
+    run_mode="frozen",
+    *,
+    helpers=None,
+):
+    previous = _install_runtime_bindings(helpers or {})
+    try:
+        return _generate_single_stock_diagnostic_markdown_legacy_body(
+            data,
+            target_date,
+            stock_code,
+            stock_name=stock_name,
+            run_mode=run_mode,
+        )
+    finally:
+        _restore_runtime_bindings(previous)
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -136,6 +211,28 @@ def resolve_single_stock_snapshot_contract(
 
     _append_log(logs, "resolve.snapshot", "success", "已解析单票快照", code=code, source_tags=stock.get("source_tags", []))
     return {"stock": stock, "module_logs": logs}
+
+
+def _resolve_single_stock_snapshot_legacy_body(
+    data,
+    stock_code,
+    stock_name="",
+    market_research_bundle=None,
+    step2_bundle=None,
+):
+    result = resolve_single_stock_snapshot_contract(
+        data,
+        stock_code,
+        stock_name=stock_name,
+        market_research_bundle=market_research_bundle,
+        step2_bundle=step2_bundle,
+        normalize_stock_code=normalize_stock_code,
+        get_stock_sector=get_stock_sector,
+        fetch_recent_price_bars=fetch_recent_price_bars,
+        safe_float=safe_float,
+        compute_bar_change_pct=compute_bar_change_pct,
+    )
+    return result.get("stock", {})
 
 
 def compose_single_stock_final_verdict_contract(
@@ -489,3 +586,42 @@ def build_single_stock_diagnostic_contract(
         "step3_bundle": step3_bundle,
         "module_logs": logs,
     }
+
+
+def _generate_single_stock_diagnostic_markdown_legacy_body(
+    data,
+    target_date,
+    stock_code,
+    stock_name="",
+    run_mode="frozen",
+):
+    result = build_single_stock_diagnostic_contract(
+        data,
+        target_date,
+        stock_code,
+        stock_name=stock_name,
+        run_mode=run_mode,
+        build_market_phase_context=build_market_phase_context,
+        build_market_research_context_bundle=build_market_research_context_bundle,
+        build_step2_candidate_bundle=build_step2_candidate_bundle,
+        build_step3_risk_bundle=build_step3_risk_bundle,
+        resolve_single_stock_snapshot=resolve_single_stock_snapshot,
+        normalize_stock_code=normalize_stock_code,
+        get_trade_permission=get_trade_permission,
+        fetch_recent_price_bars=fetch_recent_price_bars,
+        evaluate_live_tradability=evaluate_live_tradability,
+        get_abnormal_follow_risk_signal=get_abnormal_follow_risk_signal,
+        safe_float=safe_float,
+        analyze_buy_signal=analyze_buy_signal,
+        quant_system_available=quant_system_available,
+        build_intraday_execution_plan=build_intraday_execution_plan,
+        build_stop_execution_plan=build_stop_execution_plan,
+        enrich_stop_plan_with_reference_anchors=enrich_stop_plan_with_reference_anchors,
+        stop_prior_low_trading_days=stop_prior_low_trading_days,
+        score_candidate_decision_stack=score_candidate_decision_stack,
+        score_execution_candidate=score_execution_candidate,
+        build_strategy_ev_calibration=build_strategy_ev_calibration,
+        build_trade_price_focus=build_trade_price_focus,
+        render_single_stock_diagnostic_markdown=render_single_stock_diagnostic_markdown,
+    )
+    return result.get("markdown", "")

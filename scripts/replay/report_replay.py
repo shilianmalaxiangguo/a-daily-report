@@ -1,3 +1,39 @@
+__all__ = [
+    "build_replay_snapshot_contract",
+    "replay_from_snapshot",
+]
+
+_MISSING = object()
+
+
+def _install_runtime_bindings(bindings):
+    previous = {}
+    module_globals = globals()
+    for key, value in (bindings or {}).items():
+        if key.startswith("__") and key.endswith("__"):
+            continue
+        previous[key] = module_globals.get(key, _MISSING)
+        module_globals[key] = value
+    return previous
+
+
+def _restore_runtime_bindings(previous):
+    module_globals = globals()
+    for key, value in (previous or {}).items():
+        if value is _MISSING:
+            module_globals.pop(key, None)
+        else:
+            module_globals[key] = value
+
+
+def replay_from_snapshot(target_date, refresh_sources=None, *, helpers=None):
+    previous = _install_runtime_bindings(helpers or {})
+    try:
+        return _replay_from_snapshot_legacy_body(target_date, refresh_sources=refresh_sources)
+    finally:
+        _restore_runtime_bindings(previous)
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -121,3 +157,14 @@ def build_replay_snapshot_contract(
         "supplementary_perspective": supplementary or "",
         "module_logs": logs,
     }
+
+
+def _replay_from_snapshot_legacy_body(target_date, refresh_sources=None):
+    return build_replay_snapshot_contract(
+        target_date,
+        refresh_sources=refresh_sources,
+        load_data_snapshot=load_data_snapshot,
+        tencent_factory=TencentFinanceData,
+        get_major_indices_from_iwencai=get_major_indices_from_iwencai,
+        safe_float=safe_float,
+    )

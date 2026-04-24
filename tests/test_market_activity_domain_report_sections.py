@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -12,6 +13,161 @@ from domains.market_activity.report_sections import (
 
 
 class MarketActivityDomainReportSectionsTest(unittest.TestCase):
+    def test_build_market_activity_report_sections_can_render_only_enabled_nodes(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [{"name": "军工一号", "code": "000001", "rate": 230000, "concepts": ["军工"], "popularity_tag": "龙头"}],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [{"name": "军工一号", "code": "sz000001", "turnover": 123.4}],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "军工", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [{"name": "消费", "zljlr": -9.8, "zdf": -1.8}],
+                },
+                "lhb_net_buy_top10": [{"rank": 1, "code": "000001", "net_buy_amount_yi": 3.2, "name": "军工一号", "zt_status": "正常", "sector": "军工"}],
+                "lhb_net_sell_top10": [{"rank": 1, "code": "000002", "net_buy_amount_yi": -2.1, "name": "消费一号", "zt_status": "正常", "sector": "消费"}],
+                "lianban_data": [],
+            },
+            target_date="2026-04-22",
+            stock_full_info={
+                "000001": {"change_pct": 5.2, "high": 12.3, "low": 11.1, "open": 11.2, "close": 12.0, "name": "军工一号"},
+                "000002": {"change_pct": -3.1, "high": 8.5, "low": 7.9, "open": 8.4, "close": 8.0, "name": "消费一号"},
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["hot_rank", "sector_fund_flow"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 四、热度核心结果", rendered)
+        self.assertIn("## 六、行业资金结果", rendered)
+        self.assertNotIn("## 五、成交核心结果", rendered)
+        self.assertNotIn("## 七、龙虎榜结果", rendered)
+
+    def test_build_market_activity_report_sections_can_render_hot_rank_header_without_table(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [{"name": "军工一号", "code": "000001", "rate": 230000, "popularity_tag": "龙头"}],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-04-22",
+            stock_full_info={"000001": {"change_pct": 5.2, "high": 12.3, "low": 11.1, "open": 11.2, "close": 12.0}},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["hot_rank_header"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 四、热度核心结果", rendered)
+        self.assertIn("只看热度是否继续抱团到主线核心", rendered)
+        self.assertNotIn("| 1 | 军工一号 |", rendered)
+        self.assertNotIn("## 五、成交核心结果", rendered)
+
+    def test_build_market_activity_report_sections_can_render_turnover_header_without_table(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [{"name": "军工一号", "code": "sz000001", "turnover": 123.4}],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-04-22",
+            stock_full_info={"000001": {"change_pct": 5.2, "high": 12.3, "low": 11.1, "open": 11.2, "close": 12.0}},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["turnover_header"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 五、成交核心结果", rendered)
+        self.assertIn("只看真放量的成交核心", rendered)
+        self.assertNotIn("| 1 | 军工一号 |", rendered)
+        self.assertNotIn("## 四、热度核心结果", rendered)
+
+    def test_build_market_activity_report_sections_can_render_sector_fund_inflow_without_outflow(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "军工", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [{"name": "消费", "zljlr": -9.8, "zdf": -1.8}],
+                },
+                "lianban_data": [],
+            },
+            target_date="2026-04-22",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_header", "sector_fund_inflow"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 六、行业资金结果", rendered)
+        self.assertIn("### 资金流入结果", rendered)
+        self.assertIn("| 1 | 军工 | +12.30亿 | +1.23% |", rendered)
+        self.assertNotIn("### 资金流出结果", rendered)
+        self.assertNotIn("消费", rendered)
+
+    def test_build_market_activity_report_sections_can_render_lhb_buy_without_sell(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lhb_net_buy_top10": [
+                    {
+                        "rank": 1,
+                        "code": "000001",
+                        "net_buy_amount_yi": 3.2,
+                        "name": "军工一号",
+                        "zt_status": "正常",
+                        "sector": "军工",
+                    }
+                ],
+                "lhb_net_sell_top10": [
+                    {
+                        "rank": 1,
+                        "code": "000002",
+                        "net_buy_amount_yi": -2.1,
+                        "name": "消费一号",
+                        "zt_status": "正常",
+                        "sector": "消费",
+                    }
+                ],
+                "lianban_data": [],
+            },
+            target_date="2026-04-22",
+            stock_full_info={
+                "000001": {"change_pct": 5.2, "high": 10.5, "low": 9.8, "open": 10.0, "close": 10.4, "name": "军工一号"},
+                "000002": {"change_pct": -3.1, "high": 8.5, "low": 7.8, "open": 8.2, "close": 8.0, "name": "消费一号"},
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["lhb_header", "lhb_buy"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 七、龙虎榜结果", rendered)
+        self.assertIn("### 净买入结果", rendered)
+        self.assertIn("| 1 | 军工一号 | 000001 | 3.20亿 | 军工 | +5.20% |", rendered)
+        self.assertNotIn("### 净流出结果", rendered)
+        self.assertNotIn("消费一号", rendered)
+
     def test_build_market_activity_report_sections_renders_hot_rank_and_lhb(self):
         result = build_market_activity_report_sections(
             data={
@@ -39,9 +195,28 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("## 四、热度前三十个股", rendered)
+        self.assertIn("## 四、热度核心结果", rendered)
+        self.assertNotIn("## 四、热度前三十个股", rendered)
+        self.assertIn("> **先看什么**: 只看热度是否继续抱团到主线核心，别被杂讯热榜带偏。", rendered)
+        self.assertNotIn("> **数据来源**: 同花顺个股热榜", rendered)
+        self.assertIn("## 五、成交核心结果", rendered)
+        self.assertNotIn("## 五、成交额排名前十且>100亿个股", rendered)
+        self.assertIn("**先看什么**: 只看真放量的成交核心，缩量凑热闹的不算。", rendered)
+        self.assertNotIn("**筛选标准**: 成交额>100亿的个股", rendered)
         self.assertIn("| 1 | 军工一号 | 000001 | 23.0w | 军工 | +5.20% |", rendered)
-        self.assertIn("## 七、龙虎榜数据", rendered)
+        self.assertIn("## 六、行业资金结果", rendered)
+        self.assertNotIn("## 六、行业资金净流向", rendered)
+        fund_section = rendered.split("## 六、行业资金结果", 1)[1].split("## 七、", 1)[0]
+        self.assertIn("### 资金流入结果", fund_section)
+        self.assertNotIn("### 净流入前十", fund_section)
+        self.assertIn("### 资金流出结果", fund_section)
+        self.assertNotIn("### 净流出前十", fund_section)
+        self.assertIn("## 七、龙虎榜结果", rendered)
+        self.assertNotIn("## 七、龙虎榜数据", rendered)
+        self.assertIn("### 净买入结果", rendered)
+        self.assertNotIn("### 净买入前十", rendered)
+        self.assertIn("### 净流出结果", rendered)
+        self.assertNotIn("### 净流出前十", rendered)
         self.assertIn("| 1 | 军工一号 | 000001 | 3.20亿 | 军工 | +5.20% |", rendered)
         self.assertTrue(any(log["step"] == "render.market_activity_sections" for log in result["module_logs"]))
 
@@ -50,37 +225,363 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
             data={
                 "lianban_data": [
                     {
+                        "lianban_days": 3,
+                        "name": "军工龙一",
+                        "code": "000005",
+                        "first_limit_time": "09:31",
+                        "reason": "军工总龙头",
+                        "plates": ["军工"],
+                    },
+                    {
                         "lianban_days": 2,
                         "name": "军工二号",
                         "code": "000003",
                         "first_limit_time": "09:45",
                         "reason": "军工主升",
                         "plates": ["军工"],
+                    },
+                    {
+                        "lianban_days": 1,
+                        "name": "军工三号",
+                        "code": "000004",
+                        "first_limit_time": "10:12",
+                        "reason": "军工补涨",
+                        "plates": ["军工"],
                     }
                 ],
-                "volume_anomalies": [{"stock_name": "军工二号", "anomaly_type": "放量突破", "strength": "高", "volume_percentile": 98, "price_change": 6.5, "reason": "量价齐升"}],
-                "lhb_analysis": [{"stock_name": "军工二号", "net_buy": 1.5, "money_type": "游资", "pattern": "接力", "recent_appearances": 2, "signal_strength": "强"}],
+                "volume_anomalies": [
+                    {
+                        "stock_code": "000003",
+                        "stock_name": "军工二号",
+                        "anomaly_type": {"__enum__": "AnomalyType", "name": "VOLUME_BREAKOUT", "value": "放量突破"},
+                        "strength": "高",
+                        "volume_percentile": 98,
+                        "price_change": 0,
+                        "reason": "量价齐升",
+                    }
+                ],
+                "lhb_analysis": [
+                    {
+                        "stock_name": "军工二号",
+                        "net_buy": 1.5,
+                        "money_type": {"__enum__": "MoneyType", "name": "HOT_MONEY", "value": "游资主导"},
+                        "pattern": "接力",
+                        "recent_appearances": 2,
+                        "signal_strength": "强",
+                    }
+                ],
                 "resonance_scores": {
                     "军工": {
                         "total_score": 8.0,
                         "strength_dimensions": ["fund_flow", "limit_up"],
                         "dimension_scores": {"fund_flow": 4, "limit_up": 3, "lhb": 1},
-                        "resonance_level": "强共振",
+                        "resonance_level": {"__enum__": "ResonanceLevel", "name": "STRONG", "value": "强共振"},
+                    },
+                    "杂毛": {
+                        "total_score": 6.0,
+                        "strength_dimensions": ["lhb"],
+                        "dimension_scores": {"fund_flow": 1, "limit_up": 1, "lhb": 4},
+                        "resonance_level": {"__enum__": "ResonanceLevel", "name": "NONE", "value": "无共振"},
                     }
                 },
-                "trade_signals": [{"signal_type": "sector", "sector_name": "军工", "score": 8.5, "action": "关注", "reason": "共振最强", "risk_level": "中"}],
+                "trade_signals": [
+                    {
+                        "signal_type": {"__enum__": "SignalType", "name": "VOLUME_START", "value": "放量启动"},
+                        "sector_name": "军工",
+                        "score": 8.5,
+                        "action": "关注",
+                        "reason": "共振最强",
+                        "risk_level": "中",
+                    },
+                    SimpleNamespace(
+                        signal_type=SimpleNamespace(value="缩量回踩"),
+                        sector_name="杂毛",
+                        stock_code="",
+                        score=3.0,
+                        action="忽略",
+                        reason="无效",
+                        risk_level="高",
+                    ),
+                ],
             },
-            stock_full_info={"000003": {"change_pct": 9.9, "high": 10.0, "low": 9.1, "open": 9.2, "close": 9.9}},
+            stock_full_info={
+                "000005": {"change_pct": 10.0, "high": 11.5, "low": 10.2, "open": 10.3, "close": 11.5},
+                "000003": {"change_pct": 9.9, "high": 10.0, "low": 9.1, "open": 9.2, "close": 9.9},
+                "000004": {"change_pct": 4.8, "high": 8.6, "low": 8.0, "open": 8.1, "close": 8.4},
+            },
             get_stock_sector=lambda *args, **kwargs: "军工",
             analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("## 九、连板梯队", rendered)
-        self.assertIn("## 十、AI多维量化分析", rendered)
+        self.assertIn("## 九、连板结果", rendered)
+        self.assertNotIn("## 九、连板梯队", rendered)
+        self.assertIn("> **先看什么**: 只看高标强度、首板扩散和连板梯队有没有继续收拢。", rendered)
+        self.assertNotIn("> **数据来源**: akshare涨停池数据（支持历史日期）", rendered)
+        self.assertIn("### 3连板结果(1只)", rendered)
+        self.assertNotIn("### 【3连板】(1只)", rendered)
+        self.assertIn("### 2连板结果(1只)", rendered)
+        self.assertNotIn("### 【2连板】(1只)", rendered)
+        self.assertIn("### 首板结果(1只)", rendered)
+        self.assertNotIn("### 【首板/1连板】(1只)", rendered)
+        self.assertIn("## 十、多维交易结果", rendered)
+        self.assertNotIn("## 十、AI多维量化分析", rendered)
+        self.assertIn("> **先看什么**: 只看量能异常、龙虎榜强度和板块共振能不能转成明日动作。", rendered)
+        self.assertNotIn("> **核心升级**", rendered)
+        self.assertIn("### 1. 放量结果", rendered)
+        self.assertNotIn("### 1. 放量异常检测", rendered)
+        self.assertIn("### 2. 板块共振结果", rendered)
+        self.assertNotIn("### 2. 板块共振评分（多维加权模型）", rendered)
+        self.assertIn("### 2. 龙虎榜结果", rendered)
+        self.assertNotIn("### 2. 龙虎榜深度分析", rendered)
+        self.assertIn("### 3. 交易信号结果", rendered)
+        self.assertNotIn("### 3. AI量化交易信号", rendered)
+        self.assertIn("| 股票 | 异常类型 | 强度 | 成交量分位 | 涨跌幅 | 当前信号 |", rendered)
+        self.assertNotIn("| 股票 | 异常类型 | 强度 | 成交量分位 | 涨跌幅 | 信号说明 |", rendered)
+        self.assertIn("| 信号类型 | 板块/个股 | 得分 | 操作建议 | 当前证据 | 风险等级 |", rendered)
+        self.assertNotIn("| 信号类型 | 板块/个股 | 得分 | 操作建议 | 逻辑说明 | 风险等级 |", rendered)
+        self.assertIn("| 军工二号 | 放量突破 | 高 | 98% | +9.90% | 量价齐升 |", rendered)
+        self.assertIn("| 军工二号 | +1.50 | 游资主导 | 接力 | 2次 | 强 |", rendered)
         self.assertIn("| 军工 | 8.0 | 🔥 强共振 |", rendered)
-        self.assertIn("| sector | 军工 | 8.5 | 关注 | 共振最强 | 中 |", rendered)
+        self.assertNotIn("无共振", rendered)
+        self.assertIn("| 放量启动 | 军工 | 8.5 | 关注 | 共振最强 | 中 |", rendered)
+        self.assertNotIn("__enum__", rendered)
         self.assertTrue(any(log["step"] == "render.advanced_activity_sections" for log in result["module_logs"]))
+
+    def test_build_advanced_activity_report_sections_can_render_only_enabled_nodes(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [
+                    {
+                        "lianban_days": 3,
+                        "name": "军工龙一",
+                        "code": "000005",
+                        "first_limit_time": "09:31",
+                        "reason": "军工总龙头",
+                        "plates": ["军工"],
+                    }
+                ],
+                "volume_anomalies": [
+                    {
+                        "stock_code": "000003",
+                        "stock_name": "军工二号",
+                        "anomaly_type": {"__enum__": "AnomalyType", "name": "VOLUME_BREAKOUT", "value": "放量突破"},
+                        "strength": "高",
+                        "volume_percentile": 98,
+                        "price_change": 9.9,
+                        "reason": "量价齐升",
+                    }
+                ],
+                "lhb_analysis": [
+                    {
+                        "stock_name": "军工二号",
+                        "net_buy": 1.5,
+                        "money_type": {"__enum__": "MoneyType", "name": "HOT_MONEY", "value": "游资主导"},
+                        "pattern": "接力",
+                        "recent_appearances": 2,
+                        "signal_strength": "强",
+                    }
+                ],
+                "resonance_scores": {
+                    "军工": {
+                        "total_score": 8.0,
+                        "strength_dimensions": ["fund_flow", "limit_up"],
+                        "dimension_scores": {"fund_flow": 4, "limit_up": 3, "lhb": 1},
+                        "resonance_level": {"__enum__": "ResonanceLevel", "name": "STRONG", "value": "强共振"},
+                    }
+                },
+                "trade_signals": [
+                    {
+                        "signal_type": {"__enum__": "SignalType", "name": "VOLUME_START", "value": "放量启动"},
+                        "sector_name": "军工",
+                        "score": 8.5,
+                        "action": "关注",
+                        "reason": "共振最强",
+                        "risk_level": "中",
+                    }
+                ],
+            },
+            stock_full_info={
+                "000005": {"change_pct": 10.0, "high": 11.5, "low": 10.2, "open": 10.3, "close": 11.5},
+                "000003": {"change_pct": 9.9, "high": 10.0, "low": 9.1, "open": 9.2, "close": 9.9},
+            },
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+            enabled_node_keys=["lianban", "trade_signals"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 九、连板结果", rendered)
+        self.assertIn("### 3. 交易信号结果", rendered)
+        self.assertNotIn("### 1. 放量结果", rendered)
+        self.assertNotIn("### 2. 龙虎榜结果", rendered)
+        self.assertNotIn("### 2. 板块共振结果", rendered)
+
+    def test_build_advanced_activity_report_sections_can_render_advanced_header_without_volume_node(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [
+                    {
+                        "stock_code": "000003",
+                        "stock_name": "军工二号",
+                        "anomaly_type": "放量突破",
+                        "strength": "高",
+                        "volume_percentile": 98,
+                        "price_change": 9.9,
+                        "reason": "量价齐升",
+                    }
+                ],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+            enabled_node_keys=["advanced_header", "trade_signals"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 十、多维交易结果", rendered)
+        self.assertIn("### 3. 交易信号结果", rendered)
+        self.assertNotIn("### 1. 放量结果", rendered)
+        self.assertNotIn("| 军工二号 | 放量突破 |", rendered)
+
+    def test_build_advanced_activity_report_sections_uses_prefilled_volume_anomaly_change_when_quote_missing(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [
+                    {
+                        "stock_code": "000777",
+                        "stock_name": "异常股",
+                        "anomaly_type": "放量突破",
+                        "strength": "高",
+                        "volume_percentile": 97,
+                        "price_change": 7.8,
+                        "reason": "量价齐升",
+                    }
+                ],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 异常股 | 放量突破 | 高 | 97% | +7.80% | 量价齐升 |", rendered)
+
+    def test_build_advanced_activity_report_sections_backfills_volume_anomaly_change_from_raw_market_pools(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [{"code": "000777", "name": "异常股", "change_pct": 7.8}],
+                "zt_pool": [{"代码": "000777", "名称": "异常股", "涨跌幅": 7.8}],
+                "dt_pool": [],
+                "turnover_rank": [{"code": "sz000777", "name": "异常股", "change_pct": 7.8}],
+                "volume_anomalies": [
+                    {
+                        "stock_code": "000777",
+                        "stock_name": "异常股",
+                        "anomaly_type": "放量突破",
+                        "strength": "高",
+                        "volume_percentile": 97,
+                        "price_change": 0,
+                        "reason": "量价齐升",
+                    }
+                ],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 异常股 | 放量突破 | 高 | 97% | +7.80% | 量价齐升 |", rendered)
+
+    def test_build_advanced_activity_report_sections_uses_result_wording_for_empty_lianban_state(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**暂无连板结果**", rendered)
+        self.assertNotIn("**暂无连板梯队数据**", rendered)
+        self.assertIn("| - | - | - | - | - | 当前无放量结果 |", rendered)
+        self.assertNotIn("| - | - | - | - | - | 暂无显著放量异常 |", rendered)
+        self.assertIn("| - | - | - | - | - | 当前无龙虎榜结果 |", rendered)
+        self.assertNotIn("| - | - | - | - | - | 暂无龙虎榜数据 |", rendered)
+        self.assertIn("*暂无共振结果*", rendered)
+        self.assertNotIn("*暂无共振评分数据*", rendered)
+        self.assertIn("*当前无交易信号*", rendered)
+        self.assertNotIn("*暂无交易信号*", rendered)
+
+    def test_build_advanced_activity_report_sections_uses_result_wording_for_low_score_trade_signals(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [
+                    {
+                        "signal_type": "缩量回踩",
+                        "sector_name": "军工",
+                        "score": 3.0,
+                        "action": "忽略",
+                        "reason": "强度不足",
+                        "risk_level": "高",
+                    }
+                ],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("*当前无有效交易信号*", rendered)
+        self.assertNotIn("*暂无有效交易信号（所有信号得分均≤15）*", rendered)
+
+    def test_build_advanced_activity_report_sections_uses_result_wording_for_non_resonant_scores(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "resonance_scores": {
+                    "军工": {
+                        "total_score": 4.0,
+                        "strength_dimensions": ["fund_flow"],
+                        "dimension_scores": {"fund_flow": 4, "limit_up": 0, "lhb": 0},
+                        "resonance_level": "无共振",
+                    }
+                },
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("*当前无共振结果*", rendered)
+        self.assertNotIn("*暂无有效共振板块（所有板块得分均为0）*", rendered)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-from domains.execution_chain.step1_sections import build_step1_watch_sections
+from domains.execution_chain.step1_sections import build_step1_watch_runtime
 
 
 def _append_log(logs, step, status, message, **details):
@@ -16,7 +16,7 @@ def _append_log(logs, step, status, message, **details):
 def build_watch_pool_stage(stage_context, stage_meta, stage_lookup=None):
     stage_context = stage_context or {}
     logs = []
-    lines = build_step1_watch_sections(
+    runtime_result = build_step1_watch_runtime(
         sector_trend_snapshot_step1=stage_context.get("sector_trend_snapshot_step1", []),
         mainline_competition_snapshot=stage_context.get("mainline_competition_snapshot", []),
         leader_memory_bank=stage_context.get("leader_memory_bank", []),
@@ -31,6 +31,7 @@ def build_watch_pool_stage(stage_context, stage_meta, stage_lookup=None):
         stage_meta=stage_meta,
         stage_lookup=stage_lookup,
     )
+    lines = runtime_result["lines"]
     exports = {
         "watchlist": stage_context.get("watchlist", []),
         "abnormal_watch_pool": stage_context.get("abnormal_watch_pool", []),
@@ -48,5 +49,5 @@ def build_watch_pool_stage(stage_context, stage_meta, stage_lookup=None):
     return {
         "lines": lines,
         "exports": exports,
-        "module_logs": logs,
+        "module_logs": list(runtime_result.get("module_logs") or []) + logs,
     }

@@ -1,3 +1,70 @@
+from report.market_research_snapshot_node_registry import build_market_research_snapshot_node_specs
+from report.market_research_snapshot_node_runtime import run_market_research_snapshot_nodes
+from report.market_research_snapshot_nodes import (
+    build_market_research_snapshot_abnormal_projection_node,
+    build_market_research_snapshot_dialectical_decision_node,
+    build_market_research_snapshot_follow_verdict_node,
+    build_market_research_snapshot_footer_node,
+    build_market_research_snapshot_header_node,
+    build_market_research_snapshot_leader_memory_node,
+    build_market_research_snapshot_mainline_focus_node,
+    build_market_research_snapshot_narrative_node,
+    build_market_research_snapshot_risk_preference_node,
+    build_market_research_snapshot_rotation_node,
+    build_market_research_snapshot_state_summary_node,
+    build_market_research_snapshot_style_background_node,
+    build_market_research_snapshot_style_note_node,
+    build_market_research_snapshot_table_header_node,
+    build_market_research_snapshot_trend_density_node,
+)
+from report.step0_follow_node_registry import build_step0_follow_node_specs
+from report.step0_follow_node_runtime import run_step0_follow_nodes
+from report.step0_follow_nodes import (
+    build_step0_follow_abnormal_projection_node,
+    build_step0_follow_conclusion_node,
+    build_step0_follow_footer_node,
+    build_step0_follow_mainline_focus_node,
+    build_step0_follow_reminder_node,
+    build_step0_follow_risk_preference_node,
+    build_step0_follow_state_summary_node,
+    build_step0_follow_style_background_node,
+    build_step0_follow_table_header_node,
+    build_step0_follow_verdict_node,
+)
+
+
+MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS = {
+    "header": build_market_research_snapshot_header_node,
+    "table_header": build_market_research_snapshot_table_header_node,
+    "risk_preference": build_market_research_snapshot_risk_preference_node,
+    "mainline_focus": build_market_research_snapshot_mainline_focus_node,
+    "rotation": build_market_research_snapshot_rotation_node,
+    "narrative": build_market_research_snapshot_narrative_node,
+    "style_background": build_market_research_snapshot_style_background_node,
+    "abnormal_projection": build_market_research_snapshot_abnormal_projection_node,
+    "follow_verdict": build_market_research_snapshot_follow_verdict_node,
+    "state_summary": build_market_research_snapshot_state_summary_node,
+    "leader_memory": build_market_research_snapshot_leader_memory_node,
+    "trend_density": build_market_research_snapshot_trend_density_node,
+    "style_note": build_market_research_snapshot_style_note_node,
+    "dialectical_decision": build_market_research_snapshot_dialectical_decision_node,
+    "footer": build_market_research_snapshot_footer_node,
+}
+
+STEP0_FOLLOW_NODE_BUILDERS = {
+    "verdict": build_step0_follow_verdict_node,
+    "table_header": build_step0_follow_table_header_node,
+    "risk_preference": build_step0_follow_risk_preference_node,
+    "style_background": build_step0_follow_style_background_node,
+    "mainline_focus": build_step0_follow_mainline_focus_node,
+    "abnormal_projection": build_step0_follow_abnormal_projection_node,
+    "state_summary": build_step0_follow_state_summary_node,
+    "conclusion": build_step0_follow_conclusion_node,
+    "reminder": build_step0_follow_reminder_node,
+    "footer": build_step0_follow_footer_node,
+}
+
+
 def render_gem_breathing_step2_section(context):
     context = context or {}
     gem_observation_stocks = context.get("gem_observation_stocks") or []
@@ -44,8 +111,8 @@ def render_gem_breathing_pool_section(context):
         return []
     lines = [
         "#### Step 3.5 - 创业板20cm预启动观察池",
-        "> **核心问题**：哪些创业板20cm样本正在出现“均线粘合 + 蛇形走位 + K线呼吸感”，值得先保留观察权？",
-        "> **纪律**：这里只先进观察池，不直接给执行权；必须等后续右侧确认后，才评估是否升级到30%条件试错。",
+        "> **先看结论**：创业板20cm样本只保留观察权，不单列成独立战场。",
+        "> **只看什么**：均线粘合、蛇形走位和右侧确认。",
     ]
     if filtered_out_gem_candidates:
         filtered_text = "；".join(
@@ -69,92 +136,22 @@ def render_gem_breathing_pool_section(context):
 def render_market_research_snapshot_section(context):
     context = context or {}
     compact = bool(context.get("compact"))
-    observation = context.get("observation") or {}
-    benchmark_change = float(context.get("benchmark_change", 0) or 0)
-    turnover = float(context.get("turnover", 0) or 0)
-    if compact:
-        lines = [
-            "### 🔬 市场研究快照",
-            f"- **盘面风险偏好**: 上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / 跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿",
-            f"- **主线焦点**: {context.get('competition_result', '主线待定')}；{context.get('competition_evidence', '先看趋势密度、异常承接和资金聚焦谁先胜出')}",
-            f"- **风格背景**: {context.get('style_label', '-') }；{context.get('style_reason', '-')}",
-            f"- **异常承接证据**: {context.get('abnormal_projection_label', '-')}；{context.get('abnormal_projection_reason', '-')}",
-            f"- **明天能不能开仓**: {context.get('follow_verdict_label', '-')}；{context.get('follow_verdict_reason', '-')}",
-            f"- **统一状态判断**: {context.get('state_energy', '-')}；{context.get('state_reason', '-')}；{context.get('state_flow_direction', '-')}",
-            "",
-        ]
-        return lines
-
-    lines = [
-        "### 🔬 市场研究快照",
-        "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
-        "|----------|----------|----------|--------------|",
-        (
-            f"| 盘面风险偏好 | 热点/趋势/异常 | 上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
-            f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿 | "
-            "先看风险偏好，再决定能否继续往下判断 |"
-        ),
-        f"| 主线焦点 | {context.get('competition_result', '主线待定')} | {context.get('competition_evidence', '先看趋势密度、异常承接和资金聚焦谁先胜出')} | 优先聚焦主线对象 |",
-        f"| 主线内部轮动 | {context.get('rotation_label', '-')} | {context.get('rotation_summary_text', '-') or context.get('rotation_reason', '-')} | {context.get('rotation_action', '-')} |",
-        f"| 叙事节点 | {context.get('narrative_label', '-')} | {context.get('narrative_reason', '-')} | {context.get('narrative_action', '-')} |",
-        f"| 风格背景 | {context.get('style_label', '-')} | {context.get('style_evidence_text', '-') or context.get('style_reason', '-')} | 背景参考，不直接触发动作 |",
-        f"| 异常承接证据 | {context.get('abnormal_projection_label', '-')} | {context.get('abnormal_projection_reason', '-')} | 允许继续进入下一步判断 |",
-        f"| 明天能不能开仓 | {context.get('follow_verdict_label', '-')} | {context.get('follow_verdict_reason', '-')} | 动作锚定到“明天能不能开仓” |",
-        "",
-        f"- **统一状态判断**: {context.get('state_energy', '-')}；{context.get('state_reason', '-')}；{context.get('state_flow_direction', '-')}",
-        f"- **龙头记忆**: 已保留{observation.get('leader_memory_count', 0)}只记忆资产，其中可信记忆{observation.get('trusted_tracking_count', 0)}只",
-    ]
-    if observation.get("densest_sector"):
-        lines.append(f"- **最强趋势密度**: {observation.get('densest_sector')} 当前有{observation.get('densest_sector_trend_count', 0)}只活跃趋势股")
-    if context.get("style_reason"):
-        lines.append(f"- **风格说明**: {context.get('style_reason')}")
-    dialectical_decision = context.get("dialectical_decision") or {}
-    if dialectical_decision:
-        lines.extend(
-            [
-                "### 🧠 辩证决策补充",
-                f"- **现在更像什么阶段**: {dialectical_decision.get('stage_label', '-')}；{dialectical_decision.get('stage_reason', '-')}",
-                f"- **指数和赚钱效应是否背离**: {dialectical_decision.get('index_profit_relation', '-')}；{dialectical_decision.get('index_profit_reason', '-')}",
-                f"- **赚钱效应现在往哪聚**: {dialectical_decision.get('focus_label', '-')}；{dialectical_decision.get('focus_action', '-')}",
-                f"- **明天优先看哪类对象**: {dialectical_decision.get('candidate_focus', '-')}；{dialectical_decision.get('candidate_action', '-')}",
-                f"- **什么情况下先不认这轮修复**: {' / '.join(dialectical_decision.get('falsification_conditions', []) or ['暂无'])}",
-            ]
-        )
-    lines.append("")
-    return lines
+    node_specs = build_market_research_snapshot_node_specs(
+        MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS,
+        enabled_node_keys=context.get("enabled_node_keys"),
+        compact=compact,
+    )
+    result = run_market_research_snapshot_nodes(node_specs, context)
+    return result["lines"]
 
 
 def render_step0_follow_section(context):
     context = context or {}
-    if context.get("compact"):
-        return [
-            f"**明日裁决**: {context.get('step0_prediction_cn', '-')}",
-            f"**裁决依据**: {context.get('step0_reason', '-')}",
-            f"**开盘前动作**: {context.get('step0_action', '-')}",
-            f"**盘面风险偏好**: 上证{context.get('zt_count', 0)} / 跌停{context.get('dt_count', 0)}；{context.get('observation_summary', '-')}",
-            f"**主线焦点**: {context.get('densest_sector', '暂无明确主线')}；趋势股{context.get('densest_sector_trend_count', 0)}只",
-            f"**异常承接**: {context.get('resilient_abnormal_count', 0)}强 / {context.get('failed_abnormal_count', 0)}弱；{context.get('abnormal_projection_label', '-')}",
-            f"**最终状态判断**: {context.get('state_energy', '-') }；{context.get('state_reason', '-')}",
-            "",
-            f"> **Step 0 结论**: {context.get('step0_reason', '-')}",
-            "",
-        ]
-    lines = [
-        f"**明日裁决**: {context.get('step0_prediction_cn', '-')}",
-        f"**裁决依据**: {context.get('step0_reason', '-')}",
-        f"**开盘前动作**: {context.get('step0_action', '-')}",
-        "",
-        "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
-        "|----------|----------|----------|--------------|",
-        f"| 盘面风险偏好 | {context.get('zt_count', 0)} / {context.get('dt_count', 0)} | {context.get('observation_summary', '-')} | 先看风险偏好，再决定能否继续往下判断 |",
-        f"| 风格背景 | {context.get('style_label', '-')} | {context.get('style_reason', '-')} | 背景参考，不直接触发动作 |",
-        f"| 主线焦点 | {context.get('densest_sector', '暂无明确主线')} | 趋势密度最强方向为{context.get('densest_sector', '待确认')}，活跃趋势股{context.get('densest_sector_trend_count', 0)}只 | 优先聚焦主线对象 |",
-        f"| 异常承接证据 | {context.get('resilient_abnormal_count', 0)}强 / {context.get('failed_abnormal_count', 0)}弱 | {context.get('abnormal_projection_label', '-')} | 允许继续进入下一步判断 |",
-        f"| 最终状态判断 | {context.get('state_energy', '-')} | {context.get('state_reason', '-')} | 动作锚定到“开盘前动作” |",
-        "",
-        f"> **Step 0 结论**: {context.get('step0_reason', '-')}",
-        "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日前30分钟先确认环境，真正买点一律等60分钟K线确认；买入后再用30分钟结构定止损。",
-        "",
-        "",
-    ]
-    return lines
+    compact = bool(context.get("compact"))
+    node_specs = build_step0_follow_node_specs(
+        STEP0_FOLLOW_NODE_BUILDERS,
+        enabled_node_keys=context.get("enabled_node_keys"),
+        compact=compact,
+    )
+    result = run_step0_follow_nodes(node_specs, context)
+    return result["lines"]

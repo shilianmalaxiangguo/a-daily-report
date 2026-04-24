@@ -81,20 +81,7 @@ def _get_stock_diagnostic_output_path(target_date: str, stock_code: str, mode: s
 
 
 def _inject_report_variant_banner(report_text: str, variant: str) -> str:
-    label = "研究全量版" if variant == REPORT_VARIANT_FULL else "执行摘要版"
-    detail = (
-        "保留市场趋势、板块动向、热点结构、狙击手推导与账本回放。"
-        if variant == REPORT_VARIANT_FULL
-        else "只保留盘前最需要看的执行结论，但与全量版共用同一条正式决策链。"
-    )
-    lines = report_text.splitlines()
-    insert_at = 3 if len(lines) >= 3 else len(lines)
-    lines[insert_at:insert_at] = [
-        f"> **阅读模式**：{label}",
-        f"> **用途**：{detail}",
-        "",
-    ]
-    return "\n".join(lines)
+    return report_text
 
 
 def _render_report_with_display_mode(
@@ -105,11 +92,17 @@ def _render_report_with_display_mode(
     has_personal_positions: bool = False,
     run_mode: str = LEDGER_MODE_FROZEN,
     persist_strategy_tracking: bool = True,
+    emit_helper_diagnostics: bool = True,
+    shared_runtime_cache: dict | None = None,
 ) -> str:
     import daily_report_entry_demo as _demo
 
     original_display_mode = getattr(_demo, "DISPLAY_MVP_MODE", False)
+    original_emit_helper_diagnostics = getattr(_demo, "EMIT_HELPER_DIAGNOSTICS", True)
+    original_runtime_cache = getattr(_demo, "REPORT_RUNTIME_CACHE", None)
     _demo.DISPLAY_MVP_MODE = bool(display_mvp_mode)
+    _demo.EMIT_HELPER_DIAGNOSTICS = bool(emit_helper_diagnostics)
+    _demo.REPORT_RUNTIME_CACHE = shared_runtime_cache
     try:
         return _demo.generate_markdown_report(
             data,
@@ -121,12 +114,50 @@ def _render_report_with_display_mode(
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
+        _demo.EMIT_HELPER_DIAGNOSTICS = original_emit_helper_diagnostics
+        _demo.REPORT_RUNTIME_CACHE = original_runtime_cache
+
+
+def _sanitize_report_section_lines(lines):
+    sanitized_lines = []
+    seen_no_trade_conclusion = False
+    blocked_markers = ("为什么要看这块", "草稿解释", "判断口径", "分析目的")
+
+    for raw_line in lines:
+        line = str(raw_line or "").rstrip()
+        if any(marker in line for marker in blocked_markers):
+            continue
+        if "当前先不开新仓" in line:
+            if seen_no_trade_conclusion:
+                continue
+            seen_no_trade_conclusion = True
+        sanitized_lines.append(line)
+    return sanitized_lines
+
+
+def _sanitize_report_section_text(text):
+    return "\n".join(_sanitize_report_section_lines(str(text or "").splitlines())).strip()
 
 
 def generate_markdown_report_from_sections(sections):
     sections = sections or {}
     ordered_keys = ["preamble", "environment", "observation", "execution", "review", "summary"]
-    return "\n\n".join(str(sections.get(key, "") or "").strip() for key in ordered_keys if sections.get(key))
+    rendered_sections = []
+    seen_no_trade_conclusion = False
+    for key in ordered_keys:
+        if not sections.get(key):
+            continue
+        section_lines = []
+        for line in _sanitize_report_section_text(sections.get(key)).splitlines():
+            if "当前先不开新仓" in line:
+                if seen_no_trade_conclusion:
+                    continue
+                seen_no_trade_conclusion = True
+            section_lines.append(line)
+        section_text = "\n".join(section_lines).strip()
+        if section_text:
+            rendered_sections.append(section_text)
+    return "\n\n".join(rendered_sections)
 
 
 def _extract_sections(data):
@@ -182,6 +213,7 @@ def build_report_outputs(
     run_mode: str = LEDGER_MODE_FROZEN,
     position_report_text: str = "",
 ):
+    shared_runtime_cache = {}
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -189,7 +221,9 @@ def build_report_outputs(
         supplementary_perspective=supplementary_perspective,
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
-        persist_strategy_tracking=True,
+        persist_strategy_tracking=False,
+        emit_helper_diagnostics=True,
+        shared_runtime_cache=shared_runtime_cache,
     )
     summary_report = _render_report_with_display_mode(
         True,
@@ -199,6 +233,8 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
+        emit_helper_diagnostics=False,
+        shared_runtime_cache=shared_runtime_cache,
     )
 
     if position_report_text:

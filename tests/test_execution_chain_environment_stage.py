@@ -10,6 +10,42 @@ from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
 
 class ExecutionChainEnvironmentStageTest(unittest.TestCase):
+    def test_build_environment_follow_stage_prefers_single_stage_body_renderer(self):
+        stage_lookup = build_execution_stage_lookup(
+            [
+                {"stage_key": "environment_follow", "title": "明日环境与跟随裁决"},
+                {"stage_key": "watch_pool", "title": "明天观察池"},
+            ]
+        )
+
+        result = build_environment_follow_stage(
+            {
+                "market_research_bundle": {
+                    "watchlist": [{"name": "军工一号", "code": "000001"}],
+                    "step0_plan": {
+                        "step0_prediction": "CLEAR",
+                        "step0_prediction_cn": "🟢 跟随主线",
+                        "step0_reason": "主线承接强",
+                        "step0_action": "先看主线承接",
+                    },
+                    "market_research_snapshot": {"state_machine": {"leading_line": "军工"}},
+                },
+                "display_mvp_mode": True,
+                "render_environment_follow_stage_body": lambda bundle, compact=False: [
+                    f"combined-body compact={compact}",
+                    bundle.get("step0_plan", {}).get("step0_action", "-"),
+                ],
+            },
+            stage_lookup["environment_follow"],
+            stage_lookup,
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("combined-body compact=True", rendered)
+        self.assertIn("先看主线承接", rendered)
+        self.assertNotIn("snapshot-section", rendered)
+        self.assertNotIn("follow-section", rendered)
+
     def test_build_environment_follow_stage_renders_dynamic_heading_and_exports_bundle_fields(self):
         stage_lookup = build_execution_stage_lookup(
             [
@@ -46,7 +82,14 @@ class ExecutionChainEnvironmentStageTest(unittest.TestCase):
             stage_lookup,
         )
 
-        self.assertEqual(result["lines"][:3], ["#### Step 0 - 明日环境与跟随裁决", "> **核心问题**：今天的市场研究结果，到了明天开盘前，究竟是该跟、该等等，还是根本不该参与？", "> **重要提示**：T日收盘生成的报告，分析的是T+1日（明天）的操作。Step 0 不再单独猜市场，而是直接引用统一市场研究快照。"])
+        self.assertEqual(
+            result["lines"][:3],
+            [
+                "#### Step 0 - 明日环境与跟随裁决",
+                "> **先看结论**：直接沿用统一市场研究快照给出的明日环境裁决。",
+                "> **怎么执行**：直接按统一市场研究快照走，盘中只确认不重猜。",
+            ],
+        )
         self.assertIn("snapshot-section", result["lines"])
         self.assertIn("follow-section", result["lines"])
         self.assertEqual(result["exports"]["step0_action"], "先看主线承接")

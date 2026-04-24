@@ -99,11 +99,60 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertIn("000001", result["abnormal_watch_map"])
         self.assertNotIn("000006", result["abnormal_watch_map"])
         self.assertEqual(result["leader_memory_bank"][0]["remember_score"], 70.0)
-        self.assertEqual(len(result["gem_breathing_candidates"]), 1)
-        self.assertEqual(len(result["filtered_out_gem_breathing_candidates"]), 1)
+        self.assertEqual(len(result["gem_breathing_candidates"]), 0)
+        self.assertEqual(len(result["filtered_out_gem_breathing_candidates"]), 0)
+        self.assertEqual(len(result["gem_observation_stocks"]), 0)
         self.assertEqual(result["market_state_snapshot"]["leading_line"], "军工")
         self.assertEqual(result["step0_plan"]["step0_prediction_cn"], "🟢 跟随主线")
         self.assertTrue(any(log["step"] == "build.market_snapshot" for log in result["module_logs"]))
+        self.assertTrue(any(log["step"] == "build.gem_breathing" and log["status"] == "skipped" for log in result["module_logs"]))
+
+    def test_build_market_research_context_bundle_contract_skips_gem_discovery_in_display_safe_mode(self):
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {},
+                "dt_pool_by_sector": {},
+                "zt_pool": [],
+                "hot_rank_top30": [],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-04-22",
+            exit_analysis={"sector_name": "军工", "risk_sectors": []},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda *args, **kwargs: [],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": (_ for _ in ()).throw(AssertionError("display-safe render should not fetch gem breathing candidates")),
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {},
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {"leading_line": "军工"},
+                "abnormal_projection": {"projection_label": "强化"},
+                "observation": observation_snapshot or {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {
+                "step0_prediction_cn": "🟢 跟随主线"
+            },
+        )
+
+        self.assertEqual(result["gem_breathing_candidates"], [])
+        self.assertEqual(result["filtered_out_gem_breathing_candidates"], [])
+        self.assertEqual(result["gem_observation_stocks"], [])
 
 
 if __name__ == "__main__":

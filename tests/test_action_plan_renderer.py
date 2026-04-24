@@ -59,13 +59,45 @@ class ActionPlanRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("#### Step 5 - 明日操作计划", rendered)
+        self.assertIn("#### 明日操作计划", rendered)
+        self.assertIn("> **先看结论**：明天只执行唯一动作，或者只观察。", rendered)
+        self.assertIn("> **怎么执行**：按盘前、开盘、首个60分钟、盘中、尾盘顺序，不临场改单。", rendered)
         self.assertIn("| 👀 明天先盯哪只 | 军工观察 | 000002 |", rendered)
-        self.assertIn("**Step 5.2 明天仓位怎么放**:", rendered)
+        self.assertIn("**明天仓位怎么放**:", rendered)
         self.assertIn("**盘前准备（08:30-09:15）**:", rendered)
         self.assertIn("**开盘前30分钟（09:30-10:00）**:", rendered)
         self.assertIn("**⚠️ 异动预警**:", rendered)
         self.assertIn("| 军工观察(000002) | 2天 | +3.00% | - | 待观察 |", rendered)
+        self.assertNotIn("为什么这样排", rendered)
+
+    def test_render_action_plan_section_can_render_only_enabled_nodes(self):
+        lines = render_action_plan_section(
+            {
+                "action_rows": [
+                    {
+                        "action": "🔥 唯一买入",
+                        "name": "军工一号",
+                        "code": "000001",
+                        "trigger": "明日首个60分钟站上10.50",
+                        "risk_window": "预估9.50 / 1-3天",
+                    }
+                ],
+                "position_section_lines": [
+                    "- **市场环境档位**: 三档（进攻档）",
+                ],
+                "pre_market_lines": [
+                    "- 设价格预警",
+                ],
+                "enabled_node_keys": ["overview", "action_table", "positioning"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("#### 明日操作计划", rendered)
+        self.assertIn("**最终动作表**（只展示真正可执行对象）:", rendered)
+        self.assertIn("**明天仓位怎么放**:", rendered)
+        self.assertNotIn("**明日执行时间表**:", rendered)
+        self.assertNotIn("**⚠️ 异动预警**:", rendered)
 
 
 if __name__ == "__main__":

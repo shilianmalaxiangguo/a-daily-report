@@ -1,3 +1,9 @@
+__all__ = [
+    "build_candidate_bundle_contract",
+    "build_step2_candidate_bundle",
+]
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -171,3 +177,36 @@ def build_candidate_bundle_contract(
         "extreme_conviction_list": extreme_conviction_list,
         "module_logs": logs,
     }
+
+
+def build_step2_candidate_bundle(
+    data,
+    exit_analysis,
+    candidates,
+    watchlist,
+    abnormal_watch_map,
+    dragon_stocks,
+    zt_pool_by_sector=None,
+    gem_breathing_candidates=None,
+    target_date="",
+    *,
+    helpers=None,
+):
+    helpers = helpers or {}
+    return build_candidate_bundle_contract(
+        data,
+        exit_analysis,
+        candidates,
+        watchlist,
+        abnormal_watch_map,
+        dragon_stocks,
+        zt_pool_by_sector=zt_pool_by_sector,
+        gem_breathing_candidates=gem_breathing_candidates,
+        target_date=target_date,
+        normalize_stock_code=helpers["normalize_stock_code"],
+        get_abnormal_rank_adjustment=helpers["get_abnormal_rank_adjustment"],
+        split_candidates_by_mainline=helpers["split_candidates_by_mainline"],
+        build_gem_observation_pool=helpers["build_gem_observation_pool"],
+        build_sector_trend_snapshot=helpers["build_sector_trend_snapshot"],
+        build_extreme_conviction_list=helpers["build_extreme_conviction_list"],
+    )

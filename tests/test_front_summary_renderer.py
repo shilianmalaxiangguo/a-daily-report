@@ -5,10 +5,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.front_summary_renderer import render_front_digest, render_mvp_focus_summary
+from report.front_summary_renderer import render_front_digest, render_front_summary_sections, render_mvp_focus_summary
 
 
 class FrontSummaryRendererTest(unittest.TestCase):
+    def test_render_front_summary_sections_can_render_only_enabled_nodes(self):
+        lines = render_front_summary_sections(
+            {
+                "front_digest": {
+                    "headline": "先观察",
+                    "state_text": "防守观察",
+                    "mainline_label": "主线待确认",
+                    "style_action_text": "先看量能",
+                    "risk_parts": ["跌停3只"],
+                    "can_open_text": "不开新仓",
+                },
+                "mvp_focus": {
+                    "special_probe_text": "军工一号(000001)",
+                    "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                },
+                "enabled_node_keys": ["mvp_focus"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 🎯 明日MVP摘要", rendered)
+        self.assertNotIn("### 🧭 前台摘要", rendered)
+
     def test_render_front_digest_outputs_full_contract_summary(self):
         lines = render_front_digest(
             {
@@ -37,10 +60,29 @@ class FrontSummaryRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 🧭 前台摘要", rendered)
         self.assertIn("- **先说结论**: 只买军工一号，60分钟确认后执行", rendered)
-        self.assertIn("- **底层逻辑**: 先选边站队，再等确认", rendered)
+        self.assertIn("- **执行依据**: 先选边站队，再等确认", rendered)
         self.assertIn("- **弱转强先看谁**: 军工一号的弱转强确认最完整", rendered)
         self.assertIn("- **现在更像哪个阶段**: 主升试错段；只做主线强者", rendered)
         self.assertIn("- **怎么执行**: 日线定环境，60分钟定买点，30分钟定止损", rendered)
+        self.assertNotIn("底层逻辑", rendered)
+
+    def test_render_front_digest_uses_action_label_for_inactive_weak_to_strong(self):
+        lines = render_front_digest(
+            {
+                "headline": "先观察",
+                "state_text": "防守观察",
+                "mainline_label": "军工",
+                "weak_to_strong_active": False,
+                "weak_to_strong_summary_text": "当前没有符合条件的弱转强对象",
+                "style_action_text": "先看量能",
+                "risk_parts": ["跌停3只"],
+                "can_open_text": "不开新仓",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **弱转强先不做**: 当前没有符合条件的弱转强对象", rendered)
+        self.assertNotIn("弱转强为什么先不做", rendered)
 
     def test_render_front_digest_compact_keeps_only_key_markers(self):
         lines = render_front_digest(

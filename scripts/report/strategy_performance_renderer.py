@@ -1,3 +1,8 @@
+from report.strategy_performance_node_registry import build_strategy_performance_node_specs
+from report.strategy_performance_node_runtime import run_strategy_performance_nodes
+from report.monitoring_pool_nodes import render_monitoring_pool_nodes
+
+
 def render_strategy_performance_section(performance_summary, helpers):
     if not performance_summary:
         return []
@@ -288,7 +293,7 @@ def render_strategy_performance_section(performance_summary, helpers):
         lines.append(f"- **EV回顾**: {self_calibration.get('ev_comment')}")
     suggestions = self_calibration.get("suggestions", []) or []
     if suggestions:
-        lines.extend(["", "| 模块 | 当前判断 | 为什么 | 下步动作 |", "|------|----------|--------|----------|"])
+        lines.extend(["", "| 模块 | 当前判断 | 当前证据 | 下步动作 |", "|------|----------|----------|----------|"])
         for item in suggestions:
             lines.append(
                 f"| {item.get('area', '-')} | {item.get('bias', '-')} | {item.get('why', '-') or '-'} | {item.get('action', '-') or '-'} |"
@@ -342,4 +347,40 @@ def render_strategy_performance_section(performance_summary, helpers):
         for item in next_actions:
             lines.append(f"- {item}")
     lines.append("")
+
+    monitoring_result = render_monitoring_pool_nodes({"performance_summary": performance_summary})
+    monitoring_lines = monitoring_result.get("lines", []) or []
+    if monitoring_lines:
+        lines.extend(monitoring_lines)
     return lines
+
+
+def _render_strategy_performance_header_node(context, node_meta=None, node_lookup=None):
+    performance_summary = context.get("performance_summary") or {}
+    if not performance_summary:
+        return {"lines": [], "exports": {}, "module_logs": []}
+    return {"lines": ["## 十五、策略计划账本", ""], "exports": {}, "module_logs": []}
+
+
+def _render_strategy_performance_body_node(context, node_meta=None, node_lookup=None):
+    performance_summary = context.get("performance_summary") or {}
+    helpers = context.get("helpers") or {}
+    lines = render_strategy_performance_section(performance_summary, helpers)
+    if lines[:2] == ["## 十五、策略计划账本", ""]:
+        lines = lines[2:]
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+STRATEGY_PERFORMANCE_NODE_BUILDERS = {
+    "header": _render_strategy_performance_header_node,
+    "body": _render_strategy_performance_body_node,
+}
+
+
+def render_strategy_performance_nodes(context):
+    context = context or {}
+    node_specs = build_strategy_performance_node_specs(
+        STRATEGY_PERFORMANCE_NODE_BUILDERS,
+        enabled_node_keys=context.get("enabled_node_keys"),
+    )
+    return run_strategy_performance_nodes(node_specs, context)

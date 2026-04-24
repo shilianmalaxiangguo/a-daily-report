@@ -29,10 +29,10 @@ class TradingPhilosophyModuleTest(unittest.TestCase):
         rendered = "\n".join(lines)
 
         self.assertIn("# 2026-04-22 A股日报", rendered)
-        self.assertIn("## 🧭 交易理念底线", rendered)
-        self.assertIn("## 🎯 策略定位与能力边界", rendered)
-        self.assertIn("卫宫切嗣式", rendered)
-        self.assertIn("今天是研究、等待、执行还是退出", rendered)
+        self.assertNotIn("交易理念底线", rendered)
+        self.assertNotIn("策略定位与能力边界", rendered)
+        self.assertNotIn("实验重放模式", rendered)
+        self.assertNotIn("真实持仓", rendered)
 
 
 if __name__ == "__main__":

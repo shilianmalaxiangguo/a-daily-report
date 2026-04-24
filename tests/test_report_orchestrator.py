@@ -147,4 +147,4 @@ class ReportOrchestratorTest(unittest.TestCase):
         self.assertIn("环境放行", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
         self.assertIn("#", ctx["rendered"]["markdown_document"])
         self.assertIn("watch_only", ctx["rendered"]["markdown_document"])
-        self.assertIn("交易理念底线", ctx["rendered"]["markdown_document"])
+        self.assertNotIn("交易理念底线", ctx["rendered"]["markdown_document"])

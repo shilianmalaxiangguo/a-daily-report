@@ -1,7 +1,9 @@
+import subprocess
 import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -13,7 +15,158 @@ from diagnostics.single_stock_runtime import (
 )
 
 
+def _run_legacy_entry_probe(script_body):
+    stub_setup = """
+import sys
+import types
+
+def _stub_module(name, **attrs):
+    module = types.ModuleType(name)
+    for key, value in attrs.items():
+        setattr(module, key, value)
+    return module
+
+sys.path.insert(0, {scripts_path!r})
+sys.modules.update(
+    {{
+        "data_collector": _stub_module("data_collector", AShareDataCollector=type("AShareDataCollector", (), {{}})),
+        "ths_hot_stock": _stub_module(
+            "ths_hot_stock",
+            fetch_ths_hot_stock=lambda *args, **kwargs: [],
+            fetch_hot_stock_with_fallback=lambda *args, **kwargs: [],
+        ),
+        "ths_hot_list": _stub_module("ths_hot_list", fetch_hot_plate=lambda *args, **kwargs: []),
+        "tencent_finance_data": _stub_module("tencent_finance_data", TencentFinanceData=type("TencentFinanceData", (), {{}})),
+        "xuangubao_intraday": _stub_module(
+            "xuangubao_intraday",
+            XuangubaoIntradayAnalyzer=type("XuangubaoIntradayAnalyzer", (), {{}}),
+        ),
+        "limit_up_down_pool": _stub_module(
+            "limit_up_down_pool",
+            get_limit_up_pool=lambda *args, **kwargs: ([], set()),
+            get_limit_down_pool=lambda *args, **kwargs: ([], set()),
+            mark_limit_status=lambda *args, **kwargs: {{}},
+        ),
+        "strong_stock_pool": _stub_module(
+            "strong_stock_pool",
+            get_strong_stock_pool=lambda *args, **kwargs: [],
+            analyze_strong_stocks_by_sector=lambda *args, **kwargs: {{}},
+        ),
+        "data_validator": _stub_module("data_validator", DataValidator=type("DataValidator", (), {{}})),
+        "quantitative_analyzer": _stub_module(
+            "quantitative_analyzer",
+            VolumeAnomalyDetector=type("VolumeAnomalyDetector", (), {{}}),
+            LHBAnalyzer=type("LHBAnalyzer", (), {{}}),
+            ResonanceAnalyzer=type("ResonanceAnalyzer", (), {{}}),
+            SignalGenerator=type("SignalGenerator", (), {{}}),
+            analyze_volume_anomaly=lambda *args, **kwargs: {{}},
+            analyze_lhb=lambda *args, **kwargs: {{}},
+            calculate_resonance=lambda *args, **kwargs: {{}},
+            generate_trade_signals=lambda *args, **kwargs: {{}},
+        ),
+        "hot_list_integrated": _stub_module(
+            "hot_list_integrated",
+            get_integrated_hot_list=lambda *args, **kwargs: {{}},
+            analyze_sector_distribution=lambda *args, **kwargs: {{}},
+        ),
+        "history_cache": _stub_module(
+            "history_cache",
+            get_cache=lambda *args, **kwargs: {{}},
+            HistoryCache=type("HistoryCache", (), {{}}),
+        ),
+        "llm_service": _stub_module("llm_service", get_llm_service=lambda *args, **kwargs: None),
+    }}
+)
+""".format(scripts_path=str(ROOT / "scripts"))
+
+    result = subprocess.run(
+        [sys.executable, "-c", stub_setup + "\n" + script_body],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    return result
+
+
 class SingleStockRuntimeTest(unittest.TestCase):
+    def _load_runtime_module(self):
+        try:
+            return __import__("diagnostics.single_stock_runtime", fromlist=["single_stock_runtime"])
+        except ModuleNotFoundError as error:
+            self.fail(f"diagnostics.single_stock_runtime should exist: {error}")
+
+    def test_legacy_single_stock_wrappers_delegate_to_runtime(self):
+        result = _run_legacy_entry_probe(
+            """
+import daily_report_entry_demo
+from unittest.mock import patch
+
+snapshot_payload = {"code": "000001", "name": "军工一号"}
+
+with patch.object(daily_report_entry_demo, "run_resolve_single_stock_snapshot", return_value=snapshot_payload) as resolve_mock, \
+     patch.object(daily_report_entry_demo, "run_generate_single_stock_diagnostic_markdown", return_value="# stock") as markdown_mock:
+    snapshot = daily_report_entry_demo.resolve_single_stock_snapshot(
+        {"target_date": "2026-04-22"},
+        "000001",
+        stock_name="军工一号",
+        market_research_bundle={"watchlist": []},
+        step2_bundle={"evaluated_stocks": []},
+    )
+    markdown = daily_report_entry_demo.generate_single_stock_diagnostic_markdown(
+        {"target_date": "2026-04-22"},
+        "2026-04-22",
+        "000001",
+        stock_name="军工一号",
+        run_mode="replay",
+    )
+
+assert resolve_mock.call_args[0][1] == "000001"
+assert resolve_mock.call_args.kwargs["stock_name"] == "军工一号"
+assert "helpers" in resolve_mock.call_args.kwargs
+assert markdown_mock.call_args[0][:3] == ({"target_date": "2026-04-22"}, "2026-04-22", "000001")
+assert markdown_mock.call_args.kwargs["stock_name"] == "军工一号"
+assert markdown_mock.call_args.kwargs["run_mode"] == "replay"
+assert "helpers" in markdown_mock.call_args.kwargs
+assert snapshot == snapshot_payload
+assert markdown == "# stock"
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_single_stock_runtime_wrappers_expose_helper_bindings(self):
+        runtime = self._load_runtime_module()
+        exec(
+            """
+def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', run_mode='frozen'):
+    return runtime_test_helper(target_date, stock_name, normalize_stock_code(stock_code), run_mode)
+""",
+            runtime.__dict__,
+        )
+
+        with patch(
+            "diagnostics.single_stock_runtime._generate_single_stock_diagnostic_markdown_legacy_body",
+            runtime._single_stock_markdown_probe,
+        ):
+            result = runtime.generate_single_stock_diagnostic_markdown(
+                {"target_date": "2026-04-22"},
+                "2026-04-22",
+                "1",
+                stock_name="军工一号",
+                run_mode="replay",
+                helpers={
+                    "runtime_test_helper": lambda target_date, stock_name, stock_code, run_mode: (
+                        target_date,
+                        stock_name,
+                        stock_code,
+                        run_mode,
+                    ),
+                    "normalize_stock_code": lambda code: str(code).zfill(6),
+                },
+            )
+
+        self.assertEqual(result, ("2026-04-22", "军工一号", "000001", "replay"))
+
     def test_resolve_single_stock_snapshot_contract_merges_watchlist_hit(self):
         result = resolve_single_stock_snapshot_contract(
             data={

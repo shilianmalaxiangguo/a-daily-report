@@ -84,15 +84,7 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
 
     stage_label = str((stage_meta or {}).get("label", "") or "Step 5").strip() or "Step 5"
 
-    lines = [
-        f"#### {stage_label} - PK决胜局（期望值模型）",
-        "> **核心问题**：真正允许出手时，只能买一只，谁的期望值(EV)最高？",
-        "> **PK公式**: EV = 成功率 × 盈利空间 - 失败率 × 亏损空间",
-        "> **纪律补充**: 只有执行权候选才允许进入PK；观察权候选一律留在观察层。",
-        "> **止损口径**: EV暂按日报大概止损放哪测算；次日真实执行以30分钟结构止损为准，最晚不超过单笔-5%。",
-        "> **EV校准**: 优先使用历史策略账本中的同类信号结果校准成功率/赚赔比；参考记录不够时回退到类型先验。",
-        "",
-    ]
+    lines = []
 
     trade_gate_open = final_gate.get("can_new_entry", False)
     ev_calibration = build_strategy_ev_calibration(target_date, ledger_mode=run_mode)
@@ -456,7 +448,6 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
     observation_lines = []
     if not trade_gate_open:
         if display_observation_candidates:
-            observation_lines.append(f"**⛔ 当前先不开新仓**: {position_level}，本轮不做PK出手结论。")
             if len(display_observation_candidates) >= 2:
                 observation_lines.append(f"**先看谁排第几**（{len(display_observation_candidates)}只，优先盯强分歧但没坏的对象）:")
                 observation_lines.append("| 股票 | 来源 | 买点 | 60分钟确认点 | 先看顺序 | 说明 |")
@@ -503,19 +494,13 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
                     observation_lines.append(f"- **价格怎么盯**: {observation_price_focus_text}")
                 if should_surface_price_note(price_focus):
                     observation_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(price_focus)}")
-                observation_lines.append(f"- **EV校准**: {top_watch.get('ev_model_source', '类型先验')}")
+                observation_lines.append(f"- **参考依据**: {top_watch.get('ev_model_source', '类型先验')}")
                 observation_lines.append("- **观察纪律**: 只记录是否继续走强，不构成明日买入指令")
             observation_lines.append("")
         else:
-            observation_lines.extend(
-                [
-                    f"**⛔ 当前先不开新仓**: {position_level}，本轮不做PK出手结论。",
-                    "**无执行权候选**: 当前没有进入执行层的标的，只保留观察池",
-                    "",
-                ]
-            )
+            observation_lines.extend(["**无执行权候选**: 当前没有进入执行层的标的，只保留观察池", ""])
 
-    conclusion_lines = [f"**{stage_label} 结论**:"]
+    conclusion_lines = ["**结论**:"]
     if best_stock:
         signal = best_stock.get("signal")
         if signal:
@@ -544,7 +529,7 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
             conclusion_lines.append(f"- **价格怎么盯**: {price_focus.get('compact_text', '-')}")
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
-            conclusion_lines.append(f"- **成功率是按什么算的**: {best_stock.get('ev_model_source', '类型先验')}")
+            conclusion_lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
             conclusion_lines.append("- **出手时怎么做**: 明日仅在60分钟确认后买入，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
         else:
             conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
@@ -574,7 +559,7 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
             if trade_gate_open:
                 conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
             else:
-                conclusion_lines.append(f"- **为什么先不买**: {position_level}，当前只允许观察，不允许新买入")
+                conclusion_lines.append(f"- **当前先不买**: {position_level}，当前只允许观察，不允许新买入")
         else:
             conclusion_lines.append("- **明天先怎么观察**: 空仓观望")
     conclusion_lines.append("")
@@ -585,6 +570,8 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
                 "decision_stack_order_text": decision_stack_order_text,
                 "scored_executable_stocks": scored_executable_stocks,
                 "pk_candidates": pk_candidates,
+                "stage_label": stage_label,
+                "stage_title": "PK决胜局（期望值模型）",
                 "trade_gate_open": trade_gate_open,
                 "position_level": position_level,
                 "pending_lines": pending_lines,
@@ -891,6 +878,7 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
     lines.extend(
         render_action_plan_section(
             {
+                "section_title": "明日操作计划",
                 "action_rows": action_rows,
                 "observation_priority_lines": observation_priority_lines,
                 "backup_observation_lines": backup_observation_lines,

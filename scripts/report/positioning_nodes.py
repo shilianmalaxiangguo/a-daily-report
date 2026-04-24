@@ -1,0 +1,227 @@
+from report.positioning_node_registry import build_positioning_node_specs
+from report.positioning_node_runtime import run_positioning_nodes
+
+
+def _compact(context):
+    return bool(context.get("compact"))
+
+
+def _signal(context):
+    return ((context.get("market_zhongshu") or {}).get("signal") or {})
+
+
+def _success(context):
+    return bool(((context.get("market_zhongshu") or {}).get("success")))
+
+
+def _has_current_signal(context):
+    market_zhongshu = context.get("market_zhongshu") or {}
+    return bool(market_zhongshu.get("current_zhongshu")) and bool(market_zhongshu.get("signal"))
+
+
+def _environment_emoji(display_position_level):
+    if "进攻" in str(display_position_level or ""):
+        return "🟢"
+    if "空仓" in str(display_position_level or ""):
+        return "🔴"
+    return "🟡"
+
+
+def build_positioning_header_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["## 📈 明天仓位怎么放（基于日线结构中枢）", ""], "exports": {}, "module_logs": []}
+
+
+def build_positioning_execution_framework_node(context, node_meta=None, node_lookup=None):
+    get_execution_framework_text = context.get("get_execution_framework_text")
+    framework_text = get_execution_framework_text() if callable(get_execution_framework_text) else "-"
+    return {"lines": [f"**怎么执行**：{framework_text}"], "exports": {}, "module_logs": []}
+
+
+def build_positioning_structure_note_node(context, node_meta=None, node_lookup=None):
+    return {
+        "lines": ["> **说明**：这里的“结构中枢”是缠论启发版的日线价格结构工具，不是严格笔/线段缠论。它只负责环境过滤、仓位判断和能不能开仓。"],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_positioning_intraday_note_node(context, node_meta=None, node_lookup=None):
+    return {
+        "lines": [
+            "> **真到盘中怎么做**：日报这里只做盘前预案。明日先看前30分钟环境是否匹配，再等首个60分钟K线确认买点，买入后再用30分钟结构刷新止损。",
+            "",
+        ],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_positioning_environment_status_node(context, node_meta=None, node_lookup=None):
+    if not _success(context) or not _has_current_signal(context):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    signal = _signal(context)
+    lines = [
+        f"### {_environment_emoji(context.get('display_position_level'))} 明日市场环境：{context.get('display_position_level', '')} / {context.get('display_operation_state', '')}",
+        "",
+        f"**大盘状态**：{signal.get('status', '未知')}",
+        f"**信号类型**：{signal.get('signal_type', '未知')}",
+    ]
+    if signal.get("comparison_result"):
+        lines.append(f"**结构对比结果**：{signal['comparison_result']}")
+    lines.append("")
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def build_positioning_structure_range_node(context, node_meta=None, node_lookup=None):
+    if not _success(context) or not _has_current_signal(context):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    market_zhongshu = context.get("market_zhongshu") or {}
+    signal = market_zhongshu.get("signal") or {}
+    current = market_zhongshu.get("current_zhongshu") or {}
+    latest_structure_segment = market_zhongshu.get("latest_structure_segment") or {}
+    zone_label = "最近确认结构区间" if latest_structure_segment.get("segment_type") == "connector" else "当前结构区间"
+    lines = [
+        f"- **{zone_label}**：[{signal.get('zd', 0):.2f}, {signal.get('zg', 0):.2f}]",
+        f"- **今日收盘**：{signal.get('today_price', 0):.2f}",
+        f"- **相对ZG**：{float(signal.get('dist_to_zg', 0) or 0) * 100:+.2f}%",
+    ]
+    if current:
+        lines.append(f"- **最近确认中枢**：{current.get('start_date', '-')}~{current.get('end_date', '-')}")
+    if latest_structure_segment.get("segment_type") == "connector":
+        lines.append(
+            f"- **最新历史结构**：{latest_structure_segment.get('start_date', '-')}~{latest_structure_segment.get('end_date', '-')} 为过渡结构（{latest_structure_segment.get('kline_count', 0)}根K线）"
+        )
+    lines.append("")
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def build_positioning_ascii_diagram_node(context, node_meta=None, node_lookup=None):
+    if _compact(context) or not context.get("ascii_diagram"):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    return {
+        "lines": ["**ASCII结构图**：", "```text", str(context.get("ascii_diagram", "")), "```", ""],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_positioning_state_basis_node(context, node_meta=None, node_lookup=None):
+    if not _success(context) or not _has_current_signal(context):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    return {
+        "lines": [
+            f"**状态依据**：{context.get('display_position_reason', '')}",
+            "**执行说明**：这里的档位只代表环境是否放行，不代表已经有可买标的；真正能不能买，要看后文有没有缩到一只可买股。",
+            "",
+        ],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_positioning_structure_overview_node(context, node_meta=None, node_lookup=None):
+    if not (_success(context) and _has_current_signal(context) and _compact(context)):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    zhongshu_list = (context.get("market_zhongshu") or {}).get("zhongshu_list") or []
+    return {
+        "lines": [f"- **结构识别概览**：历史共识别 {len(zhongshu_list)} 个结构中枢；当前只跟踪最近确认中枢与尾部过渡。", ""],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_positioning_zhongshu_table_node(context, node_meta=None, node_lookup=None):
+    if not (_success(context) and _has_current_signal(context) and not _compact(context)):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    market_zhongshu = context.get("market_zhongshu") or {}
+    zhongshu_list = market_zhongshu.get("zhongshu_list") or []
+    if not zhongshu_list:
+        return {"lines": [], "exports": {}, "module_logs": []}
+    signal = market_zhongshu.get("signal") or {}
+    latest_structure_segment = market_zhongshu.get("latest_structure_segment") or {}
+    lines = [
+        f"**识别出 {len(zhongshu_list)} 个结构中枢**：",
+        "| 结构中枢 | 时间区间 | ZG | ZD | 性质 |",
+        "|------|----------|-----|-----|------|",
+    ]
+    for i, zs in enumerate(zhongshu_list):
+        is_current = i == len(zhongshu_list) - 1
+        if is_current:
+            status = signal.get("status", "")
+            if latest_structure_segment.get("segment_type") == "connector":
+                nature = f"**最近确认结构中枢**（后续过渡结构延伸至{latest_structure_segment.get('end_date', '-')}）"
+            elif "突破中枢" in status:
+                nature = "**当前结构中枢**（🔥今日突破）"
+            elif "跌破并落入下中枢区间" in status:
+                nature = "**当前结构中枢**（🚨今日暴跌·已落入下一中枢）"
+            elif "跌破中枢" in status:
+                nature = "**当前结构中枢**（⚠️今日跌破·空仓观望）"
+            else:
+                nature = "**当前结构中枢**"
+        else:
+            nature = "已完成"
+        lines.append(f"| 第{i+1}结构中枢 | {zs.get('start_date', '-')}~{zs.get('end_date', '-')} | {float(zs.get('zg', 0) or 0):.2f} | {float(zs.get('zd', 0) or 0):.2f} | {nature} |")
+    lines.append("")
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def build_positioning_connector_segments_node(context, node_meta=None, node_lookup=None):
+    if not (_success(context) and _has_current_signal(context) and not _compact(context)):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    structure_segments = (context.get("market_zhongshu") or {}).get("structure_segments") or []
+    connector_segments = [segment for segment in structure_segments if segment.get("segment_type") == "connector"]
+    if not connector_segments:
+        return {"lines": [], "exports": {}, "module_logs": []}
+    role_map = {
+        "leading": "前置过渡",
+        "between": "中枢间过渡",
+        "trailing": "尾部过渡",
+    }
+    lines = ["**过渡结构保留**：", "| 过渡结构 | 时间区间 | K线数 | 角色 |", "|--------|----------|-------|------|"]
+    for idx, seg in enumerate(connector_segments[-3:], 1):
+        lines.append(
+            f"| 第{idx}过渡结构 | {seg.get('start_date', '-')}~{seg.get('end_date', '-')} | {seg.get('kline_count', 0)} | {role_map.get(seg.get('connector_role', ''), '过渡结构')} |"
+        )
+    lines.append("")
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def build_positioning_error_state_node(context, node_meta=None, node_lookup=None):
+    if _success(context) and _has_current_signal(context):
+        return {"lines": [], "exports": {}, "module_logs": []}
+    if _success(context):
+        lines = ["> **⚠️ 大盘中枢分析**：数据异常，请查看详细分析", ""]
+    else:
+        lines = ["> **⚠️ 大盘中枢分析**：数据获取失败，基于情绪指标判断仓位", ""]
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def build_positioning_footer_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["---", ""], "exports": {}, "module_logs": []}
+
+
+POSITIONING_NODE_BUILDERS = {
+    "header": build_positioning_header_node,
+    "execution_framework": build_positioning_execution_framework_node,
+    "structure_note": build_positioning_structure_note_node,
+    "intraday_note": build_positioning_intraday_note_node,
+    "environment_status": build_positioning_environment_status_node,
+    "structure_range": build_positioning_structure_range_node,
+    "ascii_diagram": build_positioning_ascii_diagram_node,
+    "state_basis": build_positioning_state_basis_node,
+    "structure_overview": build_positioning_structure_overview_node,
+    "zhongshu_table": build_positioning_zhongshu_table_node,
+    "connector_segments": build_positioning_connector_segments_node,
+    "error_state": build_positioning_error_state_node,
+    "footer": build_positioning_footer_node,
+}
+
+
+def render_positioning_section(context):
+    context = context or {}
+    node_specs = build_positioning_node_specs(
+        POSITIONING_NODE_BUILDERS,
+        enabled_node_keys=context.get("enabled_node_keys"),
+    )
+    result = run_positioning_nodes(node_specs, context)
+    return result["lines"]

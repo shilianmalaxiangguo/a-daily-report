@@ -1,3 +1,7 @@
+from report.front_summary_node_registry import build_front_summary_node_specs
+from report.front_summary_node_runtime import run_front_summary_nodes
+
+
 def render_front_digest(context):
     context = context or {}
     risk_parts = context.get("risk_parts") or []
@@ -12,7 +16,7 @@ def render_front_digest(context):
     if context.get("philosophy_constraint_text"):
         lines.append(f"- **理念约束**: {context.get('philosophy_constraint_text')}")
     if context.get("contract_logic_text"):
-        lines.append(f"- **底层逻辑**: {context.get('contract_logic_text')}")
+        lines.append(f"- **执行依据**: {context.get('contract_logic_text')}")
     if context.get("alignment_pool_text"):
         lines.append(f"- **方向站队池**: {context.get('alignment_pool_text')}")
     if context.get("rotation_summary_text"):
@@ -20,7 +24,7 @@ def render_front_digest(context):
     if context.get("rotation_narrative_text"):
         lines.append(f"- **叙事节点**: {context.get('rotation_narrative_text')}")
     if context.get("weak_to_strong_summary_text"):
-        prefix = "弱转强先看谁" if context.get("weak_to_strong_active") else "弱转强为什么先不做"
+        prefix = "弱转强先看谁" if context.get("weak_to_strong_active") else "弱转强先不做"
         lines.append(f"- **{prefix}**: {context.get('weak_to_strong_summary_text')}")
     lines.extend(
         [
@@ -99,7 +103,7 @@ def render_mvp_focus_summary(context):
             "龙头回看名单",
             "创业板20cm预启动",
             "弱转强先看谁",
-            "弱转强为什么先不做",
+            "弱转强先不做",
             "明天能不能开仓",
             "观察周期",
             "介入周期",
@@ -110,3 +114,30 @@ def render_mvp_focus_summary(context):
         lines = [line for line in lines if line.startswith("###") or any(marker in line for marker in keep_markers)]
     lines.append("")
     return lines
+
+
+def _build_front_digest_node(context, node_meta=None, node_lookup=None):
+    return {"lines": render_front_digest(context.get("front_digest", {}) or {}), "exports": {}, "module_logs": []}
+
+
+def _build_mvp_focus_node(context, node_meta=None, node_lookup=None):
+    return {"lines": render_mvp_focus_summary(context.get("mvp_focus", {}) or {}), "exports": {}, "module_logs": []}
+
+
+FRONT_SUMMARY_NODE_BUILDERS = {
+    "front_digest": _build_front_digest_node,
+    "mvp_focus": _build_mvp_focus_node,
+}
+
+
+def build_front_summary_sections_result(context):
+    context = context or {}
+    node_specs = build_front_summary_node_specs(
+        FRONT_SUMMARY_NODE_BUILDERS,
+        enabled_node_keys=context.get("enabled_node_keys"),
+    )
+    return run_front_summary_nodes(node_specs, context)
+
+
+def render_front_summary_sections(context):
+    return build_front_summary_sections_result(context).get("lines", [])

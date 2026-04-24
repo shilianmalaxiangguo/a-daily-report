@@ -93,7 +93,7 @@ def run(ctx):
 
     build_legacy_final_conclusion_lines = helpers.get("build_legacy_final_conclusion_lines")
     build_front_mainline_label = helpers.get("build_front_mainline_label")
-    render_mainline_discipline_section = helpers.get("render_mainline_discipline_section")
+    render_context_tail_sections = helpers.get("render_context_tail_sections")
     render_supplementary_perspective_section = helpers.get("render_supplementary_perspective_section")
     render_ai_market_insight_section = helpers.get("render_ai_market_insight_section")
 
@@ -150,34 +150,42 @@ def run(ctx):
                     "best_stock": inputs.get("best_stock"),
                     "watch_anchor": inputs.get("watch_anchor"),
                     "watch_anchor_type": inputs.get("watch_anchor_type", ""),
+                    "style_switch": (market_research_snapshot.get("style_switch", {}) or {}),
+                    "tracking_memory_status": inputs.get("tracking_memory_status", {}) or {},
+                    "today_validated_items": inputs.get("today_validated_items"),
+                    "position_level": inputs.get("position_level", ""),
+                    "trade_style": inputs.get("trade_style", ""),
                     "front_follow_action_text": inputs.get("front_follow_action_text", ""),
                     "abnormal_probe_parts": abnormal_probe_parts,
+                    "report_stages": inputs.get("report_stages", []),
                 }
             )
         )
 
-    if callable(render_mainline_discipline_section):
-        lines.extend(render_mainline_discipline_section(resolved_mainline_name))
+    focus_subject = mainline_text if mainline_text != "暂无明确主线" else "市场整体"
+    context_tail_payload = {
+        "mainline_name": resolved_mainline_name,
+        "supplementary_perspective": supplementary_perspective,
+        "market_insight": {
+            "market_trend": inputs.get("market_trend", ""),
+            "zt_count": inputs.get("zt_count", 0),
+            "dt_count": inputs.get("dt_count", 0),
+            "energy_state": market_state_snapshot.get("energy_state", "未知"),
+            "flow_direction": market_state_snapshot.get("flow_direction", "-"),
+            "mainline_text": mainline_text,
+            "risk_text": risk_text,
+            "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
+        },
+    }
 
-    if callable(render_supplementary_perspective_section):
-        lines.extend(render_supplementary_perspective_section(supplementary_perspective))
+    if callable(render_context_tail_sections):
+        lines.extend(render_context_tail_sections(context_tail_payload))
+    else:
+        if callable(render_supplementary_perspective_section):
+            lines.extend(render_supplementary_perspective_section(supplementary_perspective))
 
-    if callable(render_ai_market_insight_section):
-        focus_subject = mainline_text if mainline_text != "暂无明确主线" else "市场整体"
-        lines.extend(
-            render_ai_market_insight_section(
-                {
-                    "market_trend": inputs.get("market_trend", ""),
-                    "zt_count": inputs.get("zt_count", 0),
-                    "dt_count": inputs.get("dt_count", 0),
-                    "energy_state": market_state_snapshot.get("energy_state", "未知"),
-                    "flow_direction": market_state_snapshot.get("flow_direction", "-"),
-                    "mainline_text": mainline_text,
-                    "risk_text": risk_text,
-                    "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
-                }
-            )
-        )
+        if callable(render_ai_market_insight_section):
+            lines.extend(render_ai_market_insight_section(context_tail_payload["market_insight"]))
 
     _append_log(
         logs,

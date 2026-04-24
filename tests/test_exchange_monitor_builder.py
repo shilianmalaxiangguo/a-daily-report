@@ -9,6 +9,39 @@ from report.exchange_monitor_builder import build_exchange_monitor_sections_cont
 
 
 class ExchangeMonitorBuilderTest(unittest.TestCase):
+    def test_build_exchange_monitor_sections_contract_can_render_only_enabled_nodes(self):
+        result = build_exchange_monitor_sections_contract(
+            data={
+                "exchange_monitor_today": [
+                    {
+                        "name": "军工一号",
+                        "code": "000001",
+                        "deviation_days": 12,
+                        "deviation_pct": 18.5,
+                        "trigger_pct": 5.2,
+                        "actual_change_pct": 6.1,
+                        "is_triggered": True,
+                    }
+                ],
+                "exchange_monitor_nextday": [
+                    {
+                        "name": "机器人一号",
+                        "code": "000002",
+                        "deviation_days": 8,
+                        "deviation_pct": 12.3,
+                        "trigger_pct": 4.8,
+                    }
+                ],
+            },
+            enabled_node_keys=["header", "nextday_alerts"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("## 十二、异动监控", rendered)
+        self.assertIn("### 2. 次日异动预警", rendered)
+        self.assertNotIn("### 1. 当日异动预警", rendered)
+        self.assertNotIn("数据来源", rendered)
+
     def test_build_exchange_monitor_sections_contract_renders_today_and_nextday_tables(self):
         result = build_exchange_monitor_sections_contract(
             data={

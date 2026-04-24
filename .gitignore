@@ -7,6 +7,8 @@
 /data/**
 /snapshots/
 /snapshots/**
+/logs/
+/logs/**
 
 # Local environment and machine-specific files
 /.env
@@ -24,6 +26,8 @@ __pycache__/
 # Local tool caches
 /scripts/cache/
 /scripts/cache/**
+/scripts/data/
+/scripts/data/**
 /scripts/.workbuddy/
 /scripts/.workbuddy/**
 /scripts/.codebuddy/

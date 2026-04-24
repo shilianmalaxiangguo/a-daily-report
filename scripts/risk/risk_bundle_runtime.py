@@ -1,3 +1,12 @@
+__all__ = [
+    "build_risk_bundle_contract",
+    "build_step3_risk_bundle",
+    "evaluate_limit_up_friction",
+    "format_step3_risk_reason",
+    "parse_limit_time_to_minutes",
+]
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -24,6 +33,10 @@ def _parse_limit_time_to_minutes(time_text):
     if len(digits) == 4:
         return int(digits[:2]) * 60 + int(digits[2:4])
     return None
+
+
+def parse_limit_time_to_minutes(time_text):
+    return _parse_limit_time_to_minutes(time_text)
 
 
 def _evaluate_limit_up_friction(zhaban, last_limit_time="", turnover=0.0, board_count=1, *, safe_float, clamp):
@@ -80,6 +93,74 @@ def _evaluate_limit_up_friction(zhaban, last_limit_time="", turnover=0.0, board_
     else:
         reason = f"炸板{zhaban}次"
     return {"penalty": penalty, "reason": reason}
+
+
+def evaluate_limit_up_friction(zhaban, last_limit_time="", turnover=0.0, board_count=1, *, helpers=None):
+    helpers = helpers or {}
+    safe_float = helpers["safe_float"]
+    clamp = helpers["clamp"]
+    return _evaluate_limit_up_friction(
+        zhaban,
+        last_limit_time=last_limit_time,
+        turnover=turnover,
+        board_count=board_count,
+        safe_float=safe_float,
+        clamp=clamp,
+    )
+
+
+def format_step3_risk_reason(risk_penalties=None, repair_buffers=None, risk_level="", *, helpers=None):
+    risk_penalties = [str(item).strip() for item in (risk_penalties or []) if str(item or "").strip()]
+    repair_buffers = [str(item).strip() for item in (repair_buffers or []) if str(item or "").strip()]
+
+    if risk_penalties and repair_buffers:
+        if risk_level == "🟢 低风险":
+            return f"虽有{'、'.join(risk_penalties)}，但{'、'.join(repair_buffers)}，净风险可控"
+        if risk_level == "🟡 中风险":
+            return f"风险项：{'、'.join(risk_penalties)}；缓冲项：{'、'.join(repair_buffers)}；仍需观察"
+        return f"风险项：{'、'.join(risk_penalties)}；虽有{'、'.join(repair_buffers)}，但不足以对冲"
+
+    if risk_penalties:
+        prefix = "风险项：" if len(risk_penalties) >= 2 else ""
+        return f"{prefix}{'、'.join(risk_penalties)}"
+
+    if repair_buffers:
+        return f"修复项：{'、'.join(repair_buffers)}，净风险可控"
+
+    return "风险可控"
+
+
+def build_step3_risk_bundle(
+    data,
+    target_date,
+    mainline_name,
+    core_stocks,
+    secondary_stocks,
+    gem_observation_stocks=None,
+    zt_pool_by_sector=None,
+    dt_pool_by_sector=None,
+    persist_a_kill=False,
+    *,
+    helpers=None,
+):
+    helpers = helpers or {}
+    return build_risk_bundle_contract(
+        data,
+        target_date,
+        mainline_name,
+        core_stocks,
+        secondary_stocks,
+        gem_observation_stocks=gem_observation_stocks,
+        zt_pool_by_sector=zt_pool_by_sector,
+        dt_pool_by_sector=dt_pool_by_sector,
+        persist_a_kill=persist_a_kill,
+        normalize_stock_code=helpers["normalize_stock_code"],
+        safe_float=helpers["safe_float"],
+        clamp=helpers["clamp"],
+        get_abnormal_follow_risk_signal=helpers["get_abnormal_follow_risk_signal"],
+        format_risk_reason=helpers.get("format_risk_reason", format_step3_risk_reason),
+        update_a_kill_blacklist=helpers["update_a_kill_blacklist"],
+    )
 
 
 def build_risk_bundle_contract(

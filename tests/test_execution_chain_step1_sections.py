@@ -55,10 +55,17 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("#### Step 1 - 明天观察池", rendered)
-        self.assertIn("**Step 1.05 龙头记忆库**", rendered)
-        self.assertIn("**Step 1.3 异动后观察池**", rendered)
-        self.assertIn("**Step 1 结论**:", rendered)
+        self.assertIn("> **先看结论**：先把明天值得继续盯的对象缩成观察池。", rendered)
+        self.assertIn("> **只看什么**：主线密度、延续形态、异动承接和记忆校验。", rendered)
+        self.assertIn("- **当前信号**: 主线承接强", rendered)
+        self.assertIn("| 排名 | 股票 | 代码 | 所属板块 | 今日形态 | 预判分数 | 明日预期 | 入池依据 |", rendered)
+        self.assertIn("**龙头记忆库**", rendered)
+        self.assertIn("**异动后观察池**", rendered)
+        self.assertIn("**结论**:", rendered)
+        self.assertIn("- **优先顺序**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选", rendered)
         self.assertIn("冷却股(000003)", rendered)
+        self.assertNotIn("投影解释", rendered)
+        self.assertNotIn("核心逻辑", rendered)
 
     def test_build_step1_watch_sections_uses_registry_driven_stage_labels(self):
         stage_lookup = build_execution_stage_lookup(
@@ -87,8 +94,31 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("#### Step 1 - 明天观察池", rendered)
-        self.assertIn("**Step 1.1 明日预期强度排序**", rendered)
+        self.assertIn("**明日预期强度排序**", rendered)
         self.assertIn("- **接着做什么**: 进入Step 2，从观察池识别明日核心标的", rendered)
+
+    def test_build_step1_watch_sections_can_render_only_enabled_nodes(self):
+        lines = build_step1_watch_sections(
+            sector_trend_snapshot_step1=[{"sector": "军工", "trend_count": 3, "strong_count": 2, "limit_up_count": 1, "anchor_name": "军工一号", "anchor_code": "000001", "anchor_reason": "龙头"}],
+            mainline_competition_snapshot=[{"role": "主攻线", "sector": "军工", "evidence": "涨停潮", "judgement": "最强", "action": "只盯核心"}],
+            leader_memory_bank=[{"name": "老龙头", "code": "000002", "sector": "军工", "remember_reason": "老龙回流", "remember_window": "3日", "action_rule": "回看"}],
+            tracking_memory_status={},
+            watchlist=[{"name": "军工一号", "code": "000001", "sector": "军工", "pattern": "涨停", "score": 88, "tomorrow_expectation": "连板预期", "reason": "板块龙一"}],
+            abnormal_watch_pool=[],
+            abnormal_projection_summary={},
+            filtered_by_a_kill=[],
+            display_mvp_mode=False,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            format_abnormal_observation_columns=lambda item: ("历史锚点", "次日边界"),
+            enabled_node_keys=["overview", "watch_ranking", "conclusion"],
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("#### Step 1 - 明天观察池", rendered)
+        self.assertIn("**明日预期强度排序**", rendered)
+        self.assertIn("**结论**:", rendered)
+        self.assertNotIn("**主线趋势密度扫描**", rendered)
+        self.assertNotIn("**龙头记忆库**", rendered)
 
 
 if __name__ == "__main__":

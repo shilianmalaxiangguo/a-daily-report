@@ -143,29 +143,10 @@ def use_report_preamble(
     has_personal_positions: bool = False,
     compact: bool = False,
 ) -> List[str]:
-    report = [
+    return [
         f"# {target_date} A股日报",
         "",
-        "*按照Self-Improving反思原则生成，增强AI分析能力*",
-        "",
     ]
-
-    if run_mode == LEDGER_MODE_REPLAY:
-        report.append("> **实验重放模式**：本报告写入实验账本/实验报告，不改写官方历史。")
-        report.append("")
-    if not has_personal_positions:
-        report.append("> **说明**：本报告默认不知道你的真实持仓。文中涉及“持仓/旧仓处理”时，均指市场级原则，不是你的个人持仓指令。")
-        report.append("")
-
-    report.append("## 🧭 交易理念底线")
-    report.append("")
-    report.extend(use_trading_philosophy_lines(compact=compact))
-    report.append("")
-    report.append("## 🎯 策略定位与能力边界")
-    report.append("")
-    report.extend(use_strategy_positioning_lines(compact=compact))
-    report.append("")
-    return report
 
 
 def build_trading_philosophy_snapshot(

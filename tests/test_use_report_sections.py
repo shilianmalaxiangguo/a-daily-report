@@ -46,7 +46,7 @@ class UseReportSectionsTest(unittest.TestCase):
                         "decision_gate_chain_text": "环境放行 -> 主线确认 -> 60分钟确认",
                         "execution_framework_text": "日线结构中枢定环境，60分钟定买点，30分钟定止损",
                         "contract_logic_digest_text": "先选边站队，再等确认",
-                        "report_preamble_lines": ["# 2026-04-22 A股日报", "", "## 🧭 交易理念底线"],
+                        "report_preamble_lines": ["# 2026-04-22 A股日报"],
                     }
                 },
             },
@@ -55,7 +55,7 @@ class UseReportSectionsTest(unittest.TestCase):
         result = run(ctx)
 
         sections = result["patches"]["sections"]
-        self.assertIn("交易理念底线", sections["preamble"])
+        self.assertEqual(sections["preamble"], "# 2026-04-22 A股日报")
         self.assertIn("主推导链", sections["environment"])
         self.assertIn("阶段看板", sections["observation"])
         self.assertIn("selection_focus", sections["observation"])

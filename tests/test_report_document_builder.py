@@ -12,6 +12,24 @@ from report.report_document_builder import (
 
 
 class ReportDocumentBuilderTest(unittest.TestCase):
+    def test_build_report_shell_contract_can_render_only_enabled_nodes(self):
+        result = build_report_shell_contract(
+            target_date="2026-04-22",
+            run_mode="frozen",
+            has_personal_positions=False,
+            compact=True,
+            enabled_node_keys=["preamble", "discipline_header", "discipline_placeholder"],
+            use_report_preamble=lambda target_date, run_mode="frozen", has_personal_positions=False, compact=False: [
+                f"# {target_date} A股日报",
+            ],
+        )
+
+        rendered = "\n".join(result["report"])
+        self.assertIn("# 2026-04-22 A股日报", rendered)
+        self.assertIn("## 🚫 次日操作纪律（第一眼看这里）", rendered)
+        self.assertIn("<!-- PROHIBITION_PLACEHOLDER -->", rendered)
+        self.assertNotIn("次日早盘打开日报，第一眼看这里。", rendered)
+
     def test_build_report_shell_contract_keeps_discipline_placeholder(self):
         result = build_report_shell_contract(
             target_date="2026-04-22",
@@ -20,13 +38,31 @@ class ReportDocumentBuilderTest(unittest.TestCase):
             compact=True,
             use_report_preamble=lambda target_date, run_mode="frozen", has_personal_positions=False, compact=False: [
                 f"# {target_date} A股日报",
-                "## 🧭 交易理念底线",
             ],
         )
 
         self.assertIn("## 🚫 次日操作纪律（第一眼看这里）", result["report"])
         self.assertIn("<!-- PROHIBITION_PLACEHOLDER -->", result["report"])
         self.assertTrue(any(log["step"] == "build.report_shell" for log in result["module_logs"]))
+
+    def test_build_prohibition_section_contract_can_render_only_enabled_nodes(self):
+        result = build_prohibition_section_contract(
+            display_position_level="二档（防守档）",
+            display_operation_state="观察态",
+            environment_headline="先看特殊标的是否继续抗跌",
+            has_personal_positions=True,
+            final_gate={"should_reduce": True},
+            main_sectors=["军工", "机器人"],
+            exit_analysis={"risk_sectors": ["地产", "消费"]},
+            enabled_node_keys=["environment", "prohibition_header", "prohibition_items"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**次日市场环境**: 二档（防守档） / 观察态 - 先看特殊标的是否继续抗跌", rendered)
+        self.assertIn("**禁止事项**:", rendered)
+        self.assertIn("禁止新开仓", rendered)
+        self.assertNotIn("**允许事项**:", rendered)
+        self.assertNotIn("风险板块（禁止碰）", rendered)
 
     def test_build_prohibition_section_contract_outputs_defensive_mode(self):
         result = build_prohibition_section_contract(

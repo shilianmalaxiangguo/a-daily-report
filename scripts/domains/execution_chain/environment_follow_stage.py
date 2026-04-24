@@ -41,33 +41,39 @@ def build_environment_follow_stage(stage_context, stage_meta, stage_lookup=None)
     stage_meta = stage_meta or {}
     bundle = dict(stage_context.get("market_research_bundle") or {})
     display_mvp_mode = bool(stage_context.get("display_mvp_mode", False))
-    render_market_research_snapshot_section = stage_context["render_market_research_snapshot_section"]
-    render_step0_follow_section = stage_context["render_step0_follow_section"]
+    render_environment_follow_stage_body = stage_context.get("render_environment_follow_stage_body")
+    render_market_research_snapshot_section = stage_context.get("render_market_research_snapshot_section")
+    render_step0_follow_section = stage_context.get("render_step0_follow_section")
     logs = []
 
     stage_label = str(stage_meta.get("label", "") or "Step 0").strip() or "Step 0"
     title = str(stage_meta.get("title", "") or "明日环境与跟随裁决").strip() or "明日环境与跟随裁决"
     lines = [
         f"#### {stage_label} - {title}",
-        "> **核心问题**：今天的市场研究结果，到了明天开盘前，究竟是该跟、该等等，还是根本不该参与？",
-        f"> **重要提示**：T日收盘生成的报告，分析的是T+1日（明天）的操作。{stage_label} 不再单独猜市场，而是直接引用统一市场研究快照。",
+        "> **先看结论**：直接沿用统一市场研究快照给出的明日环境裁决。",
+        "> **怎么执行**：直接按统一市场研究快照走，盘中只确认不重猜。",
         "",
-        '> **📈 大盘中枢分析**：详见报告开头的"明天仓位怎么放"部分',
+        '> **补充**：仓位和大盘中枢统一放到“明天仓位怎么放”里看。',
         "",
     ]
-    lines.extend(
-        render_market_research_snapshot_section(
-            bundle.get("market_research_snapshot", {}) or {},
-            compact=display_mvp_mode,
-        )
-    )
-    lines.extend(
-        render_step0_follow_section(
-            bundle.get("step0_plan", {}) or {},
-            bundle.get("market_research_snapshot", {}) or {},
-            compact=display_mvp_mode,
-        )
-    )
+    if callable(render_environment_follow_stage_body):
+        lines.extend(render_environment_follow_stage_body(bundle, compact=display_mvp_mode))
+    else:
+        if callable(render_market_research_snapshot_section):
+            lines.extend(
+                render_market_research_snapshot_section(
+                    bundle.get("market_research_snapshot", {}) or {},
+                    compact=display_mvp_mode,
+                )
+            )
+        if callable(render_step0_follow_section):
+            lines.extend(
+                render_step0_follow_section(
+                    bundle.get("step0_plan", {}) or {},
+                    bundle.get("market_research_snapshot", {}) or {},
+                    compact=display_mvp_mode,
+                )
+            )
 
     exports = {field: bundle.get(field) for field in _EXPORT_FIELDS}
     step0_plan = bundle.get("step0_plan", {}) or {}

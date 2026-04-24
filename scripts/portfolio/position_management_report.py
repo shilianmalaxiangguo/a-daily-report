@@ -1,3 +1,79 @@
+from __future__ import annotations
+
+__all__ = [
+    "analyze_position_management",
+    "analyze_position_management_report",
+    "parse_position_string",
+]
+
+_MISSING = object()
+
+
+def _install_runtime_bindings(bindings):
+    previous = {}
+    module_globals = globals()
+    for key, value in (bindings or {}).items():
+        if key.startswith("__") and key.endswith("__"):
+            continue
+        previous[key] = module_globals.get(key, _MISSING)
+        module_globals[key] = value
+    return previous
+
+
+def _restore_runtime_bindings(previous):
+    module_globals = globals()
+    for key, value in (previous or {}).items():
+        if value is _MISSING:
+            module_globals.pop(key, None)
+        else:
+            module_globals[key] = value
+
+
+def parse_position_string(position_str):
+    return _parse_position_string_legacy_body(position_str)
+
+
+def analyze_position_management(data, target_date, positions, *, helpers=None):
+    previous = _install_runtime_bindings(helpers or {})
+    try:
+        return _analyze_position_management_legacy_body(data, target_date, positions)
+    finally:
+        _restore_runtime_bindings(previous)
+
+
+def _parse_position_string(position_str):
+    return _parse_position_string_legacy_body(position_str)
+
+
+def _analyze_position_management(data, target_date, positions):
+    return _analyze_position_management_legacy_body(data, target_date, positions)
+
+
+def _parse_position_string_legacy_body(position_str):
+    import re
+
+    position_str = str(position_str or "").replace("我的仓位是", "").strip()
+    pattern = r"([^\d\s]+)\s+(\d+(?:\.\d+)?)\s*%"
+    matches = re.findall(pattern, position_str)
+
+    positions = []
+    for name, position in matches:
+        positions.append({
+            "name": name.strip(),
+            "position": float(position),
+        })
+    return positions
+
+
+def _analyze_position_management_legacy_body(data, target_date, positions):
+    return analyze_position_management_report(
+        data=data,
+        positions=positions,
+        build_trading_philosophy_lines=build_trading_philosophy_lines,
+        display_mvp_mode=display_mvp_mode,
+    )
+
+
 def analyze_position_management_report(data, positions, build_trading_philosophy_lines, display_mvp_mode):
     if not positions:
         return ""

@@ -337,10 +337,19 @@ def build_market_research_context_bundle_contract(
     )
     _append_log(logs, "build.memory", "success", "已构建龙头记忆与跟踪状态", memory_count=len(leader_memory_bank))
 
-    all_gem_breathing_candidates = discover_all_gem_breathing_candidates(
-        stock_meta_map,
-        target_date=target_date,
-    )
+    if decision_strict_mode:
+        all_gem_breathing_candidates = discover_all_gem_breathing_candidates(
+            stock_meta_map,
+            target_date=target_date,
+        )
+    else:
+        all_gem_breathing_candidates = []
+        _append_log(
+            logs,
+            "build.gem_breathing",
+            "skipped",
+            "display-safe 模式跳过 gem breathing 全量发现，避免渲染阶段额外联网",
+        )
     gem_breathing_candidates = [
         item
         for item in all_gem_breathing_candidates
