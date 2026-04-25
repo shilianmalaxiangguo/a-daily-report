@@ -9,6 +9,27 @@ from report.front_page_v2_renderer import render_front_page_v2
 
 
 class FrontPageV2RendererTest(unittest.TestCase):
+    def test_candidate_section_uses_observation_title_when_unique_target_is_empty(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [
+                    "| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |",
+                    "|------|------|----------|--------------|-----------|------|----------|----------|",
+                    "| 富瀚微 | 300613 | 半导体 | 放量涨停 | 未完全爆发 | 明日验证承接 | 主线资金主动进攻 | 观察，等10点确认 |",
+                ],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("### 1. 主线内观察候选", rendered)
+        self.assertNotIn("### 1. 主线内可执行候选", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
             render_front_page_v2(

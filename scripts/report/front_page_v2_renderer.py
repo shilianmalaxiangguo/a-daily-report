@@ -305,11 +305,17 @@ def _convert_legacy_core_table(table):
     return converted
 
 
-def _candidate_lines(report_lines):
+def _has_unique_action_target(snapshot):
+    target = (snapshot or {}).get("unique_action_target") or {}
+    return isinstance(target, dict) and bool(target.get("name") or target.get("code"))
+
+
+def _candidate_lines(report_lines, snapshot=None):
     core_header = "| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |"
     legacy_core_header = "| 股票 | 代码 | 所属方向 | 为什么看 | 明天重点看什么 | 执行权 |"
     cross_header = "| 股票 | 代码 | 所属方向 | 观察意义 | 明日原则 |"
-    lines = ["## 五、个股解读", "### 1. 主线内可执行候选"]
+    core_title = "### 1. 主线内可执行候选" if _has_unique_action_target(snapshot) else "### 1. 主线内观察候选"
+    lines = ["## 五、个股解读", core_title]
     core_table = _extract_table(report_lines, core_header)
     if not core_table:
         core_table = _convert_legacy_core_table(_extract_table(report_lines, legacy_core_header))
@@ -402,7 +408,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     lines.extend(_turnover_share_lines(snapshot))
 
     lines.extend(_capital_intent_lines(snapshot))
-    lines.extend(_candidate_lines(report_lines))
+    lines.extend(_candidate_lines(report_lines, snapshot))
     lines.extend(_execution_plan_lines(snapshot))
     lines.extend(_final_summary_lines(report_lines, snapshot, final_gate=final_gate))
     lines = [line for line in lines if not any(marker in str(line) for marker in FORBIDDEN_FRONT_PAGE_MARKERS)]
