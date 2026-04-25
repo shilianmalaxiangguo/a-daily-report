@@ -57,6 +57,17 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
 
         self.assertEqual(compute_input_hash(left), compute_input_hash(right))
 
+    def test_packet_input_hash_can_be_recomputed_from_full_packet(self):
+        packet = build_reasoning_input_packet(
+            "2026-04-24",
+            {
+                "mainline_turnover_summary": {"current_mainline": "半导体"},
+                "candidate_pool": [{"code": "300613", "name": "富瀚微"}],
+            },
+        )
+
+        self.assertEqual(packet["input_hash"], compute_input_hash(packet))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,8 @@ def _stable_json(value: Any) -> str:
 
 
 def compute_input_hash(packet: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_stable_json(packet).encode("utf-8")).hexdigest()
+    hash_input = {key: value for key, value in packet.items() if key != "input_hash"}
+    return hashlib.sha256(_stable_json(hash_input).encode("utf-8")).hexdigest()
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -75,7 +76,5 @@ def build_reasoning_input_packet(
         "risk_context": _as_dict(snapshot.get("risk_context")),
         "source_status": _as_dict(snapshot.get("source_status")),
     }
-    packet["input_hash"] = compute_input_hash(
-        {key: value for key, value in packet.items() if key != "input_hash"}
-    )
+    packet["input_hash"] = compute_input_hash(packet)
     return packet
