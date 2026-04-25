@@ -384,7 +384,7 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     final_gate = final_gate or {}
     cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
     daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
-    action = str(final_gate.get("final_action") or "防守观察")
+    action = str(final_gate.get("final_action") or "10点确认，不满足就空仓")
     target = _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         target_name = str(target.get("name") or "唯一对象").strip()
@@ -398,7 +398,7 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         "## 七、最终结论",
         "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
         "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
-        f"| {action} | 不主动 | {cycle} | {daily} | 先看市场基底 | {unique_target} | 空仓 / 短线确认 | {one_line_action} |",
+        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | 先看市场基底 | {unique_target} | 空仓 / 短线确认 | {one_line_action} |",
     ]
 
 

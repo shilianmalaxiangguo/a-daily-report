@@ -88,7 +88,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
-        self.assertIn("| 防守观察 | 不主动 | 半导体 | 半导体 | 先看市场基底 | 富瀚微(300613) |", rendered)
+        self.assertIn("| 10点确认，不满足就空仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 富瀚微(300613) |", rendered)
 
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
