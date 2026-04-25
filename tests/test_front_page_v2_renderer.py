@@ -64,6 +64,36 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("chain-of-thought", rendered)
         self.assertNotIn("思维链", rendered)
 
+    def test_reasoning_decision_surface_sanitizes_forbidden_markers_and_table_breaks(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "reasoning_decision": {
+                        "action": "observe",
+                        "mainline_state": "unclear",
+                        "unique_target": None,
+                        "conclusion": "思维链：先想A\n再想B | 这段不该破表",
+                        "evidence": [{"field": "x", "summary": "chain-of-thought: hidden | draft"}],
+                        "trigger_conditions": ["10点确认\n不要换行", "候选|确认"],
+                        "failure_conditions": ["主线回落 | 失败"],
+                        "excluded_candidates": [{"id": "300613", "name": "富瀚微", "reason": "思维链 泄漏 | 原因"}],
+                        "confidence": "medium|bad",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("### 0. 推理裁决", rendered)
+        self.assertNotIn("思维链", rendered)
+        self.assertNotIn("chain-of-thought", rendered)
+        reasoning_section = rendered[rendered.index("### 0. 推理裁决") : rendered.index("| 明日唯一动作 |")]
+        for line in reasoning_section.splitlines():
+            if line.startswith("|") and not line.startswith("|------"):
+                self.assertEqual(line.count("|"), 3, line)
+
     def test_reasoning_decision_unique_target_drives_unique_action_when_snapshot_target_is_missing(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -89,6 +119,33 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertIn("| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
         self.assertIn("| 10点确认，不满足就空仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 富瀚微(300613) |", rendered)
+
+    def test_reasoning_decision_unique_target_only_drives_action_for_conditional_entry(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "reasoning_decision": {
+                        "action": "observe",
+                        "mainline_state": "strengthening",
+                        "unique_target": "300613",
+                        "conclusion": "只观察，不给执行目标。",
+                        "evidence": [],
+                        "trigger_conditions": ["10点确认"],
+                        "failure_conditions": ["主线回落"],
+                        "excluded_candidates": [],
+                        "confidence": "medium",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("### 1. 主线内观察候选", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 10点确认，不满足就空仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 |", rendered)
 
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
