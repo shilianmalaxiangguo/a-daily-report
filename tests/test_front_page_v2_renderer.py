@@ -9,6 +9,83 @@ from report.front_page_v2_renderer import render_front_page_v2
 
 
 class FrontPageV2RendererTest(unittest.TestCase):
+    def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "current_sector_turnover_snapshot": {
+                        "date": "2026-04-24",
+                        "sector_name": "半导体",
+                        "turnover_share_pct": 18.1,
+                    },
+                    "recent_sector_turnover_history": [
+                        {"date": "2026-04-23", "sector_name": "半导体", "turnover_share_pct": 15.8},
+                    ],
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                        "turnover_share_trend_rows": [
+                            {
+                                "date": "2026-04-24",
+                                "cycle_mainline": "半导体",
+                                "daily_attack_line": "半导体",
+                                "mainline_turnover": "2180.00亿",
+                                "market_turnover": "12834.00亿",
+                                "share": "18.1%",
+                                "share_change": "待累计",
+                                "interpretation": "主线占比继续抬升",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+
+        self.assertIn(
+            "| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct | 主线占比继续抬升 |",
+            rendered,
+        )
+
+    def test_turnover_share_lines_keeps_pending_when_previous_history_is_different_mainline(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "current_sector_turnover_snapshot": {
+                        "date": "2026-04-24",
+                        "sector_name": "半导体",
+                        "turnover_share_pct": 18.1,
+                    },
+                    "recent_sector_turnover_history": [
+                        {"date": "2026-04-23", "sector_name": "电力", "turnover_share_pct": 15.8},
+                    ],
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                        "turnover_share_trend_rows": [
+                            {
+                                "date": "2026-04-24",
+                                "cycle_mainline": "半导体",
+                                "daily_attack_line": "半导体",
+                                "mainline_turnover": "2180.00亿",
+                                "market_turnover": "12834.00亿",
+                                "share": "18.1%",
+                                "share_change": "+2.3pct",
+                                "interpretation": "新主线刚切换，先累计半导体自身占比",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+
+        self.assertIn(
+            "| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | 待累计 | 新主线刚切换，先累计半导体自身占比 |",
+            rendered,
+        )
+        self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct |", rendered)
+
     def test_market_fit_embeds_in_existing_sections_without_standalone_modules(self):
         rendered = "\n".join(
             render_front_page_v2(

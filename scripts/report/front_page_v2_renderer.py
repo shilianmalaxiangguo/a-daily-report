@@ -163,9 +163,7 @@ def _double_mainline_lines(snapshot):
 
 
 def _turnover_share_lines(snapshot):
-    rows = resolve_turnover_share_trend_rows(snapshot.get("mainline_turnover_summary") or {})
-    if not rows:
-        rows = resolve_turnover_share_trend_rows(snapshot)
+    rows = resolve_turnover_share_trend_rows(snapshot)
     lines = [
         "### 5. 主线成交额占比趋势",
         "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",

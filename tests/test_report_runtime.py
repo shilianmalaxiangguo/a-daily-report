@@ -1546,6 +1546,77 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("| 半导体 | 半导体 | 周期主线与当天主攻线一致 | 继续围绕半导体观察承接 |", result["report"])
         self.assertIn("| 2026-04-24 | 半导体 | 半导体 | 数据暂缺 | 26414.92亿 | 待累计 | 待累计 | 缺少板块成交额接口，先记录主线归属 |", result["report"])
 
+    def test_render_markdown_report_runtime_uses_structured_turnover_history_for_share_change(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_research_snapshot": {
+                        "state_machine": {"leading_line": "半导体"},
+                        "mainline_turnover_summary": {
+                            "current_mainline": "半导体",
+                            "double_mainline_summary": {
+                                "cycle_mainline": "半导体",
+                                "daily_attack_line": "半导体",
+                                "relationship": "周期主线与当天主攻线一致",
+                                "tomorrow_action": "继续围绕半导体观察承接",
+                            },
+                            "turnover_share_trend_rows": [
+                                {
+                                    "date": "2026-04-24",
+                                    "cycle_mainline": "半导体",
+                                    "daily_attack_line": "半导体",
+                                    "mainline_turnover": "2180.00亿",
+                                    "market_turnover": "12834.00亿",
+                                    "share": "18.1%",
+                                    "share_change": "待累计",
+                                    "interpretation": "主线占比继续抬升",
+                                }
+                            ],
+                        },
+                    },
+                    "current_mainline_history_record": {"date": "2026-04-24", "primary_mainline": "半导体"},
+                    "recent_mainline_history": [{"date": "2026-04-23", "primary_mainline": "半导体"}],
+                    "current_sector_turnover_snapshot": {
+                        "date": "2026-04-24",
+                        "sector_name": "半导体",
+                        "turnover_share_pct": 18.1,
+                    },
+                    "recent_sector_turnover_history": [
+                        {"date": "2026-04-23", "sector_name": "半导体", "turnover_share_pct": 15.8},
+                    ],
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            DISPLAY_MVP_MODE=True,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-04-24",
+            helpers=helpers,
+            config={},
+        )
+
+        self.assertIn(
+            "| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct | 主线占比继续抬升 |",
+            result["report"],
+        )
+
     def test_render_markdown_report_runtime_does_not_clear_existing_mainline_atoms_when_context_is_empty(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {"lines": [], "module_logs": [], "context": {}}

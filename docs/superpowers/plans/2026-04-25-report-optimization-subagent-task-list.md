@@ -24,7 +24,7 @@ Continue optimizing the daily report as a trading-useful product: first make the
   - Likely files: `scripts/report/report_acceptance_audit.py`, `tests/test_report_acceptance_audit.py`.
   - Verification: audit unit tests plus real replay audit.
 
-- [ ] Task 2: Complete structured mainline / turnover history continuity.
+- [x] Task 2: Complete structured mainline / turnover history continuity.
   - User benefit: front page and appendix can show whether the mainline is strengthening or weakening across days instead of saying `待累计` whenever history exists.
   - Likely files: `scripts/report/runtime.py`, `scripts/report/front_page_v2_renderer.py`, `tests/test_report_runtime.py`, `tests/test_front_page_v2_renderer.py`.
   - Verification: unit tests for day-over-day `占比变化`, replay audit still passes.
