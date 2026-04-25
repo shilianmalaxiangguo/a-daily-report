@@ -273,8 +273,9 @@ def _audit_reasoning_surface(lines):
     findings = []
     front = _front_page_lines(lines)
     front_text = "\n".join(front)
+    front_text_lower = front_text.lower()
     for marker in REASONING_CHAIN_LEAK_MARKERS:
-        if marker in front_text:
+        if marker.lower() in front_text_lower:
             findings.append(
                 _finding(
                     "reasoning_chain_leakage",

@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from report.reasoning_decision_support import (
     build_reasoning_input_packet,
     compute_input_hash,
+    derive_unique_action_target_from_reasoning_decision,
     validate_reasoning_decision,
 )
 
@@ -178,6 +179,25 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         result = validate_reasoning_decision(packet, decision)
 
         self.assertTrue(result["passed"], result["findings"])
+
+    def test_derivation_blocks_conditional_entry_with_missing_or_invalid_confidence(self):
+        base_decision = {
+            "action": "conditional_entry",
+            "unique_target": "300613",
+            "trigger_conditions": ["10点确认"],
+            "failure_conditions": ["主线回落"],
+        }
+        for confidence in (None, "", "invalid"):
+            with self.subTest(confidence=confidence):
+                decision = dict(base_decision)
+                if confidence is not None:
+                    decision["confidence"] = confidence
+                snapshot = {
+                    "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+                    "reasoning_decision": decision,
+                }
+
+                self.assertEqual(derive_unique_action_target_from_reasoning_decision(snapshot), {})
 
 
 if __name__ == "__main__":

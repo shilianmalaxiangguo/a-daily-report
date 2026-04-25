@@ -232,17 +232,19 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_reasoning_chain_leakage(self):
-        bad = GOOD_MARKDOWN.replace(
-            "## 七、最终结论",
-            "### 0. 推理裁决\n"
-            "思维链：先这样想，再那样想。\n\n"
-            "## 七、最终结论",
-        )
+        for marker in ("思维链", "Chain-of-Thought", "CHAIN-OF-THOUGHT"):
+            with self.subTest(marker=marker):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    "### 0. 推理裁决\n"
+                    f"{marker}：先这样想，再那样想。\n\n"
+                    "## 七、最终结论",
+                )
 
-        result = audit_report_markdown(bad)
+                result = audit_report_markdown(bad)
 
-        self.assertIn("reasoning_chain_leakage", {finding["code"] for finding in result["findings"]})
-        self.assertFalse(result["passed"])
+                self.assertIn("reasoning_chain_leakage", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
 
     def test_audit_flags_appendix_duplicate_front_page_sections(self):
         bad = GOOD_MARKDOWN.replace(
