@@ -100,7 +100,27 @@ def _strip_duplicate_market_base_header(lines):
 
 
 def _sanitize_report_lines(lines):
-    return sanitize_front_page_text(list(lines or []))
+    return sanitize_front_page_text(_dedupe_repeated_no_trade_lines(lines))
+
+
+def _dedupe_repeated_no_trade_lines(lines):
+    cleaned = []
+    seen = set()
+    markers = ("不开新仓", "不做", "空仓等待")
+    for line in list(lines or []):
+        text = str(line or "")
+        is_dedupe_target = (
+            text.strip()
+            and not text.lstrip().startswith("|")
+            and any(marker in text for marker in markers)
+        )
+        if is_dedupe_target:
+            key = text.strip()
+            if key in seen:
+                continue
+            seen.add(key)
+        cleaned.append(text)
+    return cleaned
 
 
 def _format_appendix_heading_content(content):

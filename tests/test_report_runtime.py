@@ -232,6 +232,21 @@ def _build_runtime_execution_test_helpers(run_registered_execution_stages, **ove
 
 
 class ReportRuntimeTest(unittest.TestCase):
+    def test_sanitize_report_lines_deduplicates_repeated_no_trade_action_lines(self):
+        lines = [
+            "## 八、详细附录",
+            "**开盘前动作**: 先观察市场整体，不提前放松资格；未确认不开新仓",
+            "其他内容",
+            "**开盘前动作**: 先观察市场整体，不提前放松资格；未确认不开新仓",
+        ]
+
+        sanitized = report_runtime._sanitize_report_lines(lines)
+
+        self.assertEqual(
+            sanitized.count("**开盘前动作**: 先观察市场整体，不提前放松资格；未确认不开新仓"),
+            1,
+        )
+
     def test_demote_appendix_headings_demotes_legacy_top_level_title(self):
         lines = [
             "# 2026-04-24 A股日报",
