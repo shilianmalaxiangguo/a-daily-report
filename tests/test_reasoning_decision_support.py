@@ -150,6 +150,35 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         self.assertIn("low_confidence_aggressive_action", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_rejects_missing_required_decision_fields(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        for key in [
+            "prompt_version",
+            "conclusion",
+            "evidence",
+            "trigger_conditions",
+            "failure_conditions",
+            "excluded_candidates",
+        ]:
+            decision.pop(key)
+
+        result = validate_reasoning_decision(packet, decision)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("required_field_missing", codes)
+        self.assertFalse(result["passed"])
+
+    def test_accepts_unique_target_with_surrounding_whitespace(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["action"] = "conditional_entry"
+        decision["unique_target"] = " 300613 "
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertTrue(result["passed"], result["findings"])
+
 
 if __name__ == "__main__":
     unittest.main()

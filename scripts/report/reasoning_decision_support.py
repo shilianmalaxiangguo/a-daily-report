@@ -84,6 +84,22 @@ ALLOWED_ACTIONS = {"do_nothing", "observe", "conditional_entry"}
 ALLOWED_MAINLINE_STATES = {"strengthening", "diverging", "fading", "unclear"}
 ALLOWED_CONFIDENCE = {"high", "medium", "low"}
 ALLOWED_MODEL_SOURCES = {"manual", "deterministic_fallback", "api"}
+REQUIRED_DECISION_FIELDS = (
+    "schema_version",
+    "target_date",
+    "input_hash",
+    "prompt_version",
+    "model_source",
+    "action",
+    "mainline_state",
+    "unique_target",
+    "conclusion",
+    "evidence",
+    "trigger_conditions",
+    "failure_conditions",
+    "excluded_candidates",
+    "confidence",
+)
 
 
 def _finding(code: str, message: str) -> Dict[str, str]:
@@ -122,6 +138,10 @@ def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str
     decision = _as_dict(decision)
     findings: List[Dict[str, str]] = []
 
+    for field in REQUIRED_DECISION_FIELDS:
+        if field not in decision:
+            findings.append(_finding("required_field_missing", f"reasoning decision is missing required field: {field}"))
+
     if decision.get("schema_version") != DECISION_SCHEMA_VERSION:
         findings.append(_finding("unsupported_schema_version", "reasoning decision schema_version must be reasoning_decision.v1"))
     if decision.get("target_date") != packet.get("target_date"):
@@ -139,9 +159,10 @@ def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str
 
     candidate_ids = _candidate_ids(packet)
     unique_target = decision.get("unique_target")
-    if decision.get("action") == "do_nothing" and unique_target:
+    unique_target_id = str(unique_target).strip() if unique_target is not None else ""
+    if decision.get("action") == "do_nothing" and unique_target_id:
         findings.append(_finding("do_nothing_has_unique_target", "do_nothing decisions must not name a unique target"))
-    if unique_target and str(unique_target) not in candidate_ids:
+    if unique_target_id and unique_target_id not in candidate_ids:
         findings.append(_finding("unique_target_not_in_candidate_pool", "unique target must come from the candidate pool"))
 
     if decision.get("action") == "conditional_entry" and (not decision.get("trigger_conditions") or not decision.get("failure_conditions")):
