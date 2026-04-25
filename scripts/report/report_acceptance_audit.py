@@ -80,6 +80,10 @@ UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
     "不做",
 )
 
+REASONING_SURFACE_HEADING = "### 0. 推理裁决"
+REASONING_REQUIRED_LABELS = ("裁决", "结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
+REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
+
 __all__ = ["audit_report_markdown"]
 
 
@@ -108,6 +112,20 @@ def _appendix_lines(lines):
         if line == APPENDIX_HEADING:
             return lines[index + 1 :]
     return []
+
+
+def _section_after(lines, start_marker):
+    try:
+        start = list(lines).index(start_marker)
+    except ValueError:
+        return []
+    section = []
+    for line in list(lines)[start + 1 :]:
+        text = str(line)
+        if text.startswith("## ") or text.startswith("### "):
+            break
+        section.append(line)
+    return section
 
 
 def _split_md_row(line):
@@ -248,6 +266,32 @@ def _audit_degraded_fake_zero(lines):
                     line=index,
                 )
             )
+    return findings
+
+
+def _audit_reasoning_surface(lines):
+    findings = []
+    front = _front_page_lines(lines)
+    front_text = "\n".join(front)
+    for marker in REASONING_CHAIN_LEAK_MARKERS:
+        if marker in front_text:
+            findings.append(
+                _finding(
+                    "reasoning_chain_leakage",
+                    f"front page must not expose reasoning chain marker: {marker}",
+                )
+            )
+    if REASONING_SURFACE_HEADING not in front:
+        return findings
+    section_text = "\n".join(_section_after(front, REASONING_SURFACE_HEADING))
+    missing = [label for label in REASONING_REQUIRED_LABELS if f"| {label} |" not in section_text]
+    if missing:
+        findings.append(
+            _finding(
+                "reasoning_surface_incomplete",
+                "reasoning surface is missing required rows: " + ", ".join(missing),
+            )
+        )
     return findings
 
 
@@ -398,6 +442,7 @@ def audit_report_markdown(markdown):
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_degraded_fake_zero(lines))
+    findings.extend(_audit_reasoning_surface(lines))
     findings.extend(_audit_unique_focus(lines))
     return {
         "passed": not findings,

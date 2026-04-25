@@ -195,6 +195,35 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertExecutionConditionMissing(bad, "不做 / 不开新仓 / 空仓")
 
+    def test_audit_flags_reasoning_surface_missing_required_rows(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
+            "### 0. 推理裁决\n"
+            "| 项目 | 内容 |\n"
+            "|------|------|\n"
+            "| 裁决 | observe |\n"
+            "| 结论 | 主线仍需确认。 |\n\n"
+            "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("reasoning_surface_incomplete", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_reasoning_chain_leakage(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 七、最终结论",
+            "### 0. 推理裁决\n"
+            "思维链：先这样想，再那样想。\n\n"
+            "## 七、最终结论",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("reasoning_chain_leakage", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_appendix_duplicate_front_page_sections(self):
         bad = GOOD_MARKDOWN.replace(
             "### 附录B：历史主线池",
