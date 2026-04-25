@@ -5,7 +5,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.reasoning_decision_support import build_reasoning_input_packet, compute_input_hash
+from report.reasoning_decision_support import (
+    build_reasoning_input_packet,
+    compute_input_hash,
+    validate_reasoning_decision,
+)
 
 
 class ReasoningDecisionSupportTest(unittest.TestCase):
@@ -67,6 +71,84 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         )
 
         self.assertEqual(packet["input_hash"], compute_input_hash(packet))
+
+    def _packet(self):
+        return build_reasoning_input_packet(
+            "2026-04-24",
+            {
+                "mainline_turnover_summary": {"current_mainline": "半导体"},
+                "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+            },
+            final_gate={"final_action": "观察"},
+        )
+
+    def _valid_decision(self, packet):
+        return {
+            "schema_version": "reasoning_decision.v1",
+            "target_date": packet["target_date"],
+            "input_hash": packet["input_hash"],
+            "prompt_version": "manual-current-conversation-v1",
+            "model_source": "manual",
+            "action": "observe",
+            "mainline_state": "strengthening",
+            "unique_target": None,
+            "conclusion": "主线仍需确认，只观察承接。",
+            "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
+            "trigger_conditions": ["10点后主线继续放量"],
+            "failure_conditions": ["主线回落"],
+            "excluded_candidates": [{"id": "300613", "name": "富瀚微", "reason": "60分钟确认未完成"}],
+            "confidence": "medium",
+        }
+
+    def test_validates_well_formed_reasoning_decision(self):
+        packet = self._packet()
+        result = validate_reasoning_decision(packet, self._valid_decision(packet))
+
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_rejects_unique_target_outside_candidate_pool(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["unique_target"] = "999999"
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertIn("unique_target_not_in_candidate_pool", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_rejects_unknown_evidence_field(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["evidence"] = [{"field": "unknown.path", "summary": "不可验证证据"}]
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertIn("evidence_field_unknown", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_rejects_conditional_entry_without_trigger_and_failure(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["action"] = "conditional_entry"
+        decision["unique_target"] = "300613"
+        decision["trigger_conditions"] = []
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertIn("conditional_entry_missing_conditions", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_rejects_low_confidence_aggressive_action(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["action"] = "conditional_entry"
+        decision["unique_target"] = "300613"
+        decision["confidence"] = "low"
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertIn("low_confidence_aggressive_action", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
 
 if __name__ == "__main__":

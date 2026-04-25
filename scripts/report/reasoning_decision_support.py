@@ -78,3 +78,92 @@ def build_reasoning_input_packet(
     }
     packet["input_hash"] = compute_input_hash(packet)
     return packet
+
+
+ALLOWED_ACTIONS = {"do_nothing", "observe", "conditional_entry"}
+ALLOWED_MAINLINE_STATES = {"strengthening", "diverging", "fading", "unclear"}
+ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+ALLOWED_MODEL_SOURCES = {"manual", "deterministic_fallback", "api"}
+
+
+def _finding(code: str, message: str) -> Dict[str, str]:
+    return {"code": code, "message": message}
+
+
+def _flatten_paths(value: Any, prefix: str = "") -> set[str]:
+    paths: set[str] = set()
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            paths.add(path)
+            paths.update(_flatten_paths(item, path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            path = f"{prefix}.{index}" if prefix else str(index)
+            paths.add(path)
+            paths.update(_flatten_paths(item, path))
+    return paths
+
+
+def _candidate_ids(packet: Mapping[str, Any]) -> set[str]:
+    ids = set()
+    for item in _as_list(packet.get("candidate_pool")):
+        if not isinstance(item, Mapping):
+            continue
+        for key in ("id", "code"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                ids.add(value)
+    return ids
+
+
+def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str, Any]) -> Dict[str, Any]:
+    packet = _as_dict(packet)
+    decision = _as_dict(decision)
+    findings: List[Dict[str, str]] = []
+
+    if decision.get("schema_version") != DECISION_SCHEMA_VERSION:
+        findings.append(_finding("unsupported_schema_version", "reasoning decision schema_version must be reasoning_decision.v1"))
+    if decision.get("target_date") != packet.get("target_date"):
+        findings.append(_finding("target_date_mismatch", "reasoning decision target_date must match input packet"))
+    if decision.get("input_hash") != packet.get("input_hash"):
+        findings.append(_finding("input_hash_mismatch", "reasoning decision input_hash must match input packet"))
+    if decision.get("action") not in ALLOWED_ACTIONS:
+        findings.append(_finding("invalid_action", "reasoning decision action is not supported"))
+    if decision.get("mainline_state") not in ALLOWED_MAINLINE_STATES:
+        findings.append(_finding("invalid_mainline_state", "reasoning decision mainline_state is not supported"))
+    if decision.get("confidence") not in ALLOWED_CONFIDENCE:
+        findings.append(_finding("invalid_confidence", "reasoning decision confidence is not supported"))
+    if decision.get("model_source") not in ALLOWED_MODEL_SOURCES:
+        findings.append(_finding("invalid_model_source", "reasoning decision model_source is not supported"))
+
+    candidate_ids = _candidate_ids(packet)
+    unique_target = decision.get("unique_target")
+    if decision.get("action") == "do_nothing" and unique_target:
+        findings.append(_finding("do_nothing_has_unique_target", "do_nothing decisions must not name a unique target"))
+    if unique_target and str(unique_target) not in candidate_ids:
+        findings.append(_finding("unique_target_not_in_candidate_pool", "unique target must come from the candidate pool"))
+
+    if decision.get("action") == "conditional_entry" and (not decision.get("trigger_conditions") or not decision.get("failure_conditions")):
+        findings.append(_finding("conditional_entry_missing_conditions", "conditional entry must include trigger and failure conditions"))
+    if decision.get("confidence") == "low" and decision.get("action") == "conditional_entry":
+        findings.append(_finding("low_confidence_aggressive_action", "low confidence cannot create conditional entry"))
+
+    known_paths = _flatten_paths(packet)
+    for item in _as_list(decision.get("evidence")):
+        if not isinstance(item, Mapping):
+            findings.append(_finding("evidence_item_invalid", "evidence items must be objects"))
+            continue
+        field = str(item.get("field") or "").strip()
+        if field not in known_paths:
+            findings.append(_finding("evidence_field_unknown", f"evidence field is not present in input packet: {field}"))
+
+    for item in _as_list(decision.get("excluded_candidates")):
+        if not isinstance(item, Mapping):
+            findings.append(_finding("excluded_candidate_invalid", "excluded candidates must be objects"))
+            continue
+        candidate_id = str(item.get("id") or item.get("code") or "").strip()
+        if candidate_id and candidate_id not in candidate_ids:
+            findings.append(_finding("excluded_candidate_unknown", f"excluded candidate is not present in input packet: {candidate_id}"))
+
+    return {"passed": not findings, "findings": findings}
