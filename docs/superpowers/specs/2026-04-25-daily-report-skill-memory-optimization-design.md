@@ -2,7 +2,7 @@
 
 Date: 2026-04-25
 Scope: `a-daily-report` skill and daily-report workflow optimization
-Status: Draft for user review
+Status: Superseded by `2026-04-25-daily-report-xhigh-operating-system-design.md`
 
 ## 1. Problem Statement
 
@@ -397,4 +397,3 @@ After the user approves this design, write an implementation plan with these tas
 4. Wire validated workflow memory into report generation/review context.
 5. Rewrite or create the daily-report skill entry as a compact router.
 6. Add verification commands and replay checks.
-
