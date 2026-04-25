@@ -83,6 +83,24 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_skill_and_report_contract_inherit_reasoning_mode_contract(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        reasoning_contract = self._read("references/reasoning-mode-contract.md")
+        combined = "\n".join([skill, report_contract, reasoning_contract])
+
+        for required in [
+            "references/reasoning-mode-contract.md",
+            "reasoning decision JSON",
+            "no-API first",
+            "current-conversation reasoning",
+            "do not expose chain-of-thought",
+            "deterministic facts",
+            "bounded decisions",
+            "future report changes inherit both report contract and reasoning contract",
+        ]:
+            self.assertIn(required, combined)
+
     def test_verification_reference_names_practical_commands(self):
         verification = self._read("references/verification.md")
 

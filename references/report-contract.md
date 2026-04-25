@@ -15,6 +15,7 @@ This reference is for report quality judgment. It is not a command manual.
 
 - Future daily-report requests use a delta spec by default: describe only the new or changed behavior.
 - New requests default inherit this report contract unless the latest user instruction explicitly overrides it.
+- Future report changes inherit both report contract and reasoning contract unless the latest user instruction explicitly overrides them.
 - In practice, new report requests do not need to restate existing guardrails.
 
 ## Optimization Order
