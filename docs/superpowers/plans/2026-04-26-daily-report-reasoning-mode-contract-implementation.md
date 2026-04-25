@@ -903,6 +903,8 @@ Append this to `scripts/report/reasoning_decision_support.py`:
 def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, Any]) -> Dict[str, str]:
     snapshot = _as_dict(snapshot)
     decision = _as_dict(snapshot.get("reasoning_decision"))
+    if decision.get("action") != "conditional_entry" or decision.get("confidence") == "low":
+        return {}
     target_id = str(decision.get("unique_target") or "").strip()
     if not target_id:
         return {}
@@ -930,8 +932,7 @@ Change `_has_unique_action_target` to:
 ```python
 def _effective_unique_action_target(snapshot):
     snapshot = snapshot or {}
-    reasoning_decision = snapshot.get("reasoning_decision")
-    if isinstance(reasoning_decision, dict) and reasoning_decision:
+    if "reasoning_decision" in snapshot:
         return derive_unique_action_target_from_reasoning_decision(snapshot)
     target = snapshot.get("unique_action_target") or {}
     if isinstance(target, dict) and (target.get("name") or target.get("code")):

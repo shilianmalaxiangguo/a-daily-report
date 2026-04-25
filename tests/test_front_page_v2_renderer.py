@@ -181,6 +181,31 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
         self.assertIn("| 10点确认，不满足就空仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 |", rendered)
 
+    def test_empty_or_malformed_reasoning_decision_blocks_snapshot_unique_target(self):
+        for reasoning_decision in ({}, "invalid"):
+            with self.subTest(reasoning_decision=reasoning_decision):
+                rendered = "\n".join(
+                    render_front_page_v2(
+                        [],
+                        target_date="2026-04-24",
+                        market_research_snapshot={
+                            "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+                            "unique_action_target": {
+                                "name": "富瀚微",
+                                "code": "300613",
+                                "condition": "主线确认 + 承接 + 60分钟确认",
+                            },
+                            "mainline_turnover_summary": {"current_mainline": "半导体"},
+                            "reasoning_decision": reasoning_decision,
+                        },
+                    )
+                )
+
+                self.assertIn("### 1. 主线内观察候选", rendered)
+                self.assertNotIn("### 1. 主线内可执行候选", rendered)
+                self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+                self.assertIn("| 10点确认，不满足就空仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 |", rendered)
+
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
             render_front_page_v2(
