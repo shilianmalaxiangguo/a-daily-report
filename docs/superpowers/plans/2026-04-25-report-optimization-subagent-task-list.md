@@ -29,7 +29,7 @@ Continue optimizing the daily report as a trading-useful product: first make the
   - Likely files: `scripts/report/runtime.py`, `scripts/report/front_page_v2_renderer.py`, `tests/test_report_runtime.py`, `tests/test_front_page_v2_renderer.py`.
   - Verification: unit tests for day-over-day `占比变化`, replay audit still passes.
 
-- [ ] Task 3: Add only-focus decision audit.
+- [x] Task 3: Add only-focus decision audit.
   - User benefit: when the report names a unique target, it must be explainable by source, mainline consistency,承接,资金痕迹,60分钟条件, and excluded-object reasons.
   - Likely files: `scripts/report/report_acceptance_audit.py`, `scripts/report/front_page_v2_renderer.py`, execution-chain candidate or pk decision nodes, related tests.
   - Verification: audit flags unsupported unique target, real replay passes or honestly reports `暂无`.

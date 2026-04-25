@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 FRONT_PAGE_HEADINGS = [
@@ -53,6 +54,32 @@ DEGRADED_MARKERS = (
 
 NO_TRADE_MARKERS = ("不做", "不开新仓", "空仓等待")
 
+UNIQUE_FOCUS_EVIDENCE_FAMILIES = [
+    ("主线一致性", ("主线", "周期主线", "当天主攻线")),
+    ("承接", ("承接",)),
+    ("资金痕迹", ("资金", "资金痕迹")),
+    ("60分钟确认", ("60分钟确认", "60分钟K线确认")),
+    ("排除/不做兜底", ("不满足", "不做", "不开新仓", "排除")),
+]
+
+UNIQUE_FOCUS_BUY_LABELS = ("唯一买入", "可执行候选", "买入")
+UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
+    "只看，不买",
+    "不给买入指令",
+    "不构成买入指令",
+    "仅观察",
+    "只观察",
+    "观察",
+    "不买",
+    "不直接给资格",
+    "不直接给执行权",
+    "条件未满足",
+    "等10点确认",
+    "待确认",
+    "不开新仓",
+    "不做",
+)
+
 __all__ = ["audit_report_markdown"]
 
 
@@ -90,6 +117,11 @@ def _split_md_row(line):
     return [cell.strip() for cell in text.strip("|").split("|")]
 
 
+def _is_separator_cells(cells):
+    joined = "".join(cells).replace(" ", "")
+    return bool(joined) and set(joined) <= {"-", ":"}
+
+
 def _audit_front_page_headings(lines):
     findings = []
     front = _front_page_lines(lines)
@@ -119,8 +151,7 @@ def _extract_execution_window_labels(lines):
             continue
         if not cells:
             break
-        joined = "".join(cells)
-        if joined and set(joined) <= {"-"}:
+        if _is_separator_cells(cells):
             continue
         labels.append(cells[0])
     return labels
@@ -238,7 +269,7 @@ def _extract_final_unique_target(lines):
             cells = _split_md_row(candidate)
             if not cells:
                 continue
-            if set("".join(cells)) <= {"-"}:
+            if _is_separator_cells(cells):
                 continue
             if len(cells) > target_index:
                 return cells[target_index]
@@ -246,22 +277,116 @@ def _extract_final_unique_target(lines):
 
 
 def _is_empty_target(value):
-    return str(value or "").strip() in ("", "-", "暂无", "不做")
+    text = str(value or "").strip()
+    if text in ("", "-", "暂无", "不做"):
+        return True
+    if re.search(r"(?<!\d)\d{6}(?!\d)", text):
+        return False
+    return "暂无" in text or "不做" in text
 
 
 def _audit_unique_focus(lines):
-    execution_target = _extract_execution_unique_target(lines)
-    final_target = _extract_final_unique_target(lines)
-    if _is_empty_target(execution_target) or _is_empty_target(final_target):
-        return []
-    if execution_target != final_target:
-        return [
+    front = _front_page_lines(lines)
+    findings = []
+    execution_target = _extract_execution_unique_target(front)
+    final_target = _extract_final_unique_target(front)
+    execution_empty = _is_empty_target(execution_target)
+    final_empty = _is_empty_target(final_target)
+    if execution_empty != final_empty:
+        findings.append(
             _finding(
                 "unique_focus_mismatch",
                 f"execution target {execution_target} conflicts with final summary target {final_target}",
             )
-        ]
-    return []
+        )
+        return findings
+    if execution_empty and final_empty:
+        findings.extend(_audit_empty_unique_focus_contradictions(front))
+        return findings
+    if execution_target != final_target:
+        findings.append(
+            _finding(
+                "unique_focus_mismatch",
+                f"execution target {execution_target} conflicts with final summary target {final_target}",
+            )
+        )
+        return findings
+    findings.extend(_audit_concrete_unique_focus_evidence(front, execution_target))
+    return findings
+
+
+def _audit_concrete_unique_focus_evidence(front_lines, target):
+    evidence_text = "\n".join(line for line in front_lines if not str(line).lstrip().startswith("#"))
+    missing = []
+    for label, markers in UNIQUE_FOCUS_EVIDENCE_FAMILIES:
+        if any(marker in evidence_text for marker in markers):
+            continue
+        missing.append(label)
+    if not missing:
+        return []
+    return [
+        _finding(
+            "unique_focus_evidence_missing",
+            f"concrete unique target {target} is missing front-page decision evidence: {', '.join(missing)}",
+        )
+    ]
+
+
+def _has_stock_reference(cells):
+    text = " ".join(cells)
+    return bool(re.search(r"(?<!\d)\d{6}(?!\d)", text))
+
+
+def _has_observation_only_qualifier(cells):
+    text = " ".join(cells)
+    return any(marker in text for marker in UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS)
+
+
+def _has_actionable_buy_label(cells, header):
+    row_text = " ".join(cells)
+    if any(label in row_text for label in UNIQUE_FOCUS_BUY_LABELS):
+        return True
+    for index, title in enumerate(header):
+        if "明日资格" not in title or index >= len(cells):
+            continue
+        value = cells[index].strip()
+        if value in ("有", "是", "具备"):
+            return True
+        if any(label in value for label in UNIQUE_FOCUS_BUY_LABELS):
+            return True
+        if "可执行" in value or "可买" in value:
+            return True
+    return False
+
+
+def _audit_empty_unique_focus_contradictions(front_lines):
+    findings = []
+    header = []
+    for offset, line in enumerate(front_lines):
+        cells = _split_md_row(line)
+        if not cells:
+            header = []
+            continue
+        if _is_separator_cells(cells):
+            continue
+        next_cells = _split_md_row(front_lines[offset + 1]) if offset + 1 < len(front_lines) else []
+        if _is_separator_cells(next_cells):
+            header = cells
+            continue
+        if not _has_stock_reference(cells):
+            continue
+        if _has_observation_only_qualifier(cells):
+            continue
+        if not _has_actionable_buy_label(cells, header):
+            continue
+        findings.append(
+            _finding(
+                "unique_focus_contradiction",
+                "unique target is empty, but the front page labels a concrete stock as buyable or executable",
+                line=offset + 1,
+            )
+        )
+    return findings
 
 
 def audit_report_markdown(markdown):

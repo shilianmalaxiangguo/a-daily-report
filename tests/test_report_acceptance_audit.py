@@ -118,6 +118,53 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
 
+    def test_audit_flags_concrete_unique_focus_without_required_decision_evidence(self):
+        bad = GOOD_MARKDOWN.replace("承接", "强弱")
+
+        result = audit_report_markdown(bad)
+
+        matching_findings = [
+            finding for finding in result["findings"] if finding["code"] == "unique_focus_evidence_missing"
+        ]
+        self.assertTrue(matching_findings, result["findings"])
+        self.assertIn("承接", matching_findings[0]["message"])
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_empty_unique_focus_with_observation_only_rows(self):
+        report = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+        ).replace(
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | 空仓 / 短线确认 | 条件不满足就不做 |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn("unique_focus_contradiction", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_empty_unique_focus_with_concrete_buy_candidate(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+        ).replace(
+            "| 主线内唯一重点 | 跨线对象定位 | 动作原则 |\n"
+            "|----------------|--------------|----------|\n"
+            "| 富瀚微(300613) | 只看外溢 | 10点确认 |",
+            "| 主线内唯一重点 | 跨线对象定位 | 动作原则 |\n"
+            "|----------------|--------------|----------|\n"
+            "| 富瀚微(300613) | 半导体 | 唯一买入，10点确认 |",
+        ).replace(
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | 空仓 / 短线确认 | 条件不满足就不做 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("unique_focus_contradiction", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_missing_execution_windows(self):
         bad = GOOD_MARKDOWN.replace(
             "| 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |\n",
