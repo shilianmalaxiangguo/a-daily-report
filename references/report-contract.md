@@ -11,6 +11,12 @@ This reference is for report quality judgment. It is not a command manual.
 - Do not hide missing data behind fake precision such as `0.00%`.
 - Do not repeat empty-position or no-trade conclusions.
 
+## Future Change Inheritance
+
+- Future daily-report requests use a delta spec by default: describe only the new or changed behavior.
+- New requests default inherit this report contract unless the latest user instruction explicitly overrides it.
+- In practice, new report requests do not need to restate existing guardrails.
+
 ## Optimization Order
 
 Use this order for broad report optimization:

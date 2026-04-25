@@ -68,6 +68,21 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_future_change_specs_default_to_inherited_report_contract(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        combined = "\n".join([skill, report_contract])
+
+        for required in [
+            "Future Change Inheritance",
+            "delta spec",
+            "default inherit",
+            "report contract",
+            "unless the latest user instruction explicitly overrides it",
+            "new report requests do not need to restate existing guardrails",
+        ]:
+            self.assertIn(required, combined)
+
     def test_verification_reference_names_practical_commands(self):
         verification = self._read("references/verification.md")
 
