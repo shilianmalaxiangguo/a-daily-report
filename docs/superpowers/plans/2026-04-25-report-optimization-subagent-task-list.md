@@ -39,7 +39,7 @@ Continue optimizing the daily report as a trading-useful product: first make the
   - Likely files: `scripts/research/entry_cycle_calibration_runtime.py`, `scripts/domains/execution_chain/entry_plan_stage.py`, entry-plan node tests.
   - Verification: April success/counterexample classification tests plus report runtime tests.
 
-- [ ] Task 5: Minimal workflow memory and skill routing only after Tasks 1-4.
+- [x] Task 5: Minimal workflow memory and skill routing only after Tasks 1-4.
   - User benefit: repeated report bugs and wording preferences become reviewable memory artifacts without forcing users to remember commands.
   - Likely files: `SKILL.md` or skill references, a small review-artifact script, tests for schema/routing if present.
   - Verification: generated review artifact only, no auto-apply to formal memory.
