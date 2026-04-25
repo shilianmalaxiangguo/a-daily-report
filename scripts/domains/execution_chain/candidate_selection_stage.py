@@ -95,6 +95,7 @@ def build_candidate_selection_runtime(stage_context, stage_meta, stage_lookup=No
         "data": data,
         "target_date": target_date,
         "position_level": stage_context.get("position_level", ""),
+        "final_gate": stage_context.get("final_gate", {}) or {},
         "exit_analysis": exit_analysis,
         "dragon_stocks": dragon_stocks,
         "display_mvp_mode": display_mvp_mode,

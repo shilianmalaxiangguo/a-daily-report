@@ -1,9 +1,73 @@
 from report.front_summary_node_registry import build_front_summary_node_specs
 from report.front_summary_node_runtime import run_front_summary_nodes
+from report.mainline_turnover_summary_support import resolve_double_mainline_summary, resolve_turnover_share_trend_rows
+
+
+ENGLISH_TRADING_JARGON_REPLACEMENTS = (
+    ("follow through", "延续承接"),
+    ("act right", "走势符合强势标准"),
+    ("setup", "形态条件"),
+    ("probe", "优先观察对象"),
+)
+
+USER_VISIBLE_WORDING_REPLACEMENTS = (
+    ("执行权限", "执行资格"),
+    ("执行权", "资格"),
+    ("闸门未开", "条件未满足"),
+    ("环境闸门", "环境条件"),
+    ("门控", "条件"),
+    ("开闸", "可做"),
+    ("放行", "可做"),
+)
+
+
+def sanitize_front_page_text(value):
+    if isinstance(value, str):
+        sanitized = value
+        for source, target in ENGLISH_TRADING_JARGON_REPLACEMENTS:
+            sanitized = sanitized.replace(source, target).replace(source.title(), target).replace(source.upper(), target)
+        for source, target in USER_VISIBLE_WORDING_REPLACEMENTS:
+            sanitized = sanitized.replace(source, target)
+        return sanitized
+    if isinstance(value, list):
+        return [sanitize_front_page_text(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(sanitize_front_page_text(item) for item in value)
+    if isinstance(value, dict):
+        return {key: sanitize_front_page_text(item) for key, item in value.items()}
+    return value
+
+
+def _render_double_mainline_summary_table(context):
+    summary = resolve_double_mainline_summary(context)
+    if not summary:
+        return []
+    return [
+        "| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |",
+        "|----------|------------|----------|----------|",
+        "| {cycle_mainline} | {daily_attack_line} | {relationship} | {tomorrow_action} |".format(**summary),
+    ]
+
+
+def _render_turnover_share_trend_table(context):
+    rows = resolve_turnover_share_trend_rows(context)
+    if not rows:
+        return []
+    lines = [
+        "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+        "|------|----------|------------|------------|------------|------|----------|------|",
+    ]
+    for row in rows:
+        lines.append(
+            "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
+                **row
+            )
+        )
+    return lines
 
 
 def render_front_digest(context):
-    context = context or {}
+    context = sanitize_front_page_text(context or {})
     risk_parts = context.get("risk_parts") or []
     lines = [
         "### 🧭 前台摘要",
@@ -11,6 +75,10 @@ def render_front_digest(context):
         f"- **市场现在什么状态**: {context.get('state_text', '-')}",
         f"- **明日主看方向**: {context.get('mainline_label', '-')}",
     ]
+    if context.get("mainline_turnover_text"):
+        lines.append(f"- **主线更替与占比**: {context.get('mainline_turnover_text')}")
+    lines.extend(_render_double_mainline_summary_table(context))
+    lines.extend(_render_turnover_share_trend_table(context))
     if context.get("special_probe_text"):
         lines.append(f"- **特殊标的先看谁**: {context.get('special_probe_text')}")
     if context.get("philosophy_constraint_text"):
@@ -44,6 +112,7 @@ def render_front_digest(context):
             "先说结论",
             "市场现在什么状态",
             "明日主看方向",
+            "主线更替与占比",
             "特殊标的先看谁",
             "明天更适合怎么做",
             "明天要防什么",
@@ -56,7 +125,7 @@ def render_front_digest(context):
 
 
 def render_mvp_focus_summary(context):
-    context = context or {}
+    context = sanitize_front_page_text(context or {})
     lines = ["### 🎯 明日MVP摘要"]
     optional_items = [
         ("特殊标的先看谁", context.get("special_probe_text")),
@@ -140,4 +209,4 @@ def build_front_summary_sections_result(context):
 
 
 def render_front_summary_sections(context):
-    return build_front_summary_sections_result(context).get("lines", [])
+    return sanitize_front_page_text(build_front_summary_sections_result(context).get("lines", []))

@@ -191,6 +191,41 @@ assert follow == {"code": "follow"}
         self.assertIs(contract_mock.call_args.kwargs["build_follow_verdict"], follow_verdict)
         self.assertIs(contract_mock.call_args.kwargs["build_dialectical_decision_snapshot"], dialectical)
 
+    def test_build_market_research_snapshot_support_passes_cycle_layer_source_data_to_contract(self):
+        support = self._load_module()
+
+        with patch(
+            "research.market_research_support.build_market_research_snapshot_contract",
+            return_value={"cycle_calendar_rows": [{"week_label": "04-21当周"}]},
+        ) as contract_mock:
+            result = support.build_market_research_snapshot(
+                {
+                    "recent_mainline_history": [{"date": "2026-04-21", "primary_mainline": "半导体"}],
+                    "current_mainline_history_record": {"date": "2026-04-24", "primary_mainline": "半导体"},
+                    "pivot_mainline_history": [{"date_range": "04-21 ~ 04-24", "mainline": "半导体"}],
+                },
+                {"can_new_entry": True},
+                "三档（进攻档）",
+                {"overall_level": "黄灯"},
+                target_date="2026-04-24",
+                helpers={
+                    "_build_abnormal_projection_summary": lambda pool=None: {"projection_label": "承接强化"},
+                    "_build_market_style_switch_snapshot": lambda *args, **kwargs: {"style_label": "主线抱团"},
+                    "_build_market_state_machine_snapshot": lambda *args, **kwargs: {"leading_line": "半导体"},
+                    "_build_mainline_rotation_snapshot": lambda **kwargs: {"summary_text": "半导体尝试接力"},
+                    "_build_abnormal_probe_group": lambda **kwargs: {"probe_group_label": "先看异常"},
+                    "_build_special_probe_verdict": lambda **kwargs: {"summary_text": "先看异常承接"},
+                    "_build_follow_verdict": lambda *args, **kwargs: {"label": "🟡 条件跟随"},
+                    "_build_dialectical_decision_snapshot": lambda **kwargs: {"stage_label": "试探修复"},
+                },
+            )
+
+        forwarded_data = contract_mock.call_args.args[0]
+        self.assertEqual(result["cycle_calendar_rows"], [{"week_label": "04-21当周"}])
+        self.assertIn("recent_mainline_history", forwarded_data)
+        self.assertIn("current_mainline_history_record", forwarded_data)
+        self.assertIn("pivot_mainline_history", forwarded_data)
+
     def test_build_dialectical_decision_snapshot_support_builds_stage_and_falsification_contract(self):
         support = self._load_module()
 
@@ -304,6 +339,24 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["label"], "🟠 只处理旧仓")
         self.assertIn("先处理异常对象", result["action"])
 
+    def test_build_follow_verdict_supports_conditional_defense_confirmation(self):
+        support = self._load_module()
+
+        result = support.build_follow_verdict(
+            {"can_new_entry": False, "should_reduce": False, "allow_conditional_30": True},
+            "二档（防守档）",
+            {
+                "energy_state": "收缩防守",
+                "execution_bias": "reduce_only",
+                "pulse_action_reason": "环境未开且主线偏弱，当前只允许处理旧仓，不再给新增执行权。",
+            },
+        )
+
+        self.assertEqual(result["code"], "conditional_defense")
+        self.assertEqual(result["label"], "🟡 条件防守观察")
+        self.assertIn("指数结构未坏", result["reason"])
+        self.assertIn("10点确认", result["action"])
+
     def test_build_mainline_competition_snapshot_support_builds_ranked_rows(self):
         support = self._load_module()
 
@@ -392,6 +445,11 @@ assert follow == {"code": "follow"}
                     "state_machine": {"energy_state": "修复", "state_reason": "主线回流", "flow_direction": "向主线收敛"},
                     "abnormal_projection": {"projection_label": "承接强化", "projection_reason": "异常股跌不下去"},
                     "follow_verdict": {"label": "🟢 跟随主线", "reason": "主线清晰"},
+                    "mainline_turnover_summary": {
+                        "conclusion": "主线未切换，军工仍是中心",
+                        "data_text": "最近3日主线 军工 -> 军工 -> 军工；成交额占比 10.2% -> 12.8% -> 15.1%",
+                        "action_text": "继续围绕军工做减法",
+                    },
                 },
                 compact=True,
                 helpers={
@@ -405,8 +463,59 @@ assert follow == {"code": "follow"}
         self.assertEqual(payload["competition_result"], "主攻线 军工")
         self.assertEqual(payload["competition_evidence"], "量能最强")
         self.assertEqual(payload["rotation_summary_text"], "军工继续聚焦")
+        self.assertEqual(payload["mainline_turnover_summary"]["conclusion"], "主线未切换，军工仍是中心")
         self.assertEqual(payload["state_energy"], "修复")
         self.assertEqual(payload["dialectical_decision"]["stage_label"], "主升")
+
+    def test_build_market_research_snapshot_support_derives_mainline_turnover_summary_from_runtime_helpers(self):
+        support = self._load_module()
+
+        result = support.build_market_research_snapshot(
+            data={"total_turnover": 10000.0},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            exit_analysis={"overall_level": "黄灯"},
+            observation_snapshot={
+                "abnormal_watch_pool": [{"code": "000001"}],
+                "main_sectors_info": [{"name": "通信"}],
+                "secondary_sectors_info": [{"name": "机器人"}],
+                "sector_trend_snapshot": [{"sector": "通信"}],
+            },
+            target_date="2026-04-24",
+            helpers={
+                "_build_abnormal_projection_summary": lambda pool: {"projection_label": "承接强化"},
+                "_build_market_style_switch_snapshot": lambda target_date, data, observation_snapshot, abnormal_projection: {"style_label": "主线抱团"},
+                "_build_market_state_machine_snapshot": lambda *args, **kwargs: {"leading_line": "通信", "state_code": "expand"},
+                "_build_mainline_rotation_snapshot": lambda **kwargs: {"summary_text": "通信继续聚焦"},
+                "_build_abnormal_probe_group": lambda **kwargs: {"probe_group_label": "先看异常"},
+                "_build_special_probe_verdict": lambda **kwargs: {"summary_text": "先看异常承接", "action": "看通信异常股"},
+                "_build_follow_verdict": lambda *args, **kwargs: {"label": "🟢 跟随主线", "reason": "主线清晰", "action": "只跟通信"},
+                "_build_dialectical_decision_snapshot": lambda **kwargs: {"stage_label": "主升", "stage_action": "继续跟随"},
+                "build_mainline_history_record_runtime": lambda target_date, market_research_snapshot=None: {
+                    "date": target_date,
+                    "primary_mainline": "通信",
+                    "leading_line": "通信",
+                },
+                "load_recent_mainline_history_runtime": lambda target_date, lookback_days=5: [
+                    {"date": "2026-04-22", "primary_mainline": "通信"},
+                    {"date": "2026-04-23", "primary_mainline": "通信"},
+                ],
+                "get_sector_turnover_snapshot_from_ths_runtime": lambda sector_name, **kwargs: {
+                    "date": "2026-04-24",
+                    "sector_name": sector_name,
+                    "turnover_share_pct": 18.1,
+                },
+                "load_recent_sector_turnover_history_runtime": lambda target_date, sector_name, lookback_days=5: [
+                    {"date": "2026-04-22", "sector_name": sector_name, "turnover_share_pct": 12.4},
+                    {"date": "2026-04-23", "sector_name": sector_name, "turnover_share_pct": 15.8},
+                ],
+            },
+        )
+
+        self.assertEqual(result["current_mainline_history_record"]["primary_mainline"], "通信")
+        self.assertEqual(result["current_sector_turnover_snapshot"]["sector_name"], "通信")
+        self.assertEqual(result["mainline_turnover_summary"]["conclusion"], "主线未切换，通信仍是中心")
+        self.assertIn("18.1%", result["mainline_turnover_summary"]["data_text"])
 
     def test_build_market_research_context_bundle_support_passes_nested_support_helpers(self):
         support = self._load_module()
@@ -505,6 +614,40 @@ assert follow == {"code": "follow"}
 
         self.assertEqual(contract_mock.call_args.kwargs["decision_strict_mode"], False)
         self.assertEqual(contract_mock.call_args.kwargs["allow_display_degraded_abnormal_snapshot"], True)
+
+    def test_render_market_research_snapshot_section_passes_lhb_capital_intent_to_renderer(self):
+        result = _run_legacy_entry_probe(
+            """
+from research.market_research_support import render_market_research_snapshot_section
+
+lines = render_market_research_snapshot_section({
+    'observation': {},
+    'style_switch': {},
+    'state_machine': {},
+    'abnormal_projection': {},
+    'follow_verdict': {},
+    'mainline_turnover_summary': {},
+    'lhb_capital_status': {
+        'capital_strength': '强',
+        'capital_intensity': '净买入集中',
+        'capital_direction': '半导体',
+        'capital_intent': '承接主线核心',
+        'style_shift': '资金向主线集中',
+        'event_attribute': '龙虎榜资金行为',
+    },
+    'capital_conclusion': {
+        'current_capital_state': '龙虎榜资金强',
+        'mainline_attitude': '资金仍在主线内确认',
+        'tomorrow_action_meaning': '只看主线核心承接',
+    },
+})
+rendered = '\\n'.join(lines)
+assert '#### 龙虎榜资金状态' in rendered, rendered
+assert '| 强 | 净买入集中 | 半导体 | 承接主线核心 | 资金向主线集中 | 龙虎榜资金行为 |' in rendered, rendered
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
 
 
 if __name__ == "__main__":

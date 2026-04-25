@@ -7,17 +7,23 @@ from report.report_shell_nodes import (
     _build_prohibition_payload,
     build_allowed_header_node,
     build_allowed_items_node,
-    build_prohibition_blank_after_environment_node,
-    build_prohibition_blank_before_allowed_node,
-    build_prohibition_blank_before_risk_node,
     build_prohibition_environment_node,
     build_prohibition_header_node,
     build_prohibition_items_node,
+    build_report_shell_capital_intent_placeholder_node,
+    build_report_shell_cycle_mainline_header_node,
+    build_report_shell_cycle_calendar_placeholder_node,
+    build_report_shell_cycle_interpretation_placeholder_node,
     build_report_shell_blank_node,
     build_report_shell_discipline_header_node,
-    build_report_shell_discipline_intro_node,
     build_report_shell_discipline_placeholder_node,
+    build_report_shell_execution_plan_header_node,
+    build_report_shell_final_summary_placeholder_node,
+    build_report_shell_market_base_header_node,
+    build_report_shell_market_base_placeholder_node,
     build_report_shell_preamble_node,
+    build_report_shell_pivot_mainline_placeholder_node,
+    build_report_shell_stock_interpretation_placeholder_node,
     build_risk_section_node,
 )
 
@@ -54,10 +60,17 @@ def build_report_shell_contract(
     builder_map = {
         "preamble": build_report_shell_preamble_node,
         "discipline_header": build_report_shell_discipline_header_node,
-        "blank_after_header": build_report_shell_blank_node,
-        "discipline_intro": build_report_shell_discipline_intro_node,
-        "blank_after_intro": build_report_shell_blank_node,
         "discipline_placeholder": build_report_shell_discipline_placeholder_node,
+        "market_base_header": build_report_shell_market_base_header_node,
+        "market_base_placeholder": build_report_shell_market_base_placeholder_node,
+        "cycle_mainline_header": build_report_shell_cycle_mainline_header_node,
+        "cycle_calendar_placeholder": build_report_shell_cycle_calendar_placeholder_node,
+        "cycle_interpretation_placeholder": build_report_shell_cycle_interpretation_placeholder_node,
+        "pivot_mainline_placeholder": build_report_shell_pivot_mainline_placeholder_node,
+        "capital_intent_placeholder": build_report_shell_capital_intent_placeholder_node,
+        "stock_interpretation_placeholder": build_report_shell_stock_interpretation_placeholder_node,
+        "execution_plan_header": build_report_shell_execution_plan_header_node,
+        "final_summary_placeholder": build_report_shell_final_summary_placeholder_node,
         "footer": build_report_shell_blank_node,
     }
     node_specs = build_report_shell_node_specs(builder_map, enabled_node_keys=enabled_node_keys)
@@ -101,13 +114,10 @@ def build_prohibition_section_contract(
     risk_sector_count = len((exit_analysis or {}).get("risk_sectors", []) or [])
     builder_map = {
         "environment": build_prohibition_environment_node,
-        "blank_after_environment": build_prohibition_blank_after_environment_node,
         "prohibition_header": build_prohibition_header_node,
         "prohibition_items": build_prohibition_items_node,
-        "blank_before_allowed": build_prohibition_blank_before_allowed_node,
         "allowed_header": build_allowed_header_node,
         "allowed_items": build_allowed_items_node,
-        "blank_before_risk": build_prohibition_blank_before_risk_node,
         "risk_section": build_risk_section_node,
     }
     node_specs = build_prohibition_section_node_specs(builder_map, enabled_node_keys=enabled_node_keys)

@@ -179,9 +179,9 @@ class MarketActivityRequestTest(unittest.TestCase):
         emitted = []
         tencent = _TencentStub()
         tencent.get_sector_fund_flow = lambda flow_type="in", limit=50: (
-            [{"name": "军工", "zljlr": 12.3, "zdf": 1.5}]
+            [{"name": "军工", "code": "pt01801000", "zljlr": 12.3, "zdf": 1.5, "cje": 1234567.0}]
             if flow_type == "in"
-            else [{"name": "消费", "zljlr": -8.1, "zdf": -1.2}]
+            else [{"name": "消费", "code": "pt01801001", "zljlr": -8.1, "zdf": -1.2, "cje": 880000.0}]
         )
 
         result = collect_market_activity_sector_snapshot_request_bundle(
@@ -202,6 +202,8 @@ class MarketActivityRequestTest(unittest.TestCase):
 
         self.assertEqual(result["results"]["hot_plates"][0]["name"], "军工")
         self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["name"], "军工")
+        self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["turnover_yi"], 123.46)
+        self.assertEqual(result["results"]["sector_fund_flow"]["outflow"][0]["turnover_yi"], 88.0)
         self.assertEqual(result["results"]["sector_change_up"][0]["name"], "军工")
         self.assertEqual(len(result["results"]["turnover_over_100b"]), 1)
         self.assertTrue(result["data_status"]["板块热榜"])

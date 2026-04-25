@@ -1215,13 +1215,14 @@ def _compute_avg_volume(bars, sample_size=5, exclude_last=False):
     )
 
 
-def build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type='', fallback_stop=None):
+def build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type='', fallback_stop=None, entry_cycle_profile=None):
     return run_build_intraday_execution_plan(
         stock_code,
         target_date,
         entry_price,
         signal_type=signal_type,
         fallback_stop=fallback_stop,
+        entry_cycle_profile=entry_cycle_profile,
         helpers={
             "fetch_intraday_bars": fetch_intraday_bars,
             "build_stop_execution_plan": build_stop_execution_plan,

@@ -6,11 +6,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from domains.execution_chain.pk_decision_stage import build_pk_decision_stage
+from domains.execution_chain.pk_decision_stage import build_pk_decision_stage, format_closed_gate_buy_limit_text
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
 
 class PkDecisionStageTest(unittest.TestCase):
+    def test_conditional_defense_gate_formats_as_ten_oclock_confirmation_not_absolute_ban(self):
+        self.assertEqual(
+            format_closed_gate_buy_limit_text("二档（防守档）", {"allow_conditional_30": True}),
+            "等10点确认，未确认不开",
+        )
+        self.assertEqual(
+            format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_conditional_30": False}),
+            "⛔一档（空仓档）禁止新开仓",
+        )
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [

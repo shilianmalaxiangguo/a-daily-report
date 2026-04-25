@@ -23,6 +23,8 @@ def build_entry_plan_conclusion_node(context, node_meta=None, node_lookup=None):
     lines.append(f"- **执行节奏**: {context['get_execution_framework_text']()}")
     if final_gate.get("can_new_entry", False):
         lines.append("- **⚠️ 重要**: 以上买点基于今日收盘数据预计算，明日若直接高开离买点>5%，则放弃；即便满足价格条件，也要等60分钟确认后再买")
+    elif final_gate.get("allow_conditional_30"):
+        lines.append(f"- **🟡 档位限制**: {position_level}，只保留10点确认后的30%条件试错；没有主线承接就不开新仓")
     else:
         lines.append(f"- **⛔ 档位限制**: {position_level}，禁止任何买入操作")
     lines.append("")

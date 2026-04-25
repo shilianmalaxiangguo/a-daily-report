@@ -10,6 +10,13 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def format_closed_gate_buy_limit_text(position_level, final_gate):
+    final_gate = final_gate or {}
+    if final_gate.get("allow_conditional_30"):
+        return "等10点确认，未确认不开"
+    return f"⛔{position_level}禁止新开仓"
+
+
 def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
     stage_context = stage_context or {}
     logs = []
@@ -558,6 +565,8 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
                 conclusion_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(price_focus)}")
             if trade_gate_open:
                 conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
+            elif final_gate.get("allow_conditional_30"):
+                conclusion_lines.append("- **当前先不抢**: 二档防守观察，只在10点确认主线承接后评估30%条件试错")
             else:
                 conclusion_lines.append(f"- **当前先不买**: {position_level}，当前只允许观察，不允许新买入")
         else:
@@ -650,7 +659,7 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
                 "action": "❌ 明天没有可买对象",
                 "name": "-",
                 "code": "-",
-                "trigger": f"⛔{position_level}禁止新开仓" if not trade_gate_open else "无符合条件标的",
+                "trigger": format_closed_gate_buy_limit_text(position_level, final_gate) if not trade_gate_open else "无符合条件标的",
                 "risk_window": "-",
             }
         )
@@ -709,11 +718,11 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
                 else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，禁止新开仓"
             )
         else:
-            position_section_lines.append("- **明天仓位放多少**: 最多30%（持有但不新增）")
+            position_section_lines.append("- **明天仓位放多少**: 最多30%（只在10点确认后条件试错）")
             position_section_lines.append(
-                "- **明天具体怎么做**: 持有你的现有强仓，禁止新开仓"
+                "- **明天具体怎么做**: 旧强仓可持有；新仓只允许主线核心完成10点确认后小仓试错"
                 if has_personal_positions
-                else "- **明天具体怎么做**: 若你有现有强仓可继续持有，禁止新开仓"
+                else "- **明天具体怎么做**: 只观察主线核心是否完成10点确认，确认前不开，确认后最多30%条件试错"
             )
     else:
         if not best_stock:
@@ -823,15 +832,26 @@ def build_pk_decision_stage(stage_context, stage_meta, stage_lookup=None):
             "- 若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格",
         ]
     else:
-        first_hour_lines = [
-            "- 当前门控不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
-            "- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增",
-        ]
-        intraday_lines = [
-            "- 以观察和处理持仓为主，不做新开仓",
-            "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
-            "- 若观察标的全天未形成更强确认 → 继续等待",
-        ]
+        if final_gate.get("allow_conditional_30"):
+            first_hour_lines = [
+                "- 当前仍是防守观察，本时段只确认主线核心是否完成10点确认",
+                "- 重点观察优先锚点是否继续走强；确认后最多30%条件试错，未确认不开",
+            ]
+            intraday_lines = [
+                "- 以观察和处理持仓为主；新仓只允许10点确认后的主线核心小仓试错",
+                "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
+                "- 若观察标的全天未形成更强确认 → 继续等待",
+            ]
+        else:
+            first_hour_lines = [
+                "- 当前门控不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
+                "- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增",
+            ]
+            intraday_lines = [
+                "- 以观察和处理持仓为主，不做新开仓",
+                "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
+                "- 若观察标的全天未形成更强确认 → 继续等待",
+            ]
 
     closing_lines = ["- 未买入的保持观望"]
     if trade_gate_open and best_stock:

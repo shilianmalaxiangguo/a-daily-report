@@ -203,6 +203,24 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(pulse["pulse_stage"], "加速")
         self.assertEqual(pulse["execution_bias"], "allow_execute")
 
+    def test_derive_mainline_pulse_snapshot_keeps_conditional_defense_when_gate_allows_30(self):
+        support = self._load_module()
+
+        pulse = support.derive_mainline_pulse_snapshot(
+            final_gate={"can_new_entry": False, "should_reduce": False, "allow_conditional_30": True},
+            state_code="contract",
+            leading_line="半导体",
+            trend_density=2,
+            resilient_count=0,
+            failed_count=0,
+            zt_count=59,
+            dt_count=20,
+        )
+
+        self.assertEqual(pulse["execution_bias"], "conditional_defense")
+        self.assertIn("10点确认", pulse["pulse_action_reason"])
+        self.assertNotIn("只允许处理旧仓", pulse["pulse_action_reason"])
+
     def test_build_market_state_machine_snapshot_support_builds_transition_contract(self):
         support = self._load_module()
 

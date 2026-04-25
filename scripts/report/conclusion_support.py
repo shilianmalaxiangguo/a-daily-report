@@ -37,6 +37,22 @@ def build_market_outlook_text(context):
 
 
 def build_focus_recap_text(context):
+    best_stock = context.get("best_stock") or {}
+    if best_stock:
+        return f"{format_stock_label(best_stock)}：已缩成明天唯一执行候选"
+
+    core_stocks = context.get("core_stocks") or []
+    if core_stocks:
+        return f"{format_stock_label(core_stocks[0])}：主线核心候选，优先观察"
+
+    watch_anchor = context.get("watch_anchor") or {}
+    if watch_anchor:
+        note_text = get_watch_anchor_note(watch_anchor)
+        recap_text = f"{format_stock_label(watch_anchor)}：继续作为重点观察对象"
+        if note_text:
+            recap_text = f"{recap_text}；{note_text}"
+        return recap_text
+
     today_focus_items = resolve_today_focus_items(context)
     if today_focus_items:
         parts = []
@@ -53,18 +69,6 @@ def build_focus_recap_text(context):
                 state_text = f"来自{'/'.join(sources)}" if sources else "继续观察"
             parts.append(f"{stock_label}：{state_text}")
         return "；".join(parts)
-
-    best_stock = context.get("best_stock") or {}
-    if best_stock:
-        return f"{format_stock_label(best_stock)}：已缩成明天唯一执行候选"
-
-    watch_anchor = context.get("watch_anchor") or {}
-    if watch_anchor:
-        note_text = get_watch_anchor_note(watch_anchor)
-        recap_text = f"{format_stock_label(watch_anchor)}：继续作为重点观察对象"
-        if note_text:
-            recap_text = f"{recap_text}；{note_text}"
-        return recap_text
 
     return "今天没有新增可信关注对象，明天先空仓观察"
 

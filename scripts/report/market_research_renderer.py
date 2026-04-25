@@ -7,7 +7,12 @@ from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_footer_node,
     build_market_research_snapshot_header_node,
     build_market_research_snapshot_leader_memory_node,
+    build_market_research_snapshot_lhb_capital_intent_node,
     build_market_research_snapshot_mainline_focus_node,
+    build_market_research_snapshot_cycle_calendar_node,
+    build_market_research_snapshot_cycle_interpretation_node,
+    build_market_research_snapshot_pivot_mainline_interpretation_node,
+    build_market_research_snapshot_mainline_turnover_node,
     build_market_research_snapshot_narrative_node,
     build_market_research_snapshot_risk_preference_node,
     build_market_research_snapshot_rotation_node,
@@ -35,9 +40,14 @@ from report.step0_follow_nodes import (
 
 MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS = {
     "header": build_market_research_snapshot_header_node,
+    "cycle_calendar": build_market_research_snapshot_cycle_calendar_node,
+    "cycle_interpretation": build_market_research_snapshot_cycle_interpretation_node,
+    "pivot_mainline_interpretation": build_market_research_snapshot_pivot_mainline_interpretation_node,
     "table_header": build_market_research_snapshot_table_header_node,
     "risk_preference": build_market_research_snapshot_risk_preference_node,
     "mainline_focus": build_market_research_snapshot_mainline_focus_node,
+    "mainline_turnover": build_market_research_snapshot_mainline_turnover_node,
+    "lhb_capital_intent": build_market_research_snapshot_lhb_capital_intent_node,
     "rotation": build_market_research_snapshot_rotation_node,
     "narrative": build_market_research_snapshot_narrative_node,
     "style_background": build_market_research_snapshot_style_background_node,
@@ -136,12 +146,22 @@ def render_gem_breathing_pool_section(context):
 def render_market_research_snapshot_section(context):
     context = context or {}
     compact = bool(context.get("compact"))
+    if context.get("enabled_node_keys") and "lhb_capital_intent" in context.get("enabled_node_keys"):
+        builders = dict(MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS)
+        builder = builders.pop("lhb_capital_intent")
+        lines = []
+        if "header" in context.get("enabled_node_keys"):
+            lines.extend(build_market_research_snapshot_header_node(context).get("lines", []))
+        lines.extend(builder(context).get("lines", []))
+        return lines
     node_specs = build_market_research_snapshot_node_specs(
         MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS,
         enabled_node_keys=context.get("enabled_node_keys"),
         compact=compact,
     )
     result = run_market_research_snapshot_nodes(node_specs, context)
+    if not context.get("enabled_node_keys") and (context.get("lhb_capital_status") or context.get("capital_conclusion")):
+        result["lines"].extend(build_market_research_snapshot_lhb_capital_intent_node(context).get("lines", []))
     return result["lines"]
 
 

@@ -60,6 +60,8 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertIn("- **当前信号**: 主线承接强", rendered)
         self.assertIn("| 排名 | 股票 | 代码 | 所属板块 | 今日形态 | 预判分数 | 明日预期 | 入池依据 |", rendered)
         self.assertIn("**龙头记忆库**", rendered)
+        self.assertIn("二次确认观察", rendered)
+        self.assertNotIn("可信记忆", rendered)
         self.assertIn("**异动后观察池**", rendered)
         self.assertIn("**结论**:", rendered)
         self.assertIn("- **优先顺序**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选", rendered)

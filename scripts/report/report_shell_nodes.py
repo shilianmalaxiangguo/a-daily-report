@@ -16,23 +16,67 @@ def build_report_shell_preamble_node(context, node_meta=None, node_lookup=None):
 
 
 def build_report_shell_discipline_header_node(context, node_meta=None, node_lookup=None):
-    return {"lines": ["## 🚫 次日操作纪律（第一眼看这里）"], "exports": {}, "module_logs": []}
+    return {"lines": ["## 一、交易纪律"], "exports": {}, "module_logs": []}
 
 
 def build_report_shell_blank_node(context, node_meta=None, node_lookup=None):
     return {"lines": [""], "exports": {}, "module_logs": []}
 
 
-def build_report_shell_discipline_intro_node(context, node_meta=None, node_lookup=None):
+def build_report_shell_discipline_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["<!-- PROHIBITION_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_market_base_header_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "## 二、市场基底"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_market_base_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["<!-- FRONT_PAGE_MARKET_BASE_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_cycle_mainline_header_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "## 三、周期与主线", "<!-- MARKET_RESEARCH_SNAPSHOT_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_cycle_calendar_placeholder_node(context, node_meta=None, node_lookup=None):
     return {
-        "lines": ["次日早盘打开日报，第一眼看这里。不在允许清单里的，就是禁止的。"],
+        "lines": ["", "### 1. 周期日历主视图", "<!-- FRONT_PAGE_CYCLE_CALENDAR_PLACEHOLDER -->"],
         "exports": {},
         "module_logs": [],
     }
 
 
-def build_report_shell_discipline_placeholder_node(context, node_meta=None, node_lookup=None):
-    return {"lines": ["<!-- PROHIBITION_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+def build_report_shell_cycle_interpretation_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {
+        "lines": ["", "### 2. 周期解读", "<!-- FRONT_PAGE_CYCLE_INTERPRETATION_PLACEHOLDER -->"],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_report_shell_pivot_mainline_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {
+        "lines": ["", "### 3. 中枢与主线解读", "<!-- FRONT_PAGE_PIVOT_MAINLINE_PLACEHOLDER -->"],
+        "exports": {},
+        "module_logs": [],
+    }
+
+
+def build_report_shell_capital_intent_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "<!-- FRONT_PAGE_CAPITAL_INTENT_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_stock_interpretation_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "<!-- FRONT_PAGE_STOCK_INTERPRETATION_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_execution_plan_header_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "## 六、明日执行计划", "<!-- STEP0_FOLLOW_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
+
+
+def build_report_shell_final_summary_placeholder_node(context, node_meta=None, node_lookup=None):
+    return {"lines": ["", "<!-- FRONT_PAGE_FINAL_SUMMARY_PLACEHOLDER -->"], "exports": {}, "module_logs": []}
 
 
 def _build_prohibition_payload(
@@ -70,7 +114,10 @@ def _build_prohibition_payload(
     elif display_position_level == "二档（防守档）":
         headline = environment_headline or "先看特殊标的是否继续抗跌，只保留观察权/旧仓处理权"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
-        payload["prohibition_items"].append("- ✅ 禁止新开仓：二档不允许任何新增买入")
+        if final_gate.get("allow_conditional_30") and not final_gate.get("should_reduce"):
+            payload["prohibition_items"].append("- ⚠️ 不抢跑：二档只保留10点确认后的30%条件试错，确认前不开新仓")
+        else:
+            payload["prohibition_items"].append("- ✅ 禁止新开仓：二档不允许任何新增买入")
         if final_gate.get("should_reduce"):
             if has_personal_positions:
                 payload["prohibition_items"].append("- ✅ 禁止抱弱留弱：你的旧仓里，不在最强趋势的票要优先处理")
@@ -97,9 +144,13 @@ def _build_prohibition_payload(
             if has_personal_positions:
                 payload["allowed_items"].append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
+                if final_gate.get("allow_conditional_30"):
+                    payload["allowed_items"].append("- 🟡 条件试错：只在主线核心完成10点确认后，最多30%小仓试错")
             else:
                 payload["allowed_items"].append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
+                if final_gate.get("allow_conditional_30"):
+                    payload["allowed_items"].append("- 🟡 条件试错：只在主线核心完成10点确认后，最多30%小仓试错")
     else:
         headline = environment_headline or "环境放行不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
@@ -128,11 +179,6 @@ def build_prohibition_environment_node(context, node_meta=None, node_lookup=None
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
-def build_prohibition_blank_after_environment_node(context, node_meta=None, node_lookup=None):
-    payload = context["prohibition_payload"]
-    return {"lines": [""] if payload.get("environment_line") else [], "exports": {}, "module_logs": []}
-
-
 def build_prohibition_header_node(context, node_meta=None, node_lookup=None):
     payload = context["prohibition_payload"]
     return {"lines": ["**禁止事项**:"] if payload.get("prohibition_items") else [], "exports": {}, "module_logs": []}
@@ -142,20 +188,12 @@ def build_prohibition_items_node(context, node_meta=None, node_lookup=None):
     return {"lines": list(context["prohibition_payload"].get("prohibition_items") or []), "exports": {}, "module_logs": []}
 
 
-def build_prohibition_blank_before_allowed_node(context, node_meta=None, node_lookup=None):
-    return {"lines": [""] if context["prohibition_payload"].get("allowed_items") else [], "exports": {}, "module_logs": []}
-
-
 def build_allowed_header_node(context, node_meta=None, node_lookup=None):
     return {"lines": ["**允许事项**:"] if context["prohibition_payload"].get("allowed_items") else [], "exports": {}, "module_logs": []}
 
 
 def build_allowed_items_node(context, node_meta=None, node_lookup=None):
     return {"lines": list(context["prohibition_payload"].get("allowed_items") or []), "exports": {}, "module_logs": []}
-
-
-def build_prohibition_blank_before_risk_node(context, node_meta=None, node_lookup=None):
-    return {"lines": [""] if context["prohibition_payload"].get("risk_line") else [], "exports": {}, "module_logs": []}
 
 
 def build_risk_section_node(context, node_meta=None, node_lookup=None):

@@ -15,6 +15,15 @@ from report.decision_board_nodes import render_decision_board_section
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
+from report.front_summary_renderer import sanitize_front_page_text
+from report.front_page_v2_renderer import render_front_page_v2
+from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
+from domains.market_state.mainline_turnover_summary_runtime import (
+    build_mainline_turnover_summary as _default_build_mainline_turnover_summary,
+)
+from research.entry_cycle_calibration_runtime import (
+    build_default_entry_cycle_calibrations as _default_build_entry_cycle_calibrations,
+)
 
 __all__ = ["render_markdown_report_runtime"]
 
@@ -77,6 +86,354 @@ def _build_display_safe_get_stock_sector(get_stock_sector):
 
 def _build_display_safe_analyze_buy_signal():
     return lambda *args, **kwargs: None
+
+
+def _replace_all_placeholder_lines(report_lines, marker, replacement_lines):
+    replaced = 0
+    while replace_placeholder_lines(report_lines, marker, replacement_lines if replaced == 0 else []) is True:
+        replaced += 1
+    return replaced
+
+
+def _strip_duplicate_market_base_header(lines):
+    return [line for line in list(lines or []) if line != "## 二、市场基底"]
+
+
+def _sanitize_report_lines(lines):
+    return sanitize_front_page_text(list(lines or []))
+
+
+def _format_appendix_heading_content(content):
+    text = str(content or "")
+    return text if text.strip().startswith("附录") else "附录：" + text
+
+
+def _demote_appendix_headings(lines):
+    demoted = []
+    for line in list(lines or []):
+        text = str(line or "")
+        if text.startswith("####"):
+            demoted.append("##### " + _format_appendix_heading_content(text[5:]))
+        elif text.startswith("###"):
+            demoted.append("#### " + _format_appendix_heading_content(text[4:]))
+        elif text.startswith("##"):
+            demoted.append("### " + _format_appendix_heading_content(text[3:]))
+        elif text.startswith("# "):
+            demoted.append("### " + _format_appendix_heading_content(text[2:]))
+        else:
+            demoted.append(text)
+    return demoted
+
+
+def _remove_duplicate_front_page_sections_from_appendix(lines):
+    cleaned = []
+    skipping_market_base = False
+    for line in list(lines or []):
+        text = str(line or "")
+        if text == "## 二、市场基底":
+            skipping_market_base = True
+            continue
+        if skipping_market_base and text.startswith("## "):
+            skipping_market_base = False
+        if skipping_market_base:
+            continue
+        cleaned.append(text)
+    return cleaned
+
+
+def _format_appendix_pct(value):
+    if value in (None, ""):
+        return "待累计"
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        text = str(value)
+        return text if text else "待累计"
+
+
+def _format_appendix_turnover_share(item):
+    item = item or {}
+    source_status = str(item.get("source_status") or "").strip()
+    value = item.get("turnover_share_pct")
+    try:
+        numeric_value = float(value or 0)
+    except (TypeError, ValueError):
+        numeric_value = 0
+    if source_status and source_status not in ("success", "ok") and numeric_value == 0:
+        return "待累计"
+    return _format_appendix_pct(value)
+
+
+def _appendix_turnover_source(item):
+    item = item or {}
+    return item.get("source_status") or item.get("source") or "记录"
+
+
+def _derive_structure_mainline_replacement(item):
+    item = item or {}
+    explicit = str(item.get("replacement") or item.get("replacement_relation") or "").strip()
+    if explicit:
+        return explicit
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("interpretation", "note", "evolution", "structure_state")
+    )
+    if "接替" in text:
+        return "接替前主线"
+    if "震荡" in text:
+        return "中枢震荡"
+    return "待确认"
+
+
+def _resolve_structure_mainline_replacement(item, mainline_switch_log):
+    replacement = _derive_structure_mainline_replacement(item)
+    if replacement != "待确认":
+        return replacement
+    mainline = str((item or {}).get("mainline") or (item or {}).get("primary_mainline") or "").strip()
+    if not mainline:
+        return replacement
+    for switch_item in reversed(list(mainline_switch_log or [])):
+        if str(switch_item.get("to_mainline") or "").strip() == mainline:
+            previous = str(switch_item.get("from_mainline") or "").strip()
+            return f"接替{previous}" if previous else "接替前主线"
+    return replacement
+
+
+def _appendix_stock_name(item):
+    return (item or {}).get("stock_name") or (item or {}).get("name") or "-"
+
+
+def _appendix_stock_code(item):
+    return (item or {}).get("stock_code") or (item or {}).get("code") or ""
+
+
+def _build_appendix_b_continuity_payload(
+    *,
+    current_mainline_history_record=None,
+    recent_mainline_history=None,
+    current_sector_turnover_snapshot=None,
+    recent_sector_turnover_history=None,
+    pivot_mainline_history=None,
+):
+    mainline_records = list(recent_mainline_history or [])
+    if current_mainline_history_record:
+        mainline_records.append(current_mainline_history_record)
+
+    historical_mainline_pool = []
+    for item in mainline_records:
+        mainline = item.get("primary_mainline") or item.get("mainline") or item.get("leading_line") or "-"
+        historical_mainline_pool.append(
+            {
+                "date": item.get("date"),
+                "mainline": mainline,
+                "status": item.get("market_state") or item.get("rotation_label") or item.get("state_code") or item.get("status") or "记录",
+                "note": item.get("rotation_summary") or item.get("note") or item.get("summary") or "",
+            }
+        )
+
+    mainline_switch_log = []
+    previous_mainline = ""
+    for item in mainline_records:
+        current_mainline = item.get("primary_mainline") or item.get("mainline") or item.get("leading_line") or ""
+        if previous_mainline and current_mainline and previous_mainline != current_mainline:
+            mainline_switch_log.append(
+                {
+                    "date": item.get("date"),
+                    "from_mainline": previous_mainline,
+                    "to_mainline": current_mainline,
+                    "reason": item.get("rotation_summary") or item.get("note") or "周期主线发生切换",
+                }
+            )
+        if current_mainline:
+            previous_mainline = current_mainline
+
+    turnover_items = list(recent_sector_turnover_history or [])
+    if current_sector_turnover_snapshot:
+        turnover_items.append(current_sector_turnover_snapshot)
+    turnover_share_history = [
+        {
+            "date": item.get("date"),
+            "mainline": item.get("mainline") or item.get("sector_name") or "-",
+            "turnover_share_pct": _format_appendix_turnover_share(item),
+            "source": _appendix_turnover_source(item),
+        }
+        for item in turnover_items
+    ]
+
+    structure_mainline_records = [
+        {
+            "date": item.get("date") or item.get("date_range"),
+            "date_range": item.get("date_range") or item.get("date"),
+            "structure": item.get("structure") or item.get("pivot_range") or item.get("position") or "-",
+            "pivot_level": item.get("pivot_level") or item.get("structure_level") or item.get("cycle_level") or "日线中枢",
+            "pivot_range": item.get("pivot_range") or item.get("structure") or "-",
+            "position": item.get("position") or "-",
+            "mainline": item.get("mainline") or item.get("primary_mainline") or "-",
+            "mainline_degree": item.get("mainline_degree") or item.get("degree") or item.get("mainline_strength") or item.get("structure_state") or "待确认",
+            "evolution": item.get("evolution") or item.get("market_state") or item.get("structure_state") or "待确认",
+            "replacement": _resolve_structure_mainline_replacement(item, mainline_switch_log),
+            "interpretation": item.get("interpretation") or item.get("note") or item.get("structure_state") or "",
+            "note": item.get("interpretation") or item.get("note") or item.get("structure_state") or "",
+        }
+        for item in list(pivot_mainline_history or [])
+    ]
+
+    return {
+        "historical_mainline_pool": historical_mainline_pool,
+        "mainline_switch_log": mainline_switch_log,
+        "turnover_share_history": turnover_share_history,
+        "structure_mainline_records": structure_mainline_records,
+    }
+
+
+def _derive_appendix_pivot_mainline_history(
+    *,
+    market_research_snapshot=None,
+    current_mainline_history_record=None,
+    recent_mainline_history=None,
+    execution_stage_context=None,
+    data=None,
+):
+    execution_stage_context = execution_stage_context or {}
+    data = data or {}
+    market_research_snapshot = market_research_snapshot or {}
+    explicit_rows = (
+        execution_stage_context.get("pivot_mainline_history", [])
+        or data.get("pivot_mainline_history", [])
+        or (market_research_snapshot.get("pivot_mainline_history", []) if isinstance(market_research_snapshot, dict) else [])
+        or (market_research_snapshot.get("pivot_mainline_rows", []) if isinstance(market_research_snapshot, dict) else [])
+    )
+    if explicit_rows:
+        return list(explicit_rows)
+    if not isinstance(market_research_snapshot, dict):
+        return []
+
+    snapshot = dict(market_research_snapshot)
+    if current_mainline_history_record and not snapshot.get("current_mainline_history_record"):
+        snapshot["current_mainline_history_record"] = current_mainline_history_record
+    if recent_mainline_history and not snapshot.get("recent_mainline_history"):
+        snapshot["recent_mainline_history"] = recent_mainline_history
+    cycle_layer = derive_market_research_cycle_layer(snapshot, snapshot.get("state_machine") or {})
+    return list(cycle_layer.get("pivot_mainline_rows") or [])
+
+
+def _merge_appendix_b_payload(existing_appendix_b, derived_appendix_b):
+    if not existing_appendix_b:
+        return derived_appendix_b or {}
+    if not isinstance(existing_appendix_b, dict):
+        return derived_appendix_b or {}
+    merged = dict(existing_appendix_b)
+    for key in (
+        "historical_mainline_pool",
+        "mainline_switch_log",
+        "turnover_share_history",
+        "structure_mainline_records",
+    ):
+        if not merged.get(key) and (derived_appendix_b or {}).get(key):
+            merged[key] = list((derived_appendix_b or {}).get(key) or [])
+    return merged
+
+
+def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_context=None):
+    execution_stage_context = execution_stage_context or {}
+    pool_specs = [
+        ("core_stocks", "主线核心"),
+        ("secondary_stocks", "主线备选"),
+        ("crossline_observation_stocks", "跨线观察"),
+        ("gem_observation_stocks", "创业板观察"),
+        ("generic_watch_stocks", "普通观察"),
+        ("watchlist", "普通观察"),
+    ]
+    seen_codes = set()
+    monitoring_pool = []
+    lifecycle_records = []
+    for key, source_pool in pool_specs:
+        for item in execution_stage_context.get(key, []) or []:
+            code = _appendix_stock_code(item)
+            dedupe_key = code or _appendix_stock_name(item)
+            if dedupe_key in seen_codes:
+                continue
+            seen_codes.add(dedupe_key)
+            current_action = item.get("current_action") or item.get("tomorrow_action") or item.get("tmr_forecast") or "继续跟踪"
+            interpretation = (
+                item.get("current_interpretation")
+                or item.get("abnormal_summary")
+                or item.get("why_watch")
+                or item.get("reason")
+                or "进入观察池，等待后续交易日累计"
+            )
+            monitoring_pool.append(
+                {
+                    "stock_name": _appendix_stock_name(item),
+                    "stock_code": code,
+                    "source_pool": source_pool,
+                    "current_action": current_action,
+                }
+            )
+            lifecycle_records.append(
+                {
+                    "stock_name": _appendix_stock_name(item),
+                    "stock_code": code,
+                    "first_report_date": item.get("first_report_date") or item.get("source_report_date") or target_date,
+                    "source_report_date": item.get("source_report_date") or target_date,
+                    "tracked_trading_days": item.get("tracked_trading_days") or 1,
+                    "daily_change_series": item.get("daily_change_series") or item.get("daily_changes") or [],
+                    "volume_change_summary": item.get("volume_change_summary") or item.get("volume_state") or "-",
+                    "cumulative_change_pct": item.get("cumulative_change_pct") or item.get("cumulative_change") or "-",
+                    "current_interpretation": interpretation,
+                    "current_action": current_action,
+                }
+            )
+
+    a_kill_items = []
+    for key in ("active_a_kill_records", "filtered_by_a_kill", "a_kill_blacklist_updates"):
+        a_kill_items.extend(execution_stage_context.get(key, []) or [])
+    a_kill_records = [
+        {
+            "stock_name": _appendix_stock_name(item),
+            "stock_code": _appendix_stock_code(item),
+            "a_kill_date": item.get("a_kill_date") or item.get("date") or target_date,
+            "reason": item.get("reason") or item.get("sector_name") or item.get("note") or "A杀淘汰",
+        }
+        for item in a_kill_items
+    ]
+
+    return {
+        "current_stock_monitoring_pool": monitoring_pool,
+        "stock_lifecycle_records": lifecycle_records,
+        "a_kill_elimination_records": a_kill_records,
+    }
+
+
+def _build_entry_cycle_calibration_payload(data=None, target_date=""):
+    data = data or {}
+    existing = data.get("entry_cycle_calibration")
+    if isinstance(existing, dict) and existing.get("cases"):
+        return existing
+
+    builder = globals().get("_default_build_entry_cycle_calibrations")
+    if not callable(builder):
+        return {}
+    try:
+        return builder(as_of_date=target_date)
+    except Exception as exc:
+        return {
+            "as_of_date": target_date,
+            "cases": [],
+            "source_status": "failed",
+            "source_error": str(exc),
+        }
+
+
+def _clear_front_page_placeholders(report_lines):
+    for marker in (
+        "<!-- FRONT_PAGE_CYCLE_CALENDAR_PLACEHOLDER -->",
+        "<!-- FRONT_PAGE_CYCLE_INTERPRETATION_PLACEHOLDER -->",
+        "<!-- FRONT_PAGE_PIVOT_MAINLINE_PLACEHOLDER -->",
+        "<!-- FRONT_PAGE_CAPITAL_INTENT_PLACEHOLDER -->",
+        "<!-- FRONT_PAGE_STOCK_INTERPRETATION_PLACEHOLDER -->",
+    ):
+        _replace_all_placeholder_lines(report_lines, marker, [])
 
 
 def _smart_score_event(title: str, original_star: int) -> int:
@@ -433,7 +790,11 @@ def _render_markdown_report_legacy_body(
     )
     
     market_trend_section = build_market_trend_sections_contract(data, target_date)
-    report.extend(market_trend_section.get('lines', []))
+    replace_placeholder_lines(
+        report,
+        "<!-- FRONT_PAGE_MARKET_BASE_PLACEHOLDER -->",
+        _strip_duplicate_market_base_header(market_trend_section.get('lines', [])),
+    )
     
     stock_full_info = data.get('stock_full_info', {})
     display_safe_get_stock_sector = _build_display_safe_get_stock_sector(get_stock_sector)
@@ -541,6 +902,25 @@ def _render_markdown_report_legacy_body(
         secondary_sectors=secondary_sectors,
         dragon_stocks=dragon_stocks,
     )
+    front_market_research_lines = _render_market_research_snapshot_section(
+        market_research_bundle.get("market_research_snapshot", {}) or {},
+        compact=DISPLAY_MVP_MODE,
+    )
+    _replace_all_placeholder_lines(
+        report,
+        "<!-- MARKET_RESEARCH_SNAPSHOT_PLACEHOLDER -->",
+        front_market_research_lines,
+    )
+    replace_placeholder_lines(
+        report,
+        "<!-- STEP0_FOLLOW_PLACEHOLDER -->",
+        _render_step0_follow_section(
+            market_research_bundle.get("step0_plan", {}) or {},
+            market_research_bundle.get("market_research_snapshot", {}) or {},
+            compact=DISPLAY_MVP_MODE,
+        ),
+    )
+    _clear_front_page_placeholders(report)
 
     def _render_core_mvp_digest_runtime(*args, **kwargs):
         return _render_core_mvp_digest(
@@ -710,6 +1090,62 @@ def _render_markdown_report_legacy_body(
     observation_snapshot = execution_stage_context.get('observation_snapshot', {}) or {}
     market_research_snapshot = execution_stage_context.get('market_research_snapshot', {}) or {}
     market_state_snapshot = execution_stage_context.get('market_state_snapshot', {}) or {}
+    current_mainline_history_record = execution_stage_context.get('current_mainline_history_record', {}) or {}
+    recent_mainline_history = execution_stage_context.get('recent_mainline_history', []) or []
+    current_sector_turnover_snapshot = execution_stage_context.get('current_sector_turnover_snapshot', {}) or {}
+    recent_sector_turnover_history = execution_stage_context.get('recent_sector_turnover_history', []) or []
+    mainline_turnover_summary = execution_stage_context.get(
+        'mainline_turnover_summary',
+        market_research_snapshot.get('mainline_turnover_summary', {}) or {},
+    ) or {}
+    if market_research_snapshot:
+        data["market_research_snapshot"] = market_research_snapshot
+    else:
+        market_research_snapshot = data.get("market_research_snapshot", {}) or {}
+    if not current_mainline_history_record:
+        current_mainline_history_record = market_research_snapshot.get("current_mainline_history_record", {}) or {}
+    if not recent_mainline_history:
+        recent_mainline_history = market_research_snapshot.get("recent_mainline_history", []) or []
+    if not current_sector_turnover_snapshot:
+        current_sector_turnover_snapshot = market_research_snapshot.get("current_sector_turnover_snapshot", {}) or {}
+    if not recent_sector_turnover_history:
+        recent_sector_turnover_history = market_research_snapshot.get("recent_sector_turnover_history", []) or []
+    if not mainline_turnover_summary:
+        mainline_turnover_summary = market_research_snapshot.get("mainline_turnover_summary", {}) or {}
+    if current_mainline_history_record:
+        data["current_mainline_history_record"] = current_mainline_history_record
+    else:
+        current_mainline_history_record = data.get("current_mainline_history_record", {}) or {}
+    if recent_mainline_history:
+        data["recent_mainline_history"] = recent_mainline_history
+    else:
+        recent_mainline_history = data.get("recent_mainline_history", []) or []
+    if current_sector_turnover_snapshot:
+        data["current_sector_turnover_snapshot"] = current_sector_turnover_snapshot
+    else:
+        current_sector_turnover_snapshot = data.get("current_sector_turnover_snapshot", {}) or {}
+    if recent_sector_turnover_history:
+        data["recent_sector_turnover_history"] = recent_sector_turnover_history
+    else:
+        recent_sector_turnover_history = data.get("recent_sector_turnover_history", []) or []
+    if mainline_turnover_summary:
+        data["mainline_turnover_summary"] = mainline_turnover_summary
+    else:
+        mainline_turnover_summary = data.get("mainline_turnover_summary", {}) or {}
+    build_mainline_turnover_summary_fn = globals().get("build_mainline_turnover_summary") or _default_build_mainline_turnover_summary
+    if (
+        current_mainline_history_record
+        and not str((mainline_turnover_summary or {}).get("current_mainline") or "").strip()
+        and callable(build_mainline_turnover_summary_fn)
+    ):
+        mainline_turnover_summary = build_mainline_turnover_summary_fn(
+            target_date=target_date,
+            current_mainline_history_record=current_mainline_history_record,
+            recent_mainline_history=recent_mainline_history,
+            current_sector_turnover_snapshot=current_sector_turnover_snapshot,
+            recent_sector_turnover_history=recent_sector_turnover_history,
+        )
+        data["mainline_turnover_summary"] = mainline_turnover_summary
     abnormal_projection_summary = execution_stage_context.get('abnormal_projection_summary', {}) or {}
     step0_plan = execution_stage_context.get('step0_plan', {}) or {}
     step0_prediction = execution_stage_context.get('step0_prediction', 'NEUTRAL')
@@ -802,6 +1238,11 @@ def _render_markdown_report_legacy_body(
                 "zt_count": zt_count,
                 "dt_count": dt_count,
                 "market_state_snapshot": market_state_snapshot,
+                "current_mainline_history_record": current_mainline_history_record,
+                "recent_mainline_history": recent_mainline_history,
+                "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
+                "recent_sector_turnover_history": recent_sector_turnover_history,
+                "mainline_turnover_summary": mainline_turnover_summary,
                 "supplementary_perspective": supplementary_perspective,
             },
             "helpers": {
@@ -809,7 +1250,6 @@ def _render_markdown_report_legacy_body(
                 "build_front_mainline_label": _build_front_mainline_label,
                 "build_legacy_final_conclusion_lines": build_legacy_final_conclusion_lines,
                 "render_context_tail_sections": globals().get("render_context_tail_sections"),
-                "render_mainline_discipline_section": render_mainline_discipline_section,
                 "render_supplementary_perspective_section": render_supplementary_perspective_section,
                 "render_ai_market_insight_section": render_ai_market_insight_section,
             },
@@ -817,7 +1257,8 @@ def _render_markdown_report_legacy_body(
     )
     tail_summary_value = tail_summary_result.get("value", {}) or {}
     tail_summary_exports = tail_summary_value.get("exports", {}) or {}
-    report.extend(tail_summary_value.get("lines", []))
+    if not replace_placeholder_lines(report, "<!-- FRONT_PAGE_FINAL_SUMMARY_PLACEHOLDER -->", tail_summary_value.get("lines", [])):
+        report.extend(tail_summary_value.get("lines", []))
     data.setdefault("module_logs", []).extend(tail_summary_value.get("module_logs", []))
     abnormal_probe_parts = tail_summary_exports.get("abnormal_probe_parts", [])
 
@@ -877,7 +1318,6 @@ def _render_markdown_report_legacy_body(
                     "format_pct": globals().get("format_pct"),
                     "safe_float": globals().get("safe_float"),
                 },
-                "append_strategy_performance_section": append_strategy_performance_section,
             },
         }
     )
@@ -890,6 +1330,31 @@ def _render_markdown_report_legacy_body(
 
     import datetime as _dt
 
+    appendix_pivot_mainline_history = _derive_appendix_pivot_mainline_history(
+        market_research_snapshot=market_research_snapshot,
+        current_mainline_history_record=current_mainline_history_record,
+        recent_mainline_history=recent_mainline_history,
+        execution_stage_context=execution_stage_context,
+        data=data,
+    )
+    existing_appendix_b = data.get("appendix_b") or (market_research_snapshot.get("appendix_b") if isinstance(market_research_snapshot, dict) else {})
+    derived_appendix_b = _build_appendix_b_continuity_payload(
+        current_mainline_history_record=current_mainline_history_record,
+        recent_mainline_history=recent_mainline_history,
+        current_sector_turnover_snapshot=current_sector_turnover_snapshot,
+        recent_sector_turnover_history=recent_sector_turnover_history,
+        pivot_mainline_history=appendix_pivot_mainline_history,
+    )
+    appendix_b = _merge_appendix_b_payload(existing_appendix_b, derived_appendix_b)
+    appendix_c = data.get("appendix_c") or (market_research_snapshot.get("appendix_c") if isinstance(market_research_snapshot, dict) else {}) or _build_appendix_c_continuity_payload(
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+    )
+    entry_cycle_calibration = _build_entry_cycle_calibration_payload(data, target_date)
+    data["appendix_b"] = appendix_b
+    data["appendix_c"] = appendix_c
+    data["entry_cycle_calibration"] = entry_cycle_calibration
+
     execution_appendix_result = run_execution_appendix_tail(
         {
             "inputs": {
@@ -899,6 +1364,9 @@ def _render_markdown_report_legacy_body(
                 "target_date": target_date,
                 "generated_at": _dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "report_version": "v2.5.0",
+                "appendix_b": appendix_b,
+                "appendix_c": appendix_c,
+                "entry_cycle_calibration": entry_cycle_calibration,
             },
             "helpers": {
                 "normalize_report_timer_steps": _normalize_report_timer_steps,
@@ -908,12 +1376,33 @@ def _render_markdown_report_legacy_body(
     )
     execution_appendix_value = execution_appendix_result.get("value", {}) or {}
     data["execution_appendix_lines"] = list(execution_appendix_value.get("lines", []) or [])
+    report.extend(data["execution_appendix_lines"])
     data.setdefault("module_logs", []).extend(execution_appendix_value.get("module_logs", []))
 
+    front_page_market_research_snapshot = {
+        **(market_research_snapshot or {}),
+        "current_mainline_history_record": current_mainline_history_record,
+        "recent_mainline_history": recent_mainline_history,
+        "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
+        "recent_sector_turnover_history": recent_sector_turnover_history,
+        "mainline_turnover_summary": mainline_turnover_summary,
+        "pivot_mainline_history": appendix_pivot_mainline_history,
+    }
+    front_page_lines = render_front_page_v2(
+        report,
+        target_date=target_date,
+        market_research_snapshot=front_page_market_research_snapshot,
+        final_gate=final_gate,
+        position_level=position_level,
+    )
     if DISPLAY_MVP_MODE:
-        report = _compact_report_for_mvp(report, stage_lookup=execution_stage_result.get("stage_lookup", {}))
+        report = front_page_lines
+    else:
+        appendix_report = _remove_duplicate_front_page_sections_from_appendix(report)
+        report = front_page_lines + ["", "## 八、详细附录", ""] + _demote_appendix_headings(appendix_report)
 
     _finalize_helper_diagnostics(data)
+    report = _sanitize_report_lines(report)
     return "\n".join(report)
 
 

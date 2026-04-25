@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from execution.entry_cycle_stop_runtime import build_entry_cycle_stop_policy, resolve_entry_cycle_profile
 from market_data.kline_dates import normalize_kline_date_str as _normalize_kline_date_str
 
 __all__ = [
@@ -84,7 +85,7 @@ def compute_avg_volume(bars, sample_size=5, exclude_last=False, *, helpers=None)
         _restore_runtime_bindings(previous)
 
 
-def build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type="", fallback_stop=None, *, helpers=None):
+def build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type="", fallback_stop=None, entry_cycle_profile=None, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
         return _build_intraday_execution_plan_legacy_body(
@@ -93,6 +94,7 @@ def build_intraday_execution_plan(stock_code, target_date, entry_price, signal_t
             entry_price,
             signal_type=signal_type,
             fallback_stop=fallback_stop,
+            entry_cycle_profile=entry_cycle_profile,
         )
     finally:
         _restore_runtime_bindings(previous)
@@ -133,13 +135,14 @@ def _compute_avg_volume(bars, sample_size=5, exclude_last=False):
     )
 
 
-def _build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type="", fallback_stop=None):
+def _build_intraday_execution_plan(stock_code, target_date, entry_price, signal_type="", fallback_stop=None, entry_cycle_profile=None):
     return _build_intraday_execution_plan_legacy_body(
         stock_code,
         target_date,
         entry_price,
         signal_type=signal_type,
         fallback_stop=fallback_stop,
+        entry_cycle_profile=entry_cycle_profile,
     )
 
 
@@ -255,7 +258,7 @@ def _compute_avg_volume_legacy_body(bars, sample_size=5, exclude_last=False):
     return sum(vols) / len(vols) if vols else 0.0
 
 
-def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_price, signal_type="", fallback_stop=None):
+def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_price, signal_type="", fallback_stop=None, entry_cycle_profile=None):
     try:
         entry = float(entry_price or 0)
     except (TypeError, ValueError):
@@ -296,6 +299,10 @@ def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_pr
 
     recent_high_60m = recent_high_60m or round(entry, 2)
     confirm_price_60m = round(max(entry, recent_high_60m), 2)
+    confirm_inputs_60m = {
+        "entry_price": round(entry, 2),
+        "recent_high": round(recent_high_60m, 2),
+    }
 
     latest_60m_close = round(float(latest_60m.get("close") or 0), 2) if latest_60m else None
     latest_60m_open = round(float(latest_60m.get("open") or 0), 2) if latest_60m else None
@@ -335,6 +342,8 @@ def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_pr
         structure_stop_30m,
         structure_label="30分钟结构止损",
     )
+    entry_cycle_stop_policy = build_entry_cycle_stop_policy(entry, stop_plan, entry_cycle_profile)
+    confirm_basis_60m = "entry_cycle_calibrated" if entry_cycle_stop_policy else "entry_or_recent_high"
 
     return {
         "bars_60m": bars_60m,
@@ -345,6 +354,8 @@ def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_pr
         "latest_60m_low": latest_60m_low,
         "latest_30m_datetime": latest_30m.get("datetime") if latest_30m else "",
         "confirm_price_60m": confirm_price_60m,
+        "confirm_basis_60m": confirm_basis_60m,
+        "confirm_inputs_60m": confirm_inputs_60m,
         "confirm_support_60m": support_60m,
         "confirm_support_60m_datetime": support_60m_dt,
         "confirm_high_60m_datetime": recent_high_60m_dt,
@@ -354,6 +365,7 @@ def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_pr
         "structure_stop_30m": structure_stop_30m,
         "structure_stop_30m_datetime": structure_stop_30m_dt,
         "stop_plan": stop_plan,
+        "entry_cycle_stop_policy": entry_cycle_stop_policy,
     }
 
 
@@ -365,12 +377,18 @@ def _build_waiting_stock_plan_legacy_body(stock_item, target_date, reason="", si
     except (TypeError, ValueError):
         entry_price = 0.0
 
+    entry_cycle_profile = resolve_entry_cycle_profile(code, stock_item.get("entry_cycle_profile"))
+    minute_plan_kwargs = {
+        "signal_type": signal_type,
+        "fallback_stop": entry_price * (1 - MAX_SINGLE_TRADE_LOSS_PCT) if entry_price > 0 else None,
+    }
+    if entry_cycle_profile:
+        minute_plan_kwargs["entry_cycle_profile"] = entry_cycle_profile
     minute_plan = build_intraday_execution_plan(
         code,
         target_date,
         entry_price,
-        signal_type=signal_type,
-        fallback_stop=entry_price * (1 - MAX_SINGLE_TRADE_LOSS_PCT) if entry_price > 0 else None,
+        **minute_plan_kwargs,
     )
     stop_plan = minute_plan.get("stop_plan") or build_stop_execution_plan(entry_price)
     stop_plan = enrich_stop_plan_with_reference_anchors(

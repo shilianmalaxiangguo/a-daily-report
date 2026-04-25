@@ -40,6 +40,28 @@ def _normalize_market_stats_value(value):
         return 0
 
 
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_sector_fund_flow_rows(rows):
+    normalized = []
+    for row in rows or []:
+        item = dict(row or {})
+        turnover_yi = item.get("turnover_yi")
+        if turnover_yi in (None, "") and item.get("cje") not in (None, ""):
+            turnover_yi = _safe_float(item.get("cje")) / 1e4
+        if turnover_yi not in (None, ""):
+            item["turnover_yi"] = round(_safe_float(turnover_yi), 2)
+        normalized.append(item)
+    return normalized
+
+
 def _build_code_to_sector_map(existing_results=None):
     existing_results = existing_results or {}
     code_to_sector = {}
@@ -413,8 +435,8 @@ def collect_market_activity_sector_snapshot_request_bundle(
     try:
         today, yesterday = current_dates or (None, None)
         if target_date == today or target_date == yesterday:
-            inflow = tencent.get_sector_fund_flow(flow_type="in", limit=50)
-            outflow = tencent.get_sector_fund_flow(flow_type="out", limit=50)
+            inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
+            outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
             results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
             if inflow or outflow:
                 data_status["行业资金流向"] = True

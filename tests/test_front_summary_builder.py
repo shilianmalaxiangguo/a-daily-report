@@ -6,12 +6,49 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.front_summary_builder import (
+    build_double_mainline_summary_contract,
+    build_turnover_share_trend_contract,
     render_core_mvp_digest_contract,
     render_mvp_focus_summary_contract,
 )
 
 
 class FrontSummaryBuilderTest(unittest.TestCase):
+    def test_build_double_mainline_summary_contract_promotes_cycle_and_attack_line(self):
+        payload = build_double_mainline_summary_contract(
+            {
+                "cycle_mainline": "半导体",
+                "daily_attack_line": "算力",
+                "relationship": "当天主攻线是周期主线内部加强，不是新主线切换",
+                "tomorrow_action": "明天继续围绕半导体做减法，只看算力核心承接",
+            }
+        )
+
+        self.assertEqual(payload["cycle_mainline"], "半导体")
+        self.assertEqual(payload["daily_attack_line"], "算力")
+        self.assertEqual(payload["relationship"], "当天主攻线是周期主线内部加强，不是新主线切换")
+        self.assertEqual(payload["tomorrow_action"], "明天继续围绕半导体做减法，只看算力核心承接")
+
+    def test_build_turnover_share_trend_contract_keeps_required_amount_fields(self):
+        rows = build_turnover_share_trend_contract(
+            [
+                {
+                    "date": "04-24",
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "算力",
+                    "mainline_turnover": "2180亿",
+                    "market_turnover": "12834亿",
+                    "share": "17.0%",
+                    "share_change": "+1.2pct",
+                    "interpretation": "主线占比继续抬升，资金仍在主线内加强",
+                }
+            ]
+        )
+
+        self.assertEqual(rows[0]["mainline_turnover"], "2180亿")
+        self.assertEqual(rows[0]["market_turnover"], "12834亿")
+        self.assertEqual(rows[0]["share_change"], "+1.2pct")
+
     def test_render_core_mvp_digest_contract_composes_digest_payload(self):
         payload = render_core_mvp_digest_contract(
             market_research_snapshot={
@@ -20,6 +57,10 @@ class FrontSummaryBuilderTest(unittest.TestCase):
                 "state_machine": {"energy_state": "修复", "state_reason": "主线回流"},
                 "follow_verdict": {"label": "🟢 跟随主线"},
                 "dialectical_decision": {"stage_label": "主升", "stage_action": "继续跟随", "index_profit_relation": "指数和赚钱效应同向"},
+                "mainline_turnover_summary": {
+                    "conclusion": "主线未切换，军工仍是中心",
+                    "data_text": "成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
+                },
             },
             final_gate={"final_action": "只做核心"},
             position_level="三档（进攻档）",
@@ -49,6 +90,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
         )
 
         self.assertEqual(payload["mainline_label"], "主攻线军工")
+        self.assertEqual(payload["mainline_turnover_text"], "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化")
         self.assertEqual(payload["rotation_summary_text"], "军工继续聚焦")
         self.assertTrue(payload["weak_to_strong_active"])
         self.assertIn("跌停", " / ".join(payload["risk_parts"]))

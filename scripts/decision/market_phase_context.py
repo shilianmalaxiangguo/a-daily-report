@@ -47,6 +47,38 @@ def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_co
     return ("一档（空仓档）", f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望", is_dt_panic)
 
 
+def _is_index_recovery_inside_zhongshu(market_zhongshu, zs_signal_type, zt_count, dt_count, dt_panic_threshold, exit_analysis):
+    if not market_zhongshu or not market_zhongshu.get("success"):
+        return False
+    if zs_signal_type != "按个股信号操作":
+        return False
+    if (exit_analysis or {}).get("overall_level") == "红灯":
+        return False
+
+    signal = market_zhongshu.get("signal", {}) or {}
+    current = market_zhongshu.get("current_zhongshu", {}) or {}
+    if signal.get("comparison_state") != "range":
+        return False
+
+    try:
+        start_close = float(current.get("start_close") or 0)
+        end_close = float(current.get("end_close") or 0)
+        today_price = float(signal.get("today_price") or 0)
+        zd = float(current.get("zd") or signal.get("zd") or 0)
+        zg = float(current.get("zg") or signal.get("zg") or 0)
+    except (TypeError, ValueError):
+        return False
+
+    if min(start_close, end_close, today_price, zd, zg) <= 0:
+        return False
+
+    index_is_rising_in_pivot = end_close >= start_close * 1.01 and today_price >= start_close
+    price_still_inside_pivot = zd <= today_price <= zg
+    market_still_active = zt_count >= 20
+    not_crash_level_dt = dt_count < dt_panic_threshold * 2
+    return index_is_rising_in_pivot and price_still_inside_pivot and market_still_active and not_crash_level_dt
+
+
 def build_market_phase_context_contract(
     data,
     target_date,
@@ -112,6 +144,27 @@ def build_market_phase_context_contract(
         dt_panic_threshold,
         main_sectors,
     )
+    if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
+        market_zhongshu,
+        zs_signal_type,
+        zt_count,
+        dt_count,
+        dt_panic_threshold,
+        exit_analysis,
+    ):
+        base_position_level = "二档（防守档）"
+        base_position_reason = (
+            f"指数仍在上行中枢内({zs_signal_status})，单日跌停{dt_count}只和涨跌比偏弱只降为防守观察，"
+            "不直接判定空仓；明日仍需10点确认主线承接。"
+        )
+        _append_log(
+            logs,
+            "index_recovery_guard",
+            "success",
+            "指数处在上行中枢内，阻止单日广度分歧直接打到空仓档",
+            zt_count=zt_count,
+            dt_count=dt_count,
+        )
     _append_log(
         logs,
         "base_position",

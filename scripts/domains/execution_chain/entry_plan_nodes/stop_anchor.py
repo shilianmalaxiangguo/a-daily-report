@@ -9,8 +9,8 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     if final_gate.get("can_new_entry", False):
         lines.append("**明日止损锚定**（买入后严格执行）:")
         if executable_stocks:
-            lines.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 跌破动作 |")
-            lines.append("|------|----------|------------|----------|----------|------------|----------|")
+            lines.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 介入周期纪律 | 跌破动作 |")
+            lines.append("|------|----------|------------|----------|----------|------------|----------------|----------|")
             for item in executable_stocks:
                 if "signal" in item:
                     signal = item["signal"]
@@ -25,10 +25,12 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
                     price_focus = build_trade_price_focus(minute_plan, stop_plan)
                     confirm_price = minute_plan.get("confirm_price_60m")
                     confirm_text = f"站上{confirm_price:.2f}" if confirm_price else f"{item.get('entry_price'):.2f}"
+                    policy = minute_plan.get("entry_cycle_stop_policy") or {}
+                    discipline_text = _format_entry_cycle_discipline(policy)
                     lines.append(
                         f"| {item.get('name')} | {buy_type} | {confirm_text} | "
                         f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | 跌破执行止损立即卖 |"
+                        f"{price_focus.get('hard_stop_display', '-')} | {discipline_text} | 跌破执行止损立即卖 |"
                     )
                 else:
                     stop_plan = item.get("stop_plan")
@@ -36,17 +38,38 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
                     price_focus = build_trade_price_focus(minute_plan, stop_plan)
                     confirm_price = minute_plan.get("confirm_price_60m")
                     confirm_text = f"站上{confirm_price:.2f}" if confirm_price else "待盘中确认"
+                    policy = minute_plan.get("entry_cycle_stop_policy") or {}
+                    discipline_text = _format_entry_cycle_discipline(policy)
                     lines.append(
                         f"| {item.get('name')} | 基础判断 | {confirm_text} | "
                         f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | 跌破执行止损立即卖 |"
+                        f"{price_focus.get('hard_stop_display', '-')} | {discipline_text} | 跌破执行止损立即卖 |"
                     )
             lines.append("")
-            lines.append("- 前台把前低/支撑/止损压缩成同一个关键位/带；真正动作只看执行止损，最晚不超过单笔-5%。")
+            if any(((item.get("minute_plan") or {}).get("entry_cycle_stop_policy") or {}) for item in executable_stocks):
+                lines.append("- 前台把前低/支撑/止损压缩成同一个关键位/带；固定-5%只作为风险底线，不替代介入周期判断。")
+            else:
+                lines.append("- 前台把前低/支撑/止损压缩成同一个关键位/带；真正动作只看执行止损，最晚不超过单笔-5%。")
         else:
             lines.append("- 无可执行股票，暂不设置止损")
     else:
         lines.append("**明日止损锚定**:")
-        lines.append(f"- ⛔ {position_level}禁止买入，无需设置止损")
+        if final_gate.get("allow_conditional_30"):
+            lines.append(f"- 🟡 {position_level}只保留10点确认后的30%条件试错；未确认前不新增，买入后再用30分钟结构止损")
+        else:
+            lines.append(f"- ⛔ {position_level}禁止买入，无需设置止损")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
+
+
+def _format_entry_cycle_discipline(policy):
+    policy = policy or {}
+    mode = str(policy.get("primary_exit_mode", "") or "").strip()
+    action_text = str(policy.get("report_action_text", "") or "").strip()
+    if mode and action_text:
+        return f"{mode}：{action_text}"
+    if mode:
+        return mode
+    if action_text:
+        return action_text
+    return "-"

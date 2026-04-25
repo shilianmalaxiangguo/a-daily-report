@@ -2,12 +2,14 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from replay.report_replay import build_replay_snapshot_contract
+from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, save_report_outputs
 
 
 def _run_legacy_entry_probe(script_body):
@@ -197,6 +199,174 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertFalse(result["found"])
         self.assertIsNone(result["data"])
         self.assertTrue(any(log["step"] == "load.snapshot" and log["status"] == "error" for log in result["module_logs"]))
+
+    def test_build_replay_snapshot_contract_hoists_analysis_atoms_for_report_reuse(self):
+        snapshot = {
+            "analysis": {
+                "mainline_history_record": {
+                    "date": "2026-04-23",
+                    "primary_mainline": "电力",
+                    "leading_line": "电力",
+                },
+                "sector_turnover_snapshot": {
+                    "date": "2026-04-23",
+                    "sector_name": "电力",
+                    "turnover_share_pct": 2.7,
+                },
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-04-23",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertTrue(result["found"])
+        self.assertEqual(result["data"]["current_mainline_history_record"]["primary_mainline"], "电力")
+        self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 2.7)
+
+    def test_build_replay_snapshot_contract_builds_missing_mainline_atoms_for_report_reuse(self):
+        snapshot = {
+            "market_research_snapshot": {
+                "state_machine": {"leading_line": "半导体"},
+                "observation": {},
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 12834.0,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-04-24",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "build_mainline_history_record": lambda target_date, market_research_snapshot: {
+                    "date": target_date,
+                    "primary_mainline": "半导体",
+                    "leading_line": "半导体",
+                },
+                "load_recent_mainline_history": lambda target_date, lookback_days=5: [
+                    {"date": "2026-04-22", "primary_mainline": "电力"},
+                    {"date": "2026-04-23", "primary_mainline": "半导体"},
+                ],
+                "get_sector_turnover_snapshot_from_ths": lambda sector_name, target_date="", total_turnover=0: {
+                    "date": target_date,
+                    "sector_name": sector_name,
+                    "sector_turnover": 2180.0,
+                    "total_turnover": total_turnover,
+                    "turnover_share_pct": 18.1,
+                },
+                "load_recent_sector_turnover_history": lambda target_date, current_mainline_name, lookback_days=5: [
+                    {"date": "2026-04-23", "sector_name": current_mainline_name, "turnover_share_pct": 15.8},
+                ],
+                "build_mainline_turnover_summary": lambda **kwargs: {
+                    "current_mainline": kwargs["current_mainline_history_record"]["primary_mainline"],
+                    "double_mainline_summary": {
+                        "cycle_mainline": "半导体",
+                        "daily_attack_line": "半导体",
+                        "relationship": "周期主线与当天主攻线一致",
+                        "tomorrow_action": "继续围绕半导体观察承接",
+                    },
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-04-24",
+                            "cycle_mainline": "半导体",
+                            "daily_attack_line": "半导体",
+                            "mainline_turnover": "2180.00亿",
+                            "market_turnover": "12834.00亿",
+                            "share": "18.1%",
+                            "share_change": "+2.3pct",
+                            "interpretation": "主线占比继续抬升",
+                        }
+                    ],
+                },
+            },
+        )
+
+        self.assertEqual(result["data"]["current_mainline_history_record"]["primary_mainline"], "半导体")
+        self.assertEqual(result["data"]["recent_mainline_history"][0]["primary_mainline"], "电力")
+        self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 18.1)
+        self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 15.8)
+        self.assertEqual(result["data"]["mainline_turnover_summary"]["current_mainline"], "半导体")
+
+    def test_build_replay_report_outputs_contract_writes_mainline_turnover_reports(self):
+        replay_runtime = self._load_module()
+        captured = {}
+        snapshot = {
+            "analysis": {
+                "mainline_history_record": {
+                    "date": "2026-04-23",
+                    "primary_mainline": "电力",
+                    "leading_line": "电力",
+                },
+                "sector_turnover_snapshot": {
+                    "date": "2026-04-23",
+                    "sector_name": "电力",
+                    "turnover_share_pct": 2.7,
+                },
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        def _build_report_outputs(data, target_date, supplementary_perspective="", has_personal_positions=False, run_mode="frozen", position_report_text=""):
+            captured["target_date"] = target_date
+            captured["run_mode"] = run_mode
+            captured["mainline"] = data["current_mainline_history_record"]["primary_mainline"]
+            captured["share_pct"] = data["current_sector_turnover_snapshot"]["turnover_share_pct"]
+            mainline_line = (
+                "- **主线更替与占比**: 主线未切换，电力仍是中心；"
+                "最近1日主线 电力；成交额占比 2.7%，节奏偏持平"
+            )
+            return {
+                REPORT_VARIANT_FULL: "# 完整版\n" + mainline_line,
+                REPORT_VARIANT_SUMMARY: "# 执行摘要\n" + mainline_line,
+            }
+
+        with TemporaryDirectory() as output_dir:
+            result = replay_runtime.build_replay_report_outputs_contract(
+                "2026-04-23",
+                refresh_sources=["noop"],
+                load_data_snapshot=lambda target_date: (snapshot, ""),
+                tencent_factory=lambda: _FakeTencentFinanceData([]),
+                get_major_indices_from_iwencai=lambda target_date="": [],
+                safe_float=lambda value: float(value or 0),
+                build_report_outputs=_build_report_outputs,
+                save_report_outputs=save_report_outputs,
+                output_dir=output_dir,
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            full_path = Path(result["saved_paths"][REPORT_VARIANT_FULL])
+            summary_path = Path(result["saved_paths"][REPORT_VARIANT_SUMMARY])
+
+            self.assertTrue(full_path.exists())
+            self.assertTrue(summary_path.exists())
+            self.assertIn("主线更替与占比", full_path.read_text(encoding="utf-8"))
+            self.assertIn("主线更替与占比", summary_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(result["found"])
+        self.assertEqual(captured["target_date"], "2026-04-23")
+        self.assertEqual(captured["run_mode"], "replay")
+        self.assertEqual(captured["mainline"], "电力")
+        self.assertEqual(captured["share_pct"], 2.7)
+        self.assertTrue(any(log["step"] == "render.report_outputs" for log in result["module_logs"]))
+        self.assertTrue(any(log["step"] == "save.report_outputs" for log in result["module_logs"]))
 
 
 if __name__ == "__main__":

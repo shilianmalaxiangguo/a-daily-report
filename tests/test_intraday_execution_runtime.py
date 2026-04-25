@@ -94,18 +94,28 @@ bars_payload = [{"datetime": "2026-04-22 10:00", "close": 10.0}]
 waiting_payload = {"entry_price": 10.0, "stop_loss": 9.5}
 
 with patch.object(daily_report_entry_demo, "run_fetch_intraday_bars", return_value=bars_payload) as bars_mock, \
-     patch.object(daily_report_entry_demo, "run_build_waiting_stock_plan", return_value=waiting_payload) as waiting_mock:
+     patch.object(daily_report_entry_demo, "run_build_waiting_stock_plan", return_value=waiting_payload) as waiting_mock, \
+     patch.object(daily_report_entry_demo, "run_build_intraday_execution_plan", return_value={"ok": True}) as plan_mock:
     bars = daily_report_entry_demo.fetch_intraday_bars("000001", "2026-04-22", period="60", lookback_bars=6)
+    plan = daily_report_entry_demo.build_intraday_execution_plan(
+        "000889",
+        "2026-04-22",
+        4.35,
+        entry_cycle_profile={"recommended_stop_mode": "structure_repair_band"},
+    )
     waiting = daily_report_entry_demo.build_waiting_stock_plan({"code": "000001", "close": 10.0}, "2026-04-22", signal_type="breakout")
 
 assert bars_mock.call_args[0][:2] == ("000001", "2026-04-22")
 assert bars_mock.call_args.kwargs["period"] == "60"
 assert bars_mock.call_args.kwargs["lookback_bars"] == 6
 assert "helpers" in bars_mock.call_args.kwargs
+assert plan_mock.call_args[0][:3] == ("000889", "2026-04-22", 4.35)
+assert plan_mock.call_args.kwargs["entry_cycle_profile"] == {"recommended_stop_mode": "structure_repair_band"}
 assert waiting_mock.call_args[0][:2] == ({"code": "000001", "close": 10.0}, "2026-04-22")
 assert waiting_mock.call_args.kwargs["signal_type"] == "breakout"
 assert "helpers" in waiting_mock.call_args.kwargs
 assert bars == bars_payload
+assert plan == {"ok": True}
 assert waiting == waiting_payload
 """
         )
@@ -140,11 +150,141 @@ assert waiting == waiting_payload
         )
 
         self.assertEqual(plan["confirm_price_60m"], 10.8)
+        self.assertEqual(plan["confirm_basis_60m"], "entry_or_recent_high")
+        self.assertEqual(plan["confirm_inputs_60m"]["entry_price"], 10.0)
+        self.assertEqual(plan["confirm_inputs_60m"]["recent_high"], 10.8)
         self.assertEqual(plan["confirm_support_60m"], 9.7)
         self.assertEqual(plan["structure_stop_30m"], 9.45)
         self.assertIn("首个60分钟放量站上10.80", plan["confirm_rule_60m"])
         self.assertEqual(plan["volume_ratio_60m"], 1.64)
         self.assertEqual(plan["stop_plan"]["effective_stop"], 9.45)
+
+    def test_build_intraday_execution_plan_marks_structure_repair_band_as_calibrated(self):
+        plan = build_intraday_execution_plan(
+            "000889",
+            "2026-04-22",
+            4.35,
+            signal_type="breakout",
+            fallback_stop=4.13,
+            entry_cycle_profile={
+                "recommended_stop_mode": "structure_repair_band",
+                "fixed_5pct_stop_result": "would_false_kill",
+                "interpretation": "中嘉博创说明固定-5%会误杀",
+            },
+            helpers={
+                "fetch_intraday_bars": lambda code, target_date, period="30", lookback_bars=12: [
+                    {"datetime": "2026-04-22 10:00", "open": 4.2, "high": 4.35, "low": 4.1, "close": 4.25, "volume": 100},
+                    {"datetime": "2026-04-22 11:00", "open": 4.25, "high": 4.5, "low": 4.18, "close": 4.46, "volume": 130},
+                    {"datetime": "2026-04-22 14:00", "open": 4.46, "high": 4.62, "low": 4.38, "close": 4.58, "volume": 180},
+                ],
+                "build_stop_execution_plan": lambda entry, structure_stop=None, structure_label="结构止损": {
+                    "entry_price": entry,
+                    "structure_stop": structure_stop,
+                    "hard_stop": 4.13,
+                    "effective_stop": structure_stop,
+                    "summary": f"{structure_label}:{structure_stop}",
+                },
+            },
+        )
+
+        self.assertEqual(plan["confirm_basis_60m"], "entry_cycle_calibrated")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["recommended_stop_mode"], "structure_repair_band")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["hard_stop_role"], "风险底线，不是观察淘汰线")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["primary_exit_mode"], "结构修复带")
+        self.assertNotIn("-5%", plan["entry_cycle_stop_policy"]["primary_exit_mode"])
+
+    def test_build_intraday_execution_plan_marks_reclaim_failure_as_primary_exit(self):
+        plan = build_intraday_execution_plan(
+            "000791",
+            "2026-04-22",
+            8.00,
+            signal_type="breakout",
+            fallback_stop=7.60,
+            entry_cycle_profile={
+                "recommended_stop_mode": "reclaim_failure_exit",
+                "interpretation": "甘肃能源没有站稳8.34-8.42",
+            },
+            helpers={
+                "fetch_intraday_bars": lambda code, target_date, period="30", lookback_bars=12: [
+                    {"datetime": "2026-04-22 10:00", "open": 8.06, "high": 8.34, "low": 7.84, "close": 8.15, "volume": 100},
+                    {"datetime": "2026-04-22 11:00", "open": 8.15, "high": 8.20, "low": 7.96, "close": 8.02, "volume": 120},
+                    {"datetime": "2026-04-22 14:00", "open": 8.02, "high": 8.13, "low": 7.88, "close": 8.03, "volume": 110},
+                ],
+                "build_stop_execution_plan": lambda entry, structure_stop=None, structure_label="结构止损": {
+                    "entry_price": entry,
+                    "structure_stop": structure_stop,
+                    "hard_stop": 7.60,
+                    "effective_stop": structure_stop,
+                    "summary": f"{structure_label}:{structure_stop}",
+                },
+            },
+        )
+
+        self.assertEqual(plan["entry_cycle_stop_policy"]["recommended_stop_mode"], "reclaim_failure_exit")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["primary_exit_mode"], "关键区失败降级")
+        self.assertIn("不是继续等待-5%", plan["entry_cycle_stop_policy"]["display_rule"])
+
+    def test_build_intraday_execution_plan_marks_a_kill_as_primary_exit(self):
+        plan = build_intraday_execution_plan(
+            "600488",
+            "2026-04-22",
+            6.97,
+            signal_type="breakout",
+            fallback_stop=6.62,
+            entry_cycle_profile={
+                "recommended_stop_mode": "a_kill_exit",
+                "interpretation": "津药药业已经出现结构失真",
+            },
+            helpers={
+                "fetch_intraday_bars": lambda code, target_date, period="30", lookback_bars=12: [
+                    {"datetime": "2026-04-22 10:00", "open": 6.7, "high": 6.99, "low": 6.37, "close": 6.42, "volume": 100},
+                    {"datetime": "2026-04-22 11:00", "open": 6.4, "high": 6.48, "low": 5.96, "close": 6.06, "volume": 130},
+                    {"datetime": "2026-04-22 14:00", "open": 6.1, "high": 6.2, "low": 5.91, "close": 5.96, "volume": 120},
+                ],
+                "build_stop_execution_plan": lambda entry, structure_stop=None, structure_label="结构止损": {
+                    "entry_price": entry,
+                    "structure_stop": structure_stop,
+                    "hard_stop": 6.62,
+                    "effective_stop": structure_stop,
+                    "summary": f"{structure_label}:{structure_stop}",
+                },
+            },
+        )
+
+        self.assertEqual(plan["entry_cycle_stop_policy"]["recommended_stop_mode"], "a_kill_exit")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["primary_exit_mode"], "A杀出清")
+        self.assertNotIn("趋势持有", plan["entry_cycle_stop_policy"]["report_action_text"])
+
+    def test_build_intraday_execution_plan_marks_time_stop_as_downgrade(self):
+        plan = build_intraday_execution_plan(
+            "603026",
+            "2026-04-22",
+            98.52,
+            signal_type="breakout",
+            fallback_stop=93.59,
+            entry_cycle_profile={
+                "recommended_stop_mode": "time_stop_or_downgrade",
+                "interpretation": "石大胜华不是趋势持有样本",
+            },
+            helpers={
+                "fetch_intraday_bars": lambda code, target_date, period="30", lookback_bars=12: [
+                    {"datetime": "2026-04-22 10:00", "open": 98.0, "high": 100.0, "low": 95.8, "close": 96.11, "volume": 100},
+                    {"datetime": "2026-04-22 11:00", "open": 97.5, "high": 100.38, "low": 94.06, "close": 99.14, "volume": 140},
+                    {"datetime": "2026-04-22 14:00", "open": 99.15, "high": 105.83, "low": 99.06, "close": 104.84, "volume": 150},
+                ],
+                "build_stop_execution_plan": lambda entry, structure_stop=None, structure_label="结构止损": {
+                    "entry_price": entry,
+                    "structure_stop": structure_stop,
+                    "hard_stop": 93.59,
+                    "effective_stop": structure_stop,
+                    "summary": f"{structure_label}:{structure_stop}",
+                },
+            },
+        )
+
+        self.assertEqual(plan["entry_cycle_stop_policy"]["recommended_stop_mode"], "time_stop_or_downgrade")
+        self.assertEqual(plan["entry_cycle_stop_policy"]["primary_exit_mode"], "时间止损/降级")
+        self.assertNotIn("趋势持有", plan["entry_cycle_stop_policy"]["report_action_text"])
 
     def test_build_intraday_execution_plan_returns_empty_for_invalid_entry(self):
         self.assertEqual(build_intraday_execution_plan("000001", "2026-04-22", 0), {})
@@ -195,6 +335,33 @@ assert waiting == waiting_payload
         self.assertEqual(result["stop_loss"], 9.6)
         self.assertEqual(result["stop_plan"]["daily_anchor_stop"], 9.4)
         self.assertEqual(result["reason"], "等待信号")
+
+    def test_build_waiting_stock_plan_uses_default_entry_cycle_profile_by_code(self):
+        from execution.intraday_execution_runtime import build_waiting_stock_plan
+
+        result = build_waiting_stock_plan(
+            {"code": "000889", "close": 4.35},
+            "2026-04-22",
+            signal_type="breakout",
+            helpers={
+                "fetch_intraday_bars": lambda code, target_date, period="30", lookback_bars=12: [
+                    {"datetime": "2026-04-22 10:00", "open": 4.2, "high": 4.35, "low": 4.1, "close": 4.25, "volume": 100},
+                    {"datetime": "2026-04-22 11:00", "open": 4.25, "high": 4.5, "low": 4.18, "close": 4.46, "volume": 130},
+                    {"datetime": "2026-04-22 14:00", "open": 4.46, "high": 4.62, "low": 4.38, "close": 4.58, "volume": 180},
+                ],
+                "build_stop_execution_plan": lambda entry, structure_stop=None, structure_label="结构止损": {
+                    "entry_price": entry,
+                    "structure_stop": structure_stop,
+                    "hard_stop": 4.13,
+                    "effective_stop": structure_stop,
+                    "summary": f"{structure_label}:{structure_stop}",
+                },
+                "enrich_stop_plan_with_reference_anchors": lambda stop_plan, code, target_date, recent_bars=None: stop_plan,
+            },
+        )
+
+        self.assertEqual(result["minute_plan"]["entry_cycle_stop_policy"]["recommended_stop_mode"], "structure_repair_band")
+        self.assertEqual(result["minute_plan"]["confirm_basis_60m"], "entry_cycle_calibrated")
 
 
 if __name__ == "__main__":

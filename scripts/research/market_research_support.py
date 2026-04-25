@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from domains.market_state.mainline_history_runtime import (
+    build_mainline_history_record as build_mainline_history_record_runtime,
+    load_recent_mainline_history as load_recent_mainline_history_runtime,
+)
+from domains.market_state.mainline_turnover_summary_runtime import (
+    build_mainline_turnover_summary as build_mainline_turnover_summary_runtime,
+)
+from domains.market_state.sector_turnover_history_runtime import (
+    load_recent_sector_turnover_history as load_recent_sector_turnover_history_runtime,
+)
+from input.ths_sector_runtime import (
+    get_sector_turnover_snapshot_from_ths as get_sector_turnover_snapshot_from_ths_runtime,
+)
+from input.tencent_sector_runtime import (
+    get_sector_turnover_snapshot_from_tencent_fund_flow as get_sector_turnover_snapshot_from_tencent_fund_flow_runtime,
+)
 from report.market_research_renderer import (
     render_market_research_snapshot_section as render_market_research_snapshot_section_renderer,
     render_step0_follow_section as render_step0_follow_section_renderer,
@@ -347,6 +363,12 @@ def _build_market_research_snapshot_legacy_body(
         build_special_probe_verdict=_build_special_probe_verdict,
         build_follow_verdict=_build_follow_verdict,
         build_dialectical_decision_snapshot=_build_dialectical_decision_snapshot,
+        build_mainline_turnover_summary=build_mainline_turnover_summary_runtime,
+        build_mainline_history_record=build_mainline_history_record_runtime,
+        load_recent_mainline_history=load_recent_mainline_history_runtime,
+        get_sector_turnover_snapshot_from_tencent_fund_flow=get_sector_turnover_snapshot_from_tencent_fund_flow_runtime,
+        get_sector_turnover_snapshot_from_ths=get_sector_turnover_snapshot_from_ths_runtime,
+        load_recent_sector_turnover_history=load_recent_sector_turnover_history_runtime,
     )
 
 
@@ -881,6 +903,16 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "reason": f"当前处于{energy_state}，新增执行权已经关闭，先研究市场，不做新增参与。",
                 "action": "空仓观察，禁止新开仓",
             }
+        if final_gate.get("allow_conditional_30") and not final_gate.get("should_reduce"):
+            action_text = "只看主线核心是否完成10点确认；确认后最多30%条件试错，未确认不开新仓"
+            if special_probe_action:
+                action_text = f"{special_probe_action}；{action_text}"
+            return {
+                "code": "conditional_defense",
+                "label": "🟡 条件防守观察",
+                "reason": f"当前处于{energy_state}，指数结构未坏，但环境还没正式放行，只保留主线核心的条件观察权。",
+                "action": action_text,
+            }
         if final_gate.get("should_reduce") or execution_bias == "reduce_only":
             action_text = "若你有旧仓先去弱留强，禁止新开仓"
             if special_probe_action:
@@ -999,6 +1031,9 @@ def _render_market_research_snapshot_section_legacy_body(market_research_snapsho
             "observation": observation,
             "competition_result": competition_result,
             "competition_evidence": competition_evidence,
+            "mainline_turnover_summary": market_research_snapshot.get("mainline_turnover_summary", {}) or {},
+            "lhb_capital_status": market_research_snapshot.get("lhb_capital_status", {}) or {},
+            "capital_conclusion": market_research_snapshot.get("capital_conclusion", {}) or {},
             "rotation_label": rotation_snapshot.get("rotation_label", "-"),
             "rotation_summary_text": rotation_snapshot.get("summary_text", rotation_snapshot.get("rotation_reason", "-")),
             "rotation_action": rotation_snapshot.get("rotation_action", "-"),

@@ -1,9 +1,28 @@
 __all__ = [
     "build_replay_snapshot_contract",
+    "build_replay_report_outputs_contract",
     "replay_from_snapshot",
 ]
 
 _MISSING = object()
+
+
+def _load_default_mainline_helpers():
+    from domains.market_state.mainline_history_runtime import (
+        build_mainline_history_record,
+        load_recent_mainline_history,
+    )
+    from domains.market_state.mainline_turnover_summary_runtime import build_mainline_turnover_summary
+    from domains.market_state.sector_turnover_history_runtime import load_recent_sector_turnover_history
+    from input.ths_sector_runtime import get_sector_turnover_snapshot_from_ths
+
+    return {
+        "build_mainline_history_record": build_mainline_history_record,
+        "load_recent_mainline_history": load_recent_mainline_history,
+        "get_sector_turnover_snapshot_from_ths": get_sector_turnover_snapshot_from_ths,
+        "load_recent_sector_turnover_history": load_recent_sector_turnover_history,
+        "build_mainline_turnover_summary": build_mainline_turnover_summary,
+    }
 
 
 def _install_runtime_bindings(bindings):
@@ -46,6 +65,104 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def _hoist_report_analysis_atoms(snapshot_data):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+
+    analysis = snapshot_data.get("analysis", {}) or {}
+    if not isinstance(analysis, dict):
+        analysis = {}
+
+    if not snapshot_data.get("current_mainline_history_record") and snapshot_data.get("mainline_history_record"):
+        snapshot_data["current_mainline_history_record"] = snapshot_data.get("mainline_history_record")
+    if not snapshot_data.get("current_mainline_history_record") and analysis.get("mainline_history_record"):
+        snapshot_data["current_mainline_history_record"] = analysis.get("mainline_history_record")
+
+    if not snapshot_data.get("current_sector_turnover_snapshot") and snapshot_data.get("sector_turnover_snapshot"):
+        snapshot_data["current_sector_turnover_snapshot"] = snapshot_data.get("sector_turnover_snapshot")
+    if not snapshot_data.get("current_sector_turnover_snapshot") and analysis.get("sector_turnover_snapshot"):
+        snapshot_data["current_sector_turnover_snapshot"] = analysis.get("sector_turnover_snapshot")
+
+    if not snapshot_data.get("mainline_turnover_summary") and analysis.get("mainline_turnover_summary"):
+        snapshot_data["mainline_turnover_summary"] = analysis.get("mainline_turnover_summary")
+
+    return snapshot_data
+
+
+def _record_has_mainline(record):
+    if not isinstance(record, dict):
+        return False
+    return bool(str(record.get("primary_mainline") or record.get("leading_line") or "").strip())
+
+
+def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    helpers = {**_load_default_mainline_helpers(), **(helpers or {})}
+    market_research_snapshot = snapshot_data.get("market_research_snapshot") or snapshot_data.get("analysis") or {}
+
+    if not _record_has_mainline(snapshot_data.get("current_mainline_history_record")) and callable(helpers.get("build_mainline_history_record")):
+        built_record = helpers["build_mainline_history_record"](
+            target_date,
+            market_research_snapshot,
+        )
+        if _record_has_mainline(built_record):
+            snapshot_data["current_mainline_history_record"] = built_record
+        else:
+            snapshot_data.pop("current_mainline_history_record", None)
+
+    current_record = snapshot_data.get("current_mainline_history_record") or {}
+    current_mainline_name = str(
+        current_record.get("primary_mainline")
+        or current_record.get("leading_line")
+        or ""
+    ).strip()
+
+    if not snapshot_data.get("recent_mainline_history") and callable(helpers.get("load_recent_mainline_history")):
+        snapshot_data["recent_mainline_history"] = helpers["load_recent_mainline_history"](
+            target_date,
+            lookback_days=5,
+        )
+
+    total_turnover = snapshot_data.get("total_turnover")
+    if total_turnover in (None, ""):
+        observation = market_research_snapshot.get("observation", {}) if isinstance(market_research_snapshot, dict) else {}
+        total_turnover = observation.get("turnover", 0.0) if isinstance(observation, dict) else 0.0
+
+    if (
+        not snapshot_data.get("current_sector_turnover_snapshot")
+        and current_mainline_name
+        and callable(helpers.get("get_sector_turnover_snapshot_from_ths"))
+    ):
+        snapshot_data["current_sector_turnover_snapshot"] = helpers["get_sector_turnover_snapshot_from_ths"](
+            current_mainline_name,
+            target_date=target_date,
+            total_turnover=total_turnover,
+        )
+
+    if (
+        not snapshot_data.get("recent_sector_turnover_history")
+        and current_mainline_name
+        and callable(helpers.get("load_recent_sector_turnover_history"))
+    ):
+        snapshot_data["recent_sector_turnover_history"] = helpers["load_recent_sector_turnover_history"](
+            target_date,
+            current_mainline_name,
+            lookback_days=5,
+        )
+
+    if not snapshot_data.get("mainline_turnover_summary") and callable(helpers.get("build_mainline_turnover_summary")):
+        snapshot_data["mainline_turnover_summary"] = helpers["build_mainline_turnover_summary"](
+            target_date=target_date,
+            current_mainline_history_record=snapshot_data.get("current_mainline_history_record") or {},
+            recent_mainline_history=snapshot_data.get("recent_mainline_history") or [],
+            current_sector_turnover_snapshot=snapshot_data.get("current_sector_turnover_snapshot") or {},
+            recent_sector_turnover_history=snapshot_data.get("recent_sector_turnover_history") or [],
+        )
+
+    return snapshot_data
+
+
 def _mark_replayed_step_success(snapshot_data, step_name, safe_float):
     timer_summary = snapshot_data.setdefault("timer_summary", {}) or {}
     raw_steps = timer_summary.get("steps", []) or []
@@ -83,6 +200,7 @@ def build_replay_snapshot_contract(
     get_major_indices_from_iwencai,
     safe_float,
     print_fn=print,
+    helpers=None,
 ):
     refresh_sources = list(refresh_sources or ["calendar_events"])
     logs = []
@@ -105,6 +223,8 @@ def build_replay_snapshot_contract(
         }
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
+    snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
+    snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=helpers)
 
     if "calendar_events" in refresh_sources:
         print_fn("   🔄 重新拉取财联社预期日历...")
@@ -157,6 +277,87 @@ def build_replay_snapshot_contract(
         "supplementary_perspective": supplementary or "",
         "module_logs": logs,
     }
+
+
+def build_replay_report_outputs_contract(
+    target_date,
+    refresh_sources=None,
+    *,
+    load_data_snapshot,
+    tencent_factory,
+    get_major_indices_from_iwencai,
+    safe_float,
+    build_report_outputs,
+    save_report_outputs,
+    output_dir=None,
+    has_personal_positions=False,
+    position_report_text="",
+    print_fn=print,
+    helpers=None,
+):
+    replay_contract = build_replay_snapshot_contract(
+        target_date,
+        refresh_sources=refresh_sources,
+        load_data_snapshot=load_data_snapshot,
+        tencent_factory=tencent_factory,
+        get_major_indices_from_iwencai=get_major_indices_from_iwencai,
+        safe_float=safe_float,
+        print_fn=print_fn,
+        helpers=helpers,
+    )
+    replay_contract.setdefault("report_outputs", {})
+    replay_contract.setdefault("saved_paths", {})
+    if not replay_contract.get("found"):
+        return replay_contract
+
+    logs = replay_contract.setdefault("module_logs", [])
+    replay_data = replay_contract.get("data") or {}
+    resolved_target_date = replay_contract.get("target_date") or target_date
+    supplementary = replay_contract.get("supplementary_perspective") or ""
+
+    try:
+        report_outputs = build_report_outputs(
+            replay_data,
+            resolved_target_date,
+            supplementary_perspective=supplementary,
+            has_personal_positions=has_personal_positions,
+            run_mode="replay",
+            position_report_text=position_report_text,
+        )
+    except Exception as exc:
+        _append_log(logs, "render.report_outputs", "error", "生成 replay 报告产物失败", error=str(exc))
+        raise
+
+    replay_contract["report_outputs"] = report_outputs
+    _append_log(
+        logs,
+        "render.report_outputs",
+        "success",
+        "已生成 replay 报告产物",
+        variants=sorted((report_outputs or {}).keys()),
+    )
+
+    try:
+        saved_paths = save_report_outputs(
+            report_outputs,
+            resolved_target_date,
+            mode="replay",
+            output_dir=output_dir,
+        )
+    except Exception as exc:
+        _append_log(logs, "save.report_outputs", "error", "落盘 replay 报告产物失败", error=str(exc))
+        raise
+
+    replay_contract["saved_paths"] = saved_paths
+    _append_log(
+        logs,
+        "save.report_outputs",
+        "success",
+        "已落盘 replay 报告产物",
+        variants=sorted((saved_paths or {}).keys()),
+        output_dir=output_dir,
+    )
+    return replay_contract
 
 
 def _replay_from_snapshot_legacy_body(target_date, refresh_sources=None):

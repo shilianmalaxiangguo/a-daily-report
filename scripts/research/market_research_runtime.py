@@ -1,3 +1,52 @@
+from report.market_fit_calibration import build_market_fit_calibration
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _has_resolved_mainline_turnover_summary(summary):
+    if not isinstance(summary, dict):
+        return False
+    return bool(str(summary.get("current_mainline") or "").strip())
+
+
+def _derive_lhb_capital_intent(data, mainline_name=""):
+    data = data or {}
+    buy_rows = list(data.get("lhb_net_buy_top10") or [])
+    sell_rows = list(data.get("lhb_net_sell_top10") or [])
+    if not buy_rows and not sell_rows:
+        return {}, {}
+
+    sector_totals = {}
+    for item in buy_rows:
+        sector = str((item or {}).get("sector") or "未归类").strip() or "未归类"
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + _safe_float((item or {}).get("net_buy_amount_yi"))
+    top_sector, top_amount = max(sector_totals.items(), key=lambda pair: pair[1]) if sector_totals else (mainline_name or "未归类", 0.0)
+    sell_amount = abs(sum(_safe_float((item or {}).get("net_buy_amount_yi")) for item in sell_rows))
+    strength = "强" if top_amount >= 5 else "中" if top_amount >= 2 else "弱"
+    style_shift = "资金向主线集中" if mainline_name and top_sector == mainline_name else "资金偏轮动试探"
+    status = {
+        "capital_strength": strength,
+        "capital_intensity": f"龙虎榜净买入集中在{top_sector}，约{top_amount:.2f}亿；净卖出端约{sell_amount:.2f}亿",
+        "capital_direction": top_sector,
+        "capital_intent": "承接主线核心" if mainline_name and top_sector == mainline_name else "尝试外溢或轮动",
+        "style_shift": style_shift,
+        "event_attribute": "龙虎榜资金行为",
+    }
+    conclusion = {
+        "current_capital_state": f"龙虎榜资金{strength}，方向在{top_sector}",
+        "mainline_attitude": "资金仍在主线内确认" if mainline_name and top_sector == mainline_name else "资金没有完全确认主线，先看是否轮动",
+        "tomorrow_action_meaning": "只看主线核心承接，不追非主线热票" if mainline_name and top_sector == mainline_name else "先观察资金是否回到主线，再决定是否给资格",
+    }
+    return status, conclusion
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -8,6 +57,26 @@ def _append_log(logs, step, status, message, **details):
             "details": details,
         }
     )
+
+
+def _collect_market_fit_observation_pool(data, observation_snapshot):
+    pool = []
+    for source in (
+        (observation_snapshot or {}).get("abnormal_watch_pool"),
+        (observation_snapshot or {}).get("leader_memory_bank"),
+        (data or {}).get("watchlist"),
+        (data or {}).get("candidates"),
+    ):
+        if isinstance(source, list):
+            pool.extend(item for item in source if isinstance(item, dict))
+    return pool
+
+
+def _collect_market_fit_strong_samples(data):
+    data = data or {}
+    if isinstance(data.get("strong_samples"), list):
+        return data.get("strong_samples") or []
+    return data.get("zt_pool") or []
 
 
 def build_market_research_snapshot_contract(
@@ -26,9 +95,16 @@ def build_market_research_snapshot_contract(
     build_special_probe_verdict,
     build_follow_verdict,
     build_dialectical_decision_snapshot,
+    build_mainline_turnover_summary=None,
+    build_mainline_history_record=None,
+    load_recent_mainline_history=None,
+    get_sector_turnover_snapshot_from_tencent_fund_flow=None,
+    get_sector_turnover_snapshot_from_ths=None,
+    load_recent_sector_turnover_history=None,
 ):
     observation_snapshot = observation_snapshot or {}
     sector_ai_analysis = data.get("sector_ai_analysis", {}) or {}
+    mainline_turnover_summary = data.get("mainline_turnover_summary") or observation_snapshot.get("mainline_turnover_summary") or {}
     logs = []
 
     abnormal_projection = build_abnormal_projection_summary(observation_snapshot.get("abnormal_watch_pool", []))
@@ -88,6 +164,81 @@ def build_market_research_snapshot_contract(
         follow_verdict=follow_verdict,
         final_gate=final_gate,
     )
+    current_mainline_history_record = data.get("current_mainline_history_record") or {}
+    recent_mainline_history = data.get("recent_mainline_history") or []
+    current_sector_turnover_snapshot = data.get("current_sector_turnover_snapshot") or {}
+    recent_sector_turnover_history = data.get("recent_sector_turnover_history") or []
+
+    if not current_mainline_history_record and callable(build_mainline_history_record):
+        current_mainline_history_record = build_mainline_history_record(
+            target_date,
+            {
+                "observation": observation_snapshot,
+                "state_machine": state_machine_snapshot,
+                "mainline_rotation_snapshot": mainline_rotation_snapshot,
+            },
+        )
+
+    current_mainline_name = str(
+        (current_mainline_history_record or {}).get("primary_mainline")
+        or (current_mainline_history_record or {}).get("leading_line")
+        or state_machine_snapshot.get("leading_line", "")
+        or ""
+    ).strip()
+
+    if not recent_mainline_history and callable(load_recent_mainline_history):
+        recent_mainline_history = load_recent_mainline_history(target_date, lookback_days=5)
+
+    total_turnover = data.get("total_turnover")
+    if total_turnover in (None, ""):
+        total_turnover = observation_snapshot.get("turnover", 0.0)
+
+    if not current_sector_turnover_snapshot and current_mainline_name and callable(get_sector_turnover_snapshot_from_tencent_fund_flow):
+        current_sector_turnover_snapshot = get_sector_turnover_snapshot_from_tencent_fund_flow(
+            current_mainline_name,
+            data.get("sector_fund_flow", {}),
+            target_date=target_date,
+            total_turnover=total_turnover,
+        )
+
+    has_sector_turnover = _safe_float((current_sector_turnover_snapshot or {}).get("sector_turnover")) > 0
+    if not has_sector_turnover and current_mainline_name and callable(get_sector_turnover_snapshot_from_ths):
+        current_sector_turnover_snapshot = get_sector_turnover_snapshot_from_ths(
+            current_mainline_name,
+            target_date=target_date,
+            total_turnover=total_turnover,
+        )
+
+    if not recent_sector_turnover_history and current_mainline_name and callable(load_recent_sector_turnover_history):
+        recent_sector_turnover_history = load_recent_sector_turnover_history(
+            target_date,
+            current_mainline_name,
+            lookback_days=5,
+        )
+
+    if not _has_resolved_mainline_turnover_summary(mainline_turnover_summary) and callable(build_mainline_turnover_summary):
+        mainline_turnover_summary = build_mainline_turnover_summary(
+            target_date=target_date,
+            current_mainline_history_record=current_mainline_history_record,
+            recent_mainline_history=recent_mainline_history,
+            current_sector_turnover_snapshot=current_sector_turnover_snapshot,
+            recent_sector_turnover_history=recent_sector_turnover_history,
+        )
+
+    market_fit_calibration = build_market_fit_calibration(
+        strong_samples=_collect_market_fit_strong_samples(data),
+        current_mainline=current_mainline_name,
+        observation_pool=_collect_market_fit_observation_pool(data, observation_snapshot),
+    )
+    _append_log(
+        logs,
+        "market_fit_calibration",
+        "success",
+        "已构建市场贴合度校准",
+        fit_label=market_fit_calibration.get("fit_label", ""),
+    )
+
+    lhb_capital_status, capital_conclusion = _derive_lhb_capital_intent(data, current_mainline_name)
 
     return {
         "observation": observation_snapshot,
@@ -98,6 +249,14 @@ def build_market_research_snapshot_contract(
         "special_probe_verdict": special_probe_verdict,
         "dialectical_decision": dialectical_decision,
         "mainline_rotation_snapshot": mainline_rotation_snapshot,
+        "current_mainline_history_record": current_mainline_history_record,
+        "recent_mainline_history": recent_mainline_history,
+        "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
+        "recent_sector_turnover_history": recent_sector_turnover_history,
+        "mainline_turnover_summary": mainline_turnover_summary,
+        "market_fit_calibration": market_fit_calibration,
+        "lhb_capital_status": lhb_capital_status,
+        "capital_conclusion": capital_conclusion,
         "sector_ai_analysis": sector_ai_analysis,
         "final_gate": final_gate,
         "module_logs": logs,

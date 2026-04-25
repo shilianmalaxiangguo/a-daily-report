@@ -52,6 +52,9 @@ def run(ctx):
         "target_date": inputs.get("target_date", ""),
         "generated_at": inputs.get("generated_at") or _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "report_version": inputs.get("report_version", "v2.5.0"),
+        "appendix_b": inputs.get("appendix_b", {}) or {},
+        "appendix_c": inputs.get("appendix_c", {}) or {},
+        "entry_cycle_calibration": inputs.get("entry_cycle_calibration", {}) or {},
     }
     lines = render_execution_appendix(render_context) if callable(render_execution_appendix) else []
     _append_log(
@@ -67,6 +70,9 @@ def run(ctx):
     exports = {
         "normalized_timer_steps": normalized_timer_steps,
         "total_time": total_time,
+        "appendix_b": render_context["appendix_b"],
+        "appendix_c": render_context["appendix_c"],
+        "entry_cycle_calibration": render_context["entry_cycle_calibration"],
     }
     return {
         "value": {

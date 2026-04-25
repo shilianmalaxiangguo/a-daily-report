@@ -920,7 +920,7 @@ def _build_market_style_switch_snapshot_legacy_body(target_date, data, observati
         trend_evidence.append(f"龙头记忆保留{leader_memory_count}只")
     if trusted_tracking_count >= 1:
         trend_signal_count += 1
-        trend_evidence.append(f"可信跟踪记录{trusted_tracking_count}只")
+        trend_evidence.append(f"二次确认观察{trusted_tracking_count}只")
 
     speculative_signal_count = 0
     speculative_evidence = []
@@ -1210,6 +1210,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
     transition_signal = str(transition_signal or "").strip()
     can_new_entry = bool(final_gate.get("can_new_entry"))
     should_reduce = bool(final_gate.get("should_reduce"))
+    allow_conditional_30 = bool(final_gate.get("allow_conditional_30"))
     operation_state = str(final_gate.get("operation_state", "") or "").strip()
 
     if trend_density >= 3 and resilient_count >= 2 and zt_count <= 25:
@@ -1259,6 +1260,10 @@ def _derive_mainline_pulse_snapshot_legacy_body(
             execution_bias = "avoid"
             pulse_action_bias = "禁止参与"
             pulse_action_reason = "环境已转撤退，先退出，等下一轮新脉冲。"
+        elif allow_conditional_30 and not should_reduce:
+            execution_bias = "conditional_defense"
+            pulse_action_bias = "只保留10点确认后的条件试错"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境未正式放行；只看10点确认后的30%条件试错。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"

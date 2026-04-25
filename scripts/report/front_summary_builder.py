@@ -1,3 +1,17 @@
+from report.mainline_turnover_summary_support import resolve_double_mainline_summary, resolve_turnover_share_trend_rows
+
+
+def build_double_mainline_summary_contract(context=None):
+    context = context or {}
+    if any(key in context for key in ("cycle_mainline", "daily_attack_line", "relationship", "tomorrow_action")):
+        context = {"double_mainline_summary": context}
+    return resolve_double_mainline_summary(context)
+
+
+def build_turnover_share_trend_contract(rows=None):
+    return resolve_turnover_share_trend_rows({"turnover_share_trend_rows": rows or []})
+
+
 def build_front_mainline_label_contract(market_research_snapshot, fallback_mainline=""):
     market_research_snapshot = market_research_snapshot or {}
     observation = market_research_snapshot.get("observation", {}) or {}
@@ -20,6 +34,20 @@ def build_front_mainline_label_contract(market_research_snapshot, fallback_mainl
             parts.append(densest_label)
 
     return "；".join(parts) if parts else "主线待确认"
+
+
+def build_front_mainline_turnover_text_contract(market_research_snapshot):
+    market_research_snapshot = market_research_snapshot or {}
+    summary = market_research_snapshot.get("mainline_turnover_summary", {}) or {}
+
+    parts = []
+    conclusion = str(summary.get("conclusion", "") or "").strip()
+    data_text = str(summary.get("data_text", "") or "").strip()
+    if conclusion:
+        parts.append(conclusion)
+    if data_text:
+        parts.append(data_text)
+    return "；".join(parts)
 
 
 def build_front_style_action_text_contract(
@@ -133,11 +161,13 @@ def render_core_mvp_digest_contract(
         mainline_name=mainline_name,
         state_machine_snapshot=state_machine,
     )
+    mainline_turnover_text = build_front_mainline_turnover_text_contract(market_research_snapshot)
     return render_front_digest(
         {
             "headline": front_follow_action_text,
             "state_text": f"{state_machine.get('energy_state', position_level)}；{state_machine.get('state_reason', position_reason)}",
             "mainline_label": mainline_label,
+            "mainline_turnover_text": mainline_turnover_text,
             "special_probe_text": special_probe_text,
             "philosophy_constraint_text": philosophy_constraint_text,
             "contract_logic_text": get_contract_logic_digest_text(),

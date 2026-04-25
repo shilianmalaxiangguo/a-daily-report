@@ -22,7 +22,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
             ]
         )
 
-        result = build_candidate_selection_stage(
+        result = build_candidate_selection_runtime(
             {
                 "data": {"sector_quadrant": {}},
                 "target_date": "2026-04-22",
@@ -62,7 +62,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("#### Step 2 - 明日核心标的", rendered)
         self.assertIn("> **先看结论**：从观察池继续缩到明日核心、次核心和跨线观察。", rendered)
         self.assertIn("> **只留什么**：主线最强的留核心，跨线对象只留观察。", rendered)
-        self.assertIn("**明日核心预判**", rendered)
+        self.assertIn("**主线内可执行候选**", rendered)
         self.assertIn("**极度看好名单**", rendered)
         self.assertNotIn("gem-section", rendered)
         self.assertEqual(result["exports"]["step2_bundle"]["mainline_name"], "军工")
@@ -167,10 +167,204 @@ class CandidateSelectionStageTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 2 - 明日核心标的", rendered)
-        self.assertIn("**明日核心预判**", rendered)
+        self.assertIn("**主线内可执行候选**", rendered)
+        self.assertIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", rendered)
+        self.assertNotIn("| 序号 | 股票 | 代码 | 板块 | 今日形态 | 异动跟踪 | 预判强度 | 核心级别 | 明日预判 |", rendered)
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("**主线趋势密度复核**", rendered)
         self.assertNotIn("**极度看好名单**", rendered)
+
+    def test_candidate_selection_marks_core_candidates_as_watch_only_when_gate_is_closed(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-04-24",
+                "exit_analysis": {"sector_name": "半导体"},
+                "final_gate": {"can_new_entry": False, "operation_state": "防守态"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [
+                        {
+                            "name": "富瀚微",
+                            "code": "300613",
+                            "sector": "半导体",
+                            "core_level": "溢价候选",
+                            "tmr_forecast": "10点看承接",
+                        }
+                    ],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["core_candidates"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 10点看承接 | 溢价候选 | 仅观察，条件未满足 |", rendered)
+        self.assertNotIn("有条件执行", rendered)
+        self.assertNotIn("闸门", rendered)
+
+    def test_candidate_selection_marks_core_candidates_as_ten_oclock_watch_when_conditional_gate_exists(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-04-24",
+                "exit_analysis": {"sector_name": "半导体"},
+                "final_gate": {"can_new_entry": False, "allow_conditional_30": True, "operation_state": "防守态"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [
+                        {"name": "富瀚微", "code": "300613", "sector": "半导体", "core_level": "溢价候选", "tmr_forecast": "10点看承接"}
+                    ],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["core_candidates"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 10点看承接 | 溢价候选 | 观察，等10点确认 |", rendered)
+        self.assertNotIn("有条件执行", rendered)
+
+    def test_candidate_selection_core_candidates_render_market_fit_fields_without_standalone_drawing_table(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-04-24",
+                "exit_analysis": {"sector_name": "半导体"},
+                "final_gate": {"can_new_entry": False, "allow_conditional_30": True},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [
+                        {
+                            "name": "富瀚微",
+                            "code": "300613",
+                            "sector": "半导体",
+                            "signature_big_yangline": "放量涨停",
+                            "five_day_burst_state": "未完全爆发",
+                            "acceptance_state": "明日验证承接",
+                            "capital_trace": "主线资金主动进攻",
+                            "qualification_text": "观察，等10点确认",
+                        }
+                    ],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["core_candidates"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", rendered)
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量涨停 | 未完全爆发 | 明日验证承接 | 主线资金主动进攻 | 观察，等10点确认 |", rendered)
+        self.assertNotIn("主力画图", rendered)
+        self.assertNotIn("执行权", rendered)
+
+    def test_candidate_selection_stage_renders_crossline_watch_as_visible_v2_table(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-04-22",
+                "exit_analysis": {"sector_name": "半导体"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "render_gem_breathing_step2_section": lambda *args, **kwargs: [],
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [
+                        {"name": "华电能源", "code": "600726", "sector": "电力", "abnormal_summary": "旧主线反抽", "tomorrow_strength": 60},
+                    ],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["crossline_watch"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**跨线观察候选**", rendered)
+        self.assertIn("| 股票 | 代码 | 所属方向 | 观察意义 | 明日原则 |", rendered)
+        self.assertIn("| 华电能源 | 600726 | 电力 |", rendered)
+        self.assertNotIn("| 序号 | 股票 | 代码 | 板块 | 异动跟踪 | 预判强度 | 观察意义 | 明日原则 |", rendered)
 
     def test_candidate_selection_stage_uses_action_labels_for_ai_group_analysis(self):
         stage_lookup = build_execution_stage_lookup(

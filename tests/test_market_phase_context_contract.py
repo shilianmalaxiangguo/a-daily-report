@@ -5,10 +5,75 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from daily_report_analysis_utils import merge_position_gate
 from decision.market_phase_context import build_market_phase_context_contract
 
 
 class MarketPhaseContextContractTest(unittest.TestCase):
+    def test_rising_index_inside_zhongshu_does_not_force_empty_position_from_breadth_divergence(self):
+        result = build_market_phase_context_contract(
+            {
+                "zt_pool": [{"code": "000001"}] * 59,
+                "dt_pool": [{"code": "000002"}] * 20,
+                "indices": {"上证指数": {"涨跌幅": -0.33}},
+                "market_stats": {"up_count": 1994, "down_count": 3085},
+                "total_turnover": 26414.92,
+                "hot_rank_top30": [{"close": 10.0, "open": 10.0, "high": 10.5, "low": 9.8, "change_pct": 3.5}],
+                "sector_trend_snapshot": [{"sector": "半导体", "trend_count": 2}],
+            },
+            "2026-04-24",
+            analyze_market_zhongshu=lambda **kwargs: {
+                "success": True,
+                "current_zhongshu": {
+                    "start_date": "2026-04-14",
+                    "end_date": "2026-04-23",
+                    "start_close": 4026.62,
+                    "end_close": 4093.25,
+                    "zd": 3992.40,
+                    "zg": 4114.84,
+                },
+                "signal": {
+                    "signal_type": "按个股信号操作",
+                    "status": "➖ 中枢内震荡",
+                    "comparison_state": "range",
+                    "today_price": 4079.90,
+                    "dist_to_zd": 0.0219,
+                    "dist_to_zg": -0.0085,
+                },
+            },
+            analyze_market_and_sectors=lambda data: {"market_status": "震荡整理"},
+            resolve_market_mainline_context=lambda data, market_analysis: {
+                "main_sectors_info": [{"name": "半导体"}],
+                "secondary_sectors_info": [{"name": "电池"}],
+                "main_sectors": ["半导体"],
+                "secondary_sectors": ["电池"],
+                "dragon_stocks": [],
+            },
+            build_mainline_exit_analysis=lambda data, market_analysis, dragon_stocks, main_sectors: {
+                "overall_level": "黄灯",
+                "sector_name": "半导体",
+            },
+            merge_position_gate=merge_position_gate,
+            build_market_state_machine_snapshot=lambda **kwargs: {
+                "execution_bias": "divergence_only",
+                "operation_state": kwargs["final_gate"]["operation_state"],
+                "energy_state": "分歧防守",
+            },
+            resolve_environment_display_contract=lambda **kwargs: {
+                "position_level": kwargs["position_level"],
+                "operation_state": kwargs["final_gate"]["operation_state"],
+                "headline": "指数上行中枢内，防守观察",
+            },
+            calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
+        )
+
+        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertTrue(result["final_gate"]["can_hold"])
+        self.assertFalse(result["final_gate"]["can_new_entry"])
+        self.assertIn("10点确认", result["final_gate"]["final_action"])
+        self.assertIn("指数仍在上行中枢内", result["position_reason"])
+        self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
+
     def test_breakout_without_clear_mainline_upgrades_final_gate(self):
         result = build_market_phase_context_contract(
             {

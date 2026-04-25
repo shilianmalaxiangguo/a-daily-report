@@ -31,6 +31,11 @@ _EXPORT_FIELDS = [
     "observation_snapshot",
     "market_research_snapshot",
     "market_state_snapshot",
+    "current_mainline_history_record",
+    "recent_mainline_history",
+    "current_sector_turnover_snapshot",
+    "recent_sector_turnover_history",
+    "mainline_turnover_summary",
     "abnormal_projection_summary",
     "step0_plan",
 ]

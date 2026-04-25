@@ -1,5 +1,7 @@
 import time
 
+from report.front_summary_renderer import sanitize_front_page_text
+
 
 HOOK_NAME = "report.tail_summary"
 
@@ -109,6 +111,11 @@ def run(ctx):
     display_mvp_mode = bool(inputs.get("display_mvp_mode"))
     mainline_name = str(inputs.get("mainline_name", "") or "").strip()
     market_research_snapshot = inputs.get("market_research_snapshot", {}) or {}
+    current_mainline_history_record = inputs.get("current_mainline_history_record", {}) or {}
+    recent_mainline_history = inputs.get("recent_mainline_history", []) or []
+    current_sector_turnover_snapshot = inputs.get("current_sector_turnover_snapshot", {}) or {}
+    recent_sector_turnover_history = inputs.get("recent_sector_turnover_history", []) or []
+    mainline_turnover_summary = inputs.get("mainline_turnover_summary", {}) or {}
     final_gate = inputs.get("final_gate", {}) or {}
     watchlist = inputs.get("watchlist", []) or []
     core_stocks = inputs.get("core_stocks", []) or []
@@ -123,9 +130,8 @@ def run(ctx):
     risk_text = _build_risk_text(inputs)
 
     if callable(build_legacy_final_conclusion_lines):
-        lines.extend(
-            build_legacy_final_conclusion_lines(
-                {
+        final_conclusion_context = sanitize_front_page_text(
+            {
                     "display_mvp_mode": display_mvp_mode,
                     "step0_prediction": inputs.get("step0_prediction", "NEUTRAL"),
                     "step0_prediction_cn": inputs.get("step0_prediction_cn", "NEUTRAL"),
@@ -143,6 +149,8 @@ def run(ctx):
                     "watchlist_count": len(watchlist),
                     "core_count": len(core_stocks),
                     "secondary_count": len(secondary_stocks),
+                    "core_stocks": core_stocks,
+                    "secondary_stocks": secondary_stocks,
                     "crossline_count": len(step2_bundle.get("crossline_observation_stocks", [])),
                     "abnormal_watch_count": len(abnormal_watch_pool),
                     "front_structure_layer_text": inputs.get("front_structure_layer_text", ""),
@@ -158,34 +166,41 @@ def run(ctx):
                     "front_follow_action_text": inputs.get("front_follow_action_text", ""),
                     "abnormal_probe_parts": abnormal_probe_parts,
                     "report_stages": inputs.get("report_stages", []),
-                }
-            )
+                    "current_mainline_history_record": current_mainline_history_record,
+                    "recent_mainline_history": recent_mainline_history,
+                    "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
+                    "recent_sector_turnover_history": recent_sector_turnover_history,
+                    "mainline_turnover_summary": mainline_turnover_summary,
+            }
         )
+        lines.extend(sanitize_front_page_text(build_legacy_final_conclusion_lines(final_conclusion_context)))
 
     focus_subject = mainline_text if mainline_text != "暂无明确主线" else "市场整体"
-    context_tail_payload = {
-        "mainline_name": resolved_mainline_name,
-        "supplementary_perspective": supplementary_perspective,
-        "market_insight": {
-            "market_trend": inputs.get("market_trend", ""),
-            "zt_count": inputs.get("zt_count", 0),
-            "dt_count": inputs.get("dt_count", 0),
-            "energy_state": market_state_snapshot.get("energy_state", "未知"),
-            "flow_direction": market_state_snapshot.get("flow_direction", "-"),
-            "mainline_text": mainline_text,
-            "risk_text": risk_text,
-            "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
-        },
-    }
+    context_tail_payload = sanitize_front_page_text(
+        {
+            "mainline_name": resolved_mainline_name,
+            "supplementary_perspective": supplementary_perspective,
+            "market_insight": {
+                "market_trend": inputs.get("market_trend", ""),
+                "zt_count": inputs.get("zt_count", 0),
+                "dt_count": inputs.get("dt_count", 0),
+                "energy_state": market_state_snapshot.get("energy_state", "未知"),
+                "flow_direction": market_state_snapshot.get("flow_direction", "-"),
+                "mainline_text": mainline_text,
+                "risk_text": risk_text,
+                "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
+            },
+        }
+    )
 
     if callable(render_context_tail_sections):
-        lines.extend(render_context_tail_sections(context_tail_payload))
+        lines.extend(sanitize_front_page_text(render_context_tail_sections(context_tail_payload)))
     else:
         if callable(render_supplementary_perspective_section):
-            lines.extend(render_supplementary_perspective_section(supplementary_perspective))
+            lines.extend(sanitize_front_page_text(render_supplementary_perspective_section(supplementary_perspective)))
 
         if callable(render_ai_market_insight_section):
-            lines.extend(render_ai_market_insight_section(context_tail_payload["market_insight"]))
+            lines.extend(sanitize_front_page_text(render_ai_market_insight_section(context_tail_payload["market_insight"])))
 
     _append_log(
         logs,

@@ -66,6 +66,25 @@ class ExecutionChainEnvironmentStageTest(unittest.TestCase):
                     "tracking_memory_status": {"today_seen_count": 2},
                     "abnormal_watch_pool": [{"name": "军工一号", "code": "000001"}],
                     "abnormal_projection_summary": {"projection_label": "承接强化"},
+                    "current_mainline_history_record": {"date": "2026-04-24", "primary_mainline": "通信"},
+                    "recent_mainline_history": [
+                        {"date": "2026-04-22", "primary_mainline": "通信"},
+                        {"date": "2026-04-23", "primary_mainline": "通信"},
+                    ],
+                    "current_sector_turnover_snapshot": {
+                        "date": "2026-04-24",
+                        "sector_name": "通信",
+                        "turnover_share_pct": 18.1,
+                    },
+                    "recent_sector_turnover_history": [
+                        {"date": "2026-04-22", "sector_name": "通信", "turnover_share_pct": 12.4},
+                        {"date": "2026-04-23", "sector_name": "通信", "turnover_share_pct": 15.8},
+                    ],
+                    "mainline_turnover_summary": {
+                        "conclusion": "主线未切换，通信仍是中心",
+                        "data_text": "最近3日主线 通信 -> 通信 -> 通信；成交额占比 12.4% -> 15.8% -> 18.1%",
+                        "action_text": "继续围绕通信做减法",
+                    },
                     "step0_plan": {
                         "step0_prediction": "CLEAR",
                         "step0_prediction_cn": "🟢 跟随主线",
@@ -94,6 +113,9 @@ class ExecutionChainEnvironmentStageTest(unittest.TestCase):
         self.assertIn("follow-section", result["lines"])
         self.assertEqual(result["exports"]["step0_action"], "先看主线承接")
         self.assertEqual(result["exports"]["watchlist"][0]["code"], "000001")
+        self.assertEqual(result["exports"]["current_mainline_history_record"]["primary_mainline"], "通信")
+        self.assertEqual(result["exports"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 18.1)
+        self.assertEqual(result["exports"]["mainline_turnover_summary"]["conclusion"], "主线未切换，通信仍是中心")
         self.assertTrue(any(log["step"] == "render.stage" for log in result["module_logs"]))
 
 

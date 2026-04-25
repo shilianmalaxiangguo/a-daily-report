@@ -104,7 +104,29 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("| 明日大盘预期 | 🟢 明朗；允许强势跟随 |", rendered)
-        self.assertIn("| 今日关注标的 | 老龙头(000002)：今日再次入池；军工一号(000001)：跌不下去 |", rendered)
+        self.assertIn("| 今日关注标的 | 军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
+        self.assertNotIn("老龙头(000002)：今日再次入池", rendered)
+
+    def test_mvp_mode_prefers_core_candidate_over_tracking_memory_focus(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": True,
+                "step0_prediction": "CLEAR",
+                "step0_prediction_cn": "🟢 明朗",
+                "step0_action": "允许强势跟随",
+                "final_gate": {"can_new_entry": True},
+                "tracking_memory_status": {
+                    "today_validated_items": [
+                        {"name": "中嘉博创", "code": "000889", "follow_state": "新异动待观察"},
+                    ]
+                },
+                "core_stocks": [{"name": "富瀚微", "code": "300613"}],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 今日关注标的 | 富瀚微(300613)：主线核心候选，优先观察 |", rendered)
+        self.assertNotIn("中嘉博创(000889)：新异动待观察", rendered)
 
     def test_full_mode_prefers_provided_report_stage_order_and_titles(self):
         lines = build_legacy_final_conclusion_lines(
@@ -157,7 +179,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("| 环境与跟随裁决 | 🟢 明朗；允许强势跟随 |", rendered)
-        self.assertIn("| 明天观察池 | 15只；老龙头(000002)：今日再次入池 |", rendered)
+        self.assertIn("| 明天观察池 | 15只；军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
+        self.assertNotIn("老龙头(000002)：今日再次入池", rendered)
         self.assertIn("| 主线核心与跨线观察 | 2只主线核心 / 1只备选 / 1只跨线观察；先只在主线核心里做减法，目标缩到军工一号(000001) |", rendered)
         self.assertIn("| 明日风险预判 | 高位分歧加大；只接受预估赚赔比 1:2.4 的试错，不接受大亏硬扛 |", rendered)
         self.assertIn("| 明日买点预计算 | 短线；只等明天唯一能买的那只自己走出来 |", rendered)

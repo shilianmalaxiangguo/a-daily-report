@@ -9,6 +9,11 @@ from report.front_summary_renderer import render_front_digest, render_front_summ
 
 
 class FrontSummaryRendererTest(unittest.TestCase):
+    def assertNoEnglishTradingJargon(self, rendered):
+        lowered = rendered.lower()
+        for forbidden in ("act right", "setup", "probe", "follow through"):
+            self.assertNotIn(forbidden, lowered)
+
     def test_render_front_summary_sections_can_render_only_enabled_nodes(self):
         lines = render_front_summary_sections(
             {
@@ -32,12 +37,49 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("### 🎯 明日MVP摘要", rendered)
         self.assertNotIn("### 🧭 前台摘要", rendered)
 
+    def test_render_front_digest_outputs_double_mainline_and_turnover_share_tables(self):
+        lines = render_front_digest(
+            {
+                "headline": "只看主线核心承接",
+                "state_text": "修复延续",
+                "mainline_label": "半导体",
+                "style_action_text": "主线内做减法",
+                "risk_parts": ["跌停2只"],
+                "can_open_text": "只等确认",
+                "double_mainline_summary": {
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "算力",
+                    "relationship": "当天主攻线是周期主线内部加强，不是新主线切换",
+                    "tomorrow_action": "明天继续围绕半导体做减法，只看算力核心承接",
+                },
+                "turnover_share_trend_rows": [
+                    {
+                        "date": "04-24",
+                        "cycle_mainline": "半导体",
+                        "daily_attack_line": "算力",
+                        "mainline_turnover": "2180亿",
+                        "market_turnover": "12834亿",
+                        "share": "17.0%",
+                        "share_change": "+1.2pct",
+                        "interpretation": "主线占比继续抬升，资金仍在主线内加强",
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
+        self.assertIn("| 半导体 | 算力 | 当天主攻线是周期主线内部加强，不是新主线切换 | 明天继续围绕半导体做减法，只看算力核心承接 |", rendered)
+        self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
+        self.assertIn("| 04-24 | 半导体 | 算力 | 2180亿 | 12834亿 | 17.0% | +1.2pct | 主线占比继续抬升，资金仍在主线内加强 |", rendered)
+
     def test_render_front_digest_outputs_full_contract_summary(self):
         lines = render_front_digest(
             {
                 "headline": "只买军工一号，60分钟确认后执行",
                 "state_text": "强分歧修复；环境放行",
                 "mainline_label": "主攻线军工；趋势密度最强军工(3只)",
+                "mainline_turnover_text": "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
                 "special_probe_text": "军工一号(000001)",
                 "philosophy_constraint_text": "只做主线，不做边缘分支",
                 "contract_logic_text": "先选边站队，再等确认",
@@ -60,6 +102,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 🧭 前台摘要", rendered)
         self.assertIn("- **先说结论**: 只买军工一号，60分钟确认后执行", rendered)
+        self.assertIn("- **主线更替与占比**: 主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化", rendered)
         self.assertIn("- **执行依据**: 先选边站队，再等确认", rendered)
         self.assertIn("- **弱转强先看谁**: 军工一号的弱转强确认最完整", rendered)
         self.assertIn("- **现在更像哪个阶段**: 主升试错段；只做主线强者", rendered)
@@ -143,6 +186,34 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("**异常承接先看谁**: 军工一号(承接) / 军工二号(回封)", rendered)
         self.assertIn("**明天能不能开仓**: 只等唯一动作", rendered)
         self.assertIn("**明日唯一动作**: 只买军工一号，60分钟确认后执行", rendered)
+
+    def test_front_summary_renderers_replace_english_trading_jargon(self):
+        context = {
+            "headline": "军工 act right 后只等 setup 完整",
+            "state_text": "probe Flow 可继续 follow through",
+            "mainline_label": "半导体 setup 确认",
+            "mainline_turnover_text": "follow through 仍在主线内",
+            "special_probe_text": "军工一号是 mainline probe",
+            "contract_logic_text": "setup 先满足，再看 act right",
+            "rotation_summary_text": "probe 到 follow through",
+            "weak_to_strong_active": True,
+            "weak_to_strong_summary_text": "setup 后 act right",
+            "style_action_text": "只做 probe，不追",
+            "risk_parts": ["follow through 失败"],
+            "can_open_text": "setup 不完整先等",
+            "execution_framework_text": "act right 再执行",
+            "special_probe_summary_text": "特殊 probe",
+            "abnormal_preview": "异常 probe",
+            "front_follow_action_text": "follow through 后执行",
+        }
+
+        rendered = "\n".join(render_front_digest(context) + render_mvp_focus_summary(context))
+
+        self.assertNoEnglishTradingJargon(rendered)
+        self.assertIn("走势符合强势标准", rendered)
+        self.assertIn("形态条件", rendered)
+        self.assertIn("优先观察对象", rendered)
+        self.assertIn("延续承接", rendered)
 
 
 if __name__ == "__main__":

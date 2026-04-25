@@ -11,15 +11,15 @@ def _target_date(context):
 
 
 def build_market_overview_header_node(context, node_meta=None, node_lookup=None):
-    return {"lines": ["## 三、大盘趋势判断"], "exports": {}, "module_logs": []}
+    return {"lines": ["## 二、市场基底"], "exports": {}, "module_logs": []}
 
 
 def build_market_overview_indices_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     lines = [
-        "### 1. 指数表现",
-        "| 指数 | 收盘 | 涨跌幅 | 趋势判断 |",
-        "|------|------|--------|----------|",
+        "### 1. 指数与市场底色",
+        "| 指标 | 数值 | 涨跌幅 | 解读 |",
+        "|------|------|--------|------|",
     ]
 
     if data.get("indices"):
@@ -34,14 +34,22 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
             )
             change = index_data.get("涨跌幅", index_data.get("change_pct", 0))
             trend = "弱势震荡" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
-            lines.append(f"| {name} | {point:.2f}点 | {change:+.2f}% | {trend} |")
+            lines.append(f"| {name} | {point:.2f} | {change:+.2f}% | {trend} |")
 
     if data.get("wind_a_alternative"):
         wa = data["wind_a_alternative"]
         point = wa.get("点位", wa.get("price", 0))
         change = wa.get("涨跌幅", wa.get("change_pct", 0))
         trend = "全市场普跌" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
-        lines.append(f"| 中证全指 | {point:.2f}点 | {change:+.2f}% | {trend} |")
+        lines.append(f"| 中证全指 | {point:.2f} | {change:+.2f}% | {trend} |")
+    turnover = float(data.get("total_turnover", 0) or 0)
+    zt_count = len(data.get("zt_pool", []))
+    dt_count = len(data.get("dt_pool", []))
+    up_count = data.get("market_stats", {}).get("up_count", 0)
+    down_count = data.get("market_stats", {}).get("down_count", 0)
+    lines.append(f"| 两市成交额 | {turnover:.2f}亿 | - | {'量能不差，但赚钱效应不足' if turnover >= 15000 else '量能偏弱，先看不做'} |")
+    lines.append(f"| 涨停 / 跌停 | {zt_count} / {dt_count} | - | {'活跃度还在，但亏钱端不轻' if dt_count >= 3 else '情绪尚可'} |")
+    lines.append(f"| 涨跌比 | {up_count} / {down_count} | - | {'下跌家数偏多，底色偏防守' if down_count > up_count else '多头仍占优'} |")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 
@@ -49,22 +57,33 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
 def build_market_overview_volume_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     turnover = data.get("total_turnover", 0)
-    if turnover > 20000:
-        level = "放量"
-        judgment = "量能充沛，市场活跃"
-    elif turnover > 15000:
-        level = "正常轮动"
-        judgment = "量能适中，观望情绪"
+    zt_count = len(data.get("zt_pool", []))
+    dt_count = len(data.get("dt_pool", []))
+    up_count = data.get("market_stats", {}).get("up_count", 0)
+    down_count = data.get("market_stats", {}).get("down_count", 0)
+
+    if turnover > 20000 and dt_count <= 5 and up_count > down_count:
+        market_state = "进攻"
+        rr_text = "值得参与"
+        meaning = "市场底色偏强，可继续跟踪主线"
+    elif turnover > 15000 and down_count <= up_count:
+        market_state = "震荡"
+        rr_text = "勉强可参与"
+        meaning = "量能尚可，但要等更清晰主线信号"
     else:
-        level = "缩量"
-        judgment = "量能萎缩，不做"
+        market_state = "收缩防守"
+        rr_text = "不值得主动参与"
+        meaning = "默认先防守，等待下一次更清晰的强化"
 
     return {
         "lines": [
-            "### 2. 量能分析",
-            "| 日期 | 成交额 | 量能状态 | 判断 |",
-            "|------|--------|---------|------|",
-            f"| {_target_date(context)} | {turnover:.2f}亿元 | {level} | {judgment} |",
+            "### 2. 市场状态结论",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            f"| 市场状态 | {market_state} |",
+            f"| 当前盈亏比 | {rr_text} |",
+            "| 当前结构位置 | 日线中枢内震荡 |",
+            f"| 明日总体含义 | {meaning} |",
             "",
         ],
         "exports": {"market_overview_turnover": turnover},
@@ -73,31 +92,7 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
 
 
 def build_market_overview_sentiment_node(context, node_meta=None, node_lookup=None):
-    data = _data(context)
-    zt_count = len(data.get("zt_pool", []))
-    dt_count = len(data.get("dt_pool", []))
-    up_count = data.get("market_stats", {}).get("up_count", 0)
-    down_count = data.get("market_stats", {}).get("down_count", 0)
-    zd_ratio = f"{up_count}:{down_count}" if down_count > 0 else f"{up_count}:0"
-    rise_fall_ratio = up_count / down_count if down_count > 0 else 0
-    ratio_judgment = "多头占优" if rise_fall_ratio > 2 else ("空头占优" if rise_fall_ratio < 0.5 else "相对均衡")
-
-    return {
-        "lines": [
-            "### 3. 市场情绪",
-            "| 指标 | 数据 | 判断 |",
-            "|------|------|------|",
-            f"| 涨停家数 | {zt_count}只 | {'赚钱效应尚可' if zt_count > 30 else '赚钱效应一般'} |",
-            f"| 跌停家数 | {dt_count}只 | {'恐慌情绪有限' if dt_count < 5 else '恐慌情绪蔓延'} |",
-            f"| 涨跌比 | {zd_ratio} | {ratio_judgment} |",
-            "",
-        ],
-        "exports": {
-            "market_overview_zt_count": zt_count,
-            "market_overview_dt_count": dt_count,
-        },
-        "module_logs": [],
-    }
+    return {"lines": [], "exports": {}, "module_logs": []}
 
 
 MARKET_OVERVIEW_NODE_BUILDERS = {
