@@ -272,6 +272,27 @@ class ReportRuntimeTest(unittest.TestCase):
         )
         self.assertFalse(any(line.startswith("# ") for line in demoted))
 
+    def test_remove_duplicate_front_page_sections_from_appendix_renames_mirrored_headings(self):
+        lines = [
+            "## 一、交易纪律",
+            "纪律明细",
+            "## 三、周期与主线",
+            "### 🔬 市场研究快照",
+            "## 六、明日执行计划",
+            "执行明细",
+        ]
+
+        cleaned = report_runtime._remove_duplicate_front_page_sections_from_appendix(lines)
+        demoted = report_runtime._demote_appendix_headings(cleaned)
+
+        self.assertIn("### 附录：交易纪律细则", demoted)
+        self.assertIn("### 附录：周期与主线依据", demoted)
+        self.assertIn("### 附录：执行计划依据", demoted)
+        self.assertIn("#### 附录：🔬 市场研究快照", demoted)
+        self.assertNotIn("### 附录：一、交易纪律", demoted)
+        self.assertNotIn("### 附录：三、周期与主线", demoted)
+        self.assertNotIn("### 附录：六、明日执行计划", demoted)
+
     def test_build_appendix_b_continuity_payload_marks_missing_turnover_share_pending(self):
         payload = report_runtime._build_appendix_b_continuity_payload(
             current_mainline_history_record={"date": "2026-04-24", "primary_mainline": "半导体"},

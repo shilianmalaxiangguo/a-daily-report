@@ -31,6 +31,15 @@ _MISSING = object()
 EMIT_HELPER_DIAGNOSTICS = True
 REPORT_RUNTIME_CACHE = None
 
+_APPENDIX_FRONT_PAGE_HEADING_RENAMES = {
+    "## 一、交易纪律": "## 交易纪律细则",
+    "## 三、周期与主线": "## 周期与主线依据",
+    "## 四、资金意图": "## 资金意图依据",
+    "## 五、个股解读": "## 个股观察依据",
+    "## 六、明日执行计划": "## 执行计划依据",
+    "## 七、最终结论": "## 结论依据",
+}
+
 
 def _install_runtime_bindings(bindings):
     previous = {}
@@ -156,6 +165,9 @@ def _remove_duplicate_front_page_sections_from_appendix(lines):
         if skipping_market_base and text.startswith("## "):
             skipping_market_base = False
         if skipping_market_base:
+            continue
+        if text in _APPENDIX_FRONT_PAGE_HEADING_RENAMES:
+            cleaned.append(_APPENDIX_FRONT_PAGE_HEADING_RENAMES[text])
             continue
         cleaned.append(text)
     return cleaned

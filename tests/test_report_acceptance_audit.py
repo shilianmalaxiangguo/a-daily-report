@@ -40,6 +40,14 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |
 |--------------|------|------|--------------|
 | 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |
+| 时间窗口 | 要看什么 | 买入权限 | 卖出/风控 | 结论 |
+|----------|----------|----------|-----------|------|
+| 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |
+| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 仅主线核心可进入观察买点 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |
+| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖 | 防大亏 |
+| 10:00左右买 | 只看周期主线核心，且必须有承接 | 满足60分钟确认才允许 | 买后用30分钟结构止损 | 小仓或不开 |
+| 午后 | 看主线是否延续 | 默认谨慎 | 若走弱继续降风险 | 不扩大试错 |
+| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |
 
 ## 七、最终结论
 | 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |
@@ -98,6 +106,26 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_flags_missing_execution_windows(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |\n",
+            "",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("execution_window_missing", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_flags_appendix_duplicate_front_page_sections(self):
+        bad = GOOD_MARKDOWN.replace(
+            "### 附录B：历史主线池",
+            "### 附录：一、交易纪律\n\n### 附录B：历史主线池",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("appendix_duplicate_front_page_section", {finding["code"] for finding in result["findings"]})
 
 
 if __name__ == "__main__":
