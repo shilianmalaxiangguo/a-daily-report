@@ -188,3 +188,19 @@ def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str
             findings.append(_finding("excluded_candidate_unknown", f"excluded candidate is not present in input packet: {candidate_id}"))
 
     return {"passed": not findings, "findings": findings}
+
+
+def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, Any]) -> Dict[str, str]:
+    snapshot = _as_dict(snapshot)
+    decision = _as_dict(snapshot.get("reasoning_decision"))
+    target_id = str(decision.get("unique_target") or "").strip()
+    if not target_id:
+        return {}
+    for candidate in _candidate_pool(snapshot):
+        if target_id in {str(candidate.get("id") or ""), str(candidate.get("code") or "")}:
+            return {
+                "name": str(candidate.get("name") or "唯一对象"),
+                "code": str(candidate.get("code") or candidate.get("id") or target_id),
+                "condition": "主线确认 + 承接 + 60分钟确认",
+            }
+    return {}

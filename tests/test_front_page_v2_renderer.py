@@ -30,6 +30,66 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("### 1. 主线内可执行候选", rendered)
         self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
 
+    def test_front_page_renders_reasoning_decision_without_chain_of_thought(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "reasoning_decision": {
+                        "action": "observe",
+                        "mainline_state": "strengthening",
+                        "unique_target": None,
+                        "conclusion": "主线仍需确认，明天只观察承接。",
+                        "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
+                        "trigger_conditions": ["10点后主线继续放量", "候选股完成60分钟确认"],
+                        "failure_conditions": ["主线回落", "候选股承接失败"],
+                        "excluded_candidates": [{"id": "300613", "name": "富瀚微", "reason": "60分钟确认未完成"}],
+                        "confidence": "medium",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("### 0. 推理裁决", rendered)
+        self.assertIn("| 裁决 | observe |", rendered)
+        self.assertIn("| 结论 | 主线仍需确认，明天只观察承接。 |", rendered)
+        self.assertIn("| 关键证据 | 主线为半导体 |", rendered)
+        self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)
+        self.assertIn("| 失败条件 | 主线回落；候选股承接失败 |", rendered)
+        self.assertIn("| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |", rendered)
+        self.assertIn("| 置信度 | medium |", rendered)
+        self.assertNotIn("chain-of-thought", rendered)
+        self.assertNotIn("思维链", rendered)
+
+    def test_reasoning_decision_unique_target_drives_unique_action_when_snapshot_target_is_missing(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-04-24",
+                market_research_snapshot={
+                    "candidate_pool": [{"code": "300613", "name": "富瀚微", "sector": "半导体"}],
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "reasoning_decision": {
+                        "action": "conditional_entry",
+                        "mainline_state": "strengthening",
+                        "unique_target": "300613",
+                        "conclusion": "只看富瀚微，满足确认才允许条件试错。",
+                        "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
+                        "trigger_conditions": ["10点后主线继续放量", "富瀚微完成60分钟确认"],
+                        "failure_conditions": ["主线回落"],
+                        "excluded_candidates": [],
+                        "confidence": "medium",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+        self.assertIn("| 防守观察 | 不主动 | 半导体 | 半导体 | 先看市场基底 | 富瀚微(300613) |", rendered)
+
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
             render_front_page_v2(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from report.reasoning_decision_renderer import render_reasoning_decision_lines
+from report.reasoning_decision_support import derive_unique_action_target_from_reasoning_decision
 from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_cycle_calendar_node,
     build_market_research_snapshot_cycle_interpretation_node,
@@ -305,8 +307,16 @@ def _convert_legacy_core_table(table):
     return converted
 
 
+def _effective_unique_action_target(snapshot):
+    snapshot = snapshot or {}
+    target = snapshot.get("unique_action_target") or {}
+    if isinstance(target, dict) and (target.get("name") or target.get("code")):
+        return target
+    return derive_unique_action_target_from_reasoning_decision(snapshot)
+
+
 def _has_unique_action_target(snapshot):
-    target = (snapshot or {}).get("unique_action_target") or {}
+    target = _effective_unique_action_target(snapshot)
     return isinstance(target, dict) and bool(target.get("name") or target.get("code"))
 
 
@@ -335,7 +345,7 @@ def _candidate_lines(report_lines, snapshot=None):
 
 
 def _unique_action_target_lines(snapshot):
-    target = (snapshot or {}).get("unique_action_target") or {}
+    target = _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         name = str(target.get("name") or "唯一对象").strip()
         code = str(target.get("code") or "-").strip()
@@ -353,8 +363,10 @@ def _unique_action_target_lines(snapshot):
 
 
 def _execution_plan_lines(snapshot=None):
+    decision_lines = render_reasoning_decision_lines((snapshot or {}).get("reasoning_decision"))
     return [
         "## 六、明日执行计划",
+        *decision_lines,
         *_unique_action_target_lines(snapshot),
         "| 时间窗口 | 要看什么 | 买入权限 | 卖出/风控 | 结论 |",
         "|----------|----------|----------|-----------|------|",
@@ -372,8 +384,8 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     final_gate = final_gate or {}
     cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
     daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
-    action = str(final_gate.get("final_action") or "10点确认，不满足就空仓")
-    target = snapshot.get("unique_action_target") or {}
+    action = str(final_gate.get("final_action") or "防守观察")
+    target = _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         target_name = str(target.get("name") or "唯一对象").strip()
         target_code = str(target.get("code") or "").strip()
@@ -386,7 +398,7 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         "## 七、最终结论",
         "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
         "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
-        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | 先看市场基底 | {unique_target} | 空仓 / 短线确认 | {one_line_action} |",
+        f"| {action} | 不主动 | {cycle} | {daily} | 先看市场基底 | {unique_target} | 空仓 / 短线确认 | {one_line_action} |",
     ]
 
 
