@@ -14,7 +14,7 @@ def reasoning_cache_key(*, target_date: str, input_hash: str, schema_version: st
     return "_".join(
         [
             _safe(target_date),
-            _safe(str(input_hash)[:12]),
+            _safe(input_hash),
             _safe(schema_version),
             _safe(prompt_version),
             _safe(model_source),
@@ -49,8 +49,20 @@ def save_reasoning_decision_cache(cache_dir: Path | str, decision: Mapping[str, 
     return path
 
 
+def _validate_raw_cache_key(key: str) -> str:
+    if not key:
+        raise ValueError("cache key must not be empty")
+    if key.endswith(".json"):
+        raise ValueError("cache key must not include the .json suffix")
+    if key != _safe(key):
+        raise ValueError("cache key contains unsafe characters")
+    if key in (".", ".."):
+        raise ValueError("cache key must not contain path traversal")
+    return key
+
+
 def load_reasoning_decision_cache(cache_dir: Path | str, decision_or_key: Mapping[str, Any] | str) -> Dict[str, Any]:
     cache_path = Path(cache_dir)
-    key = _key_from_decision(decision_or_key) if isinstance(decision_or_key, Mapping) else str(decision_or_key)
+    key = _key_from_decision(decision_or_key) if isinstance(decision_or_key, Mapping) else _validate_raw_cache_key(str(decision_or_key))
     path = cache_path / f"{key}.json"
     return json.loads(path.read_text(encoding="utf-8"))
