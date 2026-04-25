@@ -309,6 +309,9 @@ def _convert_legacy_core_table(table):
 
 def _effective_unique_action_target(snapshot):
     snapshot = snapshot or {}
+    reasoning_decision = snapshot.get("reasoning_decision")
+    if isinstance(reasoning_decision, dict) and reasoning_decision:
+        return derive_unique_action_target_from_reasoning_decision(snapshot)
     target = snapshot.get("unique_action_target") or {}
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         return target
