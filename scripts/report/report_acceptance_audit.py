@@ -24,6 +24,13 @@ REQUIRED_EXECUTION_WINDOWS = [
     "尾盘",
 ]
 
+REQUIRED_EXECUTION_CONDITIONS = [
+    ("10点确认", ("10点确认", "10点附近确认")),
+    ("60分钟确认", ("60分钟确认", "60分钟K线确认")),
+    ("30分钟结构止损", ("30分钟结构止损", "30分钟结构定止损", "30分钟定止损")),
+    ("不做 / 不开新仓 / 空仓", ("不做", "不开新仓", "空仓")),
+]
+
 APPENDIX_DUPLICATE_FRONT_PAGE_HEADINGS = {
     "附录：一、交易纪律",
     "附录：二、市场基底",
@@ -130,6 +137,23 @@ def _audit_execution_windows(lines):
                     f"front-page execution plan is missing required window: {window}",
                 )
             )
+    return findings
+
+
+def _audit_execution_conditions(lines):
+    if not _extract_execution_window_labels(lines):
+        return []
+    front_text = "\n".join(_front_page_lines(lines))
+    findings = []
+    for label, markers in REQUIRED_EXECUTION_CONDITIONS:
+        if any(marker in front_text for marker in markers):
+            continue
+        findings.append(
+            _finding(
+                "execution_condition_missing",
+                f"front-page execution plan has time windows but is missing required actionable condition: {label}",
+            )
+        )
     return findings
 
 
@@ -245,6 +269,7 @@ def audit_report_markdown(markdown):
     findings = []
     findings.extend(_audit_front_page_headings(lines))
     findings.extend(_audit_execution_windows(lines))
+    findings.extend(_audit_execution_conditions(lines))
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_degraded_fake_zero(lines))

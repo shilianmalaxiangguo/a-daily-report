@@ -19,7 +19,7 @@ Continue optimizing the daily report as a trading-useful product: first make the
 
 ## Tasks
 
-- [ ] Task 1: Strengthen intraday execution-condition audit.
+- [x] Task 1: Strengthen intraday execution-condition audit.
   - User benefit: the report cannot pass if the front page has time windows but lacks the real action contract: 10点确认, 60分钟确认, 30分钟结构止损, and no-action fallback.
   - Likely files: `scripts/report/report_acceptance_audit.py`, `tests/test_report_acceptance_audit.py`.
   - Verification: audit unit tests plus real replay audit.
@@ -43,4 +43,3 @@ Continue optimizing the daily report as a trading-useful product: first make the
   - User benefit: repeated report bugs and wording preferences become reviewable memory artifacts without forcing users to remember commands.
   - Likely files: `SKILL.md` or skill references, a small review-artifact script, tests for schema/routing if present.
   - Verification: generated review artifact only, no auto-apply to formal memory.
-

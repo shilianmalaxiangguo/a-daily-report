@@ -60,6 +60,17 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 
 
 class ReportAcceptanceAuditTest(unittest.TestCase):
+    def assertExecutionConditionMissing(self, markdown, expected_text):
+        result = audit_report_markdown(markdown)
+
+        matching_findings = [
+            finding
+            for finding in result["findings"]
+            if finding["code"] == "execution_condition_missing" and expected_text in finding["message"]
+        ]
+        self.assertTrue(matching_findings, result["findings"])
+        self.assertFalse(result["passed"])
+
     def test_audit_accepts_valid_front_page_contract(self):
         result = audit_report_markdown(GOOD_MARKDOWN)
 
@@ -116,6 +127,26 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("execution_window_missing", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_flags_missing_10_point_confirmation(self):
+        bad = GOOD_MARKDOWN.replace("10点确认", "开盘确认")
+
+        self.assertExecutionConditionMissing(bad, "10点确认")
+
+    def test_audit_flags_missing_60_minute_confirmation(self):
+        bad = GOOD_MARKDOWN.replace("60分钟确认", "结构确认")
+
+        self.assertExecutionConditionMissing(bad, "60分钟确认")
+
+    def test_audit_flags_missing_30_minute_structural_stop(self):
+        bad = GOOD_MARKDOWN.replace("30分钟结构止损", "结构止损")
+
+        self.assertExecutionConditionMissing(bad, "30分钟结构止损")
+
+    def test_audit_flags_missing_no_action_fallback(self):
+        bad = GOOD_MARKDOWN.replace("不做", "继续观察").replace("空仓", "等待")
+
+        self.assertExecutionConditionMissing(bad, "不做 / 不开新仓 / 空仓")
 
     def test_audit_flags_appendix_duplicate_front_page_sections(self):
         bad = GOOD_MARKDOWN.replace(
