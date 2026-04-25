@@ -8,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from domains.execution_chain.entry_plan_node_runtime import run_entry_plan_nodes
 from domains.execution_chain.entry_plan_nodes.conclusion import build_entry_plan_conclusion_node
 from domains.execution_chain.entry_plan_nodes.stop_anchor import build_entry_plan_stop_anchor_node
+from execution.entry_cycle_stop_runtime import build_entry_cycle_stop_policy
 
 
 class EntryPlanNodeRuntimeTest(unittest.TestCase):
@@ -124,6 +125,56 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         self.assertIn("结构修复带", rendered)
         self.assertIn("关键区失败降级", rendered)
         self.assertIn("时间止损/降级", rendered)
+        self.assertNotIn("-5%清仓", rendered)
+
+    def test_stop_anchor_surfaces_all_april_stop_mode_labels_with_risk_floor(self):
+        stop_cases = [
+            ("中嘉博创", 4.35, "structure_repair_band", "结构修复带"),
+            ("博杰股份", 86.90, "structure_band", "结构容忍带"),
+            ("龙蟠科技", 25.05, "structure_band", "结构容忍带"),
+            ("甘肃能源", 8.00, "reclaim_failure_exit", "关键区失败降级"),
+            ("津药药业", 6.97, "a_kill_exit", "A杀出清"),
+            ("石大胜华", 98.52, "time_stop_or_downgrade", "时间止损/降级"),
+        ]
+        executable_stocks = []
+        for name, entry_price, stop_mode, expected_label in stop_cases:
+            policy = build_entry_cycle_stop_policy(
+                entry_price,
+                {"effective_stop": round(entry_price * 0.97, 2), "hard_stop": round(entry_price * 0.95, 2)},
+                {"recommended_stop_mode": stop_mode},
+            )
+            self.assertEqual(policy.get("stop_mode_label"), expected_label)
+            executable_stocks.append(
+                {
+                    "name": name,
+                    "entry_price": entry_price,
+                    "minute_plan": {
+                        "confirm_price_60m": entry_price,
+                        "entry_cycle_stop_policy": policy,
+                    },
+                    "stop_plan": {"effective_stop": round(entry_price * 0.97, 2)},
+                }
+            )
+
+        context = {
+            "position_level": "二档（防守档）",
+            "final_gate": {"can_new_entry": True},
+            "build_stop_execution_plan": lambda *args, **kwargs: {},
+            "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                "key_zone_display": "结构带",
+                "execution_stop_display": "30分钟结构",
+                "hard_stop_display": "最晚硬止损",
+            },
+            "executable_stocks": executable_stocks,
+        }
+
+        rendered = "\n".join(build_entry_plan_stop_anchor_node(context)["lines"])
+
+        self.assertIn("止损模式", rendered)
+        for _, _, _, expected_label in stop_cases:
+            self.assertIn(expected_label, rendered)
+        self.assertIn("固定-5%只作为风险底线", rendered)
+        self.assertIn("最晚硬止损", rendered)
         self.assertNotIn("-5%清仓", rendered)
 
 

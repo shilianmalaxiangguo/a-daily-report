@@ -13,6 +13,15 @@ DEFAULT_ENTRY_CYCLE_STOP_PROFILES = {
 }
 
 
+STOP_MODE_LABELS = {
+    "structure_repair_band": "结构修复带",
+    "structure_band": "结构容忍带",
+    "reclaim_failure_exit": "关键区失败降级",
+    "a_kill_exit": "A杀出清",
+    "time_stop_or_downgrade": "时间止损/降级",
+}
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -64,7 +73,8 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
     if recommended_mode == "structure_repair_band":
         return {
             "recommended_stop_mode": recommended_mode,
-            "primary_exit_mode": "结构修复带",
+            "stop_mode_label": STOP_MODE_LABELS[recommended_mode],
+            "primary_exit_mode": STOP_MODE_LABELS[recommended_mode],
             "hard_stop_role": "风险底线，不是观察淘汰线",
             "execution_stop": execution_stop,
             "risk_floor": risk_floor,
@@ -75,7 +85,8 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
     if recommended_mode == "reclaim_failure_exit":
         return {
             "recommended_stop_mode": recommended_mode,
-            "primary_exit_mode": "关键区失败降级",
+            "stop_mode_label": STOP_MODE_LABELS[recommended_mode],
+            "primary_exit_mode": STOP_MODE_LABELS[recommended_mode],
             "hard_stop_role": "风险底线，不是观察淘汰线",
             "execution_stop": execution_stop,
             "risk_floor": risk_floor,
@@ -86,7 +97,8 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
     if recommended_mode == "a_kill_exit":
         return {
             "recommended_stop_mode": recommended_mode,
-            "primary_exit_mode": "A杀出清",
+            "stop_mode_label": STOP_MODE_LABELS[recommended_mode],
+            "primary_exit_mode": STOP_MODE_LABELS[recommended_mode],
             "hard_stop_role": "风险底线，不是观察淘汰线",
             "execution_stop": execution_stop,
             "risk_floor": risk_floor,
@@ -97,7 +109,8 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
     if recommended_mode == "time_stop_or_downgrade":
         return {
             "recommended_stop_mode": recommended_mode,
-            "primary_exit_mode": "时间止损/降级",
+            "stop_mode_label": STOP_MODE_LABELS[recommended_mode],
+            "primary_exit_mode": STOP_MODE_LABELS[recommended_mode],
             "hard_stop_role": "风险底线，不是观察淘汰线",
             "execution_stop": execution_stop,
             "risk_floor": risk_floor,
@@ -107,7 +120,8 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
 
     return {
         "recommended_stop_mode": recommended_mode,
-        "primary_exit_mode": "结构容忍带",
+        "stop_mode_label": STOP_MODE_LABELS.get(recommended_mode, "结构容忍带"),
+        "primary_exit_mode": STOP_MODE_LABELS.get(recommended_mode, "结构容忍带"),
         "hard_stop_role": "风险底线，不是观察淘汰线",
         "execution_stop": execution_stop,
         "risk_floor": risk_floor,

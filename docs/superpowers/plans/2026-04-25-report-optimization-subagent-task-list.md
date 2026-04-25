@@ -34,7 +34,7 @@ Continue optimizing the daily report as a trading-useful product: first make the
   - Likely files: `scripts/report/report_acceptance_audit.py`, `scripts/report/front_page_v2_renderer.py`, execution-chain candidate or pk decision nodes, related tests.
   - Verification: audit flags unsupported unique target, real replay passes or honestly reports `暂无`.
 
-- [ ] Task 4: Add entry-cycle calibration surface.
+- [x] Task 4: Add entry-cycle calibration surface.
   - User benefit: 60分钟买点 and stop logic become case-aware; the report stops implying fixed `-5%` is the only risk rule.
   - Likely files: `scripts/research/entry_cycle_calibration_runtime.py`, `scripts/domains/execution_chain/entry_plan_stage.py`, entry-plan node tests.
   - Verification: April success/counterexample classification tests plus report runtime tests.

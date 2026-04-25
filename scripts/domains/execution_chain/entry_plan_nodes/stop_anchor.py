@@ -9,8 +9,8 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     if final_gate.get("can_new_entry", False):
         lines.append("**明日止损锚定**（买入后严格执行）:")
         if executable_stocks:
-            lines.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 介入周期纪律 | 跌破动作 |")
-            lines.append("|------|----------|------------|----------|----------|------------|----------------|----------|")
+            lines.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 止损模式 | 介入周期纪律 | 跌破动作 |")
+            lines.append("|------|----------|------------|----------|----------|------------|----------|----------------|----------|")
             for item in executable_stocks:
                 if "signal" in item:
                     signal = item["signal"]
@@ -26,11 +26,12 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
                     confirm_price = minute_plan.get("confirm_price_60m")
                     confirm_text = f"站上{confirm_price:.2f}" if confirm_price else f"{item.get('entry_price'):.2f}"
                     policy = minute_plan.get("entry_cycle_stop_policy") or {}
+                    stop_mode_text = _format_entry_cycle_stop_mode(policy)
                     discipline_text = _format_entry_cycle_discipline(policy)
                     lines.append(
                         f"| {item.get('name')} | {buy_type} | {confirm_text} | "
                         f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | {discipline_text} | 跌破执行止损立即卖 |"
+                        f"{price_focus.get('hard_stop_display', '-')} | {stop_mode_text} | {discipline_text} | 跌破执行止损立即卖 |"
                     )
                 else:
                     stop_plan = item.get("stop_plan")
@@ -39,11 +40,12 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
                     confirm_price = minute_plan.get("confirm_price_60m")
                     confirm_text = f"站上{confirm_price:.2f}" if confirm_price else "待盘中确认"
                     policy = minute_plan.get("entry_cycle_stop_policy") or {}
+                    stop_mode_text = _format_entry_cycle_stop_mode(policy)
                     discipline_text = _format_entry_cycle_discipline(policy)
                     lines.append(
                         f"| {item.get('name')} | 基础判断 | {confirm_text} | "
                         f"{price_focus.get('key_zone_display', '-')} | {price_focus.get('execution_stop_display', '-')} | "
-                        f"{price_focus.get('hard_stop_display', '-')} | {discipline_text} | 跌破执行止损立即卖 |"
+                        f"{price_focus.get('hard_stop_display', '-')} | {stop_mode_text} | {discipline_text} | 跌破执行止损立即卖 |"
                     )
             lines.append("")
             if any(((item.get("minute_plan") or {}).get("entry_cycle_stop_policy") or {}) for item in executable_stocks):
@@ -62,10 +64,22 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
+def _format_entry_cycle_stop_mode(policy):
+    policy = policy or {}
+    label = str(policy.get("stop_mode_label", "") or "").strip()
+    if label:
+        return label
+    mode = str(policy.get("primary_exit_mode", "") or "").strip()
+    return mode or "-"
+
+
 def _format_entry_cycle_discipline(policy):
     policy = policy or {}
+    label = str(policy.get("stop_mode_label", "") or "").strip()
     mode = str(policy.get("primary_exit_mode", "") or "").strip()
     action_text = str(policy.get("report_action_text", "") or "").strip()
+    if label and action_text:
+        return action_text
     if mode and action_text:
         return f"{mode}：{action_text}"
     if mode:
