@@ -67,8 +67,6 @@ def render_reasoning_decision_lines(decision: Mapping[str, Any] | None) -> list[
         "### 0. 推理裁决",
         "| 项目 | 内容 |",
         "|------|------|",
-        f"| 裁决 | {_sanitize_cell(decision.get('action'))} |",
-        f"| 主线状态 | {_sanitize_cell(decision.get('mainline_state'))} |",
         f"| 结论 | {_sanitize_cell(decision.get('conclusion'))} |",
         f"| 关键证据 | {_evidence_text(decision)} |",
         f"| 触发条件 | {_join(decision.get('trigger_conditions'))} |",

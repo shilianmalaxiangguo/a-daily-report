@@ -54,7 +54,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("### 0. 推理裁决", rendered)
-        self.assertIn("| 裁决 | observe |", rendered)
+        self.assertNotIn("| 裁决 | observe |", rendered)
+        self.assertNotIn("| 主线状态 | strengthening |", rendered)
         self.assertIn("| 结论 | 主线仍需确认，明天只观察承接。 |", rendered)
         self.assertIn("| 关键证据 | 主线为半导体 |", rendered)
         self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)

@@ -81,7 +81,7 @@ UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
 )
 
 REASONING_SURFACE_HEADING = "### 0. 推理裁决"
-REASONING_REQUIRED_LABELS = ("裁决", "结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
+REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
 REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
 
 __all__ = ["audit_report_markdown"]

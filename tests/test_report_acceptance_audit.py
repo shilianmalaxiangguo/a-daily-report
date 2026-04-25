@@ -211,6 +211,26 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("reasoning_surface_incomplete", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_accepts_reasoning_surface_without_action_or_mainline_state_rows(self):
+        report = GOOD_MARKDOWN.replace(
+            "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
+            "### 0. 推理裁决\n"
+            "| 项目 | 内容 |\n"
+            "|------|------|\n"
+            "| 结论 | 主线仍需确认。 |\n"
+            "| 关键证据 | 主线为半导体 |\n"
+            "| 触发条件 | 10点确认 |\n"
+            "| 失败条件 | 主线回落 |\n"
+            "| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |\n"
+            "| 置信度 | medium |\n\n"
+            "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn("reasoning_surface_incomplete", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
     def test_audit_flags_reasoning_chain_leakage(self):
         bad = GOOD_MARKDOWN.replace(
             "## 七、最终结论",

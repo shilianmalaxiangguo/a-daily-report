@@ -779,7 +779,8 @@ Add this test to `tests/test_front_page_v2_renderer.py`:
         )
 
         self.assertIn("### 0. 推理裁决", rendered)
-        self.assertIn("| 裁决 | observe |", rendered)
+        self.assertNotIn("| 裁决 | observe |", rendered)
+        self.assertNotIn("| 主线状态 | strengthening |", rendered)
         self.assertIn("| 结论 | 主线仍需确认，明天只观察承接。 |", rendered)
         self.assertIn("| 关键证据 | 主线为半导体 |", rendered)
         self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)
@@ -884,8 +885,6 @@ def render_reasoning_decision_lines(decision: Mapping[str, Any] | None) -> list[
         "### 0. 推理裁决",
         "| 项目 | 内容 |",
         "|------|------|",
-        f"| 裁决 | {decision.get('action') or '-'} |",
-        f"| 主线状态 | {decision.get('mainline_state') or '-'} |",
         f"| 结论 | {decision.get('conclusion') or '-'} |",
         f"| 关键证据 | {_evidence_text(decision)} |",
         f"| 触发条件 | {_join(decision.get('trigger_conditions'))} |",
@@ -1053,7 +1052,7 @@ In `scripts/report/report_acceptance_audit.py`, add constants near the other mar
 
 ```python
 REASONING_SURFACE_HEADING = "### 0. 推理裁决"
-REASONING_REQUIRED_LABELS = ("裁决", "结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
+REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
 REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
 ```
 
