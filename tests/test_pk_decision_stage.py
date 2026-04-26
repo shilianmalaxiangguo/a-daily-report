@@ -107,6 +107,83 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["watch_anchor"]["code"], "000009")
         self.assertEqual(result["exports"]["watch_anchor_type"], "重点观察谁")
 
+    def test_pk_decision_runtime_exports_probe_position_and_front_texts(self):
+        candidate = {"name": "军工一号", "code": "000001"}
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-04-22",
+                "run_mode": "replay",
+                "position_level": "三档（进攻档）",
+                "position_reason": "环境放行",
+                "display_mvp_mode": False,
+                "high_board_count": 2,
+                "final_gate": {"can_new_entry": True, "final_action": "只做唯一动作"},
+                "mainline_name": "军工",
+                "watchlist": [{"name": "军工一号", "code": "000001"}],
+                "core_stocks": [{"name": "军工一号", "code": "000001"}],
+                "abnormal_watch_pool": [],
+                "abnormal_watch_pool_all": [],
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "market_research_snapshot": {"state_machine": {}, "style_switch": {}},
+                "focus_group": [candidate],
+                "keep_group": [],
+                "delete_group": [],
+                "step2_bundle": {"crossline_observation_stocks": [], "evaluated_stocks": [], "gem_observation_stocks": []},
+                "conviction_codes": set(),
+                "leader_memory_codes": set(),
+                "executable_stocks": [candidate],
+                "waiting_stocks": [],
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "build_strategy_ev_calibration": lambda target_date, ledger_mode=None: {"source": "ledger"},
+                "score_execution_candidate": lambda stock, ev_calibration: {**stock, "score": 90},
+                "score_candidate_decision_stack": lambda stock, **kwargs: {**stock, "decision_stack_score": 90},
+                "sort_decision_stack_candidates": lambda candidates: list(candidates),
+                "sort_watch_anchor_candidates": lambda candidates, **kwargs: list(candidates),
+                "get_trade_permission": lambda *args, **kwargs: {"permission_label": "观察权", "permission_reason": "等待"},
+                "fetch_recent_price_bars": lambda *args, **kwargs: [],
+                "evaluate_live_tradability": lambda *args, **kwargs: {"can_trade": True, "report_day_is_one_word": False},
+                "analyze_buy_signal": lambda *args, **kwargs: None,
+                "quant_system_available": False,
+                "build_waiting_stock_plan": lambda seed, *args, **kwargs: dict(seed),
+                "derive_watch_anchor_type": lambda candidate, mainline_name="": "重点观察谁",
+                "derive_watch_anchor_note": lambda candidate, mainline_name="": "先看承接",
+                "build_abnormal_watch_anchor_candidates": lambda **kwargs: [],
+                "select_priority_watch_anchor": lambda **kwargs: ({}, ""),
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": lambda **kwargs: {
+                    "target_position_pct": 50,
+                    "candidate_feedback_ready": True,
+                    "trigger_text": "完成60分钟确认",
+                },
+                "build_front_structure_layer_text": lambda **kwargs: "环境打开，只等唯一动作",
+                "build_front_follow_action_text": lambda **kwargs: "只盯军工一号",
+                "build_special_probe_focus_text": lambda **kwargs: "先看主线异动",
+                "build_philosophy_constraint_text": lambda **kwargs: "只做主线核心",
+                "render_core_mvp_digest": lambda *args, **kwargs: ["core-digest"],
+                "render_mvp_focus_summary": lambda *args, **kwargs: ["focus-summary"],
+                "get_execution_framework_text": lambda: "先60分钟确认，再看30分钟止损",
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=[
+                "score_candidates",
+                "watch_anchor",
+                "probe_position",
+                "front_texts",
+                "export_stage_state",
+            ],
+        )
+
+        self.assertEqual(result["exports"]["front_structure_layer_text"], "环境打开，只等唯一动作")
+        self.assertEqual(result["exports"]["core_mvp_digest_lines"], ["core-digest"])
+        self.assertEqual(result["exports"]["mvp_focus_summary_lines"], ["focus-summary"])
+        self.assertEqual(result["exports"]["position_decision"]["target_position_pct"], 50)
+        self.assertEqual(result["exports"]["best_stock"]["position_pct"], 50)
+        self.assertEqual(result["exports"]["best_stock"]["candidate_feedback_ready"], True)
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [
