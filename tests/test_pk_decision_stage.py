@@ -316,6 +316,36 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
+        self.assertEqual(
+            result["lines"],
+            [
+                "#### Step 5 - PK决胜局（期望值模型）",
+                "pk-section",
+                "#### 明日操作计划",
+                "action-plan",
+                "",
+            ],
+        )
+        self.assertEqual(
+            set(result["exports"]),
+            {
+                "trade_gate_open",
+                "best_stock",
+                "runner_up",
+                "watch_anchor",
+                "watch_anchor_type",
+                "abnormal_probe_group",
+                "special_probe_verdict",
+                "position_decision",
+                "front_structure_layer_text",
+                "front_follow_action_text",
+                "special_probe_text",
+                "philosophy_constraint_text",
+                "scored_executable_stocks",
+                "core_mvp_digest_lines",
+                "mvp_focus_summary_lines",
+            },
+        )
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("#### 明日操作计划", rendered)
         self.assertIn("pk-section", rendered)
@@ -325,7 +355,17 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["front_structure_layer_text"], "环境打开，只等唯一动作")
         self.assertEqual(result["exports"]["core_mvp_digest_lines"], ["core-digest"])
         self.assertEqual(result["exports"]["mvp_focus_summary_lines"], ["focus-summary"])
-        self.assertTrue(any(log["module"] == "domains.execution_chain.pk_decision_stage" for log in result["module_logs"]))
+        stage_log = next(log for log in result["module_logs"] if log["module"] == "domains.execution_chain.pk_decision_stage")
+        self.assertEqual(
+            stage_log["details"],
+            {
+                "stage_key": "pk_decision",
+                "trade_gate_open": True,
+                "has_best_stock": True,
+                "has_watch_anchor": False,
+            },
+        )
+        self.assertTrue(any(log["module"] == "domains.execution_chain.pk_decision_node_runtime" for log in result["module_logs"]))
 
     def test_pk_decision_stage_uses_action_label_for_watch_only_conclusion(self):
         stage_lookup = build_execution_stage_lookup(
