@@ -41,6 +41,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "reasoning_decision": {
                         "action": "observe",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": None,
                         "conclusion": "主线仍需确认，明天只观察承接。",
                         "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
@@ -61,7 +62,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)
         self.assertIn("| 失败条件 | 主线回落；候选股承接失败 |", rendered)
         self.assertIn("| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |", rendered)
-        self.assertIn("| 置信度 | medium |", rendered)
+        self.assertIn("| 推理深度 | xhigh |", rendered)
+        self.assertNotIn("| 置信度 | medium |", rendered)
         self.assertNotIn("chain-of-thought", rendered)
         self.assertNotIn("思维链", rendered)
 
@@ -75,6 +77,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "reasoning_decision": {
                         "action": "observe",
                         "mainline_state": "unclear",
+                        "reasoning_effort": "xhigh",
                         "unique_target": None,
                         "conclusion": "思维链：先想A\n再想B | 这段不该破表",
                         "evidence": [{"field": "x", "summary": "chain-of-thought: hidden | draft"}],
@@ -106,6 +109,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "reasoning_decision": {
                         "action": "conditional_entry",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": "300613",
                         "conclusion": "只看富瀚微，满足确认才允许条件试错。",
                         "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
@@ -132,6 +136,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "reasoning_decision": {
                         "action": "observe",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": "300613",
                         "conclusion": "只观察，不给执行目标。",
                         "evidence": [],
@@ -164,6 +169,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "reasoning_decision": {
                         "action": "observe",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": "300613",
                         "conclusion": "只观察，不给执行目标。",
                         "evidence": [],

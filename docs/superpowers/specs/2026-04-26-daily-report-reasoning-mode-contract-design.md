@@ -84,7 +84,7 @@ The report may show:
 3. trigger conditions;
 4. failure conditions;
 5. excluded-candidate reasons;
-6. confidence label.
+6. reasoning effort label, fixed at `xhigh`.
 
 The report must not show hidden chain-of-thought or long draft reasoning.
 
@@ -127,6 +127,7 @@ Schema shape:
   "target_date": "2026-04-24",
   "input_hash": "sha256...",
   "prompt_version": "manual-current-conversation-v1",
+  "reasoning_effort": "xhigh",
   "model_source": "manual | deterministic_fallback | api",
   "action": "do_nothing | observe | conditional_entry",
   "mainline_state": "strengthening | diverging | fading | unclear",
@@ -163,7 +164,8 @@ Rules:
 2. `conditional_entry` must include trigger and failure conditions.
 3. Evidence must reference fields present in the input packet.
 4. Excluded candidates must come from the candidate pool.
-5. Low confidence should degrade to `observe` or `do_nothing` unless the latest user instruction explicitly overrides it.
+5. `reasoning_effort` must be `xhigh`; this is the reasoning depth, not the trade-confidence label.
+6. Low confidence should degrade to `observe` or `do_nothing` unless the latest user instruction explicitly overrides it.
 
 ## 7. Validator And Audit
 
@@ -179,7 +181,8 @@ Required checks:
 6. excluded candidates exist in the packet;
 7. conditional entry has trigger and failure conditions;
 8. low-confidence decisions do not create aggressive actions;
-9. missing or degraded data does not become fake certainty.
+9. reasoning effort is exactly `xhigh`;
+10. missing or degraded data does not become fake certainty.
 
 The report acceptance audit should then check rendered markdown for the existing contract:
 

@@ -59,6 +59,7 @@ class ReasoningDecisionCacheTest(unittest.TestCase):
                 "target_date": "2026-04-24",
                 "input_hash": "abcdef1234567890",
                 "prompt_version": "manual-current-conversation-v1",
+                "reasoning_effort": "xhigh",
                 "model_source": "manual",
                 "action": "observe",
                 "mainline_state": "unclear",

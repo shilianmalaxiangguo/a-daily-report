@@ -96,8 +96,9 @@ This reference is for bounded daily-report reasoning. It is not a prompt manual 
 
 - Use no-API first: current-conversation reasoning or deterministic artifacts may produce a reasoning decision JSON.
 - Code owns deterministic facts: market snapshots, candidate pools, turnover share, source status, and replay artifacts.
-- Reasoning mode owns bounded decisions: action, mainline state, unique target judgment, trigger conditions, failure conditions, and exclusion reasons.
-- The report renderer owns expression: it shows only conclusion, evidence, triggers, failures, exclusions, and confidence.
+- Reasoning mode owns bounded decisions: action, mainline state, unique target judgment, trigger conditions, failure conditions, exclusion reasons, and confidence.
+- Reasoning must run at `reasoning_effort = xhigh`; this is the reasoning depth, not the trade-confidence label.
+- The report renderer owns expression: it shows only conclusion, evidence, triggers, failures, exclusions, and reasoning effort.
 - Do not expose chain-of-thought, hidden reasoning traces, or long draft reasoning in the daily report.
 
 ## Decision Boundary
@@ -110,6 +111,7 @@ Required fields:
 - `target_date`
 - `input_hash`
 - `prompt_version`
+- `reasoning_effort`
 - `model_source`
 - `action`
 - `mainline_state`
@@ -124,6 +126,7 @@ Required fields:
 ## Safety Rules
 
 - Evidence must point to fields from the reasoning input packet.
+- `reasoning_effort` must be `xhigh`.
 - A unique target must come from the candidate pool.
 - `conditional_entry` must include trigger and failure conditions.
 - Low confidence cannot create an aggressive action.
@@ -390,6 +393,7 @@ from report.reasoning_decision_support import validate_reasoning_decision
             "target_date": packet["target_date"],
             "input_hash": packet["input_hash"],
             "prompt_version": "manual-current-conversation-v1",
+            "reasoning_effort": "xhigh",
             "model_source": "manual",
             "action": "observe",
             "mainline_state": "strengthening",
@@ -471,6 +475,7 @@ Append this implementation to `scripts/report/reasoning_decision_support.py`:
 ALLOWED_ACTIONS = {"do_nothing", "observe", "conditional_entry"}
 ALLOWED_MAINLINE_STATES = {"strengthening", "diverging", "fading", "unclear"}
 ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+ALLOWED_REASONING_EFFORT = {"xhigh"}
 ALLOWED_MODEL_SOURCES = {"manual", "deterministic_fallback", "api"}
 
 
@@ -522,6 +527,8 @@ def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str
         findings.append(_finding("invalid_mainline_state", "reasoning decision mainline_state is not supported"))
     if decision.get("confidence") not in ALLOWED_CONFIDENCE:
         findings.append(_finding("invalid_confidence", "reasoning decision confidence is not supported"))
+    if decision.get("reasoning_effort") not in ALLOWED_REASONING_EFFORT:
+        findings.append(_finding("invalid_reasoning_effort", "reasoning decision effort must be xhigh"))
     if decision.get("model_source") not in ALLOWED_MODEL_SOURCES:
         findings.append(_finding("invalid_model_source", "reasoning decision model_source is not supported"))
 
@@ -624,6 +631,7 @@ class ReasoningDecisionCacheTest(unittest.TestCase):
                 "target_date": "2026-04-24",
                 "input_hash": "abcdef1234567890",
                 "prompt_version": "manual-current-conversation-v1",
+                "reasoning_effort": "xhigh",
                 "model_source": "manual",
                 "action": "observe",
                 "mainline_state": "unclear",
@@ -766,6 +774,7 @@ Add this test to `tests/test_front_page_v2_renderer.py`:
                     "reasoning_decision": {
                         "action": "observe",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": None,
                         "conclusion": "主线仍需确认，明天只观察承接。",
                         "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
@@ -786,7 +795,8 @@ Add this test to `tests/test_front_page_v2_renderer.py`:
         self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)
         self.assertIn("| 失败条件 | 主线回落；候选股承接失败 |", rendered)
         self.assertIn("| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |", rendered)
-        self.assertIn("| 置信度 | medium |", rendered)
+        self.assertIn("| 推理深度 | xhigh |", rendered)
+        self.assertNotIn("| 置信度 | medium |", rendered)
         self.assertNotIn("chain-of-thought", rendered)
         self.assertNotIn("思维链", rendered)
 ```
@@ -805,6 +815,7 @@ Add this second test to verify the decision can drive the unique target:
                     "reasoning_decision": {
                         "action": "conditional_entry",
                         "mainline_state": "strengthening",
+                        "reasoning_effort": "xhigh",
                         "unique_target": "300613",
                         "conclusion": "只看富瀚微，满足确认才允许条件试错。",
                         "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
@@ -910,7 +921,7 @@ def render_reasoning_decision_lines(decision: Mapping[str, Any] | None) -> list[
         f"| 触发条件 | {_join(decision.get('trigger_conditions'))} |",
         f"| 失败条件 | {_join(decision.get('failure_conditions'))} |",
         f"| 排除对象 | {_excluded_text(decision)} |",
-        f"| 置信度 | {_sanitize_cell(decision.get('confidence'))} |",
+        f"| 推理深度 | {_sanitize_cell(decision.get('reasoning_effort'))} |",
         "",
     ]
 ```
@@ -1076,7 +1087,7 @@ In `scripts/report/report_acceptance_audit.py`, add constants near the other mar
 
 ```python
 REASONING_SURFACE_HEADING = "### 0. 推理裁决"
-REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "置信度")
+REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "推理深度")
 REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
 ```
 
@@ -1229,4 +1240,4 @@ Spec coverage:
 
 No API is added in this plan. API-backed reasoning remains behind the same schema for a later phase.
 
-No hidden chain-of-thought is rendered; only conclusion, evidence, triggers, failures, exclusions, and confidence enter the report.
+No hidden chain-of-thought is rendered; only conclusion, evidence, triggers, failures, exclusions, and reasoning effort enter the report.

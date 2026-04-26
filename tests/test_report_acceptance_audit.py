@@ -222,7 +222,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 触发条件 | 10点确认 |\n"
             "| 失败条件 | 主线回落 |\n"
             "| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |\n"
-            "| 置信度 | medium |\n\n"
+            "| 推理深度 | xhigh |\n\n"
             "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
         )
 

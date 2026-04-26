@@ -89,6 +89,7 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
             "target_date": packet["target_date"],
             "input_hash": packet["input_hash"],
             "prompt_version": "manual-current-conversation-v1",
+            "reasoning_effort": "xhigh",
             "model_source": "manual",
             "action": "observe",
             "mainline_state": "strengthening",
@@ -151,11 +152,22 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         self.assertIn("low_confidence_aggressive_action", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_requires_xhigh_reasoning_effort(self):
+        packet = self._packet()
+        decision = self._valid_decision(packet)
+        decision["reasoning_effort"] = "high"
+
+        result = validate_reasoning_decision(packet, decision)
+
+        self.assertIn("invalid_reasoning_effort", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_rejects_missing_required_decision_fields(self):
         packet = self._packet()
         decision = self._valid_decision(packet)
         for key in [
             "prompt_version",
+            "reasoning_effort",
             "conclusion",
             "evidence",
             "trigger_conditions",

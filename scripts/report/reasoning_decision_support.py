@@ -83,12 +83,14 @@ def build_reasoning_input_packet(
 ALLOWED_ACTIONS = {"do_nothing", "observe", "conditional_entry"}
 ALLOWED_MAINLINE_STATES = {"strengthening", "diverging", "fading", "unclear"}
 ALLOWED_CONFIDENCE = {"high", "medium", "low"}
+ALLOWED_REASONING_EFFORT = {"xhigh"}
 ALLOWED_MODEL_SOURCES = {"manual", "deterministic_fallback", "api"}
 REQUIRED_DECISION_FIELDS = (
     "schema_version",
     "target_date",
     "input_hash",
     "prompt_version",
+    "reasoning_effort",
     "model_source",
     "action",
     "mainline_state",
@@ -154,6 +156,8 @@ def validate_reasoning_decision(packet: Mapping[str, Any], decision: Mapping[str
         findings.append(_finding("invalid_mainline_state", "reasoning decision mainline_state is not supported"))
     if decision.get("confidence") not in ALLOWED_CONFIDENCE:
         findings.append(_finding("invalid_confidence", "reasoning decision confidence is not supported"))
+    if decision.get("reasoning_effort") not in ALLOWED_REASONING_EFFORT:
+        findings.append(_finding("invalid_reasoning_effort", "reasoning decision effort must be xhigh"))
     if decision.get("model_source") not in ALLOWED_MODEL_SOURCES:
         findings.append(_finding("invalid_model_source", "reasoning decision model_source is not supported"))
 

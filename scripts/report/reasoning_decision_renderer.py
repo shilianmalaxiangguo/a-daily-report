@@ -72,6 +72,6 @@ def render_reasoning_decision_lines(decision: Mapping[str, Any] | None) -> list[
         f"| 触发条件 | {_join(decision.get('trigger_conditions'))} |",
         f"| 失败条件 | {_join(decision.get('failure_conditions'))} |",
         f"| 排除对象 | {_excluded_text(decision)} |",
-        f"| 置信度 | {_sanitize_cell(decision.get('confidence'))} |",
+        f"| 推理深度 | {_sanitize_cell(decision.get('reasoning_effort'))} |",
         "",
     ]
