@@ -16,6 +16,41 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def _build_code_map(items, normalize_stock_code, code_keys):
+    mapped = {}
+    if isinstance(items, dict):
+        for code, item in items.items():
+            if isinstance(item, dict):
+                normalized = normalize_stock_code(item.get("code") or code)
+                if normalized:
+                    mapped[normalized] = item
+        return mapped
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        code = ""
+        for key in code_keys:
+            code = item.get(key)
+            if code:
+                break
+        normalized = normalize_stock_code(code)
+        if normalized:
+            mapped[normalized] = item
+    return mapped
+
+
+def _enrich_candidate_item(item, code, stock_info_map, volume_anomaly_map):
+    stock_info = stock_info_map.get(code, {}) or {}
+    for key in ("open", "high", "low", "close", "price", "yclose", "change_pct"):
+        if key in stock_info and item.get(key) in (None, ""):
+            item[key] = stock_info.get(key)
+
+    volume_anomaly = volume_anomaly_map.get(code, {}) or {}
+    reason = volume_anomaly.get("reason")
+    if reason and not item.get("volume_summary"):
+        item["volume_summary"] = reason
+
+
 def build_candidate_bundle_contract(
     data,
     exit_analysis,
@@ -37,6 +72,8 @@ def build_candidate_bundle_contract(
     zt_pool_by_sector = zt_pool_by_sector or {}
     gem_breathing_candidates = gem_breathing_candidates or []
     logs = []
+    stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
+    volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
 
     lianban_data = data.get("lianban_data", {})
     lb_stocks_map = {}
@@ -53,8 +90,10 @@ def build_candidate_bundle_contract(
     for stock in watchlist:
         item = dict(stock)
         code = item.get("code", "")
+        normalized_code = normalize_stock_code(code)
+        _enrich_candidate_item(item, normalized_code, stock_info_map, volume_anomaly_map)
         base_score = item.get("score", 0)
-        abnormal_item = abnormal_watch_map.get(code, {})
+        abnormal_item = abnormal_watch_map.get(code, {}) or abnormal_watch_map.get(normalized_code, {})
         abnormal_bonus, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
         lb_info = lb_stocks_map.get(code, {})
         lb_count = lb_info.get("连板数", 1)

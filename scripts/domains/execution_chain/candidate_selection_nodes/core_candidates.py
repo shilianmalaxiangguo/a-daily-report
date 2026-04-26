@@ -1,3 +1,6 @@
+from selection.candlestick_signature import infer_signature_big_yangline
+
+
 def build_candidate_selection_core_candidates_node(context, node_meta=None, node_lookup=None):
     core_stocks = context.get("core_stocks", []) or []
     primary_mainline = str(context.get("primary_mainline", "") or "").strip()
@@ -12,7 +15,7 @@ def build_candidate_selection_core_candidates_node(context, node_meta=None, node
         lines.append("|------|------|----------|--------------|-----------|------|----------|----------|")
         core_preview = core_stocks[:2] if display_mvp_mode else core_stocks
         for stock in core_preview:
-            signature_big_yangline = stock.get("signature_big_yangline") or "-"
+            signature_big_yangline = infer_signature_big_yangline(stock)
             five_day_burst_state = stock.get("five_day_burst_state") or "-"
             acceptance_state = (
                 stock.get("acceptance_state")

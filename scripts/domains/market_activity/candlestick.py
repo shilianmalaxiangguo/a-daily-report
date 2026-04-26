@@ -40,11 +40,16 @@ def analyze_candlestick_pattern(open_price, close_price, high_price, low_price, 
         except Exception:
             pass
 
-    if change_pct >= 9.9 and open_price == close_price == high_price == low_price:
+    price_tolerance = max(abs(close_price) * 0.005, 0.01) if close_price else 0.01
+    close_at_high = abs(close_price - high_price) <= price_tolerance
+    open_near_high = abs(open_price - high_price) <= price_tolerance
+    has_intraday_break = low_price < min(open_price, close_price) - price_tolerance
+
+    if change_pct >= 9.9 and abs(open_price - close_price) <= price_tolerance and abs(high_price - low_price) <= price_tolerance:
         final_score = 10 + time_bonus
         return f"一字板加速{time_desc}", final_score, "最强加速形态，次日可能继续加速或分歧"
 
-    if change_pct >= 9.9 and open_price == close_price == high_price and low_price < close_price:
+    if change_pct >= 9.9 and close_at_high and open_near_high and has_intraday_break:
         final_score = 8 + time_bonus
         return f"T字板分歧转一致{time_desc}", final_score, "涨停价开盘，盘中炸板后回封，分歧转一致"
 

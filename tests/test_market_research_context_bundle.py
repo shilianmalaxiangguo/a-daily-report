@@ -154,6 +154,67 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertEqual(result["filtered_out_gem_breathing_candidates"], [])
         self.assertEqual(result["gem_observation_stocks"], [])
 
+    def test_build_market_research_context_bundle_uses_stock_full_info_for_t_board_pattern(self):
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {"半导体": [{"代码": "300613"}]},
+                "dt_pool_by_sector": {},
+                "zt_pool": [
+                    {
+                        "代码": "300613",
+                        "名称": "富瀚微",
+                        "所属行业": "半导体",
+                        "涨跌幅": 20.01,
+                        "最新价": 56.08,
+                        "成交额": 1471516672,
+                    }
+                ],
+                "stock_full_info": {
+                    "300613": {
+                        "open": 55.90,
+                        "high": 56.08,
+                        "low": 54.21,
+                        "close": 56.08,
+                        "change_pct": 20.01,
+                    }
+                },
+                "hot_rank_top30": [],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [{"stock_code": "300613", "reason": "显著放量6.0倍"}],
+            },
+            target_date="2026-04-24",
+            exit_analysis={"sector_name": "半导体", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="一档",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda *args, **kwargs: [],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {},
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        self.assertEqual(result["watchlist"][0]["pattern"], "放量T字板")
+        self.assertIn("T字板分歧转一致", result["watchlist"][0]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

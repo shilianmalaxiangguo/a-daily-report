@@ -36,6 +36,19 @@ class MarketActivityCandlestickTest(unittest.TestCase):
         self.assertEqual(score, 0)
         self.assertIn("长上影线", suggestion)
 
+    def test_analyze_candlestick_pattern_treats_near_limit_open_break_and_reseal_as_t_board(self):
+        name, score, suggestion = analyze_candlestick_pattern(
+            55.90,
+            56.08,
+            56.08,
+            54.21,
+            20.01,
+        )
+
+        self.assertEqual(name, "T字板分歧转一致")
+        self.assertEqual(score, 8)
+        self.assertIn("炸板后回封", suggestion)
+
     def test_analyze_candlestick_pattern_handles_shock_and_downtrend(self):
         self.assertEqual(
             analyze_candlestick_pattern(10.0, 10.05, 10.08, 9.98, 1.0)[0],

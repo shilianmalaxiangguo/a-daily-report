@@ -1,3 +1,6 @@
+from selection.candlestick_signature import infer_signature_big_yangline
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -26,6 +29,42 @@ def _merge_text_list(*values):
                 seen.add(text)
                 merged.append(text)
     return merged
+
+
+def _build_code_map(items, normalize_stock_code, code_keys):
+    mapped = {}
+    if isinstance(items, dict):
+        for code, item in items.items():
+            if isinstance(item, dict):
+                normalized = normalize_stock_code(item.get("code") or code)
+                if normalized:
+                    mapped[normalized] = item
+        return mapped
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        code = ""
+        for key in code_keys:
+            code = item.get(key)
+            if code:
+                break
+        normalized = normalize_stock_code(code)
+        if normalized:
+            mapped[normalized] = item
+    return mapped
+
+
+def _enrich_price_shape(stock, code, stock_info_map, volume_anomaly_map):
+    enriched = dict(stock)
+    stock_info = stock_info_map.get(code, {}) or {}
+    for key in ("open", "high", "low", "close", "price", "yclose", "change_pct"):
+        if key in stock_info and enriched.get(key) in (None, ""):
+            enriched[key] = stock_info.get(key)
+    volume_anomaly = volume_anomaly_map.get(code, {}) or {}
+    reason = volume_anomaly.get("reason")
+    if reason and not enriched.get("volume_summary"):
+        enriched["volume_summary"] = reason
+    return enriched
 
 
 def build_market_research_context_bundle_contract(
@@ -74,35 +113,35 @@ def build_market_research_context_bundle_contract(
     hot_stocks = data.get("hot_rank_top30", [])
     integrated_hot_list = data.get("integrated_hot_list", [])
     active_a_kill_records = get_active_a_kill_records(target_date)
+    stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
+    volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
 
     candidates = []
     for stock in zt_pool[:30]:
         code = normalize_stock_code(stock.get("代码", stock.get("code", "")))
+        stock = _enrich_price_shape(stock, code, stock_info_map, volume_anomaly_map)
         name = stock.get("名称", stock.get("name", ""))
         sector = stock.get("所属行业", stock.get("sector", ""))
-        change = stock.get("涨跌幅", 9.9)
+        change = stock.get("涨跌幅", stock.get("change_pct", 9.9))
 
         open_price = stock.get("开盘价", stock.get("open", 0))
         close_price = stock.get("最新价", stock.get("close", 0))
         high_price = stock.get("最高价", stock.get("high", 0))
         low_price = stock.get("最低价", stock.get("low", 0))
         volume = stock.get("成交额", stock.get("volume", 0))
-
-        is_yizi = (open_price == close_price == high_price == low_price) and change >= 9.9
-        is_tzi = (open_price == high_price == close_price) and low_price < open_price and change >= 9.9
-        is_guangtou = (high_price == close_price) and (open_price < close_price) and change >= 9.9
+        signature = infer_signature_big_yangline(stock)
 
         score = 0
         reason_text = ""
-        if is_yizi:
+        if signature == "一字板":
             score += 40
             reason_text = "一字板最强，明日大概率连板"
-        elif is_tzi:
+        elif "T字板" in signature:
             score += 35
             reason_text = "T字板分歧转一致，明日可能加速"
-        elif is_guangtou:
+        elif "大阳线" in signature:
             score += 30
-            reason_text = "光头涨停实体强，明日有溢价"
+            reason_text = "大阳线封板，明日有溢价"
         elif change >= 9.9:
             score += 25
             reason_text = "涨停但形态一般，明日看竞价"
@@ -136,7 +175,7 @@ def build_market_research_context_bundle_contract(
                 "volume": volume,
                 "score": score,
                 "source": "涨停池",
-                "pattern": "一字板" if is_yizi else "T字板" if is_tzi else "光头涨停" if is_guangtou else "普通涨停",
+                "pattern": signature if signature != "-" else "普通涨停",
                 "reason": reason_text,
                 "tomorrow_expectation": "连板预期" if score >= 70 else "溢价预期" if score >= 50 else "观察竞价",
             }

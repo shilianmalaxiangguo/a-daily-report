@@ -267,6 +267,60 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 10点看承接 | 溢价候选 | 观察，等10点确认 |", rendered)
         self.assertNotIn("有条件执行", rendered)
 
+    def test_candidate_selection_infers_volume_t_board_signature_from_price_shape(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-04-24",
+                "exit_analysis": {"sector_name": "半导体"},
+                "final_gate": {"can_new_entry": False, "allow_conditional_30": True},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [
+                        {
+                            "name": "富瀚微",
+                            "code": "300613",
+                            "sector": "半导体",
+                            "open": 55.90,
+                            "high": 56.08,
+                            "low": 54.21,
+                            "close": 56.08,
+                            "change": 20.01,
+                            "abnormal_summary": "显著放量6.0倍，涨停，强启动信号",
+                            "core_level": "溢价候选",
+                            "tmr_forecast": "明日可能高开溢价",
+                        }
+                    ],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["core_candidates"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量T字板 | - | 明日可能高开溢价 | 溢价候选 | 观察，等10点确认 |", rendered)
+
     def test_candidate_selection_core_candidates_render_market_fit_fields_without_standalone_drawing_table(self):
         result = build_candidate_selection_runtime(
             {

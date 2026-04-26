@@ -189,6 +189,53 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(result["extreme_conviction_list"][0]["code"], "000001")
         self.assertTrue(any(log["step"] == "candidate_scoring" for log in result["module_logs"]))
 
+    def test_candidate_bundle_enriches_core_stock_with_price_shape_and_volume_anomaly(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "stock_full_info": {
+                    "300613": {
+                        "code": "300613",
+                        "open": 55.90,
+                        "high": 56.08,
+                        "low": 54.21,
+                        "close": 56.08,
+                        "change_pct": 20.01,
+                    }
+                },
+                "volume_anomalies": [
+                    {
+                        "stock_code": "300613",
+                        "reason": "显著放量6.0倍，涨停，强启动信号",
+                    }
+                ],
+            },
+            exit_analysis={"sector_name": "半导体"},
+            candidates=[],
+            watchlist=[{"name": "富瀚微", "code": "300613", "sector": "半导体", "score": 60}],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-04-24",
+            normalize_stock_code=lambda code: str(code or "").replace(".SZ", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (
+                [item for item in stocks if item.get("sector") == mainline_name],
+                [],
+            ),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+        )
+
+        core = result["core_stocks"][0]
+        self.assertEqual(core["open"], 55.90)
+        self.assertEqual(core["high"], 56.08)
+        self.assertEqual(core["low"], 54.21)
+        self.assertEqual(core["close"], 56.08)
+        self.assertEqual(core["change_pct"], 20.01)
+        self.assertEqual(core["volume_summary"], "显著放量6.0倍，涨停，强启动信号")
+
 
 if __name__ == "__main__":
     unittest.main()
