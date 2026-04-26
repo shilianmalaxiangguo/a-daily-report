@@ -184,6 +184,31 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["best_stock"]["position_pct"], 50)
         self.assertEqual(result["exports"]["best_stock"]["candidate_feedback_ready"], True)
 
+    def test_pk_decision_runtime_builds_pk_and_action_plan_contexts_for_renderers(self):
+        captured = {}
+
+        def render_pk(context):
+            captured["pk"] = dict(context)
+            return ["pk"]
+
+        def render_action(context):
+            captured["action"] = dict(context)
+            return ["action"]
+
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": render_pk,
+                "render_action_plan_section": render_action,
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["pk_context", "action_plan_context", "render_sections"],
+        )
+
+        self.assertEqual(result["lines"], ["pk", "action", ""])
+        self.assertIn("conclusion_lines", captured["pk"])
+        self.assertIn("action_rows", captured["action"])
+        self.assertIn("position_section_lines", captured["action"])
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [
