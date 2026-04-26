@@ -64,6 +64,49 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["best_stock"]["code"], "000001")
         self.assertEqual(result["exports"]["trade_gate_open"], True)
 
+    def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-04-22",
+                "run_mode": "replay",
+                "final_gate": {"can_new_entry": False},
+                "mainline_name": "军工",
+                "market_research_snapshot": {"state_machine": {}},
+                "executable_stocks": [],
+                "waiting_stocks": [],
+                "keep_group": [],
+                "abnormal_watch_pool_all": [],
+                "step2_bundle": {
+                    "crossline_observation_stocks": [{"name": "跨线股", "code": "000009", "tmr_forecast": "只看承接"}],
+                    "evaluated_stocks": [],
+                    "gem_observation_stocks": [],
+                },
+                "conviction_codes": set(),
+                "leader_memory_codes": set(),
+                "build_strategy_ev_calibration": lambda target_date, ledger_mode=None: {"source": "ledger"},
+                "score_execution_candidate": lambda stock, ev_calibration: {**stock, "score": 80},
+                "score_candidate_decision_stack": lambda stock, **kwargs: {**stock, "decision_stack_score": 80},
+                "sort_decision_stack_candidates": lambda candidates: list(candidates),
+                "sort_watch_anchor_candidates": lambda candidates, **kwargs: list(candidates),
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "get_trade_permission": lambda *args, **kwargs: {"permission_label": "跨线观察权", "permission_reason": "只观察"},
+                "fetch_recent_price_bars": lambda *args, **kwargs: [],
+                "evaluate_live_tradability": lambda *args, **kwargs: {"can_trade": True, "report_day_is_one_word": False},
+                "analyze_buy_signal": lambda *args, **kwargs: None,
+                "quant_system_available": False,
+                "build_waiting_stock_plan": lambda seed, *args, **kwargs: dict(seed),
+                "derive_watch_anchor_type": lambda candidate, mainline_name="": "重点观察谁",
+                "derive_watch_anchor_note": lambda candidate, mainline_name="": "先看承接",
+                "build_abnormal_watch_anchor_candidates": lambda **kwargs: [],
+                "select_priority_watch_anchor": lambda **kwargs: ({}, ""),
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["score_candidates", "observation_pool", "watch_anchor", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["watch_anchor"]["code"], "000009")
+        self.assertEqual(result["exports"]["watch_anchor_type"], "重点观察谁")
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [
