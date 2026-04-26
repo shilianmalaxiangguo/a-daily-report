@@ -38,6 +38,32 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["lines"], ["pk-rendered", "action-rendered", ""])
         self.assertEqual(result["exports"], {})
 
+    def test_pk_decision_runtime_score_candidates_exports_best_stock(self):
+        candidate = {"name": "军工一号", "code": "000001"}
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-04-22",
+                "run_mode": "replay",
+                "final_gate": {"can_new_entry": True},
+                "mainline_name": "军工",
+                "market_research_snapshot": {"state_machine": {}},
+                "executable_stocks": [candidate],
+                "waiting_stocks": [],
+                "conviction_codes": set(),
+                "leader_memory_codes": set(),
+                "build_strategy_ev_calibration": lambda target_date, ledger_mode=None: {"source": "ledger"},
+                "score_execution_candidate": lambda stock, ev_calibration: {**stock, "score": 90},
+                "score_candidate_decision_stack": lambda stock, **kwargs: {**stock, "decision_stack_score": 90},
+                "sort_decision_stack_candidates": lambda candidates: list(candidates),
+                "sort_watch_anchor_candidates": lambda candidates, **kwargs: list(candidates),
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["score_candidates", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["best_stock"]["code"], "000001")
+        self.assertEqual(result["exports"]["trade_gate_open"], True)
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [
