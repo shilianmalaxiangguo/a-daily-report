@@ -17,13 +17,13 @@ The UI project should live inside this skill checkout, but it should not be trac
 
 Planned local folder:
 
-- `snapshot-visual-analysis-ui/`
+- `snap-ui/`
 
 This folder is ignored from the root `.gitignore` so the UI can later become its own independent git repository. The daily-report repository should only track the design/spec documents and any data contract helpers that belong to the skill itself.
 
 When implementation starts:
 
-- Scaffold the Nuxt app inside `snapshot-visual-analysis-ui/`.
+- Scaffold the Nuxt app inside `snap-ui/`.
 - Keep its `package.json`, lockfile, source files, and build outputs inside that folder.
 - Initialize a separate git repository there when the UI project is ready to be versioned independently.
 - Do not add the folder as a submodule unless explicitly requested later.

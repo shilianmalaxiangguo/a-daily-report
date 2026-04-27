@@ -11,8 +11,8 @@
 /logs/**
 
 # Independent local UI projects
-/snapshot-visual-analysis-ui/
-/snapshot-visual-analysis-ui/**
+/snap-ui/
+/snap-ui/**
 
 # Local environment and machine-specific files
 /.env
