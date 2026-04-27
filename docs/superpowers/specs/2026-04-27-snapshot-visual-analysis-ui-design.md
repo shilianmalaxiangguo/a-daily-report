@@ -11,6 +11,23 @@
 - Reka UI 只在 Nuxt UI 默认交互不够贴合时补充 headless primitive。
 - ECharts 负责主线 smooth line、K 线和成交量图。
 
+## Repository Placement
+
+The UI project should live inside this skill checkout, but it should not be tracked by the `a-daily-report` git repository.
+
+Planned local folder:
+
+- `snapshot-visual-analysis-ui/`
+
+This folder is ignored from the root `.gitignore` so the UI can later become its own independent git repository. The daily-report repository should only track the design/spec documents and any data contract helpers that belong to the skill itself.
+
+When implementation starts:
+
+- Scaffold the Nuxt app inside `snapshot-visual-analysis-ui/`.
+- Keep its `package.json`, lockfile, source files, and build outputs inside that folder.
+- Initialize a separate git repository there when the UI project is ready to be versioned independently.
+- Do not add the folder as a submodule unless explicitly requested later.
+
 ## Product Narrative
 
 这个界面不是营销页，也不是暗色大屏，而是一张清爽的每日复盘工作台。
