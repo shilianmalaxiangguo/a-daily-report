@@ -40,6 +40,18 @@ def _normalize_market_stats_value(value):
         return 0
 
 
+def _market_activity_row_value(row, key, position, default=None):
+    missing = object()
+    if hasattr(row, "get"):
+        value = row.get(key, missing)
+        if value is not missing:
+            return value
+    try:
+        return row[position]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -60,6 +72,28 @@ def _normalize_sector_fund_flow_rows(rows):
             item["turnover_yi"] = round(_safe_float(turnover_yi), 2)
         normalized.append(item)
     return normalized
+
+
+_PROVIDER_ALIASES = {
+    "tencent.fundflow.getHyRank": "tencent.sector_change_rank",
+    "eastmoney.push2.clist": "eastmoney.turnover_rank",
+}
+
+
+def _provider_from_rows(rows, default_provider):
+    sources = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        source = row.get("data_source")
+        if source:
+            sources.append(_PROVIDER_ALIASES.get(source, source))
+    unique_sources = sorted(set(sources))
+    if not unique_sources:
+        return default_provider
+    if len(unique_sources) == 1:
+        return unique_sources[0]
+    return ",".join(unique_sources)
 
 
 def _build_code_to_sector_map(existing_results=None):
@@ -140,8 +174,8 @@ def collect_market_activity_pool_request_bundle(
         if not market_activity_df.empty:
             market_stats = {}
             for _, row in market_activity_df.iterrows():
-                item = row[0] if len(row) > 0 else ""
-                value = row[1] if len(row) > 1 else 0
+                item = _market_activity_row_value(row, "item", 0, "")
+                value = _market_activity_row_value(row, "value", 1, 0)
                 numeric_value = _normalize_market_stats_value(value)
                 if item == "上涨":
                     market_stats["up_count"] = numeric_value
@@ -481,10 +515,10 @@ def collect_market_activity_sector_snapshot_request_bundle(
             error=str(error),
         )
 
-    emit("  8️⃣ 获取板块涨跌幅排行（同花顺问财API）...")
+    emit("  8️⃣ 获取板块涨跌幅排行（腾讯行业资金流）...")
     try:
-        sector_up = get_sector_change_from_iwencai(rank_type="up", limit=10)
-        sector_down = get_sector_change_from_iwencai(rank_type="down", limit=10)
+        sector_up = get_sector_change_from_iwencai(rank_type="up", limit=10, target_date=target_date)
+        sector_down = get_sector_change_from_iwencai(rank_type="down", limit=10, target_date=target_date)
         results["sector_change_up"] = sector_up or []
         results["sector_change_down"] = sector_down or []
         data_status["板块涨幅排行"] = bool(sector_up)
@@ -500,7 +534,10 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "request.sector_change_rank",
             "success" if step_status.get("板块涨跌幅排行获取") else "degraded",
             "已处理板块涨跌幅排行请求",
-            provider="iwencai.sector_change_rank",
+            provider=_provider_from_rows(
+                list(results.get("sector_change_up", [])) + list(results.get("sector_change_down", [])),
+                "tencent.sector_change_rank",
+            ),
             target_keys=["sector_change_up", "sector_change_down"],
             up_count=len(results.get("sector_change_up", [])),
             down_count=len(results.get("sector_change_down", [])),
@@ -516,13 +553,13 @@ def collect_market_activity_sector_snapshot_request_bundle(
             module_logs,
             "request.sector_change_rank",
             "error",
-            "板块涨跌幅排行请求失败",
-            provider="iwencai.sector_change_rank",
+            "腾讯板块涨跌幅排行请求失败",
+            provider="tencent.sector_change_rank",
             target_keys=["sector_change_up", "sector_change_down"],
             error=str(error),
         )
 
-    emit("  9️⃣ 获取成交额排名（iwencai API）...")
+    emit("  9️⃣ 获取东方财富成交额排行...")
     try:
         turnover_rank = get_turnover_rank_from_iwencai(limit=50, target_date=target_date)
         if turnover_rank:
@@ -532,18 +569,18 @@ def collect_market_activity_sector_snapshot_request_bundle(
             data_status["成交额排名"] = True
             step_status["成交额排名获取"] = True
             elapsed, _ = timer.record("成交额排名获取", 9)
-            emit(f"   ✅ 成交额排名成功: {len(turnover_rank)} 条，>100亿: {len(over_100b)} 只 [⏱ {elapsed:.2f}s]")
+            emit(f"   ✅ 东方财富成交额排行成功: {len(turnover_rank)} 条，>100亿: {len(over_100b)} 只 [⏱ {elapsed:.2f}s]")
         else:
             results["turnover_rank"] = []
             results["turnover_over_100b"] = []
             data_status["成交额排名"] = False
-            emit("   ❌ 成交额排名返回空")
+            emit("   ❌ 东方财富成交额排行返回空")
         _append_log(
             module_logs,
             "request.turnover_rank",
             "success" if data_status.get("成交额排名") else "degraded",
-            "已处理成交额排名请求",
-            provider="iwencai.turnover_rank",
+            "已处理成交额排行请求",
+            provider=_provider_from_rows(results.get("turnover_rank", []), "eastmoney.turnover_rank"),
             target_keys=["turnover_rank", "turnover_over_100b"],
             turnover_count=len(results.get("turnover_rank", [])),
             over_100b_count=len(results.get("turnover_over_100b", [])),
@@ -552,13 +589,13 @@ def collect_market_activity_sector_snapshot_request_bundle(
         results["turnover_rank"] = []
         results["turnover_over_100b"] = []
         data_status["成交额排名"] = False
-        emit(f"   ❌ 成交额排名失败: {error}")
+        emit(f"   ❌ 东方财富成交额排行失败: {error}")
         _append_log(
             module_logs,
             "request.turnover_rank",
             "error",
-            "成交额排名请求失败",
-            provider="iwencai.turnover_rank",
+            "东方财富成交额排行请求失败",
+            provider="eastmoney.turnover_rank",
             target_keys=["turnover_rank", "turnover_over_100b"],
             error=str(error),
         )

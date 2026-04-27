@@ -13,6 +13,11 @@ from market_data.kline_dates import (
     short_kline_date,
 )
 
+
+class IwencaiSkillVersionError(RuntimeError):
+    """Raised when OpenAPI rejects the locally installed SkillHub/skill version."""
+
+
 __all__ = [
     "analyze_market_zhongshu",
     "build_structure_segment",
@@ -416,11 +421,13 @@ def _normalize_baostock_index_code(index_code):
 
 def _load_iwencai_index_dataframe(recent_days, urlopen_fn=None):
     import pandas as pd
+    import urllib.error
     import urllib.request
 
     api_key = os.environ.get("IWENCAI_API_KEY", "")
     urlopen_fn = urlopen_fn or urllib.request.urlopen
-    url = "https://openapi.iwencai.com/v1/query2data"
+    base_url = (os.environ.get("IWENCAI_BASE_URL") or "https://openapi.iwencai.com").rstrip("/")
+    url = f"{base_url}/v1/query2data"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -435,7 +442,17 @@ def _load_iwencai_index_dataframe(recent_days, urlopen_fn=None):
 
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    response = urlopen_fn(request, timeout=30)
+    try:
+        response = urlopen_fn(request, timeout=30)
+    except urllib.error.HTTPError as error:
+        body = ""
+        try:
+            body = error.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        if error.code == 401 and "Skill 版本过低" in body:
+            raise IwencaiSkillVersionError(body or "问财 SkillHub 本地技能版本过低") from error
+        raise
     result = json.loads(response.read().decode("utf-8"))
     if result.get("status_code", 0) != 0:
         raise RuntimeError(f"API错误: {result.get('status_msg', 'unknown error')}")
@@ -462,6 +479,53 @@ def _load_iwencai_index_dataframe(recent_days, urlopen_fn=None):
             klines.append(kline)
 
     return pd.DataFrame(klines), "同花顺问财API"
+
+
+def _normalize_akshare_index_symbol(index_code):
+    code = str(index_code or "").lower().replace(".", "")
+    if code.startswith(("sh", "sz")):
+        return code
+    if code.startswith(("000", "880", "899")):
+        return f"sh{code}"
+    if code.startswith(("399", "159")):
+        return f"sz{code}"
+    return code
+
+
+def _load_akshare_index_dataframe(index_code, recent_days, target_date=None):
+    import pandas as pd
+
+    try:
+        import akshare as ak
+    except Exception:
+        return None, "akshare.stock_zh_index_daily_em"
+
+    symbol = _normalize_akshare_index_symbol(index_code)
+    try:
+        df = ak.stock_zh_index_daily_em(symbol=symbol)
+    except Exception:
+        return None, "akshare.stock_zh_index_daily_em"
+
+    if df is None or getattr(df, "empty", False):
+        return None, "akshare.stock_zh_index_daily_em"
+
+    df = df.copy()
+    if "date" not in df.columns:
+        return None, "akshare.stock_zh_index_daily_em"
+
+    df["date"] = df["date"].map(normalize_kline_date_str)
+    if target_date:
+        end_date = normalize_kline_date_str(target_date)
+        df = df[df["date"] <= end_date]
+
+    for column in ("open", "high", "low", "close", "volume", "amount"):
+        if column not in df.columns:
+            df[column] = 0.0
+    df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
+    df = df.sort_values("date").tail(int(recent_days or 120) + 1).reset_index(drop=True)
+    if len(df) < 2:
+        return None, "akshare.stock_zh_index_daily_em"
+    return df, "akshare.stock_zh_index_daily_em"
 
 
 def _load_baostock_index_dataframe(index_code, recent_days, bs_module=None):
@@ -517,14 +581,20 @@ def analyze_market_zhongshu(
             else:
                 df, data_source = fetched, "injected_dataframe"
         else:
-            print_fn(f"[大盘结构] 尝试使用同花顺问财API获取{index_code}指数数据...")
-            df = None
-            data_source = "unknown"
-            try:
-                df, data_source = _load_iwencai_index_dataframe(recent_days, urlopen_fn=urlopen_fn)
-            except Exception as error:
-                print_fn(f"[大盘结构] 同花顺问财API获取失败: {error}，切换到BaoStock备用...")
+            print_fn(f"[大盘结构] 尝试使用 AkShare 获取{index_code}近{recent_days}日指数K线...")
+            df, data_source = _load_akshare_index_dataframe(index_code, recent_days, target_date=target_date)
+            if df is None or len(df) == 0:
+                print_fn(f"[大盘结构] AkShare 获取失败，尝试使用 fast_index_runtime...")
                 df, data_source = _load_baostock_index_dataframe(index_code, recent_days, bs_module=bs_module)
+            if df is None or len(df) == 0:
+                print_fn(f"[大盘结构] fast_index_runtime 获取失败，尝试使用同花顺问财API...")
+                df = None
+                data_source = "unknown"
+            try:
+                if df is None or len(df) == 0:
+                    df, data_source = _load_iwencai_index_dataframe(recent_days, urlopen_fn=urlopen_fn)
+            except Exception as error:
+                print_fn(f"[大盘结构] 同花顺问财API获取失败: {error}，fast_index_runtime 已尝试")
 
         if df is None or len(df) == 0:
             return {"success": False, "error": "所有数据源均无法获取指数数据"}

@@ -23,8 +23,14 @@ class MarketStateRequestTest(unittest.TestCase):
         emitted = []
         request_registry = {
             "total_turnover": lambda *, target_date: 12345.6,
-            "major_indices": lambda *, target_date: [{"code": "000001", "change_pct": 1.2}],
-            "wind_a": lambda *, target_date: {"price": 5432.1, "change_pct": 0.8},
+            "major_indices": lambda *, target_date: [
+                {"code": "000001", "change_pct": 1.2, "data_source": "akshare.stock_zh_index_daily_em"}
+            ],
+            "wind_a": lambda *, target_date: {
+                "price": 5432.1,
+                "change_pct": 0.8,
+                "data_source": "akshare.stock_zh_index_daily_em",
+            },
         }
 
         result = collect_market_state_request_bundle(
@@ -47,6 +53,13 @@ class MarketStateRequestTest(unittest.TestCase):
         self.assertEqual(len(result["module_logs"]), 3)
         self.assertEqual(timer.records[0], ("两市成交额获取", 1))
         self.assertTrue(any("两市成交额" in line for line in emitted))
+        self.assertIn("  1️⃣ 获取两市成交额（AkShare 指数成交额）...", emitted)
+        self.assertIn("  2️⃣ 获取三大指数（AkShare 指数日线）...", emitted)
+        self.assertIn("  3️⃣ 获取中证全指（AkShare 指数日线）...", emitted)
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.total_turnover"], "akshare.stock_zh_index_daily_em")
+        self.assertEqual(provider_by_step["request.major_indices"], "akshare.stock_zh_index_daily_em")
+        self.assertEqual(provider_by_step["request.wind_a"], "akshare.stock_zh_index_daily_em")
 
 
 if __name__ == "__main__":

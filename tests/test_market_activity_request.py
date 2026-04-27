@@ -111,6 +111,46 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(any("涨停池" in line for line in emitted))
         self.assertEqual(timer.records[-1], ("涨停跌停数据获取", 4))
 
+    def test_collect_market_activity_pool_request_bundle_parses_akshare_market_activity_columns(self):
+        import pandas as pd
+
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-04-27",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "半导体", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "白酒Ⅱ"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: pd.DataFrame(
+                [
+                    {"item": "上涨", "value": 3182.0},
+                    {"item": "涨停", "value": 85.0},
+                    {"item": "下跌", "value": 1900.0},
+                    {"item": "跌停", "value": 54.0},
+                ]
+            ),
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["step_status"]["涨停跌停数据获取"])
+        self.assertTrue(result["data_status"]["涨停池"])
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(len(result["results"]["zt_pool"]), 1)
+        self.assertEqual(len(result["results"]["dt_pool"]), 1)
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 3182)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 1900)
+        self.assertEqual(result["results"]["market_stats"]["zt_count"], 85)
+        self.assertEqual(result["results"]["market_stats"]["dt_count"], 54)
+        self.assertEqual(result["module_logs"][0]["status"], "success")
+
     def test_collect_market_activity_hot_rank_request_bundle_builds_hot_rank_and_integrated_snapshot(self):
         timer = _TimerStub()
         emitted = []
@@ -188,12 +228,14 @@ class MarketActivityRequestTest(unittest.TestCase):
             "2026-04-22",
             fetch_hot_plate=lambda: [{"name": "军工", "rate": 32.0, "tag": "2涨停", "hot_tag": "持续上榜"}],
             tencent=tencent,
-            get_sector_change_from_iwencai=lambda rank_type="up", limit=10: (
-                [{"name": "军工", "change_pct": 4.5}] if rank_type == "up" else [{"name": "消费", "change_pct": -3.2}]
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: (
+                [{"name": "军工", "change_pct": 4.5, "data_source": "tencent.fundflow.getHyRank"}]
+                if rank_type == "up"
+                else [{"name": "消费", "change_pct": -3.2, "data_source": "tencent.fundflow.getHyRank"}]
             ),
             get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: [
-                {"name": "军工一号", "code": "000001", "turnover": 123.4},
-                {"name": "消费一号", "code": "000002", "turnover": 88.0},
+                {"name": "军工一号", "code": "000001", "turnover": 123.4, "data_source": "eastmoney.push2.clist"},
+                {"name": "消费一号", "code": "000002", "turnover": 88.0, "data_source": "eastmoney.push2.clist"},
             ],
             timer=timer,
             emit=emitted.append,
@@ -217,6 +259,42 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(result["step_status"]["成交额排名获取"])
         self.assertEqual(timer.records[-1], ("成交额排名获取", 9))
         self.assertTrue(any("板块热榜" in line for line in emitted))
+        self.assertIn("  8️⃣ 获取板块涨跌幅排行（腾讯行业资金流）...", emitted)
+        self.assertIn("  9️⃣ 获取东方财富成交额排行...", emitted)
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.sector_change_rank"], "tencent.sector_change_rank")
+        self.assertEqual(provider_by_step["request.turnover_rank"], "eastmoney.turnover_rank")
+
+    def test_collect_market_activity_sector_snapshot_request_bundle_passes_target_date_and_logs_actual_providers(self):
+        timer = _TimerStub()
+        emitted = []
+        captured_sector_dates = []
+        captured_turnover_dates = []
+        tencent = _TencentStub()
+        tencent.get_sector_fund_flow = lambda flow_type="in", limit=50: []
+
+        result = collect_market_activity_sector_snapshot_request_bundle(
+            "2026-04-18",
+            fetch_hot_plate=lambda: [],
+            tencent=tencent,
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: (
+                captured_sector_dates.append(target_date)
+                or [{"name": "半导体", "change_pct": 4.23, "data_source": "akshare.stock_board_industry_name_em"}]
+            ),
+            get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: (
+                captured_turnover_dates.append(target_date)
+                or [{"name": "宁德时代", "code": "300750", "turnover": 145.1, "data_source": "akshare.stock_zh_a_spot_em"}]
+            ),
+            timer=timer,
+            emit=emitted.append,
+            current_dates=("2026-04-22", "2026-04-21"),
+        )
+
+        self.assertEqual(captured_sector_dates, ["2026-04-18", "2026-04-18"])
+        self.assertEqual(captured_turnover_dates, ["2026-04-18"])
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.sector_change_rank"], "akshare.stock_board_industry_name_em")
+        self.assertEqual(provider_by_step["request.turnover_rank"], "akshare.stock_zh_a_spot_em")
 
     def test_collect_market_activity_sector_snapshot_request_bundle_marks_historical_sector_flow_as_handled(self):
         timer = _TimerStub()
@@ -228,7 +306,7 @@ class MarketActivityRequestTest(unittest.TestCase):
             "2026-04-18",
             fetch_hot_plate=lambda: [],
             tencent=tencent,
-            get_sector_change_from_iwencai=lambda rank_type="up", limit=10: [],
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: [],
             get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: [],
             timer=timer,
             emit=emitted.append,

@@ -10,6 +10,23 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def _provider_from_payload(payload, default_provider):
+    sources = []
+    items = payload if isinstance(payload, list) else [payload]
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        source = item.get("data_source")
+        if source:
+            sources.append(source)
+    unique_sources = sorted(set(sources))
+    if not unique_sources:
+        return default_provider
+    if len(unique_sources) == 1:
+        return unique_sources[0]
+    return ",".join(unique_sources)
+
+
 def collect_market_state_request_bundle(
     target_date,
     *,
@@ -23,7 +40,7 @@ def collect_market_state_request_bundle(
     module_logs = []
 
     step_status["两市成交额获取"] = False
-    emit("  1️⃣ 获取两市成交额（iwencai API）...")
+    emit("  1️⃣ 获取两市成交额（AkShare 指数成交额）...")
     try:
         total_turnover_float = request_registry["total_turnover"](target_date=target_date)
         results["total_turnover"] = total_turnover_float
@@ -41,7 +58,7 @@ def collect_market_state_request_bundle(
                 "request.total_turnover",
                 "success",
                 "已获取两市成交额",
-                provider="iwencai.total_turnover",
+                provider="akshare.stock_zh_index_daily_em",
                 target_keys=["total_turnover", "turnover_data"],
                 total_turnover=total_turnover_float,
             )
@@ -54,7 +71,7 @@ def collect_market_state_request_bundle(
                 "request.total_turnover",
                 "degraded",
                 "两市成交额为空或无效",
-                provider="iwencai.total_turnover",
+                provider="akshare.stock_zh_index_daily_em",
                 target_keys=["total_turnover", "turnover_data"],
             )
     except Exception as error:
@@ -66,13 +83,13 @@ def collect_market_state_request_bundle(
             "request.total_turnover",
             "error",
             "两市成交额请求失败",
-            provider="iwencai.total_turnover",
+            provider="akshare.stock_zh_index_daily_em",
             target_keys=["total_turnover", "turnover_data"],
             error=str(error),
         )
 
     step_status["主要指数获取"] = False
-    emit("  2️⃣ 获取三大指数（iwencai API）...")
+    emit("  2️⃣ 获取三大指数（AkShare 指数日线）...")
     try:
         indices = request_registry["major_indices"](target_date=target_date)
         results["indices"] = indices
@@ -86,7 +103,7 @@ def collect_market_state_request_bundle(
                 "request.major_indices",
                 "success",
                 "已获取主要指数",
-                provider="iwencai.major_indices",
+                provider=_provider_from_payload(indices, "akshare.stock_zh_index_daily_em"),
                 target_keys=["indices"],
                 index_count=len(indices),
             )
@@ -99,7 +116,7 @@ def collect_market_state_request_bundle(
                 "request.major_indices",
                 "degraded",
                 "主要指数为空或无效",
-                provider="iwencai.major_indices",
+                provider="akshare.stock_zh_index_daily_em",
                 target_keys=["indices"],
             )
     except Exception as error:
@@ -111,13 +128,13 @@ def collect_market_state_request_bundle(
             "request.major_indices",
             "error",
             "主要指数请求失败",
-            provider="iwencai.major_indices",
+            provider="akshare.stock_zh_index_daily_em",
             target_keys=["indices"],
             error=str(error),
         )
 
     step_status["中证全指获取"] = False
-    emit("  3️⃣ 获取中证全指（iwencai API）...")
+    emit("  3️⃣ 获取中证全指（AkShare 指数日线）...")
     try:
         wind_a_alt = request_registry["wind_a"](target_date=target_date)
         results["wind_a_alternative"] = wind_a_alt
@@ -133,7 +150,7 @@ def collect_market_state_request_bundle(
                 "request.wind_a",
                 "success",
                 "已获取中证全指",
-                provider="iwencai.wind_a",
+                provider=_provider_from_payload(wind_a_alt, "akshare.stock_zh_index_daily_em"),
                 target_keys=["wind_a_alternative"],
                 price=wind_a_price,
                 change_pct=wind_a_change,
@@ -147,7 +164,7 @@ def collect_market_state_request_bundle(
                 "request.wind_a",
                 "degraded",
                 "中证全指为空或无效",
-                provider="iwencai.wind_a",
+                provider="akshare.stock_zh_index_daily_em",
                 target_keys=["wind_a_alternative"],
             )
     except Exception as error:
@@ -159,7 +176,7 @@ def collect_market_state_request_bundle(
             "request.wind_a",
             "error",
             "中证全指请求失败",
-            provider="iwencai.wind_a",
+            provider="akshare.stock_zh_index_daily_em",
             target_keys=["wind_a_alternative"],
             error=str(error),
         )
