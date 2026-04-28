@@ -28,6 +28,16 @@ def _daily_rows(start="2026-01-01", periods=30, high=105, low=95, close=100):
 
 
 class ChanlunZhongshuRuntimeTest(unittest.TestCase):
+    def test_build_daily_structure_candidates_empty_payload_includes_count_contract(self):
+        result = runtime.build_daily_structure_candidates([])
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status"], "empty_daily_bars")
+        self.assertEqual(result["daily_structure_candidates"], [])
+        self.assertIsNone(result["current_candidate"])
+        self.assertEqual(result["daily_lookback_count"], 0)
+        self.assertEqual(result["report_focus_count"], 0)
+
     def test_build_daily_structure_candidates_marks_9_day_tail_as_forming_candidate(self):
         rows = _daily_rows(start="2026-04-14", periods=10, high=4114.84, low=3992.41, close=4050)
 
@@ -44,7 +54,7 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(current["zg_candidate"], 4114.84)
 
     def test_build_daily_structure_candidates_confirms_duration_only_after_20_days(self):
-        rows = _daily_rows(start="2026-01-05", periods=21, high=4190.87, low=3983.58, close=4080)
+        rows = _daily_rows(start="2026-01-05", periods=20, high=4190.87, low=3983.58, close=4080)
 
         result = runtime.build_daily_structure_candidates(rows, target_date="2026-02-03", min_daily_klines=20)
 

@@ -72,6 +72,8 @@ def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines
             "status": "empty_daily_bars",
             "daily_structure_candidates": [],
             "current_candidate": None,
+            "daily_lookback_count": 0,
+            "report_focus_count": 0,
         }
     base = frame.tail(DAILY_STRUCTURE_LOOKBACK_DAYS).reset_index(drop=True)
     if len(base) < min_daily_klines:
