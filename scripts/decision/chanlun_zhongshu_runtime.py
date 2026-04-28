@@ -32,7 +32,7 @@ def _safe_float(value, default=0.0):
 
 def _strict_float(value):
     try:
-        if isinstance(value, bool) or value in (None, ""):
+        if pd.api.types.is_bool(value) or value in (None, ""):
             return None
         number = float(value)
     except (TypeError, ValueError):
