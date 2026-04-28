@@ -154,6 +154,7 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         result = runtime.confirm_daily_level_zhongshu(candidate, structures)
 
         self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertFalse(result["confirmed"])
         self.assertIn("9/20", result["explanation"])
 
     def test_confirm_daily_level_zhongshu_reports_insufficient_60m_history(self):
