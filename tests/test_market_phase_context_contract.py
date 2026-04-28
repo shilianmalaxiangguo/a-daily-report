@@ -10,6 +10,43 @@ from decision.market_phase_context import build_market_phase_context_contract
 
 
 class MarketPhaseContextContractTest(unittest.TestCase):
+    def test_default_zhongshu_request_uses_250_day_structural_base(self):
+        captured_kwargs = {}
+
+        def analyze_market_zhongshu(**kwargs):
+            captured_kwargs.update(kwargs)
+            return {"success": False}
+
+        build_market_phase_context_contract(
+            data={"zt_pool": [], "dt_pool": [], "market_stats": {"up_count": 1000, "down_count": 2000}},
+            target_date="2026-04-27",
+            analyze_market_zhongshu=analyze_market_zhongshu,
+            analyze_market_and_sectors=lambda data: {"market_status": "震荡整理"},
+            resolve_market_mainline_context=lambda data, market_analysis: {
+                "main_sectors": [],
+                "secondary_sectors": [],
+                "main_sectors_info": [],
+                "secondary_sectors_info": [],
+                "dragon_stocks": [],
+            },
+            build_mainline_exit_analysis=lambda data, market_analysis, dragon_stocks, main_sectors: {"overall_level": "黄灯"},
+            merge_position_gate=lambda position_level, exit_analysis: {
+                "position_level": position_level,
+                "operation_state": "防守态",
+                "can_new_entry": False,
+                "gate_reason": "",
+            },
+            build_market_state_machine_snapshot=lambda **kwargs: {},
+            resolve_environment_display_contract=lambda **kwargs: {
+                "position_level": kwargs["position_level"],
+                "operation_state": kwargs["final_gate"]["operation_state"],
+            },
+            calculate_price_range=lambda item: {},
+        )
+
+        self.assertEqual(captured_kwargs["recent_days"], 250)
+        self.assertEqual(captured_kwargs["min_zhongshu_klines"], 20)
+
     def test_rising_index_inside_zhongshu_does_not_force_empty_position_from_breadth_divergence(self):
         result = build_market_phase_context_contract(
             {
@@ -279,6 +316,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertEqual(result["position_level"], "二档（防守档）")
         self.assertFalse(result["final_gate"]["can_new_entry"])
         self.assertNotIn("中枢突破是最高优先级信号", result["final_gate"].get("gate_reason", ""))
+        self.assertNotIn("积极做多", result["position_reason"])
         self.assertIn("60分钟缠论确认", result["position_reason"])
         self.assertIn("未确认", result["position_reason"])
 

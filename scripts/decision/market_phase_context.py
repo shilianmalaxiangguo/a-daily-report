@@ -121,7 +121,7 @@ def build_market_phase_context_contract(
     build_market_state_machine_snapshot,
     resolve_environment_display_contract,
     calculate_price_range,
-    market_zhongshu_lookback_days=120,
+    market_zhongshu_lookback_days=250,
     market_zhongshu_min_klines=20,
 ):
     logs = []
@@ -178,6 +178,7 @@ def build_market_phase_context_contract(
     if chanlun_is_unconfirmed:
         if "三档" in str(base_position_level):
             base_position_level = "二档（防守档）"
+            base_position_reason = "日K结构仍需60分钟缠论确认，未确认前降为二档防守观察。"
 
     if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
         market_zhongshu,
