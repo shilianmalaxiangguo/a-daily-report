@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
+
 import pandas as pd
 
 from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
@@ -25,6 +28,25 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _strict_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return number
+
+
+def _safe_int(value, default=0):
+    number = _strict_float(value)
+    if number is None:
+        return int(default)
+    return int(number)
 
 
 def _failure_result(status, error=None):
@@ -113,21 +135,53 @@ def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines
     }
 
 
-def _overlap_range(structures):
-    if not structures:
+def _coerce_structure_sequence(structures):
+    if structures is None:
+        return []
+    if isinstance(structures, Mapping):
+        return [structures]
+    if isinstance(structures, (str, bytes)):
+        return []
+    try:
+        return list(structures)
+    except TypeError:
+        return []
+
+
+def _normalize_60m_structure(item):
+    if not isinstance(item, Mapping):
         return None
-    zg = min(_safe_float(item.get("zg")) for item in structures)
-    zd = max(_safe_float(item.get("zd")) for item in structures)
+    zg = _strict_float(item.get("zg"))
+    zd = _strict_float(item.get("zd"))
+    if zg is None or zd is None or zg <= zd:
+        return None
+    return {"zg": zg, "zd": zd}
+
+
+def _overlap_range(raw_structures):
+    if not raw_structures:
+        return None
+    structures = []
+    for item in raw_structures:
+        normalized = _normalize_60m_structure(item)
+        if normalized is None:
+            return None
+        structures.append(normalized)
+    zg = min(item["zg"] for item in structures)
+    zd = max(item["zd"] for item in structures)
     if zg <= zd:
         return None
     return {"zg": float(zg), "zd": float(zd)}
 
 
 def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
-    candidate = candidate or {}
-    structures = [item for item in list(chanlun_60m_structures or []) if isinstance(item, dict)]
-    count = int(candidate.get("kline_count") or 0)
-    required = int(candidate.get("required_kline_count") or DAILY_CANDIDATE_MIN_KLINES)
+    if not isinstance(candidate, Mapping):
+        candidate = {}
+    structures = _coerce_structure_sequence(chanlun_60m_structures)
+    count = max(_safe_int(candidate.get("kline_count"), default=0), 0)
+    required = _safe_int(candidate.get("required_kline_count"), default=DAILY_CANDIDATE_MIN_KLINES)
+    if required <= 0:
+        required = DAILY_CANDIDATE_MIN_KLINES
     if len(structures) < 3:
         return {
             "confirmed": False,

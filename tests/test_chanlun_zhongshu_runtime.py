@@ -27,6 +27,26 @@ def _daily_rows(start="2026-01-01", periods=30, high=105, low=95, close=100):
     return rows
 
 
+def _confirmed_daily_candidate(**overrides):
+    candidate = {
+        "start_date": "2026-01-05",
+        "end_date": "2026-02-12",
+        "kline_count": 29,
+        "required_kline_count": 20,
+        "candidate_status": "daily_cycle_confirmed_by_duration",
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _overlapping_60m_structures():
+    return [
+        {"start_time": "2026-01-05 10:30:00", "end_time": "2026-01-08 14:00:00", "zg": 10, "zd": 4},
+        {"start_time": "2026-01-09 10:30:00", "end_time": "2026-01-15 14:00:00", "zg": 9, "zd": 3},
+        {"start_time": "2026-01-16 10:30:00", "end_time": "2026-01-23 14:00:00", "zg": 8, "zd": 2},
+    ]
+
+
 class ChanlunZhongshuRuntimeTest(unittest.TestCase):
     def test_build_daily_structure_candidates_missing_date_degrades_to_invalid_payload(self):
         result = runtime.build_daily_structure_candidates([{"high": 1, "low": 0}])
@@ -170,6 +190,79 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["confirmation_status"], "insufficient_60m_history")
         self.assertFalse(result["confirmed"])
+
+    def test_confirm_daily_level_zhongshu_rejects_missing_60m_bounds(self):
+        structures = [{"zg": 10}, {"zg": 9}, {"zg": 8}]
+
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), structures)
+
+        self.assertEqual(result["confirmation_status"], "not_confirmed")
+        self.assertFalse(result["confirmed"])
+        self.assertIsNone(result["zg"])
+        self.assertIsNone(result["zd"])
+
+    def test_confirm_daily_level_zhongshu_rejects_invalid_60m_numeric_fields(self):
+        structures = [
+            {"zg": 10, "zd": "bad"},
+            {"zg": 9, "zd": 3},
+            {"zg": 8, "zd": 2},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), structures)
+
+        self.assertEqual(result["confirmation_status"], "not_confirmed")
+        self.assertFalse(result["confirmed"])
+        self.assertIsNone(result["zg"])
+        self.assertIsNone(result["zd"])
+
+    def test_confirm_daily_level_zhongshu_rejects_invalid_60m_ranges(self):
+        structures = [
+            {"zg": 10, "zd": 4},
+            {"zg": 9, "zd": 9},
+            {"zg": 8, "zd": 2},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), structures)
+
+        self.assertEqual(result["confirmation_status"], "not_confirmed")
+        self.assertFalse(result["confirmed"])
+
+    def test_confirm_daily_level_zhongshu_rejects_no_60m_overlap(self):
+        structures = [
+            {"zg": 10, "zd": 8},
+            {"zg": 7, "zd": 5},
+            {"zg": 4, "zd": 2},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), structures)
+
+        self.assertEqual(result["confirmation_status"], "not_confirmed")
+        self.assertFalse(result["confirmed"])
+        self.assertIsNone(result["zg"])
+        self.assertIsNone(result["zd"])
+
+    def test_confirm_daily_level_zhongshu_degrades_non_mapping_candidate(self):
+        result = runtime.confirm_daily_level_zhongshu("bad", _overlapping_60m_structures())
+
+        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertFalse(result["confirmed"])
+        self.assertIn("0/20", result["explanation"])
+
+    def test_confirm_daily_level_zhongshu_degrades_non_numeric_candidate_count(self):
+        candidate = _confirmed_daily_candidate(kline_count="abc", required_kline_count="abc")
+
+        result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
+
+        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertFalse(result["confirmed"])
+        self.assertIn("0/20", result["explanation"])
+
+    def test_confirm_daily_level_zhongshu_degrades_non_iterable_60m_payload(self):
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), 123)
+
+        self.assertEqual(result["confirmation_status"], "insufficient_60m_history")
+        self.assertFalse(result["confirmed"])
+        self.assertEqual(result["trend_type_count"], 0)
 
 
 if __name__ == "__main__":
