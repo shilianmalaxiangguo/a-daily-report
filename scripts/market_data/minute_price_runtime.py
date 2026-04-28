@@ -23,6 +23,8 @@ def normalize_index_minute_symbol(index_code: str) -> str:
         return "sz" + text.split(".", 1)[1]
     if text.startswith(("sh", "sz")):
         return text
+    if text.startswith("399"):
+        return "sz" + text
     if text.startswith("0"):
         return "sh" + text
     return text
@@ -107,7 +109,10 @@ def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DE
             "bars": bars,
         }
         if bars:
-            _write_cache(path, payload)
+            try:
+                _write_cache(path, payload)
+            except Exception:
+                pass
         return payload
     except Exception as error:
         return {
