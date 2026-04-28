@@ -12,6 +12,18 @@ def _append_log(logs, step, status, message, **details):
 
 def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_count, dt_count, dt_panic_threshold, main_sectors):
     is_dt_panic = dt_count >= dt_panic_threshold
+    if "形成中" in str(zs_signal_status or ""):
+        if zs_signal_type in ["跌破支撑", "暴跌至下一中枢"]:
+            return (
+                "一档（空仓档）",
+                f"当前中枢未满20根({zs_signal_status})且价格走弱，先空仓观察，不按有效日线中枢承接。",
+                is_dt_panic,
+            )
+        return (
+            "二档（防守档）",
+            f"当前中枢未满20根({zs_signal_status})，只作观察，不把形成中突破放大成三档进攻。",
+            is_dt_panic,
+        )
 
     if zs_signal_type == "大盘突破":
         if is_dt_panic:
@@ -45,6 +57,17 @@ def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_co
     if market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 10:
         return ("二档（防守档）", f"中枢内震荡({zs_signal_status})，市场温和，精选个股持有", is_dt_panic)
     return ("一档（空仓档）", f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望", is_dt_panic)
+
+
+def _chanlun_confirmation_is_unconfirmed(market_zhongshu):
+    confirmation = (market_zhongshu or {}).get("chanlun_confirmation") or {}
+    status = confirmation.get("confirmation_status")
+    return status in {
+        "forming_daily_level_zhongshu",
+        "not_confirmed",
+        "insufficient_60m_history",
+        "structure_conflict",
+    }
 
 
 def _is_index_recovery_inside_zhongshu(market_zhongshu, zs_signal_type, zt_count, dt_count, dt_panic_threshold, exit_analysis):
@@ -92,7 +115,7 @@ def build_market_phase_context_contract(
     resolve_environment_display_contract,
     calculate_price_range,
     market_zhongshu_lookback_days=120,
-    market_zhongshu_min_klines=5,
+    market_zhongshu_min_klines=20,
 ):
     logs = []
     _append_log(logs, "start", "success", "开始构建市场环境上下文", target_date=target_date)
@@ -144,6 +167,11 @@ def build_market_phase_context_contract(
         dt_panic_threshold,
         main_sectors,
     )
+    if _chanlun_confirmation_is_unconfirmed(market_zhongshu):
+        if "三档" in str(base_position_level):
+            base_position_level = "二档（防守档）"
+        base_position_reason = f"{base_position_reason}；日K结构仍需60分钟缠论确认，未确认前只作防守观察。"
+
     if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
         market_zhongshu,
         zs_signal_type,
@@ -181,9 +209,11 @@ def build_market_phase_context_contract(
     sector_name = exit_analysis.get("sector_name", "")
     if (
         zs_signal_type == "大盘突破"
+        and "形成中" not in str(zs_signal_status or "")
         and not is_dt_panic
         and not final_gate["can_new_entry"]
         and "暂无明确主线" in str(sector_name)
+        and not _chanlun_confirmation_is_unconfirmed(market_zhongshu)
     ):
         final_gate = {
             "gate_status": "放行",
