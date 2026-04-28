@@ -7,6 +7,7 @@ from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
 DAILY_STRUCTURE_LOOKBACK_DAYS = 250
 DAILY_REPORT_FOCUS_DAYS = 120
 DAILY_CANDIDATE_MIN_KLINES = 20
+REQUIRED_DAILY_COLUMNS = ("date", "high", "low")
 
 __all__ = [
     "DAILY_CANDIDATE_MIN_KLINES",
@@ -25,8 +26,28 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _failure_result(status, error=None):
+    result = {
+        "success": False,
+        "status": status,
+        "daily_structure_candidates": [],
+        "current_candidate": None,
+        "daily_lookback_count": 0,
+        "report_focus_count": 0,
+    }
+    if error:
+        result["error"] = error
+    return result
+
+
+def _coerce_daily_frame(rows):
+    if isinstance(rows, pd.DataFrame):
+        return rows.copy()
+    return pd.DataFrame(list(rows or []))
+
+
 def _prepare_daily_rows(rows, target_date=None):
-    frame = pd.DataFrame(list(rows or []))
+    frame = _coerce_daily_frame(rows)
     if frame.empty:
         return frame
     frame["date"] = frame["date"].map(normalize_kline_date_str)
@@ -65,16 +86,16 @@ def _candidate_from_slice(frame, *, min_daily_klines=DAILY_CANDIDATE_MIN_KLINES)
 
 
 def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines=DAILY_CANDIDATE_MIN_KLINES):
-    frame = _prepare_daily_rows(rows, target_date=target_date)
+    frame = _coerce_daily_frame(rows)
     if frame.empty:
-        return {
-            "success": False,
-            "status": "empty_daily_bars",
-            "daily_structure_candidates": [],
-            "current_candidate": None,
-            "daily_lookback_count": 0,
-            "report_focus_count": 0,
-        }
+        return _failure_result("empty_daily_bars")
+    missing_columns = [column for column in REQUIRED_DAILY_COLUMNS if column not in frame.columns]
+    if missing_columns:
+        missing_text = ", ".join(missing_columns)
+        return _failure_result("invalid_daily_bars", error=f"missing required columns: {missing_text}")
+    frame = _prepare_daily_rows(frame, target_date=target_date)
+    if frame.empty:
+        return _failure_result("empty_daily_bars")
     base = frame.tail(DAILY_STRUCTURE_LOOKBACK_DAYS).reset_index(drop=True)
     if len(base) < min_daily_klines:
         current_slice = base
