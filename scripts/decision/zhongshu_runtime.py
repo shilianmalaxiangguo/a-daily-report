@@ -6,12 +6,14 @@ import os
 import re
 import traceback
 
+from decision.chanlun_zhongshu_runtime import analyze_chanlun_zhongshu
 from market_data.daily_price_runtime import fetch_daily_price_bars
 from market_data.kline_dates import (
     normalize_kline_date_str,
     parse_kline_date,
     short_kline_date,
 )
+from market_data.minute_price_runtime import fetch_index_minute_bars
 
 
 class IwencaiSkillVersionError(RuntimeError):
@@ -25,6 +27,21 @@ __all__ = [
     "build_zhongshu_structure",
     "split_zhongshu_history_and_today",
 ]
+
+CONFIRMED_ZHONGSHU_MIN_KLINES = 20
+FORMING_ZHONGSHU_MIN_KLINES = 5
+
+
+def _is_forming_zhongshu_segment(segment):
+    segment = segment or {}
+    if segment.get("confirmation_status") == "forming" or bool(segment.get("is_current_forming")):
+        return True
+    kline_count = segment.get("kline_count")
+    required_count = segment.get("required_kline_count") or CONFIRMED_ZHONGSHU_MIN_KLINES
+    try:
+        return int(kline_count) < int(required_count)
+    except (TypeError, ValueError):
+        return False
 
 
 def split_zhongshu_history_and_today(df, recent_days=120, target_date=None):
@@ -54,7 +71,17 @@ def split_zhongshu_history_and_today(df, recent_days=120, target_date=None):
     return recent_df, hist_df, today_df
 
 
-def build_structure_segment(hist_df, start_idx, end_idx, segment_type, zg=None, zd=None, reason=""):
+def build_structure_segment(
+    hist_df,
+    start_idx,
+    end_idx,
+    segment_type,
+    zg=None,
+    zd=None,
+    reason="",
+    confirmation_status=None,
+    required_kline_count=None,
+):
     """构建结构分段，确保每根K线都能归属到中枢或连接段。"""
     start_row = hist_df.iloc[start_idx]
     end_row = hist_df.iloc[end_idx]
@@ -79,10 +106,20 @@ def build_structure_segment(hist_df, start_idx, end_idx, segment_type, zg=None, 
     if segment_type == "zhongshu":
         segment["zg"] = float(zg)
         segment["zd"] = float(zd)
+        segment["confirmation_status"] = confirmation_status or "confirmed"
+        if required_kline_count is not None:
+            segment["required_kline_count"] = int(required_kline_count)
+        if segment["confirmation_status"] == "forming":
+            segment["is_current_forming"] = True
     return segment
 
 
-def build_zhongshu_structure(hist_df, min_zhongshu_klines=5, min_overlap_bars=3):
+def build_zhongshu_structure(
+    hist_df,
+    min_zhongshu_klines=CONFIRMED_ZHONGSHU_MIN_KLINES,
+    min_overlap_bars=3,
+    min_current_zhongshu_klines=FORMING_ZHONGSHU_MIN_KLINES,
+):
     """沿用连续重叠分段识别中枢，并保留全部非中枢K线为连接段。"""
     del min_overlap_bars
     if hist_df is None or len(hist_df) == 0:
@@ -107,7 +144,8 @@ def build_zhongshu_structure(hist_df, min_zhongshu_klines=5, min_overlap_bars=3)
             continue
 
         run_end = idx - 1
-        segment_type = "zhongshu" if (run_end - run_start + 1) >= min_zhongshu_klines else "connector"
+        run_count = run_end - run_start + 1
+        segment_type = "zhongshu" if run_count >= min_zhongshu_klines else "connector"
         segment_reason = (
             "连续重叠区间达到确认长度，识别为中枢"
             if segment_type == "zhongshu"
@@ -121,6 +159,8 @@ def build_zhongshu_structure(hist_df, min_zhongshu_klines=5, min_overlap_bars=3)
             zg=run_high if segment_type == "zhongshu" else None,
             zd=run_low if segment_type == "zhongshu" else None,
             reason=segment_reason,
+            confirmation_status="confirmed" if segment_type == "zhongshu" else None,
+            required_kline_count=min_zhongshu_klines if segment_type == "zhongshu" else None,
         )
         structure_segments.append(segment)
         if segment_type == "zhongshu":
@@ -131,12 +171,22 @@ def build_zhongshu_structure(hist_df, min_zhongshu_klines=5, min_overlap_bars=3)
         run_low = float(row["low"])
 
     run_end = total - 1
-    segment_type = "zhongshu" if (run_end - run_start + 1) >= min_zhongshu_klines else "connector"
-    segment_reason = (
-        "连续重叠区间达到确认长度，识别为中枢"
-        if segment_type == "zhongshu"
-        else "历史尾部尚未达到确认中枢长度，作为连接段保留"
-    )
+    run_count = run_end - run_start + 1
+    confirmation_status = None
+    if run_count >= min_zhongshu_klines:
+        segment_type = "zhongshu"
+        confirmation_status = "confirmed"
+        segment_reason = "连续重叠区间达到确认长度，识别为中枢"
+    elif run_count >= min_current_zhongshu_klines:
+        segment_type = "zhongshu"
+        confirmation_status = "forming"
+        segment_reason = (
+            f"最近当前中枢形成中，{run_count}/{min_zhongshu_klines}根K线，"
+            "未满确认长度，只作观察"
+        )
+    else:
+        segment_type = "connector"
+        segment_reason = "历史尾部尚未达到确认中枢长度，作为连接段保留"
     segment = build_structure_segment(
         hist_df,
         run_start,
@@ -145,6 +195,8 @@ def build_zhongshu_structure(hist_df, min_zhongshu_klines=5, min_overlap_bars=3)
         zg=run_high if segment_type == "zhongshu" else None,
         zd=run_low if segment_type == "zhongshu" else None,
         reason=segment_reason,
+        confirmation_status=confirmation_status,
+        required_kline_count=min_zhongshu_klines if segment_type == "zhongshu" else None,
     )
     structure_segments.append(segment)
     if segment_type == "zhongshu":
@@ -398,8 +450,10 @@ def build_zhongshu_ascii_diagram(structure_segments, today_date, today_price, si
     labeled_rows.append("          " + "".join(tag_row).rstrip())
     labeled_rows.append("          " + "".join(date_row).rstrip())
     if latest_zhongshu_segment:
+        latest_is_forming = _is_forming_zhongshu_segment(latest_zhongshu_segment)
+        latest_label = "当前形成中结构" if latest_is_forming else "最新确认结构中枢"
         labeled_rows.append(
-            "          最新确认结构中枢: "
+            f"          {latest_label}: "
             f"{short_kline_date(latest_zhongshu_segment['start_date'])}->{short_kline_date(latest_zhongshu_segment['end_date'])} "
             f"ZG={latest_zg:.2f} / ZD={latest_zd:.2f}"
         )
@@ -555,10 +609,12 @@ def _load_baostock_index_dataframe(index_code, recent_days, bs_module=None):
 def analyze_market_zhongshu(
     index_code="sh000001",
     recent_days=120,
-    min_zhongshu_klines=5,
+    min_zhongshu_klines=CONFIRMED_ZHONGSHU_MIN_KLINES,
     target_date=None,
     *,
     fetch_dataframe=None,
+    fetch_minute_bars=None,
+    use_chanlun_confirmation=True,
     urlopen_fn=None,
     bs_module=None,
     print_fn=print,
@@ -626,6 +682,9 @@ def analyze_market_zhongshu(
         if current:
             zg = current["zg"]
             zd = current["zd"]
+            is_current_forming = current.get("confirmation_status") == "forming"
+            current_kline_count = int(current.get("kline_count") or 0)
+            required_kline_count = int(current.get("required_kline_count") or min_zhongshu_klines)
             dist_to_zg = (today_price - zg) / zg
             dist_to_zd = (today_price - zd) / zd
 
@@ -667,6 +726,38 @@ def analyze_market_zhongshu(
                 signal["position_level"] = "二档防守档（30%）"
                 signal["action"] = "精选个股"
 
+            if is_current_forming:
+                original_status = signal.get("status", "待确认")
+                signal["structure_confirmation"] = "forming"
+                signal["current_kline_count"] = current_kline_count
+                signal["required_kline_count"] = required_kline_count
+                signal["status"] = (
+                    f"⏳ 当前中枢形成中（{current_kline_count}/{required_kline_count}，"
+                    f"原信号：{original_status}，仅观察）"
+                )
+                signal["action"] = "只观察，等20根确认或60分钟确认"
+
+        chanlun_result = {}
+        if use_chanlun_confirmation:
+            daily_rows = hist_df.to_dict("records") + [today_df.to_dict()]
+            chanlun_result = analyze_chanlun_zhongshu(
+                daily_rows=daily_rows,
+                target_date=target_date,
+                fetch_minute_bars=fetch_minute_bars or fetch_index_minute_bars,
+                index_code=index_code,
+                minute_period="60",
+                min_daily_klines=min_zhongshu_klines,
+            )
+            confirmation = chanlun_result.get("chanlun_confirmation") or {}
+            current_candidate = chanlun_result.get("current_candidate") or {}
+            if confirmation.get("confirmation_status") in ("forming_daily_level_zhongshu", "insufficient_60m_history"):
+                signal["structure_confirmation"] = confirmation.get("confirmation_status")
+                signal["status"] = (
+                    f"⏳ 日K候选形成中（{current_candidate.get('kline_count', 0)}/"
+                    f"{current_candidate.get('required_kline_count', min_zhongshu_klines)}，"
+                    f"60分钟确认：{confirmation.get('confirmation_status')}）"
+                )
+
         print_fn(f"[大盘结构] 数据源: {data_source}，识别到{len(zhongshu_list)}个结构中枢，当前价格{today_price:.2f}")
         return {
             "zhongshu_list": zhongshu_list,
@@ -678,6 +769,10 @@ def analyze_market_zhongshu(
             "signal": signal,
             "success": True,
             "data_source": data_source,
+            "daily_structure_candidates": chanlun_result.get("daily_structure_candidates", []),
+            "daily_structure_current": chanlun_result.get("current_candidate"),
+            "chanlun_60m_structures": chanlun_result.get("chanlun_60m_structures", []),
+            "chanlun_confirmation": chanlun_result.get("chanlun_confirmation", {}),
         }
     except Exception as error:
         print_fn(f"大盘结构分析失败: {error}")
