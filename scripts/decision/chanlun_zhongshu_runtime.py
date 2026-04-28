@@ -14,6 +14,7 @@ __all__ = [
     "DAILY_REPORT_FOCUS_DAYS",
     "DAILY_STRUCTURE_LOOKBACK_DAYS",
     "build_daily_structure_candidates",
+    "confirm_daily_level_zhongshu",
 ]
 
 
@@ -109,4 +110,57 @@ def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines
         "current_candidate": current,
         "daily_lookback_count": int(len(base)),
         "report_focus_count": min(int(len(base)), DAILY_REPORT_FOCUS_DAYS),
+    }
+
+
+def _overlap_range(structures):
+    if not structures:
+        return None
+    zg = min(_safe_float(item.get("zg")) for item in structures)
+    zd = max(_safe_float(item.get("zd")) for item in structures)
+    if zg <= zd:
+        return None
+    return {"zg": float(zg), "zd": float(zd)}
+
+
+def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
+    candidate = candidate or {}
+    structures = [item for item in list(chanlun_60m_structures or []) if isinstance(item, dict)]
+    count = int(candidate.get("kline_count") or 0)
+    required = int(candidate.get("required_kline_count") or DAILY_CANDIDATE_MIN_KLINES)
+    if len(structures) < 3:
+        return {
+            "confirmed": False,
+            "confirmation_status": "insufficient_60m_history",
+            "trend_type_count": len(structures),
+            "zg": None,
+            "zd": None,
+            "explanation": "60分钟走势类型不足3段，不能确认日线级别缠论中枢。",
+        }
+    overlap = _overlap_range(structures[:3])
+    if not overlap:
+        return {
+            "confirmed": False,
+            "confirmation_status": "not_confirmed",
+            "trend_type_count": len(structures[:3]),
+            "zg": None,
+            "zd": None,
+            "explanation": "前三个60分钟走势类型没有重叠区间。",
+        }
+    if count < required:
+        return {
+            "confirmed": False,
+            "confirmation_status": "forming_daily_level_zhongshu",
+            "trend_type_count": 3,
+            "zg": overlap["zg"],
+            "zd": overlap["zd"],
+            "explanation": f"日K候选仍为{count}/{required}，60分钟结构只支持形成中，不能升级为确认中枢。",
+        }
+    return {
+        "confirmed": True,
+        "confirmation_status": "confirmed_daily_level_zhongshu",
+        "trend_type_count": 3,
+        "zg": overlap["zg"],
+        "zd": overlap["zd"],
+        "explanation": "日K候选满足周期长度，且60分钟前三段走势类型存在重叠区间。",
     }

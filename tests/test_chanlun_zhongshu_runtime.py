@@ -112,6 +112,64 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(current["end_date"], "2026-04-27")
         self.assertEqual(current["kline_count"], 10)
 
+    def test_confirm_daily_level_zhongshu_requires_three_60m_trend_overlaps(self):
+        candidate = {
+            "start_date": "2026-01-05",
+            "end_date": "2026-02-12",
+            "kline_count": 29,
+            "required_kline_count": 20,
+            "candidate_status": "daily_cycle_confirmed_by_duration",
+            "zd_candidate": 3983.58,
+            "zg_candidate": 4190.87,
+        }
+        structures = [
+            {"start_time": "2026-01-05 10:30:00", "end_time": "2026-01-08 14:00:00", "zg": 4160, "zd": 4020},
+            {"start_time": "2026-01-09 10:30:00", "end_time": "2026-01-15 14:00:00", "zg": 4140, "zd": 4000},
+            {"start_time": "2026-01-16 10:30:00", "end_time": "2026-01-23 14:00:00", "zg": 4120, "zd": 4010},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(candidate, structures)
+
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertEqual(result["trend_type_count"], 3)
+        self.assertEqual(result["zd"], 4020.0)
+        self.assertEqual(result["zg"], 4120.0)
+
+    def test_confirm_daily_level_zhongshu_keeps_9_day_candidate_forming_even_with_60m_overlap(self):
+        candidate = {
+            "start_date": "2026-04-14",
+            "end_date": "2026-04-24",
+            "kline_count": 9,
+            "required_kline_count": 20,
+            "candidate_status": "daily_candidate_forming",
+            "zd_candidate": 3992.41,
+            "zg_candidate": 4114.84,
+        }
+        structures = [
+            {"start_time": "2026-04-14 10:30:00", "end_time": "2026-04-16 14:00:00", "zg": 4100, "zd": 4000},
+            {"start_time": "2026-04-17 10:30:00", "end_time": "2026-04-21 14:00:00", "zg": 4090, "zd": 4010},
+            {"start_time": "2026-04-22 10:30:00", "end_time": "2026-04-24 14:00:00", "zg": 4080, "zd": 4020},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(candidate, structures)
+
+        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertIn("9/20", result["explanation"])
+
+    def test_confirm_daily_level_zhongshu_reports_insufficient_60m_history(self):
+        candidate = {
+            "start_date": "2026-01-05",
+            "end_date": "2026-02-12",
+            "kline_count": 29,
+            "required_kline_count": 20,
+            "candidate_status": "daily_cycle_confirmed_by_duration",
+        }
+
+        result = runtime.confirm_daily_level_zhongshu(candidate, [])
+
+        self.assertEqual(result["confirmation_status"], "insufficient_60m_history")
+        self.assertFalse(result["confirmed"])
+
 
 if __name__ == "__main__":
     unittest.main()
