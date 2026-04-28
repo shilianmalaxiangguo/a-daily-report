@@ -317,6 +317,28 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["trend_type_count"], 0)
 
+    def test_analyze_chanlun_zhongshu_returns_daily_candidate_and_confirmation(self):
+        daily_rows = _daily_rows(start="2026-04-14", periods=10, high=4114.84, low=3992.41, close=4050)
+        minute_payload = {
+            "success": True,
+            "bars": [
+                {"datetime": "2026-04-14 10:30:00", "date": "2026-04-14", "high": 4100, "low": 4000, "close": 4050},
+                {"datetime": "2026-04-16 14:00:00", "date": "2026-04-16", "high": 4090, "low": 4010, "close": 4040},
+                {"datetime": "2026-04-21 14:00:00", "date": "2026-04-21", "high": 4080, "low": 4020, "close": 4050},
+            ],
+        }
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=daily_rows,
+            target_date="2026-04-27",
+            fetch_minute_bars=lambda **kwargs: minute_payload,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["current_candidate"]["candidate_status"], "daily_candidate_forming")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertEqual(result["current_candidate"]["kline_count"], 9)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,9 @@ __all__ = [
     "DAILY_CANDIDATE_MIN_KLINES",
     "DAILY_REPORT_FOCUS_DAYS",
     "DAILY_STRUCTURE_LOOKBACK_DAYS",
+    "analyze_chanlun_zhongshu",
     "build_daily_structure_candidates",
+    "build_chanlun_60m_structures",
     "confirm_daily_level_zhongshu",
 ]
 
@@ -217,4 +219,69 @@ def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
         "zg": overlap["zg"],
         "zd": overlap["zd"],
         "explanation": "日K候选满足周期长度，且60分钟前三段走势类型存在重叠区间。",
+    }
+
+
+def build_chanlun_60m_structures(minute_bars):
+    bars = list(minute_bars or [])
+    if not bars:
+        return []
+    if len(bars) < 3:
+        return []
+    structures = []
+    chunk_size = max(1, len(bars) // 3)
+    for index in range(3):
+        chunk = bars[index * chunk_size : (index + 1) * chunk_size] if index < 2 else bars[index * chunk_size :]
+        if not chunk:
+            continue
+        high = max(_safe_float(item.get("high")) for item in chunk)
+        low = min(_safe_float(item.get("low")) for item in chunk)
+        structures.append(
+            {
+                "start_time": chunk[0].get("datetime"),
+                "end_time": chunk[-1].get("datetime"),
+                "zg": float(high),
+                "zd": float(low),
+                "direction": "range",
+                "status": "subordinate_trend_type",
+            }
+        )
+    return structures
+
+
+def analyze_chanlun_zhongshu(
+    *,
+    daily_rows,
+    target_date=None,
+    fetch_minute_bars,
+    index_code="sh.000001",
+    minute_period="60",
+    min_daily_klines=DAILY_CANDIDATE_MIN_KLINES,
+):
+    daily_result = build_daily_structure_candidates(
+        daily_rows,
+        target_date=target_date,
+        min_daily_klines=min_daily_klines,
+    )
+    if not daily_result.get("success"):
+        return {
+            "success": False,
+            "status": daily_result.get("status", "daily_candidate_failed"),
+            "daily_structure_candidates": [],
+            "current_candidate": None,
+            "chanlun_60m_structures": [],
+            "chanlun_confirmation": {"confirmation_status": "not_confirmed", "confirmed": False},
+        }
+    minute_result = fetch_minute_bars(index_code=index_code, period=minute_period)
+    minute_bars = minute_result.get("bars") if isinstance(minute_result, dict) else []
+    structures = build_chanlun_60m_structures(minute_bars)
+    confirmation = confirm_daily_level_zhongshu(daily_result.get("current_candidate"), structures)
+    return {
+        "success": True,
+        "status": "success",
+        "daily_structure_candidates": daily_result.get("daily_structure_candidates", []),
+        "current_candidate": daily_result.get("current_candidate"),
+        "chanlun_60m_structures": structures,
+        "chanlun_confirmation": confirmation,
+        "minute_source_status": minute_result.get("status") if isinstance(minute_result, dict) else "unknown",
     }
