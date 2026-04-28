@@ -751,12 +751,19 @@ def analyze_market_zhongshu(
             confirmation = chanlun_result.get("chanlun_confirmation") or {}
             current_candidate = chanlun_result.get("current_candidate") or {}
             if confirmation.get("confirmation_status") in ("forming_daily_level_zhongshu", "insufficient_60m_history"):
-                signal["structure_confirmation"] = confirmation.get("confirmation_status")
+                confirmation_status = confirmation.get("confirmation_status")
+                signal["structure_confirmation"] = confirmation_status
                 signal["status"] = (
                     f"⏳ 日K候选形成中（{current_candidate.get('kline_count', 0)}/"
                     f"{current_candidate.get('required_kline_count', min_zhongshu_klines)}，"
-                    f"60分钟确认：{confirmation.get('confirmation_status')}）"
+                    f"60分钟确认：{confirmation_status}）"
                 )
+                signal["signal_type"] = "中枢确认待观察"
+                signal["position_level"] = "观察档（不加仓）"
+                if confirmation_status == "insufficient_60m_history":
+                    signal["action"] = "只观察，等60分钟确认"
+                else:
+                    signal["action"] = "只观察，等20根确认或60分钟确认"
 
         print_fn(f"[大盘结构] 数据源: {data_source}，识别到{len(zhongshu_list)}个结构中枢，当前价格{today_price:.2f}")
         return {

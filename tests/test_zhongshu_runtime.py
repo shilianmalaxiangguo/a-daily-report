@@ -70,6 +70,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         result = analyze_market_zhongshu(
             target_date="2026-04-23",
             fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            use_chanlun_confirmation=False,
             print_fn=lambda *args, **kwargs: None,
         )
 
@@ -130,6 +131,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         result = analyze_market_zhongshu(
             target_date="2026-04-22",
             fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            use_chanlun_confirmation=False,
             print_fn=lambda *args, **kwargs: None,
         )
 
@@ -172,6 +174,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
                 index_code="sh000001",
                 recent_days=120,
                 target_date="2026-04-27",
+                use_chanlun_confirmation=False,
                 print_fn=lambda *args, **kwargs: None,
             )
 
@@ -200,6 +203,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
             result = analyze_market_zhongshu(
                 index_code="sh000001",
                 target_date="2026-04-22",
+                use_chanlun_confirmation=False,
                 print_fn=lambda *args, **kwargs: None,
             )
 
@@ -217,12 +221,71 @@ class ZhongshuRuntimeTest(unittest.TestCase):
                 index_code="sh000001",
                 target_date="2026-04-22",
                 urlopen_fn=_raise_skill_version_low,
+                use_chanlun_confirmation=False,
                 print_fn=logs.append,
             )
 
         self.assertFalse(result["success"])
         self.assertTrue(any("Skill 版本过低" in line for line in logs))
         self.assertFalse(any("HTTP Error 401" in line for line in logs))
+
+    def test_analyze_market_zhongshu_opt_out_skips_default_minute_fetch(self):
+        df = pd.DataFrame(
+            [
+                {"date": "2026-04-15", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1},
+                {"date": "2026-04-16", "open": 100, "high": 104, "low": 96, "close": 101, "volume": 1},
+                {"date": "2026-04-17", "open": 101, "high": 103, "low": 97, "close": 100, "volume": 1},
+                {"date": "2026-04-20", "open": 100, "high": 104, "low": 96, "close": 102, "volume": 1},
+                {"date": "2026-04-21", "open": 101, "high": 105, "low": 95, "close": 103, "volume": 1},
+                {"date": "2026-04-22", "open": 103, "high": 108, "low": 102, "close": 107, "volume": 1},
+            ]
+        )
+
+        with patch.object(zhongshu_runtime, "fetch_index_minute_bars", side_effect=AssertionError("minute fetch called")) as minute_mock:
+            result = analyze_market_zhongshu(
+                target_date="2026-04-22",
+                fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+                use_chanlun_confirmation=False,
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["daily_structure_candidates"], [])
+        self.assertIsNone(result["daily_structure_current"])
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertEqual(result["chanlun_confirmation"], {})
+        minute_mock.assert_not_called()
+
+    def test_analyze_market_zhongshu_insufficient_60m_history_keeps_action_conservative(self):
+        dates = pd.bdate_range(end="2026-04-27", periods=21)
+        rows = []
+        for index, date in enumerate(dates):
+            is_today = index == len(dates) - 1
+            rows.append(
+                {
+                    "date": date.strftime("%Y-%m-%d"),
+                    "open": 4050,
+                    "high": 4125 if is_today else 4114.84,
+                    "low": 4100 if is_today else 3992.41,
+                    "close": 4120 if is_today else 4050,
+                    "volume": 1,
+                    "amount": 1,
+                }
+            )
+        df = pd.DataFrame(rows)
+
+        result = analyze_market_zhongshu(
+            target_date="2026-04-27",
+            fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            fetch_minute_bars=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("minute unavailable")),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertIn("60分钟确认", result["signal"]["status"])
+        self.assertEqual(result["signal"]["action"], "只观察，等60分钟确认")
+        self.assertNotEqual(result["signal"]["action"], "积极做多")
 
     def test_analyze_market_zhongshu_exposes_chanlun_confirmation_contract(self):
         daily_rows = [
