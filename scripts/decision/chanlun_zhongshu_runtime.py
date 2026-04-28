@@ -150,6 +150,19 @@ def _coerce_structure_sequence(structures):
         return []
 
 
+def _coerce_minute_bar_sequence(minute_bars):
+    if minute_bars is None:
+        return []
+    if isinstance(minute_bars, Mapping):
+        return [minute_bars]
+    if isinstance(minute_bars, (str, bytes)):
+        return []
+    try:
+        return list(minute_bars)
+    except TypeError:
+        return []
+
+
 def _normalize_60m_structure(item):
     if not isinstance(item, Mapping):
         return None
@@ -223,23 +236,36 @@ def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
 
 
 def build_chanlun_60m_structures(minute_bars):
-    bars = list(minute_bars or [])
+    bars = _coerce_minute_bar_sequence(minute_bars)
     if not bars:
         return []
     if len(bars) < 3:
         return []
+    normalized_bars = []
+    for item in bars:
+        if not isinstance(item, Mapping):
+            return []
+        high = _strict_float(item.get("high"))
+        low = _strict_float(item.get("low"))
+        if high is None or low is None or high <= low:
+            return []
+        normalized_bars.append({"raw": item, "high": high, "low": low})
     structures = []
-    chunk_size = max(1, len(bars) // 3)
+    chunk_size = max(1, len(normalized_bars) // 3)
     for index in range(3):
-        chunk = bars[index * chunk_size : (index + 1) * chunk_size] if index < 2 else bars[index * chunk_size :]
+        chunk = (
+            normalized_bars[index * chunk_size : (index + 1) * chunk_size]
+            if index < 2
+            else normalized_bars[index * chunk_size :]
+        )
         if not chunk:
             continue
-        high = max(_safe_float(item.get("high")) for item in chunk)
-        low = min(_safe_float(item.get("low")) for item in chunk)
+        high = max(item["high"] for item in chunk)
+        low = min(item["low"] for item in chunk)
         structures.append(
             {
-                "start_time": chunk[0].get("datetime"),
-                "end_time": chunk[-1].get("datetime"),
+                "start_time": chunk[0]["raw"].get("datetime"),
+                "end_time": chunk[-1]["raw"].get("datetime"),
                 "zg": float(high),
                 "zd": float(low),
                 "direction": "range",
@@ -272,8 +298,13 @@ def analyze_chanlun_zhongshu(
             "chanlun_60m_structures": [],
             "chanlun_confirmation": {"confirmation_status": "not_confirmed", "confirmed": False},
         }
-    minute_result = fetch_minute_bars(index_code=index_code, period=minute_period)
-    minute_bars = minute_result.get("bars") if isinstance(minute_result, dict) else []
+    try:
+        minute_result = fetch_minute_bars(index_code=index_code, period=minute_period)
+    except Exception as exc:
+        minute_result = {"status": "minute_fetch_failed", "error": str(exc), "bars": []}
+    if not isinstance(minute_result, dict):
+        minute_result = {"status": "invalid_minute_payload", "error": "minute fetch returned non-dict payload", "bars": []}
+    minute_bars = minute_result.get("bars")
     structures = build_chanlun_60m_structures(minute_bars)
     confirmation = confirm_daily_level_zhongshu(daily_result.get("current_candidate"), structures)
     return {
@@ -284,4 +315,5 @@ def analyze_chanlun_zhongshu(
         "chanlun_60m_structures": structures,
         "chanlun_confirmation": confirmation,
         "minute_source_status": minute_result.get("status") if isinstance(minute_result, dict) else "unknown",
+        "minute_source_error": minute_result.get("error") if isinstance(minute_result, dict) else None,
     }

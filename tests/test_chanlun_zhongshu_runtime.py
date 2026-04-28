@@ -51,6 +51,10 @@ def _pandas_bool(value):
     return pd.Series([value], dtype="bool").iloc[0]
 
 
+def _confirmed_daily_rows():
+    return _daily_rows(start="2026-01-05", periods=20, high=4190.87, low=3983.58, close=4080)
+
+
 class ChanlunZhongshuRuntimeTest(unittest.TestCase):
     def test_build_daily_structure_candidates_missing_date_degrades_to_invalid_payload(self):
         result = runtime.build_daily_structure_candidates([{"high": 1, "low": 0}])
@@ -338,6 +342,106 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(result["current_candidate"]["candidate_status"], "daily_candidate_forming")
         self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "forming_daily_level_zhongshu")
         self.assertEqual(result["current_candidate"]["kline_count"], 9)
+
+    def test_analyze_chanlun_zhongshu_degrades_when_minute_fetch_raises(self):
+        def fetch_minute_bars(**kwargs):
+            raise RuntimeError("network down")
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=fetch_minute_bars,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["minute_source_status"], "minute_fetch_failed")
+        self.assertIn("network down", result["minute_source_error"])
+
+    def test_analyze_chanlun_zhongshu_rejects_missing_minute_lows(self):
+        minute_payload = {
+            "success": True,
+            "bars": [
+                {"datetime": "2026-01-05 10:30:00", "high": 4100},
+                {"datetime": "2026-01-09 14:00:00", "high": 4090},
+                {"datetime": "2026-01-16 14:00:00", "high": 4080},
+            ],
+        }
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=lambda **kwargs: minute_payload,
+        )
+
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+
+    def test_analyze_chanlun_zhongshu_rejects_boolean_minute_bounds(self):
+        minute_payload = {
+            "success": True,
+            "bars": [
+                {"datetime": "2026-01-05 10:30:00", "high": True, "low": False},
+                {"datetime": "2026-01-09 14:00:00", "high": True, "low": False},
+                {"datetime": "2026-01-16 14:00:00", "high": True, "low": False},
+            ],
+        }
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=lambda **kwargs: minute_payload,
+        )
+
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+
+    def test_analyze_chanlun_zhongshu_degrades_non_mapping_minute_bars(self):
+        minute_payload = {
+            "success": True,
+            "bars": [
+                {"datetime": "2026-01-05 10:30:00", "high": 4100, "low": 4000},
+                "bad bar",
+                {"datetime": "2026-01-16 14:00:00", "high": 4080, "low": 4020},
+            ],
+        }
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=lambda **kwargs: minute_payload,
+        )
+
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+
+    def test_analyze_chanlun_zhongshu_degrades_non_iterable_minute_bars(self):
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=lambda **kwargs: {"success": True, "bars": 123},
+        )
+
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+
+    def test_analyze_chanlun_zhongshu_degrades_non_dict_minute_fetch_result(self):
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=lambda **kwargs: ["bad payload"],
+        )
+
+        self.assertEqual(result["chanlun_60m_structures"], [])
+        self.assertFalse(result["chanlun_confirmation"]["confirmed"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["minute_source_status"], "invalid_minute_payload")
 
 
 if __name__ == "__main__":
