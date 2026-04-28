@@ -215,6 +215,20 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertIsNone(result["zg"])
         self.assertIsNone(result["zd"])
 
+    def test_confirm_daily_level_zhongshu_rejects_boolean_60m_numeric_fields(self):
+        structures = [
+            {"zg": True, "zd": False},
+            {"zg": True, "zd": False},
+            {"zg": True, "zd": False},
+        ]
+
+        result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), structures)
+
+        self.assertEqual(result["confirmation_status"], "not_confirmed")
+        self.assertFalse(result["confirmed"])
+        self.assertIsNone(result["zg"])
+        self.assertIsNone(result["zd"])
+
     def test_confirm_daily_level_zhongshu_rejects_invalid_60m_ranges(self):
         structures = [
             {"zg": 10, "zd": 4},
@@ -250,6 +264,15 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
 
     def test_confirm_daily_level_zhongshu_degrades_non_numeric_candidate_count(self):
         candidate = _confirmed_daily_candidate(kline_count="abc", required_kline_count="abc")
+
+        result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
+
+        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertFalse(result["confirmed"])
+        self.assertIn("0/20", result["explanation"])
+
+    def test_confirm_daily_level_zhongshu_degrades_boolean_candidate_counts(self):
+        candidate = _confirmed_daily_candidate(kline_count=True, required_kline_count=False)
 
         result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
 

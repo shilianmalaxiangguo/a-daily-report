@@ -32,7 +32,7 @@ def _safe_float(value, default=0.0):
 
 def _strict_float(value):
     try:
-        if value in (None, ""):
+        if isinstance(value, bool) or value in (None, ""):
             return None
         number = float(value)
     except (TypeError, ValueError):
