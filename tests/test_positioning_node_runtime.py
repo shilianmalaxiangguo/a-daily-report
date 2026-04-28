@@ -47,6 +47,50 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("**ASCII结构图**", rendered)
         self.assertNotIn("**识别出 1 个结构中枢**", rendered)
 
+    def test_render_positioning_section_splits_daily_box_and_chanlun_confirmation(self):
+        lines = render_positioning_section(
+            {
+                "enabled_node_keys": ["structure_range", "zhongshu_table"],
+                "compact": False,
+                "market_zhongshu": {
+                    "success": True,
+                    "daily_structure_current": {
+                        "start_date": "2026-04-14",
+                        "end_date": "2026-04-24",
+                        "kline_count": 9,
+                        "required_kline_count": 20,
+                        "zd_candidate": 3992.41,
+                        "zg_candidate": 4114.84,
+                        "candidate_status": "daily_candidate_forming",
+                    },
+                    "chanlun_confirmation": {
+                        "confirmation_status": "forming_daily_level_zhongshu",
+                        "confirmed": False,
+                        "explanation": "日K候选仍为9/20，60分钟结构只支持形成中。",
+                    },
+                    "current_zhongshu": {},
+                    "latest_structure_segment": {},
+                    "structure_segments": [],
+                    "zhongshu_list": [],
+                    "signal": {
+                        "status": "⏳ 日K候选形成中（9/20，60分钟确认：forming_daily_level_zhongshu）",
+                        "signal_type": "按个股信号操作",
+                        "zd": 3992.41,
+                        "zg": 4114.84,
+                        "today_price": 4086.34,
+                        "dist_to_zg": -0.0069,
+                        "comparison_result": "震荡",
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("日K结构箱体", rendered)
+        self.assertIn("60分钟缠论确认", rendered)
+        self.assertIn("9/20", rendered)
+        self.assertNotIn("最近确认中枢", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

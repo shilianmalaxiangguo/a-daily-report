@@ -338,6 +338,33 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(row["replacement"], "接替前主线")
         self.assertIn("还未进入攻击段", row["interpretation"])
 
+    def test_appendix_b_renders_daily_candidate_not_confirmed_zhongshu(self):
+        rows = report_runtime._derive_appendix_pivot_mainline_history(
+            current_mainline_history_record={"date": "2026-04-27", "primary_mainline": "半导体"},
+            data={
+                "target_date": "2026-04-27",
+                "market_zhongshu": {
+                    "success": True,
+                    "daily_structure_current": {
+                        "start_date": "2026-04-14",
+                        "end_date": "2026-04-24",
+                        "kline_count": 9,
+                        "required_kline_count": 20,
+                        "zd_candidate": 3992.41,
+                        "zg_candidate": 4114.84,
+                        "candidate_status": "daily_candidate_forming",
+                    },
+                    "chanlun_confirmation": {
+                        "confirmation_status": "forming_daily_level_zhongshu",
+                        "confirmed": False,
+                    },
+                },
+            },
+        )
+
+        self.assertEqual(rows[0]["pivot_level"], "日K结构候选（9/20）")
+        self.assertNotEqual(rows[0]["pivot_level"], "日线中枢")
+
     def test_get_or_build_calendar_ai_context_reuses_shared_runtime_cache(self):
         calls = []
         original_cache = report_runtime.REPORT_RUNTIME_CACHE

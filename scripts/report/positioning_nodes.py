@@ -16,7 +16,43 @@ def _success(context):
 
 def _has_current_signal(context):
     market_zhongshu = context.get("market_zhongshu") or {}
-    return bool(market_zhongshu.get("current_zhongshu")) and bool(market_zhongshu.get("signal"))
+    has_structure = bool(market_zhongshu.get("current_zhongshu")) or bool(market_zhongshu.get("daily_structure_current"))
+    return has_structure and bool(market_zhongshu.get("signal"))
+
+
+def _format_price(value):
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _daily_structure_ratio(daily_structure):
+    count = daily_structure.get("kline_count")
+    required = daily_structure.get("required_kline_count")
+    if count is None and required is None:
+        return "-"
+    if required is None:
+        return str(count)
+    return f"{count or 0}/{required}"
+
+
+def _daily_structure_range_text(daily_structure):
+    start_date = daily_structure.get("start_date") or "-"
+    end_date = daily_structure.get("end_date") or "-"
+    return f"{start_date}~{end_date}"
+
+
+def _daily_candidate_range_text(daily_structure):
+    zd = daily_structure.get("zd_candidate")
+    zg = daily_structure.get("zg_candidate")
+    return f"[{_format_price(zd)}, {_format_price(zg)}]"
+
+
+def _chanlun_confirmation_text(confirmation):
+    status = confirmation.get("confirmation_status") or "待确认"
+    explanation = str(confirmation.get("explanation") or "").strip()
+    return f"{status}；{explanation}" if explanation else status
 
 
 def _environment_emoji(display_position_level):
@@ -77,6 +113,18 @@ def build_positioning_structure_range_node(context, node_meta=None, node_lookup=
         return {"lines": [], "exports": {}, "module_logs": []}
     market_zhongshu = context.get("market_zhongshu") or {}
     signal = market_zhongshu.get("signal") or {}
+    daily_structure = market_zhongshu.get("daily_structure_current") or {}
+    if daily_structure:
+        confirmation = market_zhongshu.get("chanlun_confirmation") or {}
+        lines = [
+            f"- **日K结构箱体**：{_daily_structure_range_text(daily_structure)}（{_daily_structure_ratio(daily_structure)}）",
+            f"- **日K候选区间**：{_daily_candidate_range_text(daily_structure)}",
+            f"- **60分钟缠论确认**：{_chanlun_confirmation_text(confirmation)}",
+            f"- **今日收盘**：{signal.get('today_price', 0):.2f}",
+            f"- **相对ZG**：{float(signal.get('dist_to_zg', 0) or 0) * 100:+.2f}%",
+            "",
+        ]
+        return {"lines": lines, "exports": {}, "module_logs": []}
     current = market_zhongshu.get("current_zhongshu") or {}
     latest_structure_segment = market_zhongshu.get("latest_structure_segment") or {}
     zone_label = "最近确认结构区间" if latest_structure_segment.get("segment_type") == "connector" else "当前结构区间"
@@ -134,6 +182,22 @@ def build_positioning_zhongshu_table_node(context, node_meta=None, node_lookup=N
     if not (_success(context) and _has_current_signal(context) and not _compact(context)):
         return {"lines": [], "exports": {}, "module_logs": []}
     market_zhongshu = context.get("market_zhongshu") or {}
+    daily_structure = market_zhongshu.get("daily_structure_current") or {}
+    if daily_structure:
+        confirmation = market_zhongshu.get("chanlun_confirmation") or {}
+        lines = [
+            "**日K结构候选与缠论确认**：",
+            "| 项目 | 时间/区间 | ZG | ZD | 状态 |",
+            "|------|----------|-----|-----|------|",
+            (
+                f"| 日K结构箱体 | {_daily_structure_range_text(daily_structure)}（{_daily_structure_ratio(daily_structure)}） | "
+                f"{_format_price(daily_structure.get('zg_candidate'))} | {_format_price(daily_structure.get('zd_candidate'))} | "
+                f"{daily_structure.get('candidate_status') or '候选形成中'} |"
+            ),
+            f"| 60分钟缠论确认 | - | - | - | {_chanlun_confirmation_text(confirmation)} |",
+            "",
+        ]
+        return {"lines": lines, "exports": {}, "module_logs": []}
     zhongshu_list = market_zhongshu.get("zhongshu_list") or []
     if not zhongshu_list:
         return {"lines": [], "exports": {}, "module_logs": []}

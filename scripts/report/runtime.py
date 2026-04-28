@@ -201,6 +201,63 @@ def _appendix_turnover_source(item):
     return item.get("source_status") or item.get("source") or "记录"
 
 
+def _format_appendix_price(value):
+    if value in (None, ""):
+        return "-"
+    try:
+        return f"{float(value):.2f}"
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or "-"
+
+
+def _appendix_daily_structure_ratio(daily_structure):
+    count = daily_structure.get("kline_count")
+    required = daily_structure.get("required_kline_count")
+    if count is None and required is None:
+        return "-"
+    if required is None:
+        return str(count)
+    return f"{count or 0}/{required}"
+
+
+def _appendix_market_zhongshu_pivot_row(market_zhongshu, *, current_mainline_history_record=None, data=None):
+    market_zhongshu = market_zhongshu or {}
+    daily_structure = market_zhongshu.get("daily_structure_current") or {}
+    if not daily_structure:
+        return None
+    data = data or {}
+    current_mainline_history_record = current_mainline_history_record or {}
+    confirmation = market_zhongshu.get("chanlun_confirmation") or {}
+    ratio = _appendix_daily_structure_ratio(daily_structure)
+    start_date = daily_structure.get("start_date") or "-"
+    end_date = daily_structure.get("end_date") or "-"
+    structure_state = confirmation.get("confirmation_status") or daily_structure.get("candidate_status") or "待确认"
+    mainline = (
+        current_mainline_history_record.get("primary_mainline")
+        or current_mainline_history_record.get("mainline")
+        or current_mainline_history_record.get("leading_line")
+        or "-"
+    )
+    pivot_range = (
+        f"{_format_appendix_price(daily_structure.get('zd_candidate'))}"
+        f"-{_format_appendix_price(daily_structure.get('zg_candidate'))}"
+    )
+    return {
+        "date": data.get("target_date") or current_mainline_history_record.get("date") or end_date,
+        "date_range": f"{start_date} ~ {end_date}",
+        "pivot_level": f"日K结构候选（{ratio}）",
+        "pivot_range": pivot_range,
+        "position": "日K候选区间内",
+        "structure_state": structure_state,
+        "mainline": mainline,
+        "mainline_degree": current_mainline_history_record.get("mainline_degree") or "观察主线",
+        "evolution": structure_state,
+        "replacement": "待确认",
+        "interpretation": f"日K结构候选尚未确认为日线中枢；60分钟缠论确认：{structure_state}。",
+    }
+
+
 def _derive_structure_mainline_replacement(item):
     item = item or {}
     explicit = str(item.get("replacement") or item.get("replacement_relation") or "").strip()
@@ -339,6 +396,20 @@ def _derive_appendix_pivot_mainline_history(
         return list(explicit_rows)
     if not isinstance(market_research_snapshot, dict):
         return []
+
+    market_zhongshu = (
+        execution_stage_context.get("market_zhongshu")
+        or data.get("market_zhongshu")
+        or market_research_snapshot.get("market_zhongshu")
+        or {}
+    )
+    market_zhongshu_row = _appendix_market_zhongshu_pivot_row(
+        market_zhongshu,
+        current_mainline_history_record=current_mainline_history_record,
+        data=data,
+    )
+    if market_zhongshu_row:
+        return [market_zhongshu_row]
 
     snapshot = dict(market_research_snapshot)
     if current_mainline_history_record and not snapshot.get("current_mainline_history_record"):
