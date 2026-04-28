@@ -468,8 +468,8 @@ from report.single_stock_diagnostic_renderer import render_single_stock_diagnost
 from report.strategy_performance_renderer import render_strategy_performance_section
 from research.tracking_memory_runtime import refresh_tracking_memory
 
-MARKET_ZHONGSHU_LOOKBACK_DAYS = 120
-MARKET_ZHONGSHU_MIN_KLINES = 5
+MARKET_ZHONGSHU_LOOKBACK_DAYS = 250
+MARKET_ZHONGSHU_MIN_KLINES = 20
 MAX_SINGLE_TRADE_LOSS_PCT = 0.05
 # Hook strings moved to daily_report_markdown_hooks.py; wrappers below keep legacy call sites working.
 DEFENSIVE_EXIT_RULE_TEXT = RUN_DEFENSIVE_EXIT_RULE_TEXT

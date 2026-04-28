@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -10,6 +11,29 @@ from decision.market_phase_context import build_market_phase_context_contract
 
 
 class MarketPhaseContextContractTest(unittest.TestCase):
+    def test_daily_report_entry_uses_250_day_zhongshu_lookback(self):
+        import daily_report_entry_demo
+
+        captured_kwargs = {}
+
+        def fake_market_phase_contract(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return {"module_logs": []}
+
+        with patch.object(
+            daily_report_entry_demo,
+            "build_market_phase_context_contract",
+            side_effect=fake_market_phase_contract,
+        ):
+            daily_report_entry_demo.build_market_phase_context(
+                {"zt_pool": [], "dt_pool": []},
+                "2026-04-27",
+                emit_logs=False,
+            )
+
+        self.assertEqual(captured_kwargs["market_zhongshu_lookback_days"], 250)
+        self.assertEqual(captured_kwargs["market_zhongshu_min_klines"], 20)
+
     def test_default_zhongshu_request_uses_250_day_structural_base(self):
         captured_kwargs = {}
 
