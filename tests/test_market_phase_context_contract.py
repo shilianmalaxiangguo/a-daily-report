@@ -282,6 +282,61 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertIn("60分钟缠论确认", result["position_reason"])
         self.assertIn("未确认", result["position_reason"])
 
+    def test_index_recovery_preserves_unconfirmed_60m_chanlun_warning(self):
+        result = build_market_phase_context_contract(
+            data={
+                "zt_pool": [{"code": "000001"}] * 25,
+                "dt_pool": [{"code": "000002"}] * 20,
+                "market_stats": {"up_count": 1600, "down_count": 2600},
+            },
+            target_date="2026-04-27",
+            analyze_market_zhongshu=lambda **kwargs: {
+                "success": True,
+                "chanlun_confirmation": {
+                    "confirmation_status": "forming_daily_level_zhongshu",
+                    "confirmed": False,
+                },
+                "current_zhongshu": {
+                    "start_close": 100.0,
+                    "end_close": 102.0,
+                    "zd": 99.0,
+                    "zg": 103.0,
+                },
+                "signal": {
+                    "signal_type": "按个股信号操作",
+                    "status": "➖ 中枢内震荡",
+                    "comparison_state": "range",
+                    "today_price": 101.5,
+                },
+            },
+            analyze_market_and_sectors=lambda data: {"market_status": "调整"},
+            resolve_market_mainline_context=lambda data, market_analysis: {
+                "main_sectors": [],
+                "secondary_sectors": [],
+                "main_sectors_info": [],
+                "secondary_sectors_info": [],
+                "dragon_stocks": [],
+            },
+            build_mainline_exit_analysis=lambda data, market_analysis, dragon_stocks, main_sectors: {"overall_level": "黄灯"},
+            merge_position_gate=lambda position_level, exit_analysis: {
+                "position_level": position_level,
+                "operation_state": "防守态",
+                "can_new_entry": False,
+                "gate_reason": "",
+            },
+            build_market_state_machine_snapshot=lambda **kwargs: {},
+            resolve_environment_display_contract=lambda **kwargs: {
+                "position_level": kwargs["position_level"],
+                "operation_state": kwargs["final_gate"]["operation_state"],
+            },
+            calculate_price_range=lambda item: {},
+        )
+
+        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
+        self.assertIn("60分钟缠论确认", result["position_reason"])
+        self.assertIn("未确认", result["position_reason"])
+
     def test_defensive_position_skips_price_plan_and_keeps_logs(self):
         result = build_market_phase_context_contract(
             {

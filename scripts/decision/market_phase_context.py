@@ -70,6 +70,13 @@ def _chanlun_confirmation_is_unconfirmed(market_zhongshu):
     }
 
 
+def _append_chanlun_unconfirmed_reason(reason):
+    warning = "日K结构仍需60分钟缠论确认，未确认前只作防守观察。"
+    if "60分钟缠论确认" in str(reason or "") and "未确认" in str(reason or ""):
+        return reason
+    return f"{reason}；{warning}"
+
+
 def _is_index_recovery_inside_zhongshu(market_zhongshu, zs_signal_type, zt_count, dt_count, dt_panic_threshold, exit_analysis):
     if not market_zhongshu or not market_zhongshu.get("success"):
         return False
@@ -167,10 +174,10 @@ def build_market_phase_context_contract(
         dt_panic_threshold,
         main_sectors,
     )
-    if _chanlun_confirmation_is_unconfirmed(market_zhongshu):
+    chanlun_is_unconfirmed = _chanlun_confirmation_is_unconfirmed(market_zhongshu)
+    if chanlun_is_unconfirmed:
         if "三档" in str(base_position_level):
             base_position_level = "二档（防守档）"
-        base_position_reason = f"{base_position_reason}；日K结构仍需60分钟缠论确认，未确认前只作防守观察。"
 
     if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
         market_zhongshu,
@@ -193,6 +200,9 @@ def build_market_phase_context_contract(
             zt_count=zt_count,
             dt_count=dt_count,
         )
+    if chanlun_is_unconfirmed:
+        base_position_reason = _append_chanlun_unconfirmed_reason(base_position_reason)
+
     _append_log(
         logs,
         "base_position",
