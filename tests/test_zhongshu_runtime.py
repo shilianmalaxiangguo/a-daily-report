@@ -256,7 +256,9 @@ class ZhongshuRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["daily_structure_current"]["candidate_status"], "daily_candidate_forming")
         self.assertEqual(result["daily_structure_current"]["kline_count"], 9)
+        self.assertEqual(result["daily_structure_current"]["required_kline_count"], 20)
         self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "forming_daily_level_zhongshu")
+        self.assertIn("9/20", result["signal"]["status"])
         self.assertIn("日K候选", result["signal"]["status"])
 
 
