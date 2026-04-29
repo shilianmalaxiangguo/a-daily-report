@@ -26,35 +26,47 @@ def _raise_skill_version_low(*args, **kwargs):
 
 
 class ZhongshuRuntimeTest(unittest.TestCase):
-    def test_build_zhongshu_structure_requires_20_klines_except_current_tail(self):
-        dates = pd.bdate_range(start="2026-03-02", periods=27)
-        rows = []
-        for index, date in enumerate(dates):
-            if index < 6:
-                high, low, close = 105, 95, 100
-            else:
-                high, low, close = 132, 124, 128
-            rows.append(
-                {
-                    "date": date.strftime("%Y-%m-%d"),
-                    "open": close,
-                    "high": high,
-                    "low": low,
-                    "close": close,
-                    "volume": 1,
-                }
-            )
+    def test_iwencai_index_dataframe_sends_current_skillhub_headers(self):
+        captured = {}
+
+        class Response:
+            def read(self):
+                return b'{"status_code": 0, "datas": [{"\\u5f00\\u76d8\\u4ef7[20260428]": 1, "\\u6700\\u9ad8\\u4ef7[20260428]": 2, "\\u6700\\u4f4e\\u4ef7[20260428]": 0.5, "\\u6536\\u76d8\\u4ef7[20260428]": 1.5, "\\u6210\\u4ea4\\u91cf[20260428]": 100}]}'
+
+        def fake_urlopen(request, timeout=30):
+            captured["request"] = request
+            return Response()
+
+        df, source = zhongshu_runtime._load_iwencai_index_dataframe(1, urlopen_fn=fake_urlopen)
+
+        request = captured["request"]
+        self.assertEqual(source, "同花顺问财API")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(request.get_header("X-claw-skill-id"), "hithink-market-query")
+        self.assertEqual(request.get_header("X-claw-skill-version"), "1.0.0")
+        self.assertEqual(request.get_header("X-claw-call-type"), "normal")
+        self.assertEqual(request.get_header("X-claw-plugin-id"), "none")
+        self.assertEqual(request.get_header("X-claw-plugin-version"), "none")
+        self.assertEqual(len(request.get_header("X-claw-trace-id")), 64)
+
+    def test_build_zhongshu_structure_detects_platform_without_20_klines(self):
+        rows = [
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100, "volume": 1},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110, "volume": 1},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101, "volume": 1},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109, "volume": 1},
+        ]
         df = pd.DataFrame(rows)
 
         structure_segments, zhongshu_list = build_zhongshu_structure(df, min_zhongshu_klines=20)
 
-        self.assertEqual(structure_segments[0]["segment_type"], "connector")
-        self.assertEqual(structure_segments[0]["kline_count"], 6)
+        self.assertEqual([item["segment_type"] for item in structure_segments], ["zhongshu"])
         self.assertEqual(len(zhongshu_list), 1)
-        self.assertEqual(zhongshu_list[0]["kline_count"], 21)
+        self.assertEqual(zhongshu_list[0]["kline_count"], 4)
+        self.assertNotIn("required_kline_count", zhongshu_list[0])
         self.assertEqual(zhongshu_list[0]["confirmation_status"], "confirmed")
 
-    def test_analyze_market_zhongshu_marks_short_latest_zone_as_forming_current(self):
+    def test_analyze_market_zhongshu_marks_short_platform_as_confirmed_current(self):
         df = pd.DataFrame(
             [
                 {"date": "2026-04-15", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1},
@@ -75,11 +87,10 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         )
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["current_zhongshu"]["confirmation_status"], "forming")
-        self.assertEqual(result["current_zhongshu"]["kline_count"], 6)
-        self.assertEqual(result["current_zhongshu"]["required_kline_count"], 20)
-        self.assertIn("6/20", result["signal"]["status"])
-        self.assertIn("观察", result["signal"]["action"])
+        self.assertEqual(result["current_zhongshu"]["confirmation_status"], "confirmed")
+        self.assertNotIn("required_kline_count", result["current_zhongshu"])
+        self.assertNotIn("/20", result["signal"]["status"])
+        self.assertNotIn("等20根", result["signal"]["action"])
 
     def test_ascii_diagram_labels_forming_structure_without_claiming_confirmed(self):
         diagram = zhongshu_runtime.build_zhongshu_ascii_diagram(
@@ -256,6 +267,29 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(result["chanlun_confirmation"], {})
         minute_mock.assert_not_called()
 
+    def test_analyze_market_zhongshu_default_chanlun_path_does_not_require_minutes(self):
+        df = pd.DataFrame(
+            [
+                {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100, "volume": 1, "amount": 1},
+                {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110, "volume": 1, "amount": 1},
+                {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101, "volume": 1, "amount": 1},
+                {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109, "volume": 1, "amount": 1},
+                {"date": "2026-04-27", "open": 109, "high": 112, "low": 104, "close": 108, "volume": 1, "amount": 1},
+            ]
+        )
+
+        result = analyze_market_zhongshu(
+            target_date="2026-04-27",
+            fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            use_chanlun_confirmation=True,
+            fetch_minute_bars=lambda **kwargs: (_ for _ in ()).throw(AssertionError("minute fetch called")),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "not_requested")
+        self.assertEqual(result["chanlun_60m_structures"], [])
+
     def test_analyze_market_zhongshu_insufficient_60m_history_keeps_action_conservative(self):
         dates = pd.bdate_range(end="2026-04-27", periods=21)
         rows = []
@@ -278,27 +312,23 @@ class ZhongshuRuntimeTest(unittest.TestCase):
             target_date="2026-04-27",
             fetch_dataframe=lambda **kwargs: (df, "test_feed"),
             fetch_minute_bars=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("minute unavailable")),
+            use_hybrid_confirmation=True,
             print_fn=lambda *args, **kwargs: None,
         )
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
         self.assertIn("60分钟确认", result["signal"]["status"])
         self.assertEqual(result["signal"]["action"], "只观察，等60分钟确认")
         self.assertNotEqual(result["signal"]["action"], "积极做多")
 
     def test_analyze_market_zhongshu_exposes_chanlun_confirmation_contract(self):
         daily_rows = [
-            {"date": "2026-04-14", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4050, "volume": 1, "amount": 1},
-            {"date": "2026-04-15", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4051, "volume": 1, "amount": 1},
-            {"date": "2026-04-16", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4052, "volume": 1, "amount": 1},
-            {"date": "2026-04-17", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4053, "volume": 1, "amount": 1},
-            {"date": "2026-04-20", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4054, "volume": 1, "amount": 1},
-            {"date": "2026-04-21", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4055, "volume": 1, "amount": 1},
-            {"date": "2026-04-22", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4056, "volume": 1, "amount": 1},
-            {"date": "2026-04-23", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4057, "volume": 1, "amount": 1},
-            {"date": "2026-04-24", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4058, "volume": 1, "amount": 1},
-            {"date": "2026-04-27", "open": 4050, "high": 4114.84, "low": 3992.41, "close": 4086.34, "volume": 1, "amount": 1},
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100, "volume": 1, "amount": 1},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110, "volume": 1, "amount": 1},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101, "volume": 1, "amount": 1},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109, "volume": 1, "amount": 1},
+            {"date": "2026-04-27", "open": 109, "high": 112, "low": 104, "close": 108, "volume": 1, "amount": 1},
         ]
         df = pd.DataFrame(daily_rows)
 
@@ -310,19 +340,75 @@ class ZhongshuRuntimeTest(unittest.TestCase):
                 "status": "success",
                 "bars": [
                     {"datetime": "2026-04-14 10:30:00", "date": "2026-04-14", "high": 4100, "low": 4000, "close": 4050},
-                    {"datetime": "2026-04-17 14:00:00", "date": "2026-04-17", "high": 4090, "low": 4010, "close": 4040},
-                    {"datetime": "2026-04-24 14:00:00", "date": "2026-04-24", "high": 4080, "low": 4020, "close": 4050},
+                    {"datetime": "2026-04-14 14:00:00", "date": "2026-04-14", "high": 4090, "low": 4010, "close": 4040},
+                    {"datetime": "2026-04-15 10:30:00", "date": "2026-04-15", "high": 4080, "low": 4020, "close": 4050},
+                    {"datetime": "2026-04-15 14:00:00", "date": "2026-04-15", "high": 4095, "low": 4015, "close": 4035},
                 ],
             },
+            use_hybrid_confirmation=True,
             print_fn=lambda *args, **kwargs: None,
         )
 
-        self.assertEqual(result["daily_structure_current"]["candidate_status"], "daily_candidate_forming")
-        self.assertEqual(result["daily_structure_current"]["kline_count"], 9)
-        self.assertEqual(result["daily_structure_current"]["required_kline_count"], 20)
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertIn("9/20", result["signal"]["status"])
-        self.assertIn("日K候选", result["signal"]["status"])
+        self.assertEqual(result["daily_structure_current"]["candidate_status"], "confirmed_platform")
+        self.assertEqual(result["daily_structure_current"]["kline_count"], 3)
+        self.assertNotIn("required_kline_count", result["daily_structure_current"])
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertNotIn("/20", result["signal"]["status"])
+
+    def test_analyze_market_zhongshu_aligns_daily_candidate_with_forming_current_zone(self):
+        rows = [
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100, "volume": 1, "amount": 1},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110, "volume": 1, "amount": 1},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101, "volume": 1, "amount": 1},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109, "volume": 1, "amount": 1},
+            {"date": "2026-04-27", "open": 109, "high": 112, "low": 104, "close": 108, "volume": 1, "amount": 1},
+        ]
+        df = pd.DataFrame(rows)
+
+        result = analyze_market_zhongshu(
+            target_date="2026-04-27",
+            fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            fetch_minute_bars=lambda **kwargs: {
+                "success": True,
+                "status": "success",
+                "bars": [
+                    {"datetime": "2026-04-14 10:30:00", "date": "2026-04-14", "high": 4100, "low": 4000, "close": 4050},
+                    {"datetime": "2026-04-14 14:00:00", "date": "2026-04-14", "high": 4090, "low": 4010, "close": 4040},
+                    {"datetime": "2026-04-15 10:30:00", "date": "2026-04-15", "high": 4080, "low": 4020, "close": 4050},
+                    {"datetime": "2026-04-15 14:00:00", "date": "2026-04-15", "high": 4095, "low": 4015, "close": 4035},
+                ],
+            },
+            use_hybrid_confirmation=True,
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        current = result["daily_structure_current"]
+        self.assertEqual(current["start_date"], "2026-04-14")
+        self.assertEqual(current["end_date"], "2026-04-16")
+        self.assertEqual(current["kline_count"], 3)
+        self.assertNotIn("required_kline_count", current)
+        self.assertEqual(current["candidate_status"], "confirmed_platform")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "confirmed_daily_level_zhongshu")
+
+        not_confirmed = analyze_market_zhongshu(
+            target_date="2026-04-27",
+            fetch_dataframe=lambda **kwargs: (df, "test_feed"),
+            fetch_minute_bars=lambda **kwargs: {
+                "success": True,
+                "status": "success",
+                "bars": [
+                    {"datetime": "2026-04-14 10:30:00", "date": "2026-04-14", "high": 4100, "low": 4000, "close": 4050},
+                    {"datetime": "2026-04-14 14:00:00", "date": "2026-04-14", "high": 3990, "low": 3900, "close": 3940},
+                    {"datetime": "2026-04-15 10:30:00", "date": "2026-04-15", "high": 4200, "low": 4150, "close": 4180},
+                    {"datetime": "2026-04-15 14:00:00", "date": "2026-04-15", "high": 4160, "low": 4150, "close": 4160},
+                ],
+            },
+            use_hybrid_confirmation=True,
+            print_fn=lambda *args, **kwargs: None,
+        )
+        self.assertEqual(not_confirmed["chanlun_confirmation"]["confirmation_status"], "not_confirmed")
+        self.assertIn("60分钟确认：not_confirmed", not_confirmed["signal"]["status"])
+        self.assertNotIn("当前中枢形成中", not_confirmed["signal"]["status"])
 
 
 if __name__ == "__main__":

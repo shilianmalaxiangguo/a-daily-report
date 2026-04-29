@@ -4,9 +4,14 @@ import datetime
 import json
 import os
 import re
+import secrets
 import traceback
 
-from decision.chanlun_zhongshu_runtime import analyze_chanlun_zhongshu
+from decision.chanlun_zhongshu_runtime import (
+    analyze_chanlun_zhongshu,
+    build_platform_sequence_from_trend_types,
+    build_trend_types_from_bars,
+)
 from market_data.daily_price_runtime import fetch_daily_price_bars
 from market_data.kline_dates import (
     normalize_kline_date_str,
@@ -34,6 +39,10 @@ FORMING_ZHONGSHU_MIN_KLINES = 5
 
 def _is_forming_zhongshu_segment(segment):
     segment = segment or {}
+    if segment.get("structure_kind") == "platform" or segment.get("candidate_status") == "confirmed_platform":
+        return False
+    if "required_kline_count" not in segment and segment.get("confirmation_status") == "confirmed":
+        return False
     if segment.get("confirmation_status") == "forming" or bool(segment.get("is_current_forming")):
         return True
     kline_count = segment.get("kline_count")
@@ -42,6 +51,11 @@ def _is_forming_zhongshu_segment(segment):
         return int(kline_count) < int(required_count)
     except (TypeError, ValueError):
         return False
+
+
+def _daily_candidate_from_forming_zhongshu(segment, required_kline_count):
+    del segment, required_kline_count
+    return None
 
 
 def split_zhongshu_history_and_today(df, recent_days=120, target_date=None):
@@ -120,101 +134,12 @@ def build_zhongshu_structure(
     min_overlap_bars=3,
     min_current_zhongshu_klines=FORMING_ZHONGSHU_MIN_KLINES,
 ):
-    """沿用连续重叠分段识别中枢，并保留全部非中枢K线为连接段。"""
-    del min_overlap_bars
+    """按平台/连接线分解结构，不再用日K连续重叠或20根长度确认中枢。"""
+    del min_zhongshu_klines, min_overlap_bars, min_current_zhongshu_klines
     if hist_df is None or len(hist_df) == 0:
         return [], []
-
-    total = len(hist_df)
-    structure_segments = []
-    zhongshu_list = []
-    run_start = 0
-    run_high = float(hist_df.iloc[0]["high"])
-    run_low = float(hist_df.iloc[0]["low"])
-
-    for idx in range(1, total):
-        prev_row = hist_df.iloc[idx - 1]
-        row = hist_df.iloc[idx]
-        overlap_high = min(float(prev_row["high"]), float(row["high"]))
-        overlap_low = max(float(prev_row["low"]), float(row["low"]))
-
-        if overlap_high > overlap_low:
-            run_high = max(run_high, float(row["high"]))
-            run_low = min(run_low, float(row["low"]))
-            continue
-
-        run_end = idx - 1
-        run_count = run_end - run_start + 1
-        segment_type = "zhongshu" if run_count >= min_zhongshu_klines else "connector"
-        segment_reason = (
-            "连续重叠区间达到确认长度，识别为中枢"
-            if segment_type == "zhongshu"
-            else "连续重叠长度不足确认中枢，保留为连接段"
-        )
-        segment = build_structure_segment(
-            hist_df,
-            run_start,
-            run_end,
-            segment_type,
-            zg=run_high if segment_type == "zhongshu" else None,
-            zd=run_low if segment_type == "zhongshu" else None,
-            reason=segment_reason,
-            confirmation_status="confirmed" if segment_type == "zhongshu" else None,
-            required_kline_count=min_zhongshu_klines if segment_type == "zhongshu" else None,
-        )
-        structure_segments.append(segment)
-        if segment_type == "zhongshu":
-            zhongshu_list.append(segment.copy())
-
-        run_start = idx
-        run_high = float(row["high"])
-        run_low = float(row["low"])
-
-    run_end = total - 1
-    run_count = run_end - run_start + 1
-    confirmation_status = None
-    if run_count >= min_zhongshu_klines:
-        segment_type = "zhongshu"
-        confirmation_status = "confirmed"
-        segment_reason = "连续重叠区间达到确认长度，识别为中枢"
-    elif run_count >= min_current_zhongshu_klines:
-        segment_type = "zhongshu"
-        confirmation_status = "forming"
-        segment_reason = (
-            f"最近当前中枢形成中，{run_count}/{min_zhongshu_klines}根K线，"
-            "未满确认长度，只作观察"
-        )
-    else:
-        segment_type = "connector"
-        segment_reason = "历史尾部尚未达到确认中枢长度，作为连接段保留"
-    segment = build_structure_segment(
-        hist_df,
-        run_start,
-        run_end,
-        segment_type,
-        zg=run_high if segment_type == "zhongshu" else None,
-        zd=run_low if segment_type == "zhongshu" else None,
-        reason=segment_reason,
-        confirmation_status=confirmation_status,
-        required_kline_count=min_zhongshu_klines if segment_type == "zhongshu" else None,
-    )
-    structure_segments.append(segment)
-    if segment_type == "zhongshu":
-        zhongshu_list.append(segment.copy())
-
-    for idx, segment in enumerate(structure_segments):
-        if segment["segment_type"] != "connector":
-            continue
-        has_prev_zhongshu = any(s["segment_type"] == "zhongshu" for s in structure_segments[:idx])
-        has_next_zhongshu = any(s["segment_type"] == "zhongshu" for s in structure_segments[idx + 1 :])
-        if has_prev_zhongshu and has_next_zhongshu:
-            segment["connector_role"] = "between"
-        elif has_prev_zhongshu:
-            segment["connector_role"] = "trailing"
-        else:
-            segment["connector_role"] = "leading"
-
-    return structure_segments, zhongshu_list
+    trend_types = build_trend_types_from_bars(hist_df, level="daily")
+    return build_platform_sequence_from_trend_types(trend_types, level="daily")
 
 
 def build_zhongshu_ascii_diagram(structure_segments, today_date, today_price, signal, max_segments=5):
@@ -473,6 +398,19 @@ def _normalize_baostock_index_code(index_code):
     return index_code
 
 
+def _build_iwencai_headers(api_key, *, call_type="normal"):
+    return {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "X-Claw-Call-Type": call_type,
+        "X-Claw-Skill-Id": "hithink-market-query",
+        "X-Claw-Skill-Version": "1.0.0",
+        "X-Claw-Plugin-Id": "none",
+        "X-Claw-Plugin-Version": "none",
+        "X-Claw-Trace-Id": secrets.token_hex(32),
+    }
+
+
 def _load_iwencai_index_dataframe(recent_days, urlopen_fn=None):
     import pandas as pd
     import urllib.error
@@ -482,10 +420,7 @@ def _load_iwencai_index_dataframe(recent_days, urlopen_fn=None):
     urlopen_fn = urlopen_fn or urllib.request.urlopen
     base_url = (os.environ.get("IWENCAI_BASE_URL") or "https://openapi.iwencai.com").rstrip("/")
     url = f"{base_url}/v1/query2data"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+    headers = _build_iwencai_headers(api_key)
     payload = {
         "query": f"上证指数近{recent_days}天K线数据，包括日期、开盘价、最高价、最低价、收盘价、成交量",
         "page": "1",
@@ -615,6 +550,7 @@ def analyze_market_zhongshu(
     fetch_dataframe=None,
     fetch_minute_bars=None,
     use_chanlun_confirmation=True,
+    use_hybrid_confirmation=False,
     urlopen_fn=None,
     bs_module=None,
     print_fn=print,
@@ -735,7 +671,7 @@ def analyze_market_zhongshu(
                     f"⏳ 当前中枢形成中（{current_kline_count}/{required_kline_count}，"
                     f"原信号：{original_status}，仅观察）"
                 )
-                signal["action"] = "只观察，等20根确认或60分钟确认"
+                signal["action"] = "只观察，等平台结构确认"
 
         chanlun_result = {}
         if use_chanlun_confirmation:
@@ -747,23 +683,24 @@ def analyze_market_zhongshu(
                 index_code=index_code,
                 minute_period="60",
                 min_daily_klines=min_zhongshu_klines,
+                use_hybrid_confirmation=use_hybrid_confirmation,
             )
             confirmation = chanlun_result.get("chanlun_confirmation") or {}
             current_candidate = chanlun_result.get("current_candidate") or {}
-            if confirmation.get("confirmation_status") in ("forming_daily_level_zhongshu", "insufficient_60m_history"):
+            if confirmation.get("confirmation_status") in ("data_insufficient", "insufficient_60m_history", "not_confirmed"):
                 confirmation_status = confirmation.get("confirmation_status")
                 signal["structure_confirmation"] = confirmation_status
+                candidate_label = "平台待确认" if confirmation_status == "not_confirmed" else "平台数据不足"
                 signal["status"] = (
-                    f"⏳ 日K候选形成中（{current_candidate.get('kline_count', 0)}/"
-                    f"{current_candidate.get('required_kline_count', min_zhongshu_klines)}，"
+                    f"⏳ {candidate_label}（走势类型数：{current_candidate.get('trend_type_count', 0)}，"
                     f"60分钟确认：{confirmation_status}）"
                 )
                 signal["signal_type"] = "中枢确认待观察"
                 signal["position_level"] = "观察档（不加仓）"
-                if confirmation_status == "insufficient_60m_history":
+                if confirmation_status in ("data_insufficient", "insufficient_60m_history"):
                     signal["action"] = "只观察，等60分钟确认"
-                else:
-                    signal["action"] = "只观察，等20根确认或60分钟确认"
+                elif confirmation_status == "not_confirmed":
+                    signal["action"] = "只观察，等60分钟重新形成平台重叠"
 
         print_fn(f"[大盘结构] 数据源: {data_source}，识别到{len(zhongshu_list)}个结构中枢，当前价格{today_price:.2f}")
         return {
