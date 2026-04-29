@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .confirmation_nodes import confirm_with_child_trend_types
+from .confirmation_nodes import confirm_with_child_trend_types, reject_full_recursive_mode
 from .contracts import (
     DEFAULT_CONFIRMATION_PERIOD,
     HYBRID_CONFIRMATION_MODE,
@@ -13,6 +13,7 @@ from .structure_nodes import identify_platforms_from_trend_types
 __all__ = [
     "analyze_hybrid_structure",
     "analyze_practical_daily_structure",
+    "full_recursive_mode_status",
 ]
 
 
@@ -50,6 +51,10 @@ def _not_requested_confirmation():
         "ZD": None,
         "explanation": "practical daily no minute confirmation",
     }
+
+
+def full_recursive_mode_status():
+    return reject_full_recursive_mode()
 
 
 def analyze_practical_daily_structure(*, daily_rows, fetch_minute_bars=None, target_date=None):

@@ -20,6 +20,13 @@ def _daily_rows():
 
 
 class ChanlunRuntimeContractTest(unittest.TestCase):
+    def test_v1_runtime_has_no_full_recursive_execution_path(self):
+        result = runtime.full_recursive_mode_status()
+
+        self.assertEqual(result["mode"], "full_recursive_mode")
+        self.assertEqual(result["status"], "deferred")
+        self.assertFalse(result["enabled"])
+
     def test_practical_daily_mode_does_not_request_minute_confirmation(self):
         calls = []
 
