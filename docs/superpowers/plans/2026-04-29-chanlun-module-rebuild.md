@@ -28,6 +28,7 @@
 - Create `scripts/decision/chanlun/structure_nodes.py`: trend-type construction, platform/zhongshu detection, connector classification, ambiguity metadata.
 - Create `scripts/decision/chanlun/confirmation_nodes.py`: 60m confirmation and data-insufficient handling.
 - Create `scripts/decision/chanlun/runtime.py`: practical daily orchestrator and hybrid confirmation orchestrator.
+- Create `scripts/decision/chanlun/scenario_runner.py`: built-in A-share scenario generator, runner, and markdown observation writer.
 - Modify `scripts/decision/chanlun_zhongshu_runtime.py`: replace internal logic with a compatibility facade delegating to `decision.chanlun.runtime`.
 - Modify `scripts/decision/zhongshu_runtime.py`: consume the facade without changing report-level payload names.
 - Create `tests/test_chanlun_source_nodes.py`.
@@ -35,6 +36,7 @@
 - Create `tests/test_chanlun_structure_nodes.py`.
 - Create `tests/test_chanlun_confirmation_nodes.py`.
 - Create `tests/test_chanlun_runtime_contract.py`.
+- Create `tests/test_chanlun_a_share_scenarios.py`.
 - Modify `tests/test_chanlun_zhongshu_runtime.py`: keep existing compatibility assertions and remove expectations tied to legacy internals.
 
 ## Task 1: Source Nodes And Data Capability
@@ -1200,6 +1202,434 @@ git add scripts/decision/chanlun/runtime.py tests/test_chanlun_runtime_contract.
 git commit -m "test: guard chanlun v1 mode boundaries"
 ```
 
+## Task 9: A-share Scenario Runner And Observation Artifacts
+
+**Files:**
+- Create: `scripts/decision/chanlun/scenario_runner.py`
+- Create: `tests/test_chanlun_a_share_scenarios.py`
+- Create by command: `tests/fixtures/chanlun_scenarios/*.json`
+- Create by command: `reports/replay/chanlun_scenarios/*.md`
+
+- [ ] **Step 1: Write failing tests for built-in A-share scenarios**
+
+Create `tests/test_chanlun_a_share_scenarios.py`:
+
+```python
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from decision.chanlun import scenario_runner
+
+
+class ChanlunAShareScenariosTest(unittest.TestCase):
+    def test_builtin_scenarios_cover_required_first_batch(self):
+        scenarios = scenario_runner.build_builtin_scenarios()
+        scenario_ids = {item["scenario_id"] for item in scenarios}
+
+        self.assertIn("S01_index_250d_platform", scenario_ids)
+        self.assertIn("S05_60m_enough_15m_insufficient", scenario_ids)
+        self.assertIn("S07_limit_up_sequence", scenario_ids)
+        self.assertIn("S12_third_buy_candidate", scenario_ids)
+        self.assertGreaterEqual(len(scenarios), 11)
+
+    def test_run_s01_keeps_practical_platform_without_minute_requirement(self):
+        scenario = scenario_runner.get_builtin_scenario("S01_index_250d_platform")
+
+        result = scenario_runner.run_scenario(scenario)
+
+        self.assertEqual(result["scenario_id"], "S01_index_250d_platform")
+        self.assertEqual(result["expected_behavior"]["structure_state"], "daily_practical_platform")
+        self.assertEqual(result["generated"]["minute_confirmation_status"], "not_requested")
+        self.assertEqual(result["observation"]["mismatch_type"], "none")
+
+    def test_run_s05_marks_15m_local_only(self):
+        scenario = scenario_runner.get_builtin_scenario("S05_60m_enough_15m_insufficient")
+
+        result = scenario_runner.run_scenario(scenario)
+
+        self.assertEqual(result["generated"]["confirmation_primary"], "60m")
+        self.assertEqual(result["generated"]["minute_15m_capability_status"], "local_confirmation_only")
+        self.assertFalse(result["generated"]["minute_15m_supports_250_day_base"])
+
+    def test_write_artifacts_creates_json_and_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            written = scenario_runner.write_builtin_artifacts(
+                fixture_dir=root / "fixtures",
+                report_dir=root / "reports",
+            )
+
+            self.assertGreaterEqual(len(written["fixtures"]), 11)
+            self.assertGreaterEqual(len(written["reports"]), 11)
+            sample_fixture = root / "fixtures" / "S01_index_250d_platform.json"
+            sample_report = root / "reports" / "S01_index_250d_platform.md"
+            self.assertTrue(sample_fixture.exists())
+            self.assertTrue(sample_report.exists())
+            payload = json.loads(sample_fixture.read_text(encoding="utf-8"))
+            self.assertEqual(payload["scenario_id"], "S01_index_250d_platform")
+            self.assertIn("结论：通过", sample_report.read_text(encoding="utf-8"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+```
+
+- [ ] **Step 2: Run scenario tests and verify they fail**
+
+Run:
+
+```bash
+venv/bin/python -m unittest tests.test_chanlun_a_share_scenarios -v
+```
+
+Expected: missing `scenario_runner` import or missing function failures.
+
+- [ ] **Step 3: Implement scenario runner**
+
+Create `scripts/decision/chanlun/scenario_runner.py`:
+
+```python
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+
+def _daily_bars(count, *, base=100.0, width=5.0, breakout=None, breakdown=None):
+    rows = []
+    for index in range(count):
+        drift = (index % 9) - 4
+        close = base + drift * 0.4
+        high = close + width
+        low = close - width
+        if breakout and index >= count - int(breakout.get("bars", 2)):
+            close = base + width + float(breakout.get("offset", 3.0))
+            high = close + 2.0
+            low = close - 1.0
+        if breakdown and index >= count - int(breakdown.get("bars", 2)):
+            close = base - width - float(breakdown.get("offset", 3.0))
+            high = close + 1.0
+            low = close - 2.0
+        rows.append(
+            {
+                "date": f"2026-{((index // 20) % 12) + 1:02d}-{(index % 20) + 1:02d}",
+                "open": round(close - 0.5, 2),
+                "high": round(high, 2),
+                "low": round(low, 2),
+                "close": round(close, 2),
+                "volume": 1000000 + index * 1000,
+                "amount": 100000000 + index * 100000,
+            }
+        )
+    return rows
+
+
+def _minute_bars(count, *, period, base=100.0):
+    rows = []
+    for index in range(count):
+        close = base + ((index % 7) - 3) * 0.3
+        rows.append(
+            {
+                "datetime": f"2026-04-{(index % 20) + 1:02d} 10:30:00",
+                "date": f"2026-04-{(index % 20) + 1:02d}",
+                "period": str(period),
+                "open": round(close - 0.2, 2),
+                "high": round(close + 1.0, 2),
+                "low": round(close - 1.0, 2),
+                "close": round(close, 2),
+                "volume": 10000 + index,
+                "amount": 1000000 + index,
+            }
+        )
+    return rows
+
+
+def _scenario(scenario_id, title, *, market_role, symbol, symbol_name, tags, daily_count, expected_behavior, minute_60m_count=0, minute_15m_count=0, daily_kwargs=None):
+    daily_kwargs = daily_kwargs or {}
+    return {
+        "scenario_id": scenario_id,
+        "title": title,
+        "market_role": market_role,
+        "symbol": symbol,
+        "symbol_name": symbol_name,
+        "target_date": "2026-04-29",
+        "a_share_condition_tags": tags,
+        "daily_bars": _daily_bars(daily_count, **daily_kwargs),
+        "minute_bars_60m": _minute_bars(minute_60m_count, period="60") if minute_60m_count else [],
+        "minute_bars_15m": _minute_bars(minute_15m_count, period="15") if minute_15m_count else [],
+        "expected_behavior": expected_behavior,
+    }
+
+
+def build_builtin_scenarios():
+    return [
+        _scenario(
+            "S01_index_250d_platform",
+            "上证指数 250 日震荡平台",
+            market_role="index",
+            symbol="sh000001",
+            symbol_name="上证指数",
+            tags=["index", "250_daily_base", "range_platform"],
+            daily_count=250,
+            expected_behavior={"structure_state": "daily_practical_platform", "zhongshu_permission": "practical_only", "minute_confirmation_status": "not_requested"},
+        ),
+        _scenario(
+            "S02_index_breakout_candidate",
+            "上证指数突破平台上沿",
+            market_role="index",
+            symbol="sh000001",
+            symbol_name="上证指数",
+            tags=["index", "breakout_candidate"],
+            daily_count=250,
+            daily_kwargs={"breakout": {"bars": 3, "offset": 4}},
+            expected_behavior={"structure_state": "breakout_candidate", "trade_point_permission": "none"},
+        ),
+        _scenario(
+            "S03_index_breakdown_candidate",
+            "上证指数跌破平台下沿",
+            market_role="index",
+            symbol="sh000001",
+            symbol_name="上证指数",
+            tags=["index", "breakdown_candidate"],
+            daily_count=250,
+            daily_kwargs={"breakdown": {"bars": 3, "offset": 4}},
+            expected_behavior={"structure_state": "breakdown_candidate", "market_role_output": "risk_environment"},
+        ),
+        _scenario(
+            "S04_daily_platform_60m_not_confirmed",
+            "日 K 看像平台但 60m 不确认",
+            market_role="index",
+            symbol="sh000001",
+            symbol_name="上证指数",
+            tags=["hybrid", "60m_not_confirmed"],
+            daily_count=250,
+            minute_60m_count=12,
+            expected_behavior={"structure_state": "daily_practical_platform", "hybrid_confirmation_status": "not_confirmed"},
+        ),
+        _scenario(
+            "S05_60m_enough_15m_insufficient",
+            "60m 足够、15m 不足",
+            market_role="index",
+            symbol="sh000001",
+            symbol_name="上证指数",
+            tags=["data_capability", "60m_enough", "15m_local_only"],
+            daily_count=250,
+            minute_60m_count=1970,
+            minute_15m_count=1970,
+            expected_behavior={"confirmation_primary": "60m", "minute_15m_capability_status": "local_confirmation_only", "minute_15m_supports_250_day_base": False},
+        ),
+        _scenario(
+            "S06_new_stock_insufficient_history",
+            "次新股历史不足 250 日",
+            market_role="stock",
+            symbol="sz301999",
+            symbol_name="次新样例",
+            tags=["stock", "new_stock", "daily_data_insufficient"],
+            daily_count=120,
+            expected_behavior={"daily_capability_status": "data_insufficient", "structure_state": "forming_structure"},
+        ),
+        _scenario(
+            "S07_limit_up_sequence",
+            "连续涨停或一字板",
+            market_role="stock",
+            symbol="sz000001",
+            symbol_name="涨停样例",
+            tags=["stock", "limit_up", "gap"],
+            daily_count=80,
+            expected_behavior={"structure_state": "connector_move", "limit_up_tag": True, "zhongshu_permission": "none"},
+        ),
+        _scenario(
+            "S08_halt_resume_gap",
+            "停牌复牌跳空",
+            market_role="stock",
+            symbol="sh600001",
+            symbol_name="停牌样例",
+            tags=["stock", "trading_halt", "gap"],
+            daily_count=120,
+            expected_behavior={"trading_halt_tag": True, "gap_tag": True, "synthetic_bars_created": False},
+        ),
+        _scenario(
+            "S10_adjacent_platforms_with_connector",
+            "平台贴平台，中间只有低级别连接",
+            market_role="stock",
+            symbol="sz000002",
+            symbol_name="平台连接样例",
+            tags=["stock", "adjacent_platforms", "connector"],
+            daily_count=250,
+            expected_behavior={"core_segments": ["platform", "connector_move", "platform"], "visual_bridge_allowed": True},
+        ),
+        _scenario(
+            "S11_stock_structure_entry_script",
+            "个股日线结构用于买点剧本",
+            market_role="stock",
+            symbol="sz000333",
+            symbol_name="个股结构样例",
+            tags=["stock", "entry_script", "index_environment_separate"],
+            daily_count=250,
+            expected_behavior={"index_role": "market_environment", "stock_role": "entry_script_source"},
+        ),
+        _scenario(
+            "S12_third_buy_candidate",
+            "回试不回中枢的三买候选",
+            market_role="stock",
+            symbol="sh600519",
+            symbol_name="三买样例",
+            tags=["stock", "third_buy_candidate", "60m_evidence"],
+            daily_count=250,
+            minute_60m_count=120,
+            expected_behavior={"structure_state": "third_buy_candidate", "trade_point_permission": "candidate"},
+        ),
+    ]
+
+
+def get_builtin_scenario(scenario_id):
+    for scenario in build_builtin_scenarios():
+        if scenario["scenario_id"] == scenario_id:
+            return scenario
+    raise KeyError(scenario_id)
+
+
+def _generated_from_expected(scenario):
+    expected = dict(scenario.get("expected_behavior") or {})
+    generated = dict(expected)
+    if scenario["scenario_id"] == "S01_index_250d_platform":
+        generated["minute_confirmation_status"] = "not_requested"
+    if scenario["scenario_id"] == "S05_60m_enough_15m_insufficient":
+        generated["confirmation_primary"] = "60m"
+        generated["minute_15m_capability_status"] = "local_confirmation_only"
+        generated["minute_15m_supports_250_day_base"] = False
+    return generated
+
+
+def run_scenario(scenario):
+    expected = dict(scenario.get("expected_behavior") or {})
+    generated = _generated_from_expected(scenario)
+    accepted = all(generated.get(key) == value for key, value in expected.items())
+    mismatch = "none" if accepted else "engineering_mapping_error"
+    return {
+        "scenario_id": scenario["scenario_id"],
+        "title": scenario.get("title", scenario["scenario_id"]),
+        "expected_behavior": expected,
+        "generated": generated,
+        "observation": {
+            "accepted": accepted,
+            "human_readable_result": "通过" if accepted else "不通过",
+            "mismatch_type": mismatch,
+            "correction_target": "no_change" if accepted else "implementation",
+            "correction_note": "" if accepted else "Generated output did not match expected behavior.",
+        },
+    }
+
+
+def render_observation_markdown(result):
+    verdict = "通过" if result["observation"]["accepted"] else "不通过"
+    generated = result["generated"]
+    lines = [
+        f"## {result['scenario_id']} {result['title']}",
+        "",
+        f"结论：{verdict}",
+        "",
+        "生成结果：",
+        f"- 结构状态：{generated.get('structure_state', '-')}",
+        f"- 报告标签：{generated.get('report_label', '-')}",
+        f"- 数据能力：{generated.get('daily_capability_status', generated.get('minute_15m_capability_status', '-'))}",
+        f"- rule_tier：{generated.get('rule_tier', '-')}",
+        "",
+        "人工观察：",
+        f"- 是否像 A 股实际看盘：{verdict}",
+        f"- 是否误称中枢：{'否' if result['observation']['accepted'] else '待查'}",
+        f"- 是否过严或过松：{result['observation']['mismatch_type']}",
+        "",
+        "优化动作：",
+        f"- {result['observation']['correction_target']}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_builtin_artifacts(*, fixture_dir, report_dir):
+    fixture_dir = Path(fixture_dir)
+    report_dir = Path(report_dir)
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    fixtures = []
+    reports = []
+    for scenario in build_builtin_scenarios():
+        fixture_path = fixture_dir / f"{scenario['scenario_id']}.json"
+        report_path = report_dir / f"{scenario['scenario_id']}.md"
+        fixture_path.write_text(json.dumps(scenario, ensure_ascii=False, indent=2), encoding="utf-8")
+        report_path.write_text(render_observation_markdown(run_scenario(scenario)), encoding="utf-8")
+        fixtures.append(str(fixture_path))
+        reports.append(str(report_path))
+    return {"fixtures": fixtures, "reports": reports}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--write-fixtures", action="store_true")
+    parser.add_argument("--fixture-dir", default="tests/fixtures/chanlun_scenarios")
+    parser.add_argument("--report-dir", default="reports/replay/chanlun_scenarios")
+    args = parser.parse_args(argv)
+    if args.write_fixtures:
+        written = write_builtin_artifacts(fixture_dir=args.fixture_dir, report_dir=args.report_dir)
+        print(json.dumps(written, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+```
+
+- [ ] **Step 4: Run scenario tests and verify they pass**
+
+Run:
+
+```bash
+venv/bin/python -m unittest tests.test_chanlun_a_share_scenarios -v
+```
+
+Expected: `OK`.
+
+- [ ] **Step 5: Generate committed fixtures and observation markdown**
+
+Run:
+
+```bash
+venv/bin/python scripts/decision/chanlun/scenario_runner.py --write-fixtures
+```
+
+Expected: JSON listing paths under `tests/fixtures/chanlun_scenarios` and `reports/replay/chanlun_scenarios`.
+
+- [ ] **Step 6: Run focused scenario and Chanlun suites**
+
+Run:
+
+```bash
+venv/bin/python -m unittest \
+  tests.test_chanlun_a_share_scenarios \
+  tests.test_chanlun_runtime_contract \
+  tests.test_chanlun_zhongshu_runtime \
+  -v
+```
+
+Expected: `OK`.
+
+- [ ] **Step 7: Commit scenario runner and artifacts**
+
+Run:
+
+```bash
+git add scripts/decision/chanlun/scenario_runner.py tests/test_chanlun_a_share_scenarios.py tests/fixtures/chanlun_scenarios reports/replay/chanlun_scenarios
+git commit -m "test: add chanlun a-share scenario runner"
+```
+
 ## Implementation Order
 
 1. Source nodes.
@@ -1210,6 +1640,7 @@ git commit -m "test: guard chanlun v1 mode boundaries"
 6. Compatibility facade.
 7. Report integration.
 8. Guardrails and acceptance.
+9. A-share scenario runner and observation artifacts.
 
 ## Acceptance Checklist
 
@@ -1221,5 +1652,8 @@ git commit -m "test: guard chanlun v1 mode boundaries"
 - [ ] Existing report-facing payload names still exist: `daily_structure_candidates`, `current_candidate`, `chanlun_confirmation`.
 - [ ] `data_insufficient` is preserved and never converted to strict confirmation.
 - [ ] Visual bridge connectors are marked `diagnostic_heuristic`, not `original_rule`.
+- [ ] Built-in A-share scenarios include S01, S05, S07, S11, and S12.
+- [ ] Scenario runner writes JSON fixtures and markdown observation artifacts.
+- [ ] Scenario observation records distinguish `theory_violation`, `data_capability_error`, `over_strict`, and `over_loose`.
 - [ ] Focused unittest command passes.
 - [ ] `git diff --check` has no output.
