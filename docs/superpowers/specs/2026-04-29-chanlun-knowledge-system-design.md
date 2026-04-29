@@ -81,7 +81,9 @@ LevelDefinition
   source_rule_tier
 ```
 
-程序必须允许替换级别映射。例如 `1m -> 5m -> 30m -> daily` 或 `1m -> 5m -> 15m -> 60m -> daily` 都是工程映射，不能写死成缠论唯一真理。
+程序必须允许替换级别映射。例如 `1m -> 5m -> 30m -> daily`、`1m -> 5m -> 15m -> 60m -> daily`，或直接把日 K 作为当前系统的最低实用级别，都是工程映射，不能写死成缠论唯一真理。
+
+后续实现不得要求所有分析都从 1 分钟 K 线开始。1 分钟 K 线只适合全递归严格模式；日报和 SkillHub 场景应优先使用较轻的数据模式。
 
 ### 3.3 完全分类与当下性
 
@@ -423,11 +425,52 @@ DivergenceEvidence
 
 ## 8. 工程映射与数据契约
 
-### 8.1 级别映射
+### 8.1 运行模式与级别映射
 
-缠论级别不是时间周期。为了程序可复现，工程上必须选定默认映射，但要标注为 `engineering_mapping`。
+缠论级别不是时间周期。为了程序可复现，工程上必须选定运行模式和级别映射，但要标注为 `engineering_mapping`。
 
-第一版推荐支持：
+第一版必须支持三种模式。
+
+#### 8.1.1 Practical Daily Mode
+
+默认模式，用于 SkillHub 和日报稳定运行。
+
+```text
+structural_base_daily_bars = 250
+report_display_daily_bars = 120
+primitive_level = daily
+```
+
+规则：
+
+- 用至少 250 根已收盘日 K 作为结构计算基底。
+- 报告和图形只展示最近 120 根日 K。
+- 先在 250 日基底上完成包含处理、分型、笔、线段和日线结构片段。
+- 展示窗口内的中枢/平台如果起点早于 120 日窗口，必须标为 `continues_from_prior_context`。
+- 输出名使用 `daily_practical_structure`、`日线结构片段` 或 `日线平台`；只有满足本文中枢定义时才可输出 `zhongshu`。
+
+这个模式不请求 1 分钟历史数据，不因缺少 1 分钟数据而整体失败。
+
+#### 8.1.2 Hybrid Confirmation Mode
+
+增强模式，用于确认最近关键结构。
+
+```text
+base = 250 daily bars
+optional_child_data = recent 60m bars
+optional_lower_data = recent 15m/5m bars
+```
+
+规则：
+
+- 日 K 仍作为长窗口结构基底。
+- 只对最近形成中或最有交易意义的结构请求 60 分钟数据。
+- 60 分钟数据不足时，相关确认输出 `confirmation_status = data_insufficient`，但日线结构片段仍可保留。
+- 该模式适合把“日线结构片段”升级或否定为更严格的次级别确认结构。
+
+#### 8.1.3 Full Recursive Mode
+
+研究或离线模式，不作为 SkillHub 默认。
 
 ```text
 1m -> 5m -> 15m -> 60m -> daily -> weekly
@@ -438,6 +481,12 @@ DivergenceEvidence
 ```text
 1m -> 5m -> 30m -> daily -> weekly -> monthly
 ```
+
+规则：
+
+- 只有该模式才要求从 1 分钟或 5 分钟等低级别逐级递归构造。
+- 该模式可用于验证理论正确性、样例测试和离线研究。
+- 该模式缺数据时可以输出 `data_insufficient`，但不能阻塞默认日报。
 
 报告或运行时不得写“60 分钟天然就是日线直接次级别”。只能写“本次工程配置中，日线的直接构造级别为 60 分钟”。
 
@@ -619,9 +668,13 @@ BarAssignment
 
 | 问题 | 第一版默认 | 规则层级 |
 |---|---|---|
-| 默认级别链 | `1m -> 5m -> 15m -> 60m -> daily -> weekly` | `engineering_mapping` |
+| 默认运行模式 | `practical_daily_mode` | `engineering_mapping` |
+| 默认计算窗口 | 250 根已收盘日 K | `engineering_mapping` |
+| 默认展示窗口 | 最近 120 根日 K | `engineering_mapping` |
+| 默认级别入口 | 日 K 作为最低实用级别输入 | `engineering_mapping` |
+| 全递归级别链 | `1m -> 5m -> 15m -> 60m -> daily -> weekly`，仅用于 `full_recursive_mode` | `engineering_mapping` |
 | 可选级别链 | 保留 `1m -> 5m -> 30m -> daily -> weekly -> monthly` 配置入口 | `engineering_mapping` |
-| 最低级别输入 | 先从 1 分钟 K 线开始；没有 1 分钟数据时输出 `data_insufficient` | `engineering_mapping` |
+| 最低级别输入 | 默认不请求 1 分钟；只有 `full_recursive_mode` 才从 1 分钟或 5 分钟开始 | `engineering_mapping` |
 | 最低级别构造零件 | 使用包含处理、分型、笔、线段，再构造最低级别中枢 | `derived_contract` |
 | 中枢有效条件 | 默认 `ZG > ZD`；不做报价单位容差 | `original_rule` |
 | `ZG == ZD` | 第一版视为无有效重叠；如后续放宽必须另写兼容说明 | `engineering_mapping` |
