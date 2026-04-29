@@ -31,9 +31,8 @@ def _confirmed_daily_candidate(**overrides):
     candidate = {
         "start_date": "2026-01-05",
         "end_date": "2026-02-12",
-        "kline_count": 29,
-        "required_kline_count": 20,
-        "candidate_status": "daily_cycle_confirmed_by_duration",
+        "kline_count": 4,
+        "candidate_status": "confirmed_platform",
     }
     candidate.update(overrides)
     return candidate
@@ -94,51 +93,94 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(result["daily_lookback_count"], 0)
         self.assertEqual(result["report_focus_count"], 0)
 
-    def test_build_daily_structure_candidates_marks_9_day_tail_as_forming_candidate(self):
-        rows = _daily_rows(start="2026-04-14", periods=10, high=4114.84, low=3992.41, close=4050)
+    def test_build_daily_structure_candidates_detects_platform_without_20_day_gate(self):
+        rows = [
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109},
+        ]
 
         result = runtime.build_daily_structure_candidates(rows, target_date="2026-04-27", min_daily_klines=20)
 
         self.assertTrue(result["success"])
         current = result["current_candidate"]
         self.assertEqual(current["start_date"], "2026-04-14")
-        self.assertEqual(current["end_date"], "2026-04-24")
-        self.assertEqual(current["kline_count"], 9)
-        self.assertEqual(current["candidate_status"], "daily_candidate_forming")
-        self.assertEqual(current["required_kline_count"], 20)
-        self.assertEqual(current["zd_candidate"], 3992.41)
-        self.assertEqual(current["zg_candidate"], 4114.84)
+        self.assertEqual(current["end_date"], "2026-04-17")
+        self.assertEqual(current["kline_count"], 4)
+        self.assertEqual(current["candidate_status"], "confirmed_platform")
+        self.assertNotIn("required_kline_count", current)
+        self.assertEqual(current["zd_candidate"], 100.0)
+        self.assertEqual(current["zg_candidate"], 111.0)
+        self.assertEqual(current["platform_core_unit_count"], 3)
 
-    def test_build_daily_structure_candidates_confirms_duration_only_after_20_days(self):
-        rows = _daily_rows(start="2026-01-05", periods=20, high=4190.87, low=3983.58, close=4080)
+    def test_build_platform_sequence_keeps_only_one_connector_between_platforms(self):
+        units = [
+            {"start_date": "2026-01-01", "end_date": "2026-01-02", "high": 110, "low": 100, "direction": "up"},
+            {"start_date": "2026-01-02", "end_date": "2026-01-03", "high": 108, "low": 98, "direction": "down"},
+            {"start_date": "2026-01-03", "end_date": "2026-01-04", "high": 109, "low": 101, "direction": "up"},
+            {"start_date": "2026-01-04", "end_date": "2026-01-05", "high": 125, "low": 112, "direction": "up"},
+            {"start_date": "2026-01-05", "end_date": "2026-01-06", "high": 145, "low": 140, "direction": "up"},
+            {"start_date": "2026-01-06", "end_date": "2026-01-07", "high": 136, "low": 128, "direction": "down"},
+            {"start_date": "2026-01-07", "end_date": "2026-01-08", "high": 138, "low": 130, "direction": "up"},
+            {"start_date": "2026-01-08", "end_date": "2026-01-09", "high": 137, "low": 129, "direction": "down"},
+        ]
 
-        result = runtime.build_daily_structure_candidates(rows, target_date="2026-02-03", min_daily_klines=20)
+        segments, platforms = runtime.build_platform_sequence_from_trend_types(units, level="daily")
 
-        current = result["current_candidate"]
-        self.assertEqual(current["kline_count"], 20)
-        self.assertEqual(current["candidate_status"], "daily_cycle_confirmed_by_duration")
-        self.assertEqual(current["zd_candidate"], 3983.58)
-        self.assertEqual(current["zg_candidate"], 4190.87)
+        self.assertEqual([item["segment_type"] for item in segments], ["zhongshu", "connector", "zhongshu"])
+        self.assertEqual(len(platforms), 2)
+        connector = segments[1]
+        self.assertEqual(connector["start_date"], "2026-01-04")
+        self.assertEqual(connector["end_date"], "2026-01-06")
+        self.assertEqual(connector["trend_type_count"], 2)
 
-    def test_build_daily_structure_candidates_uses_latest_20_completed_bars_when_history_is_longer(self):
-        rows = _daily_rows(start="2026-01-05", periods=25, high=4190.87, low=3983.58, close=4080)
+    def test_build_platform_sequence_inserts_bridge_when_platforms_touch(self):
+        units = [
+            {"start_date": "2026-01-01", "end_date": "2026-01-02", "high": 110, "low": 100, "direction": "up"},
+            {"start_date": "2026-01-02", "end_date": "2026-01-03", "high": 108, "low": 98, "direction": "down"},
+            {"start_date": "2026-01-03", "end_date": "2026-01-04", "high": 109, "low": 101, "direction": "up"},
+            {"start_date": "2026-01-04", "end_date": "2026-01-05", "high": 125, "low": 112, "direction": "up"},
+            {"start_date": "2026-01-05", "end_date": "2026-01-06", "high": 124, "low": 113, "direction": "down"},
+            {"start_date": "2026-01-06", "end_date": "2026-01-07", "high": 123, "low": 114, "direction": "up"},
+        ]
 
-        result = runtime.build_daily_structure_candidates(rows, target_date="2026-02-10", min_daily_klines=20)
+        segments, platforms = runtime.build_platform_sequence_from_trend_types(units, level="daily")
 
-        current = result["current_candidate"]
-        self.assertEqual(current["start_date"], "2026-01-12")
-        self.assertEqual(current["end_date"], "2026-02-06")
-        self.assertEqual(current["kline_count"], 20)
-        self.assertEqual(current["candidate_status"], "daily_cycle_confirmed_by_duration")
+        self.assertEqual([item["segment_type"] for item in segments], ["zhongshu", "connector", "zhongshu"])
+        self.assertEqual(len(platforms), 2)
+        self.assertEqual(segments[1]["connector_role"], "between")
+        self.assertEqual(segments[1]["trend_type_count"], 1)
+
+    def test_build_daily_structure_candidates_returns_not_yet_platform_without_three_overlapping_moves(self):
+        rows = [
+            {"date": "2026-04-14", "open": 100, "high": 101, "low": 100, "close": 100},
+            {"date": "2026-04-15", "open": 100, "high": 110, "low": 109, "close": 110},
+            {"date": "2026-04-16", "open": 110, "high": 51, "low": 50, "close": 50},
+            {"date": "2026-04-17", "open": 50, "high": 60, "low": 59, "close": 60},
+        ]
+
+        result = runtime.build_daily_structure_candidates(rows, target_date="2026-04-27", min_daily_klines=20)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["status"], "not_yet_platform")
+        self.assertEqual(result["daily_structure_candidates"], [])
+        self.assertIsNone(result["current_candidate"])
 
     def test_build_daily_structure_candidates_uses_completed_history_before_target_day(self):
-        rows = _daily_rows(start="2026-04-14", periods=11, high=4114.84, low=3992.41, close=4050)
+        rows = [
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109},
+            {"date": "2026-04-28", "open": 109, "high": 160, "low": 150, "close": 155},
+        ]
 
         result = runtime.build_daily_structure_candidates(rows, target_date="2026-04-28", min_daily_klines=20)
 
         current = result["current_candidate"]
-        self.assertEqual(current["end_date"], "2026-04-27")
-        self.assertEqual(current["kline_count"], 10)
+        self.assertEqual(current["end_date"], "2026-04-17")
+        self.assertEqual(current["kline_count"], 4)
 
     def test_confirm_daily_level_zhongshu_requires_three_60m_trend_overlaps(self):
         candidate = {
@@ -163,15 +205,14 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(result["zd"], 4020.0)
         self.assertEqual(result["zg"], 4120.0)
 
-    def test_confirm_daily_level_zhongshu_keeps_9_day_candidate_forming_even_with_60m_overlap(self):
+    def test_confirm_daily_level_zhongshu_does_not_require_daily_duration(self):
         candidate = {
             "start_date": "2026-04-14",
-            "end_date": "2026-04-24",
-            "kline_count": 9,
-            "required_kline_count": 20,
-            "candidate_status": "daily_candidate_forming",
-            "zd_candidate": 3992.41,
-            "zg_candidate": 4114.84,
+            "end_date": "2026-04-17",
+            "kline_count": 4,
+            "candidate_status": "confirmed_platform",
+            "zd_candidate": 100,
+            "zg_candidate": 110,
         }
         structures = [
             {"start_time": "2026-04-14 10:30:00", "end_time": "2026-04-16 14:00:00", "zg": 4100, "zd": 4000},
@@ -181,9 +222,9 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
 
         result = runtime.confirm_daily_level_zhongshu(candidate, structures)
 
-        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertFalse(result["confirmed"])
-        self.assertIn("9/20", result["explanation"])
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertTrue(result["confirmed"])
+        self.assertNotIn("/20", result["explanation"])
 
     def test_confirm_daily_level_zhongshu_reports_insufficient_60m_history(self):
         candidate = {
@@ -280,29 +321,29 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
     def test_confirm_daily_level_zhongshu_degrades_non_mapping_candidate(self):
         result = runtime.confirm_daily_level_zhongshu("bad", _overlapping_60m_structures())
 
-        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertFalse(result["confirmed"])
-        self.assertIn("0/20", result["explanation"])
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertTrue(result["confirmed"])
+        self.assertNotIn("/20", result["explanation"])
 
-    def test_confirm_daily_level_zhongshu_degrades_non_numeric_candidate_count(self):
+    def test_confirm_daily_level_zhongshu_ignores_legacy_non_numeric_candidate_count(self):
         candidate = _confirmed_daily_candidate(kline_count="abc", required_kline_count="abc")
 
         result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
 
-        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertFalse(result["confirmed"])
-        self.assertIn("0/20", result["explanation"])
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertTrue(result["confirmed"])
+        self.assertNotIn("/20", result["explanation"])
 
-    def test_confirm_daily_level_zhongshu_degrades_boolean_candidate_counts(self):
+    def test_confirm_daily_level_zhongshu_ignores_legacy_boolean_candidate_counts(self):
         candidate = _confirmed_daily_candidate(kline_count=True, required_kline_count=False)
 
         result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
 
-        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertFalse(result["confirmed"])
-        self.assertIn("0/20", result["explanation"])
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertTrue(result["confirmed"])
+        self.assertNotIn("/20", result["explanation"])
 
-    def test_confirm_daily_level_zhongshu_degrades_pandas_boolean_candidate_counts(self):
+    def test_confirm_daily_level_zhongshu_ignores_legacy_pandas_boolean_candidate_counts(self):
         candidate = _confirmed_daily_candidate(
             kline_count=_pandas_bool(True),
             required_kline_count=_pandas_bool(True),
@@ -310,9 +351,9 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
 
         result = runtime.confirm_daily_level_zhongshu(candidate, _overlapping_60m_structures())
 
-        self.assertEqual(result["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertFalse(result["confirmed"])
-        self.assertIn("0/20", result["explanation"])
+        self.assertEqual(result["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertTrue(result["confirmed"])
+        self.assertNotIn("/20", result["explanation"])
 
     def test_confirm_daily_level_zhongshu_degrades_non_iterable_60m_payload(self):
         result = runtime.confirm_daily_level_zhongshu(_confirmed_daily_candidate(), 123)
@@ -321,14 +362,38 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertFalse(result["confirmed"])
         self.assertEqual(result["trend_type_count"], 0)
 
+    def test_public_facade_uses_practical_daily_mode_by_default(self):
+        calls = []
+
+        def fetch_minute_bars(**kwargs):
+            calls.append(kwargs)
+            raise AssertionError("default facade must not fetch minute bars")
+
+        result = runtime.analyze_chanlun_zhongshu(
+            daily_rows=_confirmed_daily_rows(),
+            target_date="2026-02-03",
+            fetch_minute_bars=fetch_minute_bars,
+        )
+
+        self.assertEqual(calls, [])
+        self.assertTrue(result["success"])
+        self.assertEqual(result["mode"], "practical_daily_mode")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "not_requested")
+
     def test_analyze_chanlun_zhongshu_returns_daily_candidate_and_confirmation(self):
-        daily_rows = _daily_rows(start="2026-04-14", periods=10, high=4114.84, low=3992.41, close=4050)
+        daily_rows = [
+            {"date": "2026-04-14", "open": 100, "high": 102, "low": 98, "close": 100},
+            {"date": "2026-04-15", "open": 100, "high": 112, "low": 99, "close": 110},
+            {"date": "2026-04-16", "open": 110, "high": 111, "low": 100, "close": 101},
+            {"date": "2026-04-17", "open": 101, "high": 110, "low": 100, "close": 109},
+        ]
         minute_payload = {
             "success": True,
             "bars": [
                 {"datetime": "2026-04-14 10:30:00", "date": "2026-04-14", "high": 4100, "low": 4000, "close": 4050},
-                {"datetime": "2026-04-16 14:00:00", "date": "2026-04-16", "high": 4090, "low": 4010, "close": 4040},
-                {"datetime": "2026-04-21 14:00:00", "date": "2026-04-21", "high": 4080, "low": 4020, "close": 4050},
+                {"datetime": "2026-04-14 14:00:00", "date": "2026-04-14", "high": 4090, "low": 4010, "close": 4040},
+                {"datetime": "2026-04-15 10:30:00", "date": "2026-04-15", "high": 4080, "low": 4020, "close": 4050},
+                {"datetime": "2026-04-15 14:00:00", "date": "2026-04-15", "high": 4095, "low": 4015, "close": 4035},
             ],
         }
 
@@ -336,12 +401,14 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             daily_rows=daily_rows,
             target_date="2026-04-27",
             fetch_minute_bars=lambda **kwargs: minute_payload,
+            use_hybrid_confirmation=True,
         )
 
         self.assertTrue(result["success"])
-        self.assertEqual(result["current_candidate"]["candidate_status"], "daily_candidate_forming")
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "forming_daily_level_zhongshu")
-        self.assertEqual(result["current_candidate"]["kline_count"], 9)
+        self.assertEqual(result["mode"], "hybrid_confirmation_mode")
+        self.assertEqual(result["current_candidate"]["candidate_status"], "confirmed_platform")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "confirmed_daily_level_zhongshu")
+        self.assertEqual(result["current_candidate"]["kline_count"], 3)
 
     def test_analyze_chanlun_zhongshu_degrades_when_minute_fetch_raises(self):
         def fetch_minute_bars(**kwargs):
@@ -351,12 +418,13 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=fetch_minute_bars,
+            use_hybrid_confirmation=True,
         )
 
         self.assertTrue(result["success"])
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
         self.assertEqual(result["minute_source_status"], "minute_fetch_failed")
         self.assertIn("network down", result["minute_source_error"])
 
@@ -374,11 +442,12 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=lambda **kwargs: minute_payload,
+            use_hybrid_confirmation=True,
         )
 
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
 
     def test_analyze_chanlun_zhongshu_rejects_boolean_minute_bounds(self):
         minute_payload = {
@@ -394,11 +463,12 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=lambda **kwargs: minute_payload,
+            use_hybrid_confirmation=True,
         )
 
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
 
     def test_analyze_chanlun_zhongshu_degrades_non_mapping_minute_bars(self):
         minute_payload = {
@@ -414,33 +484,36 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=lambda **kwargs: minute_payload,
+            use_hybrid_confirmation=True,
         )
 
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
 
     def test_analyze_chanlun_zhongshu_degrades_non_iterable_minute_bars(self):
         result = runtime.analyze_chanlun_zhongshu(
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=lambda **kwargs: {"success": True, "bars": 123},
+            use_hybrid_confirmation=True,
         )
 
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
 
     def test_analyze_chanlun_zhongshu_degrades_non_dict_minute_fetch_result(self):
         result = runtime.analyze_chanlun_zhongshu(
             daily_rows=_confirmed_daily_rows(),
             target_date="2026-02-03",
             fetch_minute_bars=lambda **kwargs: ["bad payload"],
+            use_hybrid_confirmation=True,
         )
 
         self.assertEqual(result["chanlun_60m_structures"], [])
         self.assertFalse(result["chanlun_confirmation"]["confirmed"])
-        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "insufficient_60m_history")
+        self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
         self.assertEqual(result["minute_source_status"], "invalid_minute_payload")
 
 
