@@ -473,6 +473,76 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             )
         )
 
+    def test_aggregate_daily_macro_platforms_cuts_real_index_departure_before_warning(self):
+        payload = json.loads((ROOT / "data/snap-ui/zhongshu-visual/2026-04-29-sh000001.json").read_text())
+        rows = payload["index_klines"]["sh000001"]
+        hist_rows = rows[:-1]
+        trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")
+        raw_segments, _raw_platforms = runtime.build_platform_sequence_from_trend_types(trend_types, level="daily")
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            ordered_dates=hist_rows,
+        )
+
+        platform = next(item for item in platforms if item["start_date"] == "2026-03-23")
+        self.assertEqual(platform["end_date"], "2026-04-07")
+        self.assertEqual(platform["boundary_policy"], "effective_departure")
+        self.assertEqual(platform["retrospective_end_date"], "2026-04-08")
+        self.assertEqual(platform["departure_warning_date"], "2026-04-08")
+        self.assertEqual(platform["departure_confirmed_date"], "2026-04-10")
+        self.assertEqual(platform["departure_direction"], "up")
+
+        departure_connector = next(
+            item
+            for item in segments
+            if item.get("segment_type") == "connector"
+            and item.get("connector_role") == "departure"
+            and item["start_date"] == "2026-04-08"
+        )
+        self.assertEqual(departure_connector["end_date"], "2026-04-09")
+        self.assertEqual(departure_connector["departure_status"], "confirmed")
+        self.assertEqual(departure_connector["departure_direction"], "up")
+        self.assertFalse(
+            any(
+                item.get("segment_type") == "connector" and right.get("segment_type") == "connector"
+                for item, right in zip(segments, segments[1:])
+            ),
+            segments,
+        )
+
+    def test_effective_departure_detector_uses_envelope_not_core_for_longpan_tail(self):
+        reference = {
+            "segment_type": "zhongshu",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-20",
+            "zg": 23.3,
+            "zd": 21.2,
+            "high": 27.68,
+            "low": 20.71,
+            "segment_high": 27.68,
+            "segment_low": 20.71,
+            "visual_high": 27.68,
+            "visual_low": 20.71,
+        }
+        rows = [
+            {"date": "2026-04-14", "high": 24.2, "low": 22.11, "close": 23.68},
+            {"date": "2026-04-16", "high": 25.05, "low": 24.1, "close": 25.05},
+            {"date": "2026-04-20", "high": 27.68, "low": 25.92, "close": 27.31},
+            {"date": "2026-04-21", "high": 26.66, "low": 25.22, "close": 26.02},
+            {"date": "2026-04-22", "high": 28.62, "low": 26.2, "close": 28.62},
+            {"date": "2026-04-23", "high": 31.4, "low": 27.95, "close": 30.45},
+            {"date": "2026-04-28", "high": 31.48, "low": 29.61, "close": 29.99},
+        ]
+
+        metadata = runtime.detect_effective_departure_from_envelope(reference, rows)
+
+        self.assertEqual(metadata["departure_warning_date"], "2026-04-22")
+        self.assertEqual(metadata["departure_confirmed_date"], "2026-04-23")
+        self.assertEqual(metadata["departure_direction"], "up")
+        self.assertEqual(metadata["departure_status"], "confirmed")
+
     def test_aggregate_daily_macro_platforms_splits_real_stock_after_large_center_migration(self):
         snapshot = json.loads((ROOT / "snapshots/2026-04-29.json").read_text())
         rows = snapshot["data"]["stock_klines"]["002805"]
