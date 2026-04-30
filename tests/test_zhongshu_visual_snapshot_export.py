@@ -70,6 +70,44 @@ class ZhongshuVisualSnapshotExportTest(unittest.TestCase):
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    def test_security_visual_payload_exports_window_and_policy_contract(self):
+        from export.security_zhongshu_visual_snapshot import normalize_security_visual_payload
+
+        payload = normalize_security_visual_payload(
+            {
+                "success": True,
+                "security_code": "603906",
+                "security_name": "Longpan Tech",
+                "security_type": "stock",
+                "zhongshu_list": [],
+                "signal": {},
+            },
+            [
+                {
+                    "date": "2026-04-29",
+                    "open": 10,
+                    "high": 11,
+                    "low": 9,
+                    "close": 10.5,
+                    "volume": 100,
+                    "amount": 1000,
+                }
+            ],
+            date="2026-04-29",
+            security_code="603906",
+            security_name="Longpan Tech",
+            security_type="stock",
+        )
+
+        self.assertEqual(payload["calculation_windows"]["structural_base_daily_bars"], 250)
+        self.assertEqual(payload["calculation_windows"]["report_display_daily_bars"], 250)
+        self.assertEqual(payload["calculation_windows"]["display_row_count"], 1)
+        self.assertEqual(payload["security_klines"]["603906"][0]["close"], 10.5)
+        self.assertEqual(payload["stock_klines"]["603906"][0]["date"], "2026-04-29")
+        self.assertEqual(payload["strict_chanlun_policy"]["default_mode"], "practical_daily_mode")
+        self.assertIn("practical_daily_node_runtime", payload["strict_chanlun_policy"]["source_algorithm"])
+        self.assertEqual(payload["strict_chanlun_policy"]["security_type"], "stock")
+
 
 if __name__ == "__main__":
     unittest.main()
