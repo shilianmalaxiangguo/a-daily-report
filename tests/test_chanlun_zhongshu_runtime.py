@@ -459,8 +459,10 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertTrue(
             any(
                 item["segment_type"] == "connector"
-                and item.get("connector_role") == "between"
-                and item["start_date"] <= "2025-12-30" <= item["end_date"]
+                and item.get("connector_role") == "departure"
+                and item["start_date"] == "2025-12-25"
+                and item["end_date"] == "2025-12-29"
+                and item.get("departure_status") == "confirmed"
                 for item in segments
             )
         )
@@ -512,6 +514,109 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
             segments,
         )
 
+    def test_effective_departure_boundary_cuts_when_confirmation_is_inside_retrospective_span(self):
+        platforms = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-06",
+                "zg": 98,
+                "zd": 92,
+                "high": 108,
+                "low": 90,
+                "segment_high": 108,
+                "segment_low": 90,
+                "visual_high": 108,
+                "visual_low": 90,
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-07",
+                "end_date": "2026-01-08",
+                "zg": 106,
+                "zd": 102,
+                "high": 110,
+                "low": 101,
+                "segment_high": 110,
+                "segment_low": 101,
+                "visual_high": 110,
+                "visual_low": 101,
+            },
+        ]
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-06", "high": 108, "low": 101, "close": 107},
+            {"date": "2026-01-07", "high": 110, "low": 102, "close": 108},
+            {"date": "2026-01-08", "high": 109, "low": 101, "close": 106},
+        ]
+
+        adjusted = runtime.apply_effective_departure_boundaries(platforms, rows)
+
+        self.assertEqual(adjusted[0]["end_date"], "2026-01-04")
+        self.assertEqual(adjusted[0]["departure_warning_date"], "2026-01-05")
+        self.assertEqual(adjusted[0]["departure_confirmed_date"], "2026-01-06")
+
+    def test_effective_departure_boundary_ignores_stale_confirmation_beyond_lookahead(self):
+        platforms = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-06",
+                "zg": 98,
+                "zd": 92,
+                "high": 105,
+                "low": 90,
+                "segment_high": 105,
+                "segment_low": 90,
+                "visual_high": 105,
+                "visual_low": 90,
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-20",
+                "end_date": "2026-01-20",
+                "zg": 108,
+                "zd": 104,
+                "high": 112,
+                "low": 103,
+                "segment_high": 112,
+                "segment_low": 103,
+                "visual_high": 112,
+                "visual_low": 103,
+            },
+        ]
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-06", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-07", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-08", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-09", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-10", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-11", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-12", "high": 104, "low": 98, "close": 103},
+            {"date": "2026-01-13", "high": 110, "low": 101, "close": 109},
+            {"date": "2026-01-14", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-15", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-16", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-17", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-18", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-19", "high": 108, "low": 100, "close": 107},
+            {"date": "2026-01-20", "high": 112, "low": 103, "close": 111},
+        ]
+
+        adjusted = runtime.apply_effective_departure_boundaries(platforms, rows)
+
+        self.assertEqual(adjusted[0]["end_date"], "2026-01-06")
+        self.assertNotIn("effective_departure", adjusted[0])
+
     def test_effective_departure_detector_uses_envelope_not_core_for_longpan_tail(self):
         reference = {
             "segment_type": "zhongshu",
@@ -542,6 +647,23 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(metadata["departure_confirmed_date"], "2026-04-23")
         self.assertEqual(metadata["departure_direction"], "up")
         self.assertEqual(metadata["departure_status"], "confirmed")
+
+    def test_effective_departure_detector_requires_envelope_bounds_not_core_only(self):
+        reference = {
+            "segment_type": "zhongshu",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-20",
+            "zg": 100,
+            "zd": 90,
+        }
+        rows = [
+            {"date": "2026-04-21", "high": 102, "low": 99, "close": 101},
+            {"date": "2026-04-22", "high": 105, "low": 101, "close": 104},
+        ]
+
+        metadata = runtime.detect_effective_departure_from_envelope(reference, rows)
+
+        self.assertIsNone(metadata)
 
     def test_aggregate_daily_macro_platforms_splits_real_stock_after_large_center_migration(self):
         snapshot = json.loads((ROOT / "snapshots/2026-04-29.json").read_text())

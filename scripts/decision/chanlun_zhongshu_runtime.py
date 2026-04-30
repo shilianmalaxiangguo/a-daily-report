@@ -28,6 +28,7 @@ __all__ = [
     "build_platform_sequence_from_trend_types",
     "build_trend_types_from_bars",
     "confirm_daily_level_zhongshu",
+    "detect_effective_departure_from_envelope",
 ]
 
 
@@ -479,6 +480,207 @@ def _core_ranges_overlap(left, right):
 MIN_CONFIRMED_PLATFORM_KLINES = 3
 CENTER_MIGRATION_PRICE_PCT_LIMIT = 0.075
 CENTER_MIGRATION_ENVELOPE_RATIO_LIMIT = 0.22
+EFFECTIVE_DEPARTURE_TAIL_SCAN_BARS = 3
+EFFECTIVE_DEPARTURE_CONFIRM_LOOKAHEAD_BARS = 6
+
+
+def _first_strict_number(mapping, *keys):
+    for key in keys:
+        value = _strict_float(mapping.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _platform_envelope_bounds(platform):
+    high = _first_strict_number(platform, "visual_high", "segment_high", "high")
+    low = _first_strict_number(platform, "visual_low", "segment_low", "low")
+    if high is None or low is None:
+        return None
+    return max(high, low), min(high, low)
+
+
+def _row_departure_direction(row, envelope_high, envelope_low, *, warning):
+    high = _strict_float(row.get("high"))
+    low = _strict_float(row.get("low"))
+    close = _strict_float(row.get("close"))
+    if high is None or low is None:
+        return None
+    if warning:
+        if close is not None and close > envelope_high:
+            return "up"
+        if close is not None and close < envelope_low:
+            return "down"
+        return None
+    if low > envelope_high:
+        return "up"
+    if high < envelope_low:
+        return "down"
+    return None
+
+
+def _departure_metadata(direction, warning_row, confirmed_row, envelope_high, envelope_low):
+    return {
+        "boundary_policy": "effective_departure",
+        "departure_status": "confirmed",
+        "departure_direction": direction,
+        "departure_warning_date": warning_row["date"],
+        "departure_confirmed_date": confirmed_row["date"],
+        "departure_envelope_high": float(envelope_high),
+        "departure_envelope_low": float(envelope_low),
+        "rule_tier": "effective_departure_boundary",
+    }
+
+
+def detect_effective_departure_from_envelope(reference_platform, rows):
+    """Detect a departure using the platform envelope rather than the core range."""
+    bounds = _platform_envelope_bounds(reference_platform or {})
+    if bounds is None:
+        return None
+    envelope_high, envelope_low = bounds
+    date_items = _coerce_ordered_date_items(rows)
+    warning = None
+    direction = None
+    for row in date_items:
+        row_direction = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
+        if row_direction is None:
+            continue
+        warning = row
+        direction = row_direction
+        break
+    if warning is None or direction is None:
+        return None
+
+    warning_seen = False
+    for row in date_items:
+        if row["date"] == warning["date"]:
+            warning_seen = True
+            continue
+        if not warning_seen:
+            continue
+        confirmed_direction = _row_departure_direction(row, envelope_high, envelope_low, warning=False)
+        if confirmed_direction == direction:
+            return _departure_metadata(direction, warning, row, envelope_high, envelope_low)
+        opposite_warning = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
+        if opposite_warning and opposite_warning != direction:
+            return {
+                "boundary_policy": "effective_departure",
+                "departure_status": "failed",
+                "departure_direction": direction,
+                "departure_warning_date": warning["date"],
+                "departure_confirmed_date": "",
+                "departure_envelope_high": float(envelope_high),
+                "departure_envelope_low": float(envelope_low),
+                "rule_tier": "failed_departure_boundary",
+            }
+    return {
+        "boundary_policy": "effective_departure",
+        "departure_status": "warning",
+        "departure_direction": direction,
+        "departure_warning_date": warning["date"],
+        "departure_confirmed_date": "",
+        "departure_envelope_high": float(envelope_high),
+        "departure_envelope_low": float(envelope_low),
+        "rule_tier": "effective_departure_warning",
+    }
+
+
+def _prefix_envelope(rows):
+    highs = [_strict_float(row.get("high")) for row in rows]
+    lows = [_strict_float(row.get("low")) for row in rows]
+    highs = [value for value in highs if value is not None]
+    lows = [value for value in lows if value is not None]
+    if not highs or not lows:
+        return None
+    return float(max(highs)), float(min(lows))
+
+
+def _find_effective_departure_boundary(platform, next_platform, date_items, index_by_date):
+    bounds = _date_index_bounds(platform, index_by_date)
+    next_bounds = _date_index_bounds(next_platform, index_by_date)
+    if bounds is None or next_bounds is None:
+        return None
+    start_idx, end_idx = bounds
+    if end_idx - start_idx + 1 < MIN_CONFIRMED_PLATFORM_KLINES + 1:
+        return None
+    scan_start = max(
+        start_idx + MIN_CONFIRMED_PLATFORM_KLINES,
+        end_idx - EFFECTIVE_DEPARTURE_TAIL_SCAN_BARS + 1,
+    )
+    scan_end = end_idx
+    confirm_end = min(
+        len(date_items) - 1,
+        scan_end + EFFECTIVE_DEPARTURE_CONFIRM_LOOKAHEAD_BARS,
+    )
+    for warning_idx in range(scan_start, scan_end + 1):
+        prefix_rows = date_items[start_idx:warning_idx]
+        if len(prefix_rows) < MIN_CONFIRMED_PLATFORM_KLINES:
+            continue
+        envelope = _prefix_envelope(prefix_rows)
+        if envelope is None:
+            continue
+        envelope_high, envelope_low = envelope
+        warning_row = date_items[warning_idx]
+        direction = _row_departure_direction(warning_row, envelope_high, envelope_low, warning=True)
+        if direction is None:
+            continue
+        for confirm_idx in range(warning_idx + 1, confirm_end + 1):
+            confirmed_row = date_items[confirm_idx]
+            confirmed_direction = _row_departure_direction(
+                confirmed_row,
+                envelope_high,
+                envelope_low,
+                warning=False,
+            )
+            if confirmed_direction != direction:
+                continue
+            decision_end_idx = warning_idx - 1
+            if decision_end_idx - start_idx + 1 < MIN_CONFIRMED_PLATFORM_KLINES:
+                return None
+            metadata = _departure_metadata(direction, warning_row, confirmed_row, envelope_high, envelope_low)
+            metadata.update(
+                {
+                    "retrospective_start_date": platform.get("start_date"),
+                    "retrospective_end_date": platform.get("end_date"),
+                    "decision_start_date": date_items[start_idx]["date"],
+                    "decision_end_date": date_items[decision_end_idx]["date"],
+                    "departure_warning_index": warning_idx,
+                    "departure_confirmed_index": confirm_idx,
+                }
+            )
+            return {"decision_end_idx": decision_end_idx, "metadata": metadata}
+    return None
+
+
+def apply_effective_departure_boundaries(platforms, ordered_dates, *, level="daily"):
+    del level
+    date_items = _coerce_ordered_date_items(ordered_dates)
+    if not platforms or not date_items:
+        return platforms
+    if any(
+        _strict_float(item.get("high")) is None
+        or _strict_float(item.get("low")) is None
+        or _strict_float(item.get("close")) is None
+        for item in date_items
+    ):
+        return platforms
+    index_by_date = {item["date"]: idx for idx, item in enumerate(date_items)}
+    adjusted = []
+    for index, platform in enumerate(platforms):
+        copied = dict(platform)
+        next_platform = platforms[index + 1] if index + 1 < len(platforms) else None
+        if next_platform is not None:
+            event = _find_effective_departure_boundary(copied, next_platform, date_items, index_by_date)
+            if event is not None:
+                bounds = _date_index_bounds(copied, index_by_date)
+                if bounds is not None:
+                    shortened = _apply_date_span(copied, bounds[0], event["decision_end_idx"], date_items)
+                    if shortened is not None:
+                        shortened.update(event["metadata"])
+                        shortened["effective_departure"] = dict(event["metadata"])
+                        copied = shortened
+        adjusted.append(copied)
+    return adjusted
 
 
 def _platform_core_bounds(platform):
@@ -1087,6 +1289,45 @@ def _build_macro_connector(prev_platform, next_platform, *, level, sequence_id):
     }
 
 
+def _date_in_segment(date, segment):
+    normalized = normalize_kline_date_str(date)
+    start = normalize_kline_date_str(segment.get("start_date"))
+    end = normalize_kline_date_str(segment.get("end_date"))
+    if not normalized or not start or not end:
+        return False
+    left, right = (start, end) if start <= end else (end, start)
+    return left <= normalized <= right
+
+
+def _annotate_effective_departure_connectors(segments):
+    annotated = []
+    pending_departure = None
+    for segment in segments:
+        copied = dict(segment)
+        if copied.get("segment_type") == "connector" and pending_departure:
+            warning_date = pending_departure.get("departure_warning_date")
+            if _date_in_segment(warning_date, copied):
+                copied.update(
+                    {
+                        "connector_role": "departure",
+                        "departure_status": pending_departure.get("departure_status", "confirmed"),
+                        "departure_direction": pending_departure.get("departure_direction", ""),
+                        "departure_warning_date": pending_departure.get("departure_warning_date", ""),
+                        "departure_confirmed_date": pending_departure.get("departure_confirmed_date", ""),
+                        "departure_envelope_high": pending_departure.get("departure_envelope_high"),
+                        "departure_envelope_low": pending_departure.get("departure_envelope_low"),
+                        "rule_tier": pending_departure.get("rule_tier", "effective_departure_boundary"),
+                        "reason": "有效离开前平台包络，作为离开段连接到下一结构",
+                    }
+                )
+                pending_departure = None
+        annotated.append(copied)
+        if copied.get("segment_type") == "zhongshu":
+            departure = copied.get("effective_departure")
+            pending_departure = departure if isinstance(departure, Mapping) else None
+    return annotated
+
+
 def aggregate_daily_macro_platforms(
     structure_segments,
     *,
@@ -1115,15 +1356,17 @@ def aggregate_daily_macro_platforms(
         if initial_partition is not None:
             _initial_segments, macro_platforms = initial_partition
         macro_platforms = _merge_platforms_by_envelope_departure(macro_platforms, ordered_dates, level=level)
+        macro_platforms = apply_effective_departure_boundaries(macro_platforms, ordered_dates, level=level)
     partitioned = _partition_macro_sequence_by_dates_with_confirmed_minimum(
         macro_platforms,
         ordered_dates,
         level=level,
     )
     if partitioned is not None:
-        return partitioned
+        partitioned_segments, partitioned_platforms = partitioned
+        return _annotate_effective_departure_connectors(partitioned_segments), partitioned_platforms
 
-    return macro_segments, [platform.copy() for platform in macro_platforms]
+    return _annotate_effective_departure_connectors(macro_segments), [platform.copy() for platform in macro_platforms]
 
 
 def _candidate_from_platform(platform):
