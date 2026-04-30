@@ -12,6 +12,7 @@ from decision.chanlun_zhongshu_runtime import (
     analyze_chanlun_zhongshu,
     build_platform_sequence_from_trend_types,
     build_trend_types_from_bars,
+    detect_effective_departure_from_envelope,
 )
 from market_data.daily_price_runtime import fetch_daily_price_bars
 from market_data.kline_dates import (
@@ -353,6 +354,20 @@ def append_tail_candidate_platform(structure_segments, ordered_rows):
         "tail_candidate_direction": retrace_direction,
         "reason": "尾部连接段脱离前平台后出现回撤与近两日重叠，标记为右侧候选平台；不进入确认中枢列表",
     }
+    departure_metadata = detect_effective_departure_from_envelope(previous_platform, rows)
+    if departure_metadata and departure_metadata.get("departure_status") == "confirmed":
+        candidate.update(
+            {
+                "departure_status": departure_metadata.get("departure_status"),
+                "departure_direction": departure_metadata.get("departure_direction"),
+                "departure_warning_date": departure_metadata.get("departure_warning_date"),
+                "departure_confirmed_date": departure_metadata.get("departure_confirmed_date"),
+                "departure_envelope_high": departure_metadata.get("departure_envelope_high"),
+                "departure_envelope_low": departure_metadata.get("departure_envelope_low"),
+                "departure_source_platform_start_date": previous_platform.get("start_date"),
+                "departure_source_platform_end_date": previous_platform.get("end_date"),
+            }
+        )
     return [*structure_segments[:-1], candidate]
 
 

@@ -129,6 +129,14 @@ class SecurityZhongshuNodeTest(unittest.TestCase):
         self.assertEqual(latest["kline_count"], 6)
         self.assertEqual(latest["zg"], 31.48)
         self.assertEqual(latest["zd"], 29.61)
+        self.assertEqual(latest["departure_status"], "confirmed")
+        self.assertEqual(latest["departure_direction"], "up")
+        self.assertEqual(latest["departure_warning_date"], "2026-04-22")
+        self.assertEqual(latest["departure_confirmed_date"], "2026-04-23")
+        self.assertEqual(latest["departure_envelope_high"], 27.68)
+        self.assertEqual(latest["departure_envelope_low"], 20.71)
+        self.assertEqual(latest["departure_source_platform_start_date"], "2026-04-01")
+        self.assertEqual(latest["departure_source_platform_end_date"], "2026-04-20")
         self.assertEqual([item["segment_type"] for item in result["structure_segments"]], ["zhongshu", "candidate_platform"])
 
 
