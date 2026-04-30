@@ -564,16 +564,9 @@ def detect_effective_departure_from_envelope(reference_platform, rows):
             continue
         opposite_warning = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
         if opposite_warning and opposite_warning != direction:
-            return {
-                "boundary_policy": "effective_departure",
-                "departure_status": "failed",
-                "departure_direction": direction,
-                "departure_warning_date": warning["date"],
-                "departure_confirmed_date": "",
-                "departure_envelope_high": float(envelope_high),
-                "departure_envelope_low": float(envelope_low),
-                "rule_tier": "failed_departure_boundary",
-            }
+            warning = row
+            direction = opposite_warning
+            continue
     if warning is None or direction is None:
         return None
     return {

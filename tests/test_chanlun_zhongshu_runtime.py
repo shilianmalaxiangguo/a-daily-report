@@ -768,6 +768,37 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(metadata["departure_warning_date"], "2026-01-07")
         self.assertEqual(metadata["departure_confirmed_date"], "")
 
+    def test_effective_departure_detector_resets_to_opposite_warning_sequence(self):
+        reference = {
+            "segment_type": "zhongshu",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-04",
+            "zg": 98,
+            "zd": 92,
+            "high": 100,
+            "low": 90,
+            "segment_high": 100,
+            "segment_low": 90,
+            "visual_high": 100,
+            "visual_low": 90,
+        }
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-06", "high": 92, "low": 85, "close": 86},
+            {"date": "2026-01-07", "high": 89, "low": 80, "close": 82},
+        ]
+
+        metadata = runtime.detect_effective_departure_from_envelope(reference, rows)
+
+        self.assertEqual(metadata["departure_status"], "confirmed")
+        self.assertEqual(metadata["departure_direction"], "down")
+        self.assertEqual(metadata["departure_warning_date"], "2026-01-06")
+        self.assertEqual(metadata["departure_confirmed_date"], "2026-01-07")
+
     def test_effective_departure_detector_requires_envelope_bounds_not_core_only(self):
         reference = {
             "segment_type": "zhongshu",
