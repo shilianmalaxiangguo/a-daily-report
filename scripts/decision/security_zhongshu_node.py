@@ -178,8 +178,16 @@ def analyze_security_zhongshu_from_frame(
 
         today_price = float(today_df["close"])
         today_date = today_df["date"]
-        structure_segments = append_today_trailing_connector(structure_segments, today_df)
-        structure_segments = append_tail_candidate_platform(structure_segments, hist_df.to_dict("records") + [today_df.to_dict()])
+        hist_rows = hist_df.to_dict("records")
+        today_record = today_df.to_dict()
+        structure_segments = append_tail_candidate_platform(structure_segments, hist_rows)
+        latest_segment = structure_segments[-1] if structure_segments else None
+        if not latest_segment or latest_segment.get("segment_type") != "candidate_platform":
+            structure_segments = append_today_trailing_connector(structure_segments, today_df)
+            structure_segments = append_tail_candidate_platform(
+                structure_segments,
+                hist_rows + [today_record],
+            )
         current = zhongshu_list[-1] if zhongshu_list else None
         latest_structure_segment = structure_segments[-1] if structure_segments else None
         normalized_security_type = str(security_type or "stock")

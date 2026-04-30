@@ -139,6 +139,45 @@ class SecurityZhongshuNodeTest(unittest.TestCase):
         self.assertEqual(latest["departure_source_platform_end_date"], "2026-04-20")
         self.assertEqual([item["segment_type"] for item in result["structure_segments"]], ["zhongshu", "candidate_platform"])
 
+    def test_keeps_comparison_day_out_of_tail_candidate_platform(self):
+        rows = [
+            *_longpan_tail_candidate_rows(),
+            {"date": "2026-04-29", "open": 30.89, "high": 33.19, "low": 30.32, "close": 32.99, "volume": 1, "amount": 10},
+        ]
+
+        result = analyze_security_zhongshu_from_rows(
+            rows,
+            security_code="603906",
+            security_name="龙蟠科技",
+            security_type="stock",
+            target_date="2026-04-29",
+            data_source="unit_fixture",
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["today_date"], "2026-04-29")
+        self.assertEqual(result["today_price"], 32.99)
+
+        latest = result["latest_structure_segment"]
+        self.assertEqual(latest["segment_type"], "candidate_platform")
+        self.assertEqual(latest["confirmation_status"], "forming")
+        self.assertEqual(latest["candidate_status"], "tail_platform_candidate")
+        self.assertTrue(latest["is_current_forming"])
+        self.assertEqual(latest["start_date"], "2026-04-21")
+        self.assertEqual(latest["end_date"], "2026-04-28")
+        self.assertEqual(latest["kline_count"], 6)
+        self.assertEqual(latest["zg"], 31.48)
+        self.assertEqual(latest["zd"], 29.61)
+        self.assertEqual(latest["departure_status"], "confirmed")
+        self.assertEqual(latest["departure_direction"], "up")
+        self.assertEqual(latest["departure_warning_date"], "2026-04-22")
+        self.assertEqual(latest["departure_confirmed_date"], "2026-04-23")
+        self.assertEqual(latest["departure_envelope_high"], 27.68)
+        self.assertEqual(latest["departure_envelope_low"], 20.71)
+        self.assertEqual(latest["departure_source_platform_start_date"], "2026-04-01")
+        self.assertEqual(latest["departure_source_platform_end_date"], "2026-04-20")
+
 
 if __name__ == "__main__":
     unittest.main()
