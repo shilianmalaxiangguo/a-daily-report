@@ -638,6 +638,14 @@ def _find_effective_departure_boundary(platform, next_platform, date_items, inde
             if confirmed_direction != direction:
                 if _row_close_inside_envelope(confirmed_row, envelope_high, envelope_low):
                     break
+                opposite_warning = _row_departure_direction(
+                    confirmed_row,
+                    envelope_high,
+                    envelope_low,
+                    warning=True,
+                )
+                if opposite_warning and opposite_warning != direction:
+                    break
                 continue
             decision_end_idx = warning_idx - 1
             if decision_end_idx - start_idx + 1 < MIN_CONFIRMED_PLATFORM_KLINES:

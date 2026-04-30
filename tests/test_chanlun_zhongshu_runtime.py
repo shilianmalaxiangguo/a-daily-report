@@ -605,6 +605,51 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertNotIn("effective_departure", adjusted[0])
         self.assertNotIn("departure_warning_date", adjusted[0])
 
+    def test_effective_departure_boundary_resets_warning_when_opposite_warning_appears(self):
+        platforms = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-06",
+                "zg": 98,
+                "zd": 92,
+                "high": 100,
+                "low": 90,
+                "segment_high": 100,
+                "segment_low": 90,
+                "visual_high": 100,
+                "visual_low": 90,
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-07",
+                "end_date": "2026-01-07",
+                "zg": 108,
+                "zd": 104,
+                "high": 112,
+                "low": 101,
+                "segment_high": 112,
+                "segment_low": 101,
+                "visual_high": 112,
+                "visual_low": 101,
+            },
+        ]
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-06", "high": 92, "low": 85, "close": 86},
+            {"date": "2026-01-07", "high": 112, "low": 101, "close": 110},
+        ]
+
+        adjusted = runtime.apply_effective_departure_boundaries(platforms, rows)
+
+        self.assertEqual(adjusted[0]["end_date"], "2026-01-06")
+        self.assertNotIn("effective_departure", adjusted[0])
+        self.assertNotIn("departure_warning_date", adjusted[0])
+
     def test_effective_departure_boundary_ignores_stale_confirmation_beyond_lookahead(self):
         platforms = [
             {
