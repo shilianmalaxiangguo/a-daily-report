@@ -22,7 +22,7 @@ from market_data.daily_price_runtime import fetch_daily_price_bars
 from market_data.kline_dates import normalize_kline_date_str
 
 STOCK_OBSERVATION_LOOKBACK_CALENDAR_DAYS = 220
-SECURITY_ZHONGSHU_VISUAL_ALGORITHM_VERSION = "security-zhongshu-tail-candidate-v2"
+SECURITY_ZHONGSHU_VISUAL_ALGORITHM_VERSION = "security-zhongshu-effective-departure-v1"
 
 
 def _stock_to_bs_code(stock_code: str) -> str:
