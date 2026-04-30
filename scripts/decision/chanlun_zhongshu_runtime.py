@@ -519,6 +519,11 @@ def _row_departure_direction(row, envelope_high, envelope_low, *, warning):
     return None
 
 
+def _row_close_inside_envelope(row, envelope_high, envelope_low):
+    close = _strict_float(row.get("close"))
+    return close is not None and envelope_low <= close <= envelope_high
+
+
 def _departure_metadata(direction, warning_row, confirmed_row, envelope_high, envelope_low):
     return {
         "boundary_policy": "effective_departure",
@@ -542,25 +547,21 @@ def detect_effective_departure_from_envelope(reference_platform, rows):
     warning = None
     direction = None
     for row in date_items:
-        row_direction = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
-        if row_direction is None:
+        if warning is None:
+            row_direction = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
+            if row_direction is None:
+                continue
+            warning = row
+            direction = row_direction
             continue
-        warning = row
-        direction = row_direction
-        break
-    if warning is None or direction is None:
-        return None
 
-    warning_seen = False
-    for row in date_items:
-        if row["date"] == warning["date"]:
-            warning_seen = True
-            continue
-        if not warning_seen:
-            continue
         confirmed_direction = _row_departure_direction(row, envelope_high, envelope_low, warning=False)
         if confirmed_direction == direction:
             return _departure_metadata(direction, warning, row, envelope_high, envelope_low)
+        if _row_close_inside_envelope(row, envelope_high, envelope_low):
+            warning = None
+            direction = None
+            continue
         opposite_warning = _row_departure_direction(row, envelope_high, envelope_low, warning=True)
         if opposite_warning and opposite_warning != direction:
             return {
@@ -573,6 +574,8 @@ def detect_effective_departure_from_envelope(reference_platform, rows):
                 "departure_envelope_low": float(envelope_low),
                 "rule_tier": "failed_departure_boundary",
             }
+    if warning is None or direction is None:
+        return None
     return {
         "boundary_policy": "effective_departure",
         "departure_status": "warning",
@@ -633,6 +636,8 @@ def _find_effective_departure_boundary(platform, next_platform, date_items, inde
                 warning=False,
             )
             if confirmed_direction != direction:
+                if _row_close_inside_envelope(confirmed_row, envelope_high, envelope_low):
+                    break
                 continue
             decision_end_idx = warning_idx - 1
             if decision_end_idx - start_idx + 1 < MIN_CONFIRMED_PLATFORM_KLINES:

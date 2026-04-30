@@ -560,6 +560,51 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(adjusted[0]["departure_warning_date"], "2026-01-05")
         self.assertEqual(adjusted[0]["departure_confirmed_date"], "2026-01-06")
 
+    def test_effective_departure_boundary_resets_warning_when_close_returns_inside_envelope(self):
+        platforms = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-06",
+                "zg": 98,
+                "zd": 92,
+                "high": 100,
+                "low": 90,
+                "segment_high": 100,
+                "segment_low": 90,
+                "visual_high": 100,
+                "visual_low": 90,
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-07",
+                "end_date": "2026-01-07",
+                "zg": 108,
+                "zd": 104,
+                "high": 112,
+                "low": 101,
+                "segment_high": 112,
+                "segment_low": 101,
+                "visual_high": 112,
+                "visual_low": 101,
+            },
+        ]
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-06", "high": 101, "low": 94, "close": 95},
+            {"date": "2026-01-07", "high": 112, "low": 101, "close": 110},
+        ]
+
+        adjusted = runtime.apply_effective_departure_boundaries(platforms, rows)
+
+        self.assertEqual(adjusted[0]["end_date"], "2026-01-06")
+        self.assertNotIn("effective_departure", adjusted[0])
+        self.assertNotIn("departure_warning_date", adjusted[0])
+
     def test_effective_departure_boundary_ignores_stale_confirmation_beyond_lookahead(self):
         platforms = [
             {
@@ -647,6 +692,36 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(metadata["departure_confirmed_date"], "2026-04-23")
         self.assertEqual(metadata["departure_direction"], "up")
         self.assertEqual(metadata["departure_status"], "confirmed")
+
+    def test_effective_departure_detector_resets_warning_when_close_returns_inside_envelope(self):
+        reference = {
+            "segment_type": "zhongshu",
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-04",
+            "zg": 98,
+            "zd": 92,
+            "high": 100,
+            "low": 90,
+            "segment_high": 100,
+            "segment_low": 90,
+            "visual_high": 100,
+            "visual_low": 90,
+        }
+        rows = [
+            {"date": "2026-01-01", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-02", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-03", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-04", "high": 100, "low": 90, "close": 95},
+            {"date": "2026-01-05", "high": 105, "low": 99, "close": 104},
+            {"date": "2026-01-06", "high": 101, "low": 94, "close": 95},
+            {"date": "2026-01-07", "high": 112, "low": 101, "close": 110},
+        ]
+
+        metadata = runtime.detect_effective_departure_from_envelope(reference, rows)
+
+        self.assertEqual(metadata["departure_status"], "warning")
+        self.assertEqual(metadata["departure_warning_date"], "2026-01-07")
+        self.assertEqual(metadata["departure_confirmed_date"], "")
 
     def test_effective_departure_detector_requires_envelope_bounds_not_core_only(self):
         reference = {
