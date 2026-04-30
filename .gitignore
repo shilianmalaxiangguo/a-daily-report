@@ -9,6 +9,8 @@
 /snapshots/**
 /logs/
 /logs/**
+/.worktrees/
+/.worktrees/**
 
 # Independent local UI projects
 /snap-ui/
