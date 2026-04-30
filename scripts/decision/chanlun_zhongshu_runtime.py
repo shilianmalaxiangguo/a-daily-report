@@ -24,6 +24,7 @@ __all__ = [
     "analyze_chanlun_zhongshu",
     "build_daily_structure_candidates",
     "build_chanlun_60m_structures",
+    "aggregate_daily_macro_platforms",
     "build_platform_sequence_from_trend_types",
     "build_trend_types_from_bars",
     "confirm_daily_level_zhongshu",
@@ -313,6 +314,38 @@ def _build_connector_segment(units, *, level, sequence_id):
     }
 
 
+def _build_synthetic_bridge_segment(prev_segment, next_unit, *, level, sequence_id):
+    start_date = prev_segment.get("end_date")
+    end_date = next_unit.get("start_date", start_date)
+    start_time = prev_segment.get("end_time", start_date)
+    end_time = next_unit.get("start_time", end_date)
+    start_close = _safe_float(prev_segment.get("end_close"), default=_safe_float(prev_segment.get("high")))
+    end_close = _safe_float(next_unit.get("start_close"), default=_safe_float(next_unit.get("low")))
+    high = max(start_close, end_close)
+    low = min(start_close, end_close)
+    return {
+        "segment_type": "connector",
+        "structure_kind": "connecting_line",
+        "connector_id": f"{level}_connector_{sequence_id}",
+        "level": level,
+        "start_date": start_date,
+        "end_date": end_date,
+        "start_time": start_time,
+        "end_time": end_time,
+        "kline_count": 0,
+        "trend_type_count": 0,
+        "trend_type_ids": [],
+        "high": float(high),
+        "low": float(low),
+        "segment_high": float(high),
+        "segment_low": float(low),
+        "start_close": float(start_close),
+        "end_close": float(end_close),
+        "synthetic_bridge": True,
+        "reason": "相邻平台之间的边界连接线；不重复占用下一平台走势类型",
+    }
+
+
 def build_platform_sequence_from_trend_types(trend_types, *, level="daily"):
     units = []
     for index, item in enumerate(_coerce_structure_sequence(trend_types)):
@@ -343,8 +376,12 @@ def build_platform_sequence_from_trend_types(trend_types, *, level="daily"):
             connector_units = []
         elif segments and segments[-1].get("segment_type") == "zhongshu":
             connector_count += 1
-            bridge = _build_connector_segment([units[index]], level=level, sequence_id=connector_count)
-            bridge["shared_with_next_platform"] = True
+            bridge = _build_synthetic_bridge_segment(
+                segments[-1],
+                units[index],
+                level=level,
+                sequence_id=connector_count,
+            )
             bridge["reason"] = "相邻平台之间显式保留一条桥接连接线，避免平台直接贴平台"
             segments.append(bridge)
 
@@ -381,6 +418,714 @@ def build_platform_sequence_from_trend_types(trend_types, *, level="daily"):
     return segments, platforms
 
 
+def _segment_price_high(segment):
+    return _safe_float(
+        segment.get("high", segment.get("segment_high", segment.get("zg", segment.get("ZG", 0.0))))
+    )
+
+
+def _segment_price_low(segment):
+    return _safe_float(
+        segment.get("low", segment.get("segment_low", segment.get("zd", segment.get("ZD", 0.0))))
+    )
+
+
+def _bounded_visual_range(zg, zd, high, low):
+    del zg, zd
+    return float(_safe_float(high)), float(_safe_float(low))
+
+
+def _segment_kline_count(segment):
+    return max(_safe_int(segment.get("kline_count"), default=1), 1)
+
+
+def _cluster_kline_count(cluster):
+    if not cluster:
+        return 0
+    total = sum(_segment_kline_count(segment) for segment in cluster)
+    return max(total - max(0, len(cluster) - 1), 1)
+
+
+def _copy_segment_with_macro_aliases(segment):
+    copied = dict(segment)
+    high = _segment_price_high(copied)
+    low = _segment_price_low(copied)
+    copied.setdefault("high", high)
+    copied.setdefault("low", low)
+    copied.setdefault("segment_high", high)
+    copied.setdefault("segment_low", low)
+    visual_high, visual_low = _bounded_visual_range(
+        copied.get("zg", copied.get("ZG")),
+        copied.get("zd", copied.get("ZD")),
+        high,
+        low,
+    )
+    copied.setdefault("visual_high", visual_high)
+    copied.setdefault("visual_low", visual_low)
+    copied.setdefault("rule_tier", "original_rule")
+    return copied
+
+
+def _core_ranges_overlap(left, right):
+    left_zg = _strict_float(left.get("zg", left.get("ZG")))
+    left_zd = _strict_float(left.get("zd", left.get("ZD")))
+    right_zg = _strict_float(right.get("zg", right.get("ZG")))
+    right_zd = _strict_float(right.get("zd", right.get("ZD")))
+    if left_zg is None or left_zd is None or right_zg is None or right_zd is None:
+        return False
+    return min(left_zg, right_zg) > max(left_zd, right_zd)
+
+
+MIN_CONFIRMED_PLATFORM_KLINES = 3
+CENTER_MIGRATION_PRICE_PCT_LIMIT = 0.075
+CENTER_MIGRATION_ENVELOPE_RATIO_LIMIT = 0.22
+
+
+def _platform_core_bounds(platform):
+    zg = _strict_float(platform.get("zg", platform.get("ZG")))
+    zd = _strict_float(platform.get("zd", platform.get("ZD")))
+    if zg is None or zd is None:
+        high = _strict_float(platform.get("high", platform.get("segment_high")))
+        low = _strict_float(platform.get("low", platform.get("segment_low")))
+        if high is None or low is None:
+            return None
+        zg = high
+        zd = low
+    return max(zg, zd), min(zg, zd)
+
+
+def _platform_core_center(platform):
+    bounds = _platform_core_bounds(platform)
+    if bounds is None:
+        return None
+    zg, zd = bounds
+    return (zg + zd) / 2
+
+
+def _has_large_center_migration(reference_platform, candidate_platform):
+    if _core_ranges_overlap(reference_platform, candidate_platform):
+        return False
+    reference_bounds = _platform_core_bounds(reference_platform)
+    reference_center = _platform_core_center(reference_platform)
+    candidate_center = _platform_core_center(candidate_platform)
+    if reference_bounds is None or reference_center is None or candidate_center is None:
+        return False
+    reference_zg, reference_zd = reference_bounds
+    candidate_outside_reference_core = candidate_center > reference_zg or candidate_center < reference_zd
+    if not candidate_outside_reference_core:
+        return False
+    reference_span = max(_segment_price_high(reference_platform) - _segment_price_low(reference_platform), 0.01)
+    price_base = max(abs(reference_center), 0.01)
+    center_shift = abs(candidate_center - reference_center)
+    price_pct = center_shift / price_base
+    envelope_ratio = center_shift / reference_span
+    return (
+        price_pct >= CENTER_MIGRATION_PRICE_PCT_LIMIT
+        and envelope_ratio >= CENTER_MIGRATION_ENVELOPE_RATIO_LIMIT
+    )
+
+
+def _merge_macro_platform_pair(left, right, *, level, sequence_id):
+    high = max(_segment_price_high(left), _segment_price_high(right))
+    low = min(_segment_price_low(left), _segment_price_low(right))
+    core_zg = min(_safe_float(left.get("zg", left.get("ZG"))), _safe_float(right.get("zg", right.get("ZG"))))
+    core_zd = max(_safe_float(left.get("zd", left.get("ZD"))), _safe_float(right.get("zd", right.get("ZD"))))
+    visual_high, visual_low = _bounded_visual_range(core_zg, core_zd, high, low)
+    trend_type_ids = list(left.get("trend_type_ids") or []) + list(right.get("trend_type_ids") or [])
+    core_trend_type_ids = list(left.get("core_trend_type_ids") or []) + list(right.get("core_trend_type_ids") or [])
+    source_segment_ids = list(left.get("source_segment_ids") or [left.get("zhongshu_id")]) + list(
+        right.get("source_segment_ids") or [right.get("zhongshu_id")]
+    )
+    return {
+        **left,
+        "segment_type": "zhongshu",
+        "structure_kind": "platform",
+        "zhongshu_id": f"{level}_macro_platform_{sequence_id}",
+        "level": level,
+        "start_date": left.get("start_date"),
+        "end_date": right.get("end_date"),
+        "start_time": left.get("start_time", left.get("start_date")),
+        "end_time": right.get("end_time", right.get("end_date")),
+        "kline_count": _cluster_kline_count([left, right]),
+        "trend_type_count": _safe_int(left.get("trend_type_count"), default=0)
+        + _safe_int(right.get("trend_type_count"), default=0),
+        "platform_core_unit_count": _safe_int(left.get("platform_core_unit_count"), default=0)
+        + _safe_int(right.get("platform_core_unit_count"), default=0),
+        "core_trend_type_ids": [item for item in core_trend_type_ids if item],
+        "trend_type_ids": [item for item in trend_type_ids if item],
+        "source_segment_ids": [item for item in source_segment_ids if item],
+        "source_segment_count": _safe_int(left.get("source_segment_count"), default=1)
+        + _safe_int(right.get("source_segment_count"), default=1),
+        "raw_platform_count": _safe_int(left.get("raw_platform_count"), default=1)
+        + _safe_int(right.get("raw_platform_count"), default=1),
+        "zg": float(core_zg),
+        "zd": float(core_zd),
+        "zg_candidate": float(core_zg),
+        "zd_candidate": float(core_zd),
+        "high": float(high),
+        "low": float(low),
+        "segment_high": float(high),
+        "segment_low": float(low),
+        "visual_high": visual_high,
+        "visual_low": visual_low,
+        "start_close": _safe_float(left.get("start_close"), default=_segment_price_low(left)),
+        "end_close": _safe_float(right.get("end_close"), default=_segment_price_high(right)),
+        "candidate_status": "confirmed_platform",
+        "confirmation_status": "confirmed",
+        "rule_tier": "daily_macro_core_overlap_merged",
+        "reason": "相邻平台核心区间重叠，按同一日线中枢延伸合并处理",
+    }
+
+
+def _merge_macro_platform_pair_with_connectors(left, right, connectors, *, level, sequence_id):
+    merged = _merge_macro_platform_pair(left, right, level=level, sequence_id=sequence_id)
+    if not connectors:
+        return merged
+    cluster = [left, *connectors, right]
+    high = max(_segment_price_high(segment) for segment in cluster)
+    low = min(_segment_price_low(segment) for segment in cluster)
+    trend_type_ids = list(merged.get("trend_type_ids") or [])
+    source_segment_ids = list(merged.get("source_segment_ids") or [])
+    for connector in connectors:
+        trend_type_ids.extend(list(connector.get("trend_type_ids") or []))
+        source_segment_ids.append(connector.get("connector_id") or f"{level}_connector_{len(source_segment_ids) + 1}")
+    merged.update(
+        {
+            "kline_count": _cluster_kline_count(cluster),
+            "trend_type_count": sum(_safe_int(segment.get("trend_type_count"), default=0) for segment in cluster),
+            "trend_type_ids": [item for item in trend_type_ids if item],
+            "source_segment_ids": [item for item in source_segment_ids if item],
+            "source_segment_count": len(cluster),
+            "high": float(high),
+            "low": float(low),
+            "segment_high": float(high),
+            "segment_low": float(low),
+            "visual_high": float(high),
+            "visual_low": float(low),
+        }
+    )
+    return merged
+
+
+def _merge_envelope_platform_pair(left, right, *, level, sequence_id):
+    high = max(_segment_price_high(left), _segment_price_high(right))
+    low = min(_segment_price_low(left), _segment_price_low(right))
+    trend_type_ids = list(left.get("trend_type_ids") or []) + list(right.get("trend_type_ids") or [])
+    core_trend_type_ids = list(left.get("core_trend_type_ids") or []) + list(right.get("core_trend_type_ids") or [])
+    source_segment_ids = list(left.get("source_segment_ids") or [left.get("zhongshu_id")]) + list(
+        right.get("source_segment_ids") or [right.get("zhongshu_id")]
+    )
+    return {
+        **left,
+        "segment_type": "zhongshu",
+        "structure_kind": "platform",
+        "zhongshu_id": f"{level}_macro_envelope_platform_{sequence_id}",
+        "level": level,
+        "end_date": right.get("end_date"),
+        "end_time": right.get("end_time", right.get("end_date")),
+        "kline_count": _cluster_kline_count([left, right]),
+        "trend_type_count": _safe_int(left.get("trend_type_count"), default=0)
+        + _safe_int(right.get("trend_type_count"), default=0),
+        "platform_core_unit_count": _safe_int(left.get("platform_core_unit_count"), default=0)
+        + _safe_int(right.get("platform_core_unit_count"), default=0),
+        "core_trend_type_ids": [item for item in core_trend_type_ids if item],
+        "trend_type_ids": [item for item in trend_type_ids if item],
+        "source_segment_ids": [item for item in source_segment_ids if item],
+        "source_segment_count": _safe_int(left.get("source_segment_count"), default=1)
+        + _safe_int(right.get("source_segment_count"), default=1),
+        "raw_platform_count": _safe_int(left.get("raw_platform_count"), default=1)
+        + _safe_int(right.get("raw_platform_count"), default=1),
+        "high": float(high),
+        "low": float(low),
+        "segment_high": float(high),
+        "segment_low": float(low),
+        "visual_high": float(high),
+        "visual_low": float(low),
+        "end_close": _safe_float(right.get("end_close"), default=_segment_price_high(right)),
+        "candidate_status": "confirmed_platform",
+        "confirmation_status": "confirmed",
+        "rule_tier": "daily_macro_envelope_merged",
+        "reason": "后续小平台未被整根K线确认脱离宏观平台包络，按同一稳定中枢延伸合并处理",
+    }
+
+
+def _collapse_connector_segments(
+    connectors,
+    *,
+    level,
+    sequence_id,
+    connector_role,
+    prev_platform=None,
+    next_platform=None,
+):
+    connectors = [connector for connector in connectors if connector.get("segment_type") == "connector"]
+    if not connectors and prev_platform and next_platform:
+        return _build_macro_connector(prev_platform, next_platform, level=level, sequence_id=sequence_id)
+    if not connectors:
+        return None
+    first = connectors[0]
+    last = connectors[-1]
+    high = max(_segment_price_high(connector) for connector in connectors)
+    low = min(_segment_price_low(connector) for connector in connectors)
+    trend_type_ids = []
+    source_segment_ids = []
+    for connector in connectors:
+        trend_type_ids.extend(list(connector.get("trend_type_ids") or []))
+        source_segment_ids.append(connector.get("connector_id") or f"{level}_connector_{len(source_segment_ids) + 1}")
+    return {
+        "segment_type": "connector",
+        "structure_kind": "connecting_line",
+        "connector_id": f"{level}_macro_connector_{sequence_id}",
+        "level": level,
+        "start_date": first.get("start_date") or (prev_platform or {}).get("end_date"),
+        "end_date": last.get("end_date") or (next_platform or {}).get("start_date"),
+        "start_time": first.get("start_time", first.get("start_date")),
+        "end_time": last.get("end_time", last.get("end_date")),
+        "kline_count": _cluster_kline_count(connectors),
+        "trend_type_count": sum(_safe_int(connector.get("trend_type_count"), default=0) for connector in connectors),
+        "trend_type_ids": [item for item in trend_type_ids if item],
+        "source_segment_ids": [item for item in source_segment_ids if item],
+        "high": float(high),
+        "low": float(low),
+        "segment_high": float(high),
+        "segment_low": float(low),
+        "start_close": _safe_float(
+            first.get("start_close"),
+            default=_safe_float((prev_platform or {}).get("end_close"), default=high),
+        ),
+        "end_close": _safe_float(
+            last.get("end_close"),
+            default=_safe_float((next_platform or {}).get("start_close"), default=low),
+        ),
+        "connector_role": connector_role,
+        "rule_tier": "daily_macro_bridge",
+        "reason": "平台之间的连接细节压缩为一条连接线",
+    }
+
+
+def _build_price_platform_sequence(raw_segments, *, level):
+    macro_segments = []
+    macro_platforms = []
+    current_platform = None
+    pending_connectors = []
+    leading_connectors = []
+    connector_count = 0
+
+    def append_connector(connectors, role, prev_platform=None, next_platform=None):
+        nonlocal connector_count
+        if not connectors and not (prev_platform and next_platform):
+            return
+        connector_count += 1
+        connector = _collapse_connector_segments(
+            connectors,
+            level=level,
+            sequence_id=connector_count,
+            connector_role=role,
+            prev_platform=prev_platform,
+            next_platform=next_platform,
+        )
+        if connector is not None:
+            macro_segments.append(connector)
+
+    def flush_current_platform():
+        if current_platform is None:
+            return
+        macro_segments.append(current_platform)
+        macro_platforms.append(current_platform.copy())
+
+    for segment in raw_segments:
+        if segment.get("segment_type") == "connector":
+            if current_platform is None:
+                leading_connectors.append(segment)
+            else:
+                pending_connectors.append(segment)
+            continue
+        if segment.get("segment_type") != "zhongshu":
+            continue
+        platform = _copy_segment_with_macro_aliases(segment)
+        if current_platform is None:
+            append_connector(leading_connectors, "leading", next_platform=platform)
+            leading_connectors = []
+            current_platform = platform
+            continue
+        if _core_ranges_overlap(current_platform, platform):
+            current_platform = _merge_macro_platform_pair_with_connectors(
+                current_platform,
+                platform,
+                pending_connectors,
+                level=level,
+                sequence_id=len(macro_platforms) + 1,
+            )
+            pending_connectors = []
+            continue
+        flush_current_platform()
+        append_connector(pending_connectors, "between", prev_platform=current_platform, next_platform=platform)
+        pending_connectors = []
+        current_platform = platform
+
+    if current_platform is None:
+        return [], []
+    flush_current_platform()
+    append_connector(pending_connectors, "trailing", prev_platform=current_platform)
+    return macro_segments, macro_platforms
+
+
+def _coerce_ordered_date_items(ordered_dates):
+    items = []
+    for item in ordered_dates or []:
+        if isinstance(item, Mapping):
+            date = normalize_kline_date_str(item.get("date"))
+            row = dict(item)
+        else:
+            date = normalize_kline_date_str(item)
+            row = {"date": date}
+        if date:
+            row["date"] = date
+            items.append(row)
+    return items
+
+
+def _first_complete_departure_index(reference_platform, candidate_platform, date_items, index_by_date):
+    bounds = _date_index_bounds(candidate_platform, index_by_date)
+    if bounds is None:
+        return None
+    reference_high = _segment_price_high(reference_platform)
+    reference_low = _segment_price_low(reference_platform)
+    for idx in range(bounds[0], bounds[1] + 1):
+        row = date_items[idx]
+        high = _strict_float(row.get("high"))
+        low = _strict_float(row.get("low"))
+        if high is None or low is None:
+            continue
+        if low > reference_high:
+            return idx, "up"
+        if high < reference_low:
+            return idx, "down"
+    return None
+
+
+def _merge_platforms_by_envelope_departure(platforms, ordered_dates, *, level):
+    date_items = _coerce_ordered_date_items(ordered_dates)
+    if not platforms or not date_items:
+        return platforms
+    if any(_strict_float(item.get("high")) is None or _strict_float(item.get("low")) is None for item in date_items):
+        return platforms
+    index_by_date = {item["date"]: idx for idx, item in enumerate(date_items)}
+    current = dict(platforms[0])
+    merged_platforms = []
+    merge_count = 0
+
+    for platform in platforms[1:]:
+        candidate = dict(platform)
+        departure = _first_complete_departure_index(current, candidate, date_items, index_by_date)
+        if departure is None:
+            if _has_large_center_migration(current, candidate):
+                merged_platforms.append(current)
+                current = candidate
+                continue
+            merge_count += 1
+            current = _merge_envelope_platform_pair(current, candidate, level=level, sequence_id=merge_count)
+            continue
+
+        departure_idx, direction = departure
+        current_bounds = _date_index_bounds(current, index_by_date)
+        candidate_bounds = _date_index_bounds(candidate, index_by_date)
+        if (
+            direction == "down"
+            and current_bounds is not None
+            and candidate_bounds is not None
+            and candidate_bounds[0] < departure_idx <= candidate_bounds[1]
+        ):
+            extended_current = _apply_date_span(current, current_bounds[0], departure_idx - 1, date_items)
+            if extended_current is not None:
+                current = extended_current
+            adjusted_candidate = _apply_date_span(candidate, departure_idx, candidate_bounds[1], date_items)
+            if adjusted_candidate is not None:
+                candidate = adjusted_candidate
+
+        merged_platforms.append(current)
+        current = candidate
+
+    merged_platforms.append(current)
+    return merged_platforms
+
+
+def _date_index_bounds(segment, index_by_date):
+    start_idx = index_by_date.get(normalize_kline_date_str(segment.get("start_date")))
+    end_idx = index_by_date.get(normalize_kline_date_str(segment.get("end_date")))
+    if start_idx is None or end_idx is None:
+        return None
+    return (min(start_idx, end_idx), max(start_idx, end_idx))
+
+
+def _apply_date_span(segment, start_idx, end_idx, date_items):
+    if start_idx < 0 or end_idx >= len(date_items) or end_idx < start_idx:
+        return None
+    copied = dict(segment)
+    copied["start_date"] = date_items[start_idx]["date"]
+    copied["end_date"] = date_items[end_idx]["date"]
+    copied["start_time"] = copied.get("start_time", copied["start_date"])
+    copied["end_time"] = copied.get("end_time", copied["end_date"])
+    copied["kline_count"] = int(end_idx - start_idx + 1)
+    rows = date_items[start_idx : end_idx + 1]
+    highs = [_strict_float(row.get("high")) for row in rows]
+    lows = [_strict_float(row.get("low")) for row in rows]
+    highs = [value for value in highs if value is not None]
+    lows = [value for value in lows if value is not None]
+    if highs and lows:
+        high = float(max(highs))
+        low = float(min(lows))
+        copied["high"] = high
+        copied["low"] = low
+        copied["segment_high"] = high
+        copied["segment_low"] = low
+        if copied.get("segment_type") == "zhongshu":
+            copied["visual_high"] = high
+            copied["visual_low"] = low
+    start_close = _strict_float(date_items[start_idx].get("close"))
+    end_close = _strict_float(date_items[end_idx].get("close"))
+    if start_close is not None:
+        copied["start_close"] = float(start_close)
+    if end_close is not None:
+        copied["end_close"] = float(end_close)
+    return copied
+
+
+def _build_partition_connector(
+    start_idx,
+    end_idx,
+    date_items,
+    *,
+    level,
+    sequence_id,
+    prev_platform=None,
+    next_platform=None,
+    connector_role="between",
+):
+    left = prev_platform or next_platform or {}
+    right = next_platform or prev_platform or {}
+    template = {
+        "segment_type": "connector",
+        "structure_kind": "connecting_line",
+        "connector_id": f"{level}_macro_connector_{sequence_id}",
+        "level": level,
+        "trend_type_count": 0,
+        "trend_type_ids": [],
+        "connector_role": connector_role,
+        "rule_tier": "daily_macro_bridge",
+        "reason": "平台之间的连接段；按交易日唯一归属切分",
+        "start_close": _safe_float(left.get("end_close"), default=_segment_price_high(left)),
+        "end_close": _safe_float(right.get("start_close"), default=_segment_price_low(right)),
+    }
+    connector = _apply_date_span(template, start_idx, end_idx, date_items)
+    if connector is None:
+        return None
+    high = _segment_price_high(connector)
+    low = _segment_price_low(connector)
+    connector["segment_high"] = high
+    connector["segment_low"] = low
+    connector["high"] = high
+    connector["low"] = low
+    return connector
+
+
+def _partition_macro_sequence_by_dates(platforms, ordered_dates, *, level):
+    date_items = _coerce_ordered_date_items(ordered_dates)
+    if not platforms or not date_items:
+        return None
+    index_by_date = {item["date"]: idx for idx, item in enumerate(date_items)}
+    indexed = []
+    for platform in platforms:
+        bounds = _date_index_bounds(platform, index_by_date)
+        if bounds is None:
+            return None
+        indexed.append({"segment": dict(platform), "start_idx": bounds[0], "end_idx": bounds[1]})
+
+    connectors = {}
+    for idx in range(len(indexed) - 1):
+        left = indexed[idx]
+        right = indexed[idx + 1]
+        left_end = left["end_idx"]
+        right_start = right["start_idx"]
+        if right_start <= left_end:
+            connector_start = right_start
+            connector_end = left_end
+            left["end_idx"] = min(left["end_idx"], connector_start - 1)
+            right["start_idx"] = max(right["start_idx"], connector_end + 1)
+        elif right_start == left_end + 1:
+            connectors[idx] = None
+            continue
+        else:
+            connector_start = left_end + 1
+            connector_end = right_start - 1
+        if connector_start <= connector_end and 0 <= connector_start < len(date_items) and connector_end < len(date_items):
+            connectors[idx] = (connector_start, connector_end)
+
+    macro_segments = []
+    macro_platforms = []
+    connector_count = 0
+    if indexed[0]["start_idx"] > 0:
+        connector_count += 1
+        leading = _build_partition_connector(
+            0,
+            indexed[0]["start_idx"] - 1,
+            date_items,
+            level=level,
+            sequence_id=connector_count,
+            next_platform=indexed[0]["segment"],
+            connector_role="leading",
+        )
+        if leading is not None:
+            macro_segments.append(leading)
+    for idx, item in enumerate(indexed):
+        platform = _apply_date_span(item["segment"], item["start_idx"], item["end_idx"], date_items)
+        if platform is not None:
+            macro_segments.append(platform)
+            macro_platforms.append(platform.copy())
+        if idx in connectors and idx + 1 < len(indexed):
+            connector_count += 1
+            connector_bounds = connectors[idx]
+            if connector_bounds is None:
+                connector = _build_macro_connector(
+                    platform,
+                    indexed[idx + 1]["segment"],
+                    level=level,
+                    sequence_id=connector_count,
+                )
+            else:
+                connector = _build_partition_connector(
+                    connector_bounds[0],
+                    connector_bounds[1],
+                    date_items,
+                    level=level,
+                    sequence_id=connector_count,
+                    prev_platform=item["segment"],
+                    next_platform=indexed[idx + 1]["segment"],
+                    connector_role="between",
+                )
+            if connector is not None:
+                macro_segments.append(connector)
+    if indexed[-1]["end_idx"] < len(date_items) - 1:
+        connector_count += 1
+        trailing = _build_partition_connector(
+            indexed[-1]["end_idx"] + 1,
+            len(date_items) - 1,
+            date_items,
+            level=level,
+            sequence_id=connector_count,
+            prev_platform=indexed[-1]["segment"],
+            connector_role="trailing",
+        )
+        if trailing is not None:
+            macro_segments.append(trailing)
+
+    return macro_segments, macro_platforms
+
+
+def _partition_macro_sequence_by_dates_with_confirmed_minimum(platforms, ordered_dates, *, level):
+    active_platforms = [dict(platform) for platform in platforms or []]
+    if not active_platforms:
+        return None
+    for _attempt in range(len(active_platforms) + 1):
+        partitioned = _partition_macro_sequence_by_dates(active_platforms, ordered_dates, level=level)
+        if partitioned is None:
+            return None
+        macro_segments, macro_platforms = partitioned
+        kept_platforms = [
+            platform
+            for platform in macro_platforms
+            if _safe_int(platform.get("kline_count"), default=0) >= MIN_CONFIRMED_PLATFORM_KLINES
+        ]
+        if len(kept_platforms) == len(macro_platforms):
+            return macro_segments, macro_platforms
+        if not kept_platforms:
+            return [], []
+        if len(kept_platforms) == len(active_platforms):
+            return macro_segments, macro_platforms
+        active_platforms = kept_platforms
+    return _partition_macro_sequence_by_dates(active_platforms, ordered_dates, level=level)
+
+
+def _build_macro_connector(prev_platform, next_platform, *, level, sequence_id):
+    start_close = _safe_float(prev_platform.get("end_close"), default=_segment_price_high(prev_platform))
+    end_close = _safe_float(next_platform.get("start_close"), default=_segment_price_low(next_platform))
+    high = max(start_close, end_close)
+    low = min(start_close, end_close)
+    start_date = prev_platform.get("end_date")
+    next_start_date = next_platform.get("start_date")
+    start_dt = parse_kline_date(start_date)
+    next_start_dt = parse_kline_date(next_start_date)
+    end_date = next_start_date
+    if start_dt is not None and next_start_dt is not None and next_start_dt < start_dt:
+        end_date = start_date
+    end_time = (
+        next_platform.get("start_time", end_date)
+        if end_date == next_start_date
+        else prev_platform.get("end_time", end_date)
+    )
+    return {
+        "segment_type": "connector",
+        "structure_kind": "connecting_line",
+        "connector_id": f"{level}_macro_connector_{sequence_id}",
+        "level": level,
+        "start_date": start_date,
+        "end_date": end_date,
+        "start_time": prev_platform.get("end_time", prev_platform.get("end_date")),
+        "end_time": end_time,
+        "kline_count": 1,
+        "trend_type_count": 1,
+        "trend_type_ids": [],
+        "high": float(high),
+        "low": float(low),
+        "segment_high": float(high),
+        "segment_low": float(low),
+        "start_close": float(start_close),
+        "end_close": float(end_close),
+        "connector_role": "between",
+        "rule_tier": "daily_macro_bridge",
+        "reason": "宏观平台之间保留一条桥接连接线，避免平台直接贴平台",
+    }
+
+
+def aggregate_daily_macro_platforms(
+    structure_segments,
+    *,
+    level="daily",
+    target_min_klines=20,
+    target_max_klines=25,
+    soft_min_klines=15,
+    ordered_dates=None,
+):
+    del target_min_klines, target_max_klines, soft_min_klines
+    raw_segments = [
+        _copy_segment_with_macro_aliases(segment)
+        for segment in _coerce_structure_sequence(structure_segments)
+        if isinstance(segment, Mapping)
+    ]
+    if not raw_segments:
+        return [], []
+
+    macro_segments, macro_platforms = _build_price_platform_sequence(raw_segments, level=level)
+    if ordered_dates:
+        initial_partition = _partition_macro_sequence_by_dates_with_confirmed_minimum(
+            macro_platforms,
+            ordered_dates,
+            level=level,
+        )
+        if initial_partition is not None:
+            _initial_segments, macro_platforms = initial_partition
+        macro_platforms = _merge_platforms_by_envelope_departure(macro_platforms, ordered_dates, level=level)
+    partitioned = _partition_macro_sequence_by_dates_with_confirmed_minimum(
+        macro_platforms,
+        ordered_dates,
+        level=level,
+    )
+    if partitioned is not None:
+        return partitioned
+
+    return macro_segments, [platform.copy() for platform in macro_platforms]
+
+
 def _candidate_from_platform(platform):
     if not platform:
         return None
@@ -392,6 +1137,8 @@ def _candidate_from_platform(platform):
         "platform_core_unit_count": int(platform.get("platform_core_unit_count") or 0),
         "high": float(platform.get("high", platform.get("segment_high", platform.get("zg", 0.0)))),
         "low": float(platform.get("low", platform.get("segment_low", platform.get("zd", 0.0)))),
+        "visual_high": float(platform.get("visual_high", platform.get("high", platform.get("zg", 0.0)))),
+        "visual_low": float(platform.get("visual_low", platform.get("low", platform.get("zd", 0.0)))),
         "zg_candidate": float(platform.get("zg")),
         "zd_candidate": float(platform.get("zd")),
         "zg": float(platform.get("zg")),
@@ -420,7 +1167,12 @@ def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines
         return _failure_result("empty_daily_bars")
     base = frame.tail(DAILY_STRUCTURE_LOOKBACK_DAYS).reset_index(drop=True)
     trend_types = build_trend_types_from_bars(base, level="daily")
-    structure_segments, platforms = build_platform_sequence_from_trend_types(trend_types, level="daily")
+    raw_structure_segments, raw_platforms = build_platform_sequence_from_trend_types(trend_types, level="daily")
+    structure_segments, platforms = aggregate_daily_macro_platforms(
+        raw_structure_segments,
+        level="daily",
+        ordered_dates=base.to_dict("records"),
+    )
     current = _candidate_from_platform(platforms[-1]) if platforms else None
     return {
         "success": True,
@@ -431,6 +1183,8 @@ def build_daily_structure_candidates(rows, *, target_date=None, min_daily_klines
         "report_focus_count": min(int(len(base)), DAILY_REPORT_FOCUS_DAYS),
         "daily_trend_types": trend_types,
         "daily_structure_segments": structure_segments,
+        "raw_daily_structure_segments": raw_structure_segments,
+        "raw_daily_structure_candidates": [_candidate_from_platform(item) for item in raw_platforms],
     }
 
 

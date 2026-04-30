@@ -8,6 +8,7 @@ import secrets
 import traceback
 
 from decision.chanlun_zhongshu_runtime import (
+    aggregate_daily_macro_platforms,
     analyze_chanlun_zhongshu,
     build_platform_sequence_from_trend_types,
     build_trend_types_from_bars,
@@ -35,6 +36,8 @@ __all__ = [
 
 CONFIRMED_ZHONGSHU_MIN_KLINES = 20
 FORMING_ZHONGSHU_MIN_KLINES = 5
+TAIL_CANDIDATE_MIN_KLINES = 4
+TAIL_CANDIDATE_MIN_RETRACE_RATIO = 0.15
 
 
 def _is_forming_zhongshu_segment(segment):
@@ -139,7 +142,218 @@ def build_zhongshu_structure(
     if hist_df is None or len(hist_df) == 0:
         return [], []
     trend_types = build_trend_types_from_bars(hist_df, level="daily")
-    return build_platform_sequence_from_trend_types(trend_types, level="daily")
+    raw_segments, _raw_platforms = build_platform_sequence_from_trend_types(trend_types, level="daily")
+    return aggregate_daily_macro_platforms(raw_segments, level="daily", ordered_dates=hist_df.to_dict("records"))
+
+
+def append_today_trailing_connector(structure_segments, today_row):
+    if not structure_segments or today_row is None:
+        return structure_segments
+    today_date = normalize_kline_date_str(today_row.get("date") if hasattr(today_row, "get") else None)
+    if not today_date:
+        return structure_segments
+    last = structure_segments[-1]
+    last_end = normalize_kline_date_str(last.get("end_date"))
+    if last_end and today_date <= last_end:
+        return structure_segments
+    high = float(today_row.get("high"))
+    low = float(today_row.get("low"))
+    close = float(today_row.get("close"))
+    if last.get("segment_type") == "connector" and last.get("connector_role") == "trailing":
+        merged = dict(last)
+        merged["end_date"] = today_date
+        merged["end_time"] = today_date
+        merged["kline_count"] = int(merged.get("kline_count") or 0) + 1
+        merged["high"] = max(float(merged.get("high", high)), high)
+        merged["low"] = min(float(merged.get("low", low)), low)
+        merged["segment_high"] = max(float(merged.get("segment_high", high)), high)
+        merged["segment_low"] = min(float(merged.get("segment_low", low)), low)
+        merged["end_close"] = close
+        merged["rule_tier"] = merged.get("rule_tier") or "daily_today_bridge"
+        merged["reason"] = "最新比较日并入尾部连接段，避免连续尾部折线"
+        return [*structure_segments[:-1], merged]
+
+    prev_close = float(last.get("end_close", close))
+    connector = {
+        "segment_type": "connector",
+        "structure_kind": "connecting_line",
+        "connector_id": "daily_today_trailing_connector",
+        "level": "daily",
+        "start_date": today_date,
+        "end_date": today_date,
+        "start_time": today_date,
+        "end_time": today_date,
+        "kline_count": 1,
+        "trend_type_count": 0,
+        "trend_type_ids": [],
+        "high": high,
+        "low": low,
+        "segment_high": high,
+        "segment_low": low,
+        "start_close": prev_close,
+        "end_close": close,
+        "connector_role": "trailing",
+        "rule_tier": "daily_today_bridge",
+        "reason": "最新比较日尚未并入平台，作为尾部连接段归属，避免K线三不管",
+    }
+    return [*structure_segments, connector]
+
+
+def _record_value(record, key, default=None):
+    if hasattr(record, "get"):
+        return record.get(key, default)
+    try:
+        return record[key]
+    except Exception:
+        return default
+
+
+def _safe_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
+def _segment_number(segment, *keys):
+    for key in keys:
+        value = _safe_number(segment.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _ordered_row_records(ordered_rows):
+    if ordered_rows is None:
+        return []
+    if hasattr(ordered_rows, "to_dict"):
+        try:
+            rows = ordered_rows.to_dict("records")
+        except TypeError:
+            rows = list(ordered_rows)
+    else:
+        rows = list(ordered_rows or [])
+    prepared = []
+    for row in rows:
+        date = normalize_kline_date_str(_record_value(row, "date"))
+        if not date:
+            continue
+        high = _safe_number(_record_value(row, "high"))
+        low = _safe_number(_record_value(row, "low"))
+        close = _safe_number(_record_value(row, "close"))
+        if high is None or low is None or close is None:
+            continue
+        prepared.append({"date": date, "high": high, "low": low, "close": close})
+    return prepared
+
+
+def _rows_for_segment(ordered_rows, segment):
+    start_date = normalize_kline_date_str(segment.get("start_date"))
+    end_date = normalize_kline_date_str(segment.get("end_date"))
+    if not start_date or not end_date:
+        return []
+    left, right = (start_date, end_date) if start_date <= end_date else (end_date, start_date)
+    return [row for row in _ordered_row_records(ordered_rows) if left <= row["date"] <= right]
+
+
+def _latest_two_row_overlap(rows):
+    if len(rows) < 2:
+        return None
+    prev_row, latest_row = rows[-2], rows[-1]
+    zg = min(prev_row["high"], latest_row["high"])
+    zd = max(prev_row["low"], latest_row["low"])
+    if zg <= zd:
+        return None
+    return {"zg": float(zg), "zd": float(zd)}
+
+
+def _tail_retrace_direction(rows, candidate_high, candidate_low, previous_platform):
+    prev_high = _segment_number(previous_platform, "high", "segment_high", "zg")
+    prev_low = _segment_number(previous_platform, "low", "segment_low", "zd")
+    if prev_high is None or prev_low is None or candidate_high <= candidate_low or len(rows) < 2:
+        return None
+    latest_close = rows[-1]["close"]
+    previous_close = rows[-2]["close"]
+    tail_span = max(candidate_high - candidate_low, 0.01)
+    if candidate_high > prev_high and latest_close < previous_close:
+        retrace_ratio = (candidate_high - latest_close) / tail_span
+        if retrace_ratio >= TAIL_CANDIDATE_MIN_RETRACE_RATIO:
+            return "up_then_retrace"
+    if candidate_low < prev_low and latest_close > previous_close:
+        retrace_ratio = (latest_close - candidate_low) / tail_span
+        if retrace_ratio >= TAIL_CANDIDATE_MIN_RETRACE_RATIO:
+            return "down_then_retrace"
+    return None
+
+
+def append_tail_candidate_platform(structure_segments, ordered_rows):
+    """把右侧尾部连接段升级为“候选平台”，但不写入确认中枢列表。"""
+    if not structure_segments or len(structure_segments) < 2:
+        return structure_segments
+    last = structure_segments[-1]
+    if last.get("segment_type") != "connector" or last.get("connector_role") != "trailing":
+        return structure_segments
+    previous_platform = None
+    for segment in reversed(structure_segments[:-1]):
+        if segment.get("segment_type") == "zhongshu" and segment.get("confirmation_status", "confirmed") == "confirmed":
+            previous_platform = segment
+            break
+    if previous_platform is None:
+        return structure_segments
+    try:
+        kline_count = int(last.get("kline_count") or 0)
+    except (TypeError, ValueError):
+        kline_count = 0
+    if kline_count < TAIL_CANDIDATE_MIN_KLINES:
+        return structure_segments
+
+    rows = _rows_for_segment(ordered_rows, last)
+    if len(rows) < TAIL_CANDIDATE_MIN_KLINES:
+        return structure_segments
+    candidate_high = max(row["high"] for row in rows)
+    candidate_low = min(row["low"] for row in rows)
+    overlap = _latest_two_row_overlap(rows)
+    if overlap is None:
+        return structure_segments
+    retrace_direction = _tail_retrace_direction(rows, candidate_high, candidate_low, previous_platform)
+    if retrace_direction is None:
+        return structure_segments
+
+    first = rows[0]
+    latest = rows[-1]
+    candidate = {
+        **last,
+        "segment_type": "candidate_platform",
+        "structure_kind": "platform_candidate",
+        "candidate_id": f"{last.get('connector_id') or 'tail_connector'}_candidate",
+        "candidate_source_connector_id": last.get("connector_id"),
+        "connector_role": "",
+        "zg": float(overlap["zg"]),
+        "zd": float(overlap["zd"]),
+        "zg_candidate": float(overlap["zg"]),
+        "zd_candidate": float(overlap["zd"]),
+        "high": float(candidate_high),
+        "low": float(candidate_low),
+        "segment_high": float(candidate_high),
+        "segment_low": float(candidate_low),
+        "visual_high": float(candidate_high),
+        "visual_low": float(candidate_low),
+        "start_close": float(first["close"]),
+        "end_close": float(latest["close"]),
+        "kline_count": int(len(rows)),
+        "trend_type_count": max(int(last.get("trend_type_count") or 0), 2),
+        "confirmation_status": "forming",
+        "candidate_status": "tail_platform_candidate",
+        "is_current_forming": True,
+        "is_tail_candidate": True,
+        "rule_tier": "tail_candidate_platform",
+        "tail_candidate_direction": retrace_direction,
+        "reason": "尾部连接段脱离前平台后出现回撤与近两日重叠，标记为右侧候选平台；不进入确认中枢列表",
+    }
+    return [*structure_segments[:-1], candidate]
 
 
 def build_zhongshu_ascii_diagram(structure_segments, today_date, today_price, signal, max_segments=5):
@@ -596,82 +810,35 @@ def analyze_market_zhongshu(
                 df[price_col] = pd.to_numeric(df[price_col], errors="coerce")
         df = df.dropna(subset=["high", "low", "close"])
 
-        recent_df, hist_df, today_df = split_zhongshu_history_and_today(
+        from decision.security_zhongshu_node import analyze_security_zhongshu_from_frame
+
+        result = analyze_security_zhongshu_from_frame(
+            df,
+            security_code=index_code,
+            security_name="上证指数",
+            security_type="index",
+            recent_days=recent_days,
+            min_zhongshu_klines=min_zhongshu_klines,
+            target_date=target_date,
+            data_source=data_source,
+            print_fn=print_fn,
+        )
+        if not result.get("success"):
+            return result
+        if not use_chanlun_confirmation:
+            result.setdefault("daily_structure_candidates", [])
+            result.setdefault("daily_structure_current", None)
+            result.setdefault("chanlun_60m_structures", [])
+            result.setdefault("chanlun_confirmation", {})
+            return result
+
+        _recent_df, hist_df, today_df = split_zhongshu_history_and_today(
             df,
             recent_days=recent_days,
             target_date=target_date,
         )
-        del recent_df
-
-        structure_segments, zhongshu_list = build_zhongshu_structure(
-            hist_df,
-            min_zhongshu_klines=min_zhongshu_klines,
-            min_overlap_bars=3,
-        )
-
-        today_price = float(today_df["close"])
-        today_date = today_df["date"]
-        current = zhongshu_list[-1] if zhongshu_list else None
-        latest_structure_segment = structure_segments[-1] if structure_segments else None
-
-        signal = {}
-        if current:
-            zg = current["zg"]
-            zd = current["zd"]
-            is_current_forming = current.get("confirmation_status") == "forming"
-            current_kline_count = int(current.get("kline_count") or 0)
-            required_kline_count = int(current.get("required_kline_count") or min_zhongshu_klines)
-            dist_to_zg = (today_price - zg) / zg
-            dist_to_zd = (today_price - zd) / zd
-
-            signal["zg"] = zg
-            signal["zd"] = zd
-            signal["dist_to_zg"] = dist_to_zg
-            signal["dist_to_zd"] = dist_to_zd
-            signal["today_price"] = today_price
-            signal["today_date"] = today_date
-
-            if dist_to_zg > 0:
-                signal["comparison_result"] = "突破"
-                signal["comparison_state"] = "breakout"
-                signal["status"] = "✅ 突破中枢"
-                signal["signal_type"] = "大盘突破"
-                signal["position_level"] = "三档进攻档（50%）"
-                signal["action"] = "积极做多"
-            elif dist_to_zd < 0:
-                signal["comparison_result"] = "下跌"
-                signal["comparison_state"] = "down"
-                signal["status"] = "⚠️ 跌破中枢"
-                signal["signal_type"] = "跌破支撑"
-                signal["position_level"] = "一档空仓档（0%）"
-                signal["action"] = "清仓观望"
-                signal["fell_into_next_zone"] = False
-                if len(zhongshu_list) >= 2:
-                    for prev_zs in reversed(zhongshu_list[:-1]):
-                        if prev_zs["zd"] <= today_price <= prev_zs["zg"]:
-                            signal["status"] = "🚨 跌破并落入下中枢区间"
-                            signal["signal_type"] = "暴跌至下一中枢"
-                            signal["action"] = "严禁抄底，等待企稳"
-                            signal["fell_into_next_zone"] = True
-                            break
-            else:
-                signal["comparison_result"] = "震荡"
-                signal["comparison_state"] = "range"
-                signal["status"] = "➖ 中枢内震荡"
-                signal["signal_type"] = "按个股信号操作"
-                signal["position_level"] = "二档防守档（30%）"
-                signal["action"] = "精选个股"
-
-            if is_current_forming:
-                original_status = signal.get("status", "待确认")
-                signal["structure_confirmation"] = "forming"
-                signal["current_kline_count"] = current_kline_count
-                signal["required_kline_count"] = required_kline_count
-                signal["status"] = (
-                    f"⏳ 当前中枢形成中（{current_kline_count}/{required_kline_count}，"
-                    f"原信号：{original_status}，仅观察）"
-                )
-                signal["action"] = "只观察，等平台结构确认"
+        del _recent_df
+        signal = result.setdefault("signal", {})
 
         chanlun_result = {}
         if use_chanlun_confirmation:
@@ -702,22 +869,16 @@ def analyze_market_zhongshu(
                 elif confirmation_status == "not_confirmed":
                     signal["action"] = "只观察，等60分钟重新形成平台重叠"
 
-        print_fn(f"[大盘结构] 数据源: {data_source}，识别到{len(zhongshu_list)}个结构中枢，当前价格{today_price:.2f}")
-        return {
-            "zhongshu_list": zhongshu_list,
-            "current_zhongshu": current,
-            "structure_segments": structure_segments,
-            "latest_structure_segment": latest_structure_segment,
-            "today_price": today_price,
-            "today_date": today_date,
-            "signal": signal,
-            "success": True,
-            "data_source": data_source,
-            "daily_structure_candidates": chanlun_result.get("daily_structure_candidates", []),
-            "daily_structure_current": chanlun_result.get("current_candidate"),
-            "chanlun_60m_structures": chanlun_result.get("chanlun_60m_structures", []),
-            "chanlun_confirmation": chanlun_result.get("chanlun_confirmation", {}),
-        }
+        result.update(
+            {
+                "signal": signal,
+                "daily_structure_candidates": chanlun_result.get("daily_structure_candidates", []),
+                "daily_structure_current": chanlun_result.get("current_candidate"),
+                "chanlun_60m_structures": chanlun_result.get("chanlun_60m_structures", []),
+                "chanlun_confirmation": chanlun_result.get("chanlun_confirmation", {}),
+            }
+        )
+        return result
     except Exception as error:
         print_fn(f"大盘结构分析失败: {error}")
         traceback.print_exc()

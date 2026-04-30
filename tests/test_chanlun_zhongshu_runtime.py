@@ -1,5 +1,6 @@
 import sys
 import unittest
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -150,7 +151,367 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual([item["segment_type"] for item in segments], ["zhongshu", "connector", "zhongshu"])
         self.assertEqual(len(platforms), 2)
         self.assertEqual(segments[1]["connector_role"], "between")
-        self.assertEqual(segments[1]["trend_type_count"], 1)
+        self.assertEqual(segments[1]["trend_type_count"], 0)
+        self.assertTrue(segments[1]["synthetic_bridge"])
+        bridge_trend_ids = set(segments[1]["trend_type_ids"])
+        left_trend_ids = set(segments[0]["trend_type_ids"])
+        right_trend_ids = set(segments[2]["trend_type_ids"])
+        self.assertFalse(bridge_trend_ids & left_trend_ids)
+        self.assertFalse(bridge_trend_ids & right_trend_ids)
+
+    def test_aggregate_daily_macro_platforms_keeps_displaced_current_platform(self):
+        raw_segments = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-03-18",
+                "end_date": "2026-04-09",
+                "kline_count": 16,
+                "trend_type_count": 9,
+                "zg": 3933.061,
+                "zd": 3880.572,
+                "high": 4065.373,
+                "low": 3794.684,
+                "segment_high": 4065.373,
+                "segment_low": 3794.684,
+                "start_close": 3860,
+                "end_close": 4048,
+            },
+            {
+                "segment_type": "connector",
+                "start_date": "2026-04-09",
+                "end_date": "2026-04-16",
+                "kline_count": 6,
+                "trend_type_count": 1,
+                "high": 4057.831,
+                "low": 3955.245,
+                "segment_high": 4057.831,
+                "segment_low": 3955.245,
+                "start_close": 4048,
+                "end_close": 4020,
+                "connector_role": "between",
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-04-09",
+                "end_date": "2026-04-22",
+                "kline_count": 10,
+                "trend_type_count": 3,
+                "zg": 4057.831,
+                "zd": 4038.428,
+                "high": 4106.844,
+                "low": 3955.245,
+                "segment_high": 4106.844,
+                "segment_low": 3955.245,
+                "start_close": 4048,
+                "end_close": 4088,
+            },
+            {
+                "segment_type": "connector",
+                "start_date": "2026-04-22",
+                "end_date": "2026-04-24",
+                "kline_count": 3,
+                "trend_type_count": 1,
+                "high": 4114.844,
+                "low": 4061.145,
+                "segment_high": 4114.844,
+                "segment_low": 4061.145,
+                "start_close": 4088,
+                "end_close": 4090,
+                "connector_role": "between",
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-04-22",
+                "end_date": "2026-04-28",
+                "kline_count": 5,
+                "trend_type_count": 3,
+                "zg": 4092.83,
+                "zd": 4062.872,
+                "high": 4114.844,
+                "low": 4061.145,
+                "segment_high": 4114.844,
+                "segment_low": 4061.145,
+                "start_close": 4088,
+                "end_close": 4102,
+            },
+        ]
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(raw_segments, level="daily")
+
+        self.assertEqual(
+            [item["segment_type"] for item in segments],
+            ["zhongshu", "connector", "zhongshu", "connector", "zhongshu"],
+        )
+        self.assertFalse(
+            any(
+                left["segment_type"] == right["segment_type"] == "connector"
+                for left, right in zip(segments, segments[1:])
+            )
+        )
+        self.assertEqual(len(platforms), 3)
+        current = platforms[-1]
+        self.assertEqual(current["start_date"], "2026-04-22")
+        self.assertEqual(current["end_date"], "2026-04-28")
+        self.assertEqual(current["kline_count"], 5)
+        self.assertEqual(current["high"], 4114.844)
+        self.assertEqual(current["low"], 4061.145)
+        self.assertEqual(current["visual_high"], current["high"])
+        self.assertEqual(current["visual_low"], current["low"])
+        self.assertEqual(current["rule_tier"], "original_rule")
+
+    def test_aggregate_daily_macro_platforms_keeps_displaced_platforms_separate(self):
+        dates = [f"2026-01-{day:02d}" for day in range(1, 11)]
+        raw_segments = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-05",
+                "kline_count": 5,
+                "trend_type_count": 3,
+                "zg": 110,
+                "zd": 100,
+                "high": 115,
+                "low": 96,
+                "trend_type_ids": ["a", "b", "c"],
+            },
+            {
+                "segment_type": "connector",
+                "start_date": "2026-01-06",
+                "end_date": "2026-01-06",
+                "kline_count": 1,
+                "trend_type_count": 0,
+                "high": 118,
+                "low": 92,
+                "trend_type_ids": [],
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-07",
+                "end_date": "2026-01-10",
+                "kline_count": 4,
+                "trend_type_count": 3,
+                "zg": 90,
+                "zd": 80,
+                "high": 94,
+                "low": 78,
+                "trend_type_ids": ["d", "e", "f"],
+            },
+        ]
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            target_min_klines=8,
+            ordered_dates=dates,
+        )
+
+        self.assertEqual([item["segment_type"] for item in segments], ["zhongshu", "connector", "zhongshu"])
+        self.assertEqual(len(platforms), 2)
+        self.assertEqual((platforms[0]["zg"], platforms[0]["zd"]), (110, 100))
+        self.assertEqual((platforms[1]["zg"], platforms[1]["zd"]), (90, 80))
+        self.assertEqual((platforms[0]["visual_high"], platforms[0]["visual_low"]), (115, 96))
+        self.assertEqual((platforms[1]["visual_high"], platforms[1]["visual_low"]), (94, 78))
+        self.assertEqual((segments[1]["start_date"], segments[1]["end_date"]), ("2026-01-06", "2026-01-06"))
+        self.assertEqual(segments[1]["connector_role"], "between")
+
+    def test_aggregate_daily_macro_platforms_merges_adjacent_core_overlap(self):
+        raw_segments = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-20",
+                "kline_count": 14,
+                "trend_type_count": 5,
+                "zg": 110,
+                "zd": 100,
+                "high": 116,
+                "low": 94,
+                "trend_type_ids": ["a", "b", "c"],
+            },
+            {
+                "segment_type": "connector",
+                "start_date": "2026-01-20",
+                "end_date": "2026-01-21",
+                "kline_count": 2,
+                "trend_type_count": 1,
+                "high": 112,
+                "low": 106,
+                "trend_type_ids": ["bridge"],
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-21",
+                "end_date": "2026-02-05",
+                "kline_count": 12,
+                "trend_type_count": 4,
+                "zg": 112,
+                "zd": 105,
+                "high": 118,
+                "low": 101,
+                "trend_type_ids": ["d", "e"],
+            },
+        ]
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            target_min_klines=10,
+        )
+
+        self.assertEqual([item["segment_type"] for item in segments], ["zhongshu"])
+        self.assertEqual(len(platforms), 1)
+        merged = platforms[0]
+        self.assertEqual(merged["start_date"], "2026-01-01")
+        self.assertEqual(merged["end_date"], "2026-02-05")
+        self.assertEqual(merged["zg"], 110)
+        self.assertEqual(merged["zd"], 105)
+        self.assertEqual(merged["high"], 118)
+        self.assertEqual(merged["low"], 94)
+        self.assertEqual(merged["rule_tier"], "daily_macro_core_overlap_merged")
+
+    def test_aggregate_daily_macro_platforms_assigns_each_date_once(self):
+        dates = [f"2026-01-{day:02d}" for day in range(1, 12)]
+        raw_segments = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-05",
+                "kline_count": 5,
+                "trend_type_count": 3,
+                "zg": 110,
+                "zd": 100,
+                "high": 112,
+                "low": 98,
+                "trend_type_ids": ["a", "b", "c"],
+            },
+            {
+                "segment_type": "connector",
+                "start_date": "2026-01-05",
+                "end_date": "2026-01-05",
+                "kline_count": 1,
+                "trend_type_count": 0,
+                "high": 109,
+                "low": 107,
+                "trend_type_ids": [],
+            },
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-01-05",
+                "end_date": "2026-01-10",
+                "kline_count": 6,
+                "trend_type_count": 3,
+                "zg": 125,
+                "zd": 118,
+                "high": 130,
+                "low": 116,
+                "trend_type_ids": ["d", "e", "f"],
+            },
+        ]
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            target_min_klines=3,
+            ordered_dates=dates,
+        )
+
+        self.assertEqual([item["segment_type"] for item in segments], ["zhongshu", "connector", "zhongshu", "connector"])
+        self.assertEqual((segments[0]["start_date"], segments[0]["end_date"]), ("2026-01-01", "2026-01-04"))
+        self.assertEqual((segments[1]["start_date"], segments[1]["end_date"]), ("2026-01-05", "2026-01-05"))
+        self.assertEqual((segments[2]["start_date"], segments[2]["end_date"]), ("2026-01-06", "2026-01-10"))
+        self.assertEqual((segments[3]["start_date"], segments[3]["end_date"]), ("2026-01-11", "2026-01-11"))
+        self.assertEqual(segments[3]["connector_role"], "trailing")
+
+        ownership = {date: 0 for date in dates}
+        for segment in segments:
+            start = dates.index(segment["start_date"])
+            end = dates.index(segment["end_date"])
+            for date in dates[start : end + 1]:
+                ownership[date] += 1
+        self.assertTrue(all(count == 1 for count in ownership.values()), ownership)
+        self.assertEqual([(item["start_date"], item["end_date"]) for item in platforms], [
+            ("2026-01-01", "2026-01-04"),
+            ("2026-01-06", "2026-01-10"),
+        ])
+
+    def test_aggregate_daily_macro_platforms_merges_real_index_fragments_until_complete_departure(self):
+        payload = json.loads((ROOT / "data/snap-ui/zhongshu-visual/2026-04-29-sh000001.json").read_text())
+        rows = payload["index_klines"]["sh000001"]
+        hist_rows = rows[:-1]
+        trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")
+        raw_segments, _raw_platforms = runtime.build_platform_sequence_from_trend_types(trend_types, level="daily")
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            ordered_dates=hist_rows,
+        )
+
+        target = next(
+            item
+            for item in platforms
+            if item["start_date"] == "2025-12-30"
+        )
+        self.assertEqual(target["end_date"], "2026-03-20")
+        self.assertEqual(target["kline_count"], 51)
+        self.assertAlmostEqual(target["visual_low"], 3947.418)
+        self.assertAlmostEqual(target["visual_high"], 4197.228)
+        self.assertTrue(
+            any(
+                item["segment_type"] == "connector"
+                and item.get("connector_role") == "between"
+                and item["start_date"] <= "2025-12-30" <= item["end_date"]
+                for item in segments
+            )
+        )
+        self.assertFalse(
+            any(
+                item["segment_type"] == "zhongshu"
+                and item["start_date"] <= "2026-03-23" <= item["end_date"]
+                and item["start_date"] == "2025-12-30"
+                for item in segments
+            )
+        )
+
+    def test_aggregate_daily_macro_platforms_splits_real_stock_after_large_center_migration(self):
+        snapshot = json.loads((ROOT / "snapshots/2026-04-29.json").read_text())
+        rows = snapshot["data"]["stock_klines"]["002805"]
+        hist_rows = rows[:-1]
+        trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")
+        raw_segments, _raw_platforms = runtime.build_platform_sequence_from_trend_types(trend_types, level="daily")
+
+        _segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            ordered_dates=hist_rows,
+        )
+
+        self.assertFalse(
+            any(
+                item["start_date"] <= "2025-11-07" and item["end_date"] >= "2026-04-14"
+                for item in platforms
+            ),
+            platforms,
+        )
+
+    def test_aggregate_daily_macro_platforms_does_not_confirm_two_day_real_stock_platform(self):
+        snapshot = json.loads((ROOT / "snapshots/2026-04-29.json").read_text())
+        rows = snapshot["data"]["stock_klines"]["002354"]
+        hist_rows = rows[:-1]
+        trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")
+        raw_segments, _raw_platforms = runtime.build_platform_sequence_from_trend_types(trend_types, level="daily")
+
+        segments, platforms = runtime.aggregate_daily_macro_platforms(
+            raw_segments,
+            level="daily",
+            ordered_dates=hist_rows,
+        )
+
+        self.assertTrue(platforms)
+        self.assertFalse(
+            any(item.get("segment_type") == "zhongshu" and item.get("kline_count") < 3 for item in segments),
+            segments,
+        )
 
     def test_build_daily_structure_candidates_returns_not_yet_platform_without_three_overlapping_moves(self):
         rows = [

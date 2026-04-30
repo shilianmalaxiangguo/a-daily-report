@@ -91,6 +91,58 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         self.assertNotIn("required_kline_count", result["current_zhongshu"])
         self.assertNotIn("/20", result["signal"]["status"])
         self.assertNotIn("等20根", result["signal"]["action"])
+        self.assertEqual(result["latest_structure_segment"]["segment_type"], "connector")
+        self.assertEqual(result["latest_structure_segment"]["connector_role"], "trailing")
+        self.assertEqual(result["latest_structure_segment"]["start_date"], "2026-04-23")
+        self.assertEqual(result["latest_structure_segment"]["end_date"], "2026-04-23")
+
+    def test_append_today_trailing_connector_merges_existing_trailing_connector(self):
+        structure_segments = [
+            {
+                "segment_type": "zhongshu",
+                "start_date": "2026-04-01",
+                "end_date": "2026-04-20",
+                "kline_count": 13,
+                "zg": 23.49,
+                "zd": 21.01,
+                "high": 27.68,
+                "low": 20.71,
+                "segment_high": 27.68,
+                "segment_low": 20.71,
+                "start_close": 21.88,
+                "end_close": 27.31,
+            },
+            {
+                "segment_type": "connector",
+                "structure_kind": "connecting_line",
+                "connector_id": "daily_macro_connector_6",
+                "start_date": "2026-04-21",
+                "end_date": "2026-04-27",
+                "kline_count": 5,
+                "high": 33.25,
+                "low": 25.22,
+                "segment_high": 33.25,
+                "segment_low": 25.22,
+                "start_close": 26.02,
+                "end_close": 32.56,
+                "connector_role": "trailing",
+            },
+        ]
+        today_row = {"date": "2026-04-28", "high": 31.48, "low": 29.61, "close": 29.99}
+
+        result = zhongshu_runtime.append_today_trailing_connector(structure_segments, today_row)
+
+        self.assertEqual(len(result), 2)
+        trailing = result[-1]
+        self.assertEqual(trailing["segment_type"], "connector")
+        self.assertEqual(trailing["connector_role"], "trailing")
+        self.assertEqual(trailing["start_date"], "2026-04-21")
+        self.assertEqual(trailing["end_date"], "2026-04-28")
+        self.assertEqual(trailing["kline_count"], 6)
+        self.assertEqual(trailing["high"], 33.25)
+        self.assertEqual(trailing["low"], 25.22)
+        self.assertEqual(trailing["start_close"], 26.02)
+        self.assertEqual(trailing["end_close"], 29.99)
 
     def test_ascii_diagram_labels_forming_structure_without_claiming_confirmed(self):
         diagram = zhongshu_runtime.build_zhongshu_ascii_diagram(
