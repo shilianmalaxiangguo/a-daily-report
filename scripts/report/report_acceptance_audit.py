@@ -84,7 +84,12 @@ REASONING_SURFACE_HEADING = "### 0. 推理裁决"
 REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "推理深度")
 REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
 SIMULATION_NOISE_MARKERS = (
+    "MiroFish",
+    "mirofish",
+    "多智能体",
     "多智能体一致认为",
+    "多智能体共识",
+    "沙盘推演",
     "沙盘推演显示",
     "某情景下可能爆发",
     "模型认为胜率提高",
@@ -98,6 +103,12 @@ THEORY_ACTION_MARKERS = (
     "群体行为共振，所以可以买",
     "群体行为共振，所以可以加仓",
     "群体行为共振，所以提高仓位",
+)
+
+THEORY_NOISE_MARKERS = (
+    "能量学判断",
+    "能量释放完成",
+    "群体行为共振",
 )
 
 __all__ = ["audit_report_markdown"]
@@ -332,6 +343,15 @@ def _audit_anti_noise_language(lines):
                     _finding(
                         "theory_driven_action_language",
                         f"front page must not use theory language as an action reason: {marker}",
+                        line=index,
+                    )
+                )
+        for marker in THEORY_NOISE_MARKERS:
+            if marker in text:
+                findings.append(
+                    _finding(
+                        "theory_noise_language",
+                        f"front page must not use theory/noise phrase: {marker}",
                         line=index,
                     )
                 )

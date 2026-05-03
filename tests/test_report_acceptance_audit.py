@@ -266,6 +266,44 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 self.assertIn("simulation_noise_language", {finding["code"] for finding in result["findings"]})
                 self.assertFalse(result["passed"])
 
+    def test_audit_flags_front_page_simulation_tool_names_and_consensus_terms(self):
+        noisy_phrases = [
+            "MiroFish提示半导体明天可能加强。",
+            "多智能体共识认为可以放宽观察条件。",
+            "沙盘推演偏乐观，先看是否试错。",
+        ]
+
+        for phrase in noisy_phrases:
+            with self.subTest(phrase=phrase):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    f"{phrase}\n\n## 七、最终结论",
+                )
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("simulation_noise_language", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
+    def test_audit_flags_front_page_theory_concept_noise_language(self):
+        noisy_phrases = [
+            "能量学判断显示承接转强。",
+            "能量释放完成，明天提高仓位。",
+            "群体行为共振，候选资格上调。",
+        ]
+
+        for phrase in noisy_phrases:
+            with self.subTest(phrase=phrase):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    f"{phrase}\n\n## 七、最终结论",
+                )
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("theory_noise_language", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
     def test_audit_flags_theory_driven_buy_language(self):
         bad = GOOD_MARKDOWN.replace(
             "## 七、最终结论",
