@@ -1,6 +1,6 @@
 # Daily Report Anti-Noise Price Action Boundary Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the approved anti-noise and price-action boundary visible to future report work, inherited by the report contract, and enforceable by the report acceptance audit.
 
@@ -32,7 +32,7 @@
 - Modify: `references/report-contract.md`
 - Modify: `tests/test_daily_report_skill_docs.py`
 
-- [ ] **Step 1: Write the failing docs test**
+- [x] **Step 1: Write the failing docs test**
 
 Add this test method to `tests/test_daily_report_skill_docs.py` inside `DailyReportSkillDocsTest`:
 
@@ -59,7 +59,7 @@ Add this test method to `tests/test_daily_report_skill_docs.py` inside `DailyRep
             self.assertIn(required, combined)
 ```
 
-- [ ] **Step 2: Run the docs test and verify it fails**
+- [x] **Step 2: Run the docs test and verify it fails**
 
 Run:
 
@@ -69,7 +69,7 @@ venv/bin/python -m unittest tests.test_daily_report_skill_docs
 
 Expected: FAIL because `SKILL.md` and `references/report-contract.md` do not yet mention the new boundary spec or its inheritance wording.
 
-- [ ] **Step 3: Update `SKILL.md` routing and operating rules**
+- [x] **Step 3: Update `SKILL.md` routing and operating rules**
 
 In `SKILL.md`, update the `optimize_skill` row in the intent table so the first reference chain includes the boundary spec after `references/report-contract.md`:
 
@@ -89,7 +89,7 @@ Add this reference bullet to the `## References` list:
 - `docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md` - anti-noise boundary for simulation tools and price-action fieldization.
 ```
 
-- [ ] **Step 4: Update `references/report-contract.md` inheritance rules**
+- [x] **Step 4: Update `references/report-contract.md` inheritance rules**
 
 In `references/report-contract.md`, add this bullet to `## Future Change Inheritance`:
 
@@ -108,7 +108,7 @@ Add this section after `## User-Facing Contract`:
 - Price-action fields may support candidate qualification, failure conditions, and unique action wording, but they must not bypass mainline confirmation, entry permission, 60分钟 confirmation, or 30分钟 stop rules.
 ```
 
-- [ ] **Step 5: Run docs tests and verify they pass**
+- [x] **Step 5: Run docs tests and verify they pass**
 
 Run:
 
@@ -118,7 +118,7 @@ venv/bin/python -m unittest tests.test_daily_report_skill_docs
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 Run:
 
@@ -135,7 +135,7 @@ git commit -m "docs: route anti-noise report boundary"
 - Modify: `scripts/report/report_acceptance_audit.py`
 - Modify: `tests/test_report_acceptance_audit.py`
 
-- [ ] **Step 1: Write failing audit tests**
+- [x] **Step 1: Write failing audit tests**
 
 Add these test methods to `ReportAcceptanceAuditTest` in `tests/test_report_acceptance_audit.py`:
 
@@ -182,7 +182,7 @@ Add these test methods to `ReportAcceptanceAuditTest` in `tests/test_report_acce
         self.assertTrue(result["passed"], result["findings"])
 ```
 
-- [ ] **Step 2: Run audit tests and verify they fail**
+- [x] **Step 2: Run audit tests and verify they fail**
 
 Run:
 
@@ -192,7 +192,7 @@ venv/bin/python -m unittest tests.test_report_acceptance_audit
 
 Expected: FAIL because the new findings are not implemented yet.
 
-- [ ] **Step 3: Add forbidden phrase constants**
+- [x] **Step 3: Add forbidden phrase constants**
 
 In `scripts/report/report_acceptance_audit.py`, after `REASONING_CHAIN_LEAK_MARKERS`, add:
 
@@ -216,7 +216,7 @@ THEORY_ACTION_MARKERS = (
 )
 ```
 
-- [ ] **Step 4: Add the audit helper**
+- [x] **Step 4: Add the audit helper**
 
 In `scripts/report/report_acceptance_audit.py`, add this helper after `_audit_reasoning_surface`:
 
@@ -247,7 +247,7 @@ def _audit_anti_noise_language(lines):
     return findings
 ```
 
-- [ ] **Step 5: Wire the helper into the audit**
+- [x] **Step 5: Wire the helper into the audit**
 
 In `audit_report_markdown()`, add the helper after `_audit_reasoning_surface(lines)` and before `_audit_unique_focus(lines)`:
 
@@ -255,7 +255,7 @@ In `audit_report_markdown()`, add the helper after `_audit_reasoning_surface(lin
     findings.extend(_audit_anti_noise_language(lines))
 ```
 
-- [ ] **Step 6: Run audit tests and verify they pass**
+- [x] **Step 6: Run audit tests and verify they pass**
 
 Run:
 
@@ -265,7 +265,7 @@ venv/bin/python -m unittest tests.test_report_acceptance_audit
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 2**
+- [x] **Step 7: Commit Task 2**
 
 Run:
 
@@ -286,7 +286,7 @@ git commit -m "test: audit anti-noise report language"
 - Verify: `tests/test_daily_report_skill_docs.py`
 - Verify: `tests/test_report_acceptance_audit.py`
 
-- [ ] **Step 1: Run focused docs and audit tests**
+- [x] **Step 1: Run focused docs and audit tests**
 
 Run:
 
@@ -296,7 +296,7 @@ venv/bin/python -m unittest tests.test_daily_report_skill_docs tests.test_report
 
 Expected: PASS.
 
-- [ ] **Step 2: Run diff hygiene**
+- [x] **Step 2: Run diff hygiene**
 
 Run:
 
@@ -306,7 +306,7 @@ git diff --check
 
 Expected: no output and exit code 0.
 
-- [ ] **Step 3: Inspect changed files for boundary wording**
+- [x] **Step 3: Inspect changed files for boundary wording**
 
 Run:
 
@@ -316,7 +316,7 @@ rg -n "anti-noise|反噪音|价格行为|上涨斜率|回撤比例|突破后承�
 
 Expected: matches in the skill docs, report contract, audit code, and tests.
 
-- [ ] **Step 4: Check working tree status**
+- [x] **Step 4: Check working tree status**
 
 Run:
 
@@ -347,3 +347,25 @@ Type and naming consistency:
 - New finding codes are `simulation_noise_language` and `theory_driven_action_language`.
 - The audit helper name is `_audit_anti_noise_language`.
 - The test assertions use the same finding codes.
+
+
+## Execution Record
+
+Completed in current worktree `/Users/chaixixi/.codex/worktrees/c89b/a-daily-report` on branch `codex/anti-noise-price-action-boundary`.
+
+Commits produced by this plan:
+
+- `dfe9191 docs: route anti-noise report boundary`
+- `e68cd91 test: audit anti-noise report language`
+
+Verification run after implementation:
+
+```bash
+python3 -m unittest tests.test_daily_report_skill_docs tests.test_report_acceptance_audit
+# Ran 27 tests ... OK
+
+git diff --check
+# no output
+```
+
+Main-tree merge was intentionally not performed from this worktree because the main `develop` tree has unrelated uncommitted changes. This worktree branch remains the merge source.
