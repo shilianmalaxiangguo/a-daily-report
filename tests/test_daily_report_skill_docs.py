@@ -101,6 +101,27 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_skill_and_report_contract_inherit_anti_noise_price_action_boundary(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        boundary_spec = self._read(
+            "docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md"
+        )
+        combined = "\n".join([skill, report_contract, boundary_spec])
+
+        for required in [
+            "2026-05-03-daily-report-anti-noise-price-action-boundary-design.md",
+            "推演型工具不得进入日报主链",
+            "交易经验可以被吸收，但必须字段化、规则化、复盘化",
+            "价格行为字段",
+            "上涨斜率",
+            "回撤比例",
+            "突破后承接",
+            "加速后衰竭",
+            "不能以自由叙事进入日报主链",
+        ]:
+            self.assertIn(required, combined)
+
     def test_verification_reference_names_practical_commands(self):
         verification = self._read("references/verification.md")
 

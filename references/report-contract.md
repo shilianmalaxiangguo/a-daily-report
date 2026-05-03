@@ -11,11 +11,19 @@ This reference is for report quality judgment. It is not a command manual.
 - Do not hide missing data behind fake precision such as `0.00%`.
 - Do not repeat empty-position or no-trade conclusions.
 
+## Anti-Noise And Price-Action Boundary
+
+- Do not add external simulation, multi-agent, or free-form prediction language to the report front page.
+- Do not use theory words such as `能量学`, `能量释放`, or `群体行为共振` as the reason for buy, add, or upgrade actions.
+- Experience is allowed only after fieldization: prefer `上涨斜率`, `回撤比例`, `突破后承接`, `加速后衰竭`, `波动收敛`, and `板块内扩散强度`.
+- Price-action fields may support candidate qualification, failure conditions, and unique action wording, but they must not bypass mainline confirmation, entry permission, 60分钟 confirmation, or 30分钟 stop rules.
+
 ## Future Change Inheritance
 
 - Future daily-report requests use a delta spec by default: describe only the new or changed behavior.
 - New requests default inherit this report contract unless the latest user instruction explicitly overrides it.
 - Future report changes inherit both report contract and reasoning contract unless the latest user instruction explicitly overrides them.
+- Future report changes also inherit `docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`: simulation tools stay out of the main chain, and trading experience enters only after becoming price-action fields.
 - In practice, new report requests do not need to restate existing guardrails.
 
 ## Optimization Order
