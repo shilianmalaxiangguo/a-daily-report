@@ -246,6 +246,47 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 self.assertIn("reasoning_chain_leakage", {finding["code"] for finding in result["findings"]})
                 self.assertFalse(result["passed"])
 
+    def test_audit_flags_front_page_simulation_noise_language(self):
+        noisy_phrases = [
+            "多智能体一致认为主线明天会修复。",
+            "沙盘推演显示半导体可能爆发。",
+            "模型认为胜率提高，所以明天提高仓位。",
+            "虽然规则未满足，但推演偏乐观，可以先买。",
+        ]
+
+        for phrase in noisy_phrases:
+            with self.subTest(phrase=phrase):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    f"{phrase}\n\n## 七、最终结论",
+                )
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("simulation_noise_language", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
+    def test_audit_flags_theory_driven_buy_language(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 七、最终结论",
+            "能量释放，所以可以买；群体行为共振，所以提高仓位。\n\n## 七、最终结论",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("theory_driven_action_language", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_fieldized_price_action_language(self):
+        report = GOOD_MARKDOWN.replace(
+            "## 七、最终结论",
+            "上涨斜率强，但回撤比例仍需验证；放量突破后先看承接，不追高；加速后出现衰竭风险，明天不主动追。\n\n## 七、最终结论",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertTrue(result["passed"], result["findings"])
+
     def test_audit_flags_appendix_duplicate_front_page_sections(self):
         bad = GOOD_MARKDOWN.replace(
             "### 附录B：历史主线池",

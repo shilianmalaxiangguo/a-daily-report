@@ -83,6 +83,22 @@ UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
 REASONING_SURFACE_HEADING = "### 0. 推理裁决"
 REASONING_REQUIRED_LABELS = ("结论", "关键证据", "触发条件", "失败条件", "排除对象", "推理深度")
 REASONING_CHAIN_LEAK_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
+SIMULATION_NOISE_MARKERS = (
+    "多智能体一致认为",
+    "沙盘推演显示",
+    "某情景下可能爆发",
+    "模型认为胜率提高",
+    "综合模拟后建议买入",
+    "虽然规则未满足，但推演偏乐观",
+)
+THEORY_ACTION_MARKERS = (
+    "能量释放，所以可以买",
+    "能量释放，所以可以加仓",
+    "能量释放，所以提高仓位",
+    "群体行为共振，所以可以买",
+    "群体行为共振，所以可以加仓",
+    "群体行为共振，所以提高仓位",
+)
 
 __all__ = ["audit_report_markdown"]
 
@@ -296,6 +312,32 @@ def _audit_reasoning_surface(lines):
     return findings
 
 
+def _audit_anti_noise_language(lines):
+    findings = []
+    front = _front_page_lines(lines)
+    for index, line in enumerate(front, 1):
+        text = str(line)
+        for marker in SIMULATION_NOISE_MARKERS:
+            if marker in text:
+                findings.append(
+                    _finding(
+                        "simulation_noise_language",
+                        f"front page must not use simulation/noise phrase: {marker}",
+                        line=index,
+                    )
+                )
+        for marker in THEORY_ACTION_MARKERS:
+            if marker in text:
+                findings.append(
+                    _finding(
+                        "theory_driven_action_language",
+                        f"front page must not use theory language as an action reason: {marker}",
+                        line=index,
+                    )
+                )
+    return findings
+
+
 def _extract_execution_unique_target(lines):
     for line in lines:
         cells = _split_md_row(line)
@@ -444,6 +486,7 @@ def audit_report_markdown(markdown):
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_degraded_fake_zero(lines))
     findings.extend(_audit_reasoning_surface(lines))
+    findings.extend(_audit_anti_noise_language(lines))
     findings.extend(_audit_unique_focus(lines))
     return {
         "passed": not findings,
