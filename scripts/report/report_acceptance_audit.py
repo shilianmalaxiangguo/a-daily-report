@@ -105,6 +105,9 @@ THEORY_ACTION_MARKERS = (
     "群体行为共振，所以提高仓位",
 )
 
+THEORY_CONCEPT_TERMS = ("能量学", "能量释放", "群体行为")
+THEORY_ACTION_CONTEXT_MARKERS = ("买", "加仓", "仓位", "候选资格", "资格")
+
 THEORY_NOISE_MARKERS = (
     "能量学判断",
     "能量释放完成",
@@ -337,8 +340,10 @@ def _audit_anti_noise_language(lines):
                         line=index,
                     )
                 )
+        theory_action_found = False
         for marker in THEORY_ACTION_MARKERS:
             if marker in text:
+                theory_action_found = True
                 findings.append(
                     _finding(
                         "theory_driven_action_language",
@@ -346,6 +351,14 @@ def _audit_anti_noise_language(lines):
                         line=index,
                     )
                 )
+        if not theory_action_found and _has_theory_action_context(text):
+            findings.append(
+                _finding(
+                    "theory_driven_action_language",
+                    "front page must not use theory concept language to justify action, qualification, or position changes",
+                    line=index,
+                )
+            )
         for marker in THEORY_NOISE_MARKERS:
             if marker in text:
                 findings.append(
@@ -356,6 +369,12 @@ def _audit_anti_noise_language(lines):
                     )
                 )
     return findings
+
+
+def _has_theory_action_context(text):
+    return any(term in text for term in THEORY_CONCEPT_TERMS) and any(
+        marker in text for marker in THEORY_ACTION_CONTEXT_MARKERS
+    )
 
 
 def _extract_execution_unique_target(lines):

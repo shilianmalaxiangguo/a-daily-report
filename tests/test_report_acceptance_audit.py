@@ -315,6 +315,25 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("theory_driven_action_language", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_flags_theory_concepts_in_action_context(self):
+        noisy_phrases = [
+            "能量学，所以可以买。",
+            "能量释放推动候选资格上调。",
+            "群体行为显示主线可以提高仓位。",
+        ]
+
+        for phrase in noisy_phrases:
+            with self.subTest(phrase=phrase):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    f"{phrase}\n\n## 七、最终结论",
+                )
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("theory_driven_action_language", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
     def test_audit_allows_fieldized_price_action_language(self):
         report = GOOD_MARKDOWN.replace(
             "## 七、最终结论",
