@@ -368,6 +368,15 @@ def _audit_anti_noise_language(lines):
                         line=index,
                     )
                 )
+        for term in THEORY_CONCEPT_TERMS:
+            if term in text:
+                findings.append(
+                    _finding(
+                        "theory_noise_language",
+                        f"front page must not use unfieldized theory concept: {term}",
+                        line=index,
+                    )
+                )
     return findings
 
 

@@ -304,6 +304,25 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 self.assertIn("theory_noise_language", {finding["code"] for finding in result["findings"]})
                 self.assertFalse(result["passed"])
 
+    def test_audit_flags_unfieldized_theory_terms_without_action_context(self):
+        noisy_phrases = [
+            "群体行为正在扩散，主线承接改善",
+            "能量释放对应为放量突破",
+            "能量学解释为趋势启动",
+        ]
+
+        for phrase in noisy_phrases:
+            with self.subTest(phrase=phrase):
+                bad = GOOD_MARKDOWN.replace(
+                    "## 七、最终结论",
+                    f"{phrase}\n\n## 七、最终结论",
+                )
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("theory_noise_language", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
     def test_audit_flags_theory_driven_buy_language(self):
         bad = GOOD_MARKDOWN.replace(
             "## 七、最终结论",
@@ -337,7 +356,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
     def test_audit_allows_fieldized_price_action_language(self):
         report = GOOD_MARKDOWN.replace(
             "## 七、最终结论",
-            "上涨斜率强，但回撤比例仍需验证；放量突破后先看承接，不追高；加速后出现衰竭风险，明天不主动追。\n\n## 七、最终结论",
+            "上涨斜率强，但回撤比例仍需验证；突破后承接改善，不追高；加速后衰竭风险仍在，板块内扩散不足。\n\n## 七、最终结论",
         )
 
         result = audit_report_markdown(report)
