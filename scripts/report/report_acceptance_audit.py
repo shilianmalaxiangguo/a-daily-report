@@ -331,7 +331,15 @@ def _audit_anti_noise_language(lines):
     front = _front_page_lines(lines)
     for index, line in enumerate(front, 1):
         text = str(line)
+        simulation_codes_on_line = set()
         theory_codes_on_line = set()
+
+        def append_simulation_finding(message):
+            code = "simulation_noise_language"
+            if code in simulation_codes_on_line:
+                return
+            simulation_codes_on_line.add(code)
+            findings.append(_finding(code, message, line=index))
 
         def append_theory_finding(code, message):
             if code in theory_codes_on_line:
@@ -341,12 +349,8 @@ def _audit_anti_noise_language(lines):
 
         for marker in SIMULATION_NOISE_MARKERS:
             if marker in text:
-                findings.append(
-                    _finding(
-                        "simulation_noise_language",
-                        f"front page must not use simulation/noise phrase: {marker}",
-                        line=index,
-                    )
+                append_simulation_finding(
+                    f"front page must not use simulation/noise phrase: {marker}",
                 )
         theory_action_found = False
         for marker in THEORY_ACTION_MARKERS:

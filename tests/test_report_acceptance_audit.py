@@ -286,6 +286,29 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 self.assertIn("simulation_noise_language", {finding["code"] for finding in result["findings"]})
                 self.assertFalse(result["passed"])
 
+    def test_audit_deduplicates_simulation_findings_per_line(self):
+        noisy_line = "多智能体一致认为主线明天会修复。"
+        bad = GOOD_MARKDOWN.replace(
+            "## 七、最终结论",
+            f"{noisy_line}\n\n## 七、最终结论",
+        )
+        inserted_line = bad.splitlines().index(noisy_line) + 1
+
+        result = audit_report_markdown(bad)
+
+        simulation_counts = Counter(
+            (finding.get("line"), finding["code"])
+            for finding in result["findings"]
+            if finding["code"] == "simulation_noise_language"
+        )
+        self.assertEqual(
+            simulation_counts,
+            {
+                (inserted_line, "simulation_noise_language"): 1,
+            },
+        )
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_front_page_theory_concept_noise_language(self):
         noisy_phrases = [
             "能量学判断显示承接转强。",
