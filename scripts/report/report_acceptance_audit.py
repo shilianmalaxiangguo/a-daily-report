@@ -331,6 +331,14 @@ def _audit_anti_noise_language(lines):
     front = _front_page_lines(lines)
     for index, line in enumerate(front, 1):
         text = str(line)
+        theory_codes_on_line = set()
+
+        def append_theory_finding(code, message):
+            if code in theory_codes_on_line:
+                return
+            theory_codes_on_line.add(code)
+            findings.append(_finding(code, message, line=index))
+
         for marker in SIMULATION_NOISE_MARKERS:
             if marker in text:
                 findings.append(
@@ -344,38 +352,26 @@ def _audit_anti_noise_language(lines):
         for marker in THEORY_ACTION_MARKERS:
             if marker in text:
                 theory_action_found = True
-                findings.append(
-                    _finding(
-                        "theory_driven_action_language",
-                        f"front page must not use theory language as an action reason: {marker}",
-                        line=index,
-                    )
+                append_theory_finding(
+                    "theory_driven_action_language",
+                    f"front page must not use theory language as an action reason: {marker}",
                 )
         if not theory_action_found and _has_theory_action_context(text):
-            findings.append(
-                _finding(
-                    "theory_driven_action_language",
-                    "front page must not use theory concept language to justify action, qualification, or position changes",
-                    line=index,
-                )
+            append_theory_finding(
+                "theory_driven_action_language",
+                "front page must not use theory concept language to justify action, qualification, or position changes",
             )
         for marker in THEORY_NOISE_MARKERS:
             if marker in text:
-                findings.append(
-                    _finding(
-                        "theory_noise_language",
-                        f"front page must not use theory/noise phrase: {marker}",
-                        line=index,
-                    )
+                append_theory_finding(
+                    "theory_noise_language",
+                    f"front page must not use theory/noise phrase: {marker}",
                 )
         for term in THEORY_CONCEPT_TERMS:
             if term in text:
-                findings.append(
-                    _finding(
-                        "theory_noise_language",
-                        f"front page must not use unfieldized theory concept: {term}",
-                        line=index,
-                    )
+                append_theory_finding(
+                    "theory_noise_language",
+                    f"front page must not use unfieldized theory concept: {term}",
                 )
     return findings
 

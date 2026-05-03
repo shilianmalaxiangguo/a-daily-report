@@ -1,5 +1,6 @@
 import sys
 import unittest
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -332,6 +333,30 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("theory_driven_action_language", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_deduplicates_theory_findings_per_line(self):
+        noisy_line = "能量释放，所以可以买；群体行为共振，所以提高仓位。"
+        bad = GOOD_MARKDOWN.replace(
+            "## 七、最终结论",
+            f"{noisy_line}\n\n## 七、最终结论",
+        )
+        inserted_line = bad.splitlines().index(noisy_line) + 1
+
+        result = audit_report_markdown(bad)
+
+        theory_counts = Counter(
+            (finding.get("line"), finding["code"])
+            for finding in result["findings"]
+            if finding["code"] in ("theory_driven_action_language", "theory_noise_language")
+        )
+        self.assertEqual(
+            theory_counts,
+            {
+                (inserted_line, "theory_driven_action_language"): 1,
+                (inserted_line, "theory_noise_language"): 1,
+            },
+        )
         self.assertFalse(result["passed"])
 
     def test_audit_flags_theory_concepts_in_action_context(self):
