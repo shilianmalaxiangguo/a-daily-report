@@ -14,7 +14,16 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 ## 一、交易纪律
 | 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |
 |----------|----------|----------|----------|----------|
-| 轻仓观察 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |
+| B档30%条件试错 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |
+
+### 月度攻防与仓位等级
+| 项目 | 结论 |
+|------|------|
+| 本月模式 | 财报/季报防守月 |
+| 当月收益 | +0.00% |
+| 盈利垫 | 未触发（阈值+10.00%） |
+| 仓位攻击等级 | B档30% |
+| 明日最大仓位 | 30% |
 
 ## 二、市场基底
 | 项目 | 结论 |
@@ -33,15 +42,21 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 观察 | 观察 | 观察 |
 
 ## 五、个股解读
-| 主线内唯一重点 | 跨线对象定位 | 动作原则 |
-|----------------|--------------|----------|
-| 富瀚微(300613) | 只看外溢 | 10点确认 |
+### 1. 个股裁决
+| 项目 | 结论 |
+|------|------|
+| 唯一对象 | 富瀚微(300613) |
+| 当前状态 | B档有条件试错对象 |
+| 备用观察 | 暂无 |
+| 今日不买原因 | 等10点确认 |
+| 明日触发 | 主线确认 + 承接 + 60分钟确认 |
+| 明日失效 | 主线回落 |
 
 ## 六、明日执行计划
 | 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |
 |--------------|------|------|--------------|
 | 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |
-| 时间窗口 | 要看什么 | 买入权限 | 卖出/风控 | 结论 |
+| 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |
 |----------|----------|----------|-----------|------|
 | 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |
 | 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 仅主线核心可进入观察买点 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |
@@ -53,7 +68,7 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 ## 七、最终结论
 | 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |
 |----------|------------|----------|------------|--------------|--------------|--------------|------------|
-| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |
+| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |
 
 ## 八、详细附录
 ### 附录B：历史主线池
@@ -77,6 +92,103 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertEqual(result["findings"], [])
         self.assertTrue(result["passed"])
+
+    def test_audit_flags_legacy_empty_short_style_in_final_summary(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("legacy_position_style", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_missing_monthly_rhythm_section(self):
+        bad = GOOD_MARKDOWN.replace(
+            "\n### 月度攻防与仓位等级\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 本月模式 | 财报/季报防守月 |\n"
+            "| 当月收益 | +0.00% |\n"
+            "| 盈利垫 | 未触发（阈值+10.00%） |\n"
+            "| 仓位攻击等级 | B档30% |\n"
+            "| 明日最大仓位 | 30% |\n",
+            "\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("monthly_rhythm_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_missing_position_attack_grade(self):
+        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |\n", "")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("monthly_rhythm_field_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_accepts_all_fixed_position_attack_grades(self):
+        cases = (
+            ("C档0%", "0%"),
+            ("B档30%", "30%"),
+            ("A-档50%", "50%"),
+            ("A档80%-100%", "100%"),
+        )
+        for label, max_position in cases:
+            with self.subTest(label=label):
+                report = (
+                    GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", f"| 仓位攻击等级 | {label} |")
+                    .replace("| 明日最大仓位 | 30% |", f"| 明日最大仓位 | {max_position} |")
+                )
+
+                result = audit_report_markdown(report)
+
+                self.assertNotIn("position_attack_grade_invalid", {finding["code"] for finding in result["findings"]})
+                self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_invalid_position_attack_grade_value(self):
+        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 仓位攻击等级 | A档90% |")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("position_attack_grade_invalid", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_position_attack_grade_above_max_position(self):
+        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 仓位攻击等级 | A档80%-100% |")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("position_attack_grade_exceeds_max_position", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_legacy_signal_grade_label_on_front_page(self):
+        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 今日信号等级 | B |")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("monthly_rhythm_field_missing", {finding["code"] for finding in result["findings"]})
+        self.assertIn("legacy_signal_grade_label", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_old_candidate_titles_on_front_page(self):
+        bad = GOOD_MARKDOWN.replace("### 1. 个股裁决", "### 1. 主线内观察候选")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("legacy_candidate_section_title", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_buy_permission_wording_on_front_page(self):
+        bad = GOOD_MARKDOWN.replace("买入资格", "买入权限")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("legacy_surface_wording", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_front_page_heading_order_and_duplicates(self):
         bad = GOOD_MARKDOWN.replace("## 二、市场基底", "## 三、周期与主线", 1)
@@ -111,13 +223,24 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_unique_focus_mismatch_between_plan_and_final_summary(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 中嘉博创(000889) | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 中嘉博创(000889) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
         )
 
         result = audit_report_markdown(bad)
 
         self.assertIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_allows_same_unique_focus_with_different_label_format(self):
+        report = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 300613 富瀚微（半导体） | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_concrete_unique_focus_without_required_decision_evidence(self):
         bad = GOOD_MARKDOWN.replace("承接", "强弱")
@@ -136,8 +259,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
             "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
         ).replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
         )
 
         result = audit_report_markdown(report)
@@ -150,15 +273,11 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
             "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
         ).replace(
-            "| 主线内唯一重点 | 跨线对象定位 | 动作原则 |\n"
-            "|----------------|--------------|----------|\n"
-            "| 富瀚微(300613) | 只看外溢 | 10点确认 |",
-            "| 主线内唯一重点 | 跨线对象定位 | 动作原则 |\n"
-            "|----------------|--------------|----------|\n"
-            "| 富瀚微(300613) | 半导体 | 唯一买入，10点确认 |",
+            "| 当前状态 | B档有条件试错对象 |",
+            "| 当前状态 | 富瀚微(300613) 唯一买入，10点确认 |",
         ).replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
         )
 
         result = audit_report_markdown(bad)

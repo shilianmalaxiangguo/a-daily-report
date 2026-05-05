@@ -280,6 +280,66 @@ assert "helpers" not in structure_mock.call_args.kwargs
 
         self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%执行仓，首个60分钟站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
 
+    def test_front_follow_action_text_passes_focus_keep_counts_to_position_sizing(self):
+        support = self._load_module()
+        captured_final_gate = {}
+
+        result = support.build_front_follow_action_text(
+            final_gate={"can_new_entry": True},
+            best_stock={"name": "军工一号", "code": "000001"},
+            watch_anchor=None,
+            watch_anchor_type="明天唯一能买的那只",
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[{"name": "军工二号", "code": "000002"}],
+            position_level="三档（进攻档）",
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
+            target_date="2026-04-22",
+            helpers={
+                "_build_bridge_prep_context": lambda **kwargs: {"active": False},
+                "_build_position_sizing_decision": lambda **kwargs: (
+                    captured_final_gate.update(kwargs.get("final_gate") or {})
+                    or {"target_position_pct": 30, "trigger_text": "完成60分钟确认"}
+                ),
+                "_build_execute_anchor_window_text": lambda **kwargs: "",
+                "_build_philosophy_constraint_text": lambda **kwargs: "",
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+            },
+        )
+
+        self.assertEqual(captured_final_gate["candidate_count"], 2)
+        self.assertEqual(captured_final_gate["unique_target_count"], 2)
+        self.assertIn("30%条件试错", result)
+
+    def test_front_structure_layer_text_deduplicates_same_code_for_position_sizing(self):
+        support = self._load_module()
+        captured_final_gate = {}
+
+        support.build_front_structure_layer_text(
+            final_gate={"can_new_entry": True},
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[{"name": "军工一号", "code": "000001", "sector": "军工", "direction": "低空经济"}],
+            best_stock={"name": "军工一号", "code": "000001"},
+            watch_anchor=None,
+            watch_anchor_type="明天唯一能买的那只",
+            position_level="三档（进攻档）",
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
+            target_date="2026-04-22",
+            helpers={
+                "_build_bridge_prep_context": lambda **kwargs: {"active": False},
+                "_build_position_sizing_decision": lambda **kwargs: (
+                    captured_final_gate.update(kwargs.get("final_gate") or {})
+                    or {"target_position_pct": 50, "trigger_text": "完成60分钟确认"}
+                ),
+                "_build_execute_anchor_window_text": lambda **kwargs: "",
+                "_build_philosophy_constraint_text": lambda **kwargs: "",
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_front_position_guard_label": lambda position_level="": "进攻档",
+            },
+        )
+
+        self.assertEqual(captured_final_gate["candidate_count"], 2)
+        self.assertEqual(captured_final_gate["unique_target_count"], 1)
+
     def test_front_summary_support_builds_bridge_prep_context(self):
         support = self._load_module()
 

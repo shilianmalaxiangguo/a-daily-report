@@ -113,6 +113,19 @@ THEORY_NOISE_MARKERS = (
     "能量释放完成",
     "群体行为共振",
 )
+LEGACY_POSITION_STYLE_MARKERS = ("空仓 / 短线确认", "空仓 / 短线 / 波段 / 尾盘量化例外")
+POSITION_STYLE_GRADE_MARKERS = ("C档0%", "B档30%", "A-档50%", "A档80%-100%")
+MONTHLY_RHYTHM_HEADING = "### 月度攻防与仓位等级"
+MONTHLY_RHYTHM_REQUIRED_LABELS = ("本月模式", "当月收益", "盈利垫", "仓位攻击等级", "明日最大仓位")
+POSITION_ATTACK_GRADE_LABELS = {"C档0%", "B档30%", "A-档50%", "A档80%-100%"}
+POSITION_ATTACK_GRADE_MIN_POSITION = {
+    "C档0%": 0,
+    "B档30%": 30,
+    "A-档50%": 50,
+    "A档80%-100%": 80,
+}
+LEGACY_CANDIDATE_SECTION_TITLES = ("### 1. 主线内观察候选", "### 1. 主线内可执行候选", "### 2. 跨线观察候选")
+LEGACY_SURFACE_WORDING_MARKERS = ("买入权限", "执行权", "门控", "开闸", "放行")
 
 __all__ = ["audit_report_markdown"]
 
@@ -163,6 +176,16 @@ def _split_md_row(line):
     if not text.startswith("|"):
         return []
     return [cell.strip() for cell in text.strip("|").split("|")]
+
+
+def _parse_percent_int(value):
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value or ""))
+    if not match:
+        return None
+    try:
+        return int(float(match.group(0)))
+    except ValueError:
+        return None
 
 
 def _is_separator_cells(cells):
@@ -233,6 +256,106 @@ def _audit_execution_conditions(lines):
                 f"front-page execution plan has time windows but is missing required actionable condition: {label}",
             )
         )
+    return findings
+
+
+def _audit_monthly_rhythm_section(lines):
+    front = _front_page_lines(lines)
+    findings = []
+    for offset, line in enumerate(front, 1):
+        cells = _split_md_row(line)
+        if cells and cells[0] == "今日信号等级":
+            findings.append(
+                _finding(
+                    "legacy_signal_grade_label",
+                    "front page must use 仓位攻击等级 instead of 今日信号等级",
+                    line=offset,
+                )
+            )
+    if MONTHLY_RHYTHM_HEADING not in front:
+        findings.append(
+            _finding(
+                "monthly_rhythm_missing",
+                "front page must render monthly attack/defense rhythm before stock selection",
+            )
+        )
+        return findings
+    section_text = "\n".join(_section_after(front, MONTHLY_RHYTHM_HEADING))
+    section_lines = _section_after(front, MONTHLY_RHYTHM_HEADING)
+    section_values = {}
+    for line in section_lines:
+        cells = _split_md_row(line)
+        if len(cells) >= 2 and not _is_separator_cells(cells):
+            section_values[cells[0]] = cells[1]
+    for label in MONTHLY_RHYTHM_REQUIRED_LABELS:
+        if f"| {label} |" not in section_text:
+            findings.append(
+                _finding(
+                    "monthly_rhythm_field_missing",
+                    f"monthly rhythm section is missing required field: {label}",
+                )
+            )
+    attack_grade = section_values.get("仓位攻击等级")
+    if attack_grade is not None and attack_grade not in POSITION_ATTACK_GRADE_LABELS:
+        findings.append(
+            _finding(
+                "position_attack_grade_invalid",
+                "仓位攻击等级 must be one of: C档0%, B档30%, A-档50%, A档80%-100%",
+            )
+        )
+    max_position = _parse_percent_int(section_values.get("明日最大仓位"))
+    min_position = POSITION_ATTACK_GRADE_MIN_POSITION.get(attack_grade)
+    if max_position is not None and min_position is not None and min_position > max_position:
+        findings.append(
+            _finding(
+                "position_attack_grade_exceeds_max_position",
+                "仓位攻击等级 cannot require more position than 明日最大仓位 allows",
+            )
+        )
+    return findings
+
+
+def _audit_candidate_section_contract(lines):
+    front = _front_page_lines(lines)
+    findings = []
+    for index, line in enumerate(front, 1):
+        if line in LEGACY_CANDIDATE_SECTION_TITLES:
+            findings.append(
+                _finding(
+                    "legacy_candidate_section_title",
+                    f"front-page candidate section must use 个股裁决 / 备用观察 instead of legacy title: {line}",
+                    line=index,
+                )
+            )
+    if "## 五、个股解读" in front and "### 1. 个股裁决" not in front:
+        findings.append(
+            _finding(
+                "candidate_verdict_missing",
+                "front-page stock section must render 个股裁决 with 当前状态",
+            )
+        )
+    stock_section = "\n".join(_section_after(front, "### 1. 个股裁决"))
+    if stock_section and "| 当前状态 |" not in stock_section:
+        findings.append(
+            _finding(
+                "candidate_state_missing",
+                "front-page 个股裁决 must include 当前状态",
+            )
+        )
+    return findings
+
+
+def _audit_legacy_surface_wording(lines):
+    front_text = "\n".join(_front_page_lines(lines))
+    findings = []
+    for marker in LEGACY_SURFACE_WORDING_MARKERS:
+        if marker in front_text:
+            findings.append(
+                _finding(
+                    "legacy_surface_wording",
+                    f"front page must use 资格/条件/可做 wording instead of legacy marker: {marker}",
+                )
+            )
     return findings
 
 
@@ -411,6 +534,45 @@ def _extract_final_unique_target(lines):
     return ""
 
 
+def _extract_final_execution_style(lines):
+    for index, line in enumerate(lines):
+        header = _split_md_row(line)
+        if "明日执行风格" not in header:
+            continue
+        style_index = header.index("明日执行风格")
+        for candidate in lines[index + 1 :]:
+            cells = _split_md_row(candidate)
+            if not cells:
+                continue
+            if _is_separator_cells(cells):
+                continue
+            if len(cells) > style_index:
+                return cells[style_index]
+    return ""
+
+
+def _audit_position_state_rendering(lines):
+    front = _front_page_lines(lines)
+    style = _extract_final_execution_style(front)
+    if not style:
+        return []
+    if any(marker in style for marker in LEGACY_POSITION_STYLE_MARKERS):
+        return [
+            _finding(
+                "legacy_position_style",
+                "final summary must render C/B/A-/A position state instead of legacy empty/short style",
+            )
+        ]
+    if not any(marker in style for marker in POSITION_STYLE_GRADE_MARKERS):
+        return [
+            _finding(
+                "position_style_missing_grade",
+                "final summary execution style must include C/B/A-/A grade and position size",
+            )
+        ]
+    return []
+
+
 def _is_empty_target(value):
     text = str(value or "").strip()
     if text in ("", "-", "暂无", "不做"):
@@ -418,6 +580,14 @@ def _is_empty_target(value):
     if re.search(r"(?<!\d)\d{6}(?!\d)", text):
         return False
     return "暂无" in text or "不做" in text
+
+
+def _target_identity(value):
+    text = str(value or "").strip()
+    match = re.search(r"(?<!\d)(\d{6})(?!\d)", text)
+    if match:
+        return match.group(1)
+    return text
 
 
 def _audit_unique_focus(lines):
@@ -438,7 +608,7 @@ def _audit_unique_focus(lines):
     if execution_empty and final_empty:
         findings.extend(_audit_empty_unique_focus_contradictions(front))
         return findings
-    if execution_target != final_target:
+    if _target_identity(execution_target) != _target_identity(final_target):
         findings.append(
             _finding(
                 "unique_focus_mismatch",
@@ -528,6 +698,9 @@ def audit_report_markdown(markdown):
     lines = _lines(markdown)
     findings = []
     findings.extend(_audit_front_page_headings(lines))
+    findings.extend(_audit_monthly_rhythm_section(lines))
+    findings.extend(_audit_candidate_section_contract(lines))
+    findings.extend(_audit_legacy_surface_wording(lines))
     findings.extend(_audit_execution_windows(lines))
     findings.extend(_audit_execution_conditions(lines))
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
@@ -536,6 +709,7 @@ def audit_report_markdown(markdown):
     findings.extend(_audit_reasoning_surface(lines))
     findings.extend(_audit_anti_noise_language(lines))
     findings.extend(_audit_unique_focus(lines))
+    findings.extend(_audit_position_state_rendering(lines))
     return {
         "passed": not findings,
         "findings": findings,

@@ -1,6 +1,19 @@
 from report.strategy_performance_node_registry import build_strategy_performance_node_specs
 from report.strategy_performance_node_runtime import run_strategy_performance_nodes
 from report.monitoring_pool_nodes import render_monitoring_pool_nodes
+from report.strategy_tracking_review import NEAT_FREAK_ATTRIBUTION_BUCKETS, normalize_neat_freak_attribution_bucket
+
+
+def _strategy_record_neat_freak_bucket_label(record):
+    attribution = record.get("attribution", {}) or {}
+    neat_freak_bucket = attribution.get("neat_freak_bucket") if isinstance(attribution, dict) else {}
+    if (
+        isinstance(neat_freak_bucket, dict)
+        and neat_freak_bucket.get("category") in NEAT_FREAK_ATTRIBUTION_BUCKETS
+        and neat_freak_bucket.get("label")
+    ):
+        return neat_freak_bucket.get("label", "-")
+    return normalize_neat_freak_attribution_bucket(record, attribution).get("label", "-")
 
 
 def render_strategy_performance_section(performance_summary, helpers):
@@ -132,8 +145,8 @@ def render_strategy_performance_section(performance_summary, helpers):
         lines.extend(
             [
                 "",
-                "| 报告日 | 标的 | 状态 | 状态层 | 策略收益区间 | 上证 | 超额区间 | 归因 |",
-                "|--------|------|------|--------|--------------|------|----------|------|",
+                "| 报告日 | 标的 | 状态 | 状态层 | 策略收益区间 | 上证 | 超额区间 | 归因 | 盘后归因桶 |",
+                "|--------|------|------|--------|--------------|------|----------|------|------------|",
             ]
         )
         for record in recent_records:
@@ -143,14 +156,16 @@ def render_strategy_performance_section(performance_summary, helpers):
             if record.get("stock_code"):
                 stock_label = f"{stock_label}({record.get('stock_code')})"
             status = sim.get("status_label") or sim.get("status") or record.get("action_type", "-")
-            attribution_label = (record.get("attribution", {}) or {}).get("label", "-")
+            attribution = record.get("attribution", {}) or {}
+            attribution_label = attribution.get("label", "-")
+            bucket_label = _strategy_record_neat_freak_bucket_label(record)
             state_text = record.get("market_energy_state", "-") or "-"
             lines.append(
                 f"| {record.get('report_date', '-')} | {stock_label} | {status} | {state_text} | "
                 f"{format_pct_range(display_metrics.get('strategy_return_worst'), display_metrics.get('strategy_return_best'))} | "
                 f"{format_pct(display_metrics.get('benchmark_return'))} | "
                 f"{format_pct_range(display_metrics.get('alpha_return_worst'), display_metrics.get('alpha_return_best'))} | "
-                f"{attribution_label} |"
+                f"{attribution_label} | {bucket_label} |"
             )
         lines.append("")
 
@@ -185,10 +200,10 @@ def render_strategy_performance_section(performance_summary, helpers):
         ]
     )
     if attribution_items:
-        lines.extend(["", "| 归属 | 次数 | 代表案例 | 说明 |", "|------|------|----------|------|"])
+        lines.extend(["", "| 盘后归因桶 | 次数 | 代表案例 | 原归因 | 说明 |", "|------------|------|----------|--------|------|"])
         for item in attribution_items:
             lines.append(
-                f"| {item.get('label', '-')} | {item.get('count', 0)} | {item.get('sample', '-')} | {item.get('reason', '-') or '-'} |"
+                f"| {item.get('label', '-')} | {item.get('count', 0)} | {item.get('sample', '-')} | {item.get('legacy_label', '-') or '-'} | {item.get('reason', '-') or '-'} |"
             )
         lines.append("")
     else:

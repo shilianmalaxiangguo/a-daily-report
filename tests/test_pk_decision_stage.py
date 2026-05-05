@@ -11,18 +11,102 @@ from domains.execution_chain.pk_decision_stage import (
     build_pk_decision_stage,
     format_closed_gate_buy_limit_text,
 )
+from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_decision_observation_pool_node
+from domains.execution_chain.pk_decision_nodes.watch_anchor import build_pk_decision_watch_anchor_node
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
 
 class PkDecisionStageTest(unittest.TestCase):
+    def test_pk_observation_pool_fetches_recent_bars_with_fast_fail(self):
+        calls = []
+
+        def _fetch_recent_price_bars(*args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return []
+
+        result = build_pk_decision_observation_pool_node(
+            {
+                "target_date": "2026-04-29",
+                "final_gate": {"can_new_entry": False},
+                "mainline_name": "电池",
+                "market_research_snapshot": {"state_machine": {}},
+                "keep_group": [{"name": "观察股", "code": "000001", "close": 10}],
+                "step2_bundle": {"evaluated_stocks": []},
+                "conviction_codes": set(),
+                "leader_memory_codes": set(),
+                "abnormal_watch_pool_all": [],
+                "trade_gate_open": False,
+                "ev_calibration": {},
+                "scored_executable_stocks": [],
+                "scored_waiting_stocks": [],
+                "pending_candidates": [],
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "score_execution_candidate": lambda stock, ev_calibration: dict(stock),
+                "score_candidate_decision_stack": lambda stock, **kwargs: dict(stock),
+                "sort_watch_anchor_candidates": lambda candidates, **kwargs: list(candidates),
+                "get_trade_permission": lambda *args, **kwargs: {"permission_label": "观察权", "permission_reason": "等待"},
+                "fetch_recent_price_bars": _fetch_recent_price_bars,
+                "evaluate_live_tradability": lambda *args, **kwargs: {"can_trade": True, "report_day_is_one_word": False},
+                "analyze_buy_signal": lambda *args, **kwargs: None,
+                "quant_system_available": False,
+                "build_waiting_stock_plan": lambda seed, *args, **kwargs: dict(seed),
+                "build_abnormal_watch_anchor_candidates": lambda **kwargs: [],
+            }
+        )
+
+        self.assertTrue(result["exports"]["scored_keep_watch_stocks"])
+        self.assertEqual(calls[0]["kwargs"].get("fast_fail"), True)
+
+    def test_pk_watch_anchor_crossline_fetches_recent_bars_with_fast_fail(self):
+        calls = []
+
+        def _fetch_recent_price_bars(*args, **kwargs):
+            calls.append({"args": args, "kwargs": kwargs})
+            return []
+
+        result = build_pk_decision_watch_anchor_node(
+            {
+                "target_date": "2026-04-29",
+                "final_gate": {"can_new_entry": False},
+                "mainline_name": "电池",
+                "market_research_snapshot": {"state_machine": {}},
+                "step2_bundle": {
+                    "crossline_observation_stocks": [
+                        {"name": "跨线股", "code": "000002", "close": 12, "tmr_forecast": "只看承接"}
+                    ],
+                    "gem_observation_stocks": [],
+                },
+                "conviction_codes": set(),
+                "leader_memory_codes": set(),
+                "trade_gate_open": False,
+                "pending_candidates": [],
+                "observation_candidates": [],
+                "waiting_stocks": [],
+                "abnormal_watch_anchor_candidates": [],
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "get_trade_permission": lambda *args, **kwargs: {"permission_label": "跨线观察权", "permission_reason": "等待"},
+                "fetch_recent_price_bars": _fetch_recent_price_bars,
+                "evaluate_live_tradability": lambda *args, **kwargs: {"can_trade": True, "report_day_is_one_word": False},
+                "analyze_buy_signal": lambda *args, **kwargs: None,
+                "quant_system_available": False,
+                "build_waiting_stock_plan": lambda seed, *args, **kwargs: dict(seed),
+                "derive_watch_anchor_type": lambda candidate, mainline_name="": "跨线重点观察谁",
+                "derive_watch_anchor_note": lambda candidate, mainline_name="": "先看承接",
+                "select_priority_watch_anchor": lambda **kwargs: ({}, ""),
+            }
+        )
+
+        self.assertEqual(result["exports"]["watch_anchor"]["code"], "000002")
+        self.assertEqual(calls[0]["kwargs"].get("fast_fail"), True)
+
     def test_conditional_defense_gate_formats_as_ten_oclock_confirmation_not_absolute_ban(self):
         self.assertEqual(
             format_closed_gate_buy_limit_text("二档（防守档）", {"allow_conditional_30": True}),
-            "等10点确认，未确认不开",
+            "等预设条件确认，未确认不开",
         )
         self.assertEqual(
             format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_conditional_30": False}),
-            "⛔一档（空仓档）禁止新开仓",
+            "⛔一档（空仓档）不新增",
         )
 
     def test_pk_decision_runtime_can_run_only_render_node_for_diagnostics(self):
@@ -183,6 +267,82 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["position_decision"]["target_position_pct"], 50)
         self.assertEqual(result["exports"]["best_stock"]["position_pct"], 50)
         self.assertEqual(result["exports"]["best_stock"]["candidate_feedback_ready"], True)
+
+    def test_pk_decision_probe_position_passes_focus_keep_counts_to_position_sizing(self):
+        captured = {}
+        focus_candidate = {"name": "军工一号", "code": "000001"}
+        keep_candidate = {"name": "军工二号", "code": "000002"}
+        final_gate = {"can_new_entry": True}
+
+        def _build_position_sizing_decision(**kwargs):
+            captured["final_gate"] = dict(kwargs.get("final_gate") or {})
+            return {
+                "target_position_pct": 0,
+                "candidate_feedback_ready": False,
+                "trigger_text": "多候选观察",
+            }
+
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-04-22",
+                "final_gate": final_gate,
+                "mainline_name": "军工",
+                "market_research_snapshot": {"state_machine": {}, "style_switch": {}},
+                "focus_group": [focus_candidate],
+                "keep_group": [keep_candidate],
+                "abnormal_watch_pool_all": [],
+                "best_stock": focus_candidate,
+                "watch_anchor": keep_candidate,
+                "watch_anchor_type": "重点观察谁",
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": _build_position_sizing_decision,
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["probe_position", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["position_decision"]["trigger_text"], "多候选观察")
+        self.assertEqual(captured["final_gate"]["candidate_count"], 2)
+        self.assertEqual(captured["final_gate"]["unique_target_count"], 2)
+        self.assertNotIn("candidate_count", final_gate)
+        self.assertNotIn("unique_target_count", final_gate)
+
+    def test_pk_decision_probe_position_deduplicates_same_code_with_partial_metadata(self):
+        captured = {}
+
+        def _build_position_sizing_decision(**kwargs):
+            captured["final_gate"] = dict(kwargs.get("final_gate") or {})
+            return {
+                "target_position_pct": 0,
+                "candidate_feedback_ready": False,
+                "trigger_text": "同一代码观察",
+            }
+
+        build_pk_decision_runtime(
+            {
+                "target_date": "2026-04-22",
+                "final_gate": {"can_new_entry": True},
+                "mainline_name": "军工",
+                "market_research_snapshot": {"state_machine": {}, "style_switch": {}},
+                "focus_group": [{"name": "军工一号", "code": "000001"}],
+                "keep_group": [{"name": "军工一号", "code": "000001", "sector": "军工", "direction": "低空经济"}],
+                "abnormal_watch_pool_all": [],
+                "best_stock": {"name": "军工一号", "code": "000001"},
+                "watch_anchor": None,
+                "watch_anchor_type": "重点观察谁",
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": _build_position_sizing_decision,
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["probe_position", "export_stage_state"],
+        )
+
+        self.assertEqual(captured["final_gate"]["candidate_count"], 2)
+        self.assertEqual(captured["final_gate"]["unique_target_count"], 1)
 
     def test_pk_decision_runtime_builds_pk_and_action_plan_contexts_for_renderers(self):
         captured = {}
@@ -472,7 +632,7 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("#### 明日操作计划", rendered)
-        self.assertIn("- **当前先不买**: 一档（空仓档），当前只允许观察，不允许新买入", "\n".join(captured["conclusion_lines"]))
+        self.assertIn("- **当前先不买**: 一档（空仓档），当前只允许观察，不新增", "\n".join(captured["conclusion_lines"]))
         self.assertNotIn("为什么先不买", "\n".join(captured["conclusion_lines"]))
 
 

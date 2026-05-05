@@ -2,6 +2,7 @@ from __future__ import annotations
 
 __all__ = [
     "build_mainline_turnover_summary",
+    "should_rebuild_mainline_turnover_summary",
 ]
 
 
@@ -19,6 +20,11 @@ def _pick_current_mainline(current_record):
     return str(current_record.get("primary_mainline") or current_record.get("leading_line") or "").strip()
 
 
+def _pick_summary_mainline(summary):
+    summary = summary or {}
+    return str(summary.get("current_mainline") or "").strip()
+
+
 def _pick_previous_mainline(recent_mainline_history, current_mainline):
     history = list(recent_mainline_history or [])
     for item in reversed(history):
@@ -26,6 +32,37 @@ def _pick_previous_mainline(recent_mainline_history, current_mainline):
         if mainline:
             return mainline
     return current_mainline
+
+
+def should_rebuild_mainline_turnover_summary(
+    summary,
+    *,
+    current_mainline_history_record=None,
+    recent_mainline_history=None,
+):
+    if not isinstance(summary, dict):
+        return True
+
+    current_mainline = _pick_current_mainline(current_mainline_history_record)
+    summary_mainline = _pick_summary_mainline(summary)
+    if not summary_mainline:
+        return True
+    if current_mainline and summary_mainline != current_mainline:
+        return True
+
+    previous_mainline = _pick_previous_mainline(recent_mainline_history, current_mainline)
+    expects_switch = bool(current_mainline and previous_mainline and current_mainline != previous_mainline)
+    if not expects_switch:
+        return False
+
+    summary_previous_mainline = str(summary.get("previous_mainline") or "").strip()
+    summary_trend_label = str(summary.get("share_trend_label") or "").strip()
+    summary_conclusion = str(summary.get("conclusion") or "").strip()
+    return not (
+        summary_previous_mainline == previous_mainline
+        and summary_trend_label == "切换"
+        and "主线切换" in summary_conclusion
+    )
 
 
 def _build_mainline_path_text(recent_mainline_history, current_mainline):
@@ -116,6 +153,9 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
     share = _safe_float(item.get("turnover_share_pct"))
     sector_turnover = _safe_float(item.get("sector_turnover"))
     sector_name = str(item.get("sector_name") or fallback_mainline or "-").strip() or "-"
+    row_daily_attack_line = str(
+        item.get("daily_attack_line") or item.get("attack_line") or daily_attack_line or sector_name or "-"
+    ).strip() or "-"
     if source_status == "missing_dependency":
         interpretation = "缺少板块成交额接口，先记录主线归属，成交额占比待后续数据累计"
     elif share > 0:
@@ -125,7 +165,7 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
     return {
         "date": str(item.get("date") or "-").strip() or "-",
         "cycle_mainline": sector_name,
-        "daily_attack_line": str(daily_attack_line or sector_name or "-").strip() or "-",
+        "daily_attack_line": row_daily_attack_line,
         "mainline_turnover": _format_amount_yi(sector_turnover),
         "market_turnover": _format_amount_yi(item.get("total_turnover")),
         "share": _format_share_pct(share),
@@ -134,21 +174,54 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
     }
 
 
+def _turnover_row_mainline(item, fallback_mainline=""):
+    item = item or {}
+    return str(item.get("sector_name") or item.get("cycle_mainline") or fallback_mainline or "").strip()
+
+
+def _turnover_row_key(item):
+    item = item or {}
+    return (str(item.get("date") or "").strip(), _turnover_row_mainline(item))
+
+
+def _limit_turnover_share_source_rows(source_rows, current_mainline, limit=5):
+    source_rows = list(source_rows or [])
+    if len(source_rows) <= limit:
+        return source_rows
+    limited = source_rows[-limit:]
+    current_mainline = str(current_mainline or "").strip()
+    previous_distinct_item = None
+    for item in reversed(source_rows):
+        row_mainline = _turnover_row_mainline(item)
+        if row_mainline and current_mainline and row_mainline != current_mainline:
+            previous_distinct_item = item
+            break
+    if previous_distinct_item and _turnover_row_key(previous_distinct_item) not in {
+        _turnover_row_key(item) for item in limited
+    }:
+        limited = [previous_distinct_item] + limited[-(limit - 1) :]
+    return limited
+
+
 def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_snapshot, current_mainline):
     source_rows = list(recent_sector_turnover_history or []) + ([current_snapshot] if current_snapshot else [])
     rows = []
-    previous_share = 0.0
-    for item in source_rows[-5:]:
+    previous_share_by_mainline = {}
+    previous_share_any_mainline = 0.0
+    for item in _limit_turnover_share_source_rows(source_rows, current_mainline):
+        row_mainline = _turnover_row_mainline(item, current_mainline)
+        previous_same_mainline = previous_share_by_mainline.get(row_mainline, 0.0)
         row = _build_turnover_share_row(
             item,
             fallback_mainline=current_mainline,
-            daily_attack_line=current_mainline,
-            previous_share=previous_share,
+            daily_attack_line="",
+            previous_share=previous_same_mainline if previous_same_mainline > 0 else previous_share_any_mainline,
         )
         rows.append(row)
         share = _safe_float((item or {}).get("turnover_share_pct"))
         if share > 0:
-            previous_share = share
+            previous_share_by_mainline[row_mainline] = share
+            previous_share_any_mainline = share
     return rows
 
 

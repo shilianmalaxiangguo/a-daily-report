@@ -1,6 +1,13 @@
+from selection.position_sizing_runtime import with_single_focus_counts
+
+
 def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=None):
     target_date = context.get("target_date", "")
-    final_gate = context.get("final_gate", {}) or {}
+    final_gate = with_single_focus_counts(
+        context.get("final_gate", {}) or {},
+        focus_group=context.get("focus_group", []) or [],
+        keep_group=context.get("keep_group", []) or [],
+    )
     mainline_name = str(context.get("mainline_name", "") or "").strip()
     market_research_snapshot = context.get("market_research_snapshot", {}) or {}
     abnormal_watch_pool_all = context.get("abnormal_watch_pool_all", []) or []
@@ -36,6 +43,7 @@ def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=N
         mainline_name=mainline_name,
         target_date=target_date,
         special_probe_verdict=special_probe_verdict,
+        monthly_context=context.get("monthly_context", {}) or {},
     )
     selected_position_candidate = best_stock or watch_anchor
     if selected_position_candidate and position_decision.get("target_position_pct", 0) > 0:

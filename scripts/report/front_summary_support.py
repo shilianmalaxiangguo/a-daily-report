@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from selection.candidate_execution_contracts import build_philosophy_constraint_text as _default_build_philosophy_constraint_text
-from selection.position_sizing_runtime import build_position_sizing_decision as _default_build_position_sizing_decision
+from selection.position_sizing_runtime import (
+    build_position_sizing_decision as _default_build_position_sizing_decision,
+    with_single_focus_counts,
+)
 from selection.watch_anchor_support import build_execute_anchor_window_text as _default_build_execute_anchor_window_text
 from report.front_summary_builder import (
     build_front_mainline_label_contract,
@@ -406,6 +409,11 @@ def _build_front_follow_action_text_legacy_body(
     focus_group = focus_group or []
     keep_group = keep_group or []
     delete_group = delete_group or []
+    final_gate = with_single_focus_counts(
+        final_gate,
+        focus_group=focus_group,
+        keep_group=keep_group,
+    )
     guard_label = _front_position_guard_label(position_level)
     execution_bias = str(state_machine_snapshot.get("execution_bias", "") or "").strip()
     pulse_stage = str(state_machine_snapshot.get("pulse_stage", "") or "").strip()
@@ -606,6 +614,11 @@ def _build_front_structure_layer_text_legacy_body(
     focus_group = focus_group or []
     keep_group = keep_group or []
     delete_group = delete_group or []
+    final_gate = with_single_focus_counts(
+        final_gate,
+        focus_group=focus_group,
+        keep_group=keep_group,
+    )
     state_machine_snapshot = state_machine_snapshot or {}
     bridge_prep = _build_bridge_prep_context(
         position_level=position_level,

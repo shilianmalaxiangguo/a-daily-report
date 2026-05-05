@@ -183,6 +183,240 @@ def _strategy_review_probe(records, start_date, end_date):
         self.assertEqual(result["category"], "env_too_strict")
         self.assertEqual(result["label"], "环境过滤过严")
 
+    def test_classify_strategy_record_attribution_adds_data_error_neat_freak_bucket(self):
+        review = self._load_review_module()
+
+        result = review.classify_strategy_record_attribution(
+            {
+                "action_type": "watch_only",
+                "source_status": "invalid_data",
+                "factor_snapshot": {"selection": {}},
+                "simulation": {"benchmark_return": 0.01},
+            },
+            "2026-04-24",
+            helpers={
+                "_collect_record_market_path": lambda record, as_of_date: {"observed_return": None},
+                "_safe_float": lambda value: float(value or 0),
+                "_round_or_none": lambda value: value,
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+            },
+        )
+
+        self.assertEqual(result["neat_freak_bucket"], {"category": "data_error", "label": "数据错误"})
+
+    def test_classify_strategy_record_attribution_adds_handoff_misjudged_neat_freak_bucket(self):
+        review = self._load_review_module()
+
+        result = review.classify_strategy_record_attribution(
+            {
+                "action_type": "execute",
+                "factor_snapshot": {"handoff_buying_evidence": "weak"},
+                "simulation": {
+                    "triggered": True,
+                    "benchmark_return": 0.01,
+                    "strategy_return_worst": -0.08,
+                    "strategy_return_best": -0.04,
+                    "alpha_return_worst": -0.08,
+                    "alpha_return_best": -0.04,
+                    "exit_reason": "day5_close",
+                },
+            },
+            "2026-04-24",
+            helpers={
+                "_collect_record_market_path": lambda record, as_of_date: {"observed_return": -0.05, "post_exit_extension": 0.0},
+                "_safe_float": lambda value: float(value or 0),
+                "sector_name_matches": lambda stock_sector, mainline_name: True,
+            },
+        )
+
+        self.assertEqual(result["neat_freak_bucket"], {"category": "handoff_buying_misjudged", "label": "后手买盘错估"})
+
+    def test_classify_strategy_record_attribution_adds_focus_scattered_neat_freak_bucket(self):
+        review = self._load_review_module()
+
+        result = review.classify_strategy_record_attribution(
+            {
+                "action_type": "watch_only",
+                "factor_snapshot": {
+                    "selection": {},
+                    "unique_target_count": 3,
+                },
+                "simulation": {"benchmark_return": 0.0},
+            },
+            "2026-04-24",
+            helpers={
+                "_collect_record_market_path": lambda record, as_of_date: {"observed_return": 0.0},
+                "_safe_float": lambda value: float(value or 0),
+                "_round_or_none": lambda value: value,
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+            },
+        )
+
+        self.assertEqual(result["neat_freak_bucket"], {"category": "focus_scattered", "label": "火力分散"})
+
+    def test_classify_neat_freak_bucket_detects_focus_from_candidate_stack(self):
+        review = self._load_review_module()
+
+        result = review.classify_neat_freak_attribution_bucket(
+            {
+                "factor_snapshot": {
+                    "selection": {},
+                    "candidate_stack": {
+                        "execute_candidates": [
+                            {"name": "样本A", "code": "000001"},
+                            {"name": "样本B", "code": "000002"},
+                        ],
+                    },
+                },
+            },
+            {"category": "defense_correct", "label": "防守正确"},
+        )
+
+        self.assertEqual(result, {"category": "focus_scattered", "label": "火力分散"})
+
+    def test_classify_neat_freak_bucket_detects_focus_from_runner_up(self):
+        review = self._load_review_module()
+
+        result = review.classify_neat_freak_attribution_bucket(
+            {
+                "factor_snapshot": {
+                    "selection": {
+                        "selected_candidate": {"name": "样本A", "code": "000001"},
+                        "runner_up": {"name": "样本B", "code": "000002"},
+                    },
+                },
+            },
+            {"category": "defense_correct", "label": "防守正确"},
+        )
+
+        self.assertEqual(result, {"category": "focus_scattered", "label": "火力分散"})
+
+    def test_classify_neat_freak_bucket_reads_reasoning_decision_handoff_evidence(self):
+        review = self._load_review_module()
+
+        result = review.classify_neat_freak_attribution_bucket(
+            {
+                "action_type": "execute",
+                "factor_snapshot": {
+                    "reasoning_decision": {"handoff_buying_evidence": "insufficient"},
+                },
+                "simulation": {
+                    "triggered": True,
+                    "strategy_return_worst": -0.06,
+                    "strategy_return_best": -0.03,
+                    "alpha_return_worst": -0.07,
+                    "alpha_return_best": -0.04,
+                },
+            },
+            {"category": "execution_valid", "label": "执行有效"},
+        )
+
+        self.assertEqual(result, {"category": "handoff_buying_misjudged", "label": "后手买盘错估"})
+
+    def test_classify_strategy_record_attribution_maps_env_too_strict_to_trigger_neat_freak_bucket(self):
+        review = self._load_review_module()
+
+        result = review.classify_strategy_record_attribution(
+            {
+                "action_type": "watch_only",
+                "simulation": {"benchmark_return": 0.02},
+                "factor_snapshot": {"selection": {}},
+            },
+            "2026-04-24",
+            helpers={
+                "_collect_record_market_path": lambda record, as_of_date: {"observed_return": 0.06, "max_runup": 0.09, "max_drawdown": -0.03},
+                "_safe_float": lambda value: float(value or 0),
+                "_round_or_none": lambda value: value,
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+            },
+        )
+
+        self.assertEqual(result["category"], "env_too_strict")
+        self.assertEqual(result["neat_freak_bucket"], {"category": "trigger_too_strict", "label": "触发过严"})
+
+    def test_classify_neat_freak_bucket_maps_reward_space_state_lag_and_stop_loss(self):
+        review = self._load_review_module()
+
+        self.assertEqual(
+            review.classify_neat_freak_attribution_bucket({}, {"category": "profit_take_early"}),
+            {"category": "reward_space_insufficient", "label": "收益空间不足"},
+        )
+        self.assertEqual(
+            review.classify_neat_freak_attribution_bucket({}, {"category": "weak_to_strong_missed"}),
+            {"category": "state_judgment_lag", "label": "状态判断慢"},
+        )
+        self.assertEqual(
+            review.classify_neat_freak_attribution_bucket(
+                {"stop_loss_breached": True, "actual_action": "hold", "simulation": {}},
+                {"category": "defense_correct"},
+            ),
+            {"category": "stop_loss_not_executed", "label": "止损不执行"},
+        )
+
+    def test_summarize_strategy_attribution_groups_by_neat_freak_bucket(self):
+        review = self._load_review_module()
+
+        result = review.summarize_strategy_attribution(
+            [
+                {
+                    "report_date": "2026-04-22",
+                    "stock_name": "样本A",
+                    "stock_code": "000001",
+                    "attribution": {
+                        "label": "执行有效",
+                        "reason": "后手买盘不足后仍执行",
+                        "neat_freak_bucket": {"category": "handoff_buying_misjudged", "label": "后手买盘错估"},
+                    },
+                },
+                {
+                    "report_date": "2026-04-23",
+                    "stock_name": "样本B",
+                    "stock_code": "000002",
+                    "attribution": {
+                        "label": "环境过滤过严",
+                        "reason": "触发条件过严",
+                        "neat_freak_bucket": {"category": "trigger_too_strict", "label": "触发过严"},
+                    },
+                },
+            ],
+            "2026-04-21",
+            "2026-04-24",
+            helpers={"_normalize_kline_date_str": lambda value: value},
+        )
+
+        self.assertEqual(
+            [(item["category"], item["label"], item["count"]) for item in result["items"]],
+            [("handoff_buying_misjudged", "后手买盘错估", 1), ("trigger_too_strict", "触发过严", 1)],
+        )
+        self.assertEqual(result["items"][0]["legacy_label"], "执行有效")
+        self.assertEqual(result["highlights"][0]["label"], "后手买盘错估")
+
+    def test_summarize_strategy_attribution_normalizes_unknown_legacy_bucket(self):
+        review = self._load_review_module()
+
+        result = review.summarize_strategy_attribution(
+            [
+                {
+                    "report_date": "2026-04-23",
+                    "stock_name": "旧样本",
+                    "stock_code": "000004",
+                    "attribution": {
+                        "category": "env_too_strict",
+                        "label": "环境过滤过严",
+                        "reason": "旧数据错误桶名",
+                        "neat_freak_bucket": {"category": "free_form_noise", "label": "自由发挥"},
+                    },
+                },
+            ],
+            "2026-04-21",
+            "2026-04-24",
+            helpers={"_normalize_kline_date_str": lambda value: value},
+        )
+
+        self.assertEqual(result["items"][0]["category"], "trigger_too_strict")
+        self.assertEqual(result["items"][0]["label"], "触发过严")
+        self.assertEqual(result["items"][0]["legacy_label"], "环境过滤过严")
+
     def test_summarize_gem_breathing_week_review_counts_upgrade_lag_samples(self):
         review = self._load_review_module()
 

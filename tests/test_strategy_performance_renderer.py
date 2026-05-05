@@ -92,7 +92,10 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
                     "action_type": "execute",
                     "market_energy_state": "修复",
                     "simulation": {"status_label": "已触发"},
-                    "attribution": {"label": "执行有效"},
+                    "attribution": {
+                        "label": "执行有效",
+                        "neat_freak_bucket": {"category": "handoff_buying_misjudged", "label": "后手买盘错估"},
+                    },
                 }
             ],
             "windows": [
@@ -109,7 +112,20 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
                     "alpha_return_best": 0.03,
                 }
             ],
-            "attribution_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "attribution_week_review": {
+                "start_date": "2026-04-20",
+                "end_date": "2026-04-22",
+                "items": [
+                    {
+                        "label": "后手买盘错估",
+                        "category": "handoff_buying_misjudged",
+                        "count": 1,
+                        "sample": "2026-04-21 军工二号(000002)",
+                        "legacy_label": "执行有效",
+                        "reason": "后手买盘不足后仍执行",
+                    }
+                ],
+            },
             "gem_20cm_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "sample_count": 0},
             "setup_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
             "ev_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
@@ -144,8 +160,113 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
         self.assertIn("### 7. 系统自校准建议", rendered)
         self.assertIn("### 8. 跨结构周期毕业看板", rendered)
         self.assertIn("| 模块 | 当前判断 | 当前证据 | 下步动作 |", rendered)
+        self.assertIn("| 报告日 | 标的 | 状态 | 状态层 | 策略收益区间 | 上证 | 超额区间 | 归因 | 盘后归因桶 |", rendered)
+        self.assertIn("| 2026-04-21 | 军工二号(000002) | 已触发 | 修复 | 0.01/0.03 | 0.02 | -0.01/0.01 | 执行有效 | 后手买盘错估 |", rendered)
+        self.assertIn("| 盘后归因桶 | 次数 | 代表案例 | 原归因 | 说明 |", rendered)
+        self.assertIn("| 后手买盘错估 | 1 | 2026-04-21 军工二号(000002) | 执行有效 | 后手买盘不足后仍执行 |", rendered)
         self.assertNotIn("| 模块 | 当前判断 | 为什么 | 下步动作 |", rendered)
 
+    def test_render_strategy_performance_section_derives_missing_neat_freak_bucket_for_old_records(self):
+        helpers = {
+            "ledger_mode_frozen": "frozen",
+            "ledger_mode_replay": "replay",
+            "defensive_exit_rule_text": "30分钟结构止损",
+            "format_strategy_record_brief": lambda record: f"{record.get('report_date', '-')}/{record.get('stock_name', '-')}",
+            "format_frozen_plan_columns": lambda record: ("-", "-", "-", "-", "-"),
+            "get_plan_action_label": lambda action_type: action_type or "-",
+            "get_recent_record_display_metrics": lambda record: {
+                "strategy_return_worst": 0.0,
+                "strategy_return_best": 0.0,
+                "benchmark_return": 0.0,
+                "alpha_return_worst": 0.0,
+                "alpha_return_best": 0.0,
+            },
+            "format_pct_range": lambda a, b: f"{a}/{b}",
+            "format_pct": lambda value: f"{value}",
+            "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+        }
+        summary = {
+            "ledger_mode": "frozen",
+            "current_plan": {"report_date": "2026-04-22"},
+            "recent_records": [
+                {
+                    "report_date": "2026-04-21",
+                    "stock_name": "旧记录",
+                    "stock_code": "000003",
+                    "action_type": "watch_only",
+                    "market_energy_state": "修复",
+                    "simulation": {"status": "watch_only"},
+                    "attribution": {"category": "env_too_strict", "label": "环境过滤过严"},
+                }
+            ],
+            "windows": [],
+            "attribution_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "gem_20cm_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "sample_count": 0},
+            "setup_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "ev_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "ev_calibration_snapshot": {"global": {"sample_size": 0}},
+            "self_calibration": {"start_date": "2026-04-20", "end_date": "2026-04-22", "suggestions": []},
+            "graduation_dashboard": {"source_label": "当前账本", "stage": "验证期", "total_score": 0, "verdict": "-"},
+            "structure_cycle_reviews": [],
+        }
+
+        rendered = "\n".join(render_strategy_performance_section(summary, helpers))
+
+        self.assertIn("| 2026-04-21 | 旧记录(000003) | watch_only | 修复 | 0.0/0.0 | 0.0 | 0.0/0.0 | 环境过滤过严 | 触发过严 |", rendered)
+        self.assertNotIn("| 环境过滤过严 | - |", rendered)
+
+    def test_render_strategy_performance_section_normalizes_unknown_legacy_bucket(self):
+        helpers = {
+            "ledger_mode_frozen": "frozen",
+            "ledger_mode_replay": "replay",
+            "defensive_exit_rule_text": "30分钟结构止损",
+            "format_strategy_record_brief": lambda record: f"{record.get('report_date', '-')}/{record.get('stock_name', '-')}",
+            "format_frozen_plan_columns": lambda record: ("-", "-", "-", "-", "-"),
+            "get_plan_action_label": lambda action_type: action_type or "-",
+            "get_recent_record_display_metrics": lambda record: {
+                "strategy_return_worst": 0.0,
+                "strategy_return_best": 0.0,
+                "benchmark_return": 0.0,
+                "alpha_return_worst": 0.0,
+                "alpha_return_best": 0.0,
+            },
+            "format_pct_range": lambda a, b: f"{a}/{b}",
+            "format_pct": lambda value: f"{value}",
+            "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+        }
+        summary = {
+            "ledger_mode": "frozen",
+            "current_plan": {"report_date": "2026-04-22"},
+            "recent_records": [
+                {
+                    "report_date": "2026-04-21",
+                    "stock_name": "旧记录",
+                    "stock_code": "000005",
+                    "action_type": "watch_only",
+                    "market_energy_state": "修复",
+                    "simulation": {"status": "watch_only"},
+                    "attribution": {
+                        "category": "env_too_strict",
+                        "label": "环境过滤过严",
+                        "neat_freak_bucket": {"category": "free_form_noise", "label": "自由发挥"},
+                    },
+                }
+            ],
+            "windows": [],
+            "attribution_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "gem_20cm_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "sample_count": 0},
+            "setup_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "ev_week_review": {"start_date": "2026-04-20", "end_date": "2026-04-22", "items": []},
+            "ev_calibration_snapshot": {"global": {"sample_size": 0}},
+            "self_calibration": {"start_date": "2026-04-20", "end_date": "2026-04-22", "suggestions": []},
+            "graduation_dashboard": {"source_label": "当前账本", "stage": "验证期", "total_score": 0, "verdict": "-"},
+            "structure_cycle_reviews": [],
+        }
+
+        rendered = "\n".join(render_strategy_performance_section(summary, helpers))
+
+        self.assertIn("| 2026-04-21 | 旧记录(000005) | watch_only | 修复 | 0.0/0.0 | 0.0 | 0.0/0.0 | 环境过滤过严 | 触发过严 |", rendered)
+        self.assertNotIn("自由发挥", rendered)
 
     def test_render_strategy_performance_section_outputs_monitoring_pools(self):
         helpers = {

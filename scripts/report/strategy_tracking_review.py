@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 __all__ = [
+    "NEAT_FREAK_ATTRIBUTION_BUCKETS",
     "build_gem_structure_cycle_cards",
     "build_self_calibration_summary",
     "build_structure_cycle_gem_summary",
     "build_system_graduation_dashboard",
     "classify_gem_breathing_week_sample",
+    "classify_neat_freak_attribution_bucket",
     "classify_strategy_record_attribution",
     "classify_structure_cycle_result",
     "extract_gem_breathing_contract_snapshot",
+    "normalize_neat_freak_attribution_bucket",
     "summarize_gem_breathing_week_review",
     "summarize_setup_signal_review",
     "summarize_strategy_attribution",
@@ -16,6 +19,39 @@ __all__ = [
 ]
 
 _MISSING = object()
+
+NEAT_FREAK_ATTRIBUTION_BUCKETS = {
+    "handoff_buying_misjudged": {"category": "handoff_buying_misjudged", "label": "后手买盘错估"},
+    "reward_space_insufficient": {"category": "reward_space_insufficient", "label": "收益空间不足"},
+    "focus_scattered": {"category": "focus_scattered", "label": "火力分散"},
+    "state_judgment_lag": {"category": "state_judgment_lag", "label": "状态判断慢"},
+    "trigger_too_strict": {"category": "trigger_too_strict", "label": "触发过严"},
+    "stop_loss_not_executed": {"category": "stop_loss_not_executed", "label": "止损不执行"},
+    "data_error": {"category": "data_error", "label": "数据错误"},
+}
+NEAT_FREAK_ATTRIBUTION_BUCKET_ORDER = {
+    category: index
+    for index, category in enumerate(NEAT_FREAK_ATTRIBUTION_BUCKETS)
+}
+
+_NEAT_FREAK_CATEGORY_MAP = {
+    "env_too_strict": "trigger_too_strict",
+    "stock_right_env_blocked": "trigger_too_strict",
+    "trigger_too_strict": "trigger_too_strict",
+    "signal_not_triggered": "trigger_too_strict",
+    "weak_to_strong_missed": "state_judgment_lag",
+    "gem_prep_upgrade_lag": "state_judgment_lag",
+    "entry_cycle_lag": "state_judgment_lag",
+    "special_probe_lag": "state_judgment_lag",
+    "state_misread": "state_judgment_lag",
+    "profit_take_early": "reward_space_insufficient",
+    "profit_take_correct": "reward_space_insufficient",
+    "exit_cycle_too_early": "reward_space_insufficient",
+    "execution_flat": "reward_space_insufficient",
+}
+
+_DATA_ERROR_MARKERS = ("data_error", "invalid_data", "数据错误")
+_EXIT_ACTION_MARKERS = ("exit", "sell", "止损", "退出", "卖出")
 
 
 def _install_runtime_bindings(bindings):
@@ -38,10 +74,195 @@ def _restore_runtime_bindings(previous):
             module_globals[key] = value
 
 
+def _copy_neat_freak_bucket(category):
+    bucket = NEAT_FREAK_ATTRIBUTION_BUCKETS.get(category) or NEAT_FREAK_ATTRIBUTION_BUCKETS["state_judgment_lag"]
+    return dict(bucket)
+
+
+def _string_has_any_marker(value, markers):
+    text = str(value or "").strip().lower()
+    return bool(text and any(str(marker).lower() in text for marker in markers))
+
+
+def _any_field_has_marker(payload, fields, markers):
+    return any(_string_has_any_marker((payload or {}).get(field), markers) for field in fields)
+
+
+def _mapping_get_nested(mapping, path):
+    current = mapping or {}
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _as_positive_int(value):
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _neat_freak_safe_float(value):
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _factor_snapshot_for_neat_freak(record):
+    factor_snapshot = (record or {}).get("factor_snapshot", {}) or {}
+    return factor_snapshot if isinstance(factor_snapshot, dict) else {}
+
+
+def _non_empty_mapping(value):
+    return bool(isinstance(value, dict) and value)
+
+
+def _list_len(value):
+    return len(value) if isinstance(value, list) else 0
+
+
+def _has_neat_freak_data_error(record):
+    record = record or {}
+    sim = record.get("simulation", {}) or {}
+    fields = ("source_status", "status", "data_status", "error_type", "category", "label", "reason")
+    return _any_field_has_marker(record, fields, _DATA_ERROR_MARKERS) or _any_field_has_marker(sim, fields, _DATA_ERROR_MARKERS)
+
+
+def _has_neat_freak_focus_scattered(record):
+    record = record or {}
+    factor_snapshot = _factor_snapshot_for_neat_freak(record)
+    unique_target_count = max(
+        _as_positive_int(record.get("unique_target_count")),
+        _as_positive_int(factor_snapshot.get("unique_target_count")),
+        _as_positive_int(_mapping_get_nested(factor_snapshot, ("selection", "unique_target_count"))),
+    )
+    single_focus_status = (
+        record.get("single_focus_constraint_status")
+        or _mapping_get_nested(record, ("single_focus_constraint", "status"))
+        or _mapping_get_nested(factor_snapshot, ("single_focus_constraint", "status"))
+        or _mapping_get_nested(factor_snapshot, ("selection", "single_focus_constraint", "status"))
+    )
+    execute_candidate_count = max(
+        _list_len(_mapping_get_nested(record, ("candidate_stack", "execute_candidates"))),
+        _list_len(_mapping_get_nested(factor_snapshot, ("candidate_stack", "execute_candidates"))),
+    )
+    has_runner_up = any(
+        _non_empty_mapping(value)
+        for value in (
+            record.get("runner_up"),
+            _mapping_get_nested(record, ("selection", "runner_up")),
+            _mapping_get_nested(factor_snapshot, ("selection", "runner_up")),
+        )
+    )
+    return unique_target_count > 1 or single_focus_status == "multiple_candidates" or execute_candidate_count > 1 or has_runner_up
+
+
+def _handoff_buying_evidence(record):
+    record = record or {}
+    factor_snapshot = _factor_snapshot_for_neat_freak(record)
+    return (
+        record.get("handoff_buying_evidence")
+        or _mapping_get_nested(record, ("handoff_buying", "evidence"))
+        or _mapping_get_nested(record, ("reasoning_decision", "handoff_buying_evidence"))
+        or factor_snapshot.get("handoff_buying_evidence")
+        or _mapping_get_nested(factor_snapshot, ("handoff_buying", "evidence"))
+        or _mapping_get_nested(factor_snapshot, ("reasoning_decision", "handoff_buying_evidence"))
+        or _mapping_get_nested(factor_snapshot, ("selection", "handoff_buying_evidence"))
+    )
+
+
+def _has_neat_freak_handoff_misjudged(record):
+    record = record or {}
+    evidence = str(_handoff_buying_evidence(record) or "").strip().lower()
+    if not evidence or evidence in ("clear", "明确", "strong", "confirmed"):
+        return False
+    sim = record.get("simulation", {}) or {}
+    action_type = str(record.get("action_type", "") or "").strip()
+    triggered = bool(sim.get("triggered"))
+    executed = action_type == "execute" or triggered
+    loss = any(
+        _neat_freak_safe_float(sim.get(field)) < 0
+        for field in ("strategy_return_worst", "strategy_return_best", "alpha_return_worst", "alpha_return_best")
+    )
+    return bool(executed and loss)
+
+
+def _has_neat_freak_stop_loss_not_executed(record):
+    record = record or {}
+    sim = record.get("simulation", {}) or {}
+    breached = bool(
+        record.get("stop_loss_breached")
+        or sim.get("stop_loss_breached")
+        or _string_has_any_marker(record.get("status"), ("stop_loss_breached",))
+        or _string_has_any_marker(sim.get("status"), ("stop_loss_breached",))
+    )
+    action_text = " ".join(
+        str(value or "")
+        for value in (
+            record.get("action"),
+            record.get("action_type"),
+            record.get("actual_action"),
+            sim.get("action"),
+            sim.get("exit_reason"),
+        )
+    )
+    return bool(breached and not _string_has_any_marker(action_text, _EXIT_ACTION_MARKERS))
+
+
+def classify_neat_freak_attribution_bucket(record, attribution=None):
+    attribution = attribution or {}
+    if _has_neat_freak_data_error(record):
+        return _copy_neat_freak_bucket("data_error")
+    if _has_neat_freak_stop_loss_not_executed(record):
+        return _copy_neat_freak_bucket("stop_loss_not_executed")
+    if _has_neat_freak_handoff_misjudged(record):
+        return _copy_neat_freak_bucket("handoff_buying_misjudged")
+    if _has_neat_freak_focus_scattered(record):
+        return _copy_neat_freak_bucket("focus_scattered")
+
+    category = str(attribution.get("category", "") or "").strip()
+    label = str(attribution.get("label", "") or "").strip()
+    if category in _NEAT_FREAK_CATEGORY_MAP:
+        return _copy_neat_freak_bucket(_NEAT_FREAK_CATEGORY_MAP[category])
+    if category == "data_error" or label == "数据错误":
+        return _copy_neat_freak_bucket("data_error")
+    if category == "stop_loss_not_executed" or label == "止损不执行":
+        return _copy_neat_freak_bucket("stop_loss_not_executed")
+    if category == "handoff_buying_misjudged" or label == "后手买盘错估":
+        return _copy_neat_freak_bucket("handoff_buying_misjudged")
+    if category == "focus_scattered" or label == "火力分散":
+        return _copy_neat_freak_bucket("focus_scattered")
+    if category == "reward_space_insufficient" or label == "收益空间不足":
+        return _copy_neat_freak_bucket("reward_space_insufficient")
+    if category == "trigger_too_strict" or "触发过严" in label:
+        return _copy_neat_freak_bucket("trigger_too_strict")
+    return _copy_neat_freak_bucket("state_judgment_lag")
+
+
+def normalize_neat_freak_attribution_bucket(record, attribution=None):
+    attribution = attribution or {}
+    existing = attribution.get("neat_freak_bucket") if isinstance(attribution, dict) else {}
+    if isinstance(existing, dict):
+        existing_category = str(existing.get("category", "") or "").strip()
+        if existing_category in NEAT_FREAK_ATTRIBUTION_BUCKETS:
+            return _copy_neat_freak_bucket(existing_category)
+    return classify_neat_freak_attribution_bucket(record, attribution)
+
+
+def _attach_neat_freak_attribution_bucket(record, attribution):
+    attribution = dict(attribution or {})
+    attribution["neat_freak_bucket"] = normalize_neat_freak_attribution_bucket(record, attribution)
+    return attribution
+
+
 def classify_strategy_record_attribution(record, as_of_date, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
-        return _classify_strategy_record_attribution_legacy_body(record, as_of_date)
+        attribution = _classify_strategy_record_attribution_legacy_body(record, as_of_date)
+        return _attach_neat_freak_attribution_bucket(record, attribution)
     finally:
         _restore_runtime_bindings(previous)
 
@@ -173,7 +394,8 @@ def build_system_graduation_dashboard(
 
 
 def _classify_strategy_record_attribution(record, as_of_date):
-    return _classify_strategy_record_attribution_legacy_body(record, as_of_date)
+    attribution = _classify_strategy_record_attribution_legacy_body(record, as_of_date)
+    return _attach_neat_freak_attribution_bucket(record, attribution)
 
 
 def _summarize_strategy_attribution(records, start_date, end_date):
@@ -516,11 +738,22 @@ def _summarize_strategy_attribution_legacy_body(records, start_date, end_date):
     highlights = []
     for record in scoped:
         attribution = record.get("attribution", {}) or {}
-        label = attribution.get("label", "待归因")
-        group = grouped.setdefault(label, {
+        neat_freak_bucket = attribution.get("neat_freak_bucket") if isinstance(attribution, dict) else {}
+        if (
+            not isinstance(neat_freak_bucket, dict)
+            or neat_freak_bucket.get("category") not in NEAT_FREAK_ATTRIBUTION_BUCKETS
+            or not neat_freak_bucket.get("label")
+        ):
+            neat_freak_bucket = normalize_neat_freak_attribution_bucket(record, attribution)
+        label = neat_freak_bucket.get("label") or "状态判断慢"
+        category = neat_freak_bucket.get("category") or "state_judgment_lag"
+        legacy_label = attribution.get("label", "待归因")
+        group = grouped.setdefault(category, {
+            "category": category,
             "label": label,
             "count": 0,
             "sample": "",
+            "legacy_label": legacy_label,
             "reason": attribution.get("reason", ""),
         })
         group["count"] += 1
@@ -529,7 +762,7 @@ def _summarize_strategy_attribution_legacy_body(records, start_date, end_date):
             if record.get("stock_code"):
                 sample_name = f"{sample_name}({record.get('stock_code')})"
             group["sample"] = f"{record.get('report_date')} {sample_name}"
-        if attribution.get("category") not in ("defense_correct", "wait_and_see") and len(highlights) < 3:
+        if category not in ("defense_correct", "wait_and_see") and len(highlights) < 3:
             sample_name = record.get("stock_name") or record.get("anchor_type") or "无标的"
             if record.get("stock_code"):
                 sample_name = f"{sample_name}({record.get('stock_code')})"
@@ -540,7 +773,10 @@ def _summarize_strategy_attribution_legacy_body(records, start_date, end_date):
                 "reason": attribution.get("reason", ""),
             })
 
-    items = sorted(grouped.values(), key=lambda x: (x.get("count", 0), x.get("label", "")), reverse=True)
+    items = sorted(
+        grouped.values(),
+        key=lambda x: (-x.get("count", 0), NEAT_FREAK_ATTRIBUTION_BUCKET_ORDER.get(x.get("category", ""), 99)),
+    )
     return {
         "start_date": start_date,
         "end_date": end_date,

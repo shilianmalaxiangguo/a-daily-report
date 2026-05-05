@@ -157,6 +157,132 @@ class FrontSummaryBuilderTest(unittest.TestCase):
         self.assertIn("弱股一号", payload["delete_preview"])
         self.assertEqual(payload["front_follow_action_text"], "只等唯一目标确认")
 
+    def test_render_mvp_focus_summary_contract_keeps_conditional_defense_not_empty_waiting(self):
+        payload = render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "半导体", "execution_bias": "watch_only"}, "style_switch": {}, "observation": {}},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            leader_memory_bank=[],
+            core_stocks=[],
+            crossline_observation_stocks=[],
+            gem_breathing_candidates=[],
+            filtered_out_gem_candidates=[],
+            structure_layer_text="防守观察，只看10点确认后的30%条件试错",
+            focus_group=[],
+            keep_group=[],
+            delete_group=[],
+            best_stock=None,
+            watch_anchor=None,
+            watch_anchor_type="",
+            abnormal_probe_group={},
+            final_gate={"can_new_entry": False, "allow_conditional_30": True, "should_reduce": False},
+            position_level="二档（防守档）",
+            target_date="2026-04-24",
+            compact=False,
+            resolve_primary_mainline_name=lambda *args, **kwargs: "半导体",
+            split_abnormal_watch_pool=lambda pool: (pool, []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "防守观察，只看10点确认后的30%条件试错",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: "",
+            candidate_matches_mainline=lambda item, mainline_name: False,
+            build_position_sizing_decision=lambda **kwargs: {"branch_20cm": {}},
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
+            build_front_follow_action_text=lambda **kwargs: "防守观察，只看主线核心；10点确认后最多30%条件试错",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertIn("30%条件试错", payload["no_trade_text"])
+        self.assertIn("没有唯一对象", payload["no_trade_text"])
+        self.assertNotIn("只保留市场研究与观察权", payload["no_trade_text"])
+
+    def test_render_mvp_focus_summary_contract_passes_focus_keep_counts_to_position_sizing(self):
+        captured_final_gate = {}
+
+        payload = render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "军工"}, "style_switch": {}, "observation": {}},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            leader_memory_bank=[],
+            core_stocks=[],
+            crossline_observation_stocks=[],
+            gem_breathing_candidates=[],
+            filtered_out_gem_candidates=[],
+            structure_layer_text="",
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[{"name": "军工二号", "code": "000002"}],
+            delete_group=[],
+            best_stock={"name": "军工一号", "code": "000001"},
+            watch_anchor=None,
+            watch_anchor_type="明天唯一能买的那只",
+            abnormal_probe_group={},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            target_date="2026-04-22",
+            compact=False,
+            resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
+            split_abnormal_watch_pool=lambda pool: (pool or [], []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "结构层通过",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: "",
+            candidate_matches_mainline=lambda item, mainline_name: False,
+            build_position_sizing_decision=lambda **kwargs: (
+                captured_final_gate.update(kwargs.get("final_gate") or {}) or {"branch_20cm": {}}
+            ),
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
+            build_front_follow_action_text=lambda **kwargs: "只等唯一目标确认",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertEqual(captured_final_gate["candidate_count"], 2)
+        self.assertEqual(captured_final_gate["unique_target_count"], 2)
+        self.assertEqual(payload["front_follow_action_text"], "只等唯一目标确认")
+
+    def test_render_mvp_focus_summary_contract_deduplicates_same_stock_for_unique_target_count(self):
+        captured_final_gate = {}
+
+        render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "军工"}, "style_switch": {}, "observation": {}},
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[{"name": "军工一号", "code": "000001", "sector": "军工", "direction": "低空经济"}],
+            best_stock={"name": "军工一号", "code": "000001"},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            target_date="2026-04-22",
+            resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
+            split_abnormal_watch_pool=lambda pool: (pool or [], []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "结构层通过",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: "",
+            candidate_matches_mainline=lambda item, mainline_name: False,
+            build_position_sizing_decision=lambda **kwargs: (
+                captured_final_gate.update(kwargs.get("final_gate") or {}) or {"branch_20cm": {}}
+            ),
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
+            build_front_follow_action_text=lambda **kwargs: "只等唯一目标确认",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertEqual(captured_final_gate["candidate_count"], 2)
+        self.assertEqual(captured_final_gate["unique_target_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

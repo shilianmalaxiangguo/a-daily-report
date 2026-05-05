@@ -1,4 +1,5 @@
 from report.mainline_turnover_summary_support import resolve_double_mainline_summary, resolve_turnover_share_trend_rows
+from selection.position_sizing_runtime import with_single_focus_counts
 
 
 def build_double_mainline_summary_contract(context=None):
@@ -241,7 +242,11 @@ def render_mvp_focus_summary_contract(
     keep_group = keep_group or []
     delete_group = delete_group or []
     abnormal_probe_group = abnormal_probe_group or {}
-    final_gate = final_gate or {}
+    final_gate = with_single_focus_counts(
+        final_gate,
+        focus_group=focus_group,
+        keep_group=keep_group,
+    )
     bridge_prep = build_bridge_prep_context(
         position_level=position_level,
         final_gate=final_gate,
@@ -426,7 +431,10 @@ def render_mvp_focus_summary_contract(
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
             )
     else:
-        no_trade_text = "当前无新增执行对象，只保留市场研究与观察权"
+        if final_gate.get("allow_conditional_30") and not final_gate.get("can_new_entry") and not final_gate.get("should_reduce"):
+            no_trade_text = "没有唯一对象不等于绝对空仓；B档只保留10点确认后的30%条件试错，未确认不开"
+        else:
+            no_trade_text = "当前无新增执行对象，只保留市场研究与观察权"
 
     bridge_prep_label = ""
     bridge_prep_text = ""

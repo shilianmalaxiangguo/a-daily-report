@@ -85,6 +85,48 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["action_text"], "只围绕新主线通信重新收缩，不对旧主线做回流预判")
         self.assertEqual(result["previous_mainline"], "军工")
         self.assertEqual(result["share_trend_label"], "切换")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["share_change"], "-3.8pct")
+
+    def test_build_mainline_turnover_summary_keeps_previous_mainline_row_labeled_as_itself(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-04-24",
+            current_mainline_history_record={"date": "2026-04-24", "primary_mainline": "半导体"},
+            recent_mainline_history=[
+                {"date": "2026-04-22", "primary_mainline": "电力"},
+                {"date": "2026-04-23", "primary_mainline": "半导体"},
+            ],
+            current_sector_turnover_snapshot={
+                "date": "2026-04-24",
+                "sector_name": "半导体",
+                "sector_turnover": 2638.1,
+                "total_turnover": 26414.92,
+                "turnover_share_pct": 10.0,
+            },
+            recent_sector_turnover_history=[
+                {
+                    "date": "2026-04-22",
+                    "sector_name": "电力",
+                    "sector_turnover": 2100.0,
+                    "total_turnover": 12000.0,
+                    "turnover_share_pct": 17.5,
+                },
+                {
+                    "date": "2026-04-23",
+                    "sector_name": "半导体",
+                    "sector_turnover": 2300.0,
+                    "total_turnover": 12500.0,
+                    "turnover_share_pct": 18.4,
+                },
+            ],
+        )
+
+        rows = result["turnover_share_trend_rows"]
+        self.assertEqual(rows[0]["cycle_mainline"], "电力")
+        self.assertEqual(rows[0]["daily_attack_line"], "电力")
+        self.assertEqual(rows[-1]["cycle_mainline"], "半导体")
+        self.assertEqual(rows[-1]["daily_attack_line"], "半导体")
 
     def test_build_mainline_turnover_summary_exports_turnover_share_table_rows_even_when_share_missing(self):
         runtime = self._load_module()
@@ -115,6 +157,43 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["turnover_share_trend_rows"][0]["market_turnover"], "26414.92亿")
         self.assertEqual(result["turnover_share_trend_rows"][0]["share"], "待累计")
         self.assertIn("缺少板块成交额接口", result["turnover_share_trend_rows"][0]["interpretation"])
+
+    def test_should_rebuild_mainline_turnover_summary_when_existing_summary_misses_switch(self):
+        runtime = self._load_module()
+
+        should_rebuild = runtime.should_rebuild_mainline_turnover_summary(
+            {
+                "current_mainline": "半导体",
+                "conclusion": "主线未切换，半导体仍是中心",
+                "share_trend_label": "持平",
+            },
+            current_mainline_history_record={"date": "2026-04-30", "primary_mainline": "半导体"},
+            recent_mainline_history=[
+                {"date": "2026-04-28", "primary_mainline": "电力"},
+                {"date": "2026-04-29", "primary_mainline": "电池"},
+            ],
+        )
+
+        self.assertTrue(should_rebuild)
+
+    def test_should_keep_mainline_turnover_summary_when_existing_summary_has_switch(self):
+        runtime = self._load_module()
+
+        should_rebuild = runtime.should_rebuild_mainline_turnover_summary(
+            {
+                "current_mainline": "半导体",
+                "previous_mainline": "电池",
+                "conclusion": "主线切换为半导体，旧主线电池退出中心",
+                "share_trend_label": "切换",
+            },
+            current_mainline_history_record={"date": "2026-04-30", "primary_mainline": "半导体"},
+            recent_mainline_history=[
+                {"date": "2026-04-28", "primary_mainline": "电力"},
+                {"date": "2026-04-29", "primary_mainline": "电池"},
+            ],
+        )
+
+        self.assertFalse(should_rebuild)
 
 
 if __name__ == "__main__":
