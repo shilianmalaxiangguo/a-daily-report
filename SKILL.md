@@ -7,6 +7,22 @@ description: Use when handling natural-language A-share daily-report requests, r
 
 This skill is a compact onboarding router for the daily-report repo. Treat the user request as natural-language intent; users do not need to remember commands.
 
+## Trading Rhythm Base
+
+Trading soul: 没有永远是好的股，好的只有好的周期。Before judging a stock as strong, first judge whether its current market cycle is still favorable. Once the cycle fades, stop defending the stock as "good" and switch the frame to exit, reduce, or avoid.
+
+Energy exhaustion soul: 能量学只作为底层交易思想，必须字段化后进入系统。震荡=能量聚集，行情=能量释放；真正可执行的观察字段是上涨角度、下跌角度、上涨幅度、调整幅度、速度变化。等速运动最省力，若走势从等速变成加速冲顶或上涨速度放慢，按加速后衰竭/动能减少处理。T+1避亏要求在亏损日前一日收盘后识别风险，例如津药药业若在2026-04-08已经出现角度转弱、幅度扩散、速度失衡，就必须给出不介入/退出纪律，避免2026-04-09的确定性亏损。
+
+Newton iteration decision discipline: this is a decision method, not a math display. Start with a coarse 1.0 judgment, test it against option sample feedback, and revise the next judgment instead of waiting for a perfect answer. For T+1, the skill must translate 强量转弱, 缩量冲高, 放量下杀, and 上涨斜率放缓 into fieldized decision fields and next-day action before the loss day confirms the risk.
+
+Default monthly frame: 财报/季报密集期以防守为主；4/8/10 月这类财报/季报日历月即使没有显式月度上下文，也先按防守处理。核心目标是守住 0% and avoid earnings landmines; non-earnings months are the attack window, where the skill may look for 10%-20% opportunity months only after market fit, mainline strength, and stock structure confirm. Daily decisions inherit this monthly rhythm before judging individual setups.
+
+Monthly target standard: 月10cm is not a low bar; treat it as the attack-month acceptance line, not a monthly KPI. In attack months, +10% is qualified, 15% is excellent, and 20% is market-gift territory. The skill should not raise targets by forcing trades; the real challenge is A-grade courage when the market gives a true A setup and C-grade patience when the market gives nothing.
+
+Signal grades: C means observe only, B means 30% trial, A- means 50% standard attack, and A means 80%-100% buy-and-hold attack. Profit is not a downgrade trigger: a profit cushion can support holding or adding while the trend acts right; only trend invalidation, mainline fading, or a broken invalidation price downgrades the position.
+
+B档 is not absolute empty-position: 一档（空仓档） means true C/0% no-trade, while 二档（防守档） can still keep 10点确认后的30%条件试错. Do not render B as C; the report must say whether the user is waiting because there is no setup, waiting as `B档条件等待`, or waiting for a specific 30% trial condition.
+
 ## Intent Routes
 
 | Internal intent | When to choose it | First reference |

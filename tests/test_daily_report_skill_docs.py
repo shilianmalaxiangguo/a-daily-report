@@ -83,6 +83,56 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_monthly_rhythm_contract_names_livermore_position_grades(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        combined = "\n".join([skill, report_contract])
+
+        for required in [
+            "Trading Rhythm Base",
+            "Monthly Trading Rhythm",
+            "Signal Grades And Position",
+            "C = 0%",
+            "B = 30%",
+            "A- = 50%",
+            "A = 80%-100%",
+            "profit cushion",
+            "invalidation price",
+            "Profit is not a downgrade trigger",
+            "月10cm is not a low bar",
+            "attack-month acceptance line",
+            "not a monthly KPI",
+            "15% is excellent",
+            "20% is market-gift territory",
+            "A-grade courage",
+            "C-grade patience",
+            "4/8/10",
+            "calendar earnings months",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_report_contract_prevents_conditional_defense_from_becoming_empty_position(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        v2_spec = self._read("docs/superpowers/specs/2026-04-25-daily-report-v2-design.md")
+        combined = "\n".join([skill, report_contract, v2_spec])
+
+        for required in [
+            "B档 is not absolute empty-position",
+            "Do not render B as C",
+            "10点确认后的30%条件试错",
+            "一档（空仓档）",
+            "二档（防守档）",
+            "C档0% / 仅观察",
+            "B档30% / 10点确认后条件试错",
+            "B档条件等待",
+            "A-档50% / 唯一对象执行",
+            "A档80%-100% / 买定离手",
+        ]:
+            self.assertIn(required, combined)
+        self.assertNotIn("空仓 / 短线 / 波段 / 尾盘量化例外", v2_spec)
+        self.assertNotIn("空仓 / 短线确认", v2_spec)
+
     def test_skill_and_report_contract_inherit_reasoning_mode_contract(self):
         skill = self._read("SKILL.md")
         report_contract = self._read("references/report-contract.md")
@@ -119,6 +169,47 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "突破后承接",
             "加速后衰竭",
             "不能以自由叙事进入日报主链",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_skill_and_report_contract_preserve_fieldized_energy_theory_t1_avoidance(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        combined = "\n".join([skill, report_contract])
+
+        for required in [
+            "能量聚集",
+            "能量释放",
+            "上涨角度",
+            "下跌角度",
+            "上涨幅度",
+            "调整幅度",
+            "等速运动最省力",
+            "速度变化",
+            "T+1避亏",
+            "津药药业",
+            "2026-04-08",
+            "2026-04-09",
+            "不介入",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_skill_and_report_contract_preserve_newton_iteration_decision_discipline(self):
+        skill = self._read("SKILL.md")
+        report_contract = self._read("references/report-contract.md")
+        combined = "\n".join([skill, report_contract])
+
+        for required in [
+            "Newton iteration decision discipline",
+            "coarse 1.0 judgment",
+            "option sample feedback",
+            "do not wait for a perfect answer",
+            "强量转弱",
+            "缩量冲高",
+            "放量下杀",
+            "上涨斜率放缓",
+            "T+1 next-day action",
+            "fieldized decision fields",
         ]:
             self.assertIn(required, combined)
 
