@@ -34,7 +34,7 @@ def build_watch_pool_conclusion_node(context, node_meta=None, node_lookup=None):
         for item in tracking_memory_status.get("today_validated_items", [])[:3]
     ]
     if trusted_memory_names:
-        lines.append(f"- **历史二次确认观察**: {', '.join(trusted_memory_names)}（只影响优先回看，不直接给执行权）")
+        lines.append(f"- **历史二次确认观察**: {', '.join(trusted_memory_names)}（只影响优先回看，不直接给买入资格）")
     elif tracking_memory_status.get("today_tentative_items"):
         lines.append("- **历史记忆状态**: 仍以临时假设为主，今天继续验证，不允许直接继承为买点")
 

@@ -436,7 +436,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     else:
         stage_label = "收缩防守"
         stage_reason = "风险释放仍优先，市场还没回到可以放大试错的状态。"
-        stage_action = "先防守，不给新增执行权。"
+        stage_action = "先防守，不给新增买入资格。"
 
     if benchmark_change <= -0.1 and profit_effect_strong:
         index_profit_relation = "指数承压，但赚钱效应还在主线里"
@@ -464,7 +464,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     elif densest_sector:
         focus_label = f"{densest_sector}暂时领先，但聚集还不够"
         focus_reason = f"{densest_sector}虽然领先，但趋势密度只有{trend_count}只，更多还是观察优势，不是绝对优势。"
-        focus_action = "先把它当研究重点，不急着授予普遍执行权。"
+        focus_action = "先把它当研究重点，不急着给普遍买入资格。"
     else:
         focus_label = "赚钱效应还没真正聚集"
         focus_reason = "热点仍偏散，主线没有形成足够稳定的中心。"
@@ -475,7 +475,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
         candidate_action = "长期阴跌后的孤立首板默认只观察；只有后续继续强化，才考虑升级。"
     else:
         candidate_focus = "先分清谁只是反抽，谁真正率先转强"
-        candidate_action = "观察池优先保留率先转强和异常承接对象，不给低位幻想执行权。"
+        candidate_action = "观察池优先保留率先转强和异常承接对象，不给低位幻想买入资格。"
 
     falsification_conditions = []
     if densest_sector:
@@ -542,7 +542,7 @@ def _build_abnormal_projection_summary_legacy_body(abnormal_watch_pool=None):
     else:
         projection_label = "异常分化观察"
         projection_reason = "异常有出现，但承接和失败并存，说明高维状态还在选择方向。"
-        action = "继续观察，不放松执行权；等更清晰的承接胜出。"
+        action = "继续观察，不放松买入资格；等更清晰的承接胜出。"
 
     return {
         "projection_label": projection_label,
@@ -640,11 +640,11 @@ def _build_mainline_competition_snapshot_legacy_body(
         )
 
     if main_sectors_info:
-        append_sector(main_sectors_info[0], "主攻线", "只在这条线里找执行权")
+        append_sector(main_sectors_info[0], "主攻线", "只在这条线里找买入资格")
     if len(main_sectors_info) >= 2:
         append_sector(main_sectors_info[1], "次强线", "有共振才看，不抢主攻线风头")
     if secondary_sectors_info:
-        append_sector(secondary_sectors_info[0], "竞争线", "先观察胜负，不急着给执行权")
+        append_sector(secondary_sectors_info[0], "竞争线", "先观察胜负，不急着给买入资格")
     if risk_sectors:
         append_sector({"name": risk_sectors[0]}, "回避线", "只做风险观察，不做出手方向")
 
@@ -900,7 +900,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             return {
                 "code": "avoid",
                 "label": "🚫 暂不跟随",
-                "reason": f"当前处于{energy_state}，新增执行权已经关闭，先研究市场，不做新增参与。",
+                "reason": f"当前处于{energy_state}，新增买入资格未满足，先研究市场，不做新增参与。",
                 "action": "空仓观察，禁止新开仓",
             }
         if final_gate.get("allow_conditional_30") and not final_gate.get("should_reduce"):
@@ -910,7 +910,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             return {
                 "code": "conditional_defense",
                 "label": "🟡 条件防守观察",
-                "reason": f"当前处于{energy_state}，指数结构未坏，但环境还没正式放行，只保留主线核心的条件观察权。",
+                "reason": f"当前处于{energy_state}，指数结构未坏，但环境条件还没正式满足，只保留主线核心的条件观察资格。",
                 "action": action_text,
             }
         if final_gate.get("should_reduce") or execution_bias == "reduce_only":
@@ -920,7 +920,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             return {
                 "code": "reduce_only",
                 "label": "🟠 只处理旧仓",
-                "reason": pulse_action_reason or f"当前处于{energy_state}，系统只保留旧仓处理权，不给新增执行权。",
+                "reason": pulse_action_reason or f"当前处于{energy_state}，系统只保留旧仓处理资格，不给新增买入资格。",
                 "action": action_text,
             }
         action_text = "先看环境；若你有持仓，只处理持仓，禁止新开仓"

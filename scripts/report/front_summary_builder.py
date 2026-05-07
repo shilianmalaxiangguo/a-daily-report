@@ -321,7 +321,7 @@ def render_mvp_focus_summary_contract(
             for item in gem_breathing_candidates[:2]
         )
         breathing_note = str(gem_breathing_candidates[0].get("note", "") or "").strip()
-        gem_breathing_text = f"{breathing_preview}；{breathing_note}；只先进观察池，不直接给执行权"
+        gem_breathing_text = f"{breathing_preview}；{breathing_note}；只先进观察池，不直接给买入资格"
     elif filtered_out_gem_candidates:
         filtered_preview = " / ".join(
             f"{item.get('name', '-')}({item.get('code', '-')})[{item.get('sector', '-')}]"
@@ -405,7 +405,7 @@ def render_mvp_focus_summary_contract(
     special_probe_summary_text = special_probe_verdict.get("summary_text", "")
     if breathing_prep.get("active"):
         note = branch_20cm.get("reason") or breathing_prep.get("note") or "创业板20cm预启动观察。"
-        gem_breathing_text = f"{note}；只先进观察池，不直接给执行权"
+        gem_breathing_text = f"{note}；只先进观察池，不直接给买入资格"
     delete_preview = ""
     if delete_group:
         delete_preview = " / ".join(f"{item.get('name', '-')}" for item in delete_group[:2])

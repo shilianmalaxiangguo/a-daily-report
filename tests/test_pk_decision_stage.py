@@ -102,11 +102,11 @@ class PkDecisionStageTest(unittest.TestCase):
     def test_conditional_defense_gate_formats_as_ten_oclock_confirmation_not_absolute_ban(self):
         self.assertEqual(
             format_closed_gate_buy_limit_text("二档（防守档）", {"allow_conditional_30": True}),
-            "等预设条件确认，未确认不开",
+            "等10点确认，未确认不开",
         )
         self.assertEqual(
             format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_conditional_30": False}),
-            "⛔一档（空仓档）不新增",
+            "⛔一档（空仓档）禁止新开仓",
         )
 
     def test_pk_decision_runtime_can_run_only_render_node_for_diagnostics(self):
@@ -632,7 +632,7 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("#### 明日操作计划", rendered)
-        self.assertIn("- **当前先不买**: 一档（空仓档），当前只允许观察，不新增", "\n".join(captured["conclusion_lines"]))
+        self.assertIn("- **当前先不买**: 一档（空仓档），当前只允许观察，不允许新买入", "\n".join(captured["conclusion_lines"]))
         self.assertNotIn("为什么先不买", "\n".join(captured["conclusion_lines"]))
 
 

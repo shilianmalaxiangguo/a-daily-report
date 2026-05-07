@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def build_pk_overview_node(context, node_meta=None, node_lookup=None):
     stage_label = str(context.get("stage_label", "") or "").strip()
     stage_title = str(context.get("stage_title", "") or "PK决胜局（期望值模型）").strip() or "PK决胜局（期望值模型）"
@@ -26,7 +29,7 @@ def build_pk_decision_stack_node(context, node_meta=None, node_lookup=None):
     ]
     for item in scored_executable_stocks:
         stack = item.get("decision_stack", {}) or {}
-        note = item.get("permission_label", "-") or "-"
+        note = sanitize_user_visible_text(item.get("permission_label", "-") or "-")
         if item.get("abnormal_setup_signal_label"):
             note = f"{note} / {item.get('abnormal_setup_signal_label')}"
         lines.append(

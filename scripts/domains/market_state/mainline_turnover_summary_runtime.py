@@ -161,7 +161,7 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
     elif share > 0:
         interpretation = "主线成交额占比可用，继续观察占比抬升或回落"
     else:
-        interpretation = "主线成交额占比暂缺，先不据此放大执行权"
+        interpretation = "主线成交额占比暂缺，先不据此放大买入资格"
     return {
         "date": str(item.get("date") or "-").strip() or "-",
         "cycle_mainline": sector_name,

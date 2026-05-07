@@ -1,5 +1,7 @@
 import time
 
+from report.surface_wording import sanitize_user_visible_text
+
 
 HOOK_NAME = "decision.action_plan"
 
@@ -27,22 +29,22 @@ def run(ctx):
     elif contract_label == "defense_observe" or phase == "defend":
         action_label = "watch_only"
         headline = "只观察，不开新仓"
-        trigger = "等待环境重新放行"
+        trigger = "等待环境条件重新满足"
         rationale = contract_rationale or "环境未开，只处理观察和旧仓"
     else:
         action_label = "watch_only"
-        headline = "先观察，不授予执行权"
+        headline = "先观察，不授予执行资格"
         trigger = "等待主线更清晰并完成60分钟确认"
         rationale = contract_rationale or "当前只保留观察权"
 
-    payload = {
+    payload = sanitize_user_visible_text({
         "action_label": action_label,
         "headline": headline,
         "trigger": trigger,
         "rationale": rationale,
         "contract_label": contract_label,
         "permission_label": permission_label,
-    }
+    })
     derivation = {
         "hook_name": HOOK_NAME,
         "inputs": ["derived.market_phase", "derived.mainline", "derived.strategy_contract", "decision.execution_permission"],

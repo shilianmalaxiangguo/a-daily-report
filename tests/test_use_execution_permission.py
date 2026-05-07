@@ -24,7 +24,7 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertIn("phase=defend", result["patches"]["decision"]["execution_permission"]["reason"])
         self.assertEqual(
             result["patches"]["decision"]["execution_permission"]["framework"]["gate_chain"],
-            ["环境放行", "主线确认", "异常/触发", "可交易性", "60分钟确认", "30分钟止损"],
+            ["环境条件满足", "主线确认", "异常/触发", "可交易性", "60分钟确认", "30分钟止损"],
         )
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
@@ -51,7 +51,7 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.market_phase", result["diagnostics"]["warnings"])
         self.assertIn(
-            "环境放行 -> 主线确认 -> 异常/触发 -> 可交易性 -> 60分钟确认 -> 30分钟止损",
+            "环境条件满足 -> 主线确认 -> 异常/触发 -> 可交易性 -> 60分钟确认 -> 30分钟止损",
             result["patches"]["decision"]["execution_permission"]["reason"],
         )
 

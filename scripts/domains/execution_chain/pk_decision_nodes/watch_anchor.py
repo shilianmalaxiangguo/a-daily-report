@@ -87,7 +87,7 @@ def build_pk_decision_watch_anchor_node(context, node_meta=None, node_lookup=Non
         watch_anchor.update(
             {
                 "permission_label": permission.get("permission_label", "") or "跨线观察权",
-                "permission_reason": permission.get("permission_reason", "") or "只作承接观察，不授予主线执行权",
+                "permission_reason": permission.get("permission_reason", "") or "只作承接观察，不给主线买入资格",
                 "tradability_guard": tradability_guard,
                 "report_day_is_one_word": tradability_guard.get("report_day_is_one_word", False),
                 "watch_source": "keep_group_watch",

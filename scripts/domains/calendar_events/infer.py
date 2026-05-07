@@ -15,8 +15,12 @@ __all__ = [
     "infer_related_sectors",
     "llm_analyze_event",
     "minimal_fallback_analysis",
+    "normalize_calendar_ai_analysis",
 ]
 
+GENERIC_CALENDAR_DIRECTION = "政策催化"
+GENERIC_CALENDAR_SECTORS = ["政策催化"]
+_INVALID_CALENDAR_SECTOR_LABELS = {"", "其他", "需盘面确认", "相关产业链标的"}
 _MISSING = object()
 _llm_call_stats = {
     "total_calls": 0,
@@ -51,7 +55,12 @@ def _restore_runtime_bindings(previous):
 def minimal_fallback_analysis(event_title: str, event_summary: str = "", *, helpers=None) -> dict:
     previous = _install_runtime_bindings(helpers or {})
     try:
-        return _minimal_fallback_analysis_legacy_body(event_title, event_summary)
+        return normalize_calendar_ai_analysis(
+            _minimal_fallback_analysis_legacy_body(event_title, event_summary),
+            event_title,
+            event_summary,
+            allow_rule_fallback=False,
+        )
     finally:
         _restore_runtime_bindings(previous)
 
@@ -118,6 +127,78 @@ def has_clear_signal(text, *, helpers=None):
         return _has_clear_signal_legacy_body(text)
     finally:
         _restore_runtime_bindings(previous)
+
+
+def _generic_calendar_analysis(event_title: str = "", event_summary: str = "", *, reason: str = "") -> dict:
+    text = f"{event_title} {event_summary}".strip()
+    trading_logic = reason or "事件产业链方向不明确，归入政策/事件催化观察"
+    if text and any(term in text for term in ["政策", "规划", "发布", "出台", "实施", "推进", "会议", "大会", "论坛"]):
+        trading_logic = reason or "涉及政策/事件催化，先按政策催化板块归类观察"
+    return {
+        "main_direction": GENERIC_CALENDAR_DIRECTION,
+        "related_sectors": list(GENERIC_CALENDAR_SECTORS),
+        "trading_logic": trading_logic,
+        "expectation": infer_expectation(text) if text else "中性",
+        "confidence": "低",
+    }
+
+
+def _is_invalid_calendar_label(value) -> bool:
+    return str(value or "").strip() in _INVALID_CALENDAR_SECTOR_LABELS
+
+
+def _dedupe_valid_calendar_sectors(sectors) -> list:
+    if isinstance(sectors, str):
+        candidates = [sectors]
+    elif isinstance(sectors, (list, tuple, set)):
+        candidates = list(sectors)
+    else:
+        candidates = []
+
+    cleaned = []
+    for sector in candidates:
+        label = str(sector or "").strip()
+        if _is_invalid_calendar_label(label):
+            continue
+        if label not in cleaned:
+            cleaned.append(label)
+    return cleaned
+
+
+def normalize_calendar_ai_analysis(result, event_title: str = "", event_summary: str = "", *, allow_rule_fallback: bool = True) -> dict:
+    if not isinstance(result, dict):
+        result = {}
+
+    direction = str(result.get("main_direction") or "").strip()
+    needs_concrete_direction = _is_invalid_calendar_label(direction)
+    if needs_concrete_direction and allow_rule_fallback:
+        fallback_result = _minimal_fallback_analysis_legacy_body(event_title, event_summary)
+        fallback_direction = str((fallback_result or {}).get("main_direction") or "").strip()
+        if not _is_invalid_calendar_label(fallback_direction):
+            result = fallback_result
+            direction = fallback_direction
+            needs_concrete_direction = False
+
+    if needs_concrete_direction:
+        generic_result = _generic_calendar_analysis(
+            event_title,
+            event_summary,
+            reason=str(result.get("trading_logic") or "").strip(),
+        )
+        result = {**generic_result, **{key: value for key, value in result.items() if value not in (None, "", [])}}
+        direction = GENERIC_CALENDAR_DIRECTION
+
+    related_sectors = _dedupe_valid_calendar_sectors(result.get("related_sectors"))
+    if not related_sectors:
+        related_sectors = [direction] if not _is_invalid_calendar_label(direction) else list(GENERIC_CALENDAR_SECTORS)
+
+    normalized = dict(result)
+    normalized["main_direction"] = direction if not _is_invalid_calendar_label(direction) else GENERIC_CALENDAR_DIRECTION
+    normalized["related_sectors"] = related_sectors
+    normalized["trading_logic"] = str(normalized.get("trading_logic") or "事件催化，需结合盘面资金确认").strip()
+    normalized["expectation"] = str(normalized.get("expectation") or infer_expectation(f"{event_title} {event_summary}")).strip()
+    normalized["confidence"] = str(normalized.get("confidence") or "低").strip()
+    return normalized
 
 
 def analyze_event_sector(event_title, event_summary="", xuangubao_data=None, hot_rank_data=None, *, helpers=None):
@@ -215,16 +296,14 @@ def _ai_analyze_event_sectors_legacy_body(event_title, event_summary="", *, prin
         _llm_call_stats["event_analysis_calls"] += 1
         _llm_call_stats["event_analysis_time"] += elapsed
 
-        if result.get("main_direction") == "其他":
-            fallback_result = minimal_fallback_analysis(event_title, event_summary)
-            if fallback_result.get("main_direction") != "其他":
-                print_fn(f"  [AI兜底] '{event_title[:30]}...' -> {fallback_result['main_direction']}（极简规则兜底）")
-                return fallback_result
-            print_fn(f"  [AI分析] '{event_title[:30]}...' -> 其他（AI无法识别明确产业链）")
+        normalized_result = normalize_calendar_ai_analysis(result, event_title, event_summary)
+        raw_direction = result.get("main_direction") if isinstance(result, dict) else None
+        if normalized_result.get("main_direction") != raw_direction:
+            print_fn(f"  [AI兜底] '{event_title[:30]}...' -> {normalized_result['main_direction']}（日历归一化）")
         else:
-            print_fn(f"  [AI分析] '{event_title[:30]}...' -> {result.get('main_direction')}（置信度:{result.get('confidence', '中')}）")
+            print_fn(f"  [AI分析] '{event_title[:30]}...' -> {normalized_result.get('main_direction')}（置信度:{normalized_result.get('confidence', '中')}）")
 
-        return result
+        return normalized_result
     except Exception as error:
         elapsed = time.time() - start_time
         print_fn(f"[ai_analyze_event_sectors] LLM调用失败({elapsed:.2f}s): {error}")
@@ -405,4 +484,4 @@ def _analyze_event_sector_legacy_body(event_title, event_summary="", xuangubao_d
     for keywords, label in mapping:
         if any(keyword in title_lower for keyword in keywords):
             return label
-    return "其他"
+    return GENERIC_CALENDAR_DIRECTION

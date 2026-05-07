@@ -1,41 +1,11 @@
 from report.front_summary_node_registry import build_front_summary_node_specs
 from report.front_summary_node_runtime import run_front_summary_nodes
 from report.mainline_turnover_summary_support import resolve_double_mainline_summary, resolve_turnover_share_trend_rows
-
-
-ENGLISH_TRADING_JARGON_REPLACEMENTS = (
-    ("follow through", "延续承接"),
-    ("act right", "走势符合强势标准"),
-    ("setup", "形态条件"),
-    ("probe", "优先观察对象"),
-)
-
-USER_VISIBLE_WORDING_REPLACEMENTS = (
-    ("执行权限", "执行资格"),
-    ("执行权", "资格"),
-    ("闸门未开", "条件未满足"),
-    ("环境闸门", "环境条件"),
-    ("门控", "条件"),
-    ("开闸", "可做"),
-    ("放行", "可做"),
-)
+from report.surface_wording import sanitize_user_visible_text
 
 
 def sanitize_front_page_text(value):
-    if isinstance(value, str):
-        sanitized = value
-        for source, target in ENGLISH_TRADING_JARGON_REPLACEMENTS:
-            sanitized = sanitized.replace(source, target).replace(source.title(), target).replace(source.upper(), target)
-        for source, target in USER_VISIBLE_WORDING_REPLACEMENTS:
-            sanitized = sanitized.replace(source, target)
-        return sanitized
-    if isinstance(value, list):
-        return [sanitize_front_page_text(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(sanitize_front_page_text(item) for item in value)
-    if isinstance(value, dict):
-        return {key: sanitize_front_page_text(item) for key, item in value.items()}
-    return value
+    return sanitize_user_visible_text(value)
 
 
 def _render_double_mainline_summary_table(context):

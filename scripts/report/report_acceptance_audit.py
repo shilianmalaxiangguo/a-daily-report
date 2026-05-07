@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from report.surface_wording import find_legacy_surface_wording
+
 FRONT_PAGE_HEADINGS = [
     "## 一、交易纪律",
     "## 二、市场基底",
@@ -72,7 +74,7 @@ UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
     "观察",
     "不买",
     "不直接给资格",
-    "不直接给执行权",
+    "不直接给买入资格",
     "条件未满足",
     "等10点确认",
     "待确认",
@@ -125,8 +127,6 @@ POSITION_ATTACK_GRADE_MIN_POSITION = {
     "A档80%-100%": 80,
 }
 LEGACY_CANDIDATE_SECTION_TITLES = ("### 1. 主线内观察候选", "### 1. 主线内可执行候选", "### 2. 跨线观察候选")
-LEGACY_SURFACE_WORDING_MARKERS = ("买入权限", "执行权", "门控", "开闸", "放行")
-
 __all__ = ["audit_report_markdown"]
 
 
@@ -348,14 +348,13 @@ def _audit_candidate_section_contract(lines):
 def _audit_legacy_surface_wording(lines):
     front_text = "\n".join(_front_page_lines(lines))
     findings = []
-    for marker in LEGACY_SURFACE_WORDING_MARKERS:
-        if marker in front_text:
-            findings.append(
-                _finding(
-                    "legacy_surface_wording",
-                    f"front page must use 资格/条件/可做 wording instead of legacy marker: {marker}",
-                )
+    for marker in find_legacy_surface_wording(front_text):
+        findings.append(
+            _finding(
+                "legacy_surface_wording",
+                f"front page must use 资格/条件/可做 wording instead of legacy marker: {marker}",
             )
+        )
     return findings
 
 

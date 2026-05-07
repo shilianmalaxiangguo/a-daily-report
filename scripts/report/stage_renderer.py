@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def render_stage_board(report_stages):
     report_stages = report_stages or []
     lines = [
@@ -10,5 +13,5 @@ def render_stage_board(report_stages):
         title = str(stage.get("title", "") or "").strip() or "-"
         status = str(stage.get("status", "") or "").strip() or "-"
         summary = str(stage.get("summary", "") or "").strip() or "-"
-        lines.append(f"| {stage_key} | {title} | {status} | {summary} |")
+        lines.append(f"| {stage_key} | {sanitize_user_visible_text(title)} | {status} | {sanitize_user_visible_text(summary)} |")
     return "\n".join(lines)

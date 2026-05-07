@@ -145,7 +145,7 @@ def build_market_phase_context_contract(
     dragon_stocks = mainline_context.get("dragon_stocks", [])
 
     exit_analysis = build_mainline_exit_analysis(data, market_analysis, dragon_stocks, main_sectors)
-    _append_log(logs, "exit_analysis", "success", "已完成主线退潮与环境闸门分析", overall_level=exit_analysis.get("overall_level", ""))
+    _append_log(logs, "exit_analysis", "success", "已完成主线退潮与环境条件分析", overall_level=exit_analysis.get("overall_level", ""))
 
     turnover = data.get("total_turnover", 0)
     zt_count = len(data.get("zt_pool", []))
@@ -227,7 +227,7 @@ def build_market_phase_context_contract(
         and not _chanlun_confirmation_is_unconfirmed(market_zhongshu)
     ):
         final_gate = {
-            "gate_status": "放行",
+            "gate_status": "可做",
             "position_level": "三档（进攻档）",
             "operation_state": "进攻态",
             "can_new_entry": True,

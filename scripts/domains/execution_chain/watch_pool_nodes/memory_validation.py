@@ -18,7 +18,7 @@ def build_watch_pool_memory_validation_node(context, node_meta=None, node_lookup
             sources = " / ".join(item.get("sources", [])[:3]) or "-"
             follow_state = item.get("follow_state", "") or "今日再次入池"
             lines.append(
-                f"| {item.get('name', '-')} | {item.get('code', '-')} | 历史观察已确认 | {sources} + {follow_state} | 只保留优先回看权，不直接给执行权 |"
+                f"| {item.get('name', '-')} | {item.get('code', '-')} | 历史观察已确认 | {sources} + {follow_state} | 只保留优先回看资格，不直接给买入资格 |"
             )
     elif tracking_memory_status.get("new_items"):
         lines.append("- **现在是什么情况**: 还没有形成二次确认观察，今天出现的更多是新假设，不能直接当真。")

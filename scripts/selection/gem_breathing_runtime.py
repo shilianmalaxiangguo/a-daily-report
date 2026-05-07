@@ -689,7 +689,7 @@ def _build_gem_observation_pool_legacy_body(gem_breathing_candidates=None, targe
         note = str(item.get("note", "") or "").strip() or "创业板20cm预启动观察。"
         textbook_profile = build_gem_breathing_textbook_profile(item, target_date=target_date) if target_date else _empty_textbook_profile()
         textbook_summary = str(textbook_profile.get("summary_text", "") or "").strip()
-        watch_anchor_note = str(item.get("watch_anchor_note", "") or "先看右侧确认和60分钟确认，不直接给执行权").strip()
+        watch_anchor_note = str(item.get("watch_anchor_note", "") or "先看右侧确认和60分钟确认，不直接给买入资格").strip()
         if textbook_summary:
             watch_anchor_note = f"{watch_anchor_note}；{textbook_summary}"
         item.update(
@@ -820,7 +820,7 @@ def _build_gem_breathing_watch_anchor_legacy_body(gem_candidate=None, target_dat
         {
             "watch_source": "gem_breathing_20cm",
             "permission_label": "创业板20cm预启动观察权",
-            "permission_reason": "只先进观察池，先看右侧确认和60分钟确认，不直接给执行权",
+            "permission_reason": "只先进观察池，先看右侧确认和60分钟确认，不直接给买入资格",
             "watch_anchor_type": "创业板20cm预启动先看谁",
             "watch_anchor_note": (
                 f"{str(gem_candidate.get('note', '') or '创业板20cm预启动观察。').strip()}；"
@@ -853,7 +853,7 @@ def _build_gem_breathing_watch_anchor_legacy_body(gem_candidate=None, target_dat
         note_parts.append(f"失守{void_price:.2f}作废")
     elif reset_breakout_price is not None:
         note_parts.append(f"失守后至少重新站回{reset_breakout_price:.2f}再评估")
-    note_parts.append("确认前只先进观察池，先看右侧确认和60分钟确认，不直接给执行权")
+    note_parts.append("确认前只先进观察池，先看右侧确认和60分钟确认，不直接给买入资格")
     watch_anchor["watch_anchor_note"] = "；".join(part for part in note_parts if part)
     return watch_anchor
 

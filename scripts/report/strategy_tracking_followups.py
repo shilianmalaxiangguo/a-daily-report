@@ -141,7 +141,7 @@ def _build_recent_target_followup_item(record, as_of_date):
             focus_text = '未来1-3天重点看再突破后能否继续横住，不满足继续只观察。'
             timeline_text = f'预启动观察后价格到今天已重新站上{contract_reset_breakout_price:.2f}再突破位。'
         review_hint = f'这说明创业板20cm预启动合同仍在{contract_window_days or 5}日窗口内，后续重点看它会不会从观察权升级到30%条件试错。'
-    elif attribution_label == '个股对了但环境不放行':
+    elif attribution_label == '个股对了但环境条件未满足':
         path_label = '个股先走出来了'
         if confirm_price is not None:
             current_position = f'收于{latest_close:.2f}，明显站在{confirm_price:.2f}确认位之上'
@@ -186,10 +186,10 @@ def _build_recent_target_followup_item(record, as_of_date):
         if confirm_price is not None:
             current_position = f'收于{latest_close:.2f}，明显站在{confirm_price:.2f}确认位之上'
             focus_text = f'未来1-3天重点看{confirm_price:.2f}之上能否继续强势；若继续扩张，要回查环境过滤是否过严'
-            timeline_text = f'价格已经越过{confirm_price:.2f}并明显展开，但系统当时没有给执行权。'
+            timeline_text = f'价格已经越过{confirm_price:.2f}并明显展开，但系统当时没有给买入资格。'
         else:
             focus_text = '未来1-3天重点看是否继续强势；若继续扩张，要回查环境过滤是否过严'
-            timeline_text = '价格已经明显展开，但系统当时没有给执行权。'
+            timeline_text = '价格已经明显展开，但系统当时没有给买入资格。'
         review_hint = '这说明对象先强于环境，后续要反查环境过滤/桥接层是不是拦得过严。'
     elif confirm_tested and support_price is not None and latest_close >= support_price:
         path_label = '先强后回，进入二次确认'
@@ -212,7 +212,7 @@ def _build_recent_target_followup_item(record, as_of_date):
             current_position = f'收于{latest_close:.2f}，仍在观察边界{support_price:.2f}之上'
             focus_text = f'未来1-3天先看{support_price:.2f}不破，再看有没有继续转强'
             timeline_text = f'到今天仍在观察边界之上，但还没有形成明确升级信号。'
-        review_hint = '这说明它还没彻底走坏，但也不能把观察权误写成执行权。'
+        review_hint = '这说明它还没彻底走坏，但也不能把观察资格误写成买入资格。'
     else:
         path_label = '继续跟踪'
         focus_text = '未来1-3天继续看是否重新转强，不急着提前下结论。'
@@ -307,7 +307,7 @@ def _build_current_target_review_item(current_plan):
             timeline_text = '今天还没把确认链走完整。'
             next_focus = '未来1-3天继续看能否给出更清楚的确认。'
         today_view = f'收于{close_price:.2f}，当前仍以观察为主。'
-        review_hint = '这说明现在更适合继续观察，不适合抢着给执行权。'
+        review_hint = '这说明现在更适合继续观察，不适合抢着给买入资格。'
 
     return {
         'sample_label': f'{stock_name}({code})',
@@ -436,7 +436,7 @@ def _build_gem_horizontal_compare_cards_legacy_body(gem_cycle_cards=None, review
             key_difference = '区别是20cm弹性和波动都更大，不能直接按10cm唯一动作给50%，必须先过右侧确认、void、reset这条合同链。'
             system_translation = '系统里要先核对void/trigger/reset三价，再决定是否只给30%条件试错，不能把20cm再突破直接翻译成10cm唯一执行。'
         elif latest_status_label in ('仍在观察窗口', '已触发右侧确认'):
-            same_point = '两者都还停在“有观察权、没执行权”的阶段，本质都还没走成唯一动作。'
+            same_point = '两者都还停在“有观察资格、没买入资格”的阶段，本质都还没走成唯一动作。'
             key_difference = '区别是20cm多了一层呼吸感合同窗口；窗口过期或失守void，就要比10cm更快降权。'
             system_translation = '把20cm先当成二次确认/等待确认样本，除非后续再突破并完成60分钟确认，否则继续观察，不提前抬仓位。'
         else:

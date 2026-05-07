@@ -144,7 +144,12 @@ class ReportOrchestratorTest(unittest.TestCase):
             "infer.execution_permission",
         )
         self.assertEqual(ctx["knowledge"]["trading_philosophy"]["source"], "skillhub")
-        self.assertIn("环境放行", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
+        self.assertEqual(ctx["knowledge"]["llm_wiki"]["source"], "llm_wiki")
+        self.assertIn("60分钟确认", ctx["knowledge"]["llm_wiki"]["report_digest_text"])
+        self.assertIn("环境条件满足", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
         self.assertIn("#", ctx["rendered"]["markdown_document"])
         self.assertIn("watch_only", ctx["rendered"]["markdown_document"])
+        self.assertIn("LLM Wiki版本：2026-05-07", ctx["rendered"]["markdown_document"])
         self.assertNotIn("交易理念底线", ctx["rendered"]["markdown_document"])
+        self.assertNotIn("教你炒股票", ctx["rendered"]["markdown_document"])
+        self.assertNotIn("能量学", ctx["rendered"]["markdown_document"])

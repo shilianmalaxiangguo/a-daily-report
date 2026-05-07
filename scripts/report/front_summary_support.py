@@ -452,7 +452,7 @@ def _build_front_follow_action_text_legacy_body(
 
     if watch_anchor and watch_source == "gem_breathing_20cm":
         note_text = str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
-        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；完成60分钟确认后才评估30%条件试错，不直接给执行权"
+        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；完成60分钟确认后才评估30%条件试错，不直接给买入资格"
         if note_text:
             text = f"{text}；{note_text}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -477,7 +477,7 @@ def _build_front_follow_action_text_legacy_body(
         text = "不开新仓，只观察跨线承接有没有继续成立；没有外溢确认前不升级"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if watch_anchor and "跨线外溢确认" in watch_anchor_type:
-        text = "不开新仓，只观察跨线资金外溢能否继续扩大；没有主攻线切换证据前仍不升级执行权"
+        text = "不开新仓，只观察跨线资金外溢能否继续扩大；没有主攻线切换证据前仍不升级买入资格"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if watch_anchor and "跨线异常" in watch_anchor_type:
         if final_gate.get("can_new_entry"):
@@ -709,7 +709,7 @@ def _build_front_structure_layer_text_legacy_body(
     if focus_group:
         return f"{guard_label}不开新仓，个股结构未坏，但环境未开"
     if keep_group:
-        return f"{guard_label}不开新仓，当前只保留观察层，不给执行权"
+        return f"{guard_label}不开新仓，当前只保留观察层，不给买入资格"
     if delete_group:
         return f"{guard_label}不开新仓，主线对象偏弱，先不出手"
     return f"{guard_label}不开新仓，只保留市场研究与观察权"

@@ -113,7 +113,7 @@ def _share_change_from_structured_history(row, context):
     if _is_degraded_turnover_item(previous_item) or previous_share is None or previous_share <= 0:
         return "待累计"
     if _turnover_item_mainline(previous_item) != row_mainline:
-        return "待累计"
+        return None
     return f"{row_share - previous_share:+.1f}pct"
 
 

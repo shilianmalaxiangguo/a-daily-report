@@ -23,6 +23,8 @@ class StageRendererTest(unittest.TestCase):
         self.assertIn("市场环境", rendered)
         self.assertIn("军工最强", rendered)
         self.assertIn("blocked", rendered)
+        self.assertIn("执行条件", rendered)
+        self.assertNotIn("执行门控", rendered)
 
 
 if __name__ == "__main__":

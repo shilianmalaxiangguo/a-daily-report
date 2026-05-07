@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
     target_date = context.get("target_date", "")
     mainline_name = str(context.get("mainline_name", "") or "").strip()
@@ -178,7 +181,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 )
     else:
         lines.append("**买点判断** (量化系统不可用，使用基础判断):")
-        lines.append("| 股票 | 代码 | 执行权限 | 今日涨幅 | 判断 | 60分钟确认点 | 价格怎么盯 | 动作 |")
+        lines.append("| 股票 | 代码 | 买入资格 | 今日涨幅 | 判断 | 60分钟确认点 | 价格怎么盯 | 动作 |")
         lines.append("|------|------|----------|----------|------|--------------|----------|------|")
 
         for stock in focus_group:
@@ -353,7 +356,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
 
     lines.append("")
     return {
-        "lines": lines,
+        "lines": sanitize_user_visible_text(lines),
         "exports": {
             "executable_stocks": executable_stocks,
             "waiting_stocks": waiting_stocks,

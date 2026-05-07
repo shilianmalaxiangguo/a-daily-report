@@ -213,6 +213,96 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_llm_wiki_preserves_chinese_chanlun_nodes_and_boundaries(self):
+        skill = self._read("SKILL.md")
+        wiki_readme = self._read("wiki/README.md")
+        price_action = self._read("wiki/交易思想/价格行为与能量框架.md")
+        chanlun_system = self._read("wiki/交易思想/缠论体系.md")
+        chanlun_boundary = self._read("wiki/交易思想/缠论-日报使用边界.md")
+        raw_index = self._read("wiki/资料库/缠论原文索引.md")
+
+        for path in [
+            "wiki/交易思想/价格行为与能量框架.md",
+            "wiki/交易思想/缠论-中枢.md",
+            "wiki/交易思想/缠论-背驰.md",
+            "wiki/交易思想/缠论-分型笔线段.md",
+            "wiki/交易思想/缠论-买卖点.md",
+            "wiki/交易思想/缠论-级别联立.md",
+            "wiki/个股分析/缠论结构观察模板.md",
+            "wiki/板块补充/板块中枢与主线延续.md",
+            "wiki/个股炒作逻辑复盘/缠论视角复盘模板.md",
+        ]:
+            self._read(path)
+
+        combined = "\n".join([skill, wiki_readme, price_action, chanlun_system, chanlun_boundary, raw_index])
+
+        for required in [
+            "LLM Wiki",
+            "wiki/交易思想/缠论体系.md",
+            "个股分析",
+            "交易思想",
+            "板块补充",
+            "个股炒作逻辑复盘",
+            "中文节点",
+            "人可读",
+            "AI可引用",
+            "原文不直接进入日报主链",
+            "日线结构中枢定环境",
+            "60分钟确认",
+            "30分钟止损",
+            "市场环境优先，个股结构执行",
+            "MACD只能作为辅助",
+            "不看基本面",
+            "角度与幅度",
+            "上涨和下跌的角度和幅度",
+            "能量聚集",
+            "能量释放",
+            "稳定知识写入 LLM Wiki",
+            ".cleanup-archive/a-daily-report-2026-05-07/chanlun",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_llm_wiki_contains_report_surface_wording_contract(self):
+        wiki_readme = self._read("wiki/README.md")
+        wording_node = self._read("wiki/交易思想/日报术语契约.md")
+        combined = "\n".join([wiki_readme, wording_node])
+
+        for required in [
+            "日报术语契约",
+            "买入资格",
+            "资格",
+            "条件",
+            "可做",
+            "门控",
+            "执行权",
+            "开闸",
+            "放行",
+            "日志",
+            "前台",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_scripts_do_not_hardcode_legacy_user_visible_wording(self):
+        forbidden = ("门控", "闸门", "开闸", "放行", "执行权", "执行权限", "买入权限")
+        allowed_paths = {
+            "scripts/report/surface_wording.py",
+            "scripts/knowledge/llm_wiki_context.py",
+            "scripts/daily_report_entry_demo.py",
+        }
+        allowed_prefixes = ("scripts/data/",)
+        offenders = []
+
+        for path in sorted((ROOT / "scripts").rglob("*.py")):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel in allowed_paths or rel.startswith(allowed_prefixes):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for marker in forbidden:
+                if marker in text:
+                    offenders.append(f"{rel}: {marker}")
+
+        self.assertEqual([], offenders)
+
     def test_verification_reference_names_practical_commands(self):
         verification = self._read("references/verification.md")
 

@@ -215,7 +215,7 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
     elif label == "C级观察样本":
         next_step = "不提前升级，只跟踪它会不会再次复现并走成右侧确认"
     else:
-        next_step = "先保留观察合同，不直接给执行权"
+        next_step = "先保留观察合同，不直接给买入资格"
 
     return f"{prefix}；{next_step}"
 

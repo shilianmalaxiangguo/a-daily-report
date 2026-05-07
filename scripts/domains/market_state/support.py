@@ -954,7 +954,7 @@ def _build_market_style_switch_snapshot_legacy_body(target_date, data, observati
         style_label = "双轨准备"
         style_reason = f"{turnover_label}，但趋势承接没有塌，连板/次新等情绪端也在冒头，明天需要先看量能再决定跟哪一侧。"
         primary_action = "两手准备：量缩偏投机先手，量增回主线趋势分歧。"
-        switch_action = "开盘先看首小时量能和主线承接，谁更强，就把执行权给谁。"
+        switch_action = "开盘先看首小时量能和主线承接，谁更强，就给谁买入资格。"
 
     turnover_series_text = " -> ".join(
         f"{item.get('date', '')}:{_safe_float(item.get('turnover')):.0f}亿"
@@ -1254,7 +1254,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
             execution_bias = "prep_only"
             pulse_action_bias = "只保留条件执行预备态"
             pulse_action_reason = (
-                f"{leading_line or '主线'}优势开始拉开，但环境闸门仍未正式放行；只能保留条件执行预备态，等待次日60分钟确认。"
+                f"{leading_line or '主线'}优势开始拉开，但环境条件仍未正式满足；只能保留条件执行预备态，等待次日60分钟确认。"
             )
         elif operation_state == "撤退态":
             execution_bias = "avoid"
@@ -1263,15 +1263,15 @@ def _derive_mainline_pulse_snapshot_legacy_body(
         elif allow_conditional_30 and not should_reduce:
             execution_bias = "conditional_defense"
             pulse_action_bias = "只保留10点确认后的条件试错"
-            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境未正式放行；只看10点确认后的30%条件试错。"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只看10点确认后的30%条件试错。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"
-            pulse_action_reason = "环境未开且主线偏弱，当前只允许处理旧仓，不再给新增执行权。"
+            pulse_action_reason = "环境条件未满足且主线偏弱，当前只允许处理旧仓，不再给新增买入资格。"
         else:
             execution_bias = "watch_only"
             pulse_action_bias = "只观察不出手"
-            pulse_action_reason = "环境尚未正式放行，研究与观察优先于执行。"
+            pulse_action_reason = "环境条件尚未正式满足，研究与观察优先于执行。"
     else:
         if pulse_stage == "退潮":
             execution_bias = "avoid"
@@ -1375,7 +1375,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         state_code = "contract"
         flow_direction = "风险释放优先，先等能量重新回流"
         state_reason = "跌停、涨跌比或仓位限制已经进入收缩区，市场先谈防守，不谈进攻。"
-        reflection_focus = "先观察恐慌是否结束，再看哪条线最先恢复承接；当前不放执行权。"
+        reflection_focus = "先观察恐慌是否结束，再看哪条线最先恢复承接；当前不给买入资格。"
         transition_signal = ""
         transition_reason = ""
         transition_action = ""
@@ -1409,7 +1409,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         )
         if upgrade_ready:
             transition_signal = "upgrade_ready"
-            transition_reason = "主攻线优势已经拉开，但环境层仍未正式放行；更适合进入条件执行预备态，而不是继续无差别仅观察。"
+            transition_reason = "主攻线优势已经拉开，但环境层仍未正式满足；更适合进入条件执行预备态，而不是继续无差别仅观察。"
             transition_action = "默认不开新仓，只为主攻线内最强对象保留条件执行预备态。"
         elif downgrade_risk:
             transition_signal = "downgrade_risk"

@@ -51,7 +51,8 @@ class ContextSectionsRendererTest(unittest.TestCase):
         lines = render_supplementary_perspective_section("第一行\n第二行")
         rendered = "\n".join(lines)
         self.assertIn("## 十三点五、补充观察", rendered)
-        self.assertIn("以下只做补充观察，不单独给执行权。", rendered)
+        self.assertIn("以下只做补充观察，不单独给执行资格。", rendered)
+        self.assertNotIn("执行权", rendered)
         self.assertIn("第一行", rendered)
         self.assertIn("第二行", rendered)
 

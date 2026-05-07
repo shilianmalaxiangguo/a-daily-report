@@ -42,7 +42,7 @@ class RuntimeContractsTest(unittest.TestCase):
         )
 
         self.assertTrue(result["can_execute"])
-        self.assertEqual(result["permission_label"], "极看执行权")
+        self.assertEqual(result["permission_label"], "极看买入资格")
         self.assertIn("异动后跌不下去", result["permission_reason"])
 
     def test_environment_display_contract_demotes_watch_only_to_defense(self):

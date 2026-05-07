@@ -37,7 +37,7 @@ class UseReportStagesTest(unittest.TestCase):
         self.assertEqual([stage["stage_key"] for stage in stages], ["market_environment", "selection_focus", "execution_gate"])
         self.assertEqual(stages[0]["title"], "市场环境")
         self.assertEqual(stages[1]["title"], "主线与筛选")
-        self.assertEqual(stages[2]["title"], "执行门控")
+        self.assertEqual(stages[2]["title"], "执行条件")
         self.assertTrue(all("summary" in stage for stage in stages))
 
 

@@ -10,6 +10,8 @@ from diagnostics.helper_diagnostics_runtime import (
     drain_helper_logs as _drain_helper_logs,
     render_helper_diagnostics_lines as _render_helper_diagnostics_lines,
 )
+from domains.calendar_events.infer import normalize_calendar_ai_analysis
+from knowledge.llm_wiki_context import build_llm_wiki_context
 from report.calendar_section_nodes import render_calendar_section
 from report.decision_board_nodes import render_decision_board_section
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
@@ -18,6 +20,7 @@ from report.positioning_nodes import render_positioning_section
 from report.front_summary_renderer import sanitize_front_page_text
 from report.front_page_v2_renderer import render_front_page_v2
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
+from report.surface_wording import sanitize_user_visible_text
 from domains.market_state.mainline_turnover_summary_runtime import (
     build_mainline_turnover_summary as _default_build_mainline_turnover_summary,
 )
@@ -556,6 +559,23 @@ def _smart_score_event(title: str, original_star: int) -> int:
     return 2
 
 
+def _keyword_match_event_sectors(title: str) -> dict:
+    return normalize_calendar_ai_analysis({}, title, "")
+
+
+def _normalize_calendar_batch_results(batch_results, events):
+    if not isinstance(batch_results, list):
+        batch_results = []
+
+    normalized_results = []
+    for index, event in enumerate(events or []):
+        title = event.get("title", "") if isinstance(event, dict) else ""
+        summary = event.get("summary", "") if isinstance(event, dict) else ""
+        raw_result = batch_results[index] if index < len(batch_results) else None
+        normalized_results.append(normalize_calendar_ai_analysis(raw_result, title, summary))
+    return normalized_results
+
+
 def _build_calendar_ai_context(data, print_fn=print):
     events = (data or {}).get("calendar_events") or []
     if not events:
@@ -591,6 +611,7 @@ def _build_calendar_ai_context(data, print_fn=print):
     except Exception as error:
         print_fn(f"   ⚠️ 批量分析失败: {error}，回退到关键词匹配")
         batch_results = [_keyword_match_event_sectors(event.get("title", "")) for event in events]
+    batch_results = _normalize_calendar_batch_results(batch_results, events)
 
     calendar_analysis = []
     all_directions = []
@@ -609,11 +630,11 @@ def _build_calendar_ai_context(data, print_fn=print):
         )
         all_directions.append(ai_analysis.get("main_direction", ""))
         related_sectors = ai_analysis.get("related_sectors", []) or []
-        filtered_sectors = [sector for sector in related_sectors if sector and sector not in ["需盘面确认", "相关产业链标的", "其他"]]
+        filtered_sectors = [sector for sector in related_sectors if sector and sector not in ["需盘面确认", "相关产业链标的"]]
         all_sectors.extend(filtered_sectors)
 
     direction_counts = Counter(all_directions)
-    top_directions = [(direction, count) for direction, count in direction_counts.most_common(10) if direction != "其他"][:5]
+    top_directions = [(direction, count) for direction, count in direction_counts.most_common(10)][:5]
     unique_sectors = list(dict.fromkeys(all_sectors))[:10]
     bullish_events = [item for item in calendar_analysis if (item.get("ai_analysis") or {}).get("expectation") == "利好"]
 
@@ -713,6 +734,9 @@ def render_markdown_report_runtime(
     helpers=None,
     config=None,
 ):
+    llm_wiki_context = build_llm_wiki_context()
+    if isinstance(data, dict):
+        data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
     bindings = {}
     bindings.update(helpers or {})
     bindings.update(config or {})
@@ -731,7 +755,7 @@ def render_markdown_report_runtime(
 
     return {
         "report": report,
-        "artifacts": {},
+        "artifacts": {"llm_wiki": llm_wiki_context},
     }
 
 
@@ -875,7 +899,7 @@ def _render_markdown_report_legacy_body(
     top_directions = calendar_ai_context.get("top_directions", []) or []
     chain_analysis_insights = ""
     if len(top_directions) >= 2 and not DISPLAY_MVP_MODE:
-        sectors_for_analysis = [direction for direction, _ in top_directions if direction != '其他']
+        sectors_for_analysis = [direction for direction, _ in top_directions]
         if sectors_for_analysis:
             chain_analysis = ai_analyze_sector_relationships(sectors_for_analysis, "日历事件产业链分析")
             chain_analysis_insights = str(chain_analysis.get("insights", "") or "").strip()
@@ -964,10 +988,10 @@ def _render_markdown_report_legacy_body(
     if data.get('wind_a_alternative'):
         csci_change = data['wind_a_alternative'].get('涨跌幅', data['wind_a_alternative'].get('change_pct', 0))
     
-    # 主线退出分析和最终门控已在前面构建，此处直接使用
+    # 主线退出分析和最终执行条件已在前面构建，此处直接使用
     print(f"   ✅ 龙头股票: {len(dragon_stocks)} 只")
     print(f"   ✅ 主线退出分析完成: {exit_analysis.get('sector_name', '未知')}")
-    print(f"   ✅ 最终执行门控: {final_gate.get('final_action', '未知')}")
+    print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(final_gate.get('final_action', '未知'))}")
 
     # 更新市场特征描述，基于智能分析
     primary_mainline = exit_analysis.get('sector_name', '') or (main_sectors[0] if main_sectors else '')

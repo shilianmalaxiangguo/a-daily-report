@@ -588,8 +588,8 @@ def _classify_strategy_record_attribution_legacy_body(record, as_of_date):
         elif observed_return is not None and observed_return >= 0.05:
             attribution.update({
                 "category": "stock_right_env_blocked",
-                "label": "个股对了但环境不放行",
-                "reason": "重点观察谁本身走强，但环境过滤还没放行，属于少赚不是做错。",
+                "label": "个股对了但环境条件未满足",
+                "reason": "重点观察谁本身走强，但环境条件还没满足，属于少赚不是做错。",
             })
         elif benchmark_return <= 0 or (anchor_alpha is not None and anchor_alpha <= 0.02):
             attribution.update({
@@ -1083,7 +1083,7 @@ def _build_self_calibration_summary_legacy_body(
     total_count = int(attribution_summary.get("total_count", 0) or 0)
     gate_too_strict = (
         label_counts.get("环境过滤过严", 0)
-        + label_counts.get("个股对了但环境不放行", 0)
+        + label_counts.get("个股对了但环境条件未满足", 0)
         + label_counts.get("介入周期偏慢", 0)
     )
     weak_to_strong_lag = label_counts.get("弱转强识别偏慢", 0)
@@ -1117,8 +1117,8 @@ def _build_self_calibration_summary_legacy_body(
         suggestions.append({
             "area": "环境过滤",
             "bias": "偏严",
-            "why": "多次出现“环境过滤过严 / 个股对了但环境不放行 / 介入周期偏慢”，说明当前环境过滤与介入升级都挡掉了部分有效观察对象。",
-            "action": "先不要直接放开买入权限，而是在二档下保留更明确的高优先级重点观察谁；对已经给出次日确认成功的唯一对象，要单独复盘介入周期是否偏慢。",
+            "why": "多次出现“环境过滤过严 / 个股对了但环境条件未满足 / 介入周期偏慢”，说明当前环境过滤与介入升级都挡掉了部分有效观察对象。",
+            "action": "先不要直接放开买入资格，而是在二档下保留更明确的高优先级重点观察谁；对已经给出次日确认成功的唯一对象，要单独复盘介入周期是否偏慢。",
         })
     elif defense_correct >= max(2, gate_too_strict):
         suggestions.append({
@@ -1186,7 +1186,7 @@ def _build_self_calibration_summary_legacy_body(
             "area": "主线/选股",
             "bias": "有偏",
             "why": "出现“主线判断偏差 / 做了但根本不该做”，说明出手对象和市场主线贴合度不够。",
-            "action": "继续收紧“看大做小”的约束，只给主线内最强和有记忆资产的标的执行权。",
+            "action": "继续收紧“看大做小”的约束，只给主线内最强和有记忆资产的标的买入资格。",
         })
 
     if exit_too_early >= 1 or stop_rebound >= 1:
@@ -1293,7 +1293,7 @@ def _classify_structure_cycle_result_legacy_body(window_summary, attribution_sum
 
     if dominant_label == "防守正确":
         return "防守有效"
-    if dominant_label in ("环境过滤过严", "个股对了但环境不放行", "介入周期偏慢"):
+    if dominant_label in ("环境过滤过严", "个股对了但环境条件未满足", "介入周期偏慢"):
         return "过滤偏严"
     return "观察学习"
 
@@ -1544,7 +1544,7 @@ def _build_system_graduation_dashboard_legacy_body(records, cycle_reviews, sourc
     if execute_count < 10 or triggered_count < 5:
         next_actions.append("继续沉淀真实执行记录，否则 EV 和退出节奏都没有统计意义。")
     if strict_cycles >= 1:
-        next_actions.append("重点复盘“过滤偏严”的周期，判断环境门控是否错杀了主线机会。")
+        next_actions.append("重点复盘“过滤偏严”的周期，判断环境条件是否错杀了主线机会。")
     if gem_sample_count > 0 and gem_upgrade_lag >= 1:
         next_actions.append(f"优先修正创业板20cm从右侧确认到30%条件试错的升级链；本周升级偏慢{gem_upgrade_lag}只，不能继续长期停在观察层。")
     if gem_sample_count > 0 and gem_voided_count >= gem_upgrade_count and gem_voided_count > 0:

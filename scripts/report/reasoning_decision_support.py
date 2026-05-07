@@ -199,6 +199,9 @@ def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, A
     decision = _as_dict(snapshot.get("reasoning_decision"))
     if decision.get("action") != "conditional_entry" or decision.get("confidence") not in {"high", "medium"}:
         return {}
+    handoff_evidence = str(decision.get("handoff_buying_evidence") or "").strip().lower()
+    if handoff_evidence in {"insufficient", "missing", "none", "unclear", "false", "no"}:
+        return {}
     target_id = str(decision.get("unique_target") or "").strip()
     if not target_id:
         return {}

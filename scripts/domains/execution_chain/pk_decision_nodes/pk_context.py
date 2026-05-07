@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None):
     trade_gate_open = context.get("trade_gate_open", False)
     display_pending_candidates = context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
@@ -112,7 +115,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 observation_lines.append("- **观察纪律**: 只记录是否继续走强，不构成明日买入指令")
             observation_lines.append("")
         else:
-            observation_lines.extend(["**无执行权候选**: 当前没有进入执行层的标的，只保留观察池", ""])
+            observation_lines.extend(["**无执行资格候选**: 当前没有进入执行层的标的，只保留观察池", ""])
 
     conclusion_lines = ["**结论**:"]
     if best_stock:
@@ -183,9 +186,9 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
     return {
         "lines": [],
         "exports": {
-            "pending_lines": pending_lines,
-            "observation_lines": observation_lines,
-            "conclusion_lines": conclusion_lines,
+            "pending_lines": sanitize_user_visible_text(pending_lines),
+            "observation_lines": sanitize_user_visible_text(observation_lines),
+            "conclusion_lines": sanitize_user_visible_text(conclusion_lines),
         },
         "module_logs": [],
     }

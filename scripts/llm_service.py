@@ -23,7 +23,7 @@ def _load_local_env_file():
 
 
 _load_local_env_file()
-os.environ.setdefault("DEEPSEEK_MODEL", "deepseek-v4-pro")
+os.environ.setdefault("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 get_llm_service = export_or_default("llm_service", "get_llm_service", lambda *args, **kwargs: None)
 

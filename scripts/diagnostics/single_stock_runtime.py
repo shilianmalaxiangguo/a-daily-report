@@ -274,7 +274,7 @@ def compose_single_stock_final_verdict_contract(
         return "环境未开，不买", f"环境层未开：{final_gate.get('final_action', '')}"
 
     if not permission.get("can_execute"):
-        return "观察，等确认", f"卡在执行权限层：{permission.get('permission_reason', '') or '条件未齐，不抢跑'}"
+        return "观察，等确认", f"卡在执行资格层：{permission.get('permission_reason', '') or '条件未齐，不抢跑'}"
 
     if quant_signal and quant_signal.is_valid:
         return "进入执行等待区", f"环境已开，且执行层通过：{permission.get('permission_reason', '')}；{quant_signal.reason}"

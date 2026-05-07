@@ -46,7 +46,7 @@ def build_execution_gate_stage(ctx):
         summary = f"{summary}；{trigger}"
     return _make_stage(
         "execution_gate",
-        "执行门控",
+        "执行条件",
         status,
         summary,
         {"permission_label": label, "trigger": trigger},

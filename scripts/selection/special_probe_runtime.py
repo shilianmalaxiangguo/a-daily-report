@@ -25,6 +25,7 @@ from selection.watch_anchor_support import (
     requires_crossline_second_confirmation as _default_requires_crossline_second_confirmation,
     sort_watch_anchor_candidates as _default_sort_watch_anchor_candidates,
 )
+from report.surface_wording import sanitize_user_visible_text
 
 __all__ = [
     "build_abnormal_watch_anchor_candidates",
@@ -259,7 +260,7 @@ def _score_candidate_decision_stack_legacy_body(
     sector = str(scored.get("sector", "") or "").strip()
     abnormal_state = _resolve_candidate_follow_state(scored)
     setup_id = _resolve_candidate_setup_id(scored)
-    permission_label = str(scored.get("permission_label", "") or "").strip()
+    permission_label = str(sanitize_user_visible_text(scored.get("permission_label", "") or "")).strip()
     signal = scored.get("signal")
     minute_plan = scored.get("minute_plan") or {}
     stop_plan = scored.get("stop_plan") or {}
@@ -349,7 +350,7 @@ def _score_candidate_decision_stack_legacy_body(
             tradability_score += 5
         if (stop_plan.get("effective_stop") if stop_plan else None) or scored.get("stop_loss"):
             tradability_score += 20
-        if permission_label and "执行权" in permission_label:
+        if permission_label and "资格" in permission_label:
             tradability_score += 10
         if not report_day_is_one_word:
             tradability_score += 10
@@ -706,7 +707,7 @@ def _build_abnormal_watch_anchor_candidates_legacy_body(
             candidate.update(
                 {
                     "permission_label": "异常观察权",
-                    "permission_reason": "当前只跟踪异常承接，不自动授予执行权",
+                    "permission_reason": "当前只跟踪异常承接，不自动给买入资格",
                     "tradability_guard": tradability_guard,
                     "report_day_is_one_word": tradability_guard.get("report_day_is_one_word", False),
                 }
@@ -964,7 +965,7 @@ def _build_special_probe_verdict_legacy_body(
             "code": "crossline_probe_only",
             "label": "跨线特殊探针",
             "summary_text": f"{name}({code}) 只是跨线市场探针，{note or '只观察跨线强弱，不代表主攻线切换'}",
-            "action": "只观察跨线强弱和资金外溢，不升级执行权",
+            "action": "只观察跨线强弱和资金外溢，不升级买入资格",
             "probe_candidate": crossline_probe,
             "probe_state": probe_state,
             "allows_conditional_30": allows_conditional_30,
@@ -1026,7 +1027,7 @@ def _build_special_probe_verdict_legacy_body(
             "code": "fallback_probe_watch",
             "label": "特殊探针",
             "summary_text": f"{name}({code}) 先看它是深跌还是抗跌，再决定这轮调整是继续收还是重新攻",
-            "action": "先观察这个特殊对象对调整的反馈，不直接升级执行权",
+            "action": "先观察这个特殊对象对调整的反馈，不直接升级买入资格",
             "probe_candidate": fallback_watch_anchor,
             "probe_state": probe_state,
             "allows_conditional_30": allows_conditional_30,
@@ -1037,7 +1038,7 @@ def _build_special_probe_verdict_legacy_body(
         "code": "no_probe",
         "label": "特殊探针",
         "summary_text": "当前没有明确特殊探针，只保留普通观察。",
-        "action": "先观察市场整体，不提前放松执行权",
+        "action": "先观察市场整体，不提前放松买入资格",
         "probe_candidate": {},
         "probe_state": "no_probe",
         "allows_conditional_30": False,

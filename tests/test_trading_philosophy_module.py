@@ -16,8 +16,8 @@ class TradingPhilosophyModuleTest(unittest.TestCase):
 
         self.assertEqual(snapshot["source"], "skillhub")
         self.assertIn("结构中枢周期", snapshot["main_derivation_chain"])
-        self.assertIn("观察权/执行权", snapshot["main_derivation_chain"])
-        self.assertIn("环境放行", snapshot["decision_gate_chain"])
+        self.assertIn("观察资格/买入资格", snapshot["main_derivation_chain"])
+        self.assertIn("环境条件满足", snapshot["decision_gate_chain"])
         self.assertIn("60分钟确认", snapshot["decision_gate_chain"])
         self.assertIn("30分钟止损", snapshot["decision_gate_chain"])
         self.assertIn("不为新故事切掉旧事实", rendered)

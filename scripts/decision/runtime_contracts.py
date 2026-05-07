@@ -45,7 +45,7 @@ def get_trade_permission_contract(
     if not execution_bias and not final_gate.get("can_new_entry", True):
         execution_bias = "watch_only"
     if not pulse_action_reason and execution_bias == "watch_only":
-        pulse_action_reason = "环境尚未正式放行，先观察，不提前把研究写成执行。"
+        pulse_action_reason = "环境条件尚未正式满足，先观察，不提前把研究写成执行。"
 
     def _watch_label():
         if is_conviction:
@@ -67,7 +67,7 @@ def get_trade_permission_contract(
         }
 
     if watch_source == "gem_breathing_20cm":
-        gem_reason = "先看创业板20cm预启动能否走成右侧确认和60分钟确认，确认后也只评估30%条件试错，不直接给执行权。"
+        gem_reason = "先看创业板20cm预启动能否走成右侧确认和60分钟确认，确认后也只评估30%条件试错，不直接给买入资格。"
         if pulse_action_reason:
             gem_reason = f"{pulse_action_reason}；{gem_reason}"
         if not is_mainline and mainline_name:
@@ -94,7 +94,7 @@ def get_trade_permission_contract(
         return {
             "can_execute": False,
             "permission_label": "禁止出手",
-            "permission_reason": "异动后已经转弱，取消执行权",
+            "permission_reason": "异动后已经转弱，取消买入资格",
             "priority": 0,
         }
 
@@ -114,7 +114,7 @@ def get_trade_permission_contract(
         }
 
     if execution_bias in ("avoid", "reduce_only", "watch_only"):
-        base_reason = pulse_action_reason or "当前阶段只允许观察，不给执行权。"
+        base_reason = pulse_action_reason or "当前阶段只允许观察，不给买入资格。"
         if pulse_stage:
             base_reason = f"当前主线处于{pulse_stage}，{base_reason}"
         if pulse_action_bias == "只减不加" and "钝化" not in base_reason and pulse_stage == "钝化":
@@ -137,7 +137,7 @@ def get_trade_permission_contract(
             reason = f"{reason}；但当前只做分歧承接，不追一致加速"
         return {
             "can_execute": True,
-            "permission_label": "极看执行权",
+            "permission_label": "极看买入资格",
             "permission_reason": reason,
             "priority": 3,
         }
@@ -148,7 +148,7 @@ def get_trade_permission_contract(
             reason = f"{reason}；当前只允许分歧承接，不做一致加速追价"
         return {
             "can_execute": True,
-            "permission_label": "主线执行权" if is_mainline else "龙头回看执行权",
+            "permission_label": "主线买入资格" if is_mainline else "龙头回看买入资格",
             "permission_reason": reason,
             "priority": 2,
         }
@@ -183,7 +183,7 @@ def get_trade_permission_contract(
     return {
         "can_execute": False,
         "permission_label": "普通观察权",
-        "permission_reason": "非主线核心，不给执行权",
+        "permission_reason": "非主线核心，不给买入资格",
         "priority": 0,
     }
 
@@ -195,7 +195,7 @@ def resolve_environment_display_contract(position_level="", final_gate=None, sta
     display_operation_state = str(final_gate.get("operation_state", "") or state_machine_snapshot.get("operation_state", "") or "观察态").strip()
     execution_bias = str(state_machine_snapshot.get("execution_bias", "") or "").strip()
     energy_state = str(state_machine_snapshot.get("energy_state", "") or "").strip()
-    headline = "环境放行不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
+    headline = "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
 
     if display_position_level == "一档（空仓档）" or execution_bias == "avoid" or display_operation_state == "撤退态":
         display_position_level = "一档（空仓档）"

@@ -159,7 +159,7 @@ def build_positioning_state_basis_node(context, node_meta=None, node_lookup=None
     return {
         "lines": [
             f"**状态依据**：{context.get('display_position_reason', '')}",
-            "**执行说明**：这里的档位只代表环境是否放行，不代表已经有可买标的；真正能不能买，要看后文有没有缩到一只可买股。",
+            "**执行说明**：这里的档位只代表环境条件是否满足，不代表已经有可买标的；真正能不能买，要看后文有没有缩到一只可买股。",
             "",
         ],
         "exports": {},

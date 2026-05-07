@@ -18,7 +18,7 @@ class UseTradingPhilosophyTest(unittest.TestCase):
         knowledge = result["patches"]["knowledge"]["trading_philosophy"]
         self.assertEqual(knowledge["source"], "skillhub")
         self.assertEqual(knowledge["version"], "2026-04-22")
-        self.assertIn("环境放行", knowledge["decision_gate_chain"])
+        self.assertIn("环境条件满足", knowledge["decision_gate_chain"])
         self.assertIn("结构中枢周期", knowledge["main_derivation_chain"])
         self.assertIn(
             "knowledge.trading_philosophy",

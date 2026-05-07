@@ -152,7 +152,7 @@ def _build_prohibition_payload(
                 if final_gate.get("allow_conditional_30"):
                     payload["allowed_items"].append("- 🟡 条件试错：只在主线核心完成10点确认后，最多30%小仓试错")
     else:
-        headline = environment_headline or "环境放行不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
+        headline = environment_headline or "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
         payload["prohibition_items"].append("- ✅ 禁止追高：不买昨天或大前天的最高点个股")
         payload["prohibition_items"].append("- ✅ 禁止做T：次日只买一种，不做日内回转")

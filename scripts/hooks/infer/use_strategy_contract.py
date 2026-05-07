@@ -5,6 +5,7 @@ from knowledge.trading_philosophy import (
     use_contract_logic_digest_text,
     use_execution_framework_text,
 )
+from report.surface_wording import sanitize_user_visible_text
 
 
 HOOK_NAME = "infer.strategy_contract"
@@ -30,7 +31,7 @@ def run(ctx):
     elif primary_line in ("", "未知"):
         contract_label = "probe_only"
         permission_label = "watch_only"
-        action_plan = "主线未清，只保留观察权，先看探针和竞争线，不授予执行权"
+        action_plan = "主线未清，只保留观察资格，先看探针和竞争线，不授予执行资格"
     else:
         contract_label = "conditional_entry"
         permission_label = "conditional_30"
@@ -39,7 +40,7 @@ def run(ctx):
     gate_chain = list(DECISION_GATE_CHAIN)
     gate_chain_text = " -> ".join(gate_chain)
     contract_reason = f"phase={phase}; primary_line={primary_line}; gate={gate_chain_text}"
-    strategy_contract = {
+    strategy_contract = sanitize_user_visible_text({
         "contract_label": contract_label,
         "permission_label": permission_label,
         "contract_reason": contract_reason,
@@ -48,7 +49,7 @@ def run(ctx):
         "gate_chain_text": gate_chain_text,
         "execution_framework_text": use_execution_framework_text(),
         "contract_logic_digest_text": use_contract_logic_digest_text(),
-    }
+    })
     derivation = {
         "hook_name": HOOK_NAME,
         "inputs": ["derived.market_phase", "derived.mainline"],

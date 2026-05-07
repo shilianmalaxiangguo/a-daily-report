@@ -1,5 +1,6 @@
 from report.context_sections_node_registry import build_context_tail_node_specs
 from report.context_sections_node_runtime import run_context_tail_nodes
+from report.surface_wording import sanitize_user_visible_text
 
 
 def render_mainline_discipline_section(mainline_name):
@@ -13,7 +14,7 @@ def render_mainline_discipline_section(mainline_name):
         "**只做什么，不做什么？**",
         "1. **只做主线**: 资金聚焦哪里，就只在那条线里找机会。",
         "2. **不做边缘**: 主线没确认前，B/C方向一律不抢。",
-        "3. **只要确定性**: 有板块效应支撑的方向才给执行权。",
+        "3. **只要确定性**: 有板块效应支撑的方向才给执行资格。",
         "",
         f"**今日纪律**: 认准'{mainline_name}'，就在'{mainline_name}'里找机会，绝不被'相关概念'分散火力！",
         "",
@@ -26,7 +27,7 @@ def render_supplementary_perspective_section(perspective_text):
         return []
     lines = [
         "## 十三点五、补充观察",
-        "> *以下只做补充观察，不单独给执行权。*",
+        "> *以下只做补充观察，不单独给执行资格。*",
         "",
     ]
     lines.extend(perspective_text.split("\n"))
@@ -76,4 +77,4 @@ def build_context_tail_sections_result(context):
 
 
 def render_context_tail_sections(context):
-    return build_context_tail_sections_result(context).get("lines", [])
+    return sanitize_user_visible_text(build_context_tail_sections_result(context).get("lines", []))

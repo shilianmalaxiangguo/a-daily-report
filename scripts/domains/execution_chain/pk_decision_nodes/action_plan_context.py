@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def _format_closed_gate_buy_limit_text(position_level, final_gate):
     final_gate = final_gate or {}
     if final_gate.get("allow_conditional_30"):
@@ -290,7 +293,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             ]
         else:
             first_hour_lines = [
-                "- 当前门控不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
+                "- 当前条件不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
                 "- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增",
             ]
             intraday_lines = [
@@ -344,15 +347,15 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     return {
         "lines": [],
         "exports": {
-            "action_rows": action_rows,
-            "observation_priority_lines": observation_priority_lines,
-            "backup_observation_lines": backup_observation_lines,
-            "position_section_lines": position_section_lines,
-            "pre_market_lines": pre_market_lines,
-            "opening_lines": opening_lines,
-            "first_hour_lines": first_hour_lines,
-            "intraday_lines": intraday_lines,
-            "closing_lines": closing_lines,
+            "action_rows": sanitize_user_visible_text(action_rows),
+            "observation_priority_lines": sanitize_user_visible_text(observation_priority_lines),
+            "backup_observation_lines": sanitize_user_visible_text(backup_observation_lines),
+            "position_section_lines": sanitize_user_visible_text(position_section_lines),
+            "pre_market_lines": sanitize_user_visible_text(pre_market_lines),
+            "opening_lines": sanitize_user_visible_text(opening_lines),
+            "first_hour_lines": sanitize_user_visible_text(first_hour_lines),
+            "intraday_lines": sanitize_user_visible_text(intraday_lines),
+            "closing_lines": sanitize_user_visible_text(closing_lines),
             "alert_rows": alert_rows,
         },
         "module_logs": [],

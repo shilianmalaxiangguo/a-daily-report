@@ -1,13 +1,16 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def render_single_stock_diagnostic_markdown(context):
-    context = context or {}
+    context = sanitize_user_visible_text(context or {})
     lines = [
         f"# {context.get('target_date', '-')} 单票诊断 - {context.get('name', '-') }({context.get('code', '-')})",
         "",
-        "> **口径说明**：本诊断与日报共用同一套市场环境、主线、异常承接、可交易性与执行权限状态机，不走旁路判断。",
+        "> **口径说明**：本诊断与日报共用同一套市场环境、主线、异常承接、可交易性与执行条件状态机，不走旁路判断。",
         "",
         "## 一、市场层",
         f"- **环境档位**: {context.get('position_level', '-')}",
-        f"- **最终门控**: {context.get('final_action', '-')}",
+        f"- **最终执行条件**: {context.get('final_action', '-')}",
         f"- **主攻线**: {context.get('mainline_name', '-')}",
         f"- **主线驱动**: {context.get('driver_type', '-')}",
         f"- **脉冲阶段**: {context.get('pulse_stage', '-')}",
@@ -23,8 +26,8 @@ def render_single_stock_diagnostic_markdown(context):
         f"- **今日形态**: {context.get('pattern', '-')}",
         f"- **异动状态**: {context.get('abnormal_follow_state', '无明确异动跟踪')}",
         f"- **异动灯号**: {context.get('risk_light', '-')} / {context.get('risk_reason', '-')}",
-        f"- **执行权限**: {context.get('permission_label', '-')}",
-        f"- **权限说明**: {context.get('permission_reason', '-')}",
+        f"- **执行资格**: {context.get('permission_label', '-')}",
+        f"- **资格说明**: {context.get('permission_reason', '-')}",
         f"- **Step 3分组**: {context.get('risk_level', '-')} / {context.get('risk_group', '-')}",
         f"- **Step 3理由**: {context.get('risk_reason_text', '-')}",
         f"- **风险归因**: 风险项{context.get('risk_penalty_count', 0)}条 / 修复项{context.get('repair_buffer_count', 0)}条 / 原始分{context.get('raw_risk_score', '-')} / 净分{context.get('risk_score', '-')}",
@@ -56,4 +59,4 @@ def render_single_stock_diagnostic_markdown(context):
     if context.get("source_tags"):
         lines.append(f"- **命中来源**: {' / '.join(context.get('source_tags', []))}")
     lines.append("")
-    return "\n".join(lines)
+    return sanitize_user_visible_text("\n".join(lines))

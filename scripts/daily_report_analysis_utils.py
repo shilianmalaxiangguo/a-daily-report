@@ -287,11 +287,11 @@ def merge_position_gate(position_level, exit_analysis):
             "base_position_cap_pct": 0,
             "final_action": "防守观察，只看主线核心；09:50-10:10完成10点确认后才评估30%条件试错，否则不开新仓",
             "final_participation": "这不是猛干的位置，只能观察、持有强者，或等10点确认后的轻仓试错",
-            "gate_reason": "市场环境还没完全放行，先让子弹飞一会儿",
+            "gate_reason": "市场环境还没完全满足进攻条件，先让子弹飞一会儿",
         }
     if light == "黄灯":
         return {
-            "gate_status": "放行",
+            "gate_status": "可做",
             "position_level": position_level,
             "operation_state": "进攻态" if position_level == "三档（进攻档）" else "防守态",
             "can_new_entry": position_level == "三档（进攻档）",
@@ -304,7 +304,7 @@ def merge_position_gate(position_level, exit_analysis):
             "gate_reason": "主线进入强化阶段，买也只买最强，不做分散试错",
         }
     return {
-        "gate_status": "放行",
+        "gate_status": "可做",
         "position_level": position_level,
         "operation_state": "进攻态" if position_level == "三档（进攻档）" else "防守态",
         "can_new_entry": position_level == "三档（进攻档）",

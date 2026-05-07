@@ -11,6 +11,8 @@ This skill is a compact onboarding router for the daily-report repo. Treat the u
 
 Trading soul: 没有永远是好的股，好的只有好的周期。Before judging a stock as strong, first judge whether its current market cycle is still favorable. Once the cycle fades, stop defending the stock as "good" and switch the frame to exit, reduce, or avoid.
 
+LLM Wiki base: stable trading knowledge lives in `wiki/` as Chinese nodes. Load `wiki/README.md` first when the request involves durable trading ideas, Chanlun, knowledge-base updates, or preventing report drift. For Chanlun, start from `wiki/交易思想/缠论体系.md`; keep raw source out of the report main chain and use `wiki/资料库/缠论原文索引.md` only for source tracing.
+
 Energy exhaustion soul: 能量学只作为底层交易思想，必须字段化后进入系统。震荡=能量聚集，行情=能量释放；真正可执行的观察字段是上涨角度、下跌角度、上涨幅度、调整幅度、速度变化。等速运动最省力，若走势从等速变成加速冲顶或上涨速度放慢，按加速后衰竭/动能减少处理。T+1避亏要求在亏损日前一日收盘后识别风险，例如津药药业若在2026-04-08已经出现角度转弱、幅度扩散、速度失衡，就必须给出不介入/退出纪律，避免2026-04-09的确定性亏损。
 
 Newton iteration decision discipline: this is a decision method, not a math display. Start with a coarse 1.0 judgment, test it against option sample feedback, and revise the next judgment instead of waiting for a perfect answer. For T+1, the skill must translate 强量转弱, 缩量冲高, 放量下杀, and 上涨斜率放缓 into fieldized decision fields and next-day action before the loss day confirms the risk.

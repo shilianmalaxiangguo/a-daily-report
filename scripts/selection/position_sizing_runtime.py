@@ -514,10 +514,10 @@ def _build_position_sizing_decision_legacy_body(
         if probe_state == "probe_crossline_upgrade_ready":
             return "跨线对象已先 act right，只允许30%条件试错，不直接当成主攻线切换。"
         if probe_allows_conditional_30:
-            return "环境尚未完全放行，但候选已具备可升级探针反馈，只允许30%条件试错仓。"
+            return "环境条件尚未完全满足，但候选已具备可升级探针反馈，只允许30%条件试错仓。"
         if execution_bias in ("prep_only", "divergence_only"):
             return "环境未完全共振，但最强对象已经先证明自己，只允许30%条件试错仓。"
-        return "环境尚未完全放行，但候选已连续多日报告并保持承接，只允许30%条件试错仓。"
+        return "环境条件尚未完全满足，但候选已连续多日报告并保持承接，只允许30%条件试错仓。"
 
     if (
         execution_bias in ("prep_only", "divergence_only")

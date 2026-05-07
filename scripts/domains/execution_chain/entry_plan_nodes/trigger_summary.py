@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=None):
     final_gate = context.get("final_gate", {}) or {}
     position_level = str(context.get("position_level", "") or "").strip()
@@ -56,9 +59,9 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                         f"{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日首个60分钟确认点{confirm_text}，仓位{display_position_pct:.0f}%"
                     )
                     if confirm_rule:
-                        lines.append(f"  {item.get('permission_label', '执行权')}；{confirm_rule}；{price_focus_text}")
+                        lines.append(f"  {item.get('permission_label', '执行资格')}；{confirm_rule}；{price_focus_text}")
                     elif price_focus_text != "-":
-                        lines.append(f"  {item.get('permission_label', '执行权')}；{price_focus_text}")
+                        lines.append(f"  {item.get('permission_label', '执行资格')}；{price_focus_text}")
                     append_price_focus_note(lines, price_focus)
                 else:
                     lines.append(
@@ -78,7 +81,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                     price_focus_text = price_focus.get("compact_text", "-")
                     confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
                     lines.append(
-                        f"- ✅ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '执行权')}，"
+                        f"- ✅ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '执行资格')}，"
                         f"明日60分钟确认点{confirm_text}后按{item.get('trigger')}执行"
                     )
                     if confirm_rule:
@@ -111,4 +114,4 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
             append_observation_price_focus_note(lines, price_focus)
         lines.append("")
 
-    return {"lines": lines, "exports": {}, "module_logs": []}
+    return {"lines": sanitize_user_visible_text(lines), "exports": {}, "module_logs": []}

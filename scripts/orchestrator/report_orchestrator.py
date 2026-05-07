@@ -4,6 +4,7 @@ from hooks.infer.use_mainline_analysis import run as run_mainline_analysis
 from hooks.infer.use_market_phase import run as run_market_phase
 from hooks.infer.use_strategy_contract import run as run_strategy_contract
 from hooks.input.use_hot_rank import run as run_hot_rank
+from hooks.knowledge.use_llm_wiki import run as run_llm_wiki
 from hooks.knowledge.use_trading_philosophy import run as run_trading_philosophy
 from hooks.persist.use_snapshot_persistence import run as run_snapshot_persistence
 from hooks.report.use_markdown_document import run as run_markdown_document
@@ -20,6 +21,7 @@ def build_report(request):
         ("infer.strategy_contract", run_strategy_contract),
         ("infer.execution_permission", run_execution_permission),
         ("knowledge.trading_philosophy", run_trading_philosophy),
+        ("knowledge.llm_wiki", run_llm_wiki),
         ("decision.action_plan", run_action_plan),
         ("report.stages", run_report_stages),
         ("report.sections", run_report_sections),

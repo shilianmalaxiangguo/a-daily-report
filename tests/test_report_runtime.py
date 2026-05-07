@@ -1,4 +1,6 @@
+import contextlib
 import importlib
+import io
 import subprocess
 import sys
 import types
@@ -391,6 +393,89 @@ class ReportRuntimeTest(unittest.TestCase):
                 delattr(report_runtime, "_build_calendar_ai_context")
             else:
                 report_runtime._build_calendar_ai_context = original_builder
+
+    def test_build_calendar_ai_context_normalizes_batch_other_to_concrete_sector(self):
+        class OtherBatchClient:
+            def analyze_events_batch(self, events, batch_size=8):
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": ["其他"],
+                        "trading_logic": "AI无法识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_stats = getattr(report_runtime, "_llm_call_stats", None)
+        try:
+            report_runtime.get_llm_service = lambda: OtherBatchClient()
+            report_runtime._llm_call_stats = {
+                "total_calls": 0,
+                "total_time": 0.0,
+                "event_analysis_calls": 0,
+                "event_analysis_time": 0.0,
+            }
+
+            result = report_runtime._build_calendar_ai_context(
+                {"calendar_events": [{"date": "2026-05-07", "title": "未知行业政策发布", "star": 5}]},
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
+            self.assertEqual(ai_analysis["main_direction"], "政策催化")
+            self.assertNotIn("其他", ai_analysis["related_sectors"])
+            self.assertEqual(result["top_directions"], [("政策催化", 1)])
+            self.assertIn("政策催化", result["unique_sectors"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_stats is None:
+                if hasattr(report_runtime, "_llm_call_stats"):
+                    delattr(report_runtime, "_llm_call_stats")
+            else:
+                report_runtime._llm_call_stats = original_stats
+
+    def test_build_calendar_ai_context_handles_malformed_batch_results_without_other(self):
+        class MalformedBatchClient:
+            def analyze_events_batch(self, events, batch_size=8):
+                return [None]
+
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_stats = getattr(report_runtime, "_llm_call_stats", None)
+        try:
+            report_runtime.get_llm_service = lambda: MalformedBatchClient()
+            report_runtime._llm_call_stats = {
+                "total_calls": 0,
+                "total_time": 0.0,
+                "event_analysis_calls": 0,
+                "event_analysis_time": 0.0,
+            }
+
+            result = report_runtime._build_calendar_ai_context(
+                {"calendar_events": [{"date": "2026-05-07", "title": "某区域发展规划发布", "star": 5}]},
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
+            self.assertNotEqual(ai_analysis["main_direction"], "其他")
+            self.assertTrue(ai_analysis["related_sectors"])
+            self.assertTrue(result["top_directions"])
+            self.assertTrue(result["unique_sectors"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_stats is None:
+                if hasattr(report_runtime, "_llm_call_stats"):
+                    delattr(report_runtime, "_llm_call_stats")
+            else:
+                report_runtime._llm_call_stats = original_stats
 
     def test_get_or_build_market_phase_context_reuses_shared_runtime_cache(self):
         calls = []
@@ -1070,10 +1155,10 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("### 4. 双层主线结论", rendered)
         self.assertIn("### 5. 主线成交额占比趋势", rendered)
         self.assertIn("### 1. 龙虎榜资金状态", rendered)
-        self.assertIn("### 1. 主线内观察候选", rendered)
+        self.assertIn("### 1. 个股裁决", rendered)
         self.assertNotIn("### 1. 主线内可执行候选", rendered)
-        self.assertIn("### 2. 跨线观察候选", rendered)
-        self.assertIn("| 时间窗口 | 要看什么 | 买入权限 | 卖出/风控 | 结论 |", rendered)
+        self.assertIn("### 2. 备用观察", rendered)
+        self.assertIn("| 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |", rendered)
         self.assertNotIn("### 🔬 市场研究快照", rendered)
         self.assertNotIn("Step 0", rendered)
 
@@ -1164,7 +1249,7 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("## 七、最终结论", front_page)
         self.assertIn("### 5. 主线成交额占比趋势", front_page)
         self.assertIn("### 1. 龙虎榜资金状态", front_page)
-        self.assertIn("| 时间窗口 | 要看什么 | 买入权限 | 卖出/风控 | 结论 |", front_page)
+        self.assertIn("| 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |", front_page)
         self.assertNotIn("### 🔬 市场研究快照", front_page)
         self.assertNotIn("Step 0", front_page)
         self.assertIn("## 八、详细附录", rendered)
@@ -1739,6 +1824,43 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertNotIn("act right", result["report"].lower())
         self.assertIn("走势符合强势标准", result["report"])
 
+    def test_render_markdown_report_runtime_sanitizes_legacy_surface_words_in_report_and_logs(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [
+                    "当前门控不允许新开仓，执行权关闭；等开闸放行后再看。",
+                ],
+                "module_logs": [],
+                "context": {},
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            _compact_report_for_mvp=lambda report, stage_lookup=None: report,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = report_runtime.render_markdown_report_runtime(
+                {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+                "2026-04-24",
+                helpers=helpers,
+                config={},
+            )
+
+        combined = result["report"] + "\n" + stdout.getvalue()
+        for forbidden in ("买入权限", "执行权", "执行权限", "门控", "闸门", "开闸", "放行"):
+            self.assertNotIn(forbidden, combined)
+        self.assertIn("最终执行条件", stdout.getvalue())
+
     def test_render_markdown_report_runtime_front_page_replaces_english_trading_jargon(self):
         from hooks.report.use_report_tail_summary import run as _run_report_tail_summary_actual
         from report.front_summary_renderer import render_front_digest as _render_front_digest_actual
@@ -1852,8 +1974,9 @@ assert rendered == "# migrated"
 
     def test_render_markdown_report_runtime_returns_report_payload(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report") as render_mock:
+            data = {"foo": "bar"}
             result = report_runtime.render_markdown_report_runtime(
-                {"foo": "bar"},
+                data,
                 "2026-04-22",
                 helpers={"DISPLAY_MVP_MODE": False},
                 config={},
@@ -1861,6 +1984,9 @@ assert rendered == "# migrated"
 
         render_mock.assert_called_once()
         self.assertEqual(result["report"], "# runtime report")
+        self.assertEqual(data["knowledge"]["llm_wiki"]["source"], "llm_wiki")
+        self.assertIn("60分钟确认", data["knowledge"]["llm_wiki"]["report_digest_text"])
+        self.assertEqual(result["artifacts"]["llm_wiki"]["version"], "2026-05-07")
 
     def test_render_markdown_report_runtime_exposes_helper_bindings_to_legacy_body(self):
         exec(

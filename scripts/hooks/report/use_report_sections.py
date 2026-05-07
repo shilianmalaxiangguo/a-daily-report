@@ -2,6 +2,7 @@ import time
 
 from knowledge.trading_philosophy import build_trading_philosophy_snapshot
 from report.stage_renderer import render_stage_board
+from report.surface_wording import sanitize_user_visible_text
 
 
 HOOK_NAME = "report.sections"
@@ -37,27 +38,30 @@ def _build_observation_section(primary_line, strategy_contract, knowledge, repor
 
 
 def _build_execution_section(contract_label, permission, action_plan, knowledge):
-    return "\n".join(
+    return sanitize_user_visible_text("\n".join(
         [
             "## 执行",
             f"- 合同层：{contract_label}",
-            f"- 执行权限：{permission}",
+            f"- 执行资格：{permission}",
             f"- 动作摘要：{action_plan.get('headline', '')}",
             f"- 触发条件：{action_plan.get('trigger', '')}",
             f"- 动作原因：{action_plan.get('rationale', '')}",
-            f"- 执行门链：{knowledge.get('decision_gate_chain_text', '')}",
+            f"- 执行条件链：{knowledge.get('decision_gate_chain_text', '')}",
             f"- 执行框架：{knowledge.get('execution_framework_text', '')}",
         ]
-    )
+    ))
 
 
-def _build_review_section(knowledge):
+def _build_review_section(knowledge, llm_wiki=None):
+    wiki = llm_wiki or {}
     return "\n".join(
         [
             "## 知识模块",
             f"- 交易思想版本：{knowledge.get('version', 'unknown')}",
             f"- 来源：{knowledge.get('source', 'unknown')}",
             f"- 源文件：{knowledge.get('source_path', '')}",
+            f"- LLM Wiki版本：{wiki.get('version', 'unknown')}",
+            f"- Wiki来源：{wiki.get('source', 'unknown')}",
         ]
     )
 
@@ -87,7 +91,9 @@ def run(ctx):
     target_date = request.get("target_date", "")
     derived = ctx.get("derived") or {}
     decision = ctx.get("decision") or {}
-    knowledge = ((ctx.get("knowledge") or {}).get("trading_philosophy") or {})
+    knowledge_root = ctx.get("knowledge") or {}
+    knowledge = (knowledge_root.get("trading_philosophy") or {})
+    llm_wiki = knowledge_root.get("llm_wiki") or {}
     market_phase = derived.get("market_phase") or {}
     mainline = derived.get("mainline") or {}
     strategy_contract = derived.get("strategy_contract") or {}
@@ -108,14 +114,14 @@ def run(ctx):
     permission = str(execution_permission.get("label", "") or "unknown").strip() or "unknown"
     preamble = "\n".join(knowledge.get("report_preamble_lines") or [f"# {target_date} A股日报"]).strip()
 
-    sections = {
+    sections = sanitize_user_visible_text({
         "preamble": preamble,
         "environment": _build_environment_section(phase, primary_line, knowledge),
         "observation": _build_observation_section(primary_line, strategy_contract, knowledge, report_stages),
         "execution": _build_execution_section(contract_label, permission, action_plan, knowledge),
-        "review": _build_review_section(knowledge),
+        "review": _build_review_section(knowledge, llm_wiki),
         "summary": _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, report_stages),
-    }
+    })
 
     return {
         "value": {"sections": sections},

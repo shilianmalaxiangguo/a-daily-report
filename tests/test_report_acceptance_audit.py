@@ -190,6 +190,16 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("legacy_surface_wording", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_flags_all_legacy_surface_wording_markers_on_front_page(self):
+        for marker in ("买入权限", "执行权", "执行权限", "门控", "闸门", "开闸", "放行"):
+            with self.subTest(marker=marker):
+                bad = GOOD_MARKDOWN.replace("防守观察", marker, 1)
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("legacy_surface_wording", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
     def test_audit_flags_front_page_heading_order_and_duplicates(self):
         bad = GOOD_MARKDOWN.replace("## 二、市场基底", "## 三、周期与主线", 1)
 
