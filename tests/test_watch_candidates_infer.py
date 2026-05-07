@@ -47,6 +47,132 @@ class WatchCandidatesInferTest(unittest.TestCase):
         self.assertTrue(any("候选池" in line for line in emitted))
         self.assertTrue(any(log["step"] == "infer.watch_candidate_pool" for log in result["module_logs"]))
 
+    def test_new_stock_research_pool_does_not_pollute_candidates_without_upgrade(self):
+        emitted = []
+        result = build_watch_candidate_pool_bundle(
+            {
+                "turnover_rank": [
+                    {"code": "000002", "name": "成交额二号", "turnover": 123.4},
+                ],
+                "new_stock_research_pool": [
+                    {
+                        "code": "301608",
+                        "name": "理奇智能",
+                        "turnover": 12.3,
+                        "new_stock_narrative_score": 88,
+                        "new_stock_factors": {"same_day_hotness": 18},
+                    },
+                ],
+            },
+            emit=emitted.append,
+        )
+
+        candidates = result["results"]["candidates"]
+        self.assertEqual([item["code"] for item in candidates], ["000002"])
+        self.assertEqual(result["results"]["added_count"].get("new_stock"), 0)
+
+    def test_new_stock_candidate_upgrades_are_appended_with_source_tags(self):
+        emitted = []
+        result = build_watch_candidate_pool_bundle(
+            {
+                "turnover_rank": [
+                    {"code": "000002", "name": "成交额二号", "turnover": 123.4},
+                ],
+                "new_stock_candidate_upgrades": [
+                    {
+                        "code": "301608",
+                        "name": "理奇智能",
+                        "turnover": 12.3,
+                        "_source": "新股研究池",
+                        "watch_source": "new_stock_research_pool",
+                        "core_level": "新股预期差候选",
+                        "new_stock_narrative_score": 88,
+                        "new_stock_factors": {"same_day_hotness": 18},
+                    },
+                ],
+            },
+            emit=emitted.append,
+        )
+
+        candidates = result["results"]["candidates"]
+        codes = [item["code"] for item in candidates]
+        self.assertEqual(codes, ["000002", "301608"])
+        liqi = next(item for item in candidates if item["code"] == "301608")
+        self.assertEqual(liqi["_source"], "新股研究池")
+        self.assertEqual(liqi["watch_source"], "new_stock_research_pool")
+        self.assertEqual(liqi["core_level"], "新股预期差候选")
+        self.assertEqual(liqi["new_stock_narrative_score"], 88)
+        self.assertEqual(liqi["new_stock_factors"], {"same_day_hotness": 18})
+        self.assertEqual(result["results"]["added_count"]["new_stock"], 1)
+
+    def test_new_stock_candidate_upgrade_enriches_existing_candidate_without_duplicate(self):
+        emitted = []
+        result = build_watch_candidate_pool_bundle(
+            {
+                "turnover_rank": [
+                    {"code": "301608", "name": "理奇智能", "turnover": 123.4, "sector": "机器人"},
+                ],
+                "new_stock_candidate_upgrades": [
+                    {
+                        "code": "301608",
+                        "name": "理奇智能",
+                        "turnover": 12.3,
+                        "_source": "新股研究池",
+                        "watch_source": "new_stock_research_pool",
+                        "core_level": "新股预期差候选",
+                        "candidate_upgrade_reason": "主线贴合",
+                        "new_stock_narrative_score": 88,
+                        "new_stock_factors": {"same_day_hotness": 18},
+                    },
+                ],
+            },
+            emit=emitted.append,
+        )
+
+        candidates = result["results"]["candidates"]
+        self.assertEqual([item["code"] for item in candidates], ["301608"])
+        liqi = candidates[0]
+        self.assertEqual(liqi["_source"], "新股研究池")
+        self.assertEqual(liqi["watch_source"], "new_stock_research_pool")
+        self.assertEqual(liqi["core_level"], "新股预期差候选")
+        self.assertEqual(liqi["candidate_upgrade_reason"], "主线贴合")
+        self.assertEqual(liqi["new_stock_narrative_score"], 88)
+        self.assertEqual(liqi["new_stock_factors"], {"same_day_hotness": 18})
+        self.assertEqual(result["results"]["added_count"]["new_stock"], 1)
+
+    def test_new_stock_candidate_upgrade_counts_duplicate_code_once(self):
+        emitted = []
+        result = build_watch_candidate_pool_bundle(
+            {
+                "new_stock_candidate_upgrades": [
+                    {
+                        "code": "301608",
+                        "name": "理奇智能",
+                        "turnover": 12.3,
+                        "_source": "新股研究池",
+                        "watch_source": "new_stock_research_pool",
+                        "core_level": "新股预期差候选",
+                        "new_stock_narrative_score": 88,
+                    },
+                    {
+                        "code": "301608",
+                        "name": "理奇智能",
+                        "turnover": 12.3,
+                        "_source": "新股研究池",
+                        "watch_source": "new_stock_research_pool",
+                        "core_level": "新股预期差候选",
+                        "new_stock_narrative_score": 90,
+                    },
+                ],
+            },
+            emit=emitted.append,
+        )
+
+        candidates = result["results"]["candidates"]
+        self.assertEqual([item["code"] for item in candidates], ["301608"])
+        self.assertEqual(candidates[0]["new_stock_narrative_score"], 90)
+        self.assertEqual(result["results"]["added_count"]["new_stock"], 1)
+
     def test_build_abnormal_watch_pool_returns_degraded_snapshot_when_recent_bars_missing(self):
         builder = getattr(watch_candidates_infer, "build_abnormal_watch_pool", None)
         self.assertIsNotNone(builder)

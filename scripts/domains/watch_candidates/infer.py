@@ -181,7 +181,26 @@ def build_watch_candidate_pool_bundle(all_data, *, emit):
             return True
         return False
 
-    added_count = {"zt": 0, "tr": 0, "lb": 0, "hot": 0, "lhb": 0}
+    def enrich_new_stock_candidate(candidate, stock):
+        candidate.update(
+            {
+                "_source": stock.get("_source") or "新股研究池",
+                "watch_source": stock.get("watch_source") or "new_stock_research_pool",
+                "core_level": stock.get("core_level") or "新股预期差候选",
+            }
+        )
+        for key in (
+            "candidate_upgrade_reason",
+            "new_stock_narrative_score",
+            "new_stock_factors",
+            "listing_date",
+            "listing_window",
+            "pre_listing_action",
+        ):
+            if key in stock:
+                candidate[key] = stock.get(key)
+
+    added_count = {"zt": 0, "tr": 0, "lb": 0, "hot": 0, "lhb": 0, "new_stock": 0}
 
     for stock in all_data.get("zt_pool", []) or []:
         if safe_add_candidate(stock, "涨停池"):
@@ -203,10 +222,28 @@ def build_watch_candidate_pool_bundle(all_data, *, emit):
         if safe_add_candidate(stock, "龙虎榜"):
             added_count["lhb"] += 1
 
+    counted_new_stock_codes = set()
+    for stock in all_data.get("new_stock_candidate_upgrades", []) or []:
+        code = stock.get("code", "") or stock.get("代码", "")
+        if not code:
+            continue
+        was_existing = code in candidates_dict
+        if safe_add_candidate(stock, "新股研究池", default_turnover=stock.get("turnover", 1)):
+            enrich_new_stock_candidate(candidates_dict[code], stock)
+            if code not in counted_new_stock_codes:
+                added_count["new_stock"] += 1
+                counted_new_stock_codes.add(code)
+        elif was_existing:
+            enrich_new_stock_candidate(candidates_dict[code], stock)
+            if code not in counted_new_stock_codes:
+                added_count["new_stock"] += 1
+                counted_new_stock_codes.add(code)
+
     candidates = list(candidates_dict.values())
     emit(
         f"   📊 候选池: 涨停{added_count['zt']}只 + 成交额{added_count['tr']}只 + "
-        f"连板{added_count['lb']}只 + 热榜{added_count['hot']}只 + 龙虎榜{added_count['lhb']}只 = {len(candidates)}只"
+        f"连板{added_count['lb']}只 + 热榜{added_count['hot']}只 + 龙虎榜{added_count['lhb']}只 + "
+        f"新股{added_count['new_stock']}只 = {len(candidates)}只"
     )
     _append_log(
         logs,
