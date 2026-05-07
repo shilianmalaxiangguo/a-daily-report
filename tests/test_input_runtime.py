@@ -70,6 +70,7 @@ sys.modules.update(
             HistoryCache=type("HistoryCache", (), {{}}),
         ),
         "llm_service": _stub_module("llm_service", get_llm_service=lambda *args, **kwargs: None),
+        "pandas": _stub_module("pandas"),
     }}
 )
 """.format(scripts_path=str(ROOT / "scripts"))
@@ -84,6 +85,181 @@ sys.modules.update(
 
 
 class InputRuntimeTest(unittest.TestCase):
+    def _new_stock_runtime_helpers(
+        self,
+        *,
+        calendar_bundle=None,
+        research_pool_builder=None,
+        watch_candidate_builder=None,
+    ):
+        class StepTimer:
+            def start(self):
+                return None
+
+            def record(self, *args, **kwargs):
+                return (0.0, 0.0)
+
+            def print_summary(self):
+                return None
+
+            def get_summary(self):
+                return []
+
+        class AShareDataCollector:
+            def get_wanzhu_top10(self):
+                return []
+
+        class TencentFinanceData:
+            def get_calendar_events(self, target_date=None):
+                return []
+
+            def get_stock_batch_info(self, codes):
+                return {}
+
+        def _empty_bundle(*args, **kwargs):
+            return {"results": {}, "data_status": {}, "step_status": {}, "module_logs": []}
+
+        def _market_state_bundle(*args, **kwargs):
+            return {
+                "results": {
+                    "total_turnover": 10000.0,
+                    "market_state_snapshot": {"leading_line": "机器人"},
+                },
+                "data_status": {"两市成交额": True},
+                "step_status": {"两市成交额获取": True},
+                "module_logs": [],
+            }
+
+        def _market_activity_pool_bundle(*args, **kwargs):
+            return {
+                "results": {"zt_pool": [], "dt_pool": []},
+                "data_status": {},
+                "step_status": {},
+                "module_logs": [],
+                "artifacts": {"limit_up_df": None, "limit_down_df": None},
+            }
+
+        def _sector_snapshot_bundle(*args, **kwargs):
+            return {
+                "results": {
+                    "hot_plates": [{"name": "机器人"}],
+                    "sector_change_up": [{"name": "机器人"}],
+                    "sector_fund_flow": [{"name": "机器人", "net_inflow": 1.2}],
+                },
+                "data_status": {},
+                "step_status": {},
+                "module_logs": [],
+            }
+
+        def _calendar_events_bundle(*args, **kwargs):
+            return {
+                "results": {
+                    "calendar_events": [],
+                    "market_research_snapshot": {
+                        "state_machine": {
+                            "leading_line": "机器人",
+                            "mainline_candidates": [{"name": "机器人"}],
+                        }
+                    },
+                    "current_mainline_history_record": {
+                        "primary_mainline": "机器人",
+                        "leading_line": "机器人",
+                    },
+                },
+                "data_status": {},
+                "step_status": {},
+                "module_logs": [],
+            }
+
+        def _calendar_bundle(*args, **kwargs):
+            if calendar_bundle is not None:
+                return calendar_bundle
+            return {
+                "results": {
+                    "new_stock_calendar": [
+                        {
+                            "code": "301608",
+                            "name": "理奇智能",
+                            "listing_window": "tomorrow_listing",
+                        }
+                    ]
+                },
+                "data_status": {"新股上市日历": True},
+                "step_status": {"新股上市日历获取": True},
+                "module_logs": [
+                    {
+                        "module": "domains.new_stock_calendar.request",
+                        "step": "request.new_stock_calendar",
+                        "status": "success",
+                        "message": "stub",
+                        "details": {"target_keys": ["new_stock_calendar"]},
+                    }
+                ],
+            }
+
+        def _research_pool_builder(calendar, *, target_date="", context=None):
+            if research_pool_builder is not None:
+                return research_pool_builder(calendar, target_date=target_date, context=context)
+            return {"new_stock_research_pool": [], "new_stock_candidate_upgrades": []}
+
+        def _watch_candidate_builder(all_data, **kwargs):
+            if watch_candidate_builder is not None:
+                return watch_candidate_builder(all_data, **kwargs)
+            return {
+                "results": {"candidates": list(all_data.get("new_stock_candidate_upgrades", []))},
+                "module_logs": [],
+            }
+
+        return {
+            "StepTimer": StepTimer,
+            "AShareDataCollector": AShareDataCollector,
+            "TencentFinanceData": TencentFinanceData,
+            "build_input_request_registry": lambda helpers: {},
+            "resolve_request_target_date": lambda target_date=None: str(target_date),
+            "collect_market_state_request_bundle": _market_state_bundle,
+            "collect_market_activity_pool_request_bundle": _market_activity_pool_bundle,
+            "collect_market_activity_hot_rank_request_bundle": _empty_bundle,
+            "collect_market_activity_sector_snapshot_request_bundle": _sector_snapshot_bundle,
+            "collect_calendar_events_request_bundle": _calendar_events_bundle,
+            "collect_new_stock_calendar_request_bundle": _calendar_bundle,
+            "fetch_sina_new_stock_calendar_pages": lambda *args, **kwargs: [],
+            "build_new_stock_research_pool": _research_pool_builder,
+            "collect_monitoring_request_bundle": _empty_bundle,
+            "collect_market_activity_capital_snapshot_request_bundle": _empty_bundle,
+            "collect_market_activity_stock_quote_request_bundle": _empty_bundle,
+            "build_market_activity_sector_analysis_bundle": _empty_bundle,
+            "build_watch_candidate_pool_bundle": _watch_candidate_builder,
+            "collect_watch_candidate_history_request_bundle": _empty_bundle,
+            "build_market_activity_quant_signal_bundle": _empty_bundle,
+            "build_request_diagnostics": lambda module_logs, data_status=None, step_status=None: {
+                "request_logs": list(module_logs or [])
+            },
+            "render_request_diagnostics_lines": lambda diagnostics: [],
+            "get_llm_call_stats": lambda: {
+                "total_calls": 0,
+                "event_analysis_calls": 0,
+                "event_analysis_time": 0,
+                "sector_analysis_calls": 0,
+                "sector_analysis_time": 0,
+                "total_time": 0,
+            },
+            "get_sector_quadrant_data": lambda *args, **kwargs: {},
+            "get_limit_up_pool": lambda *args, **kwargs: [],
+            "get_limit_down_pool": lambda *args, **kwargs: [],
+            "fetch_ths_hot_stock": lambda *args, **kwargs: [],
+            "get_integrated_hot_list": lambda *args, **kwargs: {},
+            "fetch_hot_plate": lambda *args, **kwargs: [],
+            "get_sector_change_from_iwencai": lambda *args, **kwargs: ([], []),
+            "get_turnover_rank_from_iwencai": lambda *args, **kwargs: [],
+            "get_stock_sector": lambda *args, **kwargs: "",
+            "XuangubaoIntradayAnalyzer": object,
+            "get_cache": lambda *args, **kwargs: {},
+            "analyze_volume_anomaly": lambda *args, **kwargs: {},
+            "analyze_lhb": lambda *args, **kwargs: {},
+            "calculate_resonance": lambda *args, **kwargs: {},
+            "generate_trade_signals": lambda *args, **kwargs: {},
+        }
+
     def test_get_daily_data_wrapper_delegates_to_input_runtime(self):
         result = _run_legacy_entry_probe(
             """
@@ -112,6 +288,81 @@ assert result["target_date"] == "2026-04-22"
 
         body_mock.assert_called_once()
         self.assertEqual(result["target_date"], "2026-04-22")
+
+    def test_run_input_runtime_body_exposes_new_stock_side_channel_when_helpers_are_injected(self):
+        input_runtime = importlib.import_module("input.runtime")
+        calls = {}
+        upgrade = {
+            "code": "301608",
+            "name": "理奇智能",
+            "watch_source": "new_stock_research_pool",
+        }
+
+        def build_new_stock_research_pool(calendar, *, target_date="", context=None):
+            calls["calendar"] = calendar
+            calls["target_date"] = target_date
+            calls["context"] = context
+            return {
+                "new_stock_research_pool": [{"code": "301608", "name": "理奇智能"}],
+                "new_stock_candidate_upgrades": [upgrade],
+            }
+
+        def build_watch_candidate_pool_bundle(all_data, **kwargs):
+            calls["watch_candidate_saw_upgrades"] = list(all_data.get("new_stock_candidate_upgrades", []))
+            return {
+                "results": {"candidates": list(all_data.get("new_stock_candidate_upgrades", []))},
+                "module_logs": [],
+            }
+
+        helpers = self._new_stock_runtime_helpers(
+            research_pool_builder=build_new_stock_research_pool,
+            watch_candidate_builder=build_watch_candidate_pool_bundle,
+        )
+
+        result = input_runtime.run_input_runtime("2026-04-29", helpers=helpers)
+
+        self.assertEqual(
+            calls["calendar"],
+            [{"code": "301608", "name": "理奇智能", "listing_window": "tomorrow_listing"}],
+        )
+        self.assertEqual(calls["target_date"], "2026-04-29")
+        self.assertEqual(calls["context"]["mainline_name"], "机器人")
+        self.assertIn("机器人", calls["context"]["potential_mainlines"])
+        self.assertGreaterEqual(calls["context"]["sector_resonance"]["score"], 8)
+        self.assertEqual(calls["context"]["sector_resonance"]["supported_sectors"], ["机器人"])
+        self.assertEqual(result["new_stock_calendar"], calls["calendar"])
+        self.assertEqual(result["new_stock_research_pool"], [{"code": "301608", "name": "理奇智能"}])
+        self.assertEqual(result["new_stock_candidate_upgrades"], [upgrade])
+        self.assertEqual(calls["watch_candidate_saw_upgrades"], [upgrade])
+        self.assertEqual(result["candidates"], [upgrade])
+
+    def test_run_input_runtime_new_stock_scoring_failure_is_non_fatal(self):
+        input_runtime = importlib.import_module("input.runtime")
+        normal_candidate = {"code": "002001", "name": "正常候选"}
+
+        def build_new_stock_research_pool(calendar, *, target_date="", context=None):
+            raise RuntimeError("scoring exploded")
+
+        def build_watch_candidate_pool_bundle(all_data, **kwargs):
+            return {"results": {"candidates": [normal_candidate]}, "module_logs": []}
+
+        helpers = self._new_stock_runtime_helpers(
+            research_pool_builder=build_new_stock_research_pool,
+            watch_candidate_builder=build_watch_candidate_pool_bundle,
+        )
+
+        result = input_runtime.run_input_runtime("2026-04-29", helpers=helpers)
+
+        self.assertEqual(result["new_stock_research_pool"], [])
+        self.assertEqual(result["new_stock_candidate_upgrades"], [])
+        self.assertEqual(result["candidates"], [normal_candidate])
+        self.assertTrue(
+            any(
+                log.get("status") == "error"
+                and log.get("step") == "request.new_stock_scoring"
+                for log in result.get("module_logs", [])
+            )
+        )
 
 
 if __name__ == "__main__":

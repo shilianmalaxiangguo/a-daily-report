@@ -14,6 +14,10 @@ from domains.market_activity.request import (
 )
 from domains.market_state.request import collect_market_state_request_bundle
 from domains.monitoring.request import collect_monitoring_request_bundle
+from domains.new_stock_calendar.request import (
+    collect_new_stock_calendar_request_bundle,
+    fetch_sina_new_stock_calendar_pages,
+)
 from domains.watch_candidates.infer import build_watch_candidate_pool_bundle
 from domains.watch_candidates.request import collect_watch_candidate_history_request_bundle
 from input.request_diagnostics_runtime import (
@@ -21,6 +25,7 @@ from input.request_diagnostics_runtime import (
     render_request_diagnostics_lines,
 )
 from input.request_registry import build_input_request_registry, resolve_request_target_date
+from selection.new_stock_narrative_runtime import build_new_stock_research_pool
 
 __all__ = ["run_input_runtime"]
 
@@ -56,6 +61,113 @@ def run_input_runtime(target_date=None, *, helpers=None, config=None):
         return _run_input_runtime_legacy_body(target_date=target_date)
     finally:
         _restore_runtime_bindings(previous)
+
+
+def _as_sequence(value):
+    if value in (None, ""):
+        return []
+    if isinstance(value, dict):
+        for key in ("items", "data", "rows", "list", "inflow", "outflow"):
+            nested = value.get(key)
+            if isinstance(nested, (list, tuple, set)):
+                return list(nested)
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _extract_named_values(value):
+    names = []
+    for item in _as_sequence(value):
+        if isinstance(item, dict):
+            for key in (
+                "name",
+                "sector_name",
+                "standard_sector",
+                "standard_name",
+                "primary_mainline",
+                "leading_line",
+                "mainline",
+            ):
+                if item.get(key):
+                    names.append(item.get(key))
+        elif item:
+            names.append(item)
+    return [str(name).strip() for name in names if str(name or "").strip()]
+
+
+def _extend_unique(target, values):
+    seen = set(target)
+    for value in values or []:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            target.append(text)
+
+
+def _derive_new_stock_context(results, fallback_mainline=""):
+    results = results or {}
+    market_research_snapshot = results.get("market_research_snapshot") or {}
+    state_machine = market_research_snapshot.get("state_machine") or {}
+    market_state_snapshot = results.get("market_state_snapshot") or {}
+    current_mainline_history_record = results.get("current_mainline_history_record") or {}
+
+    mainline_name = (
+        current_mainline_history_record.get("primary_mainline")
+        or state_machine.get("leading_line")
+        or market_state_snapshot.get("leading_line")
+        or fallback_mainline
+        or ""
+    )
+
+    potential_mainlines = []
+    _extend_unique(potential_mainlines, _extract_named_values(state_machine.get("mainline_candidates")))
+    _extend_unique(
+        potential_mainlines,
+        [
+            current_mainline_history_record.get("leading_line"),
+            current_mainline_history_record.get("primary_mainline"),
+            state_machine.get("leading_line"),
+            market_state_snapshot.get("leading_line"),
+            mainline_name,
+        ],
+    )
+
+    sector_ai_analysis = results.get("sector_ai_analysis") or {}
+    _extend_unique(potential_mainlines, _extract_named_values(sector_ai_analysis.get("standard_sectors")))
+    _extend_unique(potential_mainlines, _extract_named_values(results.get("hot_plates")))
+    _extend_unique(potential_mainlines, _extract_named_values(results.get("sector_change_up")))
+
+    sector_fund_flow = results.get("sector_fund_flow") or {}
+    if isinstance(sector_fund_flow, dict):
+        inflow_rows = sector_fund_flow.get("inflow") or []
+    else:
+        inflow_rows = sector_fund_flow
+    _extend_unique(potential_mainlines, _extract_named_values(inflow_rows))
+
+    context = {
+        "mainline_name": mainline_name,
+        "potential_mainlines": potential_mainlines,
+        "new_stock_profiles": results.get("new_stock_profiles", {}),
+    }
+
+    for key in ("new_stock_money_making_effect", "recent_new_stock_money_making_effect"):
+        if key in results:
+            context[key] = results.get(key)
+
+    support_names = []
+    _extend_unique(support_names, _extract_named_values(results.get("hot_plates")))
+    _extend_unique(support_names, _extract_named_values(results.get("sector_change_up")))
+    _extend_unique(support_names, _extract_named_values(inflow_rows))
+    if support_names:
+        context["sector_resonance"] = {
+            "supported_sectors": support_names,
+            "score": min(10, 7 + len(support_names)),
+            "source": "hot_plates/sector_change_up/sector_fund_flow",
+        }
+
+    return context
 
 
 def _run_input_runtime_legacy_body(target_date=None):
@@ -171,6 +283,43 @@ def _run_input_runtime_legacy_body(target_date=None):
         data_status.update(calendar_events_result.get("data_status", {}))
         step_status.update(calendar_events_result.get("step_status", {}))
         module_logs.extend(calendar_events_result.get("module_logs", []))
+
+        new_stock_calendar_result = collect_new_stock_calendar_request_bundle(
+            target_date,
+            fetch_pages=fetch_sina_new_stock_calendar_pages,
+            timer=timer,
+            emit=lambda message: print(message, flush=True),
+        )
+        results.update(new_stock_calendar_result.get("results", {}))
+        data_status.update(new_stock_calendar_result.get("data_status", {}))
+        step_status.update(new_stock_calendar_result.get("step_status", {}))
+        module_logs.extend(new_stock_calendar_result.get("module_logs", []))
+
+        try:
+            new_stock_research_result = build_new_stock_research_pool(
+                results.get("new_stock_calendar", []),
+                target_date=target_date,
+                context=_derive_new_stock_context(results),
+            )
+            results.update(new_stock_research_result or {})
+        except Exception as error:
+            results["new_stock_research_pool"] = []
+            results["new_stock_candidate_upgrades"] = []
+            module_logs.append(
+                {
+                    "module": "selection.new_stock_narrative_runtime",
+                    "step": "request.new_stock_scoring",
+                    "status": "error",
+                    "message": "新股研究池评分失败",
+                    "details": {
+                        "target_keys": [
+                            "new_stock_research_pool",
+                            "new_stock_candidate_upgrades",
+                        ],
+                        "error": str(error),
+                    },
+                }
+            )
 
         def _fetch_exchange_monitor_payload():
             import requests
