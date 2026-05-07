@@ -231,20 +231,24 @@ def _merge_profile(record, context):
 
 
 def _resolve_listing_timing(record, target_date):
-    listing_date = _parse_date((record or {}).get("listing_date"))
+    raw_listing_date = _normalize_text((record or {}).get("listing_date"))
+    listing_date = _parse_date(raw_listing_date)
     target = _parse_date(target_date)
     days_to_listing = None
     days_since_listing = None
 
+    if not listing_date:
+        return {
+            "listing_window": "missing_listing_date",
+            "pre_listing_action": "none",
+            "days_to_listing": None,
+            "days_since_listing": None,
+            "official_listing_date_missing": True,
+        }
+
     if listing_date and target:
         days_to_listing = (listing_date - target).days
         days_since_listing = (target - listing_date).days
-    elif (record or {}).get("days_to_listing") not in (None, ""):
-        try:
-            days_to_listing = int((record or {}).get("days_to_listing"))
-            days_since_listing = -days_to_listing
-        except (TypeError, ValueError):
-            days_to_listing = None
 
     if days_to_listing == 2:
         window = "pre_alert_t2"
@@ -267,6 +271,7 @@ def _resolve_listing_timing(record, target_date):
         ),
         "days_to_listing": days_to_listing,
         "days_since_listing": days_since_listing,
+        "official_listing_date_missing": False,
     }
 
 
@@ -423,11 +428,6 @@ def _score_board_resonance(record, context, mainline_match_score):
         score = _score_level_value(context.get(key), 10)
         if score:
             return score
-
-    if mainline_match_score >= 20 and _extract_mainline_terms(context):
-        return 8
-    if mainline_match_score >= 12:
-        return 5
     return 0
 
 
@@ -474,6 +474,8 @@ def _score_trade_value(record):
 
 def _timing_sentence(scored_record):
     window = _normalize_text((scored_record or {}).get("listing_window"))
+    if window == "missing_listing_date":
+        return "缺少官方上市日期，只保留研究，不进入升级。"
     if window == "pre_alert_t2":
         return "T-2提醒：准备清仓/减仓低质量持仓，保留现金和空仓灵活性，明天再复核是否仍符合。"
     if window == "tomorrow_listing":
@@ -491,6 +493,8 @@ def _upgrade_blockers(scored_record):
     scored_record = scored_record or {}
     factors = scored_record.get("new_stock_factors") or {}
     blockers = []
+    if scored_record.get("official_listing_date_missing") or scored_record.get("listing_window") == "missing_listing_date":
+        blockers.append("缺少官方上市日期")
     if _safe_float(scored_record.get("new_stock_narrative_score"), 0.0) < UPGRADE_THRESHOLD:
         blockers.append("总分未达72")
     if scored_record.get("listing_window") not in ALLOWED_LISTING_WINDOWS:

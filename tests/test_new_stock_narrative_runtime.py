@@ -18,6 +18,7 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
             "mainline_name": "电池",
             "potential_mainline": ["锂电池", "新能源"],
             "new_stock_money_making_effect": "strong",
+            "sector_resonance": {"status": "strong"},
             "new_stock_profiles": {
                 "301608": {
                     "sector": "电池",
@@ -96,6 +97,7 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
         context = {
             "mainline_name": "汽车零部件",
             "new_stock_money_making_effect": {"status": "strong"},
+            "sector_resonance": "strong",
             "new_stock_profiles": {
                 "001365": {
                     "sector": "汽车零部件",
@@ -122,6 +124,97 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
         self.assertIn("准备清仓", item["candidate_upgrade_reason"])
         self.assertIn("减仓", item["candidate_upgrade_reason"])
         self.assertIn("现金", item["candidate_upgrade_reason"])
+        self.assertNotIn("买入", item["candidate_upgrade_reason"])
+
+    def test_missing_official_listing_date_never_upgrades_even_with_calendar_window(self):
+        calendar = [
+            {
+                "code": "301608",
+                "name": "N理奇智能",
+                "days_to_listing": 1,
+                "listing_window": "tomorrow_listing",
+                "pre_listing_action": "focus_tomorrow_battle",
+                "issue_price": 20.0,
+                "fundraising_yi": 2.944,
+                "source": "sina_new_stock_calendar",
+                "source_status": "degraded",
+            }
+        ]
+
+        result = build_new_stock_research_pool(
+            calendar,
+            target_date="2026-04-29",
+            context=self._liqi_context(),
+        )
+
+        item = result["new_stock_research_pool"][0]
+        self.assertEqual(item["listing_window"], "missing_listing_date")
+        self.assertEqual(item["pre_listing_action"], "none")
+        self.assertEqual(item["new_stock_factors"]["listing_window_score"], 0)
+        self.assertFalse(item["upgrade_eligible"])
+        self.assertEqual(result["new_stock_candidate_upgrades"], [])
+        self.assertFalse(should_upgrade_new_stock_candidate(item))
+        self.assertIn("缺少官方上市日期", item["candidate_upgrade_reason"])
+
+    def test_high_mainline_and_narrative_without_explicit_support_stays_research_only(self):
+        calendar = [
+            {
+                "code": "301608",
+                "name": "N理奇智能",
+                "listing_date": "2026-04-30",
+                "issue_price": 20.0,
+                "fundraising_yi": 2.944,
+                "source": "sina_new_stock_calendar",
+                "source_status": "success",
+            }
+        ]
+        context = {
+            "mainline_name": "电池",
+            "potential_mainline": ["锂电池", "新能源"],
+            "new_stock_profiles": self._liqi_context()["new_stock_profiles"],
+        }
+
+        result = build_new_stock_research_pool(
+            calendar,
+            target_date="2026-04-29",
+            context=context,
+        )
+
+        item = result["new_stock_research_pool"][0]
+        factors = item["new_stock_factors"]
+        self.assertGreaterEqual(item["new_stock_narrative_score"], 72)
+        self.assertGreaterEqual(factors["mainline_match_score"], 20)
+        self.assertGreaterEqual(factors["narrative_association_score"], 18)
+        self.assertEqual(factors["market_emotion_score"], 0)
+        self.assertEqual(factors["board_resonance_score"], 0)
+        self.assertFalse(item["upgrade_eligible"])
+        self.assertEqual(result["new_stock_candidate_upgrades"], [])
+
+    def test_today_listing_uses_live_open_confirmation_without_buy_language(self):
+        calendar = [
+            {
+                "code": "301608",
+                "name": "N理奇智能",
+                "listing_date": "2026-04-30",
+                "issue_price": 20.0,
+                "fundraising_yi": 2.944,
+                "source": "sina_new_stock_calendar",
+                "source_status": "success",
+            }
+        ]
+
+        result = build_new_stock_research_pool(
+            calendar,
+            target_date="2026-04-30",
+            context=self._liqi_context(),
+        )
+
+        item = result["new_stock_research_pool"][0]
+        self.assertEqual(item["listing_window"], "today_listing")
+        self.assertEqual(item["pre_listing_action"], "live_open_confirm")
+        self.assertTrue(item["upgrade_eligible"])
+        self.assertIn("开盘确认", item["candidate_upgrade_reason"])
+        self.assertIn("不做预先承诺", item["candidate_upgrade_reason"])
         self.assertNotIn("买入", item["candidate_upgrade_reason"])
 
     def test_weak_non_mainline_sample_stays_research_only(self):
