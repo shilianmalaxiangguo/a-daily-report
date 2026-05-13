@@ -289,7 +289,7 @@ class CloudflareFreeDailyDb:
             total_amount = _safe_float(total_row["total_amount_yi"] if total_row else 0)
             quote_rows = conn.execute(
                 """
-                SELECT trade_date, ts_code, stock_code, name, amount_yi
+                SELECT trade_date, ts_code, stock_code, name, close, pct_chg, amount_yi
                 FROM stock_daily_quotes_recent
                 WHERE trade_date = ?
                 ORDER BY amount_yi DESC, ts_code ASC
@@ -313,6 +313,8 @@ class CloudflareFreeDailyDb:
                     "stock_code": row["stock_code"],
                     "name": row["name"],
                     "amount_yi": amount_yi,
+                    "close": _safe_float(row["close"]),
+                    "pct_chg": _safe_float(row["pct_chg"]),
                     "total_amount_yi": total_amount,
                     "amount_share_pct": share,
                     "source_run_id": int(source_run_id or 0),
@@ -414,11 +416,15 @@ class CloudflareFreeDailyDb:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT trade_date, rank_scope, rank_no, ts_code, stock_code, name,
-                       amount_yi, total_amount_yi, amount_share_pct, source_run_id
+                SELECT rank.trade_date, rank.rank_scope, rank.rank_no, rank.ts_code, rank.stock_code, rank.name,
+                       rank.amount_yi, rank.total_amount_yi, rank.amount_share_pct, rank.source_run_id,
+                       quote.close, quote.pct_chg
                 FROM turnover_rank_daily
-                WHERE trade_date = ? AND rank_scope = ? AND rank_no <= ?
-                ORDER BY rank_no ASC
+                AS rank
+                LEFT JOIN stock_daily_quotes_recent AS quote
+                  ON quote.trade_date = rank.trade_date AND quote.ts_code = rank.ts_code
+                WHERE rank.trade_date = ? AND rank.rank_scope = ? AND rank.rank_no <= ?
+                ORDER BY rank.rank_no ASC
                 """,
                 (trade_date, rank_scope, limit),
             ).fetchall()

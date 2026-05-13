@@ -36,14 +36,35 @@ def _round_pct(value):
     return round(_safe_float(value), 4)
 
 
-def _sector_for_rank(row, stock_industry_map):
+def _stock_profile_for_rank(row, stock_industry_map):
     ts_code = str((row or {}).get("ts_code") or "").strip().upper()
     stock_code = str((row or {}).get("stock_code") or "").strip()
-    return str(
-        (stock_industry_map or {}).get(ts_code)
-        or (stock_industry_map or {}).get(stock_code)
-        or "未分组"
-    ).strip() or "未分组"
+    profile = (stock_industry_map or {}).get(ts_code) or (stock_industry_map or {}).get(stock_code) or {}
+    if isinstance(profile, str):
+        return {"industry": profile, "name": ""}
+    if isinstance(profile, dict):
+        return profile
+    return {}
+
+
+def _stock_for_rank(row, stock_industry_map):
+    profile = _stock_profile_for_rank(row, stock_industry_map)
+    return {
+        "rank": int((row or {}).get("rank_no") or 0),
+        "ts_code": str((row or {}).get("ts_code") or "").strip().upper(),
+        "stock_code": str((row or {}).get("stock_code") or "").strip(),
+        "stock_name": str((row or {}).get("name") or profile.get("name") or "").strip(),
+        "amount_yi": _round_amount((row or {}).get("amount_yi")),
+        "close": _round_amount((row or {}).get("close")),
+        "pct_chg": _round_pct((row or {}).get("pct_chg")),
+    }
+
+
+def _sector_for_rank(row, stock_industry_map):
+    profile = _stock_profile_for_rank(row, stock_industry_map)
+    if isinstance(profile, dict):
+        return str(profile.get("industry") or "未分组").strip() or "未分组"
+    return "未分组"
 
 
 def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry_map):
@@ -53,9 +74,10 @@ def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry
     by_sector = {}
     for row in rank_rows:
         sector = _sector_for_rank(row, stock_industry_map)
-        bucket = by_sector.setdefault(sector, {"sector": sector, "amount_yi": 0.0, "stock_count": 0})
+        bucket = by_sector.setdefault(sector, {"sector": sector, "amount_yi": 0.0, "stock_count": 0, "stocks": []})
         bucket["amount_yi"] += _safe_float(row.get("amount_yi"))
         bucket["stock_count"] += 1
+        bucket["stocks"].append(_stock_for_rank(row, stock_industry_map))
     total = sum(item["amount_yi"] for item in by_sector.values())
     rows = []
     for item in by_sector.values():
@@ -66,6 +88,7 @@ def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry
                 "amount_yi": amount,
                 "share_pct": _round_pct(amount / total * 100.0) if total > 0 else 0.0,
                 "stock_count": item["stock_count"],
+                "stocks": sorted(item["stocks"], key=lambda stock: stock["rank"]),
             }
         )
     rows.sort(key=lambda item: (-item["amount_yi"], item["sector"]))

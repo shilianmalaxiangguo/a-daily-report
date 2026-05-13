@@ -123,12 +123,14 @@ def fetch_stock_industry_map(*, pro=None, ts_module=None):
     for row in _frame_to_records(frame):
         stock_code, _market = _split_ts_code(row.get("ts_code"))
         industry = str(row.get("industry") or "").strip()
+        name = str(row.get("name") or "").strip()
         if not stock_code or not industry:
             continue
         ts_code = str(row.get("ts_code") or "").strip().upper()
-        mapping[stock_code] = industry
+        profile = {"industry": industry, "name": name}
+        mapping[stock_code] = profile
         if ts_code:
-            mapping[ts_code] = industry
+            mapping[ts_code] = profile
     return mapping
 
 

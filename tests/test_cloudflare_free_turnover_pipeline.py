@@ -77,11 +77,28 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             self.assertEqual(payload["latest_sector_breakdown"]["trade_date"], "2026-05-12")
             self.assertEqual(payload["latest_sector_breakdown"]["sector_source"], "tushare.stock_basic.industry")
             self.assertEqual(
-                payload["latest_sector_breakdown"]["rows"][:2],
+                [
+                    {key: row[key] for key in ("sector", "amount_yi", "share_pct", "stock_count")}
+                    for row in payload["latest_sector_breakdown"]["rows"][:2]
+                ],
                 [
                     {"sector": "半导体", "amount_yi": 1365.0, "share_pct": 76.9014, "stock_count": 30},
                     {"sector": "通信设备", "amount_yi": 410.0, "share_pct": 23.0986, "stock_count": 20},
                 ],
+            )
+            semiconductor_stocks = payload["latest_sector_breakdown"]["rows"][0]["stocks"]
+            self.assertEqual(len(semiconductor_stocks), 30)
+            self.assertEqual(
+                semiconductor_stocks[0],
+                {
+                    "rank": 1,
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "stock_name": "测试01",
+                    "amount_yi": 60.0,
+                    "close": 10.5,
+                    "pct_chg": 1.0,
+                },
             )
 
     def test_run_turnover_pipeline_uses_injected_services(self):
