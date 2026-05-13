@@ -9,6 +9,8 @@
 /snapshots/**
 /logs/
 /logs/**
+/.generated/
+/.generated/**
 /.worktrees/
 /.worktrees/**
 
@@ -21,6 +23,8 @@
 /.hermes/
 /venv/
 /venv/**
+/wiki/.obsidian/
+/wiki/.obsidian/**
 .DS_Store
 
 # Python caches
