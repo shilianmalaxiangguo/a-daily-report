@@ -24,10 +24,11 @@ else:
 A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-03-31重写版）
 
 严格按照SKILL.md中声明的数据源优先级调用：
+0. 基础市场事实与 snap-ui public data：Tushare-first；AkShare / iwencai 仅作为 fallback only
 1. 热度前十个股：同花顺个股热榜（首选）→ 腾讯财经热股排行（备用）
 2. 板块热榜：同花顺板块热榜
-3. 指数数据：AkShare 指数日线（首选）→ 同花顺问财/历史K线（兜底）
-4. 两市成交额：AkShare 指数成交额（首选）→ 同花顺问财（兜底）
+3. 指数数据：Tushare index_daily（首选）→ AkShare / 同花顺问财 / 历史K线（兜底）
+4. 两市成交额：Tushare daily amount（首选）→ AkShare / 同花顺问财（兜底）
 5. 涨停跌停数据：akshare涨停跌停池
 6. 行业资金流向：腾讯财经板块资金流向
 7. 板块涨跌幅排行：腾讯行业资金流（首选）→ 同花顺问财/AkShare（兜底）
@@ -38,7 +39,7 @@ A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-
 12. 龙虎榜数据：finshare龙虎榜接口
 
 使用方法：
-    python daily_report_entry_demo.py [YYYY-MM-DD]
+    python3 daily_report_entry_demo.py [YYYY-MM-DD]
     默认获取昨天数据
 """
 
@@ -321,6 +322,11 @@ from input.iwencai_runtime import (
     get_total_turnover_from_iwencai,
     get_turnover_rank_from_iwencai,
     get_wind_a_from_iwencai,
+)
+from input.tushare_runtime import (
+    get_major_indices_from_tushare_first,
+    get_total_turnover_from_tushare_first,
+    get_wind_a_from_tushare_first,
 )
 from input.runtime import run_input_runtime
 from market_data.kline_dates import (

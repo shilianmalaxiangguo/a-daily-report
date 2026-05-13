@@ -282,6 +282,63 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_llm_wiki_contains_tushare_first_data_source_contract(self):
+        skill = self._read("SKILL.md")
+        wiki_readme = self._read("wiki/README.md")
+        data_source_node = self._read("wiki/运行契约/日报数据源契约.md")
+        combined = "\n".join([skill, wiki_readme, data_source_node])
+
+        for required in [
+            "Tushare-first",
+            "快速稳定高效",
+            "fresh daily generation",
+            "snap-ui public data",
+            "akshare",
+            "iwencai",
+            "fallback only",
+            "tests.test_tushare_input_runtime",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_cloudflare_module_mime_reflection_is_recorded(self):
+        reflection = self._read("docs/ops/reflections/2026-05-13-cloudflare-pages-module-mime.md")
+
+        for required in [
+            "Cloudflare Pages",
+            "module MIME",
+            "text/html",
+            "application/javascript",
+            "clean .output and dist",
+            "verify-pages-module-assets",
+            "do not manually redeploy before identifying the bad asset URL",
+        ]:
+            self.assertIn(required, reflection)
+
+    def test_llm_wiki_contains_snap_ui_publish_contract(self):
+        wiki_readme = self._read("wiki/README.md")
+        publish_node = self._read("wiki/运行契约/snap-ui发布契约.md")
+        combined = "\n".join([wiki_readme, publish_node])
+
+        for required in [
+            "Cloudflare Pages",
+            "module MIME",
+            "application/javascript",
+            "verify-pages-module-assets",
+            "clean .output and dist",
+            "develop",
+            "tests/unit/publicStaticDataContract.test.ts",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_daily_report_entry_docstring_keeps_tushare_as_primary_source(self):
+        entry = self._read("scripts/daily_report_entry_demo.py")
+
+        self.assertIn("基础市场事实与 snap-ui public data：Tushare-first", entry)
+        self.assertIn("指数数据：Tushare index_daily（首选）", entry)
+        self.assertIn("两市成交额：Tushare daily amount（首选）", entry)
+        self.assertNotIn("指数数据：AkShare 指数日线（首选）", entry)
+        self.assertNotIn("两市成交额：AkShare 指数成交额（首选）", entry)
+
     def test_scripts_do_not_hardcode_legacy_user_visible_wording(self):
         forbidden = ("门控", "闸门", "开闸", "放行", "执行权", "执行权限", "买入权限")
         allowed_paths = {

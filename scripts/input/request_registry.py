@@ -9,9 +9,9 @@ DEFAULT_INPUT_REQUEST_KEYS = (
 )
 
 _HELPER_NAME_BY_REQUEST_KEY = {
-    "total_turnover": "get_total_turnover_from_iwencai",
-    "major_indices": "get_major_indices_from_iwencai",
-    "wind_a": "get_wind_a_from_iwencai",
+    "total_turnover": "get_total_turnover_from_tushare_first",
+    "major_indices": "get_major_indices_from_tushare_first",
+    "wind_a": "get_wind_a_from_tushare_first",
 }
 
 

@@ -13,17 +13,23 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-05-07")
+        self.assertEqual(context["version"], "2026-05-13")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
         self.assertIn("wiki/交易思想/价格行为与能量框架.md", context["source_paths"])
         self.assertIn("wiki/交易思想/日报术语契约.md", context["source_paths"])
+        self.assertIn("wiki/运行契约/日报数据源契约.md", context["source_paths"])
+        self.assertIn("wiki/运行契约/snap-ui发布契约.md", context["source_paths"])
         self.assertIn("日线结构中枢定环境 -> 60分钟确认 -> 30分钟止损", context["field_mappings"])
         self.assertIn("稳定知识写入 LLM Wiki", context["write_boundaries"])
         self.assertIn("原文不直接进入日报主链", context["report_boundaries"])
         self.assertIn("MACD只能作为辅助", context["report_boundaries"])
         self.assertIn("用户可见输出不用门控/闸门/执行权/开闸/放行，改用资格/条件/可做", context["report_boundaries"])
+        self.assertIn("fresh daily generation uses Tushare-first", context["data_source_policy"])
+        self.assertIn("akshare/iwencai are fallback only", context["data_source_policy"])
+        self.assertIn("snap-ui publish verifies Cloudflare module assets before push", context["publish_policy"])
+        self.assertIn("develop is the Cloudflare Pages branch", context["publish_policy"])
 
     def test_build_llm_wiki_context_keeps_report_digest_short_and_fieldized(self):
         context = build_llm_wiki_context()

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List
 
 
-WIKI_VERSION = "2026-05-07"
+WIKI_VERSION = "2026-05-13"
 WIKI_SOURCE = "llm_wiki"
 WIKI_LANGUAGE = "zh-CN"
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,6 +17,8 @@ SOURCE_PATHS = [
     "wiki/交易思想/缠论体系.md",
     "wiki/交易思想/缠论-日报使用边界.md",
     "wiki/交易思想/日报术语契约.md",
+    "wiki/运行契约/日报数据源契约.md",
+    "wiki/运行契约/snap-ui发布契约.md",
     "wiki/交易思想/缠论-级别联立.md",
     "wiki/资料库/缠论原文索引.md",
 ]
@@ -43,6 +45,18 @@ WRITE_BOUNDARIES = [
     "service/code 写运行逻辑",
 ]
 
+DATA_SOURCE_POLICY = [
+    "fresh daily generation uses Tushare-first",
+    "snap-ui public data uses Tushare-first structured JSON",
+    "akshare/iwencai are fallback only",
+]
+
+PUBLISH_POLICY = [
+    "snap-ui publish verifies Cloudflare module assets before push",
+    "develop is the Cloudflare Pages branch",
+    "public data contract check runs before deploy",
+]
+
 REPORT_DIGEST_TEXT = (
     "LLM Wiki约束：交易思想只取角度与幅度、承接和速度变化；"
     "缠论只取结构字段，按日线结构中枢定环境、60分钟确认、30分钟止损执行；"
@@ -64,6 +78,8 @@ def build_llm_wiki_context() -> Dict[str, object]:
         "field_mappings": list(FIELD_MAPPINGS),
         "report_boundaries": list(REPORT_BOUNDARIES),
         "write_boundaries": list(WRITE_BOUNDARIES),
+        "data_source_policy": list(DATA_SOURCE_POLICY),
+        "publish_policy": list(PUBLISH_POLICY),
         "report_digest_text": REPORT_DIGEST_TEXT,
     }
 
