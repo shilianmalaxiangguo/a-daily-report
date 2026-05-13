@@ -25,6 +25,7 @@
 /venv/**
 /wiki/.obsidian/
 /wiki/.obsidian/**
+/wiki/*.canvas
 .DS_Store
 
 # Python caches
