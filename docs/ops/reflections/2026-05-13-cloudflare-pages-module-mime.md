@@ -22,3 +22,14 @@ Cloudflare Pages 线上页面加载 `_nuxt/*.js` 时返回 `text/html`，浏览�
 3. 对每个引用查响应头。
 4. 如果返回 `text/html`，先比对当前构建产物是否含该文件。
 5. 本地 `npm run build` 必须通过 `verify-pages-module-assets` 后再推送。
+
+## 同日补充：静态数据完整性
+
+同一天的日报索引更新不等于 snap-ui 视觉数据完整。2026-05-13 曾出现 report ref 已经到 5/13，但 `zhongshu-structure` 缺少 5/13 的 sh000001 视觉文件，导致工作台仍显示 5/12 中枢；同时 runtime API 返回 200 空数组会让主线图跳过静态 fallback。
+
+后续发布前必须额外确认：
+
+1. `/data/snap-ui/zhongshu-structure/index.json` 的 latest date 同时包含 report ref 和 sh000001 visual ref。
+2. `/data/snap-ui/structure-lab/<latest>-frozen.json` 的 `meta.date`、个股 3D 最新 K 线、市场光照最新 context 都等于 latest date。
+3. `/data/snap-ui/turnover/top50-share/latest.json` 有 latest row、latest sector breakdown、sector breakdown series，并且单点图也可见。
+4. 主线成交额组件把 200 空数组当作不可用数据，继续读取 public JSON fallback。
