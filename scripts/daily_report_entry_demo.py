@@ -50,6 +50,7 @@ import time
 import signal
 import threading
 from enum import Enum
+from pathlib import Path
 
 # 添加项目脚本路径，用于导入量化交易系统
 sys.path.insert(0, '/Users/chaixixi/WorkBuddy/Claw/scripts')
@@ -193,6 +194,7 @@ from portfolio.position_management_report import (
     analyze_position_management as run_analyze_position_management,
     parse_position_string as run_parse_position_string,
 )
+from publish.snap_ui_public_data import publish_snap_ui_public_data
 from replay.report_replay import replay_from_snapshot as run_replay_from_snapshot
 from market_data.daily_price_runtime import (
     compute_bar_change_pct as run_compute_bar_change_pct,
@@ -3593,6 +3595,7 @@ def main():
     # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
     if data:
         _save_data_snapshot(data, target_date, mode=run_mode)
+        publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
     
     return 0
 
