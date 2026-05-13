@@ -46,16 +46,57 @@ def _sector_for_rank(row, stock_industry_map):
     ).strip() or "未分组"
 
 
-def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry_map):
+def _moneyflow_for_rank(row, stock_moneyflow_map):
+    ts_code = str((row or {}).get("ts_code") or "").strip().upper()
+    stock_code = str((row or {}).get("stock_code") or "").strip()
+    value = (stock_moneyflow_map or {}).get(ts_code)
+    if value is None:
+        value = (stock_moneyflow_map or {}).get(stock_code)
+    if value is None:
+        return None
+    return _round_amount(value)
+
+
+def _name_for_rank(row, stock_name_map):
+    ts_code = str((row or {}).get("ts_code") or "").strip().upper()
+    stock_code = str((row or {}).get("stock_code") or "").strip()
+    value = (stock_name_map or {}).get(ts_code)
+    if value is None:
+        value = (stock_name_map or {}).get(stock_code)
+    return str(value or row.get("name") or stock_code).strip()
+
+
+def _build_sector_breakdown(
+    db,
+    trade_date,
+    *,
+    limit,
+    rank_scope,
+    stock_industry_map,
+    stock_moneyflow_map=None,
+    stock_name_map=None,
+):
     rank_rows = db.query_turnover_rank_rows(trade_date, limit=limit, rank_scope=rank_scope)
     if not rank_rows:
         return None
     by_sector = {}
     for row in rank_rows:
         sector = _sector_for_rank(row, stock_industry_map)
-        bucket = by_sector.setdefault(sector, {"sector": sector, "amount_yi": 0.0, "stock_count": 0})
-        bucket["amount_yi"] += _safe_float(row.get("amount_yi"))
+        amount_yi = _safe_float(row.get("amount_yi"))
+        bucket = by_sector.setdefault(sector, {"sector": sector, "amount_yi": 0.0, "stock_count": 0, "stocks": []})
+        bucket["amount_yi"] += amount_yi
         bucket["stock_count"] += 1
+        bucket["stocks"].append(
+            {
+                "rank": int(row.get("rank_no") or bucket["stock_count"]),
+                "stock_code": str(row.get("stock_code") or "").strip(),
+                "stock_name": _name_for_rank(row, stock_name_map or {}),
+                "amount_yi": _round_amount(amount_yi),
+                "net_inflow_yi": _moneyflow_for_rank(row, stock_moneyflow_map or {}),
+                "close": _round_amount(row.get("close")),
+                "pct_chg": _round_pct(row.get("pct_chg")),
+            }
+        )
     total = sum(item["amount_yi"] for item in by_sector.values())
     rows = []
     for item in by_sector.values():
@@ -66,6 +107,7 @@ def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry
                 "amount_yi": amount,
                 "share_pct": _round_pct(amount / total * 100.0) if total > 0 else 0.0,
                 "stock_count": item["stock_count"],
+                "stocks": sorted(item["stocks"], key=lambda stock: stock["rank"]),
             }
         )
     rows.sort(key=lambda item: (-item["amount_yi"], item["sector"]))
@@ -78,7 +120,7 @@ def _build_sector_breakdown(db, trade_date, *, limit, rank_scope, stock_industry
     }
 
 
-def _with_sector_breakdown(db, payload, *, stock_industry_map=None):
+def _with_sector_breakdown(db, payload, *, stock_industry_map=None, stock_moneyflow_map=None, stock_name_map=None):
     query_window = payload.get("query_window") or {}
     limit = int(query_window.get("rank_limit") or 50)
     rank_scope = query_window.get("rank_scope") or "all_a"
@@ -93,6 +135,8 @@ def _with_sector_breakdown(db, payload, *, stock_industry_map=None):
             limit=limit,
             rank_scope=rank_scope,
             stock_industry_map=stock_industry_map or {},
+            stock_moneyflow_map=stock_moneyflow_map or {},
+            stock_name_map=stock_name_map or {},
         )
         if breakdown:
             series.append(breakdown)
@@ -110,13 +154,28 @@ class CloudflareFreeJsonExportService:
         self.db = db
         self.artifact_root = Path(artifact_root)
 
-    def export_turnover_share_series(self, end_date, *, window_days=30, limit=50, stock_industry_map=None):
+    def export_turnover_share_series(
+        self,
+        end_date,
+        *,
+        window_days=30,
+        limit=50,
+        stock_industry_map=None,
+        stock_moneyflow_map=None,
+        stock_name_map=None,
+    ):
         payload = self.db.query_top_turnover_share_series(
             end_date,
             window_days=window_days,
             limit=limit,
         )
-        payload = _with_sector_breakdown(self.db, payload, stock_industry_map=stock_industry_map)
+        payload = _with_sector_breakdown(
+            self.db,
+            payload,
+            stock_industry_map=stock_industry_map,
+            stock_moneyflow_map=stock_moneyflow_map,
+            stock_name_map=stock_name_map,
+        )
         self.db.save_turnover_share_series(payload)
         r2_key = "exports/turnover/top50-share/latest.json"
         content_hash = _write_json(self.artifact_root / r2_key, payload)

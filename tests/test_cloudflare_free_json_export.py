@@ -52,7 +52,14 @@ class CloudflareFreeJsonExportTest(unittest.TestCase):
             run_id = self._seed_db(db)
             service = CloudflareFreeJsonExportService(db, artifact_root=tmp_path / "r2")
 
-            result = service.export_turnover_share_series("2026-05-12", window_days=30, limit=50)
+            result = service.export_turnover_share_series(
+                "2026-05-12",
+                window_days=30,
+                limit=50,
+                stock_industry_map={"000001": "半导体", "000002": "半导体"},
+                stock_moneyflow_map={"000001": 1.23, "000002": -0.45},
+                stock_name_map={"000001": "平安银行"},
+            )
             artifact_path = tmp_path / "r2" / result["r2_key"]
             payload = json.loads(artifact_path.read_text(encoding="utf-8"))
 
@@ -62,6 +69,18 @@ class CloudflareFreeJsonExportTest(unittest.TestCase):
             self.assertEqual(payload["query_window"]["end_date"], "2026-05-12")
             self.assertEqual(payload["source_run_ids"], [run_id])
             self.assertEqual(len(payload["rows"]), 1)
+            sector_stocks = [
+                stock
+                for sector in payload["latest_sector_breakdown"]["rows"]
+                for stock in sector["stocks"]
+            ]
+            sample_stock = next(stock for stock in sector_stocks if stock["stock_code"] == "000001")
+            self.assertEqual(sample_stock["stock_name"], "平安银行")
+            self.assertEqual(sample_stock["rank"], 1)
+            self.assertAlmostEqual(sample_stock["amount_yi"], 60.0)
+            self.assertAlmostEqual(sample_stock["net_inflow_yi"], 1.23)
+            self.assertAlmostEqual(sample_stock["close"], 10.5)
+            self.assertAlmostEqual(sample_stock["pct_chg"], 1.0)
             artifacts = db.get_report_artifacts()
             self.assertEqual(len(artifacts), 1)
             self.assertEqual(artifacts[0]["variant"], "turnover-top50-share")

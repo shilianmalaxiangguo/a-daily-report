@@ -4,8 +4,11 @@ from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_client import create_tushare_pro_api
 
 __all__ = [
+    "fetch_stock_basic_map",
     "fetch_stock_industry_map",
+    "fetch_stock_name_map",
     "fetch_stock_daily_turnover_records",
+    "fetch_stock_moneyflow_map",
     "fetch_stock_turnover_history",
 ]
 
@@ -112,7 +115,7 @@ def fetch_stock_daily_turnover_records(trade_date, *, pro=None, ts_module=None):
     return records
 
 
-def fetch_stock_industry_map(*, pro=None, ts_module=None):
+def fetch_stock_basic_map(*, pro=None, ts_module=None):
     pro = pro or create_tushare_pro_api(ts_module=ts_module)
     frame = pro.stock_basic(
         exchange="",
@@ -122,13 +125,57 @@ def fetch_stock_industry_map(*, pro=None, ts_module=None):
     mapping = {}
     for row in _frame_to_records(frame):
         stock_code, _market = _split_ts_code(row.get("ts_code"))
-        industry = str(row.get("industry") or "").strip()
-        if not stock_code or not industry:
+        if not stock_code:
+            continue
+        item = {
+            "name": str(row.get("name") or "").strip(),
+            "industry": str(row.get("industry") or "").strip(),
+        }
+        if not item["name"] and not item["industry"]:
             continue
         ts_code = str(row.get("ts_code") or "").strip().upper()
-        mapping[stock_code] = industry
+        mapping[stock_code] = item
         if ts_code:
-            mapping[ts_code] = industry
+            mapping[ts_code] = item
+    return mapping
+
+
+def fetch_stock_industry_map(*, pro=None, ts_module=None):
+    mapping = {}
+    for key, item in fetch_stock_basic_map(pro=pro, ts_module=ts_module).items():
+        industry = str(item.get("industry") or "").strip()
+        if not industry:
+            continue
+        mapping[key] = industry
+    return mapping
+
+
+def fetch_stock_name_map(*, pro=None, ts_module=None):
+    mapping = {}
+    for key, item in fetch_stock_basic_map(pro=pro, ts_module=ts_module).items():
+        name = str(item.get("name") or "").strip()
+        if name:
+            mapping[key] = name
+    return mapping
+
+
+def fetch_stock_moneyflow_map(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return {}
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    frame = pro.moneyflow(trade_date=compact)
+    mapping = {}
+    for row in _frame_to_records(frame):
+        stock_code, _market = _split_ts_code(row.get("ts_code"))
+        net_amount = _safe_float(row.get("net_mf_amount"))
+        if not stock_code:
+            continue
+        net_inflow_yi = round(net_amount / 10000.0, 6)
+        ts_code = str(row.get("ts_code") or "").strip().upper()
+        mapping[stock_code] = net_inflow_yi
+        if ts_code:
+            mapping[ts_code] = net_inflow_yi
     return mapping
 
 

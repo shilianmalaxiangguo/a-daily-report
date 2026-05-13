@@ -414,11 +414,15 @@ class CloudflareFreeDailyDb:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT trade_date, rank_scope, rank_no, ts_code, stock_code, name,
-                       amount_yi, total_amount_yi, amount_share_pct, source_run_id
-                FROM turnover_rank_daily
-                WHERE trade_date = ? AND rank_scope = ? AND rank_no <= ?
-                ORDER BY rank_no ASC
+                SELECT r.trade_date, r.rank_scope, r.rank_no, r.ts_code, r.stock_code,
+                       COALESCE(NULLIF(r.name, ''), q.name) AS name,
+                       r.amount_yi, r.total_amount_yi, r.amount_share_pct, r.source_run_id,
+                       q.close, q.pct_chg
+                FROM turnover_rank_daily r
+                LEFT JOIN stock_daily_quotes_recent q
+                  ON q.trade_date = r.trade_date AND q.ts_code = r.ts_code
+                WHERE r.trade_date = ? AND r.rank_scope = ? AND r.rank_no <= ?
+                ORDER BY r.rank_no ASC
                 """,
                 (trade_date, rank_scope, limit),
             ).fetchall()

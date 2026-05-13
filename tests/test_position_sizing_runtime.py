@@ -10,6 +10,28 @@ from selection.position_sizing_runtime import build_position_sizing_decision
 
 
 class PositionSizingRuntimeTest(unittest.TestCase):
+    def test_daily_report_wrapper_accepts_monthly_context(self):
+        import daily_report_entry_demo as entry
+
+        captured = {}
+
+        def fake_position_sizing_decision(**kwargs):
+            captured["monthly_context"] = kwargs.get("monthly_context")
+            return {"target_position_pct": 0}
+
+        with patch.object(entry, "run_build_position_sizing_decision", side_effect=fake_position_sizing_decision):
+            result = entry._build_position_sizing_decision(
+                final_gate={"can_new_entry": True},
+                state_machine_snapshot={},
+                best_stock={"name": "电力一号", "code": "000001"},
+                mainline_name="电力",
+                target_date="2026-05-13",
+                monthly_context={"month_mode": "ordinary_attack"},
+            )
+
+        self.assertEqual(result["target_position_pct"], 0)
+        self.assertEqual(captured["monthly_context"]["month_mode"], "ordinary_attack")
+
     def test_build_position_sizing_decision_allows_execute_50_for_single_confirmed_target(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True},

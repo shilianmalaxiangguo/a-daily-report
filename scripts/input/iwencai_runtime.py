@@ -584,6 +584,20 @@ def get_total_turnover_from_iwencai(target_date=None, *, api_key=None, urlopen_f
 
 
 def _default_fetch_daily_price_bars(code, start_date, end_date, *, is_index=False):
+    try:
+        from market_data.tushare_service import fetch_daily_price_bars as fetch_tushare_daily_price_bars
+
+        tushare_bars = fetch_tushare_daily_price_bars(
+            code,
+            start_date,
+            end_date,
+            is_index=is_index,
+        )
+        if tushare_bars:
+            return tushare_bars
+    except Exception:
+        pass
+
     from market_data.daily_price_runtime import fetch_daily_price_bars
 
     return fetch_daily_price_bars(

@@ -49,6 +49,18 @@ class _FakePro:
             ]
         )
 
+    def moneyflow(self, **kwargs):
+        return _FakeFrame(
+            [
+                {
+                    "ts_code": f"{index + 1:06d}.SZ",
+                    "trade_date": kwargs["trade_date"],
+                    "net_mf_amount": (index + 1) * 10000,
+                }
+                for index in range(60)
+            ]
+        )
+
 
 class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
     def test_run_turnover_pipeline_builds_db_and_export_artifact(self):
@@ -79,10 +91,29 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             self.assertEqual(
                 payload["latest_sector_breakdown"]["rows"][:2],
                 [
-                    {"sector": "半导体", "amount_yi": 1365.0, "share_pct": 76.9014, "stock_count": 30},
-                    {"sector": "通信设备", "amount_yi": 410.0, "share_pct": 23.0986, "stock_count": 20},
+                    {
+                        "sector": "半导体",
+                        "amount_yi": 1365.0,
+                        "share_pct": 76.9014,
+                        "stock_count": 30,
+                        "stocks": payload["latest_sector_breakdown"]["rows"][0]["stocks"],
+                    },
+                    {
+                        "sector": "通信设备",
+                        "amount_yi": 410.0,
+                        "share_pct": 23.0986,
+                        "stock_count": 20,
+                        "stocks": payload["latest_sector_breakdown"]["rows"][1]["stocks"],
+                    },
                 ],
             )
+            first_stock = payload["latest_sector_breakdown"]["rows"][0]["stocks"][0]
+            self.assertEqual(first_stock["stock_code"], "000001")
+            self.assertEqual(first_stock["stock_name"], "测试01")
+            self.assertEqual(first_stock["rank"], 1)
+            self.assertAlmostEqual(first_stock["net_inflow_yi"], 1.0)
+            self.assertAlmostEqual(first_stock["close"], 10.5)
+            self.assertAlmostEqual(first_stock["pct_chg"], 1.0)
 
     def test_run_turnover_pipeline_uses_injected_services(self):
         from pipelines.cloudflare_free_turnover_pipeline import run_turnover_pipeline
@@ -111,6 +142,12 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
                     }
                 ]
 
+            def get_stock_moneyflow_map(self, trade_date):
+                return {"000001": 1.25}
+
+            def get_stock_name_map(self):
+                return {"000001": "平安银行"}
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             market_data_service = FakeMarketDataService()
@@ -126,6 +163,10 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             self.assertEqual(market_data_service.calls, ["2026-05-12"])
             self.assertEqual(result["quote_count"], 1)
             self.assertEqual(result["rank_count"], 1)
+            payload = json.loads((tmp_path / "r2" / result["export"]["r2_key"]).read_text(encoding="utf-8"))
+            first_stock = payload["latest_sector_breakdown"]["rows"][0]["stocks"][0]
+            self.assertEqual(first_stock["stock_name"], "平安银行")
+            self.assertAlmostEqual(first_stock["net_inflow_yi"], 1.25)
 
 
 if __name__ == "__main__":

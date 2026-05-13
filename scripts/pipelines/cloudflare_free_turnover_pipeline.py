@@ -38,6 +38,10 @@ def run_turnover_pipeline(
     ranks = database_service.rebuild_turnover_rank_daily(trade_date, rank_limit=rank_limit, source_run_id=run_id)
     industry_map_loader = getattr(market_data_service, "get_stock_industry_map", None)
     stock_industry_map = industry_map_loader() if callable(industry_map_loader) else {}
+    name_map_loader = getattr(market_data_service, "get_stock_name_map", None)
+    stock_name_map = name_map_loader() if callable(name_map_loader) else {}
+    moneyflow_loader = getattr(market_data_service, "get_stock_moneyflow_map", None)
+    stock_moneyflow_map = moneyflow_loader(trade_date) if callable(moneyflow_loader) else {}
     export_result = CloudflareFreeJsonExportService(
         database_service,
         artifact_root=artifact_root,
@@ -46,6 +50,8 @@ def run_turnover_pipeline(
         window_days=window_days,
         limit=export_limit,
         stock_industry_map=stock_industry_map,
+        stock_moneyflow_map=stock_moneyflow_map,
+        stock_name_map=stock_name_map,
     )
     return {
         "trade_date": trade_date,

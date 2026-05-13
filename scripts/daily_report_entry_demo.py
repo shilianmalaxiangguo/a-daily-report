@@ -1436,7 +1436,7 @@ def get_trade_permission(
     final_gate=None,
     state_machine_snapshot=None,
 ):
-    """根据环境闸门 + 主线脉冲阶段 + 个股承接，分配执行权限。"""
+    """根据环境条件 + 主线脉冲阶段 + 个股承接，分配交易资格。"""
     weak_to_strong_context = _build_weak_to_strong_context(
         candidate=stock,
         mainline_name=mainline_name,
@@ -1981,6 +1981,7 @@ def _build_position_sizing_decision(
     target_date='',
     special_probe_verdict=None,
     mainline_anchor=None,
+    monthly_context=None,
 ):
     return run_build_position_sizing_decision(
         final_gate=final_gate,
@@ -1992,6 +1993,7 @@ def _build_position_sizing_decision(
         target_date=target_date,
         special_probe_verdict=special_probe_verdict,
         mainline_anchor=mainline_anchor,
+        monthly_context=monthly_context,
         helpers={
             "_build_candidate_feedback_clock": _build_candidate_feedback_clock,
             "_classify_20cm_branch": _classify_20cm_branch,

@@ -19,6 +19,8 @@ from input.iwencai_runtime import (
     get_wind_a_from_iwencai,
 )
 
+import input.iwencai_runtime as iwencai_runtime
+
 
 class _Response:
     def __init__(self, payload):
@@ -58,7 +60,10 @@ class IwencaiRuntimeTest(unittest.TestCase):
             captured["helpers"] = helpers or {}
             return []
 
-        with patch("market_data.daily_price_runtime.fetch_daily_price_bars", side_effect=fake_fetch_daily_price_bars):
+        with patch("market_data.tushare_service.fetch_daily_price_bars", return_value=[]), patch(
+            "market_data.daily_price_runtime.fetch_daily_price_bars",
+            side_effect=fake_fetch_daily_price_bars,
+        ):
             _default_fetch_daily_price_bars("000001", "2026-04-01", "2026-04-22", is_index=True)
 
         self.assertIn("normalize_stock_code", captured["helpers"])
@@ -68,6 +73,27 @@ class IwencaiRuntimeTest(unittest.TestCase):
         self.assertIn("_daily_price_bar_cache", captured["helpers"])
         self.assertIn("_ensure_baostock_login", captured["helpers"])
         self.assertIn("_logout_baostock_silently", captured["helpers"])
+
+    def test_default_fetch_daily_price_bars_prefers_tushare_before_legacy_path(self):
+        tushare_bars = [
+            {"date": "2026-05-12", "open": 3360, "high": 3380, "low": 3350, "close": 3370},
+            {"date": "2026-05-13", "open": 3370, "high": 3395, "low": 3365, "close": 3388},
+        ]
+        legacy_calls = []
+
+        def fail_legacy(*args, **kwargs):
+            legacy_calls.append(args)
+            raise AssertionError("legacy price path should not run when Tushare returns bars")
+
+        with patch("market_data.tushare_service.fetch_daily_price_bars", return_value=tushare_bars) as tushare_mock, patch(
+            "market_data.daily_price_runtime.fetch_daily_price_bars",
+            side_effect=fail_legacy,
+        ):
+            result = _default_fetch_daily_price_bars("000001", "2026-05-01", "2026-05-13", is_index=True)
+
+        self.assertEqual(result, tushare_bars)
+        tushare_mock.assert_called_once_with("000001", "2026-05-01", "2026-05-13", is_index=True)
+        self.assertEqual(legacy_calls, [])
 
     def test_major_indices_falls_back_to_price_bars_when_akshare_and_api_key_missing(self):
         bar_map = {
@@ -275,13 +301,14 @@ class IwencaiRuntimeTest(unittest.TestCase):
         def fail_iwencai(*args, **kwargs):
             raise AssertionError("iwencai should not be called when Eastmoney primary succeeds")
 
-        result = get_turnover_rank_from_iwencai(
-            limit=2,
-            target_date="2026-04-27",
-            eastmoney_urlopen_fn=fake_eastmoney_urlopen,
-            urlopen_fn=fail_iwencai,
-            print_fn=lambda *args, **kwargs: None,
-        )
+        with patch.object(iwencai_runtime, "_is_live_rank_target_date", return_value=True):
+            result = get_turnover_rank_from_iwencai(
+                limit=2,
+                target_date="2026-04-27",
+                eastmoney_urlopen_fn=fake_eastmoney_urlopen,
+                urlopen_fn=fail_iwencai,
+                print_fn=lambda *args, **kwargs: None,
+            )
 
         self.assertEqual([item["name"] for item in result], ["宁德时代", "海光信息"])
         self.assertAlmostEqual(result[0]["turnover"], 145.1432613236)

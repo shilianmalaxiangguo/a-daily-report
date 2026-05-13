@@ -49,7 +49,7 @@ def build_pk_decision_watch_anchor_node(context, node_meta=None, node_lookup=Non
             final_gate=final_gate,
             state_machine_snapshot=market_research_snapshot.get("state_machine", {}),
         )
-        recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4)
+        recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4, fast_fail=True)
         tradability_guard = evaluate_live_tradability(
             crossline_watch_seed,
             target_date,

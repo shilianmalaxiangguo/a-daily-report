@@ -40,7 +40,7 @@ def build_pk_decision_observation_pool_node(context, node_meta=None, node_lookup
                 final_gate=final_gate,
                 state_machine_snapshot=market_research_snapshot.get("state_machine", {}),
             )
-            recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4)
+            recent_bars = fetch_recent_price_bars(code, target_date, lookback_days=4, fast_fail=True)
             tradability_guard = evaluate_live_tradability(stock, target_date, recent_bars=recent_bars)
             signal = (
                 analyze_buy_signal(code, stock.get("name", ""), close_price, safe_float(stock.get("volume")))

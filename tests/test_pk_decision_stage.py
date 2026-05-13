@@ -198,7 +198,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "target_date": "2026-04-22",
                 "run_mode": "replay",
                 "position_level": "三档（进攻档）",
-                "position_reason": "环境放行",
+                "position_reason": "环境允许参与",
                 "display_mvp_mode": False,
                 "high_board_count": 2,
                 "final_gate": {"can_new_entry": True, "final_action": "只做唯一动作"},
@@ -309,6 +309,43 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertNotIn("candidate_count", final_gate)
         self.assertNotIn("unique_target_count", final_gate)
 
+    def test_pk_decision_probe_position_passes_monthly_context_to_position_sizing(self):
+        captured = {}
+
+        def _build_position_sizing_decision(**kwargs):
+            captured["monthly_context"] = kwargs.get("monthly_context")
+            return {
+                "target_position_pct": 0,
+                "candidate_feedback_ready": False,
+                "trigger_text": "月度节奏观察",
+            }
+
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-05-13",
+                "final_gate": {"can_new_entry": True},
+                "mainline_name": "电力",
+                "market_research_snapshot": {"state_machine": {}, "style_switch": {}},
+                "focus_group": [],
+                "keep_group": [],
+                "abnormal_watch_pool_all": [],
+                "best_stock": {"name": "电力一号", "code": "000001"},
+                "watch_anchor": None,
+                "watch_anchor_type": "",
+                "monthly_context": {"month_mode": "ordinary_attack", "month_return_pct": 3.5},
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": _build_position_sizing_decision,
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["probe_position", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["position_decision"]["trigger_text"], "月度节奏观察")
+        self.assertEqual(captured["monthly_context"]["month_mode"], "ordinary_attack")
+        self.assertEqual(captured["monthly_context"]["month_return_pct"], 3.5)
+
     def test_pk_decision_probe_position_deduplicates_same_code_with_partial_metadata(self):
         captured = {}
 
@@ -390,7 +427,7 @@ class PkDecisionStageTest(unittest.TestCase):
             "stop_plan": {"summary": "预估9.50", "note_text": "看9.50"},
             "position_pct": 50,
             "ev_model_source": "历史账本",
-            "permission_label": "执行权",
+            "permission_label": "交易资格",
             "reason": "主线最强",
         }
 
@@ -399,7 +436,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "target_date": "2026-04-22",
                 "run_mode": "replay",
                 "position_level": "三档（进攻档）",
-                "position_reason": "环境放行",
+                "position_reason": "环境允许参与",
                 "step0_prediction": "CLEAR",
                 "step0_prediction_cn": "🟢 明朗",
                 "step0_action": "允许强势跟随",
