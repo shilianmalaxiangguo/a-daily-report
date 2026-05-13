@@ -14,6 +14,10 @@ from domains.calendar_events.infer import normalize_calendar_ai_analysis
 from knowledge.llm_wiki_context import build_llm_wiki_context
 from report.calendar_section_nodes import render_calendar_section
 from report.decision_board_nodes import render_decision_board_section
+from report.decision_ledger import (
+    build_decision_ledger_snapshot as _default_build_decision_ledger_snapshot,
+    write_decision_ledger_artifacts as _default_write_decision_ledger_artifacts,
+)
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
@@ -133,6 +137,57 @@ def _dedupe_repeated_no_trade_lines(lines):
             seen.add(key)
         cleaned.append(text)
     return cleaned
+
+
+def _resolve_decision_ledger_market_branch(market_research_snapshot, execution_stage_context):
+    market_research_snapshot = market_research_snapshot or {}
+    execution_stage_context = execution_stage_context or {}
+    return (
+        market_research_snapshot.get("market_branch")
+        or market_research_snapshot.get("cycle_note")
+        or execution_stage_context.get("step0_reason")
+        or "待验证市场演变"
+    )
+
+
+def _resolve_decision_ledger_sector_relationship(execution_stage_context):
+    execution_stage_context = execution_stage_context or {}
+    summary = execution_stage_context.get("mainline_turnover_summary") or {}
+    return (
+        summary.get("relationship")
+        or summary.get("relationship_label")
+        or execution_stage_context.get("mainline_relationship_state")
+        or "暂未分出"
+    )
+
+
+def _maybe_persist_decision_ledger(
+    *,
+    data,
+    target_date,
+    execution_stage_context,
+    market_research_snapshot=None,
+):
+    if not globals().get("persist_decision_ledger", False):
+        return None
+    execution_stage_context = execution_stage_context or {}
+    extreme_conviction_list = execution_stage_context.get("extreme_conviction_list", []) or []
+    build_snapshot = globals().get("build_decision_ledger_snapshot") or _default_build_decision_ledger_snapshot
+    write_artifacts = globals().get("write_decision_ledger_artifacts") or _default_write_decision_ledger_artifacts
+    snapshot = build_snapshot(
+        trade_date=target_date,
+        extreme_conviction_list=extreme_conviction_list,
+        market_branch=_resolve_decision_ledger_market_branch(market_research_snapshot, execution_stage_context),
+        sector_relationship_state=_resolve_decision_ledger_sector_relationship(execution_stage_context),
+        source_report=(data or {}).get("source_report") or {},
+    )
+    result = write_artifacts(
+        snapshot,
+        root_dir=globals().get("decision_ledger_root_dir", "."),
+    )
+    if isinstance(data, dict):
+        data["decision_ledger_artifacts"] = result
+    return result
 
 
 def _format_appendix_heading_content(content):
@@ -1225,6 +1280,12 @@ def _render_markdown_report_legacy_body(
         'mainline_turnover_summary',
         market_research_snapshot.get('mainline_turnover_summary', {}) or {},
     ) or {}
+    _maybe_persist_decision_ledger(
+        data=data,
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     if market_research_snapshot:
         data["market_research_snapshot"] = market_research_snapshot
     else:

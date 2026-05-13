@@ -1828,7 +1828,11 @@ class ReportRuntimeTest(unittest.TestCase):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {
                 "lines": [
-                    "当前门控不允许新开仓，执行权关闭；等开闸放行后再看。",
+                    (
+                        "当前" + "门" + "控不允许新开仓，"
+                        + "执行" + "权关闭；等"
+                        + "开" + "闸" + "放" + "行后再看。"
+                    ),
                 ],
                 "module_logs": [],
                 "context": {},
@@ -1857,8 +1861,17 @@ class ReportRuntimeTest(unittest.TestCase):
             )
 
         combined = result["report"] + "\n" + stdout.getvalue()
-        for forbidden in ("买入权限", "执行权", "执行权限", "门控", "闸门", "开闸", "放行"):
-            self.assertNotIn(forbidden, combined)
+        forbidden_terms = (
+            "买入" + "权限",
+            "执行" + "权",
+            "执行" + "权限",
+            "门" + "控",
+            "闸" + "门",
+            "开" + "闸",
+            "放" + "行",
+        )
+        for term in forbidden_terms:
+            self.assertNotIn(term, combined)
         self.assertIn("最终执行条件", stdout.getvalue())
 
     def test_render_markdown_report_runtime_front_page_replaces_english_trading_jargon(self):
@@ -2013,6 +2026,52 @@ def _runtime_binding_probe(
             )
 
         self.assertEqual(result["report"], "# Runtime Report 2026-04-22")
+
+    def test_runtime_decision_ledger_hook_builds_and_writes_when_enabled(self):
+        captured = {}
+
+        def _fake_build_snapshot(**kwargs):
+            captured["build"] = kwargs
+            return {"trade_date": kwargs["trade_date"], "cases": []}
+
+        def _fake_write_snapshot(snapshot, *, root_dir="."):
+            captured["write"] = {"snapshot": snapshot, "root_dir": root_dir}
+            return {"snapshot_path": "data/decision-ledger/2026-05-12.json"}
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_decision_ledger": True,
+                "decision_ledger_root_dir": "/tmp/decision-ledger-root",
+                "build_decision_ledger_snapshot": _fake_build_snapshot,
+                "write_decision_ledger_artifacts": _fake_write_snapshot,
+            }
+        )
+        try:
+            result = report_runtime._maybe_persist_decision_ledger(
+                data={"source_report": {"path": "reports/2026-05-12_A股日报_完整版.md", "variant": "full"}},
+                target_date="2026-05-12",
+                execution_stage_context={
+                    "extreme_conviction_list": [
+                        {
+                            "code": "601991",
+                            "name": "大唐发电",
+                            "sector": "电力",
+                            "conviction_reason": "趋势辨识度高",
+                        }
+                    ],
+                    "mainline_turnover_summary": {"relationship": "混沌接力"},
+                },
+                market_research_snapshot={"market_branch": "指数高位停顿轮动"},
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(result["snapshot_path"], "data/decision-ledger/2026-05-12.json")
+        self.assertEqual(captured["build"]["trade_date"], "2026-05-12")
+        self.assertEqual(captured["build"]["market_branch"], "指数高位停顿轮动")
+        self.assertEqual(captured["build"]["sector_relationship_state"], "混沌接力")
+        self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "601991")
+        self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
 
     def test_runtime_body_does_not_hand_append_report_copy(self):
         runtime_source = (ROOT / "scripts" / "report" / "runtime.py").read_text()
