@@ -13,6 +13,7 @@ from input.tushare_runtime import (
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
 )
+from market_data.tushare_service import fetch_daily_price_bars
 
 
 class TushareInputRuntimeTest(unittest.TestCase):
@@ -118,6 +119,35 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["change_pct"], 1.0)
         self.assertEqual(fallback_calls, [])
+
+    def test_tushare_index_daily_uses_csi_code_for_wind_a(self):
+        calls = []
+
+        class FakePro:
+            def index_daily(self, ts_code="", start_date="", end_date=""):
+                calls.append((ts_code, start_date, end_date))
+                return [
+                    {
+                        "trade_date": "20260513",
+                        "open": 6200,
+                        "high": 6280,
+                        "low": 6190,
+                        "close": 6262,
+                        "vol": 100,
+                    }
+                ]
+
+        rows = fetch_daily_price_bars(
+            "000985",
+            "2026-05-13",
+            "2026-05-13",
+            is_index=True,
+            ts_module=object(),
+            pro=FakePro(),
+        )
+
+        self.assertEqual(calls[0][0], "000985.CSI")
+        self.assertEqual(rows[0]["data_source"], "tushare.index_daily")
 
     def test_turnover_rank_uses_tushare_daily_before_legacy_fallback(self):
         fallback_calls = []

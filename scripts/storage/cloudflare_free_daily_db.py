@@ -274,6 +274,21 @@ class CloudflareFreeDailyDb:
             conn.commit()
         return total
 
+    def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+        trade_date = _text(trade_date)
+        market_scope = _text(market_scope) or "all_a"
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT trade_date, market_scope, total_amount_yi, stock_count,
+                       source_policy, source_run_id
+                FROM market_daily_totals
+                WHERE trade_date = ? AND market_scope = ?
+                """,
+                (trade_date, market_scope),
+            ).fetchone()
+        return dict(row) if row else {}
+
     def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
         trade_date = _text(trade_date)
         rank_limit = max(_safe_int(rank_limit, 100), 1)

@@ -42,10 +42,13 @@ class DatabaseServiceTest(unittest.TestCase):
 
             self.assertEqual(service.upsert_stock_daily_quotes_recent(rows, source_run_id=run_id), 1)
             total = service.rebuild_market_daily_total("2026-05-12", source_run_id=run_id)
+            queried_total = service.query_market_daily_total("2026-05-12")
             ranks = service.rebuild_turnover_rank_daily("2026-05-12", rank_limit=50, source_run_id=run_id)
             series = service.query_top_turnover_share_series("2026-05-12", window_days=30, limit=50)
 
             self.assertEqual(total["total_amount_yi"], 2.5)
+            self.assertEqual(queried_total["total_amount_yi"], 2.5)
+            self.assertEqual(queried_total["stock_count"], 1)
             self.assertEqual(len(ranks), 1)
             self.assertEqual(series["rows"][0]["share_pct"], 100.0)
 

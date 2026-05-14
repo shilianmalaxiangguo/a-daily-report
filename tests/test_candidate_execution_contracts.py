@@ -9,6 +9,8 @@ from selection.candidate_execution_contracts import (
     build_candidate_exit_rules,
     build_gem_textbook_front_text,
     build_gem_textbook_next_step_text,
+    build_participation_window_from_candidate,
+    build_participation_window_policy,
     build_philosophy_constraint_text,
     build_weak_to_strong_context,
     candidate_has_formal_abnormal_setup,
@@ -98,6 +100,39 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertIn("不为新故事切掉旧事实", text)
         self.assertIn("外部风险若已被市场脱敏", text)
         self.assertEqual(text.count("不为新故事切掉旧事实"), 1)
+
+    def test_participation_window_policy_returns_auditable_processing_fields(self):
+        policy = build_participation_window_policy(
+            "竞价表态 + 回封参与",
+            "过快封死就沿电力趋势比价链找低位承接",
+        )
+
+        self.assertEqual(policy["required_steps"], ["竞价表态", "开盘前几分钟承接", "回封/打板"])
+        self.assertEqual(policy["fallback_state"], "不满足回到0%")
+        self.assertEqual(policy["participation_basis"]["auction"], "价格位置 / 匹配金额 / 委托稳定 / 板块同步")
+        self.assertEqual(policy["participation_basis"]["first_minutes"], "主动资金继续抬价 / 承接连续")
+        self.assertEqual(policy["participation_basis"]["board_or_reseal"], "大单金额持续进入 / 快速回封 / 封单质量改善")
+        self.assertEqual(policy["participation_basis"]["missed_entry"], "过快封死就沿电力趋势比价链找低位承接")
+
+        ordinary = build_participation_window_policy("60分钟确认")
+
+        self.assertEqual(ordinary["required_steps"], ["主线确认", "承接", "60分钟确认"])
+        self.assertEqual(ordinary["participation_basis"]["structure"], "60分钟确认只服务普通结构，不覆盖强核心快路径")
+
+    def test_participation_window_from_candidate_uses_fast_path_for_core_markers(self):
+        self.assertEqual(
+            build_participation_window_from_candidate({"pattern": "一字板最强"}),
+            "打板/错过",
+        )
+        self.assertEqual(
+            build_participation_window_from_candidate({"core_level": "主线核心"}),
+            "竞价表态 + 回封参与",
+        )
+        self.assertEqual(
+            build_participation_window_from_candidate({"sector": "电力"}, is_mainline=True),
+            "开盘前几分钟 + 60分钟确认",
+        )
+        self.assertEqual(build_participation_window_from_candidate({}), "60分钟确认")
 
 
 if __name__ == "__main__":

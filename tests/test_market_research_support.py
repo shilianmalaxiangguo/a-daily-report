@@ -2,6 +2,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -516,6 +517,98 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["current_sector_turnover_snapshot"]["sector_name"], "通信")
         self.assertEqual(result["mainline_turnover_summary"]["conclusion"], "主线未切换，通信仍是中心")
         self.assertIn("18.1%", result["mainline_turnover_summary"]["data_text"])
+
+    def test_build_market_research_snapshot_support_uses_fact_db_total_when_input_turnover_is_zero(self):
+        support = self._load_module()
+
+        result = support.build_market_research_snapshot(
+            data={
+                "total_turnover": 0.0,
+                "sector_fund_flow": [{"name": "电力", "code": "pt01801161", "cje": 995.13 * 1e4}],
+            },
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            exit_analysis={"overall_level": "黄灯"},
+            observation_snapshot={},
+            target_date="2026-05-13",
+            helpers={
+                "_build_abnormal_projection_summary": lambda pool: {"projection_label": "承接强化"},
+                "_build_market_style_switch_snapshot": lambda target_date, data, observation_snapshot, abnormal_projection: {},
+                "_build_market_state_machine_snapshot": lambda *args, **kwargs: {"leading_line": "电力", "state_code": "expand"},
+                "_build_mainline_rotation_snapshot": lambda **kwargs: {},
+                "_build_abnormal_probe_group": lambda **kwargs: {},
+                "_build_special_probe_verdict": lambda **kwargs: {},
+                "_build_follow_verdict": lambda *args, **kwargs: {"label": "🟢 跟随主线"},
+                "_build_dialectical_decision_snapshot": lambda **kwargs: {},
+                "build_mainline_history_record_runtime": lambda target_date, market_research_snapshot=None: {
+                    "date": target_date,
+                    "primary_mainline": "电力",
+                },
+                "load_recent_mainline_history_runtime": lambda target_date, lookback_days=5: [],
+                "load_recent_sector_turnover_history_runtime": lambda target_date, sector_name, lookback_days=5: [],
+                "get_market_total_turnover_from_fact_db_runtime": lambda target_date, **kwargs: 32642.12,
+            },
+        )
+
+        snapshot = result["current_sector_turnover_snapshot"]
+        row = result["mainline_turnover_summary"]["turnover_share_trend_rows"][0]
+        self.assertEqual(snapshot["total_turnover"], 32642.12)
+        self.assertAlmostEqual(snapshot["turnover_share_pct"], 3.05)
+        self.assertEqual(row["market_turnover"], "32642.12亿")
+        self.assertEqual(row["share"], "3.0%")
+
+    def test_fact_db_runtime_helpers_return_tushare_total_and_rank_rows(self):
+        support = self._load_module()
+        from storage.database_service import DatabaseService
+
+        rows = [
+            {
+                "trade_date": "2026-05-13",
+                "ts_code": "601318.SH",
+                "stock_code": "601318",
+                "market": "SH",
+                "name": "中国平安",
+                "close": 50,
+                "pct_chg": 1.3,
+                "amount_yi": 210.5,
+            },
+            {
+                "trade_date": "2026-05-13",
+                "ts_code": "300750.SZ",
+                "stock_code": "300750",
+                "market": "SZ",
+                "name": "宁德时代",
+                "close": 200,
+                "pct_chg": -0.4,
+                "amount_yi": 98.7,
+            },
+        ]
+
+        with TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "daily.db"
+            service = DatabaseService.sqlite_d1_compatible(db_path)
+            run_id = service.save_provider_source_run(
+                {
+                    "trade_date": "2026-05-13",
+                    "provider": "tushare",
+                    "endpoint": "daily",
+                    "status": "success",
+                    "row_count": 2,
+                }
+            )
+            service.upsert_stock_daily_quotes_recent(rows, source_run_id=run_id)
+            service.rebuild_market_daily_total("2026-05-13", source_run_id=run_id)
+            service.rebuild_turnover_rank_daily("2026-05-13", rank_limit=50, source_run_id=run_id)
+
+            total = support.get_market_daily_total_from_fact_db_runtime("2026-05-13", db_path=db_path)
+            rank_rows = support.get_turnover_rank_from_fact_db_runtime("2026-05-13", limit=50, db_path=db_path)
+
+        self.assertEqual(total["total_amount_yi"], 309.2)
+        self.assertEqual(total["stock_count"], 2)
+        self.assertEqual([item["code"] for item in rank_rows], ["601318", "300750"])
+        self.assertEqual(rank_rows[0]["data_source"], "tushare.daily")
+        self.assertEqual(rank_rows[0]["sector"], "未知")
+        self.assertEqual(rank_rows[1]["change_pct"], -0.4)
 
     def test_build_market_research_context_bundle_support_passes_nested_support_helpers(self):
         support = self._load_module()

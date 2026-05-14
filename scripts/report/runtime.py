@@ -478,16 +478,60 @@ def _derive_appendix_pivot_mainline_history(
     return list(cycle_layer.get("pivot_mainline_rows") or [])
 
 
+def _appendix_share_number(value):
+    if value in (None, ""):
+        return 0.0
+    text = str(value).strip().replace("%", "")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _should_replace_appendix_turnover_share(existing_item, derived_item):
+    existing_share = _appendix_share_number((existing_item or {}).get("turnover_share_pct"))
+    derived_share = _appendix_share_number((derived_item or {}).get("turnover_share_pct"))
+    if derived_share <= 0:
+        return False
+    return existing_share <= 0
+
+
+def _merge_turnover_share_history(existing_items, derived_items):
+    merged = list(existing_items or [])
+    index_by_date = {
+        str((item or {}).get("date") or "").strip(): idx
+        for idx, item in enumerate(merged)
+        if isinstance(item, dict) and str((item or {}).get("date") or "").strip()
+    }
+    for item in derived_items or []:
+        if not isinstance(item, dict):
+            continue
+        item_date = str(item.get("date") or "").strip()
+        if item_date and item_date in index_by_date:
+            existing_idx = index_by_date[item_date]
+            if _should_replace_appendix_turnover_share(merged[existing_idx], item):
+                merged[existing_idx] = dict(item)
+            continue
+        merged.append(item)
+        if item_date:
+            index_by_date[item_date] = len(merged) - 1
+    return merged
+
+
 def _merge_appendix_b_payload(existing_appendix_b, derived_appendix_b):
     if not existing_appendix_b:
         return derived_appendix_b or {}
     if not isinstance(existing_appendix_b, dict):
         return derived_appendix_b or {}
     merged = dict(existing_appendix_b)
+    if (derived_appendix_b or {}).get("turnover_share_history"):
+        merged["turnover_share_history"] = _merge_turnover_share_history(
+            merged.get("turnover_share_history") or [],
+            (derived_appendix_b or {}).get("turnover_share_history") or [],
+        )
     for key in (
         "historical_mainline_pool",
         "mainline_switch_log",
-        "turnover_share_history",
         "structure_mainline_records",
     ):
         if not merged.get(key) and (derived_appendix_b or {}).get(key):

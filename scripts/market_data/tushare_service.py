@@ -54,7 +54,10 @@ def normalize_ts_code(security_code, *, is_index=False):
         return ""
     code = code.zfill(6)
     if is_index:
-        market = "SZ" if code.startswith("399") else "SH"
+        if code == "000985":
+            market = "CSI"
+        else:
+            market = "SZ" if code.startswith("399") else "SH"
     elif code.startswith(("8", "4", "9")):
         market = "BJ"
     elif code.startswith(("6", "5")):

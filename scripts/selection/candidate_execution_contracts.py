@@ -132,6 +132,8 @@ __all__ = [
     "build_gem_textbook_front_text",
     "build_gem_textbook_next_step_text",
     "build_gem_textbook_reference_text",
+    "build_participation_window_from_candidate",
+    "build_participation_window_policy",
     "build_philosophy_constraint_text",
     "build_weak_to_strong_context",
     "candidate_has_formal_abnormal_setup",
@@ -430,6 +432,128 @@ def map_setup_id_to_signal_type(setup_id=""):
     if setup_id in ("burst_hold", "burst_digest", "fresh_abnormal_probe"):
         return "breakout"
     return ""
+
+
+def build_participation_window_policy(window="", missed_action=""):
+    window = str(window or "").strip()
+    missed_action = str(missed_action or "").strip()
+    if "打板/错过" in window:
+        window_type = "board_or_miss"
+        auction_required = True
+        first_minutes_required = True
+        board_or_reseal_required = True
+        ordinary_structure_confirm_allowed = False
+        required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
+        fallback_state = "不满足回到0%"
+        participation_basis = {
+            "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
+            "first_minutes": "主动资金继续抬价 / 承接连续",
+            "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
+            "missed_entry": missed_action,
+        }
+    elif "竞价" in window or "回封" in window:
+        window_type = "auction_reseal"
+        auction_required = True
+        first_minutes_required = True
+        board_or_reseal_required = True
+        ordinary_structure_confirm_allowed = False
+        required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
+        fallback_state = "不满足回到0%"
+        participation_basis = {
+            "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
+            "first_minutes": "主动资金继续抬价 / 承接连续",
+            "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
+            "missed_entry": missed_action,
+        }
+    elif "开盘前几分钟" in window and "60分钟确认" in window:
+        window_type = "opening_structure_confirm"
+        auction_required = False
+        first_minutes_required = True
+        board_or_reseal_required = False
+        ordinary_structure_confirm_allowed = True
+        required_steps = ["开盘前几分钟承接", "主线确认", "60分钟确认"]
+        fallback_state = "不满足回到0%"
+        participation_basis = {
+            "first_minutes": "主动资金继续抬价 / 承接连续",
+            "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
+            "missed_entry": missed_action,
+        }
+    else:
+        window_type = "structure_confirm"
+        auction_required = False
+        first_minutes_required = False
+        board_or_reseal_required = False
+        ordinary_structure_confirm_allowed = True
+        required_steps = ["主线确认", "承接", "60分钟确认"]
+        fallback_state = "不满足回到0%"
+        participation_basis = {
+            "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
+            "missed_entry": missed_action,
+        }
+
+    return {
+        "participation_window_type": window_type,
+        "auction_required": auction_required,
+        "first_minutes_required": first_minutes_required,
+        "board_or_reseal_required": board_or_reseal_required,
+        "ordinary_structure_confirm_allowed": ordinary_structure_confirm_allowed,
+        "missed_entry_policy": missed_action,
+        "required_steps": required_steps,
+        "fallback_state": fallback_state,
+        "participation_basis": participation_basis,
+    }
+
+
+def build_participation_window_from_candidate(candidate=None, *, is_anchor=False, is_mainline=False):
+    candidate = candidate or {}
+
+    explicit = str(
+        candidate.get("participation_window")
+        or candidate.get("entry_window")
+        or candidate.get("execution_window")
+        or candidate.get("window")
+        or candidate.get("conviction_window")
+        or ""
+    ).strip()
+    if explicit:
+        return explicit
+
+    pattern = str(candidate.get("pattern", "") or "")
+    core_level = str(candidate.get("core_level", "") or "")
+    reason_text = " / ".join(
+        str(candidate.get(key, "") or "")
+        for key in (
+            "conviction_reason",
+            "stock_setup",
+            "setup",
+            "reason",
+            "conviction_rule",
+            "role",
+        )
+    )
+    combined = f"{pattern} / {core_level} / {reason_text}"
+
+    if "一字" in combined:
+        return "打板/错过"
+
+    fast_markers = (
+        "T字",
+        "涨停",
+        "连板",
+        "主线核心",
+        "主线内核",
+        "板块锚定龙",
+        "趋势比价链锚定龙",
+        "首波先锋",
+        "分歧转一致",
+        "资金顶出辨识度",
+    )
+    if is_anchor or any(marker in combined for marker in fast_markers):
+        return "竞价表态 + 回封参与"
+
+    if is_mainline:
+        return "开盘前几分钟 + 60分钟确认"
+    return "60分钟确认"
 
 
 def format_holding_window_text(min_days, max_days):

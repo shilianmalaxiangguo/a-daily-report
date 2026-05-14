@@ -91,6 +91,19 @@ def _write_tasks(path, recorder):
     return path
 
 
+def _resolve_public_latest_date(snap_ui_dir, fallback_date):
+    index_path = Path(snap_ui_dir) / "public" / "data" / "daily-reports" / "index.json"
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except Exception:
+        return str(fallback_date)
+    reports = payload.get("reports") if isinstance(payload, dict) else []
+    if not isinstance(reports, list) or not reports:
+        return str(fallback_date)
+    latest = reports[0].get("date") if isinstance(reports[0], dict) else ""
+    return str(latest or fallback_date)
+
+
 def _default_static_export_runner(root, snap_ui_dir):
     command = ["npm", "--prefix", str(snap_ui_dir), "run", "export:static-data"]
     completed = subprocess.run(command, cwd=str(root), check=True, capture_output=True, text=True)
@@ -201,8 +214,9 @@ def publish_snap_ui_public_data(
 
     try:
         recorder.mark_done("resolve_target_date")
+        public_latest_date = _resolve_public_latest_date(snap_ui_dir, target_date)
         turnover_result = turnover_pipeline_runner(
-            target_date,
+            public_latest_date,
             db_path=db_path,
             artifact_root=artifact_root,
         )
@@ -212,7 +226,11 @@ def publish_snap_ui_public_data(
         static_export_result = static_export_runner(root, snap_ui_dir)
         recorder.mark_done("export_static_data")
 
-        contract_check_result = contract_check_runner(root, snap_ui_dir, target_date)
+        contract_check_result = contract_check_runner(
+            root,
+            snap_ui_dir,
+            public_latest_date,
+        )
         recorder.mark_done("contract_check")
 
         manifest = _build_manifest(

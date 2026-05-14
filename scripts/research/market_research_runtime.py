@@ -13,7 +13,58 @@ def _safe_float(value, default=0.0):
 def _has_resolved_mainline_turnover_summary(summary):
     if not isinstance(summary, dict):
         return False
-    return bool(str(summary.get("current_mainline") or "").strip())
+    if not str(summary.get("current_mainline") or "").strip():
+        return False
+    for row in summary.get("turnover_share_trend_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        has_mainline_turnover = str(row.get("mainline_turnover") or "").strip() not in {"", "-", "数据暂缺"}
+        missing_market_turnover = str(row.get("market_turnover") or "").strip() in {"", "-", "数据暂缺"}
+        if has_mainline_turnover and missing_market_turnover:
+            return False
+    return True
+
+
+def _resolve_effective_total_turnover(
+    data,
+    observation_snapshot,
+    target_date,
+    *,
+    get_market_total_turnover_from_fact_db=None,
+):
+    data = data or {}
+    observation_snapshot = observation_snapshot or {}
+    for value in (
+        data.get("total_turnover"),
+        observation_snapshot.get("turnover"),
+        observation_snapshot.get("total_turnover"),
+    ):
+        total_turnover = _safe_float(value)
+        if total_turnover > 0:
+            return total_turnover
+
+    if callable(get_market_total_turnover_from_fact_db):
+        total_turnover = _safe_float(get_market_total_turnover_from_fact_db(target_date))
+        if total_turnover > 0:
+            return total_turnover
+
+    return 0.0
+
+
+def _fill_sector_snapshot_total_turnover(snapshot, total_turnover):
+    if not isinstance(snapshot, dict):
+        return snapshot or {}
+    if not snapshot:
+        return {}
+    total_turnover = round(_safe_float(total_turnover), 2)
+    if total_turnover <= 0 or _safe_float(snapshot.get("total_turnover")) > 0:
+        return snapshot
+    snapshot = dict(snapshot)
+    sector_turnover = _safe_float(snapshot.get("sector_turnover"))
+    snapshot["total_turnover"] = total_turnover
+    if sector_turnover > 0:
+        snapshot["turnover_share_pct"] = round(sector_turnover / total_turnover * 100, 2)
+    return snapshot
 
 
 def _derive_lhb_capital_intent(data, mainline_name=""):
@@ -107,6 +158,7 @@ def build_market_research_snapshot_contract(
     build_mainline_turnover_summary=None,
     build_mainline_history_record=None,
     load_recent_mainline_history=None,
+    get_market_total_turnover_from_fact_db=None,
     get_sector_turnover_snapshot_from_tencent_fund_flow=None,
     get_sector_turnover_snapshot_from_ths=None,
     load_recent_sector_turnover_history=None,
@@ -201,9 +253,16 @@ def build_market_research_snapshot_contract(
             target_date,
         )
 
-    total_turnover = data.get("total_turnover")
-    if total_turnover in (None, ""):
-        total_turnover = observation_snapshot.get("turnover", 0.0)
+    total_turnover = _resolve_effective_total_turnover(
+        data,
+        observation_snapshot,
+        target_date,
+        get_market_total_turnover_from_fact_db=get_market_total_turnover_from_fact_db,
+    )
+    current_sector_turnover_snapshot = _fill_sector_snapshot_total_turnover(
+        current_sector_turnover_snapshot,
+        total_turnover,
+    )
 
     if not current_sector_turnover_snapshot and current_mainline_name and callable(get_sector_turnover_snapshot_from_tencent_fund_flow):
         current_sector_turnover_snapshot = get_sector_turnover_snapshot_from_tencent_fund_flow(

@@ -14,7 +14,18 @@ def _load_default_mainline_helpers():
     )
     from domains.market_state.mainline_turnover_summary_runtime import build_mainline_turnover_summary
     from domains.market_state.sector_turnover_history_runtime import load_recent_sector_turnover_history
+    from input.tushare_runtime import get_wind_a_from_tushare_first
     from input.ths_sector_runtime import get_sector_turnover_snapshot_from_ths
+    from research.market_research_runtime import (
+        _fill_sector_snapshot_total_turnover,
+        _has_resolved_mainline_turnover_summary,
+        _resolve_effective_total_turnover,
+    )
+    from research.market_research_support import (
+        get_market_daily_total_from_fact_db_runtime,
+        get_market_total_turnover_from_fact_db_runtime,
+        get_turnover_rank_from_fact_db_runtime,
+    )
 
     return {
         "build_mainline_history_record": build_mainline_history_record,
@@ -22,6 +33,13 @@ def _load_default_mainline_helpers():
         "get_sector_turnover_snapshot_from_ths": get_sector_turnover_snapshot_from_ths,
         "load_recent_sector_turnover_history": load_recent_sector_turnover_history,
         "build_mainline_turnover_summary": build_mainline_turnover_summary,
+        "fill_sector_snapshot_total_turnover": _fill_sector_snapshot_total_turnover,
+        "has_resolved_mainline_turnover_summary": _has_resolved_mainline_turnover_summary,
+        "resolve_effective_total_turnover": _resolve_effective_total_turnover,
+        "get_market_daily_total_from_fact_db": get_market_daily_total_from_fact_db_runtime,
+        "get_market_total_turnover_from_fact_db": get_market_total_turnover_from_fact_db_runtime,
+        "get_turnover_rank_from_fact_db": get_turnover_rank_from_fact_db_runtime,
+        "get_wind_a_from_tushare": get_wind_a_from_tushare_first,
     }
 
 
@@ -63,6 +81,15 @@ def _append_log(logs, step, status, message, **details):
             "details": details,
         }
     )
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def _hoist_report_analysis_atoms(snapshot_data):
@@ -133,10 +160,26 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
             target_date,
         )
 
-    total_turnover = snapshot_data.get("total_turnover")
-    if total_turnover in (None, ""):
-        observation = market_research_snapshot.get("observation", {}) if isinstance(market_research_snapshot, dict) else {}
-        total_turnover = observation.get("turnover", 0.0) if isinstance(observation, dict) else 0.0
+    observation = market_research_snapshot.get("observation", {}) if isinstance(market_research_snapshot, dict) else {}
+    if callable(helpers.get("resolve_effective_total_turnover")):
+        total_turnover = helpers["resolve_effective_total_turnover"](
+            snapshot_data,
+            observation,
+            target_date,
+            get_market_total_turnover_from_fact_db=helpers.get("get_market_total_turnover_from_fact_db"),
+        )
+    else:
+        total_turnover = snapshot_data.get("total_turnover")
+        if total_turnover in (None, ""):
+            total_turnover = observation.get("turnover", 0.0) if isinstance(observation, dict) else 0.0
+    if _safe_float(total_turnover) > 0:
+        snapshot_data["total_turnover"] = round(_safe_float(total_turnover), 2)
+
+    if callable(helpers.get("fill_sector_snapshot_total_turnover")):
+        snapshot_data["current_sector_turnover_snapshot"] = helpers["fill_sector_snapshot_total_turnover"](
+            snapshot_data.get("current_sector_turnover_snapshot") or {},
+            total_turnover,
+        )
 
     if (
         not snapshot_data.get("current_sector_turnover_snapshot")
@@ -160,7 +203,13 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
             lookback_days=5,
         )
 
-    if not snapshot_data.get("mainline_turnover_summary") and callable(helpers.get("build_mainline_turnover_summary")):
+    summary_resolved = True
+    if callable(helpers.get("has_resolved_mainline_turnover_summary")):
+        summary_resolved = helpers["has_resolved_mainline_turnover_summary"](
+            snapshot_data.get("mainline_turnover_summary")
+        )
+
+    if not summary_resolved and callable(helpers.get("build_mainline_turnover_summary")):
         snapshot_data["mainline_turnover_summary"] = helpers["build_mainline_turnover_summary"](
             target_date=target_date,
             current_mainline_history_record=snapshot_data.get("current_mainline_history_record") or {},
@@ -200,6 +249,154 @@ def _mark_replayed_step_success(snapshot_data, step_name, safe_float):
     snapshot_data["timer_summary"] = timer_summary
 
 
+def _replace_request_module_log(snapshot_data, *, module, step, status, message, **details):
+    logs = snapshot_data.setdefault("module_logs", [])
+    replacement = {
+        "module": module,
+        "step": step,
+        "status": status,
+        "message": message,
+        "details": details,
+    }
+    replaced = False
+    normalized_logs = []
+    for item in logs or []:
+        if isinstance(item, dict) and item.get("step") == step:
+            if not replaced:
+                normalized_logs.append(replacement)
+                replaced = True
+            continue
+        normalized_logs.append(item)
+    if not replaced:
+        normalized_logs.append(replacement)
+    snapshot_data["module_logs"] = normalized_logs
+    return replacement
+
+
+def _refresh_request_diagnostics(snapshot_data):
+    try:
+        from input.request_diagnostics_runtime import build_request_diagnostics
+    except Exception:
+        return
+    snapshot_data["request_diagnostics"] = build_request_diagnostics(
+        snapshot_data.get("module_logs") or [],
+        data_status=snapshot_data.get("data_status") or {},
+        step_status=snapshot_data.get("step_status") or {},
+    )
+
+
+def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    helpers = helpers or {}
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    changed = False
+
+    total_row = {}
+    get_total_row = helpers.get("get_market_daily_total_from_fact_db")
+    if callable(get_total_row):
+        total_row = get_total_row(target_date) or {}
+
+    total_turnover = safe_float((total_row or {}).get("total_amount_yi"))
+    if total_turnover <= 0 and callable(helpers.get("get_market_total_turnover_from_fact_db")):
+        total_turnover = safe_float(helpers["get_market_total_turnover_from_fact_db"](target_date))
+
+    if total_turnover > 0 and (
+        data_status.get("两市成交额") is False
+        or safe_float(snapshot_data.get("total_turnover")) <= 0
+        or str(_provider_from_snapshot_log(snapshot_data, "request.total_turnover")).startswith(("akshare.", "eastmoney."))
+    ):
+        total_turnover = round(total_turnover, 2)
+        snapshot_data["total_turnover"] = total_turnover
+        turnover_data = dict(snapshot_data.get("turnover_data") or {})
+        turnover_data["total_turnover_yi"] = total_turnover
+        turnover_data["date"] = target_date
+        snapshot_data["turnover_data"] = turnover_data
+        data_status["两市成交额"] = True
+        step_status["两市成交额获取"] = True
+        _mark_replayed_step_success(snapshot_data, "两市成交额获取", safe_float)
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_state.request",
+            step="request.total_turnover",
+            status="success",
+            message="已从事实库回补两市成交额",
+            provider="tushare.daily",
+            target_keys=["total_turnover", "turnover_data"],
+            total_turnover=total_turnover,
+            row_count=(total_row or {}).get("stock_count"),
+            source_run_id=(total_row or {}).get("source_run_id"),
+        )
+        changed = True
+
+    get_rank_rows = helpers.get("get_turnover_rank_from_fact_db")
+    rank_rows = get_rank_rows(target_date, limit=50) if callable(get_rank_rows) else []
+    if rank_rows and (
+        data_status.get("成交额排名") is False
+        or not snapshot_data.get("turnover_rank")
+        or not str(((snapshot_data.get("turnover_rank") or [{}])[0] or {}).get("data_source") or "").startswith("tushare.")
+    ):
+        snapshot_data["turnover_rank"] = list(rank_rows)
+        snapshot_data["turnover_over_100b"] = [
+            item for item in rank_rows if safe_float((item or {}).get("turnover")) > 100
+        ]
+        data_status["成交额排名"] = True
+        step_status["成交额排名获取"] = True
+        _mark_replayed_step_success(snapshot_data, "成交额排名获取", safe_float)
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.turnover_rank",
+            status="success",
+            message="已从事实库回补成交额排行",
+            provider="tushare.daily",
+            target_keys=["turnover_rank", "turnover_over_100b"],
+            row_count=len(rank_rows),
+            turnover_count=len(rank_rows),
+            over_100b_count=len(snapshot_data.get("turnover_over_100b") or []),
+        )
+        changed = True
+
+    get_wind_a = helpers.get("get_wind_a_from_tushare")
+    wind_a = get_wind_a(target_date) if callable(get_wind_a) else {}
+    wind_a_provider = str((wind_a or {}).get("data_source") or "").strip()
+    wind_a_price = safe_float((wind_a or {}).get("price", (wind_a or {}).get("点位", 0)))
+    if wind_a_price > 0 and wind_a_provider.startswith("tushare.") and (
+        data_status.get("中证全指") is False
+        or safe_float((snapshot_data.get("wind_a_alternative") or {}).get("price", (snapshot_data.get("wind_a_alternative") or {}).get("点位", 0))) <= 0
+        or not str(_provider_from_snapshot_log(snapshot_data, "request.wind_a")).startswith("tushare.")
+    ):
+        snapshot_data["wind_a_alternative"] = dict(wind_a or {})
+        data_status["中证全指"] = True
+        step_status["中证全指获取"] = True
+        _mark_replayed_step_success(snapshot_data, "中证全指获取", safe_float)
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_state.request",
+            step="request.wind_a",
+            status="success",
+            message="已从Tushare回补中证全指",
+            provider=wind_a_provider,
+            target_keys=["wind_a_alternative"],
+            price=wind_a_price,
+            change_pct=(wind_a or {}).get("change_pct", (wind_a or {}).get("涨跌幅", 0)),
+        )
+        changed = True
+
+    if changed:
+        _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
+def _provider_from_snapshot_log(snapshot_data, step):
+    for item in snapshot_data.get("module_logs") or []:
+        if not isinstance(item, dict) or item.get("step") != step:
+            continue
+        return (item.get("details") or {}).get("provider") or ""
+    return ""
+
+
 def build_replay_snapshot_contract(
     target_date,
     refresh_sources=None,
@@ -233,7 +430,14 @@ def build_replay_snapshot_contract(
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
     snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
-    snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=helpers)
+    runtime_helpers = {**_load_default_mainline_helpers(), **(helpers or {})}
+    snapshot_data = _ensure_replay_critical_tushare_facts(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=runtime_helpers)
 
     if "calendar_events" in refresh_sources:
         print_fn("   🔄 重新拉取财联社预期日历...")

@@ -26,6 +26,7 @@ from research.market_research_runtime import (
     build_market_research_snapshot_contract,
     derive_step0_follow_plan_contract,
 )
+from storage.database_service import DatabaseService
 
 __all__ = [
     "build_abnormal_projection_summary",
@@ -37,6 +38,9 @@ __all__ = [
     "build_market_observation_snapshot",
     "build_market_research_snapshot",
     "derive_step0_follow_plan",
+    "get_market_daily_total_from_fact_db_runtime",
+    "get_market_total_turnover_from_fact_db_runtime",
+    "get_turnover_rank_from_fact_db_runtime",
     "render_market_research_snapshot_section",
     "render_step0_follow_section",
 ]
@@ -55,6 +59,51 @@ def _safe_float(value, default=0.0):
 
 def sector_name_matches(sector_a, sector_b):
     return analysis_utils.sector_name_matches(sector_a, sector_b)
+
+
+def get_market_total_turnover_from_fact_db_runtime(target_date, *, market_scope="all_a", db_path=None):
+    row = get_market_daily_total_from_fact_db_runtime(target_date, market_scope=market_scope, db_path=db_path)
+    return _safe_float((row or {}).get("total_amount_yi"))
+
+
+def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="all_a", db_path=None):
+    try:
+        service = DatabaseService.sqlite_d1_compatible(db_path)
+        row = service.query_market_daily_total(target_date, market_scope=market_scope)
+    except Exception:
+        return {}
+    return dict(row or {})
+
+
+def get_turnover_rank_from_fact_db_runtime(target_date, *, limit=50, rank_scope="all_a", db_path=None):
+    try:
+        service = DatabaseService.sqlite_d1_compatible(db_path)
+        rows = service.query_turnover_rank_rows(target_date, limit=limit, rank_scope=rank_scope)
+    except Exception:
+        return []
+
+    ranked = []
+    for index, row in enumerate(rows or [], start=1):
+        row = row or {}
+        stock_code = str(row.get("stock_code") or "").strip()
+        ts_code = str(row.get("ts_code") or "").strip().upper()
+        code = stock_code or (ts_code.split(".", 1)[0] if "." in ts_code else ts_code)
+        turnover = _safe_float(row.get("amount_yi"))
+        if not code or turnover <= 0:
+            continue
+        ranked.append(
+            {
+                "rank": int(row.get("rank_no") or index),
+                "code": code,
+                "name": str(row.get("name") or code).strip(),
+                "turnover": turnover,
+                "change_pct": _safe_float(row.get("pct_chg")),
+                "sector": str(row.get("sector") or "未知").strip() or "未知",
+                "data_source": "tushare.daily",
+                "trade_date": row.get("trade_date") or target_date,
+            }
+        )
+    return ranked
 
 
 def _install_runtime_bindings(bindings):
@@ -366,6 +415,7 @@ def _build_market_research_snapshot_legacy_body(
         build_mainline_turnover_summary=build_mainline_turnover_summary_runtime,
         build_mainline_history_record=build_mainline_history_record_runtime,
         load_recent_mainline_history=load_recent_mainline_history_runtime,
+        get_market_total_turnover_from_fact_db=get_market_total_turnover_from_fact_db_runtime,
         get_sector_turnover_snapshot_from_tencent_fund_flow=get_sector_turnover_snapshot_from_tencent_fund_flow_runtime,
         get_sector_turnover_snapshot_from_ths=get_sector_turnover_snapshot_from_ths_runtime,
         load_recent_sector_turnover_history=load_recent_sector_turnover_history_runtime,

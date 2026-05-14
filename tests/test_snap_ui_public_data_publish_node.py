@@ -68,6 +68,50 @@ class SnapUiPublicDataPublishNodeTest(unittest.TestCase):
             self.assertEqual(Path(calls[0][2]["db_path"]), root / "data" / "cloudflare_free_daily.db")
             self.assertEqual(calls[-1][0], "contract")
 
+    def test_publish_snap_ui_public_data_checks_current_public_latest_when_target_is_historical(self):
+        from publish.snap_ui_public_data import publish_snap_ui_public_data
+
+        calls = []
+
+        def fake_turnover_pipeline(trade_date, **kwargs):
+            calls.append(("turnover", trade_date))
+            return {
+                "trade_date": trade_date,
+                "quote_count": 5490,
+                "rank_count": 100,
+                "export": {"r2_key": "exports/turnover/top50-share/latest.json"},
+            }
+
+        def fake_static_export(root, snap_ui_dir):
+            calls.append(("static_export",))
+            return {"command": ["npm", "run", "export:static-data"], "returncode": 0}
+
+        def fake_contract_check(root, snap_ui_dir, expected_latest_date):
+            calls.append(("contract", expected_latest_date))
+            return {"command": ["npm", "test"], "returncode": 0}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            public_data_dir = root / "snap-ui" / "public" / "data" / "daily-reports"
+            public_data_dir.mkdir(parents=True)
+            (public_data_dir / "index.json").write_text(
+                json.dumps({"reports": [{"date": "2026-05-14"}, {"date": "2026-05-13"}]}),
+                encoding="utf-8",
+            )
+
+            publish_snap_ui_public_data(
+                "2026-05-13",
+                root=root,
+                turnover_pipeline_runner=fake_turnover_pipeline,
+                static_export_runner=fake_static_export,
+                contract_check_runner=fake_contract_check,
+            )
+
+        self.assertIn(("turnover", "2026-05-14"), calls)
+        self.assertNotIn(("turnover", "2026-05-13"), calls)
+        self.assertIn(("contract", "2026-05-14"), calls)
+        self.assertNotIn(("contract", "2026-05-13"), calls)
+
     def test_publish_snap_ui_public_data_records_failure_and_stops_on_contract_error(self):
         from publish.snap_ui_public_data import SnapUiPublicDataPublishError, publish_snap_ui_public_data
 

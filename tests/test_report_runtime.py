@@ -313,6 +313,33 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(row["turnover_share_pct"], "待累计")
         self.assertEqual(row["source"], "missing_dependency")
 
+    def test_merge_appendix_b_payload_replaces_stale_zero_turnover_share_for_same_date(self):
+        existing = {
+            "turnover_share_history": [
+                {
+                    "date": "2026-05-13",
+                    "mainline": "电力",
+                    "turnover_share_pct": "0.00%",
+                    "source": "success",
+                }
+            ]
+        }
+        derived = {
+            "turnover_share_history": [
+                {
+                    "date": "2026-05-13",
+                    "mainline": "电力",
+                    "turnover_share_pct": "3.05%",
+                    "source": "tushare.daily",
+                }
+            ]
+        }
+
+        merged = report_runtime._merge_appendix_b_payload(existing, derived)
+
+        self.assertEqual(merged["turnover_share_history"][0]["turnover_share_pct"], "3.05%")
+        self.assertEqual(merged["turnover_share_history"][0]["source"], "tushare.daily")
+
     def test_build_appendix_b_continuity_payload_enriches_structure_mainline_records(self):
         payload = report_runtime._build_appendix_b_continuity_payload(
             pivot_mainline_history=[
@@ -1999,7 +2026,7 @@ assert rendered == "# migrated"
         self.assertEqual(result["report"], "# runtime report")
         self.assertEqual(data["knowledge"]["llm_wiki"]["source"], "llm_wiki")
         self.assertIn("60分钟确认", data["knowledge"]["llm_wiki"]["report_digest_text"])
-        self.assertEqual(result["artifacts"]["llm_wiki"]["version"], "2026-05-07")
+        self.assertEqual(result["artifacts"]["llm_wiki"]["version"], "2026-05-13")
 
     def test_render_markdown_report_runtime_exposes_helper_bindings_to_legacy_body(self):
         exec(

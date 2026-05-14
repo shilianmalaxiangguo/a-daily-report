@@ -34,6 +34,12 @@ class DatabaseService:
             source_run_id=source_run_id,
         )
 
+    def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+        return self.repository.query_market_daily_total(
+            trade_date,
+            market_scope=market_scope,
+        )
+
     def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
         return self.repository.rebuild_turnover_rank_daily(
             trade_date,

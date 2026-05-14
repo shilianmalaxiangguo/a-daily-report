@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from replay.report_replay import build_replay_snapshot_contract
-from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, save_report_outputs
+from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
 
 
 def _run_legacy_entry_probe(script_body):
@@ -302,6 +302,244 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 18.1)
         self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 15.8)
         self.assertEqual(result["data"]["mainline_turnover_summary"]["current_mainline"], "半导体")
+
+    def test_build_replay_snapshot_contract_refills_zero_total_turnover_from_fact_db(self):
+        snapshot = {
+            "current_mainline_history_record": {"date": "2026-05-13", "primary_mainline": "电力"},
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-13",
+                "sector_name": "电力",
+                "sector_turnover": 995.13,
+                "total_turnover": 0.0,
+                "turnover_share_pct": 0.0,
+                "source_status": "success",
+            },
+            "mainline_turnover_summary": {
+                "current_mainline": "电力",
+                "turnover_share_trend_rows": [
+                    {
+                        "date": "2026-05-13",
+                        "cycle_mainline": "电力",
+                        "mainline_turnover": "995.13亿",
+                        "market_turnover": "数据暂缺",
+                        "share": "待累计",
+                    }
+                ],
+            },
+            "total_turnover": 0.0,
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-13",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_mainline_history": lambda target_date, lookback_days=5: [],
+                "load_recent_sector_turnover_history": lambda target_date, current_mainline_name, lookback_days=5: [],
+                "get_market_total_turnover_from_fact_db": lambda target_date: 32642.12,
+            },
+        )
+
+        current = result["data"]["current_sector_turnover_snapshot"]
+        row = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"][0]
+        self.assertEqual(result["data"]["total_turnover"], 32642.12)
+        self.assertEqual(current["total_turnover"], 32642.12)
+        self.assertAlmostEqual(current["turnover_share_pct"], 3.05)
+        self.assertEqual(row["market_turnover"], "32642.12亿")
+        self.assertEqual(row["share"], "3.0%")
+
+    def test_build_replay_snapshot_contract_restores_critical_tushare_facts_from_fact_db(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 0.0,
+            "turnover_data": {"total_turnover_yi": 0.0, "date": "2026-05-13"},
+            "turnover_rank": [],
+            "turnover_over_100b": [],
+            "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
+            "data_status": {
+                "两市成交额": False,
+                "主要指数": True,
+                "中证全指": False,
+                "成交额排名": False,
+            },
+            "step_status": {
+                "两市成交额获取": False,
+                "主要指数获取": True,
+                "中证全指获取": False,
+                "成交额排名获取": False,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.total_turnover",
+                    "status": "degraded",
+                    "message": "两市成交额为空或无效",
+                    "details": {"provider": "akshare.stock_zh_index_daily_em"},
+                },
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.wind_a",
+                    "status": "degraded",
+                    "message": "中证全指为空或无效",
+                    "details": {"provider": "akshare.stock_zh_index_daily_em"},
+                },
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.turnover_rank",
+                    "status": "degraded",
+                    "message": "已处理成交额排行请求",
+                    "details": {"provider": "eastmoney.turnover_rank", "turnover_count": 0},
+                },
+            ],
+            "request_diagnostics": {"summary": {"degraded_count": 3}},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-13",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": lambda target_date: {
+                    "trade_date": target_date,
+                    "total_amount_yi": 32642.123233,
+                    "stock_count": 5493,
+                    "source_run_id": 17,
+                },
+                "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [
+                    {
+                        "rank": 1,
+                        "code": "601318",
+                        "name": "中国平安",
+                        "turnover": 210.5,
+                        "change_pct": 1.3,
+                        "sector": "保险",
+                        "data_source": "tushare.daily",
+                        "trade_date": target_date,
+                    },
+                    {
+                        "rank": 2,
+                        "code": "300750",
+                        "name": "宁德时代",
+                        "turnover": 98.7,
+                        "change_pct": -0.4,
+                        "sector": "电池",
+                        "data_source": "tushare.daily",
+                        "trade_date": target_date,
+                    },
+                ],
+                "get_wind_a_from_tushare": lambda target_date: {},
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["total_turnover"], 32642.12)
+        self.assertEqual(data["turnover_data"]["total_turnover_yi"], 32642.12)
+        self.assertEqual([item["code"] for item in data["turnover_rank"]], ["601318", "300750"])
+        self.assertEqual(data["turnover_over_100b"][0]["code"], "601318")
+        self.assertTrue(data["data_status"]["两市成交额"])
+        self.assertTrue(data["data_status"]["成交额排名"])
+        self.assertFalse(data["data_status"]["中证全指"])
+        self.assertTrue(data["step_status"]["两市成交额获取"])
+        self.assertTrue(data["step_status"]["成交额排名获取"])
+        provider_by_step = {
+            item["step"]: item["details"]["provider"]
+            for item in data["module_logs"]
+            if item.get("step") in {"request.total_turnover", "request.turnover_rank", "request.wind_a"}
+        }
+        self.assertEqual(provider_by_step["request.total_turnover"], "tushare.daily")
+        self.assertEqual(provider_by_step["request.turnover_rank"], "tushare.daily")
+        self.assertEqual(provider_by_step["request.wind_a"], "akshare.stock_zh_index_daily_em")
+        degraded_steps = [item["step"] for item in data["request_diagnostics"]["degraded"]]
+        self.assertEqual(degraded_steps, ["request.wind_a"])
+        preflight = build_report_preflight(data, "2026-05-13")
+        self.assertEqual(preflight["failures"], ["中证全指"])
+
+    def test_build_replay_snapshot_contract_restores_wind_a_from_tushare(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 32642.12,
+            "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
+            "turnover_rank": [{"code": "601318", "data_source": "tushare.daily"}],
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": False,
+                "成交额排名": True,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": False,
+                "成交额排名获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.total_turnover",
+                    "status": "success",
+                    "message": "已获取两市成交额",
+                    "details": {"provider": "tushare.daily", "row_count": 5493},
+                },
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.wind_a",
+                    "status": "degraded",
+                    "message": "中证全指为空或无效",
+                    "details": {"provider": "akshare.stock_zh_index_daily_em"},
+                },
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.turnover_rank",
+                    "status": "success",
+                    "message": "已处理成交额排行请求",
+                    "details": {"provider": "tushare.daily", "row_count": 50},
+                },
+            ],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-13",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_wind_a_from_tushare": lambda target_date: {
+                    "name": "中证全指",
+                    "code": "000985",
+                    "price": 6686.86,
+                    "change_pct": 0.72,
+                    "data_source": "tushare.index_daily",
+                    "trade_date": target_date,
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["wind_a_alternative"]["price"], 6686.86)
+        self.assertTrue(data["data_status"]["中证全指"])
+        self.assertTrue(data["step_status"]["中证全指获取"])
+        provider_by_step = {
+            item["step"]: item["details"]["provider"]
+            for item in data["module_logs"]
+            if item.get("step") in {"request.total_turnover", "request.turnover_rank", "request.wind_a"}
+        }
+        self.assertEqual(provider_by_step["request.wind_a"], "tushare.index_daily")
+        preflight = build_report_preflight(data, "2026-05-13")
+        self.assertEqual(preflight["status"], "success")
 
     def test_build_replay_report_outputs_contract_writes_mainline_turnover_reports(self):
         replay_runtime = self._load_module()
