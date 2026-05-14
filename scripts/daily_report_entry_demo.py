@@ -32,7 +32,7 @@ A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-
 5. 涨停跌停数据：akshare涨停跌停池
 6. 行业资金流向：腾讯财经板块资金流向
 7. 板块涨跌幅排行：腾讯行业资金流（首选）→ 同花顺问财/AkShare（兜底）
-8. 成交额排名：东方财富成交额排行（首选）→ 同花顺问财/AkShare（兜底）
+8. 成交额排名：Tushare daily amount（首选）→ 东方财富 / 同花顺问财 / AkShare（兜底）
 9. 预期日历：财联社预期日历（CLS接口，封装在 TencentFinanceData.get_calendar_events）
 10. 选股通异动：选股通盘中异动分析
 11. 顽主杯热门前十：顽主杯API
@@ -80,6 +80,9 @@ from daily_report_render import (
     _inject_report_variant_banner,
     _render_report_with_display_mode,
     build_report_outputs,
+    build_report_preflight,
+    render_report_preflight_lines,
+    ReportCriticalDataMissingError,
     save_report_output,
     save_report_outputs,
     save_stock_diagnostic_output,
@@ -326,6 +329,7 @@ from input.iwencai_runtime import (
 from input.tushare_runtime import (
     get_major_indices_from_tushare_first,
     get_total_turnover_from_tushare_first,
+    get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
 )
 from input.runtime import run_input_runtime
@@ -2540,14 +2544,14 @@ def _resolve_candidate_contract_prices(candidate=None, signal=None, expose_execu
     )
 
 
-def _classify_20cm_branch(candidate=None, mainline_name='', confirm_price=None, support_price=None, feedback_ready=False, allow_conditional_30=False, target_date='', mainline_anchor=None):
+def _classify_20cm_branch(candidate=None, mainline_name='', confirm_price=None, support_price=None, feedback_ready=False, allow_attack_50_ready=False, target_date='', mainline_anchor=None):
     return run_classify_20cm_branch(
         candidate,
         mainline_name=mainline_name,
         confirm_price=confirm_price,
         support_price=support_price,
         feedback_ready=feedback_ready,
-        allow_conditional_30=allow_conditional_30,
+        allow_attack_50_ready=allow_attack_50_ready,
         target_date=target_date,
         mainline_anchor=mainline_anchor,
         helpers={
@@ -3429,6 +3433,8 @@ def generate_markdown_report(
     has_personal_positions=False,
     run_mode=LEDGER_MODE_FROZEN,
     persist_strategy_tracking=True,
+    persist_decision_ledger=False,
+    decision_ledger_root_dir=None,
 ):
     runtime_result = render_markdown_report_runtime(
         data,
@@ -3442,7 +3448,10 @@ def generate_markdown_report(
             for key, value in globals().items()
             if not (key.startswith("__") and key.endswith("__"))
         },
-        config={},
+        config={
+            "persist_decision_ledger": persist_decision_ledger,
+            "decision_ledger_root_dir": decision_ledger_root_dir or str(Path(__file__).resolve().parents[1]),
+        },
     )
     return runtime_result["report"]
 
@@ -3556,6 +3565,18 @@ def main():
     else:
         print(f"📅 获取数据: {target_date}")
         data = get_daily_data(target_date)
+    if data:
+        report_preflight = build_report_preflight(data, target_date)
+        for line in render_report_preflight_lines(report_preflight):
+            print(line)
+        if report_preflight.get("failures"):
+            raise ReportCriticalDataMissingError(
+                "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
+                    target_date,
+                    "、".join(report_preflight.get("failures") or []),
+                    "\n".join(render_report_preflight_lines(report_preflight)),
+                )
+            )
     run_mode = LEDGER_MODE_REPLAY if args.replay else LEDGER_MODE_FROZEN
     if run_mode == LEDGER_MODE_FROZEN:
         official_ledger = load_strategy_performance_ledger(mode=LEDGER_MODE_FROZEN)

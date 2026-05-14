@@ -264,6 +264,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             tencent=tencent,
             get_sector_change_from_iwencai=get_sector_change_from_iwencai,
             get_turnover_rank_from_iwencai=get_turnover_rank_from_iwencai,
+            request_registry=request_registry,
             timer=timer,
             emit=lambda message: print(message, flush=True),
             current_dates=current_dates,
@@ -584,6 +585,8 @@ def _run_input_runtime_legacy_body(target_date=None):
             baostock_source_factory=_baostock_source_factory,
             timer=timer,
             emit=lambda message: print(message, flush=True),
+            enable_live_quicktiny=False,
+            enable_baostock_fallback=False,
         )
         results.update(watch_candidate_history_result.get("results", {}))
         module_logs.extend(watch_candidate_history_result.get("module_logs", []))

@@ -25,16 +25,33 @@ except ImportError:  # pragma: no cover - local compatibility shim for this repo
 
 REPORT_VARIANT_FULL = "full"
 REPORT_VARIANT_SUMMARY = "summary"
+CRITICAL_REPORT_DATA_FIELDS = (
+    ("两市成交额", "total_turnover"),
+    ("中证全指", "wind_a_alternative"),
+    ("成交额排名", "turnover_rank"),
+)
+CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
+    "total_turnover": ("tushare.",),
+    "wind_a_alternative": ("tushare.",),
+    "turnover_rank": ("tushare.",),
+}
+
+
+class ReportCriticalDataMissingError(RuntimeError):
+    """Raised when a report would render with missing market-critical data."""
 
 __all__ = [
     "REPORT_VARIANT_FULL",
     "REPORT_VARIANT_SUMMARY",
+    "ReportCriticalDataMissingError",
     "_get_report_output_path",
     "_get_stock_diagnostic_output_path",
     "_inject_report_variant_banner",
     "_render_report_with_display_mode",
     "generate_markdown_report_from_sections",
     "generate_markdown_report",
+    "build_report_preflight",
+    "render_report_preflight_lines",
     "build_report_outputs",
     "save_report_output",
     "save_report_outputs",
@@ -84,6 +101,183 @@ def _inject_report_variant_banner(report_text: str, variant: str) -> str:
     return report_text
 
 
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _critical_payload_valid(data, payload_key):
+    data = data or {}
+    if payload_key == "total_turnover":
+        return _safe_float(data.get("total_turnover")) > 0
+    if payload_key == "wind_a_alternative":
+        payload = data.get("wind_a_alternative") or {}
+        if not isinstance(payload, dict):
+            return False
+        return _safe_float(payload.get("price", payload.get("点位", 0))) > 0
+    if payload_key == "turnover_rank":
+        return bool(data.get("turnover_rank"))
+    return True
+
+
+def _report_data_payload(data):
+    if not isinstance(data, dict):
+        return {}
+    payload = data.get("data")
+    if isinstance(payload, dict) and ("data_status" in payload or "step_status" in payload):
+        return payload
+    return data
+
+
+def _critical_data_failures(data):
+    data = _report_data_payload(data)
+    data_status = data.get("data_status") or {}
+    failures = []
+    for label, payload_key in CRITICAL_REPORT_DATA_FIELDS:
+        if not _critical_field_tracked(data, label, payload_key):
+            continue
+        if data_status.get(label) is False or not _critical_payload_valid(data, payload_key):
+            failures.append(label)
+    return failures
+
+
+def _critical_field_tracked(data, label, payload_key):
+    data_status = (data or {}).get("data_status") or {}
+    return label in data_status or payload_key in (data or {})
+
+
+def _provider_allowed_for_critical_payload(payload_key, provider):
+    provider = str(provider or "").strip()
+    allowed_prefixes = CRITICAL_TUSHARE_PROVIDER_PREFIXES.get(payload_key, ())
+    if not allowed_prefixes:
+        return True
+    return any(provider.startswith(prefix) for prefix in allowed_prefixes)
+
+
+def _provider_for_step(data, step):
+    for log in (data.get("module_logs") or []):
+        if not isinstance(log, dict) or log.get("step") != step:
+            continue
+        details = log.get("details") or {}
+        return details.get("provider") or ""
+    return ""
+
+
+def _row_count_for_step(data, step, payload_key):
+    for log in (data.get("module_logs") or []):
+        if not isinstance(log, dict) or log.get("step") != step:
+            continue
+        details = log.get("details") or {}
+        for key in ("row_count", "rank_count", "index_count", "count"):
+            if details.get(key) not in (None, ""):
+                return details.get(key)
+    payload = data.get(payload_key)
+    if isinstance(payload, (list, tuple)):
+        return len(payload)
+    if isinstance(payload, dict):
+        return 1 if payload else 0
+    return 1 if payload not in (None, "", 0, 0.0) else 0
+
+
+def _critical_value(data, payload_key):
+    if payload_key == "total_turnover":
+        return round(_safe_float(data.get("total_turnover")), 2)
+    if payload_key == "wind_a_alternative":
+        payload = data.get("wind_a_alternative") or {}
+        if isinstance(payload, dict):
+            return round(_safe_float(payload.get("price", payload.get("点位", 0))), 2)
+        return 0.0
+    if payload_key == "turnover_rank":
+        return _row_count_for_step(data, "request.turnover_rank", payload_key)
+    return ""
+
+
+def build_report_preflight(data, target_date):
+    data = _report_data_payload(data)
+    data_status = data.get("data_status") or {}
+    step_by_payload_key = {
+        "total_turnover": "request.total_turnover",
+        "wind_a_alternative": "request.wind_a",
+        "turnover_rank": "request.turnover_rank",
+    }
+    checks = []
+    failures = set(_critical_data_failures(data))
+    for label, payload_key in CRITICAL_REPORT_DATA_FIELDS:
+        step = step_by_payload_key[payload_key]
+        tracked = _critical_field_tracked(data, label, payload_key)
+        provider = _provider_for_step(data, step)
+        if not provider:
+            payload = data.get(payload_key)
+            provider = payload.get("data_source") if isinstance(payload, dict) else ""
+            if not provider and isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                provider = payload[0].get("data_source") or ""
+            if not provider and hasattr(payload, "data_source"):
+                provider = getattr(payload, "data_source", "")
+        provider_failed = tracked and not _provider_allowed_for_critical_payload(payload_key, provider)
+        checks.append(
+            {
+                "label": label,
+                "payload_key": payload_key,
+                "status": "failed" if label in failures or provider_failed else "success",
+                "provider": provider or "unknown",
+                "value": _critical_value(data, payload_key),
+                "row_count": _row_count_for_step(data, step, payload_key),
+                "data_status": data_status.get(label),
+            }
+        )
+    return {
+        "target_date": target_date,
+        "status": "failed" if failures or any(check["status"] == "failed" for check in checks) else "success",
+        "checks": checks,
+        "failures": [
+            check["label"]
+            for check in checks
+            if check["label"] in failures or check["status"] == "failed"
+        ],
+    }
+
+
+def render_report_preflight_lines(preflight):
+    preflight = preflight or {}
+    lines = [
+        "日报关键数据 preflight: {} / {}".format(
+            preflight.get("status", "unknown"),
+            preflight.get("target_date", ""),
+        )
+    ]
+    for check in preflight.get("checks") or []:
+        lines.append(
+            "- {label}: {status} | provider={provider} | value={value} | row_count={row_count}".format(
+                label=check.get("label", ""),
+                status=check.get("status", ""),
+                provider=check.get("provider", "unknown"),
+                value=check.get("value", ""),
+                row_count=check.get("row_count", ""),
+            )
+        )
+    if preflight.get("failures"):
+        lines.append("失败字段: {}".format("、".join(preflight.get("failures") or [])))
+    return lines
+
+
+def _raise_if_critical_data_missing(data, target_date, preflight=None):
+    preflight = preflight or build_report_preflight(data, target_date)
+    failures = preflight.get("failures") or []
+    if not failures:
+        return
+    raise ReportCriticalDataMissingError(
+        "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
+            target_date,
+            "、".join(failures),
+            "\n".join(render_report_preflight_lines(preflight)),
+        )
+    )
+
+
 def _render_report_with_display_mode(
     display_mvp_mode: bool,
     data: Dict[str, Any],
@@ -92,6 +286,8 @@ def _render_report_with_display_mode(
     has_personal_positions: bool = False,
     run_mode: str = LEDGER_MODE_FROZEN,
     persist_strategy_tracking: bool = True,
+    persist_decision_ledger: bool = False,
+    decision_ledger_root_dir: str | None = None,
     emit_helper_diagnostics: bool = True,
     shared_runtime_cache: dict | None = None,
 ) -> str:
@@ -111,6 +307,8 @@ def _render_report_with_display_mode(
             has_personal_positions=has_personal_positions,
             run_mode=run_mode,
             persist_strategy_tracking=persist_strategy_tracking,
+            persist_decision_ledger=persist_decision_ledger,
+            decision_ledger_root_dir=decision_ledger_root_dir,
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
@@ -212,7 +410,13 @@ def build_report_outputs(
     has_personal_positions: bool = False,
     run_mode: str = LEDGER_MODE_FROZEN,
     position_report_text: str = "",
+    emit_preflight: bool = True,
 ):
+    preflight = build_report_preflight(data, target_date)
+    if emit_preflight:
+        for line in render_report_preflight_lines(preflight):
+            print(line)
+    _raise_if_critical_data_missing(data, target_date, preflight=preflight)
     shared_runtime_cache = {}
     full_report = _render_report_with_display_mode(
         False,
@@ -222,6 +426,8 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
+        persist_decision_ledger=run_mode == LEDGER_MODE_FROZEN,
+        decision_ledger_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
     )
@@ -233,6 +439,8 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
+        persist_decision_ledger=False,
+        decision_ledger_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=False,
         shared_runtime_cache=shared_runtime_cache,
     )

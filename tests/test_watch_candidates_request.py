@@ -1,5 +1,6 @@
 import importlib
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -105,6 +106,124 @@ class WatchCandidatesRequestTest(unittest.TestCase):
         self.assertEqual(timer.records[-1], ("候选股历史成交额获取", 15))
         self.assertTrue(any("候选股" in line for line in emitted))
         self.assertTrue(any(log["step"] == "request.candidate_history" for log in result["module_logs"]))
+
+    def test_quicktiny_hard_timeout_falls_back_to_baostock(self):
+        request_module = importlib.import_module("domains.watch_candidates.request")
+        bundle = request_module.collect_watch_candidate_history_request_bundle
+
+        timer = _TimerStub()
+        emitted = []
+        cache = _CacheStub()
+        baostock = _BaoStockStub()
+
+        def slow_quicktiny(**_kwargs):
+            time.sleep(0.2)
+            return [99.0]
+
+        result = bundle(
+            "2026-05-14",
+            candidates=[{"code": "000002", "name": "慢接口样本", "turnover": 9.0, "sector": "算力"}],
+            stock_full_info={"000002": {"change_pct": 3.8}},
+            get_cache=lambda: cache,
+            fetch_quicktiny_history=slow_quicktiny,
+            baostock_source_factory=lambda: baostock,
+            timer=timer,
+            emit=emitted.append,
+            quicktiny_timeout_seconds=0.05,
+        )
+
+        stocks_with_history = result["results"]["stocks_with_history"]
+        self.assertEqual(stocks_with_history[0]["hist_turnover"], [4.0, 5.0])
+        self.assertEqual(stocks_with_history[0]["data_source"], "BaoStock")
+        self.assertEqual(result["results"]["history_fetch_stats"]["quicktiny_fail"], 1)
+        self.assertEqual(result["results"]["history_fetch_stats"]["baostock_success"], 1)
+        self.assertTrue(any("QuickTiny超时" in line for line in emitted))
+
+    def test_cached_history_skips_live_quicktiny_when_sufficient(self):
+        request_module = importlib.import_module("domains.watch_candidates.request")
+        bundle = request_module.collect_watch_candidate_history_request_bundle
+
+        class CacheWithEnoughHistory(_CacheStub):
+            def get(self, code, target_date):
+                return [float(index) for index in range(1, 31)]
+
+        timer = _TimerStub()
+        emitted = []
+        cache = CacheWithEnoughHistory()
+        quicktiny_calls = []
+
+        result = bundle(
+            "2026-05-14",
+            candidates=[{"code": "000003", "name": "缓存样本", "turnover": 9.0, "sector": "算力"}],
+            stock_full_info={"000003": {"change_pct": 3.8}},
+            get_cache=lambda: cache,
+            fetch_quicktiny_history=lambda **kwargs: quicktiny_calls.append(kwargs) or [99.0],
+            baostock_source_factory=lambda: _BaoStockStub(),
+            timer=timer,
+            emit=emitted.append,
+            cached_history_min_days=20,
+        )
+
+        stocks_with_history = result["results"]["stocks_with_history"]
+        self.assertEqual(quicktiny_calls, [])
+        self.assertEqual(stocks_with_history[0]["data_source"], "缓存")
+        self.assertEqual(stocks_with_history[0]["hist_turnover"], [float(index) for index in range(1, 28)])
+        self.assertTrue(any("缓存足够" in line for line in emitted))
+
+    def test_can_disable_live_quicktiny_for_main_report_path(self):
+        request_module = importlib.import_module("domains.watch_candidates.request")
+        bundle = request_module.collect_watch_candidate_history_request_bundle
+
+        timer = _TimerStub()
+        emitted = []
+        quicktiny_calls = []
+        baostock = _BaoStockStub()
+
+        result = bundle(
+            "2026-05-14",
+            candidates=[{"code": "000004", "name": "无缓存样本", "turnover": 9.0, "sector": "算力"}],
+            stock_full_info={"000004": {"change_pct": 3.8}},
+            get_cache=lambda: _CacheStub(),
+            fetch_quicktiny_history=lambda **kwargs: quicktiny_calls.append(kwargs) or [99.0],
+            baostock_source_factory=lambda: baostock,
+            timer=timer,
+            emit=emitted.append,
+            enable_live_quicktiny=False,
+        )
+
+        stocks_with_history = result["results"]["stocks_with_history"]
+        self.assertEqual(quicktiny_calls, [])
+        self.assertEqual(stocks_with_history[0]["hist_turnover"], [4.0, 5.0])
+        self.assertEqual(stocks_with_history[0]["data_source"], "BaoStock")
+        self.assertEqual(result["results"]["history_fetch_stats"]["baostock_success"], 1)
+        self.assertTrue(any("跳过QuickTiny实时补充" in line for line in emitted))
+
+    def test_can_disable_baostock_for_main_report_path(self):
+        request_module = importlib.import_module("domains.watch_candidates.request")
+        bundle = request_module.collect_watch_candidate_history_request_bundle
+
+        timer = _TimerStub()
+        emitted = []
+        quicktiny_calls = []
+        baostock_created = []
+
+        result = bundle(
+            "2026-05-14",
+            candidates=[{"code": "000005", "name": "无历史样本", "turnover": 9.0, "sector": "算力"}],
+            stock_full_info={"000005": {"change_pct": 3.8}},
+            get_cache=lambda: _CacheStub(),
+            fetch_quicktiny_history=lambda **kwargs: quicktiny_calls.append(kwargs) or [99.0],
+            baostock_source_factory=lambda: baostock_created.append(True) or _BaoStockStub(),
+            timer=timer,
+            emit=emitted.append,
+            enable_live_quicktiny=False,
+            enable_baostock_fallback=False,
+        )
+
+        self.assertEqual(result["results"]["stocks_with_history"], [])
+        self.assertEqual(quicktiny_calls, [])
+        self.assertEqual(baostock_created, [])
+        self.assertTrue(any("跳过BaoStock兜底" in line for line in emitted))
 
 
 if __name__ == "__main__":

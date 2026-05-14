@@ -1,4 +1,10 @@
 from datetime import datetime, timedelta
+import queue
+import threading
+
+
+class _HardTimeoutError(TimeoutError):
+    pass
 
 
 def _append_log(logs, step, status, message, **details):
@@ -61,6 +67,29 @@ def _merge_history_parts(historical_part, recent_part, data_source, stats):
     return [], ""
 
 
+def _call_with_hard_timeout(timeout_seconds, func, **kwargs):
+    if not timeout_seconds or timeout_seconds <= 0:
+        return func(**kwargs)
+
+    result_queue = queue.Queue(maxsize=1)
+
+    def _target():
+        try:
+            result_queue.put(("result", func(**kwargs)))
+        except BaseException as error:
+            result_queue.put(("error", error))
+
+    worker = threading.Thread(target=_target, daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+    if worker.is_alive():
+        raise _HardTimeoutError(f"QuickTiny request exceeded {timeout_seconds:.2f}s")
+    status, payload = result_queue.get_nowait()
+    if status == "error":
+        raise payload
+    return payload
+
+
 def collect_watch_candidate_history_request_bundle(
     target_date,
     *,
@@ -72,6 +101,10 @@ def collect_watch_candidate_history_request_bundle(
     timer,
     emit,
     limit=20,
+    quicktiny_timeout_seconds=3.0,
+    cached_history_min_days=20,
+    enable_live_quicktiny=True,
+    enable_baostock_fallback=True,
 ):
     candidates = list(candidates or [])
     stock_full_info = stock_full_info or {}
@@ -123,48 +156,64 @@ def collect_watch_candidate_history_request_bundle(
                 )
                 recent_part = []
                 data_source = "未知"
+                if len(historical_part) >= cached_history_min_days:
+                    combined, merged_source = historical_part, "缓存"
+                    emit(f"      💾 缓存足够: {code_for_lookup} ({len(historical_part)}天)，跳过QuickTiny实时补充")
+                else:
+                    combined = []
+                    merged_source = ""
 
-                try:
-                    recent_part = list(
-                        fetch_quicktiny_history(
-                            full_code=full_code,
-                            code=code_for_lookup,
-                            target_date=target_date,
-                            days=30,
-                        )
-                        or []
-                    )
-                    if recent_part:
-                        results["history_fetch_stats"]["quicktiny_success"] += 1
-                        data_source = "QuickTiny"
-                        emit(f"      ⚡ QuickTiny成功: {code_for_lookup} ({len(recent_part)}天)")
+                    if enable_live_quicktiny:
+                        try:
+                            recent_part = list(
+                                _call_with_hard_timeout(
+                                    quicktiny_timeout_seconds,
+                                    fetch_quicktiny_history,
+                                    full_code=full_code,
+                                    code=code_for_lookup,
+                                    target_date=target_date,
+                                    days=30,
+                                )
+                                or []
+                            )
+                            if recent_part:
+                                results["history_fetch_stats"]["quicktiny_success"] += 1
+                                data_source = "QuickTiny"
+                                emit(f"      ⚡ QuickTiny成功: {code_for_lookup} ({len(recent_part)}天)")
+                            else:
+                                results["history_fetch_stats"]["quicktiny_fail"] += 1
+                        except _HardTimeoutError as error:
+                            results["history_fetch_stats"]["quicktiny_fail"] += 1
+                            emit(f"      ⏱️ QuickTiny超时: {code_for_lookup} - {error}, 将使用BaoStock兜底")
+                        except Exception:
+                            results["history_fetch_stats"]["quicktiny_fail"] += 1
+                            emit(f"      ⚡ QuickTiny失败: {code_for_lookup}, 将使用BaoStock兜底")
                     else:
-                        results["history_fetch_stats"]["quicktiny_fail"] += 1
-                except Exception:
-                    results["history_fetch_stats"]["quicktiny_fail"] += 1
-                    emit(f"      ⚡ QuickTiny失败: {code_for_lookup}, 将使用BaoStock兜底")
+                        emit(f"      ⏭️ 跳过QuickTiny实时补充: {code_for_lookup}, 使用缓存/BaoStock")
 
-                if not recent_part and baostock_source_factory:
-                    try:
-                        if baostock_source is None:
-                            baostock_source = baostock_source_factory()
-                        recent_part = _fetch_baostock_history(baostock_source, code_for_lookup, target_date)
-                        if recent_part:
-                            results["history_fetch_stats"]["baostock_success"] += 1
-                            data_source = "BaoStock"
-                            emit(f"      🔄 BaoStock兜底成功: {code_for_lookup} ({len(recent_part)}天)")
-                        else:
+                    if not recent_part and baostock_source_factory and enable_baostock_fallback:
+                        try:
+                            if baostock_source is None:
+                                baostock_source = baostock_source_factory()
+                            recent_part = _fetch_baostock_history(baostock_source, code_for_lookup, target_date)
+                            if recent_part:
+                                results["history_fetch_stats"]["baostock_success"] += 1
+                                data_source = "BaoStock"
+                                emit(f"      🔄 BaoStock兜底成功: {code_for_lookup} ({len(recent_part)}天)")
+                            else:
+                                results["history_fetch_stats"]["baostock_fail"] += 1
+                        except Exception as error:
                             results["history_fetch_stats"]["baostock_fail"] += 1
-                    except Exception as error:
-                        results["history_fetch_stats"]["baostock_fail"] += 1
-                        emit(f"      ❌ BaoStock也失败: {code_for_lookup} - {error}")
+                            emit(f"      ❌ BaoStock也失败: {code_for_lookup} - {error}")
+                    elif not recent_part and baostock_source_factory and not enable_baostock_fallback:
+                        emit(f"      ⏭️ 跳过BaoStock兜底: {code_for_lookup}")
 
-                combined, merged_source = _merge_history_parts(
-                    historical_part,
-                    recent_part,
-                    data_source,
-                    results["history_fetch_stats"],
-                )
+                    combined, merged_source = _merge_history_parts(
+                        historical_part,
+                        recent_part,
+                        data_source,
+                        results["history_fetch_stats"],
+                    )
                 if not combined:
                     emit(f"      ⚠️ {code_for_lookup} 无数据可用")
                     continue
