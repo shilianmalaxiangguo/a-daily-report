@@ -65,6 +65,7 @@ class SnapUiPublicDataPublishNodeTest(unittest.TestCase):
             self.assertIn("- [x] Run local data contract check", tasks_markdown)
             self.assertNotIn("Failure:", tasks_markdown)
             self.assertEqual(calls[0][0:2], ("turnover", "2026-05-12"))
+            self.assertEqual(Path(calls[0][2]["db_path"]), root / "data" / "cloudflare_free_daily.db")
             self.assertEqual(calls[-1][0], "contract")
 
     def test_publish_snap_ui_public_data_records_failure_and_stops_on_contract_error(self):

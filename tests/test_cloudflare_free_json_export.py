@@ -88,6 +88,24 @@ class CloudflareFreeJsonExportTest(unittest.TestCase):
             self.assertEqual(artifacts[0]["r2_key"], "exports/turnover/top50-share/latest.json")
             self.assertEqual(artifacts[0]["schema_version"], "cf-free-turnover-series/v1")
 
+    def test_export_turnover_share_series_refuses_empty_series(self):
+        from export.cloudflare_free_json_export import (
+            TurnoverShareExportDataUnavailableError,
+            CloudflareFreeJsonExportService,
+        )
+        from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db = CloudflareFreeDailyDb(tmp_path / "daily.db")
+            service = CloudflareFreeJsonExportService(db, artifact_root=tmp_path / "r2")
+
+            with self.assertRaises(TurnoverShareExportDataUnavailableError):
+                service.export_turnover_share_series("2026-05-13", window_days=30, limit=50)
+
+            self.assertFalse((tmp_path / "r2" / "exports" / "turnover" / "top50-share" / "latest.json").exists())
+            self.assertEqual(db.get_report_artifacts(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

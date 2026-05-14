@@ -95,6 +95,15 @@ def _record_has_mainline(record):
     return bool(str(record.get("primary_mainline") or record.get("leading_line") or "").strip())
 
 
+def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
+    try:
+        return loader(target_date, lookback_days=25, max_scan_days=60)
+    except TypeError as exc:
+        if "max_scan_days" not in str(exc):
+            raise
+        return loader(target_date, lookback_days=25)
+
+
 def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
@@ -119,9 +128,9 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
     ).strip()
 
     if not snapshot_data.get("recent_mainline_history") and callable(helpers.get("load_recent_mainline_history")):
-        snapshot_data["recent_mainline_history"] = helpers["load_recent_mainline_history"](
+        snapshot_data["recent_mainline_history"] = _load_recent_mainline_history_for_cycle_calendar(
+            helpers["load_recent_mainline_history"],
             target_date,
-            lookback_days=5,
         )
 
     total_turnover = snapshot_data.get("total_turnover")

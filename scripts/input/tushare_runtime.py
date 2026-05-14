@@ -4,13 +4,37 @@ import datetime
 
 from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_service import fetch_daily_price_bars
-from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
+from market_data.tushare_turnover_service import (
+    fetch_stock_daily_turnover_records,
+    fetch_stock_industry_map,
+    fetch_stock_name_map,
+)
 
 __all__ = [
+    "ProviderValue",
     "get_total_turnover_from_tushare_first",
     "get_major_indices_from_tushare_first",
     "get_wind_a_from_tushare_first",
+    "get_turnover_rank_from_tushare_first",
 ]
+
+
+class ProviderValue(float):
+    def __new__(
+        cls,
+        value,
+        *,
+        data_source="",
+        source_endpoint="",
+        source_row_count=0,
+        source_retry_count=0,
+    ):
+        obj = float.__new__(cls, value)
+        obj.data_source = data_source
+        obj.source_endpoint = source_endpoint
+        obj.source_row_count = source_row_count
+        obj.source_retry_count = source_retry_count
+        return obj
 
 
 def _safe_float(value, default=0.0):
@@ -36,6 +60,17 @@ def _fallback_call(fn, target_date):
     return fn(target_date=target_date)
 
 
+def _fetch_turnover_rows_with_retry(fetcher, target_date, retry_count=1):
+    attempts = max(int(retry_count or 0), 0) + 1
+    last_rows = []
+    for attempt in range(attempts):
+        rows = fetcher(target_date) or []
+        last_rows = rows
+        if rows:
+            return rows, attempt
+    return last_rows, attempts - 1
+
+
 def get_total_turnover_from_tushare_first(
     target_date=None,
     *,
@@ -43,16 +78,96 @@ def get_total_turnover_from_tushare_first(
     legacy_get_total_turnover_fn=None,
 ):
     fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    retry_count = 0
     try:
-        rows = fetcher(target_date)
+        rows, retry_count = _fetch_turnover_rows_with_retry(fetcher, target_date)
         total = sum(_safe_float((row or {}).get("amount_yi")) for row in (rows or []))
         if total > 0:
-            return round(total, 2)
+            return ProviderValue(
+                round(total, 2),
+                data_source="tushare.daily",
+                source_endpoint="daily",
+                source_row_count=len(rows or []),
+                source_retry_count=retry_count,
+            )
     except Exception:
         pass
 
     fallback = _fallback_call(legacy_get_total_turnover_fn, target_date)
-    return _safe_float(fallback)
+    return ProviderValue(
+        _safe_float(fallback),
+        data_source="legacy.total_turnover",
+        source_endpoint="fallback",
+        source_row_count=0,
+        source_retry_count=retry_count,
+    )
+
+
+def _lookup_by_code(mapping, row, default=""):
+    stock_code = str((row or {}).get("stock_code") or "").strip()
+    ts_code = str((row or {}).get("ts_code") or "").strip().upper()
+    value = (mapping or {}).get(stock_code)
+    if value in (None, ""):
+        value = (mapping or {}).get(ts_code)
+    return str(value or default).strip()
+
+
+def get_turnover_rank_from_tushare_first(
+    target_date=None,
+    *,
+    limit=50,
+    fetch_stock_daily_turnover_records_fn=None,
+    fetch_stock_name_map_fn=None,
+    fetch_stock_industry_map_fn=None,
+    legacy_get_turnover_rank_fn=None,
+):
+    fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    try:
+        rows = [row for row in (fetcher(target_date) or []) if _safe_float((row or {}).get("amount_yi")) > 0]
+        rows.sort(
+            key=lambda row: (
+                -_safe_float((row or {}).get("amount_yi")),
+                str((row or {}).get("stock_code") or (row or {}).get("ts_code") or ""),
+            )
+        )
+        if rows:
+            name_map_loader = fetch_stock_name_map_fn or fetch_stock_name_map
+            industry_map_loader = fetch_stock_industry_map_fn or fetch_stock_industry_map
+            try:
+                name_map = name_map_loader() if callable(name_map_loader) else {}
+            except Exception:
+                name_map = {}
+            try:
+                industry_map = industry_map_loader() if callable(industry_map_loader) else {}
+            except Exception:
+                industry_map = {}
+
+            ranked = []
+            for rank, row in enumerate(rows[: max(int(limit or 50), 1)], start=1):
+                stock_code = str(row.get("stock_code") or "").strip()
+                ts_code = str(row.get("ts_code") or "").strip().upper()
+                code = stock_code or (ts_code.split(".", 1)[0] if "." in ts_code else ts_code)
+                name = _lookup_by_code(name_map, row, row.get("name") or code)
+                sector = _lookup_by_code(industry_map, row, "未知")
+                ranked.append(
+                    {
+                        "rank": rank,
+                        "code": code,
+                        "name": name,
+                        "turnover": _safe_float(row.get("amount_yi")),
+                        "change_pct": _safe_float(row.get("pct_chg")),
+                        "sector": sector or "未知",
+                        "data_source": "tushare.daily",
+                        "trade_date": row.get("trade_date"),
+                    }
+                )
+            return ranked
+    except Exception:
+        pass
+
+    if callable(legacy_get_turnover_rank_fn):
+        return legacy_get_turnover_rank_fn(target_date=target_date, limit=limit) or []
+    return []
 
 
 def _change_pct(latest_bar, prev_bar):

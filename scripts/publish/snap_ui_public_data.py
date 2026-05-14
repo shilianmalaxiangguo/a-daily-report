@@ -185,7 +185,7 @@ def publish_snap_ui_public_data(
     root = Path(root or Path(__file__).resolve().parents[2])
     snap_ui_dir = Path(snap_ui_dir or root / "snap-ui")
     output_dir = Path(output_root or root / ".generated" / "snap-ui-public-data") / str(target_date)
-    db_path = Path(db_path or root / ".generated" / "d1" / "daily.db")
+    db_path = Path(db_path or root / "data" / "cloudflare_free_daily.db")
     artifact_root = Path(artifact_root or root / ".generated" / "r2")
     manifest_path = output_dir / "snap-ui_publish_manifest.json"
     tasks_path = output_dir / "snap-ui_publish_tasks.md"

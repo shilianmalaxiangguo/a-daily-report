@@ -207,6 +207,80 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
         self.assertEqual(result[0]["competition_mainline"], "商业航天")
         self.assertEqual(result[1]["source"], "persist.snapshot")
 
+    def test_extract_mainline_history_record_reads_current_record_contract(self):
+        runtime = self._load_module()
+
+        result = runtime.extract_mainline_history_record(
+            {
+                "recent_mainline_history": [
+                    {"date": "2026-05-12", "primary_mainline": "电力", "source": "snapshot.history"}
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-05-13",
+                    "primary_mainline": "半导体",
+                    "secondary_mainline": "电力",
+                    "leading_line": "半导体",
+                    "source": "market_research_snapshot",
+                },
+            }
+        )
+
+        self.assertEqual(result["date"], "2026-05-13")
+        self.assertEqual(result["primary_mainline"], "半导体")
+        self.assertEqual(result["secondary_mainline"], "电力")
+
+    def test_load_recent_mainline_history_reuses_snapshot_recent_history_window(self):
+        runtime = self._load_module()
+
+        snapshots = {
+            "2026-05-13": (
+                {
+                    "current_mainline_history_record": {
+                        "date": "2026-05-13",
+                        "primary_mainline": "半导体",
+                        "leading_line": "半导体",
+                        "source": "market_research_snapshot",
+                    }
+                },
+                "",
+            ),
+            "2026-05-12": (
+                {
+                    "recent_mainline_history": [
+                        {"date": "2026-05-08", "primary_mainline": "机器人", "source": "snapshot.history"},
+                        {"date": "2026-05-11", "primary_mainline": "电力", "source": "snapshot.history"},
+                    ],
+                    "current_mainline_history_record": {
+                        "date": "2026-05-12",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "market_research_snapshot",
+                    },
+                },
+                "",
+            ),
+        }
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-14",
+            lookback_days=4,
+            max_scan_days=4,
+            helpers={
+                "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-14": "2026-05-13",
+                    "2026-05-13": "2026-05-12",
+                    "2026-05-12": "2026-05-11",
+                    "2026-05-11": "2026-05-08",
+                    "2026-05-08": "2026-05-07",
+                }.get(value),
+                "_normalize_kline_date_str": lambda value: value,
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13"])
+        self.assertEqual([item["primary_mainline"] for item in result], ["机器人", "电力", "电力", "半导体"])
+
 
 if __name__ == "__main__":
     unittest.main()

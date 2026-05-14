@@ -8,7 +8,12 @@ from storage.cloudflare_free_daily_db import SCHEMA_VERSION_TURNOVER_SERIES
 
 __all__ = [
     "CloudflareFreeJsonExportService",
+    "TurnoverShareExportDataUnavailableError",
 ]
+
+
+class TurnoverShareExportDataUnavailableError(RuntimeError):
+    pass
 
 
 def _write_json(path, payload):
@@ -169,6 +174,10 @@ class CloudflareFreeJsonExportService:
             window_days=window_days,
             limit=limit,
         )
+        if not payload.get("rows"):
+            raise TurnoverShareExportDataUnavailableError(
+                f"No turnover share rows available for end_date={end_date}; refusing to export Top50 artifact"
+            )
         payload = _with_sector_breakdown(
             self.db,
             payload,

@@ -108,6 +108,14 @@ def _iter_mainline_history_records(payload, depth=0, max_depth=6):
 
     records = []
     if isinstance(payload, dict):
+        current_record = payload.get("current_mainline_history_record")
+        if isinstance(current_record, dict):
+            records.append(current_record)
+
+        current_records = payload.get("current_mainline_history_records")
+        if isinstance(current_records, list):
+            records.extend(item for item in current_records if isinstance(item, dict))
+
         direct_record = payload.get("mainline_history_record")
         if isinstance(direct_record, dict):
             records.append(direct_record)
@@ -117,7 +125,13 @@ def _iter_mainline_history_records(payload, depth=0, max_depth=6):
             records.extend(item for item in direct_records if isinstance(item, dict))
 
         for key, value in payload.items():
-            if key in {"mainline_history_record", "mainline_history_records"}:
+            if key in {
+                "current_mainline_history_record",
+                "current_mainline_history_records",
+                "mainline_history_record",
+                "mainline_history_records",
+                "recent_mainline_history",
+            }:
                 continue
             if isinstance(value, (dict, list)):
                 records.extend(_iter_mainline_history_records(value, depth=depth + 1, max_depth=max_depth))
@@ -172,14 +186,54 @@ def extract_mainline_history_record(snapshot_data):
     }
 
 
+def _normalize_history_record(record, fallback_date=""):
+    if not isinstance(record, dict):
+        return None
+    primary_mainline = _first_non_empty(record.get("primary_mainline"), record.get("leading_line"))
+    if not primary_mainline:
+        return None
+    return {
+        "date": _normalize_date(record.get("date") or fallback_date),
+        "primary_mainline": primary_mainline,
+        "secondary_mainline": _normalize_date(record.get("secondary_mainline")),
+        "competition_mainline": _normalize_date(record.get("competition_mainline")),
+        "rotation_label": _normalize_date(record.get("rotation_label")),
+        "leading_line": _normalize_date(record.get("leading_line") or primary_mainline),
+        "state_code": _normalize_date(record.get("state_code")),
+        "rotation_summary": _normalize_date(record.get("rotation_summary")),
+        "source": _normalize_date(record.get("source")),
+    }
+
+
+def _iter_recent_mainline_history(payload, depth=0, max_depth=4):
+    if payload is None or depth > max_depth:
+        return []
+    records = []
+    if isinstance(payload, dict):
+        direct_records = payload.get("recent_mainline_history")
+        if isinstance(direct_records, list):
+            records.extend(item for item in direct_records if isinstance(item, dict))
+        for key, value in payload.items():
+            if key == "recent_mainline_history":
+                continue
+            if isinstance(value, (dict, list)):
+                records.extend(_iter_recent_mainline_history(value, depth=depth + 1, max_depth=max_depth))
+        return records
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, (dict, list)):
+                records.extend(_iter_recent_mainline_history(item, depth=depth + 1, max_depth=max_depth))
+    return records
+
+
 def load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
-        history = []
+        history_by_date = {}
         cursor = _normalize_kline_date_str(target_date)
         scanned_days = 0
 
-        while cursor and len(history) < lookback_days and scanned_days < max_scan_days:
+        while cursor and len(history_by_date) < lookback_days and scanned_days < max_scan_days:
             cursor = get_previous_date_str(cursor)
             if not cursor:
                 break
@@ -189,25 +243,22 @@ def load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20,
             if not snapshot_data:
                 continue
 
+            for recent_record in _iter_recent_mainline_history(snapshot_data):
+                normalized_recent = _normalize_history_record(recent_record)
+                record_date = normalized_recent.get("date") if normalized_recent else ""
+                if not record_date or record_date >= str(target_date):
+                    continue
+                history_by_date.setdefault(record_date, normalized_recent)
+
             record = extract_mainline_history_record(snapshot_data)
             if not record:
                 continue
 
-            history.append(
-                {
-                    "date": record.get("date") or cursor,
-                    "primary_mainline": record.get("primary_mainline", ""),
-                    "secondary_mainline": record.get("secondary_mainline", ""),
-                    "competition_mainline": record.get("competition_mainline", ""),
-                    "rotation_label": record.get("rotation_label", ""),
-                    "leading_line": record.get("leading_line", ""),
-                    "state_code": record.get("state_code", ""),
-                    "rotation_summary": record.get("rotation_summary", ""),
-                    "source": record.get("source", ""),
-                }
-            )
+            normalized_record = _normalize_history_record(record, fallback_date=cursor)
+            record_date = normalized_record.get("date") if normalized_record else ""
+            if record_date and record_date < str(target_date):
+                history_by_date[record_date] = normalized_record
 
-        history.reverse()
-        return history
+        return [history_by_date[key] for key in sorted(history_by_date)][-lookback_days:]
     finally:
         _restore_runtime_bindings(previous)

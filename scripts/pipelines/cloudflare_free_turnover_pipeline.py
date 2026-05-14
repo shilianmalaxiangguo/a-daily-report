@@ -5,8 +5,13 @@ from market_data.service import MarketDataService
 from storage.database_service import DatabaseService
 
 __all__ = [
+    "TurnoverPipelineDataUnavailableError",
     "run_turnover_pipeline",
 ]
+
+
+class TurnoverPipelineDataUnavailableError(RuntimeError):
+    pass
 
 
 def run_turnover_pipeline(
@@ -19,7 +24,7 @@ def run_turnover_pipeline(
     database_service=None,
     rank_limit=100,
     export_limit=50,
-    window_days=30,
+    window_days=25,
 ):
     market_data_service = market_data_service or MarketDataService(pro=pro)
     database_service = database_service or DatabaseService.sqlite_d1_compatible(db_path)
@@ -33,6 +38,10 @@ def run_turnover_pipeline(
             "row_count": len(rows),
         }
     )
+    if not rows:
+        raise TurnoverPipelineDataUnavailableError(
+            f"Tushare daily returned no turnover rows for {trade_date}; aborting Top50 turnover export"
+        )
     quote_count = database_service.upsert_stock_daily_quotes_recent(rows, source_run_id=run_id)
     market_total = database_service.rebuild_market_daily_total(trade_date, source_run_id=run_id)
     ranks = database_service.rebuild_turnover_rank_daily(trade_date, rank_limit=rank_limit, source_run_id=run_id)

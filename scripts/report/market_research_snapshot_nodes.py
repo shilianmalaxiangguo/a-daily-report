@@ -216,7 +216,7 @@ def derive_market_research_cycle_layer(data, state_machine=None):
     groups = _group_mainline_cycles(records)
     calendar_rows = []
     selected_groups = groups[-2:]
-    selected_records = [record for group in selected_groups for record in group.get("records", [])]
+    selected_records = records[-25:]
     calendar_row_by_week = {}
     for record in selected_records:
         field = _weekday_field(record.get("date"))

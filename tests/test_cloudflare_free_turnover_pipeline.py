@@ -83,6 +83,7 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             self.assertEqual(result["rank_count"], 100 if result["rank_count"] == 100 else 60)
             self.assertEqual(result["market_total"]["stock_count"], 60)
             self.assertTrue(artifact_path.exists())
+            self.assertEqual(payload["query_window"]["window_days"], 25)
             self.assertEqual(payload["query_window"]["rank_limit"], 50)
             self.assertEqual(len(payload["rows"]), 1)
             self.assertAlmostEqual(payload["rows"][0]["top_amount_yi"], sum(range(11, 61)))
@@ -167,6 +168,32 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             first_stock = payload["latest_sector_breakdown"]["rows"][0]["stocks"][0]
             self.assertEqual(first_stock["stock_name"], "平安银行")
             self.assertAlmostEqual(first_stock["net_inflow_yi"], 1.25)
+
+    def test_run_turnover_pipeline_aborts_when_tushare_daily_returns_empty(self):
+        from pipelines.cloudflare_free_turnover_pipeline import (
+            TurnoverPipelineDataUnavailableError,
+            run_turnover_pipeline,
+        )
+        from storage.database_service import DatabaseService
+
+        class EmptyMarketDataService:
+            def get_stock_daily_turnover_records(self, trade_date):
+                return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            database_service = DatabaseService.sqlite_d1_compatible(tmp_path / "daily.db")
+
+            with self.assertRaises(TurnoverPipelineDataUnavailableError):
+                run_turnover_pipeline(
+                    "2026-05-13",
+                    artifact_root=tmp_path / "r2",
+                    market_data_service=EmptyMarketDataService(),
+                    database_service=database_service,
+                )
+
+            self.assertFalse((tmp_path / "r2" / "exports" / "turnover" / "top50-share" / "latest.json").exists())
+            self.assertEqual(database_service.get_report_artifacts(), [])
 
 
 if __name__ == "__main__":

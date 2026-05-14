@@ -79,6 +79,15 @@ def _collect_market_fit_strong_samples(data):
     return data.get("zt_pool") or []
 
 
+def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
+    try:
+        return loader(target_date, lookback_days=25, max_scan_days=60)
+    except TypeError as exc:
+        if "max_scan_days" not in str(exc):
+            raise
+        return loader(target_date, lookback_days=25)
+
+
 def build_market_research_snapshot_contract(
     data,
     final_gate,
@@ -187,7 +196,10 @@ def build_market_research_snapshot_contract(
     ).strip()
 
     if not recent_mainline_history and callable(load_recent_mainline_history):
-        recent_mainline_history = load_recent_mainline_history(target_date, lookback_days=5)
+        recent_mainline_history = _load_recent_mainline_history_for_cycle_calendar(
+            load_recent_mainline_history,
+            target_date,
+        )
 
     total_turnover = data.get("total_turnover")
     if total_turnover in (None, ""):

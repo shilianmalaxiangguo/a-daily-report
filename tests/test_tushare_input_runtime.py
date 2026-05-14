@@ -10,6 +10,7 @@ from input.request_registry import build_input_request_registry
 from input.tushare_runtime import (
     get_major_indices_from_tushare_first,
     get_total_turnover_from_tushare_first,
+    get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
 )
 
@@ -22,17 +23,20 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_tushare_first": lambda *, target_date: calls.append("tushare_total") or 100.0,
             "get_major_indices_from_tushare_first": lambda *, target_date: calls.append("tushare_indices") or {},
             "get_wind_a_from_tushare_first": lambda *, target_date: calls.append("tushare_wind_a") or {},
+            "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_turnover_rank") or [],
             "get_total_turnover_from_iwencai": lambda *, target_date: calls.append("legacy_total") or 0.0,
             "get_major_indices_from_iwencai": lambda *, target_date: calls.append("legacy_indices") or {},
             "get_wind_a_from_iwencai": lambda *, target_date: calls.append("legacy_wind_a") or {},
+            "get_turnover_rank_from_iwencai": lambda *, target_date, limit=50: calls.append("legacy_turnover_rank") or [],
         }
 
         registry = build_input_request_registry(helpers)
         self.assertEqual(registry["total_turnover"](target_date="2026-05-13"), 100.0)
         registry["major_indices"](target_date="2026-05-13")
         registry["wind_a"](target_date="2026-05-13")
+        registry["turnover_rank"](target_date="2026-05-13", limit=50)
 
-        self.assertEqual(calls, ["tushare_total", "tushare_indices", "tushare_wind_a"])
+        self.assertEqual(calls, ["tushare_total", "tushare_indices", "tushare_wind_a", "tushare_turnover_rank"])
 
     def test_total_turnover_uses_tushare_daily_before_legacy_fallback(self):
         fallback_calls = []
@@ -48,18 +52,28 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result, 200.75)
         self.assertEqual(fallback_calls, [])
+        self.assertEqual(result.data_source, "tushare.daily")
+        self.assertEqual(result.source_endpoint, "daily")
+        self.assertEqual(result.source_row_count, 2)
+        self.assertEqual(result.source_retry_count, 0)
 
-    def test_total_turnover_falls_back_only_when_tushare_has_no_rows(self):
+    def test_total_turnover_retries_tushare_empty_before_legacy_fallback(self):
         fallback_calls = []
+        tushare_calls = []
 
         result = get_total_turnover_from_tushare_first(
             "2026-05-13",
-            fetch_stock_daily_turnover_records_fn=lambda trade_date: [],
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: tushare_calls.append(trade_date) or [],
             legacy_get_total_turnover_fn=lambda target_date=None: fallback_calls.append(target_date) or 88.0,
         )
 
         self.assertEqual(result, 88.0)
         self.assertEqual(fallback_calls, ["2026-05-13"])
+        self.assertEqual(tushare_calls, ["2026-05-13", "2026-05-13"])
+        self.assertEqual(result.data_source, "legacy.total_turnover")
+        self.assertEqual(result.source_endpoint, "fallback")
+        self.assertEqual(result.source_row_count, 0)
+        self.assertEqual(result.source_retry_count, 1)
 
     def test_major_indices_use_tushare_index_daily_before_legacy_fallback(self):
         fallback_calls = []
@@ -104,6 +118,45 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["change_pct"], 1.0)
         self.assertEqual(fallback_calls, [])
+
+    def test_turnover_rank_uses_tushare_daily_before_legacy_fallback(self):
+        fallback_calls = []
+
+        result = get_turnover_rank_from_tushare_first(
+            "2026-05-13",
+            limit=2,
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"ts_code": "000001.SZ", "stock_code": "000001", "amount_yi": 120.5, "pct_chg": 2.1},
+                {"ts_code": "600000.SH", "stock_code": "600000", "amount_yi": 320.25, "pct_chg": -1.2},
+                {"ts_code": "300001.SZ", "stock_code": "300001", "amount_yi": 80.0, "pct_chg": 0.4},
+            ],
+            fetch_stock_name_map_fn=lambda: {"600000": "浦发银行", "000001": "平安银行"},
+            fetch_stock_industry_map_fn=lambda: {"600000": "银行", "000001": "银行"},
+            legacy_get_turnover_rank_fn=lambda target_date=None, limit=50: fallback_calls.append((target_date, limit)) or [],
+        )
+
+        self.assertEqual([item["code"] for item in result], ["600000", "000001"])
+        self.assertEqual(result[0]["name"], "浦发银行")
+        self.assertEqual(result[0]["sector"], "银行")
+        self.assertEqual(result[0]["turnover"], 320.25)
+        self.assertEqual(result[0]["change_pct"], -1.2)
+        self.assertEqual(result[0]["data_source"], "tushare.daily")
+        self.assertEqual(fallback_calls, [])
+
+    def test_turnover_rank_falls_back_only_when_tushare_has_no_rows(self):
+        fallback_calls = []
+
+        result = get_turnover_rank_from_tushare_first(
+            "2026-05-13",
+            limit=2,
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [],
+            legacy_get_turnover_rank_fn=lambda target_date=None, limit=50: fallback_calls.append((target_date, limit)) or [
+                {"code": "300750", "name": "宁德时代", "turnover": 145.1, "data_source": "eastmoney.turnover_rank"}
+            ],
+        )
+
+        self.assertEqual(result[0]["code"], "300750")
+        self.assertEqual(fallback_calls, [("2026-05-13", 2)])
 
 
 if __name__ == "__main__":

@@ -80,6 +80,67 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["pivot_mainline_rows"][0]["structure_state"], "上沿承压")
         self.assertRegex(result["pivot_mainline_rows"][0]["interpretation"], r"。$")
 
+    def test_derive_market_research_cycle_layer_calendar_uses_latest_25_trading_days(self):
+        trading_dates = [
+            "2026-04-01",
+            "2026-04-02",
+            "2026-04-03",
+            "2026-04-06",
+            "2026-04-07",
+            "2026-04-08",
+            "2026-04-09",
+            "2026-04-10",
+            "2026-04-13",
+            "2026-04-14",
+            "2026-04-15",
+            "2026-04-16",
+            "2026-04-17",
+            "2026-04-20",
+            "2026-04-21",
+            "2026-04-22",
+            "2026-04-23",
+            "2026-04-24",
+            "2026-04-27",
+            "2026-04-28",
+            "2026-04-29",
+            "2026-04-30",
+            "2026-05-01",
+            "2026-05-04",
+            "2026-05-05",
+            "2026-05-06",
+        ]
+        history = [
+            {
+                "date": trade_date,
+                "primary_mainline": "电力" if index % 3 == 0 else "半导体",
+                "market_state": "观察",
+            }
+            for index, trade_date in enumerate(trading_dates[:-1])
+        ]
+
+        result = derive_market_research_cycle_layer(
+            {
+                "recent_mainline_history": history,
+                "current_mainline_history_record": {
+                    "date": "2026-05-06",
+                    "primary_mainline": "通信",
+                    "market_state": "试探",
+                },
+            },
+            state_machine={"leading_line": "通信"},
+        )
+        rendered_cells = [
+            cell
+            for row in result["cycle_calendar_rows"]
+            for field in ("monday", "tuesday", "wednesday", "thursday", "friday")
+            for cell in (row[field] if isinstance(row[field], list) else [row[field]])
+            if isinstance(cell, dict) and cell.get("date")
+        ]
+
+        self.assertEqual(len(rendered_cells), 25)
+        self.assertEqual(rendered_cells[0]["date"], "04-02")
+        self.assertEqual(rendered_cells[-1]["date"], "05-06")
+
     def test_derive_market_research_cycle_layer_treats_pivot_as_mainline_cycle_carrier(self):
         result = derive_market_research_cycle_layer(
             {
@@ -219,6 +280,26 @@ class MarketResearchRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["mainline_turnover_summary"]["conclusion"], "主线未切换，通信仍是中心")
         self.assertIn("18.1%", result["mainline_turnover_summary"]["data_text"])
+
+    def test_build_market_research_snapshot_contract_loads_latest_25_mainline_history_days(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        calls = []
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-04-24"},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: calls.append((target_date, load_kwargs)) or [
+                {"date": "2026-04-22", "primary_mainline": "半导体"},
+                {"date": "2026-04-23", "primary_mainline": "半导体"},
+            ],
+            **kwargs,
+        )
+
+        self.assertEqual(calls, [("2026-04-24", {"lookback_days": 25, "max_scan_days": 60})])
+        self.assertEqual(len(result["recent_mainline_history"]), 2)
 
     def test_build_market_research_snapshot_contract_uses_tencent_sector_flow_turnover_before_ths(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
