@@ -11,6 +11,26 @@ __all__ = [
 
 _stock_industry_cache = {}
 _eastmoney_warning_emitted = False
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
+
+
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
 
 
 def get_stock_status(stock_name, stock_code, zt_pool, dt_pool, change_pct=None):
@@ -68,14 +88,14 @@ def get_stock_sector(
         for stock in zt_pool_raw:
             if stock.get("代码") == stock_code or stock.get("名称") == stock_name:
                 sector = stock.get("所属行业", "")
-                if sector and sector != "未知":
+                if _is_valid_sector_label(sector):
                     return sector
 
     if dt_pool_raw:
         for stock in dt_pool_raw:
             if stock.get("代码") == stock_code or stock.get("名称") == stock_name:
                 sector = stock.get("所属行业", "")
-                if sector and sector != "未知":
+                if _is_valid_sector_label(sector):
                     return sector
 
     if hot_rank_data:
@@ -107,7 +127,7 @@ def get_stock_sector(
         for stock in lhb_data:
             if stock.get("code") == stock_code or stock.get("name") == stock_name:
                 sector = stock.get("sector", "")
-                if sector and sector != "未知":
+                if _is_valid_sector_label(sector):
                     return sector
 
     if sector_fund_flow:

@@ -131,6 +131,31 @@ def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
         return loader(target_date, lookback_days=25)
 
 
+def _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot=None):
+    try:
+        from research.market_research_runtime import _build_sector_attack_evidence_rows
+    except Exception:
+        return None
+    market_research_snapshot = market_research_snapshot or {}
+    return _build_sector_attack_evidence_rows(
+        snapshot_data,
+        snapshot_data.get("current_sector_turnover_snapshot")
+        or market_research_snapshot.get("current_sector_turnover_snapshot")
+        or {},
+        snapshot_data.get("recent_sector_turnover_history")
+        or market_research_snapshot.get("recent_sector_turnover_history")
+        or [],
+        snapshot_data.get("total_turnover") or (market_research_snapshot.get("observation") or {}).get("turnover", 0),
+    )
+
+
+def _summary_has_attack_evidence(summary):
+    if not isinstance(summary, dict):
+        return False
+    attack_summary = summary.get("mainline_attack_evidence_summary")
+    return isinstance(attack_summary, dict) and bool(str(attack_summary.get("attack_state") or "").strip())
+
+
 def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
@@ -209,15 +234,79 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
             snapshot_data.get("mainline_turnover_summary")
         )
 
-    if not summary_resolved and callable(helpers.get("build_mainline_turnover_summary")):
-        snapshot_data["mainline_turnover_summary"] = helpers["build_mainline_turnover_summary"](
-            target_date=target_date,
-            current_mainline_history_record=snapshot_data.get("current_mainline_history_record") or {},
-            recent_mainline_history=snapshot_data.get("recent_mainline_history") or [],
-            current_sector_turnover_snapshot=snapshot_data.get("current_sector_turnover_snapshot") or {},
-            recent_sector_turnover_history=snapshot_data.get("recent_sector_turnover_history") or [],
-        )
+    sector_attack_evidence_rows = _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot)
+    should_rebuild_for_attack_evidence = bool(
+        sector_attack_evidence_rows
+        and not _summary_has_attack_evidence(snapshot_data.get("mainline_turnover_summary"))
+    )
 
+    if (not summary_resolved or should_rebuild_for_attack_evidence) and callable(helpers.get("build_mainline_turnover_summary")):
+        build_kwargs = {
+            "target_date": target_date,
+            "current_mainline_history_record": snapshot_data.get("current_mainline_history_record") or {},
+            "recent_mainline_history": snapshot_data.get("recent_mainline_history") or [],
+            "current_sector_turnover_snapshot": snapshot_data.get("current_sector_turnover_snapshot") or {},
+            "recent_sector_turnover_history": snapshot_data.get("recent_sector_turnover_history") or [],
+        }
+        if sector_attack_evidence_rows:
+            build_kwargs["sector_attack_evidence_rows"] = sector_attack_evidence_rows
+        snapshot_data["mainline_turnover_summary"] = helpers["build_mainline_turnover_summary"](
+            **build_kwargs
+        )
+        if isinstance(market_research_snapshot, dict):
+            market_research_snapshot["mainline_turnover_summary"] = snapshot_data["mainline_turnover_summary"]
+            snapshot_data["market_research_snapshot"] = market_research_snapshot
+
+    return snapshot_data
+
+
+def _ensure_replay_capital_intent_atoms(snapshot_data):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+
+    market_research_snapshot = snapshot_data.get("market_research_snapshot")
+    if not isinstance(market_research_snapshot, dict):
+        return snapshot_data
+
+    try:
+        from research.market_research_runtime import (
+            _derive_capital_intent_breakdown,
+            _derive_lhb_capital_intent,
+        )
+    except Exception:
+        return snapshot_data
+
+    mainline_turnover_summary = (
+        snapshot_data.get("mainline_turnover_summary")
+        or market_research_snapshot.get("mainline_turnover_summary")
+        or {}
+    )
+    current_record = snapshot_data.get("current_mainline_history_record") or market_research_snapshot.get("current_mainline_history_record") or {}
+    current_mainline_name = str(
+        current_record.get("primary_mainline")
+        or current_record.get("leading_line")
+        or mainline_turnover_summary.get("current_mainline")
+        or ""
+    ).strip()
+
+    sector_attack_evidence_rows = _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot)
+    lhb_capital_status, capital_conclusion = _derive_lhb_capital_intent(snapshot_data, current_mainline_name)
+    capital_intent_breakdown, capital_conclusion = _derive_capital_intent_breakdown(
+        mainline_turnover_summary,
+        sector_attack_evidence_rows,
+        lhb_capital_status,
+        capital_conclusion,
+    )
+
+    if capital_intent_breakdown:
+        market_research_snapshot["capital_intent_breakdown"] = capital_intent_breakdown
+        market_research_snapshot["lhb_capital_status"] = lhb_capital_status
+        market_research_snapshot["capital_conclusion"] = capital_conclusion
+    elif lhb_capital_status or capital_conclusion:
+        market_research_snapshot["lhb_capital_status"] = lhb_capital_status or market_research_snapshot.get("lhb_capital_status") or {}
+        market_research_snapshot["capital_conclusion"] = capital_conclusion or market_research_snapshot.get("capital_conclusion") or {}
+
+    snapshot_data["market_research_snapshot"] = market_research_snapshot
     return snapshot_data
 
 
@@ -233,7 +322,9 @@ def _mark_replayed_step_success(snapshot_data, step_name, safe_float):
         name = str(item[0] or "").strip()
         elapsed = safe_float(item[1])
         cumulative = safe_float(item[2])
-        base_name = name.replace("(失败)", "").replace("(回补)", "").strip()
+        base_name = name.replace("(失败)", "").replace("(回补)", "").replace("(空)", "").strip()
+        if ":" in base_name and base_name.startswith("步骤"):
+            base_name = base_name.split(":", 1)[1].strip()
         if base_name == step_name:
             name = step_name
             matched = True
@@ -389,12 +480,296 @@ def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float
     return snapshot_data
 
 
+def _has_rows(value):
+    if isinstance(value, (list, tuple)):
+        return len(value) > 0
+    if isinstance(value, dict):
+        return bool(value)
+    return value not in (None, "", 0, 0.0)
+
+
+def _sync_replay_source_status(snapshot_data, *, data_label, step_label, timer_label, safe_float):
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status[data_label] = True
+    step_status[step_label] = True
+    _mark_replayed_step_success(snapshot_data, timer_label, safe_float)
+
+
+def _fallback_integrated_hot_list_from_primary(snapshot_data):
+    hot_rank = snapshot_data.get("hot_rank_top30") or []
+    if not isinstance(hot_rank, list):
+        return []
+    integrated = []
+    for index, item in enumerate(hot_rank, 1):
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row.setdefault("rank", index)
+        integrated.append(row)
+    return integrated
+
+
+def _fetch_replay_xuangubao_data(target_date, helpers):
+    fetcher = (helpers or {}).get("fetch_xuangubao_data")
+    if callable(fetcher):
+        try:
+            return fetcher(target_date=target_date) or {}
+        except TypeError as error:
+            if "target_date" not in str(error):
+                raise
+            return fetcher() or {}
+    from xuangubao_intraday import XuangubaoIntradayAnalyzer
+
+    return XuangubaoIntradayAnalyzer().fetch_xuangubao_data(target_date=target_date) or {}
+
+
+def _fetch_replay_wanzhu_top10(target_date, helpers):
+    fetcher = (helpers or {}).get("fetch_wanzhu_top10")
+    if callable(fetcher):
+        return list(fetcher(target_date) or [])
+    from data_collector import AShareDataCollector
+
+    return list(AShareDataCollector().get_wanzhu_top10(target_date) or [])
+
+
+def _build_sector_bucket(records, *, include_zt_type=False):
+    buckets = {}
+    for item in records or []:
+        if not isinstance(item, dict):
+            continue
+        sector = item.get("所属行业") or item.get("sector") or "未知"
+        row = {
+            "code": item.get("代码") or item.get("code") or "",
+            "name": item.get("名称") or item.get("name") or "",
+        }
+        if include_zt_type:
+            row["zt_type"] = item.get("涨停统计") or item.get("zt_type") or ""
+        buckets.setdefault(sector, []).append(row)
+    return buckets
+
+
+def _fetch_replay_limit_pool_snapshot(target_date, helpers):
+    fetcher = (helpers or {}).get("get_limit_pool_snapshot")
+    if callable(fetcher):
+        return fetcher(target_date) or {}
+    try:
+        from input.tushare_runtime import get_limit_pool_snapshot_from_tushare_first
+
+        return get_limit_pool_snapshot_from_tushare_first(target_date=target_date) or {}
+    except Exception:
+        return {}
+
+
+def _apply_replay_limit_pool_snapshot(snapshot_data, pool_snapshot, safe_float):
+    zt_pool = list((pool_snapshot or {}).get("zt_pool") or [])
+    dt_pool = list((pool_snapshot or {}).get("dt_pool") or [])
+    market_stats = dict((pool_snapshot or {}).get("market_stats") or {})
+    if not (zt_pool or dt_pool or market_stats):
+        return False
+
+    snapshot_data["zt_pool"] = zt_pool
+    snapshot_data["dt_pool"] = dt_pool
+    snapshot_data["limit_up_codes"] = list((pool_snapshot or {}).get("limit_up_codes") or [row.get("代码") for row in zt_pool if isinstance(row, dict) and row.get("代码")])
+    snapshot_data["limit_down_codes"] = list((pool_snapshot or {}).get("limit_down_codes") or [row.get("代码") for row in dt_pool if isinstance(row, dict) and row.get("代码")])
+    snapshot_data["zt_pool_by_sector"] = (pool_snapshot or {}).get("zt_pool_by_sector") or _build_sector_bucket(zt_pool, include_zt_type=True)
+    snapshot_data["dt_pool_by_sector"] = (pool_snapshot or {}).get("dt_pool_by_sector") or _build_sector_bucket(dt_pool)
+    snapshot_data["market_stats"] = market_stats
+
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["涨停池"] = bool(zt_pool)
+    data_status["跌停池"] = bool(dt_pool)
+    data_status["大盘涨跌统计"] = bool(market_stats)
+    if zt_pool:
+        data_status["涨停股板块分布"] = True
+    if dt_pool:
+        data_status["跌停股板块分布"] = True
+    step_status["涨停跌停数据获取"] = True
+    _mark_replayed_step_success(snapshot_data, "涨停跌停数据获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.pool_snapshot",
+        status="success",
+        message="已回补涨停跌停池与市场活跃度快照",
+        provider=(pool_snapshot or {}).get("provider", "tushare.limit_list_ths"),
+        target_keys=["zt_pool", "dt_pool", "zt_pool_by_sector", "dt_pool_by_sector", "market_stats"],
+        zt_count=len(zt_pool),
+        dt_count=len(dt_pool),
+        fallback_used=bool((pool_snapshot or {}).get("fallback_used")),
+    )
+    return True
+
+
+def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    helpers = helpers or {}
+    changed = False
+
+    if (
+        snapshot_data.get("step_status", {}).get("涨停跌停数据获取") is False
+        or snapshot_data.get("data_status", {}).get("涨停池") is False
+        or snapshot_data.get("data_status", {}).get("跌停池") is False
+        or snapshot_data.get("data_status", {}).get("大盘涨跌统计") is False
+    ):
+        if _apply_replay_limit_pool_snapshot(
+            snapshot_data,
+            _fetch_replay_limit_pool_snapshot(target_date, helpers),
+            safe_float,
+        ):
+            changed = True
+
+    if (
+        snapshot_data.get("data_status", {}).get("整合热榜") is False
+        or snapshot_data.get("step_status", {}).get("整合热榜获取") is False
+        or not _has_rows(snapshot_data.get("integrated_hot_list"))
+    ):
+        integrated = _fallback_integrated_hot_list_from_primary(snapshot_data)
+        if integrated:
+            snapshot_data["integrated_hot_list"] = integrated
+            snapshot_data.setdefault("tag_distribution", snapshot_data.get("tag_distribution") or {})
+            snapshot_data.setdefault("status_distribution", snapshot_data.get("status_distribution") or {})
+            _sync_replay_source_status(
+                snapshot_data,
+                data_label="整合热榜",
+                step_label="整合热榜获取",
+                timer_label="整合热榜获取",
+                safe_float=safe_float,
+            )
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.request",
+                step="request.integrated_hot_rank",
+                status="success",
+                message="已从热度前三十回补整合热榜",
+                provider="primary_hot_rank.fallback",
+                target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
+                integrated_count=len(integrated),
+                fallback_used=True,
+            )
+            changed = True
+
+    xgb_data = snapshot_data.get("xuangubao_data") or {}
+    xgb_count = (
+        len((xgb_data or {}).get("xuangubao_news", []) or [])
+        + len((xgb_data or {}).get("xuangubao_plates", []) or [])
+        + len((xgb_data or {}).get("xuangubao_limit_up_reasons", []) or [])
+    )
+    xgb_news_count = len((xgb_data or {}).get("xuangubao_news", []) or [])
+    if (
+        snapshot_data.get("data_status", {}).get("选股通盘中异动") is False
+        or snapshot_data.get("step_status", {}).get("选股通盘中异动获取") is False
+        or xgb_count <= 0
+        or xgb_news_count <= 0
+    ):
+        try:
+            xgb_data = _fetch_replay_xuangubao_data(target_date, helpers)
+        except Exception:
+            xgb_data = {}
+        news_count = len((xgb_data or {}).get("xuangubao_news", []) or [])
+        plate_count = len((xgb_data or {}).get("xuangubao_plates", []) or [])
+        limit_up_reason_count = len((xgb_data or {}).get("xuangubao_limit_up_reasons", []) or [])
+        if news_count or plate_count or limit_up_reason_count:
+            snapshot_data["xuangubao_data"] = xgb_data
+            _sync_replay_source_status(
+                snapshot_data,
+                data_label="选股通盘中异动",
+                step_label="选股通盘中异动获取",
+                timer_label="选股通盘中异动获取",
+                safe_float=safe_float,
+            )
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.monitoring.request",
+                step="request.xuangubao",
+                status="success",
+                message="已回补选股通盘中异动",
+                provider="xuangubao.fetch_xuangubao_data",
+                target_keys=["xuangubao_data"],
+                optional=True,
+                news_count=news_count,
+                plate_count=plate_count,
+                limit_up_reason_count=limit_up_reason_count,
+                diagnostic_note="; ".join(
+                    f"{key}={value}"
+                    for key, value in ((xgb_data or {}).get("diagnostics", {}) or {}).items()
+                    if value not in (None, "", {})
+                ),
+                diagnostics=(xgb_data or {}).get("diagnostics", {}),
+            )
+            changed = True
+
+    if (
+        snapshot_data.get("data_status", {}).get("顽主杯热门前十") is False
+        or snapshot_data.get("step_status", {}).get("顽主杯热门前十获取") is False
+        or not _has_rows(snapshot_data.get("wanzhu_top10"))
+    ):
+        try:
+            wanzhu_top10 = _fetch_replay_wanzhu_top10(target_date, helpers)
+        except Exception:
+            wanzhu_top10 = []
+        if wanzhu_top10:
+            snapshot_data["wanzhu_top10"] = wanzhu_top10
+            _sync_replay_source_status(
+                snapshot_data,
+                data_label="顽主杯热门前十",
+                step_label="顽主杯热门前十获取",
+                timer_label="顽主杯热门前十获取",
+                safe_float=safe_float,
+            )
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.monitoring.request",
+                step="request.wanzhu_top10",
+                status="success",
+                message="已回补顽主杯热门前十",
+                provider="AShareDataCollector.get_wanzhu_top10",
+                target_keys=["wanzhu_top10"],
+                stock_count=len(wanzhu_top10),
+            )
+            changed = True
+
+    if (
+        snapshot_data.get("step_status", {}).get("连板梯队提取") is False
+        or snapshot_data.get("lianban_data") is None
+    ):
+        snapshot_data["lianban_data"] = list(snapshot_data.get("lianban_data") or [])
+        snapshot_data.setdefault("step_status", {})["连板梯队提取"] = True
+        _mark_replayed_step_success(snapshot_data, "连板梯队提取", safe_float)
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.lianban_snapshot",
+            status="success",
+            message="已确认连板梯队为空但请求成功",
+            provider="tushare.limit_list_ths",
+            target_keys=["lianban_data"],
+            lianban_count=len(snapshot_data.get("lianban_data") or []),
+        )
+        changed = True
+
+    if changed:
+        _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
 def _provider_from_snapshot_log(snapshot_data, step):
     for item in snapshot_data.get("module_logs") or []:
         if not isinstance(item, dict) or item.get("step") != step:
             continue
         return (item.get("details") or {}).get("provider") or ""
     return ""
+
+
+def _fetch_calendar_events_compat(tencent, target_date):
+    try:
+        return tencent.get_calendar_events(target_date=target_date)
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        return tencent.get_calendar_events()
 
 
 def build_replay_snapshot_contract(
@@ -437,15 +812,38 @@ def build_replay_snapshot_contract(
         safe_float,
         helpers=runtime_helpers,
     )
+    snapshot_data = _ensure_replay_decision_sources(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
     snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=runtime_helpers)
+    snapshot_data = _ensure_replay_capital_intent_atoms(snapshot_data)
 
     if "calendar_events" in refresh_sources:
         print_fn("   🔄 重新拉取财联社预期日历...")
         try:
             tencent = tencent_factory()
-            calendar = tencent.get_calendar_events(target_date=target_date)
+            calendar = _fetch_calendar_events_compat(tencent, target_date)
             if calendar:
                 snapshot_data["calendar_events"] = calendar
+                data_status = snapshot_data.setdefault("data_status", {})
+                step_status = snapshot_data.setdefault("step_status", {})
+                data_status["预期日历"] = True
+                step_status["预期日历获取"] = True
+                _mark_replayed_step_success(snapshot_data, "预期日历获取", safe_float)
+                _replace_request_module_log(
+                    snapshot_data,
+                    module="domains.calendar_events.request",
+                    step="request.calendar_events",
+                    status="success",
+                    message="已刷新财联社预期日历",
+                    provider="tencent.get_calendar_events",
+                    target_keys=["calendar_events"],
+                    calendar_count=len(calendar),
+                )
+                _refresh_request_diagnostics(snapshot_data)
                 print_fn(f"   ✅ 预期日历刷新成功: {len(calendar)} 条")
                 _append_log(logs, "refresh.calendar_events", "success", "已刷新财联社预期日历", count=len(calendar))
             else:

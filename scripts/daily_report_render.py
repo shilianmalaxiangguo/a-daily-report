@@ -31,10 +31,17 @@ CRITICAL_REPORT_DATA_FIELDS = (
     ("成交额排名", "turnover_rank"),
 )
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
-    "total_turnover": ("tushare.",),
     "wind_a_alternative": ("tushare.",),
     "turnover_rank": ("tushare.",),
 }
+DECISION_CRITICAL_REPORT_DATA_FIELDS = (
+    ("整合热榜", "整合热榜获取", ("request.integrated_hot_rank",), "integrated_hot_list", False),
+    ("预期日历", "预期日历获取", ("request.calendar_events",), "calendar_events", False),
+    ("选股通盘中异动", "选股通盘中异动获取", ("request.xuangubao",), "xuangubao_data", False),
+    ("顽主杯热门前十", "顽主杯热门前十获取", ("request.wanzhu_top10",), "wanzhu_top10", False),
+    ("连板梯队", "连板梯队提取", ("request.lianban_snapshot",), "lianban_data", True),
+)
+FAILED_REQUEST_STATUSES = {"error", "degraded"}
 
 
 class ReportCriticalDataMissingError(RuntimeError):
@@ -167,6 +174,28 @@ def _provider_for_step(data, step):
     return ""
 
 
+def _request_logs_for_steps(data, steps):
+    steps = set(steps or [])
+    return [
+        log
+        for log in (data.get("module_logs") or [])
+        if isinstance(log, dict) and log.get("step") in steps
+    ]
+
+
+def _provider_for_steps(data, steps):
+    providers = []
+    for log in _request_logs_for_steps(data, steps):
+        details = log.get("details") or {}
+        provider = details.get("provider") or details.get("source") or ""
+        if provider:
+            providers.append(str(provider))
+    unique = sorted(set(providers))
+    if not unique:
+        return ""
+    return ",".join(unique)
+
+
 def _row_count_for_step(data, step, payload_key):
     for log in (data.get("module_logs") or []):
         if not isinstance(log, dict) or log.get("step") != step:
@@ -181,6 +210,88 @@ def _row_count_for_step(data, step, payload_key):
     if isinstance(payload, dict):
         return 1 if payload else 0
     return 1 if payload not in (None, "", 0, 0.0) else 0
+
+
+def _row_count_for_steps(data, steps, payload_key):
+    for log in _request_logs_for_steps(data, steps):
+        details = log.get("details") or {}
+        if "news_count" in details or "plate_count" in details or "limit_up_reason_count" in details:
+            return (
+                int(_safe_float(details.get("news_count"), 0))
+                + int(_safe_float(details.get("plate_count"), 0))
+                + int(_safe_float(details.get("limit_up_reason_count"), 0))
+            )
+        for key in ("row_count", "rank_count", "index_count", "count", "integrated_count", "calendar_count", "news_count", "stock_count", "lianban_count"):
+            if details.get(key) not in (None, ""):
+                return details.get(key)
+    payload = data.get(payload_key)
+    if isinstance(payload, (list, tuple)):
+        return len(payload)
+    if isinstance(payload, dict):
+        return 1 if payload else 0
+    return 1 if payload not in (None, "", 0, 0.0) else 0
+
+
+def _decision_payload_valid(data, payload_key, allow_empty):
+    if payload_key not in data:
+        return True
+    payload = data.get(payload_key)
+    if payload_key == "xuangubao_data":
+        if not isinstance(payload, dict):
+            return False
+        return bool(payload.get("xuangubao_news"))
+    if allow_empty:
+        return payload is not None
+    if isinstance(payload, (list, tuple, dict)):
+        return bool(payload)
+    return payload not in (None, "", 0, 0.0)
+
+
+def _decision_request_failed(data, steps):
+    logs = _request_logs_for_steps(data, steps)
+    if not logs:
+        return False
+    return not any(str(log.get("status") or "").strip() == "success" for log in logs)
+
+
+def _decision_field_tracked(data, label, step_label, steps, payload_key):
+    data_status = (data or {}).get("data_status") or {}
+    step_status = (data or {}).get("step_status") or {}
+    return (
+        label in data_status
+        or step_label in step_status
+        or payload_key in (data or {})
+        or bool(_request_logs_for_steps(data or {}, steps))
+    )
+
+
+def _build_decision_critical_checks(data):
+    data = data or {}
+    data_status = data.get("data_status") or {}
+    step_status = data.get("step_status") or {}
+    checks = []
+    for label, step_label, steps, payload_key, allow_empty in DECISION_CRITICAL_REPORT_DATA_FIELDS:
+        tracked = _decision_field_tracked(data, label, step_label, steps, payload_key)
+        if not tracked:
+            continue
+        data_failed = label in data_status and data_status.get(label) is False
+        step_failed = step_label in step_status and step_status.get(step_label) is False
+        request_failed = _decision_request_failed(data, steps)
+        payload_failed = not _decision_payload_valid(data, payload_key, allow_empty)
+        status = "failed" if data_failed or step_failed or request_failed or payload_failed else "success"
+        checks.append(
+            {
+                "label": label,
+                "step_label": step_label,
+                "payload_key": payload_key,
+                "status": status,
+                "provider": _provider_for_steps(data, steps) or "unknown",
+                "row_count": _row_count_for_steps(data, steps, payload_key),
+                "data_status": data_status.get(label),
+                "step_status": step_status.get(step_label),
+            }
+        )
+    return checks
 
 
 def _critical_value(data, payload_key):
@@ -229,15 +340,19 @@ def build_report_preflight(data, target_date):
                 "data_status": data_status.get(label),
             }
         )
+    decision_checks = _build_decision_critical_checks(data)
+    decision_failures = [check["label"] for check in decision_checks if check["status"] == "failed"]
+    all_failures = [
+        check["label"]
+        for check in checks
+        if check["label"] in failures or check["status"] == "failed"
+    ] + decision_failures
     return {
         "target_date": target_date,
-        "status": "failed" if failures or any(check["status"] == "failed" for check in checks) else "success",
+        "status": "failed" if all_failures else "success",
         "checks": checks,
-        "failures": [
-            check["label"]
-            for check in checks
-            if check["label"] in failures or check["status"] == "failed"
-        ],
+        "decision_checks": decision_checks,
+        "failures": all_failures,
     }
 
 
@@ -259,6 +374,18 @@ def render_report_preflight_lines(preflight):
                 row_count=check.get("row_count", ""),
             )
         )
+    if preflight.get("decision_checks"):
+        lines.append("决策数据 preflight:")
+        for check in preflight.get("decision_checks") or []:
+            lines.append(
+                "- {label}: {status} | provider={provider} | row_count={row_count} | step_status={step_status}".format(
+                    label=check.get("label", ""),
+                    status=check.get("status", ""),
+                    provider=check.get("provider", "unknown"),
+                    row_count=check.get("row_count", ""),
+                    step_status=check.get("step_status", ""),
+                )
+            )
     if preflight.get("failures"):
         lines.append("失败字段: {}".format("、".join(preflight.get("failures") or [])))
     return lines

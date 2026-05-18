@@ -30,6 +30,7 @@ _llm_call_stats = {
     "sector_analysis_calls": 0,
     "sector_analysis_time": 0.0,
 }
+ENABLE_REMOTE_CALENDAR_LLM = False
 
 
 def _install_runtime_bindings(bindings):
@@ -217,6 +218,134 @@ def analyze_event_sector(event_title, event_summary="", xuangubao_data=None, hot
 def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str = "") -> dict:
     full_text = f"{event_title} {event_summary}".lower()
 
+    if any(term in full_text for term in ["逆回购", "mlf", "shibor", "同业存单", "流动性", "央行公开市场"]):
+        return {
+            "main_direction": "金融流动性",
+            "related_sectors": ["银行", "券商", "国债期货", "货币政策"],
+            "trading_logic": "涉及公开市场或资金面事件，主要影响流动性预期和金融板块风险偏好",
+            "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["amd", "英伟达", "gpu", "ai开发者日", "智算", "算力", "数据中心", "液冷", "服务器"]):
+        return {
+            "main_direction": "AI算力",
+            "related_sectors": ["AI芯片", "服务器", "液冷", "数据中心", "光模块"],
+            "trading_logic": "涉及AI算力基础设施或芯片平台事件，优先映射到算力产业链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["联想", "天禧ai", "ai pc", "ai电脑", "ai手机", "ai终端", "端侧ai", "claw"]):
+        return {
+            "main_direction": "AI终端",
+            "related_sectors": ["AI PC", "消费电子", "端侧AI", "智能硬件"],
+            "trading_logic": "涉及AI终端产品升级，映射到端侧AI和消费电子链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["google i/o", "谷歌开发者", "aigc", "人工智能技术大会", "agentarts", "智能体", "meta", "ai应用", "生成式ai"]):
+        return {
+            "main_direction": "AI应用",
+            "related_sectors": ["AI应用", "大模型", "智能体", "多模态"],
+            "trading_logic": "涉及AI应用、开发者生态或智能体平台事件，映射到AI应用链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["无人机", "低空", "eVTOL".lower(), "飞行汽车"]):
+        return {
+            "main_direction": "低空经济",
+            "related_sectors": ["无人机", "eVTOL", "飞行汽车", "空管系统"],
+            "trading_logic": "涉及无人机/低空产业活动，映射到低空经济链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["半导体", "集微", "集成电路", "芯片大会", "晶圆", "先进封装"]):
+        return {
+            "main_direction": "半导体",
+            "related_sectors": ["半导体设备", "半导体材料", "先进封装", "存储芯片"],
+            "trading_logic": "涉及半导体产业会议或技术生态，映射到半导体链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["临床肿瘤", "asco", "世界卫生大会", "医药", "医疗", "创新药", "肿瘤"]):
+        return {
+            "main_direction": "医药医疗",
+            "related_sectors": ["创新药", "医疗器械", "CXO", "生物医药"],
+            "trading_logic": "涉及医疗卫生或肿瘤学会议，映射到医药医疗链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["畜牧", "养殖", "饲料", "生猪", "禽"]):
+        return {
+            "main_direction": "农牧养殖",
+            "related_sectors": ["养殖业", "饲料", "动物保健", "农产品"],
+            "trading_logic": "涉及畜牧养殖行业活动，映射到农牧产业链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["光谷", "光电子", "光博会", "光通信", "6g", "5g", "cpo", "光模块", "光芯片"]):
+        return {
+            "main_direction": "光通信",
+            "related_sectors": ["光模块", "CPO", "光芯片", "光通信设备"],
+            "trading_logic": "涉及光电子/光通信产业活动，映射到光通信链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["工程机械", "建筑及工程机械", "工程装备", "矿山机械"]):
+        return {
+            "main_direction": "工程机械",
+            "related_sectors": ["工程机械", "建筑机械", "出口链", "机械设备"],
+            "trading_logic": "涉及工程机械展会或出口场景，映射到工程机械链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["世界智能产业", "智能产业博览会", "智能制造", "工业互联网"]):
+        return {
+            "main_direction": "智能制造",
+            "related_sectors": ["智能制造", "工业互联网", "机器人", "自动化"],
+            "trading_logic": "涉及智能产业或制造业数字化活动，映射到智能制造链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["短信服务", "阿里云", "云服务", "云计算", "云通信"]):
+        return {
+            "main_direction": "云计算",
+            "related_sectors": ["云服务", "云通信", "数字经济", "软件服务"],
+            "trading_logic": "涉及云服务价格或平台变化，映射到云计算和软件服务链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["网络文明", "网络安全", "数字治理", "内容治理"]):
+        return {
+            "main_direction": "网络安全",
+            "related_sectors": ["网络安全", "数字治理", "内容安全", "信创"],
+            "trading_logic": "涉及网络治理和数字生态会议，映射到网络安全/数字治理链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["贸促会", "贸易投资", "apec", "亚太经合", "贸易部长"]):
+        return {
+            "main_direction": "外贸投资",
+            "related_sectors": ["外贸", "跨境支付", "港口航运", "供应链服务"],
+            "trading_logic": "涉及贸易投资或区域经贸会议，映射到外贸和跨境链",
+            "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["普京", "中俄", "俄罗斯总统", "国事访问"]):
+        return {
+            "main_direction": "中俄贸易",
+            "related_sectors": ["中俄贸易", "跨境支付", "能源贸易", "港口航运"],
+            "trading_logic": "涉及中俄关系或访问事件，映射到中俄贸易和跨境链",
+            "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["国民经济运行", "经济运行情况", "统计局", "国新办"]):
+        return {
+            "main_direction": "宏观经济",
+            "related_sectors": ["顺周期", "金融", "消费", "周期资源"],
+            "trading_logic": "涉及宏观数据披露，主要用于判断经济预期和顺周期风险偏好",
+            "expectation": "中性",
+            "confidence": "中",
+        }
     if any(term in full_text for term in ["原油", "油价", "石油", "燃油", "opec", "伊朗"]):
         return {
             "main_direction": "周期资源",
@@ -257,14 +386,6 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": "根据具体事件判断",
             "confidence": "中",
         }
-    if any(term in full_text for term in ["光通信", "6g", "5g", "cpo", "光模块", "光芯片"]):
-        return {
-            "main_direction": "光通信",
-            "related_sectors": ["光模块", "CPO", "光芯片", "通信设备"],
-            "trading_logic": "涉及光通信技术/标准进展，利好光通信产业链",
-            "expectation": "根据具体事件判断",
-            "confidence": "中",
-        }
     if any(term in full_text for term in ["机器人", "具身智能", "减速器", "伺服电机"]):
         return {
             "main_direction": "人形机器人",
@@ -286,6 +407,11 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
 def _ai_analyze_event_sectors_legacy_body(event_title, event_summary="", *, print_fn=print):
     global _llm_call_stats
     start_time = time.time()
+    if not ENABLE_REMOTE_CALENDAR_LLM:
+        result = minimal_fallback_analysis(event_title, event_summary)
+        print_fn(f"  [本地规则] '{event_title[:30]}...' -> {result.get('main_direction')}")
+        return result
+
     try:
         client = _default_get_llm_service()
         result = client.analyze_event_sectors(event_title, event_summary)
@@ -306,7 +432,7 @@ def _ai_analyze_event_sectors_legacy_body(event_title, event_summary="", *, prin
         return normalized_result
     except Exception as error:
         elapsed = time.time() - start_time
-        print_fn(f"[ai_analyze_event_sectors] LLM调用失败({elapsed:.2f}s): {error}")
+        print_fn(f"[ai_analyze_event_sectors] 远程LLM失败({elapsed:.2f}s)，使用本地规则: {error}")
         return minimal_fallback_analysis(event_title, event_summary)
 
 

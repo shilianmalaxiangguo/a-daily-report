@@ -1,5 +1,21 @@
 from selection.candlestick_signature import infer_signature_big_yangline
 
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
+
 
 def _append_log(logs, step, status, message, **details):
     logs.append(
@@ -52,6 +68,53 @@ def _build_code_map(items, normalize_stock_code, code_keys):
         if normalized:
             mapped[normalized] = item
     return mapped
+
+
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
+
+
+def _build_xuangubao_plate_map(data, normalize_stock_code):
+    mapped = {}
+    reasons = ((data or {}).get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []) or []
+    for item in reasons:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_stock_code(item.get("symbol") or item.get("code") or item.get("stock_code") or "")
+        if not code:
+            continue
+        for plate in item.get("related_plates") or []:
+            if not isinstance(plate, dict):
+                continue
+            name = str(plate.get("plate_name") or plate.get("name") or "").strip()
+            if _is_valid_sector_label(name):
+                mapped[code] = name
+                break
+    return mapped
+
+
+def _resolve_stock_sector(stock, code, xuangubao_plate_map):
+    for value in (stock.get("sector", ""), stock.get("所属行业", ""), stock.get("所属板块", ""), stock.get("industry", "")):
+        if _is_valid_sector_label(value):
+            return str(value).strip()
+    return xuangubao_plate_map.get(code, "未归类")
+
+
+def _sanitize_sector_bucket_map(sector_map, xuangubao_plate_map, normalize_stock_code):
+    sanitized = {}
+    for sector, stocks in (sector_map or {}).items():
+        for stock in stocks or []:
+            if not isinstance(stock, dict):
+                continue
+            code = normalize_stock_code(stock.get("代码") or stock.get("code") or stock.get("symbol") or "")
+            resolved_sector = str(sector or "").strip()
+            if not _is_valid_sector_label(resolved_sector):
+                resolved_sector = xuangubao_plate_map.get(code, "")
+            if not _is_valid_sector_label(resolved_sector):
+                continue
+            sanitized.setdefault(resolved_sector, []).append(stock)
+    return sanitized
 
 
 def _enrich_price_shape(stock, code, stock_info_map, volume_anomaly_map):
@@ -115,13 +178,16 @@ def build_market_research_context_bundle_contract(
     active_a_kill_records = get_active_a_kill_records(target_date)
     stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
     volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
+    xuangubao_plate_map = _build_xuangubao_plate_map(data, normalize_stock_code)
+    zt_pool_by_sector = _sanitize_sector_bucket_map(zt_pool_by_sector, xuangubao_plate_map, normalize_stock_code)
+    dt_pool_by_sector = _sanitize_sector_bucket_map(dt_pool_by_sector, xuangubao_plate_map, normalize_stock_code)
 
     candidates = []
     for stock in zt_pool[:30]:
         code = normalize_stock_code(stock.get("代码", stock.get("code", "")))
         stock = _enrich_price_shape(stock, code, stock_info_map, volume_anomaly_map)
         name = stock.get("名称", stock.get("name", ""))
-        sector = stock.get("所属行业", stock.get("sector", ""))
+        sector = _resolve_stock_sector(stock, code, xuangubao_plate_map)
         change = stock.get("涨跌幅", stock.get("change_pct", 9.9))
 
         open_price = stock.get("开盘价", stock.get("open", 0))
@@ -190,7 +256,7 @@ def build_market_research_context_bundle_contract(
                 {
                     "name": stock.get("name", ""),
                     "code": code,
-                    "sector": stock.get("sector", stock.get("所属板块", "")),
+                    "sector": _resolve_stock_sector(stock, code, xuangubao_plate_map),
                     "change": change,
                     "score": max(0, 30 - idx * 2) + (10 if change >= 7 else 0),
                     "source": f"热榜第{idx}",
@@ -241,16 +307,16 @@ def build_market_research_context_bundle_contract(
         )
         if not sector_tags and concepts:
             sector_tags = list(concepts)
+        resolved_sector = _resolve_stock_sector(stock, code, xuangubao_plate_map)
+        if resolved_sector == "未归类":
+            if _is_valid_sector_label(existing.get("sector", "")):
+                resolved_sector = existing.get("sector", "")
+            elif sector_tags:
+                resolved_sector = sector_tags[0]
         stock_meta_map[code] = {
             "name": stock.get("name", stock.get("名称", "")) or existing.get("name", ""),
             "code": code,
-            "sector": (
-                stock.get("sector", "")
-                or stock.get("所属行业", "")
-                or stock.get("所属板块", "")
-                or existing.get("sector", "")
-                or (sector_tags[0] if sector_tags else "")
-            ),
+            "sector": resolved_sector,
             "industry": stock.get("industry", stock.get("所属行业", existing.get("industry", ""))),
             "sector_tags": sector_tags,
             "concepts": concepts,
@@ -446,6 +512,7 @@ def build_market_research_context_bundle_contract(
         observation_snapshot=observation_snapshot,
         target_date=target_date,
     )
+    mainline_turnover_summary = market_research_snapshot.get("mainline_turnover_summary", {}) or {}
     market_state_snapshot = market_research_snapshot.get("state_machine", {}) or {}
     abnormal_projection_summary = market_research_snapshot.get("abnormal_projection", {}) or {}
     step0_plan = derive_step0_follow_plan(market_research_snapshot, final_gate, position_level)
@@ -475,6 +542,7 @@ def build_market_research_context_bundle_contract(
         "observation_snapshot": observation_snapshot,
         "market_research_snapshot": market_research_snapshot,
         "market_state_snapshot": market_state_snapshot,
+        "mainline_turnover_summary": mainline_turnover_summary,
         "abnormal_projection_summary": abnormal_projection_summary,
         "step0_plan": step0_plan,
         "module_logs": logs,

@@ -146,6 +146,35 @@ assert sector == "军工"
         self.assertEqual(sector_from_raw, "军工")
         self.assertEqual(sector_from_hot_rank, "机器人")
 
+    def test_market_activity_support_ignores_market_board_labels_when_resolving_sector(self):
+        support = self._load_module()
+
+        sector = support.get_stock_sector(
+            "巨力索具",
+            "002342",
+            hot_rank_data=[
+                {"code": "002342", "name": "巨力索具", "concepts": ["商业航天", "军工"]},
+            ],
+            zt_pool_raw=[
+                {"代码": "002342", "名称": "巨力索具", "所属行业": "HS"},
+            ],
+            skip_api_call=True,
+        )
+        gem_sector = support.get_stock_sector(
+            "大普微",
+            "301666",
+            hot_rank_data=[
+                {"code": "301666", "name": "大普微", "concepts": ["存储芯片"]},
+            ],
+            zt_pool_raw=[
+                {"代码": "301666", "名称": "大普微", "所属行业": "GEM"},
+            ],
+            skip_api_call=True,
+        )
+
+        self.assertEqual(sector, "商业航天")
+        self.assertEqual(gem_sector, "存储芯片")
+
     def test_market_activity_support_emits_warning_when_eastmoney_lookup_fails(self):
         support = self._load_module()
         support._stock_industry_cache.clear()

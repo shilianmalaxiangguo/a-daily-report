@@ -9,6 +9,21 @@ __all__ = [
 ]
 
 _MISSING = object()
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
 
 
 def _install_runtime_bindings(bindings):
@@ -46,6 +61,37 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
+
+
+def _build_xuangubao_plate_map(all_data):
+    mapped = {}
+    reasons = ((all_data or {}).get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []) or []
+    for item in reasons:
+        if not isinstance(item, dict):
+            continue
+        code = normalize_stock_code(item.get("symbol") or item.get("code") or item.get("stock_code") or "")
+        if not code:
+            continue
+        for plate in item.get("related_plates") or []:
+            if not isinstance(plate, dict):
+                continue
+            name = str(plate.get("plate_name") or plate.get("name") or "").strip()
+            if _is_valid_sector_label(name):
+                mapped[code] = name
+                break
+    return mapped
+
+
+def _resolve_candidate_sector(stock, code, xuangubao_plate_map):
+    for value in (stock.get("sector", ""), stock.get("所属行业", ""), stock.get("所属板块", "")):
+        if _is_valid_sector_label(value):
+            return str(value).strip()
+    return xuangubao_plate_map.get(normalize_stock_code(code), "未归类")
 
 
 def _round_or_none(value, digits=2):
@@ -142,6 +188,7 @@ def build_watch_candidate_pool_bundle(all_data, *, emit):
     all_data = all_data or {}
     candidates_dict = {}
     logs = []
+    xuangubao_plate_map = _build_xuangubao_plate_map(all_data)
 
     tr_name_map = {}
     for stock in all_data.get("turnover_rank", []) or []:
@@ -175,7 +222,7 @@ def build_watch_candidate_pool_bundle(all_data, *, emit):
                 "code": code,
                 "name": name,
                 "turnover": turnover,
-                "sector": stock.get("sector", "") or stock.get("所属行业", ""),
+                "sector": _resolve_candidate_sector(stock, code, xuangubao_plate_map),
                 "_source": source_name,
             }
             return True
@@ -196,6 +243,10 @@ def build_watch_candidate_pool_bundle(all_data, *, emit):
             "listing_date",
             "listing_window",
             "pre_listing_action",
+            "new_stock_cycle_state",
+            "c_stage_acceptance",
+            "emotion_outlet_status",
+            "new_stock_recognition_status",
         ):
             if key in stock:
                 candidate[key] = stock.get(key)
@@ -548,7 +599,7 @@ def _build_abnormal_watch_pool_legacy_body(
                         "setup_signal_label": setup_signal.get("label", ""),
                         "setup_signal_phase": setup_signal.get("phase", ""),
                         "anchor_price": round(anchor_price, 2) if anchor_price else 0,
-                        "action_rule": "MVP快照回退：先看次日是否继续强于市场，再等60分钟确认。",
+                        "action_rule": "MVP快照回退：先看次日是否继续强于市场，再按预演参与窗口确认。",
                         "abnormal_note": "缺少近期K线，先按强势/主线优先级纳入异常观察。",
                         "abnormal_score": abnormal_score,
                         "source": stock.get("source", ""),

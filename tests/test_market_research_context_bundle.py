@@ -107,6 +107,84 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertTrue(any(log["step"] == "build.market_snapshot" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "build.gem_breathing" and log["status"] == "skipped" for log in result["module_logs"]))
 
+    def test_build_market_research_context_bundle_replaces_board_labels_with_xuangubao_plates(self):
+        captured_abnormal_candidates = []
+        captured_sector_inputs = {}
+
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {
+                    "HS": [{"代码": "000417"}],
+                    "GEM": [{"代码": "300212"}],
+                    "STAR": [{"代码": "688507"}],
+                },
+                "dt_pool_by_sector": {},
+                "zt_pool": [
+                    {"代码": "000417", "名称": "合百集团", "所属行业": "HS", "涨跌幅": 10.0, "开盘价": 10, "最新价": 11, "最高价": 11, "最低价": 10, "成交额": 230000000},
+                    {"代码": "300212", "名称": "*ST易录", "所属行业": "GEM", "涨跌幅": 20.0, "开盘价": 10, "最新价": 12, "最高价": 12, "最低价": 10, "成交额": 180000000},
+                    {"代码": "688507", "名称": "索辰科技", "所属行业": "STAR", "涨跌幅": 20.0, "开盘价": 10, "最新价": 12, "最高价": 12, "最低价": 10, "成交额": 160000000},
+                ],
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {"symbol": "000417.SZ", "name": "合百集团", "related_plates": [{"plate_name": "国产芯片"}]},
+                        {"symbol": "300212.SZ", "name": "*ST易录", "related_plates": [{"plate_name": "ST股"}]},
+                        {"symbol": "688507.SS", "name": "索辰科技", "related_plates": [{"plate_name": "机器人"}]},
+                    ]
+                },
+                "hot_rank_top30": [],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-05-18",
+            exit_analysis={"sector_name": "电力", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="一档",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").split(".")[0].replace("SZ", "").replace("SS", "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda target_date, candidate_stocks, **kwargs: captured_abnormal_candidates.extend(candidate_stocks) or [
+                {"code": item["code"], "name": item["name"], "sector": item["sector"], "follow_state": "新异动待观察", "is_degraded_snapshot": True}
+                for item in candidate_stocks
+            ],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: bool((item or {}).get("is_degraded_snapshot")),
+            build_sector_trend_snapshot=lambda candidates, watchlist, evaluated_stocks, dragon_stocks, **kwargs: captured_sector_inputs.update({"candidates": candidates, "watchlist": watchlist}) or [
+                {"sector": "国产芯片", "trend_count": 2, "anchor_code": "000417", "anchor_name": "合百集团", "density_score": 80}
+            ],
+            build_leader_memory_bank=lambda sector_snapshot, watchlist, dragon_stocks, **kwargs: [
+                {"code": "000417", "name": "合百集团", "sector": sector_snapshot[0]["sector"], "remember_score": 80, "remember_reason": "板块辨识度最高"}
+            ],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {
+                "abnormal_watch_pool": kwargs.get("abnormal_watch_pool", []),
+                "leader_memory_bank": kwargs.get("leader_memory_bank", []),
+                "sector_trend_snapshot": kwargs.get("sector_trend_snapshot", []),
+            },
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+                "observation": observation_snapshot or {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        candidate_sectors = [item["sector"] for item in result["watchlist"]]
+        self.assertEqual(candidate_sectors, ["国产芯片", "ST股", "机器人"])
+        self.assertEqual([item["sector"] for item in captured_abnormal_candidates], candidate_sectors)
+        self.assertEqual([item["sector"] for item in captured_sector_inputs["candidates"]], candidate_sectors)
+        self.assertNotIn("HS", candidate_sectors)
+        self.assertNotIn("GEM", candidate_sectors)
+        self.assertNotIn("STAR", candidate_sectors)
+
     def test_build_market_research_context_bundle_contract_skips_gem_discovery_in_display_safe_mode(self):
         result = build_market_research_context_bundle_contract(
             data={

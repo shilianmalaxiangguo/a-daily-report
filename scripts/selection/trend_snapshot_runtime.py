@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from selection.candidate_execution_contracts import (
+    build_participation_window_from_candidate,
+    build_participation_window_policy,
+)
 
 __all__ = [
     "build_extreme_conviction_list",
@@ -9,6 +13,21 @@ __all__ = [
 ]
 
 _MISSING = object()
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
 
 
 def _install_runtime_bindings(bindings):
@@ -40,6 +59,11 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
+
+
 def normalize_stock_code(code):
     return analysis_utils.normalize_stock_code(code)
 
@@ -59,6 +83,94 @@ def stock_matches_sector(stock, sector_name):
         if concept and (sector_name in concept or concept in sector_name):
             return True
     return False
+
+
+def _stable_code_rank(value):
+    text = normalize_stock_code(value)
+    digits = "".join(ch for ch in str(text or "") if ch.isdigit())
+    if not digits:
+        return 999999
+    try:
+        return int(digits)
+    except ValueError:
+        return 999999
+
+
+def _conviction_attack_state(stock, *, is_anchor=False, is_mainline=False):
+    if is_anchor and is_mainline:
+        return "100%"
+    if stock.get("allow_full_attack") or stock.get("a_grade_candidate"):
+        return "100%"
+    return "50%"
+
+
+def _conviction_participation_window(stock, *, is_anchor=False, is_mainline=False):
+    return build_participation_window_from_candidate(
+        stock,
+        is_anchor=is_anchor,
+        is_mainline=is_mainline,
+    )
+
+
+def _build_conviction_participation_fields(stock, *, sector="", is_anchor=False, is_mainline=False):
+    sector_text = str(sector or stock.get("sector") or "主线").strip() or "主线"
+    if not _is_valid_sector_label(sector_text):
+        sector_text = "主线"
+    window = _conviction_participation_window(stock, is_anchor=is_anchor, is_mainline=is_mainline)
+    if window == "打板/错过":
+        board_script = "只做首次强封且大单金额持续进入，封死买不到就不追"
+        missed_action = f"封死买不到就沿{sector_text}趋势比价链找低位承接，找不到就跳过"
+    elif "回封参与" in window:
+        board_script = "首次封板只看大单金额持续进入，弱封不追"
+        missed_action = f"过快封死就沿{sector_text}趋势比价链找低位承接，找不到就跳过"
+    else:
+        board_script = "不以涨停为唯一条件，先等价格确认和承接连续"
+        missed_action = f"确认前快速拉高就跳过，只沿{sector_text}趋势比价链找低位承接，找不到就跳过"
+
+    participation = {
+        "participation_window": window,
+        "attack_state": _conviction_attack_state(stock, is_anchor=is_anchor, is_mainline=is_mainline),
+        "auction_script": "09:20后看价格位置、匹配金额、委托稳定和板块同步，任一不合格按0%不参与",
+        "first_minutes_script": "09:30-09:35只看主动资金是否继续抬价，承接不连续按0%不参与",
+        "board_script": board_script,
+        "reseal_script": "开板释放抛压后快速回封，且封单质量改善、板块同步",
+        "missed_action": missed_action,
+        "invalid_condition": "竞价表态、开盘承接、板块同步任一失败，按0%不参与",
+    }
+    participation.update(build_participation_window_policy(window, missed_action, candidate=stock))
+    return participation
+
+
+def _build_core_identity_fields(
+    *,
+    is_anchor=False,
+    is_mainline=False,
+    lianban=0,
+    reason="",
+    pattern="",
+    reason_parts=None,
+    attack_state="50%",
+):
+    reason_text = str(reason or "")
+    pattern_text = str(pattern or "")
+    basis = [str(part).strip() for part in (reason_parts or []) if str(part).strip()]
+    early_allowed = bool(is_anchor and is_mainline)
+    if early_allowed:
+        role = "trend_chain_anchor"
+        chain_position = "high_anchor" if int(lianban or 0) >= 2 or pattern_text in ("T字板", "一字板") else "core_transmitter"
+    elif is_mainline or "龙一" in reason_text or int(lianban or 0) >= 2:
+        role = "core_transmitter"
+        chain_position = "middle_transmitter"
+    else:
+        role = "tracked_sample"
+        chain_position = "unassigned"
+    return {
+        "role": role,
+        "chain_position": chain_position,
+        "early_participation_allowed": early_allowed,
+        "position_state": attack_state,
+        "basis": basis,
+    }
 
 
 def build_sector_trend_snapshot(candidates, watchlist, evaluated_stocks, dragon_stocks, zt_pool_by_sector=None, top_n=5, *, helpers=None):
@@ -140,7 +252,7 @@ def _build_sector_trend_snapshot_legacy_body(candidates, watchlist, evaluated_st
     sector_buckets = {}
 
     def _ensure_bucket(sector_name):
-        if not sector_name:
+        if not _is_valid_sector_label(sector_name):
             return None
         return sector_buckets.setdefault(
             sector_name,
@@ -264,6 +376,8 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
     for stock in evaluated_stocks:
         code = normalize_stock_code(stock.get("code", ""))
         sector = stock.get("sector", "")
+        if not _is_valid_sector_label(sector):
+            sector = ""
         tomorrow_strength = _safe_float(stock.get("tomorrow_strength", stock.get("score", 0)))
         lianban = int(stock.get("连板数", stock.get("lianban", 0)) or 0)
         reason = str(stock.get("reason", ""))
@@ -303,16 +417,32 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
 
         action_rule = "只盯分歧后的转强，不追情绪顶点"
         if is_anchor and is_mainline:
-            action_rule = "优先盯首个60分钟确认，若继续强就只做它"
+            action_rule = "优先盯竞价表态、开盘承接和回封质量，继续强就只做它"
         elif lianban >= 2:
-            action_rule = "先看竞价承接，再等60分钟确认"
+            action_rule = "先看竞价承接，回封或结构确认命中才参与"
 
+        participation_fields = _build_conviction_participation_fields(
+            stock,
+            sector=sector,
+            is_anchor=is_anchor,
+            is_mainline=is_mainline,
+        )
         conviction_list.append(
             {
                 **stock,
                 "conviction_score": round(conviction_score, 1),
                 "conviction_reason": " / ".join(reason_parts),
                 "conviction_rule": action_rule,
+                "core_identity": _build_core_identity_fields(
+                    is_anchor=is_anchor,
+                    is_mainline=is_mainline,
+                    lianban=lianban,
+                    reason=reason,
+                    pattern=pattern,
+                    reason_parts=reason_parts,
+                    attack_state=participation_fields.get("attack_state", "50%"),
+                ),
+                **participation_fields,
             }
         )
 
@@ -321,6 +451,7 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             x.get("conviction_score", 0),
             x.get("tomorrow_strength", 0),
             x.get("连板数", x.get("lianban", 0)),
+            -_stable_code_rank(x.get("code", "")),
         ),
         reverse=True,
     )
@@ -358,6 +489,8 @@ def _build_leader_memory_bank_legacy_body(sector_snapshot, watchlist, dragon_sto
         watch_stock = watch_map.get(code, {})
         dragon_stock = dragon_map.get(code, {})
         sector = item.get("sector", "") or watch_stock.get("sector", "") or dragon_stock.get("sector", "")
+        if not _is_valid_sector_label(sector):
+            sector = "未归类"
         lianban = int(
             watch_stock.get("连板数", watch_stock.get("lianban", dragon_stock.get("lianban", item.get("anchor_lianban", 0))))
             or 0

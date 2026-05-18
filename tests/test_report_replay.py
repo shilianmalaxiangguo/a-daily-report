@@ -93,6 +93,14 @@ class _FakeTencentFinanceData:
         return list(self._calendar_events)
 
 
+class _NoArgTencentFinanceData:
+    def __init__(self, calendar_events):
+        self._calendar_events = calendar_events
+
+    def get_calendar_events(self):
+        return list(self._calendar_events)
+
+
 class ReportReplayTest(unittest.TestCase):
     def _load_module(self):
         try:
@@ -180,11 +188,223 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["supplementary_perspective"], "补充视角")
         self.assertEqual(result["data"]["calendar_events"], [{"title": "new"}])
         self.assertEqual(result["data"]["indices"], [{"code": "sh000001"}])
+        self.assertTrue(result["data"]["data_status"]["预期日历"])
+        self.assertTrue(result["data"]["step_status"]["预期日历获取"])
         self.assertTrue(result["data"]["data_status"]["主要指数"])
         self.assertTrue(result["data"]["step_status"]["主要指数获取"])
+        request_logs = result["data"]["module_logs"]
+        self.assertTrue(
+            any(log["step"] == "request.calendar_events" and log["status"] == "success" for log in request_logs)
+        )
         self.assertIn("主要指数获取", [row[0] for row in result["data"]["timer_summary"]["steps"]])
         self.assertTrue(any(log["step"] == "refresh.calendar_events" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "refresh.major_indices" for log in result["module_logs"]))
+
+    def test_build_replay_snapshot_contract_refreshes_calendar_when_provider_has_no_target_date_arg(self):
+        snapshot = {
+            "calendar_events": [{"title": "old"}],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-14",
+            refresh_sources=["calendar_events"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _NoArgTencentFinanceData([{"title": "new"}]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertEqual(result["data"]["calendar_events"], [{"title": "new"}])
+        self.assertTrue(
+            any(
+                log["step"] == "refresh.calendar_events" and log["status"] == "success"
+                for log in result["module_logs"]
+            )
+        )
+        self.assertFalse(
+            any(
+                log["step"] == "refresh.calendar_events" and log["status"] == "warning"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_build_replay_snapshot_contract_backfills_decision_sources_from_stale_snapshot(self):
+        snapshot = {
+            "hot_rank_top30": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "integrated_hot_list": [],
+            "xuangubao_data": {},
+            "wanzhu_top10": [],
+            "lianban_data": [],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {
+                "涨停池": False,
+                "跌停池": False,
+                "大盘涨跌统计": False,
+                "整合热榜": False,
+                "选股通盘中异动": False,
+                "顽主杯热门前十": False,
+            },
+            "step_status": {
+                "涨停跌停数据获取": False,
+                "整合热榜获取": False,
+                "选股通盘中异动获取": False,
+                "顽主杯热门前十获取": False,
+                "连板梯队提取": False,
+                "主要指数获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.integrated_hot_rank",
+                    "status": "error",
+                    "message": "整合热榜失败",
+                    "details": {"provider": "hot_list_integrated.get_integrated_hot_list"},
+                },
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.xuangubao",
+                    "status": "degraded",
+                    "message": "选股通为空",
+                    "details": {"provider": "xuangubao.fetch_xuangubao_data", "news_count": 0},
+                },
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.wanzhu_top10",
+                    "status": "degraded",
+                    "message": "顽主杯为空",
+                    "details": {"provider": "AShareDataCollector.get_wanzhu_top10", "stock_count": 0},
+                },
+            ],
+            "timer_summary": {
+                "steps": [
+                    ["步骤12: 顽主杯热门前十获取(空)", 1.0, 1.0],
+                ]
+            },
+        }
+
+        xgb_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_limit_pool_snapshot": lambda target_date: {
+                    "provider": "tushare.limit_list_ths",
+                    "zt_pool": [{"代码": "601991", "名称": "大唐发电", "所属行业": "电力", "涨停统计": "首板"}],
+                    "dt_pool": [{"代码": "301588", "名称": "维达利", "所属行业": "消费电子"}],
+                    "market_stats": {"up_count": 2375, "down_count": 3003},
+                },
+                "fetch_wanzhu_top10": lambda target_date: [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+                "fetch_xuangubao_data": lambda target_date=None: xgb_calls.append(target_date) or {
+                    "xuangubao_news": [],
+                    "xuangubao_plates": [{"name": "国产芯片"}],
+                    "diagnostics": {"newsflash": "非法的token"},
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(len(data["zt_pool"]), 1)
+        self.assertEqual(len(data["dt_pool"]), 1)
+        self.assertTrue(data["data_status"]["涨停池"])
+        self.assertTrue(data["step_status"]["涨停跌停数据获取"])
+        self.assertEqual(len(data["integrated_hot_list"]), 1)
+        self.assertEqual(len(data["xuangubao_data"]["xuangubao_plates"]), 1)
+        self.assertEqual(len(data["wanzhu_top10"]), 1)
+        self.assertEqual(data["lianban_data"], [])
+        self.assertTrue(data["data_status"]["整合热榜"])
+        self.assertTrue(data["data_status"]["选股通盘中异动"])
+        self.assertTrue(data["data_status"]["顽主杯热门前十"])
+        self.assertTrue(data["step_status"]["连板梯队提取"])
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") in {"request.integrated_hot_rank", "request.xuangubao", "request.wanzhu_top10", "request.lianban_snapshot"}
+        }
+        self.assertEqual(by_step["request.integrated_hot_rank"]["status"], "success")
+        self.assertEqual(by_step["request.xuangubao"]["details"]["plate_count"], 1)
+        self.assertEqual(by_step["request.xuangubao"]["details"]["diagnostic_note"], "newsflash=非法的token")
+        self.assertEqual(by_step["request.wanzhu_top10"]["details"]["stock_count"], 1)
+        self.assertEqual(by_step["request.lianban_snapshot"]["status"], "success")
+        self.assertIn("顽主杯热门前十获取", [row[0] for row in data["timer_summary"]["steps"]])
+        self.assertEqual(xgb_calls, ["2026-05-18"])
+
+    def test_build_replay_snapshot_contract_refreshes_xuangubao_when_newsflash_empty(self):
+        snapshot = {
+            "hot_rank_top30": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "integrated_hot_list": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "xuangubao_data": {
+                "xuangubao_news": [],
+                "xuangubao_plates": [{"name": "国产芯片"}],
+                "xuangubao_limit_up_reasons": [{"symbol": "600676.SS", "stock_reason": "拟置入文旅体育资产"}],
+                "diagnostics": {"newsflash": "missing XUANGUBAO_IVANKA_TOKEN"},
+            },
+            "wanzhu_top10": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "lianban_data": [],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {
+                "整合热榜": True,
+                "选股通盘中异动": True,
+                "顽主杯热门前十": True,
+            },
+            "step_status": {
+                "整合热榜获取": True,
+                "选股通盘中异动获取": True,
+                "顽主杯热门前十获取": True,
+                "连板梯队提取": True,
+                "主要指数获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.xuangubao",
+                    "status": "success",
+                    "message": "已回补选股通盘中异动",
+                    "details": {
+                        "provider": "xuangubao.fetch_xuangubao_data",
+                        "news_count": 0,
+                        "plate_count": 1,
+                        "limit_up_reason_count": 1,
+                        "diagnostic_note": "newsflash=missing XUANGUBAO_IVANKA_TOKEN",
+                    },
+                }
+            ],
+        }
+        xgb_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "fetch_xuangubao_data": lambda target_date=None: xgb_calls.append(target_date) or {
+                    "xuangubao_news": [{"title": "今日早盘新闻"}],
+                    "xuangubao_plates": [{"name": "国产芯片"}],
+                    "xuangubao_limit_up_reasons": [{"symbol": "600676.SS", "stock_reason": "拟置入文旅体育资产"}],
+                    "diagnostics": {},
+                }
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(xgb_calls, ["2026-05-18"])
+        self.assertEqual(data["xuangubao_data"]["xuangubao_news"][0]["title"], "今日早盘新闻")
+        xgb_log = next(log for log in data["module_logs"] if log.get("step") == "request.xuangubao")
+        self.assertEqual(xgb_log["details"]["news_count"], 1)
+        self.assertEqual(xgb_log["details"]["diagnostic_note"], "")
 
     def test_build_replay_snapshot_contract_returns_not_found_when_snapshot_missing(self):
         result = build_replay_snapshot_contract(
@@ -303,6 +523,165 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 15.8)
         self.assertEqual(result["data"]["mainline_turnover_summary"]["current_mainline"], "半导体")
 
+    def test_build_replay_snapshot_contract_rederives_capital_intent_from_top_level_attack_facts(self):
+        snapshot = {
+            "market_research_snapshot": {
+                "state_machine": {"leading_line": "半导体"},
+                "observation": {},
+                "mainline_turnover_summary": {
+                    "current_mainline": "半导体",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "半导体",
+                        "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+                    },
+                },
+                "lhb_capital_status": {
+                    "capital_strength": "强",
+                    "capital_intensity": "龙虎榜净买入集中在未知，约14.57亿；净卖出端约26.16亿",
+                    "capital_direction": "未知",
+                    "capital_intent": "尝试外溢或轮动",
+                    "style_shift": "资金偏轮动试探",
+                    "event_attribute": "龙虎榜资金行为",
+                },
+                "capital_conclusion": {
+                    "current_capital_state": "龙虎榜资金强，方向在未知",
+                    "mainline_attitude": "资金没有完全确认主线，先看是否轮动",
+                    "tomorrow_action_meaning": "先观察资金是否回到主线，再决定是否给资格",
+                },
+            },
+            "current_mainline_history_record": {"date": "2026-05-14", "primary_mainline": "半导体"},
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-14",
+                "sector_name": "半导体",
+                "sector_turnover": 4206.7,
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 12.4,
+            },
+            "recent_sector_turnover_history": [
+                {"date": "2026-05-13", "sector_name": "半导体", "turnover_share_pct": 10.8}
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "半导体",
+                    "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+                },
+            },
+            "sector_fund_flow": {
+                "inflow": [
+                    {"name": "半导体", "zljlr": 45.0, "turnover_yi": 4206.7},
+                    {"name": "电力", "zljlr": 8.0, "turnover_yi": 2300.0},
+                ],
+                "outflow": [],
+            },
+            "zt_pool_by_sector": {
+                "半导体": [
+                    {"名称": "中船特气", "涨停统计": "4连板"},
+                    {"名称": "芯片一号", "涨停统计": "首板"},
+                    {"名称": "芯片二号", "涨停统计": "首板"},
+                    {"名称": "芯片三号", "涨停统计": "首板"},
+                    {"名称": "芯片四号", "涨停统计": "首板"},
+                ]
+            },
+            "lhb_net_buy_top10": [
+                {"name": "电力一号", "code": "000001", "sector": "电力", "net_buy_amount_yi": 14.57},
+            ],
+            "lhb_net_sell_top10": [
+                {"name": "消费一号", "code": "000002", "sector": "消费", "net_buy_amount_yi": -26.16},
+            ],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 33880.86,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-14",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        research = result["data"]["market_research_snapshot"]
+        self.assertEqual(research["capital_intent_breakdown"]["capital_consistency"], "板块攻击成立，龙虎榜未验证")
+        self.assertEqual(research["capital_conclusion"]["mainline_attitude"], "板块攻击成立，龙虎榜未验证")
+        self.assertEqual(research["capital_conclusion"]["tomorrow_action_meaning"], "先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决")
+        self.assertNotIn("资金没有完全确认主线", research["capital_conclusion"]["mainline_attitude"])
+
+    def test_build_replay_snapshot_contract_rebuilds_stale_summary_without_attack_evidence(self):
+        snapshot = {
+            "market_research_snapshot": {
+                "state_machine": {"leading_line": "半导体"},
+                "observation": {},
+                "mainline_turnover_summary": {
+                    "current_mainline": "半导体",
+                    "conclusion": "主线未切换，半导体仍是中心",
+                },
+            },
+            "current_mainline_history_record": {"date": "2026-05-14", "primary_mainline": "半导体"},
+            "recent_mainline_history": [{"date": "2026-05-13", "primary_mainline": "电力"}],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-14",
+                "sector_name": "半导体",
+                "sector_turnover": 4206.7,
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 12.4,
+            },
+            "recent_sector_turnover_history": [
+                {"date": "2026-05-13", "sector_name": "半导体", "turnover_share_pct": 10.8}
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "conclusion": "主线未切换，半导体仍是中心",
+            },
+            "sector_fund_flow": {
+                "inflow": [
+                    {"name": "养殖业", "zljlr": 7.59, "turnover_yi": 99.91},
+                    {"name": "国有大型银行Ⅱ", "zljlr": 4.09, "turnover_yi": 99.97},
+                    {"name": "化学制品", "zljlr": 3.39, "turnover_yi": 556.9},
+                ],
+                "outflow": [],
+            },
+            "zt_pool_by_sector": {
+                "半导体": [{"name": "中船特气", "zt_type": "4/3"}, {"name": "晶升股份", "zt_type": "1/1"}],
+                "化学制品": [
+                    {"name": "和远气体", "zt_type": "4/2"},
+                    {"name": "宏柏新材", "zt_type": "1/1"},
+                    {"name": "红 宝 丽", "zt_type": "1/1"},
+                    {"name": "晨光新材", "zt_type": "1/1"},
+                    {"name": "红墙股份", "zt_type": "1/1"},
+                ],
+                "家居用品": [{"name": "蒙娜丽莎", "zt_type": "5/5"}, {"name": "麒盛科技", "zt_type": "1/1"}],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 33880.86,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-14",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        top_summary = result["data"]["mainline_turnover_summary"]
+        research_summary = result["data"]["market_research_snapshot"]["mainline_turnover_summary"]
+        self.assertEqual(top_summary["mainline_attack_evidence_summary"]["attack_state"], "chaotic_rotation")
+        self.assertEqual(top_summary["current_mainline"], "")
+        self.assertEqual(top_summary["mainline_capacity_regime_summary"]["primary_line"], "暂无")
+        self.assertEqual(research_summary["mainline_attack_evidence_summary"]["attack_state"], "chaotic_rotation")
+        self.assertEqual(research_summary["current_mainline"], "")
+
     def test_build_replay_snapshot_contract_refills_zero_total_turnover_from_fact_db(self):
         snapshot = {
             "current_mainline_history_record": {"date": "2026-05-13", "primary_mainline": "电力"},
@@ -368,12 +747,14 @@ def _replay_probe(target_date, refresh_sources=None):
                 "主要指数": True,
                 "中证全指": False,
                 "成交额排名": False,
+                "选股通盘中异动": True,
             },
             "step_status": {
                 "两市成交额获取": False,
                 "主要指数获取": True,
                 "中证全指获取": False,
                 "成交额排名获取": False,
+                "选股通盘中异动获取": True,
             },
             "module_logs": [
                 {
@@ -397,7 +778,20 @@ def _replay_probe(target_date, refresh_sources=None):
                     "message": "已处理成交额排行请求",
                     "details": {"provider": "eastmoney.turnover_rank", "turnover_count": 0},
                 },
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.xuangubao",
+                    "status": "success",
+                    "message": "已处理选股通异动请求",
+                    "details": {
+                        "provider": "xuangubao.fetch_xuangubao_data",
+                        "news_count": 1,
+                        "plate_count": 0,
+                        "limit_up_reason_count": 0,
+                    },
+                },
             ],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
             "request_diagnostics": {"summary": {"degraded_count": 3}},
         }
 
@@ -476,12 +870,14 @@ def _replay_probe(target_date, refresh_sources=None):
                 "主要指数": True,
                 "中证全指": False,
                 "成交额排名": True,
+                "选股通盘中异动": True,
             },
             "step_status": {
                 "两市成交额获取": True,
                 "主要指数获取": True,
                 "中证全指获取": False,
                 "成交额排名获取": True,
+                "选股通盘中异动获取": True,
             },
             "module_logs": [
                 {
@@ -505,7 +901,20 @@ def _replay_probe(target_date, refresh_sources=None):
                     "message": "已处理成交额排行请求",
                     "details": {"provider": "tushare.daily", "row_count": 50},
                 },
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.xuangubao",
+                    "status": "success",
+                    "message": "已处理选股通异动请求",
+                    "details": {
+                        "provider": "xuangubao.fetch_xuangubao_data",
+                        "news_count": 1,
+                        "plate_count": 0,
+                        "limit_up_reason_count": 0,
+                    },
+                },
             ],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
         }
 
         result = build_replay_snapshot_contract(

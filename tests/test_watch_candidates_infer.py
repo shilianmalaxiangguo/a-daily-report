@@ -47,6 +47,34 @@ class WatchCandidatesInferTest(unittest.TestCase):
         self.assertTrue(any("候选池" in line for line in emitted))
         self.assertTrue(any(log["step"] == "infer.watch_candidate_pool" for log in result["module_logs"]))
 
+    def test_build_watch_candidate_pool_bundle_replaces_market_board_sector_with_xuangubao_plate(self):
+        emitted = []
+        result = build_watch_candidate_pool_bundle(
+            {
+                "zt_pool": [
+                    {"代码": "000417", "名称": "合百集团", "成交额": 230000000, "所属行业": "HS"},
+                    {"代码": "300212", "名称": "*ST易录", "成交额": 180000000, "所属行业": "GEM"},
+                    {"代码": "688507", "名称": "索辰科技", "成交额": 160000000, "所属行业": "STAR"},
+                ],
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {"symbol": "000417.SZ", "name": "合百集团", "related_plates": [{"plate_name": "国产芯片"}]},
+                        {"symbol": "300212.SZ", "name": "*ST易录", "related_plates": [{"plate_name": "ST股"}]},
+                        {"symbol": "688507.SS", "name": "索辰科技", "related_plates": [{"plate_name": "机器人"}]},
+                    ]
+                },
+            },
+            emit=emitted.append,
+        )
+
+        sectors = {item["code"]: item["sector"] for item in result["results"]["candidates"]}
+        self.assertEqual(sectors["000417"], "国产芯片")
+        self.assertEqual(sectors["300212"], "ST股")
+        self.assertEqual(sectors["688507"], "机器人")
+        self.assertNotIn("HS", sectors.values())
+        self.assertNotIn("GEM", sectors.values())
+        self.assertNotIn("STAR", sectors.values())
+
     def test_new_stock_research_pool_does_not_pollute_candidates_without_upgrade(self):
         emitted = []
         result = build_watch_candidate_pool_bundle(
@@ -123,6 +151,10 @@ class WatchCandidatesInferTest(unittest.TestCase):
                         "candidate_upgrade_reason": "主线贴合",
                         "new_stock_narrative_score": 88,
                         "new_stock_factors": {"same_day_hotness": 18},
+                        "new_stock_cycle_state": "spread",
+                        "c_stage_acceptance": "confirmed",
+                        "emotion_outlet_status": "market_flag",
+                        "new_stock_recognition_status": "emotion_flag",
                     },
                 ],
             },
@@ -138,6 +170,10 @@ class WatchCandidatesInferTest(unittest.TestCase):
         self.assertEqual(liqi["candidate_upgrade_reason"], "主线贴合")
         self.assertEqual(liqi["new_stock_narrative_score"], 88)
         self.assertEqual(liqi["new_stock_factors"], {"same_day_hotness": 18})
+        self.assertEqual(liqi["new_stock_cycle_state"], "spread")
+        self.assertEqual(liqi["c_stage_acceptance"], "confirmed")
+        self.assertEqual(liqi["emotion_outlet_status"], "market_flag")
+        self.assertEqual(liqi["new_stock_recognition_status"], "emotion_flag")
         self.assertEqual(result["results"]["added_count"]["new_stock"], 1)
 
     def test_new_stock_candidate_upgrade_counts_duplicate_code_once(self):
