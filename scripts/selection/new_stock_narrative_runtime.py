@@ -40,6 +40,44 @@ DIRECT_EXECUTION_PERMISSION_FIELDS = {
     "allow_execute",
     "execution_entry_permission",
 }
+NEW_STOCK_CYCLE_ALIASES = {
+    "未启动": "not_started",
+    "单票宣泄": "single_stock_watch",
+    "单票观察": "single_stock_watch",
+    "单票": "single_stock_watch",
+    "扩散": "spread",
+    "同批扩散": "spread",
+    "高潮": "climax",
+    "过热": "climax",
+    "退潮": "fade",
+    "冰点": "weak",
+    "弱市": "weak",
+}
+NEW_STOCK_RECOGNITION_ALIASES = {
+    "普通新股": "ordinary_new_stock",
+    "未升级": "ordinary_new_stock",
+    "情绪旗帜": "emotion_flag",
+    "市场旗帜": "emotion_flag",
+    "旗帜": "emotion_flag",
+    "核心": "emotion_flag",
+}
+NEW_STOCK_ACCEPTANCE_ALIASES = {
+    "确认": "confirmed",
+    "已确认": "confirmed",
+    "承接确认": "confirmed",
+    "不足": "insufficient",
+    "未确认": "insufficient",
+    "弱": "weak",
+}
+NEW_STOCK_OUTLET_ALIASES = {
+    "市场旗帜": "market_flag",
+    "情绪旗帜": "market_flag",
+    "情绪出口": "market_flag",
+    "领先": "market_flag",
+    "普通": "none",
+    "无": "none",
+    "否": "none",
+}
 
 LISTING_WINDOW_SCORE = {
     "tomorrow_listing": 18,
@@ -84,6 +122,20 @@ def _normalize_code(value):
 
 def _normalize_text(value):
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _normalize_label(value, aliases, default):
+    text = _normalize_text(value)
+    if not text:
+        return default
+    lowered = text.lower()
+    known = set(aliases.values()) | {default}
+    if lowered in known:
+        return lowered
+    for key, normalized in aliases.items():
+        if key in text:
+            return normalized
+    return lowered
 
 
 def _normalize_name(value):
@@ -489,6 +541,49 @@ def _timing_sentence(scored_record):
     return "上市窗口不在允许区间，仅保留研究。"
 
 
+def _normalize_new_stock_cycle_fields(scored_record):
+    scored_record = dict(scored_record or {})
+    days_since_listing = scored_record.get("days_since_listing")
+    default_cycle_state = "single_stock_watch"
+    if isinstance(days_since_listing, int) and days_since_listing < 0:
+        default_cycle_state = "not_started"
+
+    scored_record["new_stock_cycle_state"] = _normalize_label(
+        scored_record.get("new_stock_cycle_state"),
+        NEW_STOCK_CYCLE_ALIASES,
+        default_cycle_state,
+    )
+    scored_record["c_stage_acceptance"] = _normalize_label(
+        scored_record.get("c_stage_acceptance"),
+        NEW_STOCK_ACCEPTANCE_ALIASES,
+        "pending",
+    )
+    scored_record["emotion_outlet_status"] = _normalize_label(
+        scored_record.get("emotion_outlet_status"),
+        NEW_STOCK_OUTLET_ALIASES,
+        "none",
+    )
+    scored_record["new_stock_recognition_status"] = _normalize_label(
+        scored_record.get("new_stock_recognition_status"),
+        NEW_STOCK_RECOGNITION_ALIASES,
+        "ordinary_new_stock",
+    )
+    return scored_record
+
+
+def _has_new_stock_cycle_proof(scored_record):
+    scored_record = scored_record or {}
+    cycle_state = _normalize_text(scored_record.get("new_stock_cycle_state"))
+    acceptance = _normalize_text(scored_record.get("c_stage_acceptance"))
+    outlet = _normalize_text(scored_record.get("emotion_outlet_status"))
+    recognition = _normalize_text(scored_record.get("new_stock_recognition_status"))
+    return bool(
+        cycle_state in {"spread", "climax"}
+        and acceptance == "confirmed"
+        and (outlet == "market_flag" or recognition == "emotion_flag")
+    )
+
+
 def _upgrade_blockers(scored_record):
     scored_record = scored_record or {}
     factors = scored_record.get("new_stock_factors") or {}
@@ -505,6 +600,8 @@ def _upgrade_blockers(scored_record):
         blockers.append("叙事关联不足18")
     if _safe_float(factors.get("market_emotion_score"), 0.0) < 12 and _safe_float(factors.get("board_resonance_score"), 0.0) < 8:
         blockers.append("缺少新股情绪或板块共振支持")
+    if not _has_new_stock_cycle_proof(scored_record):
+        blockers.append("新股周期证明不足")
     return blockers
 
 
@@ -534,7 +631,8 @@ def _build_candidate_upgrade_reason(scored_record):
     narrative_text = "；".join(narrative_bits)
 
     if scored_record.get("upgrade_eligible"):
-        return " ".join(part for part in (factor_text, timing_text, narrative_text) if part)
+        cycle_text = "新股周期已通过扩散、C阶段承接和情绪出口验证。"
+        return " ".join(part for part in (factor_text, timing_text, cycle_text, narrative_text) if part)
 
     blockers = "、".join(_upgrade_blockers(scored_record)) or "条件未完全满足"
     return " ".join(part for part in (factor_text, timing_text, f"暂不升级：{blockers}。", narrative_text) if part)
@@ -552,6 +650,7 @@ def should_upgrade_new_stock_candidate(scored_record):
             _safe_float(factors.get("market_emotion_score"), 0.0) >= 12
             or _safe_float(factors.get("board_resonance_score"), 0.0) >= 8
         )
+        and _has_new_stock_cycle_proof(scored_record)
     )
 
 
@@ -560,6 +659,7 @@ def score_new_stock_narrative(record, context=None, target_date=""):
     scored = _merge_profile(record, context)
     timing = _resolve_listing_timing(scored, target_date)
     scored.update(timing)
+    scored = _normalize_new_stock_cycle_fields(scored)
     scored["turnover"] = _derive_turnover(scored)
 
     mainline_match_score = _score_mainline_match(scored, context)
@@ -611,6 +711,10 @@ def _build_candidate_upgrade(scored_record):
         "listing_date": scored_record.get("listing_date", ""),
         "listing_window": scored_record.get("listing_window", ""),
         "pre_listing_action": scored_record.get("pre_listing_action", ""),
+        "new_stock_cycle_state": scored_record.get("new_stock_cycle_state", ""),
+        "c_stage_acceptance": scored_record.get("c_stage_acceptance", ""),
+        "emotion_outlet_status": scored_record.get("emotion_outlet_status", ""),
+        "new_stock_recognition_status": scored_record.get("new_stock_recognition_status", ""),
     }
 
 

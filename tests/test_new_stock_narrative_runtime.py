@@ -13,22 +13,30 @@ from selection.new_stock_narrative_runtime import (
 
 
 class NewStockNarrativeRuntimeTest(unittest.TestCase):
-    def _liqi_context(self):
+    def _liqi_context(self, *, cycle_proof=False):
+        profile = {
+            "sector": "电池",
+            "industry": "锂电池设备",
+            "concept_tags": ["锂电池", "新能源"],
+            "customer_anchors": ["宁德时代", "比亚迪"],
+            "supply_chain_role": "锂电池设备/材料链",
+            "domestic_advantage": "国产制造和成本优势",
+        }
+        if cycle_proof:
+            profile.update(
+                {
+                    "new_stock_cycle_state": "扩散",
+                    "c_stage_acceptance": "confirmed",
+                    "emotion_outlet_status": "market_flag",
+                    "new_stock_recognition_status": "emotion_flag",
+                }
+            )
         return {
             "mainline_name": "电池",
             "potential_mainline": ["锂电池", "新能源"],
             "new_stock_money_making_effect": "strong",
             "sector_resonance": {"status": "strong"},
-            "new_stock_profiles": {
-                "301608": {
-                    "sector": "电池",
-                    "industry": "锂电池设备",
-                    "concept_tags": ["锂电池", "新能源"],
-                    "customer_anchors": ["宁德时代", "比亚迪"],
-                    "supply_chain_role": "锂电池设备/材料链",
-                    "domestic_advantage": "国产制造和成本优势",
-                }
-            },
+            "new_stock_profiles": {"301608": profile},
         }
 
     def test_build_pool_enriches_liqi_style_sample_and_upgrades_it(self):
@@ -48,7 +56,7 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
         result = build_new_stock_research_pool(
             calendar,
             target_date="2026-04-29",
-            context=self._liqi_context(),
+            context=self._liqi_context(cycle_proof=True),
         )
 
         self.assertIn("new_stock_research_pool", result)
@@ -106,6 +114,10 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
                     "customer_anchors": ["比亚迪"],
                     "supply_chain_role": "整车配套链",
                     "domestic_advantage": "国产替代和供应链效率",
+                    "new_stock_cycle_state": "扩散",
+                    "c_stage_acceptance": "confirmed",
+                    "emotion_outlet_status": "market_flag",
+                    "new_stock_recognition_status": "emotion_flag",
                 }
             },
         }
@@ -190,6 +202,71 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
         self.assertFalse(item["upgrade_eligible"])
         self.assertEqual(result["new_stock_candidate_upgrades"], [])
 
+    def test_strong_pre_listing_new_stock_without_cycle_proof_stays_research_only(self):
+        calendar = [
+            {
+                "code": "301608",
+                "name": "N理奇智能",
+                "listing_date": "2026-04-30",
+                "issue_price": 20.0,
+                "fundraising_yi": 2.944,
+                "source": "sina_new_stock_calendar",
+                "source_status": "success",
+            }
+        ]
+
+        result = build_new_stock_research_pool(
+            calendar,
+            target_date="2026-04-29",
+            context=self._liqi_context(),
+        )
+
+        item = result["new_stock_research_pool"][0]
+        self.assertGreaterEqual(item["new_stock_narrative_score"], 72)
+        self.assertEqual(item["new_stock_cycle_state"], "not_started")
+        self.assertEqual(item["new_stock_recognition_status"], "ordinary_new_stock")
+        self.assertFalse(item["upgrade_eligible"])
+        self.assertIn("新股周期证明不足", item["candidate_upgrade_reason"])
+        self.assertEqual(result["new_stock_candidate_upgrades"], [])
+
+    def test_emotion_outlet_new_stock_with_c_stage_acceptance_can_upgrade(self):
+        calendar = [
+            {
+                "code": "301608",
+                "name": "C理奇智能",
+                "listing_date": "2026-04-30",
+                "issue_price": 20.0,
+                "fundraising_yi": 2.944,
+                "source": "sina_new_stock_calendar",
+                "source_status": "success",
+            }
+        ]
+        context = self._liqi_context()
+        context["new_stock_profiles"] = {
+            "301608": {
+                **context["new_stock_profiles"]["301608"],
+                "new_stock_cycle_state": "扩散",
+                "c_stage_acceptance": "confirmed",
+                "emotion_outlet_status": "market_flag",
+                "new_stock_recognition_status": "emotion_flag",
+            }
+        }
+
+        result = build_new_stock_research_pool(
+            calendar,
+            target_date="2026-05-01",
+            context=context,
+        )
+
+        item = result["new_stock_research_pool"][0]
+        self.assertEqual(item["new_stock_cycle_state"], "spread")
+        self.assertEqual(item["c_stage_acceptance"], "confirmed")
+        self.assertEqual(item["emotion_outlet_status"], "market_flag")
+        self.assertEqual(item["new_stock_recognition_status"], "emotion_flag")
+        self.assertTrue(item["upgrade_eligible"])
+        self.assertIn("C阶段承接", item["candidate_upgrade_reason"])
+        self.assertEqual(len(result["new_stock_candidate_upgrades"]), 1)
+
     def test_today_listing_uses_live_open_confirmation_without_buy_language(self):
         calendar = [
             {
@@ -206,7 +283,7 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
         result = build_new_stock_research_pool(
             calendar,
             target_date="2026-04-30",
-            context=self._liqi_context(),
+            context=self._liqi_context(cycle_proof=True),
         )
 
         item = result["new_stock_research_pool"][0]
@@ -269,7 +346,7 @@ class NewStockNarrativeRuntimeTest(unittest.TestCase):
 
         scored = score_new_stock_narrative(
             record,
-            context=self._liqi_context(),
+            context=self._liqi_context(cycle_proof=True),
             target_date="2026-04-29",
         )
 

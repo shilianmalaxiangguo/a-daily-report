@@ -280,7 +280,7 @@ If rendered, use a compact appendix-style block:
 未升级：某某新股 / 主线不匹配 / 只保留观察
 ```
 
-Do not use user-visible words such as `门控`, `开闸`, or `执行权` in this new section.
+Do not use user-visible words such as `条件`, `可做`, or `资格` in this new section.
 
 ## Error Handling
 
