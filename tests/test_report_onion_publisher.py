@@ -39,7 +39,7 @@ def _snapshot(**overrides):
             },
             "capital_conclusion": {
                 "current_capital_state": "龙虎榜资金强，方向在未知",
-                "mainline_attitude": "资金没有完全确认主线，先看是否轮动",
+                "mainline_attitude": "龙虎榜未验证通信设备",
             },
         },
         "mainline_turnover_summary": {
@@ -76,7 +76,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
                 ],
                 observation_pool={"top": "大唐发电(601991)"},
                 candidate_ranking="PK决胜候选：大唐发电(601991)",
-                execution_plan="09:50-10:10确认窗口，买点等60分钟确认",
+                execution_plan="竞价/开盘承接/回封/结构确认分层窗口",
                 market_research_snapshot={
                     "observation": {
                         "zt_count": 98,
@@ -97,11 +97,11 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
                         "position_level": "二档（防守档）",
                         "operation_state": "防守态",
                         "can_new_entry": False,
-                        "final_action": "09:50-10:10确认窗口，买点等60分钟确认",
+                        "final_action": "竞价/开盘承接/回封/结构确认分层窗口",
                     },
                     "capital_conclusion": {
                         "current_capital_state": "龙虎榜资金强，方向在未知",
-                        "mainline_attitude": "资金没有完全确认主线，先看是否轮动",
+                        "mainline_attitude": "龙虎榜未验证通信设备",
                     },
                 },
             ),
@@ -157,7 +157,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
                             "stock_code": "002975",
                             "source_pool": "主线核心",
                             "sector": "通信设备",
-                            "current_action": "09:50-10:10确认窗口，买点等60分钟确认",
+                            "current_action": "竞价/开盘承接/回封/结构确认分层窗口",
                         },
                         {
                             "stock_name": "宇环数控",
@@ -201,7 +201,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
     def test_forbidden_public_text_detector_blocks_codes_and_execution_terms(self):
         for text in [
             "大唐发电(601991)",
-            "买点等60分钟确认",
+            "竞价/开盘承接/回封/结构确认分层窗口",
             "止损线是-5%",
             "09:50-10:10确认窗口",
             "PK决胜候选",

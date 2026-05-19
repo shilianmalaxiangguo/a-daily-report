@@ -21,7 +21,7 @@ LOCKED_FIELDS = ["targets", "executionPlan", "candidateRanking", "pkDetails", "r
 FORBIDDEN_PUBLIC_PATTERNS = [
     re.compile(r"(?<!\d)(?:(?:00|30|60|68)\d{4}|[89]\d{5})(?!\d)"),
     re.compile(r"[\u4e00-\u9fff]{2,}\((?:(?:00|30|60|68)\d{4}|[89]\d{5})\)"),
-    re.compile(r"(买点|触发|止损|止盈|PK|候选|观察池|唯一对象|备用观察|执行计划|时间窗口)"),
+    re.compile(r"(买点|触发|止损|止盈|PK|候选|观察池|唯一对象|备用观察|执行计划|时间窗口|竞价|开盘承接|回封|结构确认|参与窗口)"),
     re.compile(r"\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}"),
 ]
 
