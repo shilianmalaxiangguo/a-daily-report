@@ -289,6 +289,51 @@ assert waiting == waiting_payload
     def test_build_intraday_execution_plan_returns_empty_for_invalid_entry(self):
         self.assertEqual(build_intraday_execution_plan("000001", "2026-04-22", 0), {})
 
+    def test_fetch_intraday_bars_uses_tushare_before_akshare(self):
+        from execution import intraday_execution_runtime as runtime
+
+        runtime._intraday_bar_cache = {}
+        akshare_calls = []
+        fake_akshare = types.SimpleNamespace(
+            stock_zh_a_hist_min_em=lambda symbol, period="30", adjust="": akshare_calls.append((symbol, period, adjust)) or (_ for _ in ()).throw(
+                AssertionError("AkShare should only run after Tushare stock_mins fails")
+            )
+        )
+        tushare_bars = [
+            {
+                "datetime": "2026-04-22 10:00:00",
+                "date": "2026-04-22",
+                "open": 9.8,
+                "high": 10.1,
+                "low": 9.7,
+                "close": 10.0,
+                "volume": 100.0,
+                "amount": 1000.0,
+            },
+            {
+                "datetime": "2026-04-22 10:30:00",
+                "date": "2026-04-22",
+                "open": 10.0,
+                "high": 10.3,
+                "low": 9.9,
+                "close": 10.2,
+                "volume": 120.0,
+                "amount": 1200.0,
+            },
+        ]
+
+        with patch.dict(sys.modules, {"akshare": fake_akshare}), patch.object(
+            runtime,
+            "fetch_tushare_minute_bars",
+            return_value=tushare_bars,
+            create=True,
+        ) as tushare_mock:
+            result = runtime.fetch_intraday_bars("000001", "2026-04-22", period="30", lookback_bars=2)
+
+        tushare_mock.assert_called_once_with("000001", period="30", target_date="2026-04-22", is_index=False)
+        self.assertEqual(akshare_calls, [])
+        self.assertEqual([bar["datetime"] for bar in result], ["2026-04-22 10:00:00", "2026-04-22 10:30:00"])
+
     def test_fetch_intraday_bars_filters_future_rows_and_caches(self):
         from execution import intraday_execution_runtime as runtime
 
@@ -303,7 +348,7 @@ assert waiting == waiting_payload
             )
         )
 
-        with patch.dict(sys.modules, {"akshare": fake_akshare}):
+        with patch.dict(sys.modules, {"akshare": fake_akshare}), patch.object(runtime, "fetch_tushare_minute_bars", return_value=[], create=True):
             first = runtime.fetch_intraday_bars("000001", "2026-04-22", period="30", lookback_bars=2)
             second = runtime.fetch_intraday_bars("000001", "2026-04-22", period="30", lookback_bars=2)
 

@@ -60,7 +60,41 @@ class MinutePriceRuntimeTest(unittest.TestCase):
         self.assertEqual(bars[0]["open"], 3990.0)
         self.assertEqual(bars[1]["amount"], 200.0)
 
-    def test_fetch_index_minute_bars_uses_sina_for_shanghai_index(self):
+    def test_fetch_index_minute_bars_uses_tushare_before_akshare(self):
+        akshare_calls = []
+
+        def fake_stock_zh_a_minute(symbol, period, adjust):
+            akshare_calls.append((symbol, period, adjust))
+            raise AssertionError("AkShare should only run after Tushare stock_mins fails")
+
+        fake_akshare = SimpleNamespace(stock_zh_a_minute=fake_stock_zh_a_minute)
+        tushare_bars = [
+            {
+                "datetime": "2026-04-27 09:30:00",
+                "date": "2026-04-27",
+                "time": "09:30:00",
+                "open": 3990.0,
+                "high": 4001.0,
+                "low": 3988.0,
+                "close": 4000.0,
+                "volume": 80.0,
+                "amount": 180.0,
+            }
+        ]
+        with patch.dict(sys.modules, {"akshare": fake_akshare}), patch.object(
+            minute_price_runtime,
+            "fetch_tushare_minute_bars",
+            return_value=tushare_bars,
+            create=True,
+        ) as tushare_mock:
+            result = minute_price_runtime.fetch_index_minute_bars("sh.000001", period="60", cache_dir=None)
+
+        tushare_mock.assert_called_once_with("sh.000001", period="60", is_index=True, target_date=None)
+        self.assertEqual(akshare_calls, [])
+        self.assertEqual(result["source"], "tushare.stock_mins")
+        self.assertEqual(result["bars"][0]["datetime"], "2026-04-27 09:30:00")
+
+    def test_fetch_index_minute_bars_falls_back_to_akshare_when_tushare_empty(self):
         calls = []
 
         def fake_stock_zh_a_minute(symbol, period, adjust):
@@ -80,12 +114,16 @@ class MinutePriceRuntimeTest(unittest.TestCase):
             )
 
         fake_akshare = SimpleNamespace(stock_zh_a_minute=fake_stock_zh_a_minute)
-        with patch.dict(sys.modules, {"akshare": fake_akshare}):
+        with patch.dict(sys.modules, {"akshare": fake_akshare}), patch.object(
+            minute_price_runtime,
+            "fetch_tushare_minute_bars",
+            return_value=[],
+            create=True,
+        ):
             result = minute_price_runtime.fetch_index_minute_bars("sh.000001", period="60", cache_dir=None)
 
         self.assertEqual(calls, [("sh000001", "60", "")])
         self.assertEqual(result["source"], "akshare.stock_zh_a_minute")
-        self.assertEqual(result["bars"][0]["datetime"], "2026-04-27 09:30:00")
 
     def test_fetch_index_minute_bars_writes_and_reuses_cache(self):
         calls = []

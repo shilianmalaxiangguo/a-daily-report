@@ -427,7 +427,7 @@ def build_single_stock_diagnostic_contract(
         _append_log(logs, "resolve.abnormal_watch", "success", "已补齐异动观察信息")
 
     if code in conviction_codes:
-        system_role = "极度看好名单"
+        system_role = "重点观察名单"
     elif code in core_codes:
         system_role = "明日核心"
     elif code in secondary_codes:

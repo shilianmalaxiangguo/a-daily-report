@@ -21,6 +21,7 @@ from market_data.kline_dates import (
     short_kline_date,
 )
 from market_data.minute_price_runtime import fetch_index_minute_bars
+from market_data.tushare_service import fetch_daily_price_bars as fetch_tushare_daily_price_bars
 
 
 class IwencaiSkillVersionError(RuntimeError):
@@ -746,6 +747,43 @@ def _load_akshare_index_dataframe(index_code, recent_days, target_date=None):
     return df, "akshare.stock_zh_index_daily_em"
 
 
+def _load_tushare_index_dataframe(index_code, recent_days, target_date=None):
+    import pandas as pd
+
+    end_dt = parse_kline_date(target_date) if target_date else datetime.datetime.now().date()
+    if end_dt is None:
+        end_dt = datetime.datetime.now().date()
+    start_dt = end_dt - datetime.timedelta(days=int(recent_days or 120) + 45)
+    try:
+        bars = fetch_tushare_daily_price_bars(
+            index_code,
+            start_dt.strftime("%Y-%m-%d"),
+            end_dt.strftime("%Y-%m-%d"),
+            is_index=True,
+        )
+    except Exception:
+        return None, "tushare.index_daily"
+    if not bars:
+        return None, "tushare.index_daily"
+
+    df = pd.DataFrame(bars)
+    if len(df) == 0 or "date" not in df.columns:
+        return None, "tushare.index_daily"
+    df = df.copy()
+    df["date"] = df["date"].map(normalize_kline_date_str)
+    end_date = normalize_kline_date_str(target_date) if target_date else ""
+    if end_date:
+        df = df[df["date"] <= end_date]
+    for column in ("open", "high", "low", "close", "volume", "amount"):
+        if column not in df.columns:
+            df[column] = 0.0
+    df = df[["date", "open", "high", "low", "close", "volume", "amount"]]
+    df = df.sort_values("date").tail(int(recent_days or 120) + 1).reset_index(drop=True)
+    if len(df) < 2:
+        return None, "tushare.index_daily"
+    return df, "tushare.index_daily"
+
+
 def _load_baostock_index_dataframe(index_code, recent_days, bs_module=None):
     import pandas as pd
     bs_code = _normalize_baostock_index_code(index_code)
@@ -802,13 +840,16 @@ def analyze_market_zhongshu(
             else:
                 df, data_source = fetched, "injected_dataframe"
         else:
-            print_fn(f"[大盘结构] 尝试使用 AkShare 获取{index_code}近{recent_days}日指数K线...")
-            df, data_source = _load_akshare_index_dataframe(index_code, recent_days, target_date=target_date)
+            print_fn(f"[大盘结构] 尝试使用 Tushare index_daily 获取{index_code}近{recent_days}日指数K线...")
+            df, data_source = _load_tushare_index_dataframe(index_code, recent_days, target_date=target_date)
             if df is None or len(df) == 0:
-                print_fn(f"[大盘结构] AkShare 获取失败，尝试使用 fast_index_runtime...")
+                print_fn(f"[大盘结构] Tushare index_daily 获取失败，尝试使用 AkShare 兜底...")
+                df, data_source = _load_akshare_index_dataframe(index_code, recent_days, target_date=target_date)
+            if df is None or len(df) == 0:
+                print_fn(f"[大盘结构] AkShare 获取失败，尝试使用 fast_index_runtime 兜底...")
                 df, data_source = _load_baostock_index_dataframe(index_code, recent_days, bs_module=bs_module)
             if df is None or len(df) == 0:
-                print_fn(f"[大盘结构] fast_index_runtime 获取失败，尝试使用同花顺问财API...")
+                print_fn(f"[大盘结构] fast_index_runtime 获取失败，尝试使用同花顺问财API 兜底...")
                 df = None
                 data_source = "unknown"
             try:
@@ -880,7 +921,7 @@ def analyze_market_zhongshu(
                 signal["signal_type"] = "中枢确认待观察"
                 signal["position_level"] = "观察档（不加仓）"
                 if confirmation_status in ("data_insufficient", "insufficient_60m_history"):
-                    signal["action"] = "只观察，等60分钟确认"
+                    signal["action"] = "只观察，等结构确认补齐"
                 elif confirmation_status == "not_confirmed":
                     signal["action"] = "只观察，等60分钟重新形成平台重叠"
 

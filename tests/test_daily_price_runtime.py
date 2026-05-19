@@ -169,6 +169,40 @@ assert enriched == enriched_payload
 
         self.assertEqual(result.returncode, 0, msg=result.stderr)
 
+    def test_gem_stock_universe_uses_tushare_stock_basic_before_akshare(self):
+        result = _run_legacy_entry_probe(
+            """
+import sys
+import types
+import daily_report_entry_demo
+from unittest.mock import patch
+
+daily_report_entry_demo._gem_stock_universe_cache = None
+
+def fail_stock_info_a_code_name():
+    raise AssertionError("AkShare should only run after Tushare stock_basic fails")
+
+fake_akshare = types.SimpleNamespace(stock_info_a_code_name=fail_stock_info_a_code_name)
+stock_basic = {
+    "300001": {"name": "创业一号", "industry": "机器人"},
+    "300002.SZ": {"name": "创业二号", "industry": "军工"},
+    "600000": {"name": "浦发银行", "industry": "银行"},
+}
+
+with patch.dict(sys.modules, {"akshare": fake_akshare}), \
+     patch.object(daily_report_entry_demo, "run_fetch_stock_basic_map", return_value=stock_basic, create=True) as basic_mock:
+    universe = daily_report_entry_demo._get_gem_stock_universe()
+
+assert universe == [
+    {"code": "300001", "name": "创业一号"},
+    {"code": "300002", "name": "创业二号"},
+]
+basic_mock.assert_called_once_with()
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
     def test_daily_price_runtime_exposes_helper_bindings(self):
         runtime = self._load_module()
         exec(

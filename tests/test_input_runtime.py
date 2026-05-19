@@ -364,6 +364,27 @@ assert result["target_date"] == "2026-04-22"
             )
         )
 
+    def test_run_input_runtime_logs_quicktiny_sector_quadrant_provider(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["get_sector_quadrant_data"] = lambda *args, **kwargs: {
+            "provider": "quicktiny.sector_analysis_quadrant",
+            "high_strong_analysis": {
+                "total": 1,
+                "tier1_count": 1,
+                "tier2_count": 0,
+                "tier3_count": 0,
+                "tier4_count": 0,
+            },
+            "quadrants": {"highStrong": [{"name": "氟化工"}]},
+        }
+
+        result = input_runtime.run_input_runtime("2026-04-29", helpers=helpers)
+
+        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        self.assertEqual(provider_by_step["request.sector_quadrant"], "quicktiny.sector_analysis_quadrant")
+        self.assertTrue(result["data_status"]["板块四象限"])
+
 
 if __name__ == "__main__":
     unittest.main()

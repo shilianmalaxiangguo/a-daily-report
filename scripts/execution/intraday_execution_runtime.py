@@ -3,12 +3,14 @@ from __future__ import annotations
 import daily_report_analysis_utils as analysis_utils
 from execution.entry_cycle_stop_runtime import build_entry_cycle_stop_policy, resolve_entry_cycle_profile
 from market_data.kline_dates import normalize_kline_date_str as _normalize_kline_date_str
+from market_data.tushare_minute_service import fetch_tushare_minute_bars
 
 __all__ = [
     "build_intraday_execution_plan",
     "build_waiting_stock_plan",
     "compute_avg_volume",
     "fetch_intraday_bars",
+    "fetch_tushare_minute_bars",
     "find_latest_intraday_pivot",
 ]
 
@@ -181,6 +183,21 @@ def _fetch_intraday_bars_legacy_body(stock_code, target_date, period="30", lookb
         return []
 
     cleaned = []
+    try:
+        cleaned = fetch_tushare_minute_bars(
+            code,
+            period=period,
+            target_date=normalized_target,
+            is_index=False,
+        )
+    except Exception:
+        cleaned = []
+
+    if cleaned:
+        result = cleaned[-lookback_bars:] if lookback_bars and len(cleaned) > lookback_bars else cleaned
+        _intraday_bar_cache[cache_key] = list(result)
+        return result
+
     try:
         import akshare as ak
 

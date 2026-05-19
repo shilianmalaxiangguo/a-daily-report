@@ -205,7 +205,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         self.assertEqual(len(result["zhongshu_list"]), 1)
         self.assertEqual(result["today_date"], "2026-04-22")
 
-    def test_analyze_market_zhongshu_uses_akshare_primary_for_120_day_window(self):
+    def test_analyze_market_zhongshu_uses_tushare_index_daily_primary_for_120_day_window(self):
         dates = pd.bdate_range(end="2026-04-27", periods=130)
         rows = [
             {
@@ -220,19 +220,17 @@ class ZhongshuRuntimeTest(unittest.TestCase):
             for index, date in enumerate(dates)
         ]
 
+        akshare_calls = []
+
         def fake_index_daily_em(symbol):
-            self.assertEqual(symbol, "sh000001")
-            return pd.DataFrame(rows)
+            akshare_calls.append(symbol)
+            raise AssertionError("AkShare should only run after Tushare index_daily fails")
 
         fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fake_index_daily_em)
         with patch.dict(sys.modules, {"akshare": fake_akshare}), \
+             patch.object(zhongshu_runtime, "fetch_tushare_daily_price_bars", return_value=rows, create=True) as tushare_mock, \
              patch.object(zhongshu_runtime, "fetch_daily_price_bars") as fast_mock, \
              patch.object(zhongshu_runtime, "_load_iwencai_index_dataframe") as iwencai_mock:
-            df, source = zhongshu_runtime._load_akshare_index_dataframe(
-                "sh000001",
-                recent_days=120,
-                target_date="2026-04-27",
-            )
             result = analyze_market_zhongshu(
                 index_code="sh000001",
                 recent_days=120,
@@ -241,16 +239,15 @@ class ZhongshuRuntimeTest(unittest.TestCase):
                 print_fn=lambda *args, **kwargs: None,
             )
 
-        self.assertEqual(source, "akshare.stock_zh_index_daily_em")
-        self.assertEqual(len(df), 121)
-        self.assertEqual(df.iloc[-1]["date"], "2026-04-27")
         self.assertTrue(result["success"])
-        self.assertEqual(result["data_source"], "akshare.stock_zh_index_daily_em")
+        self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertEqual(result["today_date"], "2026-04-27")
+        self.assertEqual(akshare_calls, [])
+        self.assertTrue(tushare_mock.call_args.kwargs["is_index"])
         fast_mock.assert_not_called()
         iwencai_mock.assert_not_called()
 
-    def test_analyze_market_zhongshu_uses_fast_index_runtime_primary_without_calling_iwencai(self):
+    def test_analyze_market_zhongshu_falls_back_to_fast_index_runtime_without_calling_iwencai(self):
         bars = [
             {"date": "2026-04-15", "open": 99, "high": 105, "low": 95, "close": 100, "volume": 1, "amount": 0},
             {"date": "2026-04-16", "open": 100, "high": 104, "low": 96, "close": 101, "volume": 1, "amount": 0},
@@ -261,6 +258,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         ]
 
         with patch.dict(sys.modules, {"akshare": SimpleNamespace()}), \
+             patch.object(zhongshu_runtime, "fetch_tushare_daily_price_bars", return_value=[], create=True), \
              patch.object(zhongshu_runtime, "_load_iwencai_index_dataframe") as iwencai_mock, \
              patch.object(zhongshu_runtime, "fetch_daily_price_bars", return_value=bars):
             result = analyze_market_zhongshu(
@@ -279,6 +277,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         logs = []
 
         with patch.dict(sys.modules, {"akshare": SimpleNamespace()}), \
+             patch.object(zhongshu_runtime, "fetch_tushare_daily_price_bars", return_value=[], create=True), \
              patch.object(zhongshu_runtime, "fetch_daily_price_bars", return_value=[]):
             result = analyze_market_zhongshu(
                 index_code="sh000001",
@@ -371,7 +370,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
         self.assertIn("60分钟确认", result["signal"]["status"])
-        self.assertEqual(result["signal"]["action"], "只观察，等60分钟确认")
+        self.assertEqual(result["signal"]["action"], "只观察，等结构确认补齐")
         self.assertNotEqual(result["signal"]["action"], "积极做多")
 
     def test_analyze_market_zhongshu_exposes_chanlun_confirmation_contract(self):

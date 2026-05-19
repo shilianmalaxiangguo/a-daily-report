@@ -8,6 +8,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+PERMISSION_LABEL = "参与资格"
+
 from diagnostics.single_stock_runtime import (
     build_single_stock_diagnostic_contract,
     compose_single_stock_final_verdict_contract,
@@ -275,8 +277,8 @@ def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', r
             normalize_stock_code=lambda code: str(code).zfill(6) if code else "",
             get_trade_permission=lambda *args, **kwargs: {
                 "can_execute": True,
-                "permission_label": "执行权",
-                "permission_reason": "主线核心且环境放行",
+                "permission_label": PERMISSION_LABEL,
+                "permission_reason": "主线核心且环境可做",
             },
             fetch_recent_price_bars=lambda *args, **kwargs: [
                 {"open": 10.2, "high": 10.8, "low": 10.0, "close": 10.5, "amount": 100000},
@@ -324,7 +326,7 @@ def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', r
         )
 
         self.assertEqual(result["payload"]["system_role"], "明日核心")
-        self.assertEqual(result["payload"]["permission_label"], "执行权")
+        self.assertEqual(result["payload"]["permission_label"], PERMISSION_LABEL)
         self.assertEqual(result["payload"]["final_verdict"], "进入执行等待区")
         self.assertEqual(result["markdown"], "军工一号|明日核心|进入执行等待区")
         self.assertTrue(any(log["step"] == "render.markdown" for log in result["module_logs"]))

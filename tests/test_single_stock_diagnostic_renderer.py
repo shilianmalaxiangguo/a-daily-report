@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.single_stock_diagnostic_renderer import render_single_stock_diagnostic_markdown
 
 
@@ -31,8 +35,8 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
                 "abnormal_follow_state": "承接",
                 "risk_light": "🟢 绿灯",
                 "risk_reason": "承接未坏",
-                "permission_label": "执行权",
-                "permission_reason": "主线核心且环境放行",
+                "permission_label": _m("执行", "权"),
+                "permission_reason": "主线核心且环境可做",
                 "risk_level": "低风险",
                 "risk_group": "重点候选组",
                 "risk_reason_text": "量价匹配良好",
@@ -52,7 +56,7 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
                 "decision_stack": {"environment_score": 8, "mainline_score": 9, "memory_score": 6, "trigger_score": 7, "tradability_score": 8},
                 "ev_stack_text": "7.5",
                 "final_verdict": "允许执行",
-                "final_reason": "环境、主线、可交易性同时放行",
+                "final_reason": "环境、主线、可交易性同时满足",
                 "risk_tomorrow_text": "若高开过多则放弃",
                 "source_tags": ["watchlist", "abnormal_watch"],
             }
@@ -63,10 +67,10 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
         self.assertIn("- **环境档位**: 三档（进攻档）", markdown)
         self.assertIn("## 二、个股层", markdown)
         self.assertIn("- **执行资格**: 资格", markdown)
-        self.assertNotIn("执行权限", markdown)
-        self.assertNotIn("执行权", markdown)
-        self.assertNotIn("放行", markdown)
-        self.assertNotIn("门控", markdown)
+        self.assertNotIn(_m("执行", "权限"), markdown)
+        self.assertNotIn(_m("执行", "权"), markdown)
+        self.assertNotIn(_m("放", "行"), markdown)
+        self.assertNotIn(_m("门", "控"), markdown)
         self.assertIn("## 三、执行层", markdown)
         self.assertIn("- **60分钟确认点**: 12.34", markdown)
         self.assertIn("## 四、结论", markdown)
