@@ -59,6 +59,54 @@ class MarketAnalysisBuilderTest(unittest.TestCase):
         self.assertIn("**热榜关注产业链**", rendered)
         self.assertTrue(any(log["step"] == "render.market_and_sector_analysis" for log in result["module_logs"]))
 
+    def test_build_market_and_sector_analysis_contract_downgrades_mainline_when_attack_evidence_is_chaotic(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "total_turnover": 33880,
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            },
+            market_analysis={"market_status": "大幅下跌"},
+            sh_change=-1.52,
+            indices={"深证成指": {"涨跌幅": -2.14}, "创业板指": {"涨跌幅": -2.16}},
+            exit_analysis={"sector_name": "半导体"},
+            main_sectors_info=[],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**当前主线**: 暂无确认主线", rendered)
+        self.assertIn("> 多方向局部活跃但资金未明显胜出", rendered)
+        self.assertNotIn("**当前主线**: 半导体", rendered)
+
+    def test_build_market_and_sector_analysis_contract_keeps_high_turnover_weak_breadth_wording_consistent(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "total_turnover": 29170.74,
+                "market_stats": {"up_count": 2375, "down_count": 3003},
+                "zt_pool": [{"code": "000001"}] * 101,
+                "dt_pool": [{"code": "000002"}] * 53,
+            },
+            market_analysis={"market_status": "震荡整理"},
+            sh_change=-0.09,
+            indices={"深证成指": {"涨跌幅": -0.20}, "创业板指": {"涨跌幅": -0.36}},
+            exit_analysis={},
+            main_sectors_info=[],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+            enabled_node_keys=["market_state"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("- **量能水平**: 29170.74亿元，量能充沛，但赚钱效应不足", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

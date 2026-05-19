@@ -13,6 +13,9 @@ from report.market_research_snapshot_nodes import (
 from report.front_summary_renderer import sanitize_front_page_text
 from report.mainline_turnover_summary_support import (
     resolve_double_mainline_summary,
+    resolve_mainline_attack_evidence_summary,
+    resolve_mainline_attack_evidence_rows,
+    resolve_mainline_capacity_regime_summary,
     resolve_turnover_share_trend_rows,
 )
 
@@ -66,6 +69,11 @@ def _append_nonempty(target, lines):
 def _market_fit_calibration(snapshot):
     calibration = (snapshot or {}).get("market_fit_calibration") or {}
     return calibration if isinstance(calibration, dict) else {}
+
+
+def _has_unconfirmed_attack_evidence(snapshot):
+    attack_summary = resolve_mainline_attack_evidence_summary(snapshot)
+    return bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
 
 
 def _append_sentence(text, addition):
@@ -169,7 +177,7 @@ def _format_pct(value, signed=False):
 
 def _monthly_mode_label(mode):
     labels = {
-        "earnings_defense": "财报/季报防守月",
+        "earnings_defense": "财报/季报高筛选月",
         "weak_market_defense": "弱市防守",
         "ordinary_attack": "普通进攻月",
         "strong_attack": "强主线进攻月",
@@ -182,7 +190,7 @@ def _monthly_mode_label(mode):
 def _conditional_defense_active(final_gate):
     final_gate = final_gate or {}
     return bool(
-        final_gate.get("allow_conditional_30")
+        final_gate.get("allow_attack_50_ready")
         and not final_gate.get("can_new_entry")
         and not final_gate.get("should_reduce")
     )
@@ -190,19 +198,25 @@ def _conditional_defense_active(final_gate):
 
 def _grade_from_position_pct(position_pct):
     position_pct = int(_safe_float(position_pct, 0))
-    if position_pct >= 80:
-        return "A"
     if position_pct >= 50:
-        return "A-"
-    if position_pct >= 30:
-        return "B"
-    return "C"
+        return "100" if position_pct >= 100 else "50"
+    return "0"
 
 
 def _normalize_signal_grade(value):
-    grade = str(value or "").strip().upper()
-    if grade in ("A", "A-", "B", "C"):
-        return grade
+    grade = str(value or "").strip().upper().replace("％", "%")
+    if grade in ("100", "100%"):
+        return "100"
+    if grade in ("50", "50%"):
+        return "50"
+    if grade in ("0", "0%"):
+        return "0"
+    if grade == "A":
+        return "100"
+    if grade in ("A-", "B"):
+        return "50"
+    if grade == "C":
+        return "0"
     return ""
 
 
@@ -223,57 +237,49 @@ def _position_state_contract(snapshot=None, final_gate=None):
         and reasoning_decision.get("action") == "conditional_entry"
         and reasoning_decision.get("handoff_buying_evidence") == "clear"
     ):
-        grade = "B"
-    if not grade and _conditional_defense_active(final_gate):
-        grade = "B"
+        grade = "50"
     if not grade and final_gate.get("can_new_entry"):
-        grade = "A-"
+        grade = "50"
+    if not grade and _conditional_defense_active(final_gate) and _has_unique_action_target(snapshot):
+        grade = "50"
     if not grade:
-        grade = "C"
+        grade = "0"
+    if grade in ("50", "100") and not _has_unique_action_target(snapshot):
+        grade = "0"
 
     contract = {
-        "C": {
-            "grade": "C",
-            "discipline": "C档0%观察",
-            "execution_style": "C档0% / 仅观察",
-            "stock_state": "C档无对象",
-            "stock_state_without_target": "C档无对象",
-            "default_action": "C档观察，不开新仓",
-            "action_with_target": "C档：不满足就空仓；即使有观察对象，也不做新增",
-            "action_without_target": "C档：不满足就空仓；没有唯一对象不试错",
+        "0": {
+            "grade": "0",
+            "discipline": "0%不参与",
+            "execution_style": "0% / 不参与",
+            "stock_state": "0%无合格标的",
+            "stock_state_without_target": "0%无合格标的",
+            "default_action": "0%不参与",
+            "action_with_target": "0%：条件不满足，即使有观察对象也不新增",
+            "action_without_target": "0%：没有合格标的就不参与",
         },
-        "B": {
-            "grade": "B",
-            "discipline": "B档30%条件试错",
-            "execution_style": "B档30% / 10点确认后条件试错",
-            "stock_state": "B档有条件试错对象",
-            "stock_state_without_target": "B档条件等待",
-            "default_action": "B档防守观察，10点确认后才评估30%条件试错",
-            "action_with_target": "B档不是绝对空仓；B档：不满足不开；满足10点确认后最多30%条件试错",
-            "action_without_target": "B档不是绝对空仓；B档：不满足不开；没有唯一对象先不下单，只在主线核心完成10点确认后评估30%条件试错",
+        "50": {
+            "grade": "50",
+            "discipline": "50%标准进攻",
+            "execution_style": "50% / 标准进攻",
+            "stock_state": "50%标准进攻对象",
+            "stock_state_without_target": "50%等待合格对象",
+            "default_action": "50%标准进攻，只做预演命中的合格对象",
+            "action_with_target": "50%：只做合格对象，满足预演情境后执行，不满足回到0%",
+            "action_without_target": "50%：没有合格对象前不下单，等市场缩到可做目标",
         },
-        "A-": {
-            "grade": "A-",
-            "discipline": "A-档50%执行",
-            "execution_style": "A-档50% / 唯一对象执行",
-            "stock_state": "A-档唯一执行对象",
-            "stock_state_without_target": "A-档等待唯一对象",
-            "default_action": "A-档只看唯一对象，60分钟确认后按50%执行",
-            "action_with_target": "A-档：只看唯一对象，60分钟确认后按50%执行，不满足不做",
-            "action_without_target": "A-档：没有唯一对象前不开仓，等待市场缩到一只",
-        },
-        "A": {
-            "grade": "A",
-            "discipline": "A档80%-100%买定离手",
-            "execution_style": "A档80%-100% / 买定离手",
-            "stock_state": "A档唯一核心对象",
-            "stock_state_without_target": "A档等待唯一核心对象",
-            "default_action": "A档唯一核心对象确认后80%-100%买定离手",
-            "action_with_target": "A档：唯一核心对象确认后80%-100%买定离手；跌破失效价才降档",
-            "action_without_target": "A档：没有唯一核心对象就不强行重仓，等待真正A档对象出现",
+        "100": {
+            "grade": "100",
+            "discipline": "100%核心进攻",
+            "execution_style": "100% / 核心进攻",
+            "stock_state": "100%唯一核心对象",
+            "stock_state_without_target": "100%等待唯一核心对象",
+            "default_action": "100%核心进攻，只做唯一核心对象",
+            "action_with_target": "100%：唯一核心对象确认后进攻；跌破失效价才降级",
+            "action_without_target": "100%：没有唯一核心对象就不满仓，等待真正核心出现",
         },
     }
-    return contract.get(grade, contract["C"])
+    return contract.get(grade, contract["0"])
 
 
 def _monthly_profit_cushion_text(monthly_rhythm):
@@ -287,21 +293,21 @@ def _monthly_profit_cushion_text(monthly_rhythm):
 def _monthly_profit_handling_text(monthly_rhythm, position_decision):
     monthly_rhythm = monthly_rhythm or {}
     if monthly_rhythm.get("profit_cushion") and monthly_rhythm.get("trend_invalid"):
-        return "盈利垫后趋势失效，进入收益保护"
+        return "盈利垫后趋势失效，回到0%保护本金"
     if monthly_rhythm.get("profit_cushion"):
         return "盈利不是降档理由；趋势正确时允许持有/加仓"
-    if str((position_decision or {}).get("signal_grade") or "").strip() in ("A", "A-"):
-        return "未到盈利垫，按仓位攻击等级执行"
-    return "先看仓位攻击等级，不因浮盈浮亏临场改规则"
+    if int(_safe_float((position_decision or {}).get("target_position_pct"), 0)) >= 50:
+        return "未到盈利垫，按进攻仓位三态执行"
+    return "先看进攻仓位三态，不因浮盈浮亏临场改规则"
 
 
 def _position_attack_grade_label(signal_grade):
+    state = _normalize_signal_grade(signal_grade)
     return {
-        "A": "A档80%-100%",
-        "A-": "A-档50%",
-        "B": "B档30%",
-        "C": "C档0%",
-    }.get(str(signal_grade or "").strip(), "C档0%")
+        "100": "100%",
+        "50": "50%",
+        "0": "0%",
+    }.get(state, "0%")
 
 
 def _monthly_rhythm_lines(snapshot):
@@ -318,51 +324,97 @@ def _monthly_rhythm_lines(snapshot):
     signal_grade = str(position_decision.get("signal_grade") or "").strip()
     if not signal_grade:
         target_position = int(_safe_float(position_decision.get("target_position_pct"), 0))
-        signal_grade = "A" if target_position >= 80 else "A-" if target_position >= 50 else "B" if target_position >= 30 else "C"
+        signal_grade = _grade_from_position_pct(target_position)
     max_position = int(
         _safe_float(
             monthly_rhythm.get("max_position_pct", position_decision.get("target_position_pct", 0)),
             0,
         )
     )
+    if not _has_unique_action_target(snapshot):
+        signal_grade = "0"
+        max_position = 0
     reason = (
         position_decision.get("sizing_reason")
         or monthly_rhythm.get("reason")
         or "月度节奏只给仓位上限，最终仍看主线、唯一对象和失效价。"
     )
     return [
-        "### 月度攻防与仓位等级",
+        "### 月度攻防与进攻仓位",
         "| 项目 | 结论 |",
         "|------|------|",
         f"| 本月模式 | {_monthly_mode_label(monthly_rhythm.get('month_mode'))} |",
         f"| 当月收益 | {_format_pct(monthly_rhythm.get('month_return_pct', 0.0), signed=True)} |",
         f"| 盈利垫 | {_monthly_profit_cushion_text(monthly_rhythm)} |",
-        f"| 仓位攻击等级 | {_position_attack_grade_label(signal_grade)} |",
+        f"| 进攻仓位三态 | {_position_attack_grade_label(signal_grade)} |",
         f"| 明日最大仓位 | {max_position}% |",
-        f"| A级满仓条件 | {'已满足' if position_decision.get('full_attack_ready') else '未满足'} |",
+        f"| 100%核心条件 | {'已满足' if position_decision.get('full_attack_ready') else '未满足'} |",
         f"| 收益处理 | {_monthly_profit_handling_text(monthly_rhythm, position_decision)} |",
         f"| 仓位理由 | {reason} |",
         "",
     ]
 
 
-def _double_mainline_lines(snapshot):
-    summary = resolve_double_mainline_summary(snapshot.get("mainline_turnover_summary") or {})
+def _mainline_capacity_regime_lines(snapshot):
+    summary = resolve_mainline_capacity_regime_summary(snapshot.get("mainline_turnover_summary") or {})
     if not summary:
-        summary = resolve_double_mainline_summary(snapshot)
+        summary = resolve_mainline_capacity_regime_summary(snapshot)
     if not summary:
-        summary = {"cycle_mainline": "-", "daily_attack_line": "-", "relationship": "主线待确认", "tomorrow_action": "10点确认，不满足空仓"}
+        summary = {
+            "mainline_capacity": "容量待累计",
+            "mainline_regime": "无主线",
+            "primary_line": "暂无",
+            "other_lines": "-",
+            "confirmation_evidence": "资金未形成明确进攻方向",
+            "sector_relationship_state": "暂未分出",
+            "mainline_process": "无",
+            "tomorrow_action": "不强行找主线，只保留异常观察",
+        }
     return [
-        "### 4. 双层主线结论",
-        "| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |",
-        "|----------|------------|----------|----------|",
-        "| {cycle_mainline} | {daily_attack_line} | {relationship} | {tomorrow_action} |".format(**summary),
+        "### 4. 主线容量与格局判断",
+        "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |",
+        "|----------|----------|--------|----------------|--------------|--------------|----------|----------|",
+        (
+            "| {mainline_capacity} | {mainline_regime} | {primary_line} | {other_lines} | "
+            "{confirmation_evidence} | {sector_relationship_state} | {mainline_process} | {tomorrow_action} |"
+        ).format(**summary),
         "",
     ]
 
 
+def _mainline_attack_evidence_lines(snapshot):
+    rows = resolve_mainline_attack_evidence_rows(snapshot)
+    if not rows:
+        rows = [
+            {
+                "sector_name": "暂无",
+                "attack_state": "无主线",
+                "net_inflow_rank": "-",
+                "net_inflow_amount": "-",
+                "limit_up_count": "-",
+                "high_anchor_height": "-",
+                "turnover_share_change": "-",
+                "conclusion": "资金未形成明确进攻方向",
+            }
+        ]
+    lines = [
+        "#### 主线攻击证据",
+        "| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |",
+        "|------|----------|------------|--------|--------|----------|--------------|------|",
+    ]
+    for row in rows[:3]:
+        lines.append(
+            "| {sector_name} | {attack_state} | {net_inflow_rank} | {net_inflow_amount} | {limit_up_count} | {high_anchor_height} | {turnover_share_change} | {conclusion} |".format(
+                **row
+            )
+        )
+    lines.append("")
+    return lines
+
+
 def _turnover_share_lines(snapshot):
     rows = resolve_turnover_share_trend_rows(snapshot)
+    has_unconfirmed_attack = _has_unconfirmed_attack_evidence(snapshot)
     lines = [
         "### 5. 主线成交额占比趋势",
         "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
@@ -370,6 +422,11 @@ def _turnover_share_lines(snapshot):
     ]
     if rows:
         for row in rows:
+            row = dict(row)
+            if has_unconfirmed_attack:
+                row["cycle_mainline"] = "暂无确认主线"
+                row["daily_attack_line"] = "暂无确认主攻线"
+                row["interpretation"] = "候选方向成交额占比可记录，但未确认主攻线"
             lines.append(
                 "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(**row)
             )
@@ -410,9 +467,13 @@ def _cycle_interpretation_lines(snapshot):
     mainline = summary.get("cycle_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "主线待确认"
     return [
         "### 2. 周期解读",
-        "| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |",
-        "|------|------|------|------|------|------|",
-        f"| 当前周期 | 待累计 | 待累计 | {mainline} | 待确认 | {_append_sentence('周期数据不足，先记录当前主线，后续日报继续补齐趋势。', cycle_note)} |",
+        "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
+        "|------|------|------|------|------|------|------|------|------|",
+        (
+            f"| 当前周期 | 待累计 | 待累计 | {mainline} | 待验证 | 待二次验证 | 待确认 | "
+            f"验证是否二次攻击，不能由单日攻击自动升级周期主线 | "
+            f"{_append_sentence('周期数据不足，只记录攻击线，后续日报继续验证传递性。', cycle_note)} |"
+        ),
     ]
 
 
@@ -435,20 +496,27 @@ def _capital_intent_lines(snapshot):
     snapshot = _normalize_capital_intent_snapshot(snapshot)
     capital_lines = build_market_research_snapshot_lhb_capital_intent_node(snapshot).get("lines", [])
     if capital_lines:
+        has_breakdown = "#### 资金意图拆解" in capital_lines
         for line in capital_lines:
-            if line == "#### 龙虎榜资金状态":
-                lines.append("### 1. 龙虎榜资金状态")
+            if line == "#### 资金意图拆解":
+                lines.append("### 1. 资金意图拆解")
+            elif line == "#### 龙虎榜资金状态":
+                lines.append("### 2. 龙虎榜资金状态" if has_breakdown else "### 1. 龙虎榜资金状态")
             elif line == "#### 资金结论":
-                lines.append("### 2. 资金结论")
+                lines.append("### 3. 资金结论" if has_breakdown else "### 2. 资金结论")
             else:
                 lines.append(line)
     else:
         lines.extend([
-            "### 1. 龙虎榜资金状态",
+            "### 1. 资金意图拆解",
+            "| 板块攻击资金 | 强度反馈 | 龙虎榜验证 | 资金一致性 | 明日含义 |",
+            "|--------------|----------|------------|------------|----------|",
+            "| - | - | - | - | - |",
+            "### 2. 龙虎榜资金状态",
             "| 资金强弱 | 资金力度 | 资金方向 | 资金意图 | 风格转向 | 事件属性 |",
             "|----------|----------|----------|----------|----------|----------|",
             "| - | - | - | - | - | - |",
-            "### 2. 资金结论",
+            "### 3. 资金结论",
             "| 当前资金状态 | 对主线的态度 | 对明日动作的含义 |",
             "|--------------|--------------|------------------|",
             "| - | - | - |",
@@ -649,7 +717,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         "### 3. 个股结论",
         "| 前台显示 | 完整候选 | 动作原则 |",
         "|----------|----------|----------|",
-        "| 只保留唯一对象和备用观察 | 完整候选单保留在结构化快照与附录 | 10点附近确认，买点等60分钟，买后30分钟结构止损 |",
+        "| 只保留唯一对象和备用观察 | 完整候选单保留在结构化快照与附录 | 竞价表态、开盘前几分钟、打板/回封、60分钟确认分层处理，买后30分钟结构止损 |",
         "",
     ])
     return lines
@@ -659,14 +727,30 @@ def _unique_action_target_lines(snapshot):
     target = _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         label = _unique_target_label(target)
-        condition = str(target.get("condition") or "主线确认 + 承接 + 60分钟确认").strip()
+        participation_window = str(target.get("participation_window") or "").strip()
+        participation_window_type = str(target.get("participation_window_type") or "").strip()
+        required_steps = target.get("required_steps") or []
+        if isinstance(required_steps, str):
+            required_steps = [part.strip() for part in required_steps.split("/") if part.strip()]
+        if not required_steps and participation_window_type and participation_window_type != "structure_confirm":
+            required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
+        condition = " / ".join(str(step).strip() for step in required_steps if str(step).strip())
+        if not condition:
+            condition = str(target.get("condition") or "").strip()
+        if not condition:
+            condition = "主线确认 + 承接 + 60分钟确认" if participation_window_type == "structure_confirm" or participation_window in ("", "60分钟确认") else "竞价表态 + 开盘前几分钟 + 回封/打板"
+        default_fallback = "不满足回到0%" if participation_window_type and participation_window_type != "structure_confirm" else "不做"
+        fallback_state = str(target.get("fallback_state") or default_fallback).strip() or default_fallback
     else:
         label = "暂无"
+        participation_window = ""
         condition = "主线确认 + 承接 + 60分钟确认未同时满足"
+        participation_window_type = "structure_confirm"
+        fallback_state = "不做"
     return [
-        "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
-        "|--------------|------|------|--------------|",
-        f"| 只看唯一对象 | {label} | {condition} | 不做 |",
+        "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |",
+        "|--------------|------|------|------|--------------|",
+        f"| 只看唯一对象 | {label} | {participation_window or '60分钟确认'} | {condition} | {fallback_state} |",
         "",
     ]
 
@@ -679,11 +763,12 @@ def _execution_plan_lines(snapshot=None):
         *_unique_action_target_lines(snapshot),
         "| 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |",
         "|----------|----------|----------|-----------|------|",
-        "| 09:25-09:40 | 竞价强弱、主线核心是否被核、跌停扩散 | 默认无 | 有旧仓先看是否需要降风险 | 不抢 |",
-        "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 仅主线核心可进入观察买点 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |",
+        "| 09:25-09:40 | 竞价表态、主线核心是否被核、跌停扩散 | 仅核心竞价表态清楚才可做 | 有旧仓先看是否需要降风险 | 合格则参与，不合格回到0% |",
+        "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 核心对象承接连续可按预演参与 | 弱仓/错仓先降风险 | 前几分钟进攻窗口 |",
+        "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入结构确认 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |",
         "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
-        "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 满足60分钟确认才允许 | 买后用30分钟结构止损 | 小仓或不开 |",
-        "| 午后 | 看主线是否延续，不追轮动末端 | 默认谨慎 | 若走弱继续降风险 | 不扩大试错 |",
+        "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价/前几分钟/回封未触发时，再看60分钟确认 | 买后用30分钟结构止损 | 50%/100%或0% |",
+        "| 午后 | 看主线是否延续，不追轮动末端 | 默认谨慎 | 若走弱继续降风险 | 不做情绪补偿 |",
         "| 尾盘 | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不尾盘开新仓 | 例外，不是常规 |",
         "",
     ]
@@ -691,8 +776,12 @@ def _execution_plan_lines(snapshot=None):
 
 def _final_summary_lines(report_lines, snapshot, final_gate=None):
     final_gate = final_gate or {}
-    cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
-    daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
+    if _has_unconfirmed_attack_evidence(snapshot):
+        cycle = "暂无确认主线"
+        daily = "暂无确认主攻线"
+    else:
+        cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
+        daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     action = position_state["default_action"]
     target = _effective_unique_action_target(snapshot)
@@ -725,7 +814,8 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     _append_nonempty(lines, _cycle_calendar_lines(snapshot))
     _append_nonempty(lines, _cycle_interpretation_lines(snapshot))
     _append_nonempty(lines, _pivot_mainline_lines(snapshot))
-    lines.extend(_double_mainline_lines(snapshot))
+    lines.extend(_mainline_capacity_regime_lines(snapshot))
+    lines.extend(_mainline_attack_evidence_lines(snapshot))
     lines.extend(_turnover_share_lines(snapshot))
 
     lines.extend(_capital_intent_lines(snapshot))

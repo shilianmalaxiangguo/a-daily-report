@@ -1,3 +1,10 @@
+from report.surface_wording import sanitize_user_visible_text
+from report.mainline_turnover_summary_support import (
+    resolve_mainline_attack_evidence_summary,
+    resolve_mainline_capacity_regime_summary,
+)
+
+
 def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_candidates=None, display_mvp_mode=False):
     gem_observation_stocks = gem_observation_stocks or []
     filtered_out_gem_candidates = filtered_out_gem_candidates or []
@@ -7,7 +14,7 @@ def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_c
     preview = gem_observation_stocks[:2] if display_mvp_mode else gem_observation_stocks[:4]
     lines = [
         "> **主线侧翼弹性层**：若主板强锚仍在，创业板20cm只作为主线白银弹性观察，不单列成独立战场。",
-        "> **观察纪律**：只先进观察池，先看均线粘合/蛇形走位能否继续走成右侧确认；确认前只观察不执行。",
+        "> **观察纪律**：只先进观察池，先看波动收敛、量价温和放大和右侧确认；确认前只观察不执行。",
     ]
     if filtered_out_gem_candidates:
         filtered_preview = filtered_out_gem_candidates[:2] if display_mvp_mode else filtered_out_gem_candidates[:4]
@@ -29,7 +36,7 @@ def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_c
     for i, item in enumerate(preview, 1):
         lines.append(
             f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
-            f"{item.get('tier', '-') or '-'} | {item.get('abnormal_summary', item.get('note', '-')) or '-'} | "
+            f"{item.get('tier', '-') or '-'} | {sanitize_user_visible_text(item.get('abnormal_summary', item.get('note', '-')) or '-')} | "
             f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和60分钟确认，不满足继续观察 |"
         )
     lines.append("")
@@ -53,6 +60,14 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
     primary_mainline = str(context.get("primary_mainline", "") or "").strip()
     display_mvp_mode = bool(context.get("display_mvp_mode", False))
     safe_float = context["safe_float"]
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    capacity_summary = resolve_mainline_capacity_regime_summary(context)
+    confirmed_attack_line = (
+        str(attack_summary.get("primary_line") or "").strip()
+        if attack_summary.get("attack_state") == "confirmed_attack"
+        else ""
+    )
+    no_confirmed_attack = bool(attack_summary) and not confirmed_attack_line
 
     core_sectors = {}
     sector_strength = {}
@@ -62,6 +77,27 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         sector_strength[sector] = sector_strength.get(sector, 0) + stock.get("tomorrow_strength", 0)
 
     lines = []
+    if no_confirmed_attack:
+        reason = (
+            attack_summary.get("confirmation_evidence")
+            or capacity_summary.get("confirmation_evidence")
+            or "主线攻击证据不足"
+        )
+        lines.append("**明日核心方向预判**: 无确认主攻线")
+        lines.append(f"> **明日纪律**: {reason}，核心标的只保留观察，不按主线买入。")
+        if primary_mainline:
+            lines.append(f"> **候选补充**: {primary_mainline}只是候选观察，不视为确认主攻线。")
+        lines.extend(
+            _render_gem_breathing_step2_section(
+                context,
+                gem_observation_stocks,
+                filtered_out_gem_candidates,
+                display_mvp_mode,
+            )
+        )
+        lines.append("")
+        return {"lines": lines, "exports": {}, "module_logs": []}
+
     if primary_mainline:
         mainline_count = len(core_stocks) + len(secondary_stocks)
         mainline_strength = sum(safe_float(stock.get("tomorrow_strength", 0)) for stock in core_stocks + secondary_stocks)

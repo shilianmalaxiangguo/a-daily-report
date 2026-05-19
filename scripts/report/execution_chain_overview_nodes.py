@@ -1,5 +1,6 @@
 from report.execution_chain_overview_node_registry import build_execution_chain_overview_node_specs
 from report.execution_chain_overview_node_runtime import run_execution_chain_overview_nodes
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
 
 
 def build_execution_chain_header_node(context, node_meta=None, node_lookup=None):
@@ -9,8 +10,11 @@ def build_execution_chain_header_node(context, node_meta=None, node_lookup=None)
 def build_execution_chain_market_summary_node(context, node_meta=None, node_lookup=None):
     primary_mainline = str(context.get("primary_mainline") or "").strip()
     market_trend = context.get("market_trend", "")
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
     lines = [f"- **基准指数**: 中证全指涨跌幅{float(context.get('csci_change', 0) or 0):+.2f}%"]
-    if primary_mainline:
+    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        lines.append(f"- **市场特征**: {market_trend}，{attack_summary.get('confirmation_evidence') or '主线攻击证据不足'}")
+    elif primary_mainline:
         lines.append(f"- **市场特征**: {market_trend}，主攻线{primary_mainline}领涨")
     else:
         lines.append(f"- **市场特征**: {market_trend}，板块轮动快速")

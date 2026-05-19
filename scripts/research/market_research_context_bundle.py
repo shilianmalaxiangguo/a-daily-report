@@ -13,6 +13,10 @@ _NON_SECTOR_LABELS = {
     "北交所",
     "未知",
     "未归类",
+    "待补充板块",
+    "待补充",
+    "其他",
+    "其它",
     "-",
 }
 
@@ -75,6 +79,44 @@ def _is_valid_sector_label(value):
     return bool(label and label not in _NON_SECTOR_LABELS)
 
 
+def _infer_sector_from_reason(text):
+    text = str(text or "")
+    if "长鑫" in text or "国产芯片" in text:
+        return "国产芯片"
+    keyword_groups = [
+        ("算力", ("Token工厂", "昇腾", "算力", "服务器", "数据中心", "液冷", "东数西算")),
+        ("机器人", ("机器人", "减速器", "智能体", "机器视觉", "智能制造", "智能物流")),
+        ("商业航天", ("商业航天", "卫星", "航天", "火箭")),
+        ("低空经济", ("低空", "无人机", "eVTOL")),
+        ("家用电器", ("小家电", "家用电器", "空调")),
+        ("消费电子", ("MiniLED", "车载背光", "VR背光", "背光显示", "消费电子", "无线耳机", "苹果产业链")),
+        ("食品饮料", ("葡萄酒", "白兰地", "保健酒", "食品", "饮料")),
+        ("天然气", ("天然气", "页岩气", "燃气")),
+        ("资产重组", ("股权转让", "资产重组", "并购重组", "控制权", "重整", "实控人变更", "国资入主", "资产置换")),
+        ("环保", ("环保", "水务")),
+        ("汽车产业链", ("汽车拆解", "汽车", "新能源汽车")),
+    ]
+    for sector, markers in keyword_groups:
+        if any(marker in text for marker in markers):
+            return sector
+    return ""
+
+
+def _stock_reason_text(stock):
+    return " / ".join(
+        str(stock.get(key) or "")
+        for key in (
+            "涨停统计",
+            "涨停原因",
+            "reason",
+            "stock_reason",
+            "xuangubao_stock_reason",
+            "abnormal_summary",
+            "volume_summary",
+        )
+    )
+
+
 def _build_xuangubao_plate_map(data, normalize_stock_code):
     mapped = {}
     reasons = ((data or {}).get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []) or []
@@ -91,6 +133,10 @@ def _build_xuangubao_plate_map(data, normalize_stock_code):
             if _is_valid_sector_label(name):
                 mapped[code] = name
                 break
+        if code not in mapped:
+            inferred = _infer_sector_from_reason(_stock_reason_text(item))
+            if inferred:
+                mapped[code] = inferred
     return mapped
 
 
@@ -98,22 +144,32 @@ def _resolve_stock_sector(stock, code, xuangubao_plate_map):
     for value in (stock.get("sector", ""), stock.get("所属行业", ""), stock.get("所属板块", ""), stock.get("industry", "")):
         if _is_valid_sector_label(value):
             return str(value).strip()
-    return xuangubao_plate_map.get(code, "未归类")
+    sector = xuangubao_plate_map.get(code, "")
+    if _is_valid_sector_label(sector):
+        return sector
+    inferred = _infer_sector_from_reason(_stock_reason_text(stock))
+    if inferred:
+        return inferred
+    return "未归类"
 
 
-def _sanitize_sector_bucket_map(sector_map, xuangubao_plate_map, normalize_stock_code):
+def _sanitize_sector_bucket_map(sector_map, xuangubao_plate_map, normalize_stock_code, stock_lookup=None):
+    stock_lookup = stock_lookup or {}
     sanitized = {}
     for sector, stocks in (sector_map or {}).items():
         for stock in stocks or []:
             if not isinstance(stock, dict):
                 continue
             code = normalize_stock_code(stock.get("代码") or stock.get("code") or stock.get("symbol") or "")
+            enriched_stock = {**stock_lookup.get(code, {}), **stock}
             resolved_sector = str(sector or "").strip()
             if not _is_valid_sector_label(resolved_sector):
                 resolved_sector = xuangubao_plate_map.get(code, "")
             if not _is_valid_sector_label(resolved_sector):
+                resolved_sector = _infer_sector_from_reason(_stock_reason_text(enriched_stock))
+            if not _is_valid_sector_label(resolved_sector):
                 continue
-            sanitized.setdefault(resolved_sector, []).append(stock)
+            sanitized.setdefault(resolved_sector, []).append(enriched_stock)
     return sanitized
 
 
@@ -173,14 +229,25 @@ def build_market_research_context_bundle_contract(
     zt_pool_by_sector = data.get("zt_pool_by_sector", {})
     dt_pool_by_sector = data.get("dt_pool_by_sector", {})
     zt_pool = data.get("zt_pool", [])
+    dt_pool = data.get("dt_pool", [])
     hot_stocks = data.get("hot_rank_top30", [])
     integrated_hot_list = data.get("integrated_hot_list", [])
     active_a_kill_records = get_active_a_kill_records(target_date)
     stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
     volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
     xuangubao_plate_map = _build_xuangubao_plate_map(data, normalize_stock_code)
-    zt_pool_by_sector = _sanitize_sector_bucket_map(zt_pool_by_sector, xuangubao_plate_map, normalize_stock_code)
-    dt_pool_by_sector = _sanitize_sector_bucket_map(dt_pool_by_sector, xuangubao_plate_map, normalize_stock_code)
+    zt_pool_lookup = {
+        normalize_stock_code(stock.get("代码", stock.get("code", ""))): stock
+        for stock in zt_pool
+        if isinstance(stock, dict)
+    }
+    dt_pool_lookup = {
+        normalize_stock_code(stock.get("代码", stock.get("code", ""))): stock
+        for stock in dt_pool
+        if isinstance(stock, dict)
+    }
+    zt_pool_by_sector = _sanitize_sector_bucket_map(zt_pool_by_sector, xuangubao_plate_map, normalize_stock_code, zt_pool_lookup)
+    dt_pool_by_sector = _sanitize_sector_bucket_map(dt_pool_by_sector, xuangubao_plate_map, normalize_stock_code, dt_pool_lookup)
 
     candidates = []
     for stock in zt_pool[:30]:
@@ -200,8 +267,8 @@ def build_market_research_context_bundle_contract(
         score = 0
         reason_text = ""
         if signature == "一字板":
-            score += 40
-            reason_text = "一字板最强，明日大概率连板"
+            score += 18
+            reason_text = "一字板封死不可成交，只记录辨识度，等分歧后确认"
         elif "T字板" in signature:
             score += 35
             reason_text = "T字板分歧转一致，明日可能加速"
@@ -243,7 +310,13 @@ def build_market_research_context_bundle_contract(
                 "source": "涨停池",
                 "pattern": signature if signature != "-" else "普通涨停",
                 "reason": reason_text,
-                "tomorrow_expectation": "连板预期" if score >= 70 else "溢价预期" if score >= 50 else "观察竞价",
+                "tomorrow_expectation": "观察竞价"
+                if signature == "一字板"
+                else "连板预期"
+                if score >= 70
+                else "溢价预期"
+                if score >= 50
+                else "观察竞价",
             }
         )
 

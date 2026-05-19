@@ -1,3 +1,6 @@
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+
+
 def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, node_lookup=None):
     data = context.get("data", {}) or {}
     exit_analysis = context.get("exit_analysis", {}) or {}
@@ -7,13 +10,15 @@ def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, no
     display_mvp_mode = bool(context.get("display_mvp_mode", False))
     target_date = context.get("target_date", "")
     position_level = context.get("position_level", "")
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    has_unconfirmed_attack_evidence = bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
 
     quadrant_data = data.get("sector_quadrant")
     if not quadrant_data or not quadrant_data.get("high_strong_analysis"):
         return {"lines": [], "exports": {"mainline_in_quadrant": None, "mainline_score": 0}, "module_logs": []}
 
     hs_analysis = quadrant_data["high_strong_analysis"]
-    current_mainline = primary_mainline or exit_analysis.get("sector_name", "")
+    current_mainline = "" if has_unconfirmed_attack_evidence else (primary_mainline or exit_analysis.get("sector_name", ""))
     mainline_in_quadrant = None
     mainline_score = 0
     if current_mainline:
@@ -50,7 +55,10 @@ def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, no
         f"| ⚠️ 边缘击球区 | <40分 | {hs_analysis.get('tier4_count', 0)}个 | 伪击球区，应过滤 |",
         "",
     ]
-    if mainline_in_quadrant:
+    if has_unconfirmed_attack_evidence:
+        lines.append("**主线位置判断**: 当前无确认主攻线，击球区只作为候选板块质量参考")
+        lines.append("")
+    elif mainline_in_quadrant:
         lines.append(f"**主线位置判断**: 当前主线'{current_mainline or '未知'}'位于{mainline_in_quadrant}（得分{mainline_score}分）")
         lines.append("")
 
@@ -67,7 +75,7 @@ def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, no
                     all_sector_names.append(sector_name)
         ai_analysis = ai_analyze_sector_relationships(all_sector_names, f"市场环境: {position_level}, 日期: {target_date}")
         if ai_analysis.get("groups"):
-            lines.append("**AI板块归并结果**")
+            lines.append("**板块归并结果**")
             lines.append("> **只看什么**: 哪些分散标签其实指向同一条主线。")
             lines.append("")
             lines.append("| 大方向 | 包含标签 | 主线依据 | 资金状态 |")

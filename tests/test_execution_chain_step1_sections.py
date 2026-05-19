@@ -64,7 +64,7 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertNotIn("可信记忆", rendered)
         self.assertIn("**异动后观察池**", rendered)
         self.assertIn("**结论**:", rendered)
-        self.assertIn("- **优先顺序**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选", rendered)
+        self.assertIn("- **优先顺序**: 分歧转一致/T字板 > 光头涨停 > 放量涨停 > 反包候选；一字板只记录辨识度，等分歧后确认", rendered)
         self.assertIn("冷却股(000003)", rendered)
         self.assertNotIn("投影解释", rendered)
         self.assertNotIn("核心逻辑", rendered)
@@ -121,6 +121,43 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("**主线趋势密度扫描**", rendered)
         self.assertNotIn("**龙头记忆库**", rendered)
+
+    def test_build_step1_watch_sections_downgrades_competition_when_attack_evidence_is_chaotic(self):
+        lines = build_step1_watch_sections(
+            sector_trend_snapshot_step1=[],
+            mainline_competition_snapshot=[
+                {"role": "主攻线", "sector": "半导体", "evidence": "趋势2只 / 涨停2只", "judgement": "当前最值得粘住的方向", "action": "只在这条线里找买入资格"},
+                {"role": "次强线", "sector": "电力", "evidence": "趋势3只 / 涨停4只", "judgement": "有承接", "action": "有共振才看"},
+            ],
+            leader_memory_bank=[],
+            tracking_memory_status={},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            abnormal_projection_summary={},
+            filtered_by_a_kill=[],
+            display_mvp_mode=False,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            format_abnormal_observation_columns=lambda item: ("历史锚点", "次日边界"),
+            mainline_turnover_summary={
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "chaotic_rotation",
+                    "primary_line": "",
+                    "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                    "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                },
+                "mainline_capacity_regime_summary": {
+                    "mainline_regime": "无主线",
+                    "primary_line": "暂无",
+                    "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                },
+            },
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 候选观察 | 半导体 | 趋势2只 / 涨停2只 | 资金未明显胜出，不能确认为主攻线 | 只观察强弱，不给买入资格 |", rendered)
+        self.assertIn("- **主线竞争格局**: 当前没有确认主攻线，多方向只做候选观察。", rendered)
+        self.assertNotIn("| 主攻线 | 半导体 |", rendered)
+        self.assertNotIn("半导体目前是主攻线", rendered)
 
 
 if __name__ == "__main__":

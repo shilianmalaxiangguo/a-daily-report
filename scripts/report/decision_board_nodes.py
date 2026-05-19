@@ -1,5 +1,6 @@
 from report.decision_board_node_registry import build_decision_board_node_specs
 from report.decision_board_node_runtime import run_decision_board_nodes
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
 
 
 def _safe_float(value, default=0.0):
@@ -29,9 +30,14 @@ def build_decision_board_mainline_section_node(context, node_meta=None, node_loo
     exit_analysis = context.get("exit_analysis", {}) or {}
     main_sectors = context.get("main_sectors", []) or []
     primary_mainline = exit_analysis.get("sector_name", "") or (main_sectors[0] if main_sectors else "")
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    has_unconfirmed_attack_evidence = bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
     high_board_count = int(context.get("high_board_count", 0) or 0)
     lines = ["### 🎯 主线方向"]
-    if primary_mainline:
+    if has_unconfirmed_attack_evidence:
+        lines.append("- **核心主攻线**: 暂无确认主攻线")
+        lines.append(f"- **主线确认**: {attack_summary.get('confirmation_evidence') or '攻击证据不足'}")
+    elif primary_mainline:
         lines.append(f"- **核心主攻线**: {primary_mainline}")
     else:
         lines.append("- **核心主攻线**: 暂无明确主线")

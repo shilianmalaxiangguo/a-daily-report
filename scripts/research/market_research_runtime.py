@@ -10,6 +10,28 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+_NON_DIRECTIONAL_LHB_SECTORS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
+
+
+def _is_directional_lhb_sector(value):
+    sector = str(value or "").strip()
+    return bool(sector and sector not in _NON_DIRECTIONAL_LHB_SECTORS)
+
+
 def _has_resolved_mainline_turnover_summary(summary):
     if not isinstance(summary, dict):
         return False
@@ -75,27 +97,127 @@ def _derive_lhb_capital_intent(data, mainline_name=""):
         return {}, {}
 
     sector_totals = {}
+    total_buy_amount = 0.0
     for item in buy_rows:
-        sector = str((item or {}).get("sector") or "未归类").strip() or "未归类"
-        sector_totals[sector] = sector_totals.get(sector, 0.0) + _safe_float((item or {}).get("net_buy_amount_yi"))
-    top_sector, top_amount = max(sector_totals.items(), key=lambda pair: pair[1]) if sector_totals else (mainline_name or "未归类", 0.0)
+        amount = _safe_float((item or {}).get("net_buy_amount_yi"))
+        total_buy_amount += amount
+        sector = str((item or {}).get("sector") or "").strip()
+        if not _is_directional_lhb_sector(sector):
+            continue
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + amount
+    if sector_totals:
+        top_sector, top_amount = max(sector_totals.items(), key=lambda pair: pair[1])
+        intensity_text = f"龙虎榜净买入集中在{top_sector}，约{top_amount:.2f}亿"
+    else:
+        top_sector, top_amount = "未归类", total_buy_amount
+        intensity_text = f"龙虎榜净买入行业方向未归类，约{top_amount:.2f}亿"
     sell_amount = abs(sum(_safe_float((item or {}).get("net_buy_amount_yi")) for item in sell_rows))
     strength = "强" if top_amount >= 5 else "中" if top_amount >= 2 else "弱"
     style_shift = "资金向主线集中" if mainline_name and top_sector == mainline_name else "资金偏轮动试探"
+    current_state = f"龙虎榜资金{strength}，方向未归类" if top_sector == "未归类" else f"龙虎榜资金{strength}，方向在{top_sector}"
     status = {
         "capital_strength": strength,
-        "capital_intensity": f"龙虎榜净买入集中在{top_sector}，约{top_amount:.2f}亿；净卖出端约{sell_amount:.2f}亿",
+        "capital_intensity": f"{intensity_text}；净卖出端约{sell_amount:.2f}亿",
         "capital_direction": top_sector,
         "capital_intent": "承接主线核心" if mainline_name and top_sector == mainline_name else "尝试外溢或轮动",
         "style_shift": style_shift,
         "event_attribute": "龙虎榜资金行为",
     }
+    lhb_validates_mainline = bool(mainline_name and top_sector == mainline_name)
     conclusion = {
-        "current_capital_state": f"龙虎榜资金{strength}，方向在{top_sector}",
-        "mainline_attitude": "资金仍在主线内确认" if mainline_name and top_sector == mainline_name else "资金没有完全确认主线，先看是否轮动",
-        "tomorrow_action_meaning": "只看主线核心承接，不追非主线热票" if mainline_name and top_sector == mainline_name else "先观察资金是否回到主线，再决定是否给资格",
+        "current_capital_state": current_state,
+        "mainline_attitude": "资金仍在主线内确认" if lhb_validates_mainline else f"龙虎榜未验证{mainline_name or '主线'}",
+        "tomorrow_action_meaning": "只看主线核心承接，不追非主线热票" if lhb_validates_mainline else "先看板块攻击证据，龙虎榜只作为验证层",
     }
     return status, conclusion
+
+
+def _format_signed_amount(value, unit="亿"):
+    amount = _safe_float(value)
+    sign = "+" if amount > 0 else ""
+    return f"{sign}{amount:.2f}{unit}"
+
+
+def _format_share_change(value):
+    change = _safe_float(value)
+    if not change:
+        return ""
+    sign = "+" if change > 0 else ""
+    return f"成交占比{sign}{change:.1f}pct"
+
+
+def _find_sector_evidence_row(rows, sector_name):
+    for row in rows or []:
+        if isinstance(row, dict) and _sector_names_match(row.get("sector_name"), sector_name):
+            return row
+    return {}
+
+
+def _derive_capital_intent_breakdown(
+    mainline_turnover_summary,
+    sector_attack_evidence_rows,
+    lhb_capital_status,
+    capital_conclusion,
+):
+    attack_summary = (mainline_turnover_summary or {}).get("mainline_attack_evidence_summary") or {}
+    primary_line = str(
+        attack_summary.get("primary_line")
+        or (mainline_turnover_summary or {}).get("current_mainline")
+        or ""
+    ).strip()
+    if not primary_line:
+        return {}, capital_conclusion or {}
+
+    attack_state = str(attack_summary.get("attack_state") or "").strip()
+    confirmed_attack = attack_state == "confirmed_attack"
+    evidence_row = _find_sector_evidence_row(sector_attack_evidence_rows, primary_line)
+    if not confirmed_attack or not evidence_row:
+        return {}, capital_conclusion or {}
+
+    rank = evidence_row.get("net_inflow_rank")
+    amount = evidence_row.get("net_inflow_amount")
+    if rank and amount not in (None, ""):
+        sector_fund_attitude = f"{primary_line}板块攻击资金确认：净流入第{rank}，{_format_signed_amount(amount)}"
+    else:
+        sector_fund_attitude = f"{primary_line}板块攻击资金确认"
+
+    strength_parts = []
+    if evidence_row.get("limit_up_count") not in (None, ""):
+        strength_parts.append(f"涨停{int(_safe_float(evidence_row.get('limit_up_count')))}")
+    if evidence_row.get("high_anchor_height") not in (None, ""):
+        strength_parts.append(f"高标{int(_safe_float(evidence_row.get('high_anchor_height')))}")
+    share_change_text = _format_share_change(evidence_row.get("turnover_share_change"))
+    if share_change_text:
+        strength_parts.append(share_change_text)
+    strength_feedback = "，".join(strength_parts) if strength_parts else attack_summary.get("confirmation_evidence", "-")
+
+    lhb_direction = str((lhb_capital_status or {}).get("capital_direction") or "").strip()
+    if lhb_direction and _sector_names_match(lhb_direction, primary_line):
+        lhb_validation = "龙虎榜验证主线"
+        capital_consistency = "板块攻击成立，龙虎榜同步验证"
+        tomorrow_meaning = "先按板块攻击线观察，龙虎榜作为加分确认"
+    elif lhb_direction:
+        lhb_validation = f"龙虎榜方向在{lhb_direction}，未验证主线"
+        capital_consistency = "板块攻击成立，龙虎榜未验证"
+        tomorrow_meaning = "先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决"
+    else:
+        lhb_validation = "龙虎榜未验证主线"
+        capital_consistency = "板块攻击成立，龙虎榜未验证"
+        tomorrow_meaning = "先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决"
+
+    capital_conclusion = dict(capital_conclusion or {})
+    capital_conclusion["mainline_attitude"] = capital_consistency
+    capital_conclusion["tomorrow_action_meaning"] = tomorrow_meaning
+    if not capital_conclusion.get("current_capital_state"):
+        capital_conclusion["current_capital_state"] = sector_fund_attitude
+
+    return {
+        "sector_fund_attitude": sector_fund_attitude,
+        "strength_feedback": strength_feedback,
+        "lhb_validation": lhb_validation,
+        "capital_consistency": capital_consistency,
+        "tomorrow_meaning": tomorrow_meaning,
+    }, capital_conclusion
 
 
 def _append_log(logs, step, status, message, **details):
@@ -137,6 +259,177 @@ def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
         if "max_scan_days" not in str(exc):
             raise
         return loader(target_date, lookback_days=25)
+
+
+def _sector_name_from_row(row):
+    row = row or {}
+    return str(row.get("sector_name") or row.get("name") or row.get("sector") or row.get("行业") or "").strip()
+
+
+def _sector_names_match(left, right):
+    left = str(left or "").strip()
+    right = str(right or "").strip()
+    if not left or not right:
+        return False
+    return left == right or left in right or right in left
+
+
+def _pick_first_number(row, *keys):
+    row = row or {}
+    for key in keys:
+        if row.get(key) not in (None, ""):
+            return _safe_float(row.get(key))
+    return None
+
+
+def _flow_turnover_yi(row):
+    turnover = _pick_first_number(row, "turnover_yi", "sector_turnover")
+    if turnover is not None:
+        return turnover
+    cje = _pick_first_number(row, "cje", "成交额")
+    if cje is None:
+        return None
+    return cje / 1e4
+
+
+def _extract_board_height(stock):
+    stock = stock or {}
+    direct = _pick_first_number(stock, "连板数", "lianban", "board_count", "height")
+    if direct is not None:
+        return int(direct)
+    text = str(stock.get("涨停统计") or stock.get("zt_type") or stock.get("limit_up_type") or "").strip()
+    if "首板" in text:
+        return 1
+    if "/" in text:
+        parts = [part.strip() for part in text.split("/") if part.strip()]
+        if len(parts) >= 2:
+            digits = "".join(char for char in parts[1] if char.isdigit())
+            if digits:
+                return int(digits)
+        if parts:
+            digits = "".join(char for char in parts[0] if char.isdigit())
+            if digits:
+                return int(digits)
+    if "天" in text and "板" in text:
+        after_tian = text.split("天", 1)[1]
+        digits = "".join(char for char in after_tian if char.isdigit())
+        if digits:
+            return int(digits)
+    digits = "".join(char for char in text if char.isdigit())
+    return int(digits) if digits else 0
+
+
+def _sector_zt_stocks(zt_pool_by_sector, sector_name):
+    if not isinstance(zt_pool_by_sector, dict):
+        return None
+    for key, stocks in zt_pool_by_sector.items():
+        if _sector_names_match(key, sector_name):
+            return list(stocks or [])
+    return []
+
+
+def _sector_previous_share(recent_sector_turnover_history, sector_name):
+    for item in reversed(list(recent_sector_turnover_history or [])):
+        if not _sector_names_match(_sector_name_from_row(item), sector_name):
+            continue
+        share = _safe_float((item or {}).get("turnover_share_pct"))
+        if share > 0:
+            return share
+    return 0.0
+
+
+def _sector_current_share(sector_name, flow_row, current_sector_turnover_snapshot, total_turnover):
+    snapshot = current_sector_turnover_snapshot or {}
+    if _sector_names_match(_sector_name_from_row(snapshot), sector_name):
+        snapshot_share = _safe_float(snapshot.get("turnover_share_pct"))
+        if snapshot_share > 0:
+            return round(snapshot_share, 2)
+    row_share = _pick_first_number(flow_row, "turnover_share_pct")
+    if row_share is not None and row_share > 0:
+        return round(row_share, 2)
+    turnover_yi = _flow_turnover_yi(flow_row)
+    total_turnover = _safe_float(total_turnover)
+    if turnover_yi is not None and turnover_yi > 0 and total_turnover > 0:
+        return round(turnover_yi / total_turnover * 100, 2)
+    return None
+
+
+def _build_sector_attack_evidence_rows(
+    data,
+    current_sector_turnover_snapshot,
+    recent_sector_turnover_history,
+    total_turnover,
+):
+    data = data or {}
+    sector_fund_flow = data.get("sector_fund_flow") or {}
+    inflow_rows = sector_fund_flow.get("inflow") if isinstance(sector_fund_flow, dict) else sector_fund_flow
+    inflow_rows = [row for row in (inflow_rows or []) if isinstance(row, dict) and _sector_name_from_row(row)]
+    zt_pool_by_sector = data.get("zt_pool_by_sector")
+    has_zt_pool = isinstance(zt_pool_by_sector, dict)
+
+    ordered_sectors = []
+    flow_by_sector = {}
+    for rank, row in enumerate(inflow_rows, 1):
+        sector_name = _sector_name_from_row(row)
+        if sector_name not in ordered_sectors:
+            ordered_sectors.append(sector_name)
+        flow_by_sector[sector_name] = (rank, row)
+
+    if has_zt_pool:
+        for sector_name in zt_pool_by_sector.keys():
+            sector_name = str(sector_name or "").strip()
+            if sector_name and not any(_sector_names_match(existing, sector_name) for existing in ordered_sectors):
+                ordered_sectors.append(sector_name)
+
+    if not ordered_sectors:
+        return None
+
+    evidence_rows = []
+    for sector_name in ordered_sectors:
+        rank, flow_row = next(
+            (
+                (rank, row)
+                for flow_sector, (rank, row) in flow_by_sector.items()
+                if _sector_names_match(flow_sector, sector_name)
+            ),
+            (None, {}),
+        )
+        evidence_row = {"sector_name": sector_name}
+        net_inflow = _pick_first_number(
+            flow_row,
+            "net_inflow_amount",
+            "net_inflow_yi",
+            "zljlr",
+            "inflow",
+            "fund_flow",
+        )
+        if net_inflow is not None:
+            evidence_row["net_inflow_amount"] = round(net_inflow, 2)
+            evidence_row["net_inflow_rank"] = rank
+
+        zt_stocks = _sector_zt_stocks(zt_pool_by_sector, sector_name)
+        if zt_stocks is not None:
+            evidence_row["limit_up_count"] = len(zt_stocks)
+            if zt_stocks:
+                anchor_stock = max(zt_stocks, key=_extract_board_height)
+                evidence_row["high_anchor_height"] = _extract_board_height(anchor_stock)
+                evidence_row["high_anchor_name"] = str(anchor_stock.get("名称") or anchor_stock.get("name") or "").strip()
+            else:
+                evidence_row["high_anchor_height"] = 0
+
+        current_share = _sector_current_share(sector_name, flow_row, current_sector_turnover_snapshot, total_turnover)
+        if current_share is not None:
+            evidence_row["turnover_share_pct"] = current_share
+            sector_turnover = _flow_turnover_yi(flow_row)
+            if sector_turnover is not None and sector_turnover > 0:
+                evidence_row["sector_turnover"] = round(sector_turnover, 2)
+            previous_share = _sector_previous_share(recent_sector_turnover_history, sector_name)
+            if previous_share > 0:
+                evidence_row["turnover_share_change"] = round(current_share - previous_share, 2)
+
+        evidence_rows.append(evidence_row)
+
+    return evidence_rows
 
 
 def build_market_research_snapshot_contract(
@@ -287,13 +580,28 @@ def build_market_research_snapshot_contract(
             lookback_days=5,
         )
 
-    if not _has_resolved_mainline_turnover_summary(mainline_turnover_summary) and callable(build_mainline_turnover_summary):
+    sector_attack_evidence_rows = _build_sector_attack_evidence_rows(
+        data,
+        current_sector_turnover_snapshot,
+        recent_sector_turnover_history,
+        total_turnover,
+    )
+    should_rebuild_for_attack_evidence = bool(
+        sector_attack_evidence_rows
+        and not (mainline_turnover_summary or {}).get("mainline_attack_evidence_summary")
+    )
+
+    if (
+        should_rebuild_for_attack_evidence
+        or not _has_resolved_mainline_turnover_summary(mainline_turnover_summary)
+    ) and callable(build_mainline_turnover_summary):
         mainline_turnover_summary = build_mainline_turnover_summary(
             target_date=target_date,
             current_mainline_history_record=current_mainline_history_record,
             recent_mainline_history=recent_mainline_history,
             current_sector_turnover_snapshot=current_sector_turnover_snapshot,
             recent_sector_turnover_history=recent_sector_turnover_history,
+            sector_attack_evidence_rows=sector_attack_evidence_rows,
         )
 
     market_fit_calibration = build_market_fit_calibration(
@@ -310,6 +618,12 @@ def build_market_research_snapshot_contract(
     )
 
     lhb_capital_status, capital_conclusion = _derive_lhb_capital_intent(data, current_mainline_name)
+    capital_intent_breakdown, capital_conclusion = _derive_capital_intent_breakdown(
+        mainline_turnover_summary,
+        sector_attack_evidence_rows,
+        lhb_capital_status,
+        capital_conclusion,
+    )
 
     return {
         "observation": observation_snapshot,
@@ -326,6 +640,7 @@ def build_market_research_snapshot_contract(
         "recent_sector_turnover_history": recent_sector_turnover_history,
         "mainline_turnover_summary": mainline_turnover_summary,
         "market_fit_calibration": market_fit_calibration,
+        "capital_intent_breakdown": capital_intent_breakdown,
         "lhb_capital_status": lhb_capital_status,
         "capital_conclusion": capital_conclusion,
         "sector_ai_analysis": sector_ai_analysis,

@@ -158,6 +158,230 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["turnover_share_trend_rows"][0]["share"], "待累计")
         self.assertIn("缺少板块成交额接口", result["turnover_share_trend_rows"][0]["interpretation"])
 
+    def test_build_mainline_turnover_summary_exports_capacity_regime_summary(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-14",
+            current_mainline_history_record={
+                "date": "2026-05-14",
+                "primary_mainline": "半导体",
+                "secondary_mainline": "电力",
+                "competition_mainline": "化学制品",
+                "sector_relationship_state": "混沌接力",
+                "mainline_process": "启动",
+                "mainline_confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+            },
+            recent_mainline_history=[
+                {"date": "2026-05-12", "primary_mainline": "电力"},
+                {"date": "2026-05-13", "primary_mainline": "电力"},
+            ],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-14",
+                "sector_name": "半导体",
+                "sector_turnover": 4206.70,
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 12.4,
+            },
+            recent_sector_turnover_history=[
+                {"date": "2026-05-12", "sector_name": "电力", "total_turnover": 26000.00, "turnover_share_pct": 10.2},
+                {"date": "2026-05-13", "sector_name": "电力", "total_turnover": 30000.00, "turnover_share_pct": 11.8},
+            ],
+        )
+
+        summary = result["mainline_capacity_regime_summary"]
+        self.assertEqual(summary["mainline_capacity"], "双线孕育")
+        self.assertEqual(summary["mainline_regime"], "混沌接力")
+        self.assertEqual(summary["primary_line"], "半导体")
+        self.assertEqual(summary["other_lines"], "电力 / 化学制品")
+        self.assertEqual(summary["confirmation_evidence"], "半导体高标和涨停更集中，成交占比靠前")
+        self.assertEqual(summary["sector_relationship_state"], "混沌接力")
+        self.assertEqual(summary["mainline_process"], "启动")
+        self.assertIn("今日33880.86亿", summary["capacity_evidence"])
+        self.assertIn("昨日30000.00亿", summary["capacity_evidence"])
+        self.assertIn("近25日中位数30000.00亿", summary["capacity_evidence"])
+
+    def test_build_mainline_turnover_summary_can_keep_no_mainline_when_capacity_is_low(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-14",
+            current_mainline_history_record={"date": "2026-05-14", "primary_mainline": ""},
+            recent_mainline_history=[],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-14",
+                "sector_name": "",
+                "total_turnover": 7800.00,
+                "turnover_share_pct": 0.0,
+            },
+            recent_sector_turnover_history=[
+                {"date": "2026-05-13", "sector_name": "机器人", "total_turnover": 9200.00, "turnover_share_pct": 4.2},
+                {"date": "2026-05-12", "sector_name": "军工", "total_turnover": 9500.00, "turnover_share_pct": 4.1},
+            ],
+        )
+
+        summary = result["mainline_capacity_regime_summary"]
+        self.assertEqual(summary["mainline_capacity"], "低容量")
+        self.assertEqual(summary["mainline_regime"], "无主线")
+        self.assertEqual(summary["primary_line"], "暂无")
+        self.assertEqual(summary["tomorrow_action"], "不强行找主线，只保留异常观察")
+
+    def test_build_mainline_turnover_summary_does_not_promote_three_hotspots_to_multi_line_without_bull_market(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-14",
+            current_mainline_history_record={
+                "date": "2026-05-14",
+                "primary_mainline": "半导体",
+                "secondary_mainline": "电力",
+                "competition_mainline": "化学制品",
+                "market_regime": "震荡",
+            },
+            recent_mainline_history=[{"date": "2026-05-13", "primary_mainline": "电力"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-14",
+                "sector_name": "半导体",
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 12.4,
+            },
+            recent_sector_turnover_history=[
+                {"date": "2026-05-13", "sector_name": "电力", "total_turnover": 30000.00, "turnover_share_pct": 11.8},
+                {"date": "2026-05-12", "sector_name": "化学制品", "total_turnover": 29500.00, "turnover_share_pct": 9.6},
+            ],
+        )
+
+        summary = result["mainline_capacity_regime_summary"]
+        self.assertNotEqual(summary["mainline_regime"], "多主线牛市")
+        self.assertEqual(summary["mainline_regime"], "混沌接力")
+
+    def test_build_mainline_turnover_summary_uses_attack_evidence_for_confirmation(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-15",
+            current_mainline_history_record={"date": "2026-05-15", "primary_mainline": "电力"},
+            recent_mainline_history=[],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-15",
+                "sector_name": "半导体",
+                "total_turnover": 30000.0,
+                "turnover_share_pct": 12.4,
+            },
+            recent_sector_turnover_history=[],
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "半导体",
+                    "net_inflow_amount": 45.0,
+                    "net_inflow_rank": 1,
+                    "limit_up_count": 8,
+                    "high_anchor_height": 4,
+                    "turnover_share_change": 1.3,
+                }
+            ],
+        )
+
+        self.assertEqual(result["mainline_attack_evidence_summary"]["attack_state"], "confirmed_attack")
+        self.assertEqual(result["mainline_capacity_regime_summary"]["primary_line"], "半导体")
+        self.assertEqual(
+            result["mainline_capacity_regime_summary"]["confirmation_evidence"],
+            "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+        )
+
+    def test_build_mainline_turnover_summary_uses_confirmed_attack_line_as_current_mainline(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-15",
+            current_mainline_history_record={"date": "2026-05-15", "primary_mainline": "电力"},
+            recent_mainline_history=[{"date": "2026-05-14", "primary_mainline": "电力"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-15",
+                "sector_name": "半导体",
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 12.4,
+            },
+            recent_sector_turnover_history=[
+                {"date": "2026-05-14", "sector_name": "电力", "total_turnover": 30000.0, "turnover_share_pct": 11.8}
+            ],
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "半导体",
+                    "net_inflow_amount": 45.0,
+                    "net_inflow_rank": 1,
+                    "limit_up_count": 8,
+                    "high_anchor_height": 4,
+                    "turnover_share_change": 1.3,
+                }
+            ],
+        )
+
+        self.assertEqual(result["current_mainline"], "半导体")
+        self.assertEqual(result["previous_mainline"], "电力")
+        self.assertEqual(result["conclusion"], "主线切换为半导体，旧主线电力退出中心")
+        self.assertEqual(result["double_mainline_summary"]["cycle_mainline"], "半导体")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "半导体")
+
+    def test_build_mainline_turnover_summary_aligns_turnover_row_to_confirmed_attack_line(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-15",
+            current_mainline_history_record={"date": "2026-05-15", "primary_mainline": "电力"},
+            recent_mainline_history=[{"date": "2026-05-14", "primary_mainline": "电力"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-15",
+                "sector_name": "电力",
+                "sector_turnover": 2300.0,
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 6.79,
+            },
+            recent_sector_turnover_history=[
+                {"date": "2026-05-14", "sector_name": "电力", "total_turnover": 30000.0, "turnover_share_pct": 11.8}
+            ],
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "半导体",
+                    "net_inflow_amount": 45.0,
+                    "net_inflow_rank": 1,
+                    "limit_up_count": 8,
+                    "high_anchor_height": 4,
+                    "sector_turnover": 4206.7,
+                    "turnover_share_pct": 12.42,
+                    "turnover_share_change": 1.3,
+                }
+            ],
+        )
+
+        row = result["turnover_share_trend_rows"][-1]
+        self.assertEqual(row["cycle_mainline"], "半导体")
+        self.assertEqual(row["daily_attack_line"], "半导体")
+        self.assertEqual(row["share"], "12.4%")
+        self.assertEqual(row["mainline_turnover"], "4206.70亿")
+
+    def test_build_mainline_turnover_summary_does_not_confirm_primary_mainline_without_attack_evidence(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-15",
+            current_mainline_history_record={"date": "2026-05-15", "primary_mainline": "半导体"},
+            recent_mainline_history=[],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-15",
+                "sector_name": "半导体",
+                "total_turnover": 26000.0,
+            },
+            recent_sector_turnover_history=[],
+            sector_attack_evidence_rows=[
+                {"sector_name": "半导体", "net_inflow_amount": 2.0, "net_inflow_rank": 20, "limit_up_count": 0}
+            ],
+        )
+
+        self.assertEqual(result["mainline_attack_evidence_summary"]["attack_state"], "no_attack")
+        self.assertEqual(result["mainline_capacity_regime_summary"]["mainline_regime"], "无主线")
+        self.assertEqual(result["mainline_capacity_regime_summary"]["primary_line"], "暂无")
+        self.assertEqual(result["mainline_capacity_regime_summary"]["confirmation_evidence"], "资金未形成明确进攻方向")
+
     def test_should_rebuild_mainline_turnover_summary_when_existing_summary_misses_switch(self):
         runtime = self._load_module()
 

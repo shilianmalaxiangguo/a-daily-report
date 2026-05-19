@@ -1,6 +1,10 @@
 from report.front_summary_node_registry import build_front_summary_node_specs
 from report.front_summary_node_runtime import run_front_summary_nodes
-from report.mainline_turnover_summary_support import resolve_double_mainline_summary, resolve_turnover_share_trend_rows
+from report.mainline_turnover_summary_support import (
+    resolve_mainline_attack_evidence_rows,
+    resolve_mainline_capacity_regime_summary,
+    resolve_turnover_share_trend_rows,
+)
 from report.surface_wording import sanitize_user_visible_text
 
 
@@ -8,14 +12,17 @@ def sanitize_front_page_text(value):
     return sanitize_user_visible_text(value)
 
 
-def _render_double_mainline_summary_table(context):
-    summary = resolve_double_mainline_summary(context)
+def _render_mainline_capacity_regime_table(context):
+    summary = resolve_mainline_capacity_regime_summary(context)
     if not summary:
         return []
     return [
-        "| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |",
-        "|----------|------------|----------|----------|",
-        "| {cycle_mainline} | {daily_attack_line} | {relationship} | {tomorrow_action} |".format(**summary),
+        "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |",
+        "|----------|----------|--------|----------------|--------------|--------------|----------|----------|",
+        (
+            "| {mainline_capacity} | {mainline_regime} | {primary_line} | {other_lines} | "
+            "{confirmation_evidence} | {sector_relationship_state} | {mainline_process} | {tomorrow_action} |"
+        ).format(**summary),
     ]
 
 
@@ -36,6 +43,24 @@ def _render_turnover_share_trend_table(context):
     return lines
 
 
+def _render_mainline_attack_evidence_table(context):
+    rows = resolve_mainline_attack_evidence_rows(context)
+    if not rows:
+        return []
+    lines = [
+        "#### 主线攻击证据",
+        "| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |",
+        "|------|----------|------------|--------|--------|----------|--------------|------|",
+    ]
+    for row in rows[:3]:
+        lines.append(
+            "| {sector_name} | {attack_state} | {net_inflow_rank} | {net_inflow_amount} | {limit_up_count} | {high_anchor_height} | {turnover_share_change} | {conclusion} |".format(
+                **row
+            )
+        )
+    return lines
+
+
 def render_front_digest(context):
     context = sanitize_front_page_text(context or {})
     risk_parts = context.get("risk_parts") or []
@@ -47,7 +72,9 @@ def render_front_digest(context):
     ]
     if context.get("mainline_turnover_text"):
         lines.append(f"- **主线更替与占比**: {context.get('mainline_turnover_text')}")
-    lines.extend(_render_double_mainline_summary_table(context))
+    lines.extend(_render_mainline_capacity_regime_table(context))
+    if not context.get("compact"):
+        lines.extend(_render_mainline_attack_evidence_table(context))
     lines.extend(_render_turnover_share_trend_table(context))
     if context.get("special_probe_text"):
         lines.append(f"- **特殊标的先看谁**: {context.get('special_probe_text')}")

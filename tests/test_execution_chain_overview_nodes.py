@@ -25,6 +25,27 @@ class ExecutionChainOverviewNodesTest(unittest.TestCase):
         self.assertIn("- **基准指数**: 中证全指涨跌幅+1.23%", rendered)
         self.assertNotIn("### 分-六步决策路径", rendered)
 
+    def test_render_execution_chain_overview_section_does_not_call_primary_mainline_when_attack_evidence_is_chaotic(self):
+        lines = render_execution_chain_overview_section(
+            {
+                "csci_change": -1.23,
+                "market_trend": "大幅下跌",
+                "primary_mainline": "半导体",
+                "enabled_node_keys": ["header", "market_summary"],
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **市场特征**: 大幅下跌，多方向局部活跃但资金未明显胜出", rendered)
+        self.assertNotIn("主攻线半导体领涨", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

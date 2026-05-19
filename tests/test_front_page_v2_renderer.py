@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.front_page_v2_renderer import render_front_page_v2
 
 
@@ -16,11 +20,16 @@ class FrontPageV2RendererTest(unittest.TestCase):
                 target_date="2026-05-12",
                 market_research_snapshot={
                     "mainline_turnover_summary": {"current_mainline": "机器人"},
+                    "unique_action_target": {
+                        "name": "机器人一号",
+                        "code": "000001",
+                        "condition": "主线确认 + 承接 + 60分钟确认",
+                    },
                     "position_decision": {
-                        "signal_grade": "A-",
+                        "signal_grade": "50",
                         "target_position_pct": 50,
                         "full_attack_ready": False,
-                        "sizing_reason": "唯一对象未完成A档确认，先按A-执行。",
+                        "sizing_reason": "唯一对象未完成100%核心确认，先按50%标准进攻。",
                         "monthly_rhythm": {
                             "month_mode": "ordinary_attack",
                             "target_role": "attack_prepare",
@@ -30,27 +39,164 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             "allow_full_attack": False,
                             "profit_cushion": False,
                             "trend_invalid": False,
-                            "reason": "处于进攻准备期，先允许A-以下参与，不开放A级满仓/重仓。",
+                            "reason": "处于进攻准备期，先按50%标准进攻，不开放100%核心进攻。",
                         },
                     },
                 },
             )
         )
 
-        self.assertIn("### 月度攻防与仓位等级", rendered)
+        self.assertIn("### 月度攻防与进攻仓位", rendered)
         self.assertIn("| 本月模式 | 普通进攻月 |", rendered)
         self.assertIn("| 当月收益 | +6.80% |", rendered)
         self.assertIn("| 盈利垫 | 未触发（阈值+10.00%） |", rendered)
-        self.assertIn("| 仓位攻击等级 | A-档50% |", rendered)
+        self.assertIn("| 进攻仓位三态 | 50% |", rendered)
         self.assertIn("| 明日最大仓位 | 50% |", rendered)
-        self.assertIn("| 收益处理 | 未到盈利垫，按仓位攻击等级执行 |", rendered)
+        self.assertIn("| 收益处理 | 未到盈利垫，按进攻仓位三态执行 |", rendered)
+
+    def test_front_page_execution_plan_uses_layered_participation_windows(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-12",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "unique_action_target": {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "condition": "竞价表态 + 回封参与 + 失效价清楚",
+                    },
+                    "position_decision": {
+                        "signal_grade": "100",
+                        "target_position_pct": 100,
+                        "full_attack_ready": True,
+                        "monthly_rhythm": {"max_position_pct": 100},
+                    },
+                },
+            )
+        )
+
+        self.assertIn("竞价表态", rendered)
+        self.assertIn("开盘前几分钟", rendered)
+        self.assertIn("回封参与", rendered)
+        self.assertIn("60分钟确认", rendered)
+        self.assertIn("50%/100%或0%", rendered)
+        self.assertNotIn("买点等60分钟", rendered)
+        self.assertNotIn(_m("满足60分钟确认", "才允许"), rendered)
+
+    def test_front_page_unique_action_prefers_structured_required_steps(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-12",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "unique_action_target": {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "participation_window": "竞价表态 + 回封参与",
+                        "participation_window_type": "auction_reseal",
+                        "condition": "主线确认 + 承接 + 60分钟确认",
+                        "required_steps": ["竞价表态", "开盘前几分钟承接", "回封/打板"],
+                        "fallback_state": "不满足回到0%",
+                    },
+                    "position_decision": {
+                        "signal_grade": "100",
+                        "target_position_pct": 100,
+                        "monthly_rhythm": {"max_position_pct": 100},
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
+        self.assertNotIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+
+    def test_front_page_unique_action_uses_window_type_over_legacy_condition(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-12",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "unique_action_target": {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "participation_window": "竞价表态 + 回封参与",
+                        "participation_window_type": "auction_reseal",
+                        "condition": "主线确认 + 承接 + 60分钟确认",
+                    },
+                    "position_decision": {
+                        "signal_grade": "100",
+                        "target_position_pct": 100,
+                        "monthly_rhythm": {"max_position_pct": 100},
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
+        self.assertNotIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+
+    def test_front_page_current_mainline_fields_downgrade_when_attack_evidence_is_chaotic(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-14",
+                market_research_snapshot={
+                    "target_date": "2026-05-14",
+                    "current_mainline_history_record": {"date": "2026-05-14", "primary_mainline": "半导体", "market_state": "观察"},
+                    "recent_mainline_history": [{"date": "2026-05-13", "primary_mainline": "电力", "market_state": "观察"}],
+                    "pivot_mainline_rows": [
+                        {
+                            "date_range": "05-14",
+                            "pivot_level": "日线中枢",
+                            "pivot_range": "-",
+                            "position": "中枢内",
+                            "mainline": "半导体",
+                            "mainline_degree": "周期主线",
+                            "evolution": "观察",
+                            "replacement": "接替电力",
+                            "interpretation": "中枢是主线周期载体：[半导体] 承载在日线中枢，主线程度是周期主线，当前演化为观察；接替电力，动作上先看承接是否稳定。",
+                        }
+                    ],
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "chaotic_rotation",
+                            "primary_line": "",
+                            "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                            "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                        },
+                        "turnover_share_trend_rows": [
+                            {
+                                "date": "2026-05-14",
+                                "cycle_mainline": "半导体",
+                                "daily_attack_line": "半导体",
+                                "mainline_turnover": "4206.70亿",
+                                "market_turnover": "33880.86亿",
+                                "share": "12.4%",
+                                "share_change": "待累计",
+                                "interpretation": "主线成交额占比可用，继续观察占比抬升或回落",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 05-14 | 日线中枢 | - | 中枢内 | 暂无确认主线 | 待确认 | 观察 | 待确认 | 中枢只记录候选方向，不把单日热度升级为周期主线；多方向局部活跃但资金未明显胜出。 |", rendered)
+        self.assertIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 候选方向成交额占比可记录，但未确认主攻线 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 暂无确认主线 | 暂无确认主攻线 |", rendered)
+        self.assertNotIn("| 05-14 | 日线中枢 | - | 中枢内 | 半导体 | 周期主线 |", rendered)
+        self.assertNotIn("| 2026-05-14 | 半导体 | 半导体 |", rendered)
+        self.assertNotIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 |", rendered)
 
     def test_front_page_maps_position_attack_grade_to_fixed_position_slabs(self):
         cases = [
-            ("C", 0, "C档0%"),
-            ("B", 30, "B档30%"),
-            ("A-", 50, "A-档50%"),
-            ("A", 100, "A档80%-100%"),
+            ("0", 0, "0%"),
+            ("50", 50, "50%"),
+            ("100", 100, "100%"),
         ]
 
         for signal_grade, target_position_pct, expected_label in cases:
@@ -60,6 +206,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         [],
                         target_date="2026-05-12",
                         market_research_snapshot={
+                            "unique_action_target": {"name": "机器人一号", "code": "000001"},
                             "position_decision": {
                                 "signal_grade": signal_grade,
                                 "target_position_pct": target_position_pct,
@@ -69,45 +216,36 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     )
                 )
 
-                self.assertIn(f"| 仓位攻击等级 | {expected_label} |", rendered)
+                self.assertIn(f"| 进攻仓位三态 | {expected_label} |", rendered)
 
     def test_front_page_renders_position_state_machine_across_front_sections(self):
         cases = [
             (
-                "C",
+                "0",
                 0,
                 {},
-                "C档0% / 仅观察",
-                "C档无对象",
-                "C档0%观察",
-                "C档：不满足就空仓",
+                "0% / 不参与",
+                "0%无合格标的",
+                "0%不参与",
+                "0%：条件不满足",
             ),
             (
-                "B",
-                30,
-                {"allow_conditional_30": True, "can_new_entry": False, "should_reduce": False},
-                "B档30% / 10点确认后条件试错",
-                "B档有条件试错对象",
-                "B档30%条件试错",
-                "B档：不满足不开",
-            ),
-            (
-                "A-",
+                "50",
                 50,
-                {"can_new_entry": True},
-                "A-档50% / 唯一对象执行",
-                "A-档唯一执行对象",
-                "A-档50%执行",
-                "A-档：只看唯一对象",
+                {"allow_attack_50_ready": True, "can_new_entry": False, "should_reduce": False},
+                "50% / 标准进攻",
+                "50%标准进攻对象",
+                "50%标准进攻",
+                "50%：只做合格对象",
             ),
             (
-                "A",
+                "100",
                 100,
                 {"can_new_entry": True},
-                "A档80%-100% / 买定离手",
-                "A档唯一核心对象",
-                "A档80%-100%买定离手",
-                "A档：唯一核心对象确认后80%-100%买定离手",
+                "100% / 核心进攻",
+                "100%唯一核心对象",
+                "100%核心进攻",
+                "100%：唯一核心对象确认后进攻",
             ),
         ]
         for grade, target_position_pct, final_gate, execution_style, stock_state, discipline, action_text in cases:
@@ -126,7 +264,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             "position_decision": {
                                 "signal_grade": grade,
                                 "target_position_pct": target_position_pct,
-                                "full_attack_ready": grade == "A",
+                                "full_attack_ready": grade == "100",
                                 "monthly_rhythm": {
                                     "month_mode": "ordinary_attack",
                                     "max_position_pct": target_position_pct,
@@ -134,7 +272,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             },
                         },
                         final_gate=final_gate,
-                        position_level="三档（进攻档）" if grade in ("A-", "A") else "",
+                        position_level="三档（进攻档）" if grade in ("50", "100") else "",
                     )
                 )
 
@@ -166,9 +304,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 唯一对象 | 暂无 |", front_stock_section)
         self.assertIn("| 今日不买原因 | 没有唯一对象，完整候选仅保留在附录和快照 |", front_stock_section)
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", front_stock_section)
-        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
 
-    def test_b_grade_without_unique_target_renders_as_condition_waiting_not_object_ready(self):
+    def test_50_state_without_unique_target_falls_back_to_zero_not_condition_waiting(self):
         rendered = "\n".join(
             render_front_page_v2(
                 [],
@@ -185,20 +323,20 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         }
                     },
                     "position_decision": {
-                        "signal_grade": "B",
-                        "target_position_pct": 30,
-                        "monthly_rhythm": {"month_mode": "earnings_defense", "max_position_pct": 30},
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "monthly_rhythm": {"month_mode": "earnings_defense", "max_position_pct": 50},
                     },
                 },
-                final_gate={"allow_conditional_30": True, "can_new_entry": False, "should_reduce": False},
+                final_gate={"allow_attack_50_ready": True, "can_new_entry": False, "should_reduce": False},
                 position_level="二档（防守档）",
             )
         )
 
         self.assertIn("| 唯一对象 | 暂无 |", rendered)
-        self.assertIn("| 当前状态 | B档条件等待 |", rendered)
-        self.assertNotIn("| 当前状态 | B档有条件试错对象 |", rendered)
-        self.assertIn("| B档防守观察，10点确认后才评估30%条件试错 |", rendered)
+        self.assertIn("| 当前状态 | 0%无合格标的 |", rendered)
+        self.assertNotIn("B档", rendered)
+        self.assertIn("| 0%不参与 |", rendered)
 
     def test_candidate_section_uses_structured_snapshot_summary_and_hides_full_candidate_table(self):
         rendered = "\n".join(
@@ -338,7 +476,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         "mainline_state": "strengthening",
                         "reasoning_effort": "xhigh",
                         "unique_target": "300613",
-                        "conclusion": "只看富瀚微，满足确认才允许条件试错。",
+                        "conclusion": "只看富瀚微，满足确认才按50%标准进攻。",
                         "handoff_buying_evidence": "clear",
                         "evidence": [{"field": "mainline_snapshot.current_mainline", "summary": "主线为半导体"}],
                         "trigger_conditions": ["10点后主线继续放量", "富瀚微完成60分钟确认"],
@@ -351,13 +489,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         expected_label = "300613 富瀚微（半导体、AI端侧芯片）"
-        self.assertIn(f"| 只看唯一对象 | {expected_label} | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+        self.assertIn(f"| 只看唯一对象 | {expected_label} | 60分钟确认 | 主线确认 / 承接 / 60分钟确认 | 不满足回到0% |", rendered)
         self.assertIn(
-            f"| B档防守观察，10点确认后才评估30%条件试错 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | {expected_label} | B档30% / 10点确认后条件试错 |",
+            f"| 50%标准进攻，只做预演命中的合格对象 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | {expected_label} | 50% / 标准进攻 |",
             rendered,
         )
-        self.assertIn("| B档30% / 10点确认后条件试错 |", rendered)
-        self.assertIn("B档不是绝对空仓；B档：不满足不开", rendered)
+        self.assertIn("| 50% / 标准进攻 |", rendered)
+        self.assertIn("50%：只做合格对象", rendered)
 
     def test_unique_target_label_keeps_markdown_tables_stable_when_direction_has_table_chars(self):
         rendered = "\n".join(
@@ -392,12 +530,12 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         expected_label = "300613 富瀚微（半导体、AI｜端侧 芯片）"
-        self.assertIn(f"| 只看唯一对象 | {expected_label} | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+        self.assertIn(f"| 只看唯一对象 | {expected_label} | 60分钟确认 | 主线确认 / 承接 / 60分钟确认 | 不满足回到0% |", rendered)
         for line in rendered.splitlines():
-            if line.startswith("| 只看唯一对象 |") or line.startswith("| B档防守观察"):
+            if line.startswith("| 只看唯一对象 |") or line.startswith("| 50%标准进攻"):
                 self.assertNotIn("AI|端侧", line)
 
-    def test_reasoning_conditional_entry_without_clear_handoff_stays_c_grade(self):
+    def test_reasoning_conditional_entry_without_clear_handoff_stays_zero_state(self):
         rendered = "\n".join(
             render_front_page_v2(
                 [],
@@ -422,11 +560,11 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
-        self.assertIn("| C档观察，不开新仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | C档0% / 仅观察 |", rendered)
-        self.assertNotIn("| B档30% / 10点确认后条件试错 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
+        self.assertNotIn(_m("B档", "30%"), rendered)
 
-    def test_conditional_defense_final_summary_does_not_collapse_to_empty_style(self):
+    def test_conditional_defense_without_unique_target_renders_zero_state(self):
         rendered = "\n".join(
             render_front_page_v2(
                 [],
@@ -446,18 +584,17 @@ class FrontPageV2RendererTest(unittest.TestCase):
                 },
                 final_gate={
                     "can_new_entry": False,
-                    "allow_conditional_30": True,
+                    "allow_attack_50_ready": True,
                     "should_reduce": False,
-                    "final_action": "防守观察，只看主线核心；09:50-10:10完成10点确认后才评估30%条件试错，否则不开新仓",
+                    "final_action": "观察，只看主线核心；09:50-10:10完成10点确认后才评估是否50%标准进攻，否则不参与",
                 },
                 position_level="二档（防守档）",
             )
         )
 
-        self.assertIn("| B档防守观察，10点确认后才评估30%条件试错 |", rendered)
-        self.assertNotIn("| 防守观察，只看主线核心；09:50-10:10完成10点确认后才评估30%条件试错，否则不开新仓 |", rendered)
-        self.assertIn("| B档30% / 10点确认后条件试错 |", rendered)
-        self.assertIn("B档不是绝对空仓", rendered)
+        self.assertIn("| 0%不参与 |", rendered)
+        self.assertNotIn(_m("30%", "条件试错"), rendered)
+        self.assertNotIn("B档", rendered)
         self.assertNotIn("| 空仓 / 短线确认 |", rendered)
 
     def test_reasoning_decision_unique_target_only_drives_action_for_conditional_entry(self):
@@ -485,8 +622,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("### 1. 个股裁决", rendered)
-        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
-        self.assertIn("| C档观察，不开新仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | C档0% / 仅观察 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_non_actionable_reasoning_decision_blocks_snapshot_unique_target(self):
         rendered = "\n".join(
@@ -519,8 +656,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertIn("### 1. 个股裁决", rendered)
         self.assertNotIn("### 1. 主线内可执行候选", rendered)
-        self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
-        self.assertIn("| C档观察，不开新仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | C档0% / 仅观察 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_empty_or_malformed_reasoning_decision_blocks_snapshot_unique_target(self):
         for reasoning_decision in ({}, "invalid"):
@@ -544,8 +681,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
                 self.assertIn("### 1. 个股裁决", rendered)
                 self.assertNotIn("### 1. 主线内可执行候选", rendered)
-                self.assertIn("| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
-                self.assertIn("| C档观察，不开新仓 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | C档0% / 仅观察 |", rendered)
+                self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+                self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
         rendered = "\n".join(
@@ -624,6 +761,68 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
         self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | 待累计 |", rendered)
 
+    def test_front_page_replaces_double_mainline_with_capacity_regime_table(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-14",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                        "mainline_capacity_regime_summary": {
+                            "mainline_capacity": "双线孕育",
+                            "mainline_regime": "混沌接力",
+                            "primary_line": "半导体",
+                            "other_lines": "电力 / 化学制品",
+                            "confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+                            "sector_relationship_state": "半导体尝试替代，电力退成背景线待确认",
+                            "mainline_process": "半导体启动，电力背景线",
+                            "tomorrow_action": "先看资金是否继续选择半导体；背景线只观察回流",
+                        },
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "confirmed_attack",
+                            "primary_line": "半导体",
+                            "candidate_lines": ["电力"],
+                            "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+                            "sector_evidence_rows": [
+                                {
+                                    "sector_name": "半导体",
+                                    "net_inflow_rank": 1,
+                                    "net_inflow_amount": 45.0,
+                                    "limit_up_count": 5,
+                                    "high_anchor_height": 4,
+                                    "turnover_share_change": 1.6,
+                                },
+                                {
+                                    "sector_name": "电力",
+                                    "net_inflow_rank": 2,
+                                    "net_inflow_amount": 8.0,
+                                    "limit_up_count": 1,
+                                    "high_anchor_height": 1,
+                                    "turnover_share_change": -0.5,
+                                },
+                            ],
+                        },
+                    },
+                    "unique_action_target": {
+                        "name": "中船特气",
+                        "code": "688146",
+                        "condition": "主线确认 + 承接 + 60分钟确认",
+                    },
+                },
+            )
+        )
+
+        self.assertIn("### 4. 主线容量与格局判断", rendered)
+        self.assertIn("| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |", rendered)
+        self.assertIn("| 双线孕育 | 混沌接力 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
+        self.assertIn("#### 主线攻击证据", rendered)
+        self.assertIn("| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |", rendered)
+        self.assertIn("| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |", rendered)
+        self.assertIn("| 电力 | 候选线 | 第2 | +8.00亿 | 1 | 1 | -0.5pct | 电力仍是候选线，证据不足以确认主攻线 |", rendered)
+        self.assertNotIn("### 4. 双层主线结论", rendered)
+        self.assertNotIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
+
     def test_market_fit_embeds_in_existing_sections_without_standalone_modules(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -699,7 +898,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         "condition": "主线确认 + 承接 + 60分钟确认",
                     },
                 },
-                final_gate={"can_new_entry": False, "allow_conditional_30": True, "final_action": "观察，等10点确认"},
+                final_gate={"can_new_entry": False, "allow_attack_50_ready": True, "final_action": "观察，等10点确认"},
                 position_level="轻仓",
             )
         )
@@ -712,9 +911,18 @@ class FrontPageV2RendererTest(unittest.TestCase):
         front_stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", front_stock_section)
         self.assertIn("| 唯一对象 | 300613 富瀚微 |", front_stock_section)
-        self.assertIn("| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |", rendered)
-        self.assertIn("| 只看唯一对象 | 300613 富瀚微 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
-        for forbidden in ("## 市场贴合度校准", "## 大阳线与承接", "## 主力画图", "执行权", "闸门", "门控", "开闸", "放行"):
+        self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)
+        self.assertIn("| 只看唯一对象 | 300613 富瀚微 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+        for forbidden in (
+            "## 市场贴合度校准",
+            "## 大阳线与承接",
+            "## 主力画图",
+            _m("执行", "权"),
+            _m("闸", "门"),
+            _m("门", "控"),
+            _m("开", "闸"),
+            _m("放", "行"),
+        ):
             self.assertNotIn(forbidden, rendered)
 
 

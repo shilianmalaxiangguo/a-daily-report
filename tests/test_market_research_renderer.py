@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.market_research_renderer import (
     render_gem_breathing_pool_section,
     render_gem_breathing_step2_section,
@@ -80,9 +84,36 @@ class MarketResearchRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("### 2. 周期解读", rendered)
-        self.assertIn("| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |", rendered)
-        self.assertIn("| 上个周期 | 04-14 ~ 04-18 | 5日 | 电力 | 强化后分化 |", rendered)
+        self.assertIn("| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |", rendered)
+        self.assertIn("| 上个周期 | 04-14 ~ 04-18 | 5日 | 电力 | 已结束周期 | 背景观察 | 强化后分化 |", rendered)
         self.assertIn("半导体正在尝试接替电力", rendered)
+
+    def test_render_market_research_snapshot_section_renders_cycle_attack_transfer_fields(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "cycle_interpretation"],
+                "cycle_interpretation_rows": [
+                    {
+                        "cycle_label": "当前周期",
+                        "date_range": "05-14",
+                        "trading_days": "1日",
+                        "mainline": "半导体",
+                        "attack_line": "半导体",
+                        "cycle_stage": "切换试攻",
+                        "transfer_state": "首次攻击",
+                        "market_state": "观察",
+                        "tomorrow_validation": "看是否二次攻击，不能由单日攻击自动升级周期主线",
+                        "interpretation": "半导体今日攻击成立，但传递性不足，不自动升级周期主线。",
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 当前周期 | 05-14 | 1日 | 半导体 | 切换试攻 | 首次攻击 | 观察 | 看是否二次攻击，不能由单日攻击自动升级周期主线 | 半导体今日攻击成立，但传递性不足，不自动升级周期主线。 |", rendered)
+        self.assertNotIn("| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |", rendered)
+        self.assertNotIn("正在承担当前周期的主线观察任务", rendered)
 
     def test_render_market_research_snapshot_section_renders_pivot_mainline_interpretation_table(self):
         lines = render_market_research_snapshot_section(
@@ -162,11 +193,175 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 2026-04-24 | 通信 | 通信 | 2180.00亿 | 12834.00亿 | 17.0% | +1.2pct | 主线占比继续抬升 |", rendered)
         self.assertNotIn("| 盘面风险偏好 |", rendered)
 
+    def test_render_market_research_snapshot_section_renders_mainline_capacity_regime_node(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "mainline_capacity_regime"],
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "双线孕育",
+                        "mainline_regime": "混沌接力",
+                        "primary_line": "半导体",
+                        "other_lines": "电力 / 化学制品",
+                        "confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+                        "sector_relationship_state": "半导体尝试替代，电力退成背景线待确认",
+                        "mainline_process": "半导体启动，电力背景线",
+                        "tomorrow_action": "先看资金是否继续选择半导体；背景线只观察回流",
+                    },
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "半导体",
+                        "candidate_lines": ["电力"],
+                        "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+                        "sector_evidence_rows": [
+                            {
+                                "sector_name": "半导体",
+                                "net_inflow_rank": 1,
+                                "net_inflow_amount": 45.0,
+                                "limit_up_count": 5,
+                                "high_anchor_height": 4,
+                                "turnover_share_change": 1.6,
+                            },
+                            {
+                                "sector_name": "电力",
+                                "net_inflow_rank": 2,
+                                "net_inflow_amount": 8.0,
+                                "limit_up_count": 1,
+                                "high_anchor_height": 1,
+                                "turnover_share_change": -0.5,
+                            },
+                        ],
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 🔬 市场研究快照", rendered)
+        self.assertIn("### 4. 主线容量与格局判断", rendered)
+        self.assertIn("| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |", rendered)
+        self.assertIn("| 双线孕育 | 混沌接力 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
+        self.assertIn("#### 主线攻击证据", rendered)
+        self.assertIn("| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |", rendered)
+
+    def test_render_market_research_snapshot_mainline_focus_downgrades_when_attack_evidence_is_chaotic(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "mainline_focus"],
+                "competition_result": "主攻线 半导体",
+                "competition_evidence": "趋势2只 / 强势1只 / 涨停2只",
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线焦点 | 无确认主攻线 | 多方向局部活跃但资金未明显胜出 | 候选只观察，不给买入资格 |", rendered)
+        self.assertNotIn("主攻线 半导体", rendered)
+
+    def test_render_market_research_snapshot_turnover_rows_downgrade_when_attack_evidence_is_chaotic(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "mainline_turnover"],
+                "mainline_turnover_summary": {
+                    "conclusion": "主线待确认，暂不输出成交额占比结论",
+                    "data_text": "最近1日主线 半导体 -> 电力 -> 电力；成交额占比 12.4%，节奏偏持平",
+                    "action_text": "先等待主线明确，再谈成交额占比趋势",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    },
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-05-14",
+                            "cycle_mainline": "半导体",
+                            "daily_attack_line": "半导体",
+                            "mainline_turnover": "4206.70亿",
+                            "market_turnover": "33880.86亿",
+                            "share": "12.4%",
+                            "share_change": "待累计",
+                            "interpretation": "主线成交额占比可用，继续观察占比抬升或回落",
+                        }
+                    ],
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 候选方向成交额占比可记录，但未确认主攻线 |", rendered)
+        self.assertNotIn("| 2026-05-14 | 半导体 | 半导体 |", rendered)
+
+    def test_render_market_research_snapshot_rotation_downgrades_when_attack_evidence_is_chaotic(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "rotation"],
+                "rotation_label": "爆发",
+                "rotation_summary_text": "主攻线半导体 / 次强线电力 / 竞争线光伏设备",
+                "rotation_action": "继续围着半导体做减法，只盯主攻线承接",
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线内部轮动 | 混沌轮动 | 多方向局部活跃但资金未明显胜出 | 不围着单一方向做减法，只保留候选观察 |", rendered)
+        self.assertNotIn("主攻线半导体", rendered)
+        self.assertNotIn("继续围着半导体做减法", rendered)
+
+    def test_render_market_research_snapshot_narrative_downgrades_when_attack_evidence_is_chaotic(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "narrative"],
+                "narrative_label": "半导体节点",
+                "narrative_reason": "产业催化发酵，半导体目前是主攻线",
+                "narrative_action": "继续盯半导体",
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 叙事节点 | 叙事待验证 | 题材只能做背景，先看板块攻击证据是否胜出 | 不把节点热度当主线确认 |", rendered)
+        self.assertNotIn("半导体目前是主攻线", rendered)
+        self.assertNotIn("继续盯半导体", rendered)
+
     def test_render_market_research_snapshot_section_renders_lhb_capital_intent_tables(self):
         lines = render_market_research_snapshot_section(
             {
                 "compact": False,
                 "enabled_node_keys": ["header", "lhb_capital_intent"],
+                "capital_intent_breakdown": {
+                    "sector_fund_attitude": "半导体板块攻击资金确认",
+                    "strength_feedback": "涨停5，高标4，成交占比+1.6pct",
+                    "lhb_validation": "龙虎榜未验证主线",
+                    "capital_consistency": "板块攻击成立，龙虎榜未验证",
+                    "tomorrow_meaning": "先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决",
+                },
                 "lhb_capital_status": {
                     "capital_strength": "强",
                     "capital_intensity": "主线净买明显放大",
@@ -185,6 +380,9 @@ class MarketResearchRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("### 🔬 市场研究快照", rendered)
+        self.assertIn("#### 资金意图拆解", rendered)
+        self.assertIn("| 板块攻击资金 | 强度反馈 | 龙虎榜验证 | 资金一致性 | 明日含义 |", rendered)
+        self.assertIn("| 半导体板块攻击资金确认 | 涨停5，高标4，成交占比+1.6pct | 龙虎榜未验证主线 | 板块攻击成立，龙虎榜未验证 | 先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决 |", rendered)
         self.assertIn("#### 龙虎榜资金状态", rendered)
         self.assertIn("| 资金强弱 | 资金力度 | 资金方向 | 资金意图 | 风格转向 | 事件属性 |", rendered)
         self.assertIn("| 强 | 主线净买明显放大 | 半导体核心 | 资金继续加仓主线核心，不做支线扩散 | 从情绪接力转向趋势容量 | 业绩预期叠加产业催化 |", rendered)
@@ -358,7 +556,7 @@ class MarketResearchRendererTest(unittest.TestCase):
             {
                 "display_mvp_mode": False,
                 "gem_observation_stocks": [
-                    {"name": "军工转债", "code": "123001", "sector": "军工", "tier": "A层", "abnormal_summary": "均线粘合", "tomorrow_strength": 82}
+                    {"name": "军工转债", "code": "123001", "sector": "军工", "tier": "A层", "abnormal_summary": _m("均线", "粘合"), "tomorrow_strength": 82}
                 ],
                 "filtered_out_gem_candidates": [],
             }
@@ -374,7 +572,8 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("主线侧翼弹性层", "\n".join(step2_lines))
         self.assertIn("#### Step 3.5 - 创业板20cm预启动观察池", "\n".join(pool_lines))
         self.assertIn("> **先看结论**：创业板20cm样本只保留观察权，不单列成独立战场。", "\n".join(pool_lines))
-        self.assertIn("> **只看什么**：均线粘合、蛇形走位和右侧确认。", "\n".join(pool_lines))
+        self.assertIn("> **只看什么**：波动收敛、量价温和放大、右侧确认。", "\n".join(pool_lines))
+        self.assertNotIn(_m("均线", "粘合"), "\n".join(step2_lines + pool_lines))
         self.assertNotIn("核心问题", "\n".join(pool_lines))
         self.assertIn("军工转债", "\n".join(pool_lines))
 

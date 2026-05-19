@@ -3,6 +3,7 @@ DEFAULT_MARKET_RESEARCH_SNAPSHOT_NODE_SPECS = [
     {"node_key": "cycle_calendar", "title": "周期日历主视图"},
     {"node_key": "cycle_interpretation", "title": "周期解读"},
     {"node_key": "pivot_mainline_interpretation", "title": "中枢与主线解读"},
+    {"node_key": "mainline_capacity_regime", "title": "主线容量与格局判断"},
     {"node_key": "table_header", "title": "证据表头"},
     {"node_key": "risk_preference", "title": "盘面风险偏好"},
     {"node_key": "mainline_focus", "title": "主线焦点"},

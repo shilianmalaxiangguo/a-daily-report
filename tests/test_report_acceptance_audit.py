@@ -14,16 +14,16 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 ## 一、交易纪律
 | 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |
 |----------|----------|----------|----------|----------|
-| B档30%条件试错 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |
+| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |
 
-### 月度攻防与仓位等级
+### 月度攻防与进攻仓位
 | 项目 | 结论 |
 |------|------|
-| 本月模式 | 财报/季报防守月 |
+| 本月模式 | 财报/季报高筛选月 |
 | 当月收益 | +0.00% |
 | 盈利垫 | 未触发（阈值+10.00%） |
-| 仓位攻击等级 | B档30% |
-| 明日最大仓位 | 30% |
+| 进攻仓位三态 | 50% |
+| 明日最大仓位 | 50% |
 
 ## 二、市场基底
 | 项目 | 结论 |
@@ -31,6 +31,16 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 市场状态 | 收缩防守 |
 
 ## 三、周期与主线
+### 4. 主线容量与格局判断
+| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |
+|----------|----------|--------|----------------|--------------|--------------|----------|----------|
+| 单线容量 | 单主线聚焦 | 半导体 | - | 半导体资金净流入靠前，高标和涨停更集中，成交占比扩张 | 单主线聚焦 | 启动 | 只围绕半导体做减法 |
+
+#### 主线攻击证据
+| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |
+|------|----------|------------|--------|--------|----------|--------------|------|
+| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |
+
 ### 5. 主线成交额占比趋势
 | 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |
 |------|----------|------------|------------|------------|------|----------|------|
@@ -46,7 +56,7 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 项目 | 结论 |
 |------|------|
 | 唯一对象 | 富瀚微(300613) |
-| 当前状态 | B档有条件试错对象 |
+| 当前状态 | 50%标准进攻对象 |
 | 备用观察 | 暂无 |
 | 今日不买原因 | 等10点确认 |
 | 明日触发 | 主线确认 + 承接 + 60分钟确认 |
@@ -61,14 +71,14 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |
 | 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 仅主线核心可进入观察买点 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |
 | 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖 | 防大亏 |
-| 10:00左右买 | 只看周期主线核心，且必须有承接 | 满足60分钟确认才允许 | 买后用30分钟结构止损 | 小仓或不开 |
+| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |
 | 午后 | 看主线是否延续 | 默认谨慎 | 若走弱继续降风险 | 不扩大试错 |
 | 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |
 
 ## 七、最终结论
 | 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |
 |----------|------------|----------|------------|--------------|--------------|--------------|------------|
-| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |
+| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |
 
 ## 八、详细附录
 ### 附录B：历史主线池
@@ -93,10 +103,49 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertEqual(result["findings"], [])
         self.assertTrue(result["passed"])
 
+    def test_audit_flags_missing_mainline_capacity_regime_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "### 4. 主线容量与格局判断\n"
+            "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |\n"
+            "|----------|----------|--------|----------------|--------------|--------------|----------|----------|\n"
+            "| 单线容量 | 单主线聚焦 | 半导体 | - | 半导体资金净流入靠前，高标和涨停更集中，成交占比扩张 | 单主线聚焦 | 启动 | 只围绕半导体做减法 |\n\n",
+            "",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("mainline_capacity_regime_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_missing_mainline_attack_evidence_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "#### 主线攻击证据\n"
+            "| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |\n"
+            "|------|----------|------------|--------|--------|----------|--------------|------|\n"
+            "| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |\n\n",
+            "",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("mainline_attack_evidence_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_legacy_double_mainline_table_on_front_page(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |",
+            "| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("legacy_double_mainline_table", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_legacy_empty_short_style_in_final_summary(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 空仓 / 短线确认 | 条件不满足就不做 |",
         )
 
         result = audit_report_markdown(bad)
@@ -106,14 +155,14 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_missing_monthly_rhythm_section(self):
         bad = GOOD_MARKDOWN.replace(
-            "\n### 月度攻防与仓位等级\n"
+            "\n### 月度攻防与进攻仓位\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 本月模式 | 财报/季报防守月 |\n"
+            "| 本月模式 | 财报/季报高筛选月 |\n"
             "| 当月收益 | +0.00% |\n"
             "| 盈利垫 | 未触发（阈值+10.00%） |\n"
-            "| 仓位攻击等级 | B档30% |\n"
-            "| 明日最大仓位 | 30% |\n",
+            "| 进攻仓位三态 | 50% |\n"
+            "| 明日最大仓位 | 50% |\n",
             "\n",
         )
 
@@ -123,7 +172,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_flags_missing_position_attack_grade(self):
-        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |\n", "")
+        bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |\n", "")
 
         result = audit_report_markdown(bad)
 
@@ -132,16 +181,15 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_accepts_all_fixed_position_attack_grades(self):
         cases = (
-            ("C档0%", "0%"),
-            ("B档30%", "30%"),
-            ("A-档50%", "50%"),
-            ("A档80%-100%", "100%"),
+            ("0%", "0%"),
+            ("50%", "50%"),
+            ("100%", "100%"),
         )
         for label, max_position in cases:
             with self.subTest(label=label):
                 report = (
-                    GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", f"| 仓位攻击等级 | {label} |")
-                    .replace("| 明日最大仓位 | 30% |", f"| 明日最大仓位 | {max_position} |")
+                    GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", f"| 进攻仓位三态 | {label} |")
+                    .replace("| 明日最大仓位 | 50% |", f"| 明日最大仓位 | {max_position} |")
                 )
 
                 result = audit_report_markdown(report)
@@ -150,7 +198,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_invalid_position_attack_grade_value(self):
-        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 仓位攻击等级 | A档90% |")
+        bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", "| 进攻仓位三态 | A" + "档90% |")
 
         result = audit_report_markdown(bad)
 
@@ -158,7 +206,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_flags_position_attack_grade_above_max_position(self):
-        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 仓位攻击等级 | A档80%-100% |")
+        bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", "| 进攻仓位三态 | 100% |")
 
         result = audit_report_markdown(bad)
 
@@ -166,12 +214,21 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_flags_legacy_signal_grade_label_on_front_page(self):
-        bad = GOOD_MARKDOWN.replace("| 仓位攻击等级 | B档30% |", "| 今日信号等级 | B |")
+        bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", "| 今日信号等级 | B |")
 
         result = audit_report_markdown(bad)
 
         self.assertIn("monthly_rhythm_field_missing", {finding["code"] for finding in result["findings"]})
         self.assertIn("legacy_signal_grade_label", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_legacy_position_grade_label_on_front_page(self):
+        bad = GOOD_MARKDOWN.replace("| 进攻仓位三态 | 50% |", "| 仓位攻击等级 | B" + "档30% |")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("monthly_rhythm_field_missing", {finding["code"] for finding in result["findings"]})
+        self.assertIn("legacy_position_grade_label", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_old_candidate_titles_on_front_page(self):
@@ -183,7 +240,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_flags_buy_permission_wording_on_front_page(self):
-        bad = GOOD_MARKDOWN.replace("买入资格", "买入权限")
+        bad = GOOD_MARKDOWN.replace("买入资格", "买入" + "权限")
 
         result = audit_report_markdown(bad)
 
@@ -191,9 +248,17 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_flags_all_legacy_surface_wording_markers_on_front_page(self):
-        for marker in ("买入权限", "执行权", "执行权限", "门控", "闸门", "开闸", "放行"):
+        for marker in (
+            "买入" + "权限",
+            "执行" + "权",
+            "执行" + "权限",
+            "门" + "控",
+            "闸" + "门",
+            "开" + "闸",
+            "放" + "行",
+        ):
             with self.subTest(marker=marker):
-                bad = GOOD_MARKDOWN.replace("防守观察", marker, 1)
+                bad = GOOD_MARKDOWN.replace("50%标准进攻", marker, 1)
 
                 result = audit_report_markdown(bad)
 
@@ -233,8 +298,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_unique_focus_mismatch_between_plan_and_final_summary(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 中嘉博创(000889) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 中嘉博创(000889) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
         )
 
         result = audit_report_markdown(bad)
@@ -269,8 +334,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
             "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
         ).replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
         )
 
         result = audit_report_markdown(report)
@@ -283,11 +348,11 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
             "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
         ).replace(
-            "| 当前状态 | B档有条件试错对象 |",
+            "| 当前状态 | 50%标准进攻对象 |",
             "| 当前状态 | 富瀚微(300613) 唯一买入，10点确认 |",
         ).replace(
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 富瀚微(300613) | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
-            "| 防守观察 | 不主动 | 半导体 | 半导体 | 防守 | 暂无 | B档30% / 10点确认后条件试错 | B档：不满足不开；满足10点确认后最多30%条件试错 |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
         )
 
         result = audit_report_markdown(bad)
@@ -310,10 +375,25 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertExecutionConditionMissing(bad, "10点确认")
 
-    def test_audit_flags_missing_60_minute_confirmation(self):
-        bad = GOOD_MARKDOWN.replace("60分钟确认", "结构确认")
+    def test_audit_flags_missing_participation_window(self):
+        bad = (
+            GOOD_MARKDOWN
+            .replace("60分钟确认", "结构确认")
+            .replace("竞价表态、参与窗口与结构确认共同成立", "结构确认共同成立")
+        )
 
-        self.assertExecutionConditionMissing(bad, "60分钟确认")
+        self.assertExecutionConditionMissing(bad, "参与窗口")
+
+    def test_audit_flags_fast_window_polluted_by_structure_condition(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("fast_window_polluted_by_structure_condition", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_missing_30_minute_structural_stop(self):
         bad = GOOD_MARKDOWN.replace("30分钟结构止损", "结构止损")

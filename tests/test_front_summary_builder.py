@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.front_summary_builder import (
     build_double_mainline_summary_contract,
     build_turnover_share_trend_contract,
@@ -60,13 +64,23 @@ class FrontSummaryBuilderTest(unittest.TestCase):
                 "mainline_turnover_summary": {
                     "conclusion": "主线未切换，军工仍是中心",
                     "data_text": "成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "单线容量",
+                        "mainline_regime": "单主线聚焦",
+                        "primary_line": "军工",
+                        "other_lines": "-",
+                        "confirmation_evidence": "军工净流入和涨停集中",
+                        "sector_relationship_state": "单主线聚焦",
+                        "mainline_process": "推进",
+                        "tomorrow_action": "只围绕军工做减法",
+                    },
                 },
             },
             final_gate={"final_action": "只做核心"},
             position_level="三档（进攻档）",
             position_reason="环境修复",
             exit_analysis={"sector_name": "军工", "overall_level": "低风险"},
-            execution_framework_text="等60分钟确认",
+            execution_framework_text="等参与窗口确认",
             high_board_count=3,
             structure_layer_text="结构层通过",
             front_follow_action_text="只做核心",
@@ -91,6 +105,8 @@ class FrontSummaryBuilderTest(unittest.TestCase):
 
         self.assertEqual(payload["mainline_label"], "主攻线军工")
         self.assertEqual(payload["mainline_turnover_text"], "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化")
+        self.assertEqual(payload["mainline_capacity_regime_summary"]["mainline_regime"], "单主线聚焦")
+        self.assertEqual(payload["mainline_capacity_regime_summary"]["primary_line"], "军工")
         self.assertEqual(payload["rotation_summary_text"], "军工继续聚焦")
         self.assertTrue(payload["weak_to_strong_active"])
         self.assertIn("跌停", " / ".join(payload["risk_parts"]))
@@ -157,7 +173,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
         self.assertIn("弱股一号", payload["delete_preview"])
         self.assertEqual(payload["front_follow_action_text"], "只等唯一目标确认")
 
-    def test_render_mvp_focus_summary_contract_keeps_conditional_defense_not_empty_waiting(self):
+    def test_render_mvp_focus_summary_contract_maps_missing_unique_target_to_zero_position(self):
         payload = render_mvp_focus_summary_contract(
             market_research_snapshot={"state_machine": {"leading_line": "半导体", "execution_bias": "watch_only"}, "style_switch": {}, "observation": {}},
             watchlist=[],
@@ -167,7 +183,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             crossline_observation_stocks=[],
             gem_breathing_candidates=[],
             filtered_out_gem_candidates=[],
-            structure_layer_text="防守观察，只看10点确认后的30%条件试错",
+            structure_layer_text="只看参与窗口是否成立",
             focus_group=[],
             keep_group=[],
             delete_group=[],
@@ -175,14 +191,14 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor=None,
             watch_anchor_type="",
             abnormal_probe_group={},
-            final_gate={"can_new_entry": False, "allow_conditional_30": True, "should_reduce": False},
+            final_gate={"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
             position_level="二档（防守档）",
             target_date="2026-04-24",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "半导体",
             split_abnormal_watch_pool=lambda pool: (pool, []),
             build_bridge_prep_context=lambda **kwargs: {"active": False},
-            build_front_structure_layer_text=lambda **kwargs: "防守观察，只看10点确认后的30%条件试错",
+            build_front_structure_layer_text=lambda **kwargs: "只看参与窗口是否成立",
             build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
             build_special_probe_focus_text=lambda **kwargs: "",
             build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
@@ -193,12 +209,14 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
             build_execute_anchor_window_text=lambda **kwargs: "",
             format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
-            build_front_follow_action_text=lambda **kwargs: "防守观察，只看主线核心；10点确认后最多30%条件试错",
+            build_front_follow_action_text=lambda **kwargs: "0%不参与；没有唯一对象前不抢跑",
             render_mvp_focus_summary=lambda payload: payload,
         )
 
-        self.assertIn("30%条件试错", payload["no_trade_text"])
+        self.assertIn("0%不参与", payload["no_trade_text"])
         self.assertIn("没有唯一对象", payload["no_trade_text"])
+        self.assertNotIn(_m("30%", "条件试错"), payload["no_trade_text"])
+        self.assertNotIn("B档", payload["no_trade_text"])
         self.assertNotIn("只保留市场研究与观察权", payload["no_trade_text"])
 
     def test_render_mvp_focus_summary_contract_passes_focus_keep_counts_to_position_sizing(self):

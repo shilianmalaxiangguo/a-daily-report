@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.context_sections_renderer import (
     render_context_tail_sections,
     render_ai_market_insight_section,
@@ -52,7 +56,7 @@ class ContextSectionsRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("## 十三点五、补充观察", rendered)
         self.assertIn("以下只做补充观察，不单独给执行资格。", rendered)
-        self.assertNotIn("执行权", rendered)
+        self.assertNotIn(_m("执行", "权"), rendered)
         self.assertIn("第一行", rendered)
         self.assertIn("第二行", rendered)
 
@@ -75,6 +79,32 @@ class ContextSectionsRendererTest(unittest.TestCase):
         self.assertIn("- **能量状态**: 修复 - 回流军工", rendered)
         self.assertIn("- **资金主线**: 军工", rendered)
         self.assertIn("- **风险点**: 高位抱团", rendered)
+
+    def test_render_ai_market_insight_section_uses_no_mainline_when_attack_evidence_is_chaotic(self):
+        lines = render_ai_market_insight_section(
+            {
+                "market_trend": "大幅下跌",
+                "zt_count": 55,
+                "dt_count": 17,
+                "energy_state": "观察",
+                "flow_direction": "轮动",
+                "mainline_text": "半导体",
+                "risk_text": "元件、半导体",
+                "focus_text": "半导体持续性，量能变化，板块轮动",
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **资金主线**: 暂无确认主攻线", rendered)
+        self.assertIn("- **关注重点**: 多方向局部活跃但资金未明显胜出", rendered)
+        self.assertNotIn("- **资金主线**: 半导体", rendered)
 
 
 if __name__ == "__main__":

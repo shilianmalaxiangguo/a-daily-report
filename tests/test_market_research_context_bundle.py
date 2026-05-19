@@ -185,6 +185,127 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertNotIn("GEM", candidate_sectors)
         self.assertNotIn("STAR", candidate_sectors)
 
+    def test_build_market_research_context_bundle_infers_sector_from_limit_reason_when_pool_sector_missing(self):
+        captured_abnormal_candidates = []
+        captured_sector_inputs = {}
+
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {
+                    "未知": [{"代码": "000417"}, {"代码": "001259"}, {"代码": "300657"}],
+                    "其他": [{"代码": "605218"}],
+                },
+                "dt_pool_by_sector": {},
+                "zt_pool": [
+                    {
+                        "代码": "000417",
+                        "名称": "合百集团",
+                        "所属行业": "未知",
+                        "涨跌幅": 10.0,
+                        "开盘价": 7.87,
+                        "最新价": 7.87,
+                        "最高价": 7.87,
+                        "最低价": 7.87,
+                        "成交额": 230000000,
+                        "涨停统计": "间接投资长鑫科技+合肥国资+区域零售",
+                    },
+                    {
+                        "代码": "001259",
+                        "名称": "利仁科技",
+                        "所属行业": "待补充板块",
+                        "涨跌幅": 10.0,
+                        "开盘价": 66.55,
+                        "最新价": 66.55,
+                        "最高价": 66.55,
+                        "最低价": 63.01,
+                        "成交额": 180000000,
+                        "涨停统计": "股份转让+小家电+露营经济",
+                    },
+                    {
+                        "代码": "300657",
+                        "名称": "弘信电子",
+                        "所属行业": "未归类",
+                        "涨跌幅": 20.0,
+                        "开盘价": 43.40,
+                        "最新价": 43.40,
+                        "最高价": 43.40,
+                        "最低价": 43.40,
+                        "成交额": 600000000,
+                        "涨停统计": "Token工厂+昇腾集群+算力租赁",
+                    },
+                    {
+                        "代码": "605218",
+                        "名称": "伟时电子",
+                        "所属行业": "未知",
+                        "涨跌幅": 10.0,
+                        "开盘价": 19.35,
+                        "最新价": 19.35,
+                        "最高价": 19.35,
+                        "最低价": 19.35,
+                        "成交额": 120000000,
+                        "涨停统计": "MiniLED车载背光+VR背光+减持终止",
+                    },
+                ],
+                "hot_rank_top30": [],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-05-18",
+            exit_analysis={"sector_name": "", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="一档",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").split(".")[0].replace("SZ", "").replace("SS", "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda target_date, candidate_stocks, **kwargs: captured_abnormal_candidates.extend(candidate_stocks) or [
+                {"code": item["code"], "name": item["name"], "sector": item["sector"], "follow_state": "新异动待观察", "is_degraded_snapshot": True}
+                for item in candidate_stocks
+            ],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: bool((item or {}).get("is_degraded_snapshot")),
+            build_sector_trend_snapshot=lambda candidates, watchlist, evaluated_stocks, dragon_stocks, **kwargs: captured_sector_inputs.update({"candidates": candidates, "watchlist": watchlist, "zt_pool_by_sector": kwargs.get("zt_pool_by_sector")}) or [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {
+                "abnormal_watch_pool": kwargs.get("abnormal_watch_pool", []),
+                "sector_trend_snapshot": kwargs.get("sector_trend_snapshot", []),
+            },
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+                "observation": observation_snapshot or {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        candidate_sectors = {item["code"]: item["sector"] for item in result["watchlist"]}
+        self.assertEqual(candidate_sectors["000417"], "国产芯片")
+        self.assertEqual(candidate_sectors["001259"], "家用电器")
+        self.assertEqual(candidate_sectors["300657"], "算力")
+        self.assertEqual(candidate_sectors["605218"], "消费电子")
+        self.assertEqual(
+            sorted(item["sector"] for item in captured_abnormal_candidates),
+            ["国产芯片", "家用电器", "消费电子", "算力"],
+        )
+        self.assertEqual(
+            sorted(item["sector"] for item in captured_sector_inputs["candidates"]),
+            ["国产芯片", "家用电器", "消费电子", "算力"],
+        )
+        self.assertEqual(sorted(captured_sector_inputs["zt_pool_by_sector"].keys()), ["国产芯片", "家用电器", "消费电子", "算力"])
+        self.assertNotIn("未知", candidate_sectors.values())
+        self.assertNotIn("未归类", candidate_sectors.values())
+        self.assertNotIn("待补充板块", candidate_sectors.values())
+        self.assertNotIn("其他", candidate_sectors.values())
+
     def test_build_market_research_context_bundle_contract_skips_gem_discovery_in_display_safe_mode(self):
         result = build_market_research_context_bundle_contract(
             data={
@@ -292,6 +413,64 @@ class MarketResearchContextBundleTest(unittest.TestCase):
 
         self.assertEqual(result["watchlist"][0]["pattern"], "放量T字板")
         self.assertIn("T字板分歧转一致", result["watchlist"][0]["reason"])
+
+    def test_build_market_research_context_bundle_downgrades_one_word_limit_to_auction_observation(self):
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {"国产芯片": [{"代码": "000417"}]},
+                "dt_pool_by_sector": {},
+                "zt_pool": [
+                    {
+                        "代码": "000417",
+                        "名称": "合百集团",
+                        "所属行业": "国产芯片",
+                        "涨跌幅": 10.07,
+                        "开盘价": 7.87,
+                        "最新价": 7.87,
+                        "最高价": 7.87,
+                        "最低价": 7.87,
+                        "成交额": 600000000,
+                    }
+                ],
+                "hot_rank_top30": [],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-05-18",
+            exit_analysis={"sector_name": "国产芯片", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="一档",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda *args, **kwargs: [],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {},
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        one_word = result["watchlist"][0]
+        self.assertEqual(one_word["pattern"], "一字板")
+        self.assertEqual(one_word["tomorrow_expectation"], "观察竞价")
+        self.assertIn("封死不可成交", one_word["reason"])
+        self.assertNotIn("大概率连板", one_word["reason"])
 
 
 if __name__ == "__main__":

@@ -19,6 +19,16 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
             "market_fit_calibration": {"fit_label": "主线有效，池子偏窄"},
             "mainline_turnover_summary": {
                 "current_mainline": "半导体",
+                "mainline_capacity_regime_summary": {
+                    "mainline_capacity": "双线孕育",
+                    "mainline_regime": "混沌接力",
+                    "primary_line": "半导体",
+                    "other_lines": "电力 / 化学制品",
+                    "confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+                    "sector_relationship_state": "半导体尝试替代，电力退成背景线待确认",
+                    "mainline_process": "启动",
+                    "tomorrow_action": "先看资金是否继续选择半导体；背景线只观察回流",
+                },
                 "double_mainline_summary": {
                     "cycle_mainline": "半导体",
                     "daily_attack_line": "半导体",
@@ -51,10 +61,58 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         self.assertEqual(packet["schema_version"], "reasoning_input.v1")
         self.assertEqual(packet["target_date"], "2026-04-24")
         self.assertEqual(packet["mainline_snapshot"]["current_mainline"], "半导体")
+        self.assertEqual(packet["mainline_snapshot"]["mainline_capacity_regime_summary"]["mainline_regime"], "混沌接力")
+        self.assertEqual(packet["mainline_snapshot"]["mainline_capacity_regime_summary"]["primary_line"], "半导体")
         self.assertEqual(packet["candidate_pool"][0]["id"], "300613")
         self.assertEqual(packet["candidate_pool"][0]["name"], "富瀚微")
         self.assertEqual(packet["execution_contract"]["final_action"], "观察")
         self.assertEqual(packet["source_status"]["ths_sector"], "ok")
+
+    def test_reasoning_input_packet_derives_capacity_regime_from_legacy_double_mainline(self):
+        packet = build_reasoning_input_packet(
+            "2026-04-24",
+            {
+                "mainline_turnover_summary": {
+                    "current_mainline": "半导体",
+                    "double_mainline_summary": {
+                        "cycle_mainline": "半导体",
+                        "daily_attack_line": "半导体",
+                        "relationship": "周期主线与当天主攻线一致",
+                        "tomorrow_action": "继续围绕半导体观察承接",
+                    },
+                }
+            },
+        )
+
+        summary = packet["mainline_snapshot"]["mainline_capacity_regime_summary"]
+        self.assertEqual(summary["mainline_capacity"], "容量待累计")
+        self.assertEqual(summary["mainline_regime"], "单主线聚焦")
+        self.assertEqual(summary["primary_line"], "半导体")
+        self.assertEqual(summary["sector_relationship_state"], "周期主线与当天主攻线一致")
+
+    def test_reasoning_input_packet_includes_mainline_attack_evidence_summary(self):
+        packet = build_reasoning_input_packet(
+            "2026-04-24",
+            {
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "半导体",
+                        "candidate_lines": ["电力"],
+                        "background_lines": [],
+                        "relationship_hint": "双主线竞争",
+                        "evidence_labels": ["资金净流入靠前", "批量涨停"],
+                        "confirmation_evidence": "半导体资金净流入靠前，涨停更集中",
+                        "evidence_gaps": [],
+                    }
+                }
+            },
+        )
+
+        self.assertEqual(
+            packet["mainline_snapshot"]["mainline_attack_evidence_summary"]["primary_line"],
+            "半导体",
+        )
 
     def test_compute_input_hash_is_order_stable_for_dict_keys(self):
         left = {"b": 2, "a": {"d": 4, "c": 3}}
@@ -210,6 +268,57 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
                 }
 
                 self.assertEqual(derive_unique_action_target_from_reasoning_decision(snapshot), {})
+
+    def test_derives_unique_action_target_with_participation_window_fields(self):
+        snapshot = {
+            "candidate_pool": [
+                {
+                    "code": "300613",
+                    "name": "富瀚微",
+                    "sector": "半导体",
+                    "participation_window": "竞价表态 + 回封参与",
+                    "participation_window_type": "auction_reseal",
+                }
+            ],
+            "reasoning_decision": {
+                "action": "conditional_entry",
+                "unique_target": "300613",
+                "confidence": "medium",
+                "handoff_buying_evidence": "clear",
+            },
+        }
+
+        target = derive_unique_action_target_from_reasoning_decision(snapshot)
+
+        self.assertEqual(target["participation_window"], "竞价表态 + 回封参与")
+        self.assertEqual(target["participation_window_type"], "auction_reseal")
+        self.assertEqual(target["required_steps"], ["竞价表态", "开盘前几分钟承接", "回封/打板"])
+        self.assertEqual(target["fallback_state"], "不满足回到0%")
+        self.assertIn("竞价表态", target["condition"])
+
+    def test_derives_fast_unique_action_target_from_short_auction_window(self):
+        snapshot = {
+            "candidate_pool": [
+                {
+                    "code": "300613",
+                    "name": "富瀚微",
+                    "sector": "半导体",
+                    "participation_window": "竞价表态",
+                }
+            ],
+            "reasoning_decision": {
+                "action": "conditional_entry",
+                "unique_target": "300613",
+                "confidence": "medium",
+                "handoff_buying_evidence": "clear",
+            },
+        }
+
+        target = derive_unique_action_target_from_reasoning_decision(snapshot)
+
+        self.assertEqual(target["participation_window"], "竞价表态")
+        self.assertEqual(target["participation_window_type"], "auction_reseal")
+        self.assertEqual(target["required_steps"], ["竞价表态", "开盘前几分钟承接", "回封/打板"])
 
 
 if __name__ == "__main__":

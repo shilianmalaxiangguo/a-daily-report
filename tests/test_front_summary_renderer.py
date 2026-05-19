@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+ACTION_TEXT = "只买军工一号，参与窗口确认后执行"
+
 from report.front_summary_renderer import render_front_digest, render_front_summary_sections, render_mvp_focus_summary
 
 
@@ -27,7 +29,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 },
                 "mvp_focus": {
                     "special_probe_text": "军工一号(000001)",
-                    "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                    "front_follow_action_text": ACTION_TEXT,
                 },
                 "enabled_node_keys": ["mvp_focus"],
             }
@@ -37,7 +39,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("### 🎯 明日MVP摘要", rendered)
         self.assertNotIn("### 🧭 前台摘要", rendered)
 
-    def test_render_front_digest_outputs_double_mainline_and_turnover_share_tables(self):
+    def test_render_front_digest_outputs_mainline_capacity_regime_and_turnover_share_tables(self):
         lines = render_front_digest(
             {
                 "headline": "只看主线核心承接",
@@ -46,11 +48,15 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "style_action_text": "主线内做减法",
                 "risk_parts": ["跌停2只"],
                 "can_open_text": "只等确认",
-                "double_mainline_summary": {
-                    "cycle_mainline": "半导体",
-                    "daily_attack_line": "算力",
-                    "relationship": "当天主攻线是周期主线内部加强，不是新主线切换",
-                    "tomorrow_action": "明天继续围绕半导体做减法，只看算力核心承接",
+                "mainline_capacity_regime_summary": {
+                    "mainline_capacity": "双线孕育",
+                    "mainline_regime": "主线+背景线",
+                    "primary_line": "半导体",
+                    "other_lines": "电力 / 化学制品",
+                    "confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+                    "sector_relationship_state": "半导体尝试替代，电力退成背景线待确认",
+                    "mainline_process": "半导体启动，电力背景线",
+                    "tomorrow_action": "先看资金是否继续选择半导体；背景线只观察回流",
                 },
                 "turnover_share_trend_rows": [
                     {
@@ -68,16 +74,17 @@ class FrontSummaryRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
-        self.assertIn("| 半导体 | 算力 | 当天主攻线是周期主线内部加强，不是新主线切换 | 明天继续围绕半导体做减法，只看算力核心承接 |", rendered)
+        self.assertIn("| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |", rendered)
+        self.assertIn("| 双线孕育 | 主线+背景线 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
+        self.assertNotIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
         self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
         self.assertIn("| 04-24 | 半导体 | 算力 | 2180亿 | 12834亿 | 17.0% | +1.2pct | 主线占比继续抬升，资金仍在主线内加强 |", rendered)
 
     def test_render_front_digest_outputs_full_contract_summary(self):
         lines = render_front_digest(
             {
-                "headline": "只买军工一号，60分钟确认后执行",
-                "state_text": "强分歧修复；环境放行",
+                "headline": ACTION_TEXT,
+                "state_text": "强分歧修复；环境可做",
                 "mainline_label": "主攻线军工；趋势密度最强军工(3只)",
                 "mainline_turnover_text": "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
                 "special_probe_text": "军工一号(000001)",
@@ -101,7 +108,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("### 🧭 前台摘要", rendered)
-        self.assertIn("- **先说结论**: 只买军工一号，60分钟确认后执行", rendered)
+        self.assertIn(f"- **先说结论**: {ACTION_TEXT}", rendered)
         self.assertIn("- **主线更替与占比**: 主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化", rendered)
         self.assertIn("- **执行依据**: 先选边站队，再等确认", rendered)
         self.assertIn("- **弱转强先看谁**: 军工一号的弱转强确认最完整", rendered)
@@ -165,16 +172,16 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "special_probe_summary_text": "军工一号是主线异常探针",
                 "structure_layer_text": "只等唯一动作",
                 "observation_cycle": "先给3~5日观察合同",
-                "intervention_cycle": "60分钟确认后只做30%试错",
+                "intervention_cycle": "预演参与窗口命中后只做50%标准进攻或0%",
                 "exit_cycle": "失守关键位就作废",
                 "delete_preview": "军工弱票 / 军工后排",
-                "buy_target_text": "军工一号(000001)，只等60分钟确认，不追盘中情绪顶点",
+                "buy_target_text": "军工一号(000001)，只按预演参与窗口，不追盘中情绪顶点",
                 "bridge_prep_label": "条件执行预备态",
                 "bridge_prep_text": "军工一号，等待突破升级",
                 "mainline_probe_text": "军工一号(000001)",
                 "crossline_probe_text": "高端装备一号(000002)",
                 "validation_probe_text": "军工二号(000003)",
-                "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                "front_follow_action_text": "只买军工一号，预演参与窗口命中后执行",
                 "compact": False,
             }
         )
@@ -185,7 +192,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("**主线研究对象**: 军工一号(军工) / 军工二号(军工)", rendered)
         self.assertIn("**异常承接先看谁**: 军工一号(承接) / 军工二号(回封)", rendered)
         self.assertIn("**明天能不能开仓**: 只等唯一动作", rendered)
-        self.assertIn("**明日唯一动作**: 只买军工一号，60分钟确认后执行", rendered)
+        self.assertIn("**明日唯一动作**: 只买军工一号，预演参与窗口命中后执行", rendered)
 
     def test_front_summary_renderers_replace_english_trading_jargon(self):
         context = {

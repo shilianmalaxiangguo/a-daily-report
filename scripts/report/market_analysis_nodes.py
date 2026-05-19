@@ -1,5 +1,7 @@
 from report.market_analysis_node_registry import build_market_analysis_node_specs
 from report.market_analysis_node_runtime import run_market_analysis_nodes
+from report.market_condition_wording import describe_market_turnover_condition
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
 
 
 def _data(context):
@@ -42,7 +44,7 @@ def build_market_analysis_market_state_node(context, node_meta=None, node_lookup
             "### 1. 市场整体状态",
             f"- **现在是什么情况**: {market_analysis.get('market_status', '震荡整理')}",
             f"- **主要指数**: 上证{sh_change:+.2f}%，深证{indices.get('深证成指', {}).get('涨跌幅', 0):+.2f}%，创业{indices.get('创业板指', {}).get('涨跌幅', 0):+.2f}%",
-            f"- **量能水平**: {total_turnover:.2f}亿元，{'量能充沛' if total_turnover > 18000 else '量能适中' if total_turnover > 12000 else '量能萎缩'}",
+            f"- **量能水平**: {total_turnover:.2f}亿元，{describe_market_turnover_condition(data)}",
             "",
         ],
         "exports": {},
@@ -51,11 +53,16 @@ def build_market_analysis_market_state_node(context, node_meta=None, node_lookup
 
 
 def build_market_analysis_mainline_node(context, node_meta=None, node_lookup=None):
+    data = _data(context)
+    attack_summary = resolve_mainline_attack_evidence_summary(data)
     exit_analysis = _exit_analysis(context)
     main_sectors_info = _main_sectors_info(context)
     mainline_name = exit_analysis.get("sector_name", "") if exit_analysis else ""
     lines = ["### 2. 主线板块分析"]
-    if mainline_name and mainline_name != "暂无明确主线":
+    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        lines.append("**当前主线**: 暂无确认主线")
+        lines.append(f"> {attack_summary.get('confirmation_evidence') or '板块攻击证据不足'}")
+    elif mainline_name and mainline_name != "暂无明确主线":
         lines.append(f"**当前主线**: {mainline_name}")
         lines.append("> 来源：统一执行链综合分析")
     elif main_sectors_info:

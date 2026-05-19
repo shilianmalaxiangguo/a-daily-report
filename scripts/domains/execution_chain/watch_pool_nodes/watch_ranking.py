@@ -14,8 +14,16 @@ def build_watch_pool_watch_ranking_node(context, node_meta=None, node_lookup=Non
             )
         lines.append("")
 
-        lianban_expect = [item for item in watchlist if "连板" in item.get("tomorrow_expectation", "")][:5]
-        premium_expect = [item for item in watchlist if "溢价" in item.get("tomorrow_expectation", "")][:3]
+        lianban_expect = [
+            item
+            for item in watchlist
+            if "连板" in item.get("tomorrow_expectation", "") and "一字" not in str(item.get("pattern", ""))
+        ][:5]
+        premium_expect = [
+            item
+            for item in watchlist
+            if "溢价" in item.get("tomorrow_expectation", "") and "一字" not in str(item.get("pattern", ""))
+        ][:3]
         fanbao_expect = [item for item in watchlist if "反包" in item.get("tomorrow_expectation", "")][:3]
         lines.append("**明日预期分组**:")
         if lianban_expect:

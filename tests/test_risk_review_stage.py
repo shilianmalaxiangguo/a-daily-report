@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from domains.execution_chain.risk_review_stage import (
     build_risk_review_runtime,
     build_risk_review_stage,
@@ -104,7 +108,7 @@ class RiskReviewStageTest(unittest.TestCase):
                             "name": "弹性一号",
                             "code": "300001",
                             "tier": "白银弹性",
-                            "note": "均线粘合",
+                            "note": _m("均线", "粘合"),
                             "watch_anchor_note": "只看右侧确认",
                         }
                     ]
@@ -145,6 +149,52 @@ class RiskReviewStageTest(unittest.TestCase):
         self.assertIn("创业板20cm预启动观察池", rendered)
         self.assertIn("弹性一号(300001)", rendered)
         self.assertIn("过滤样本(300002)/机器人：非主线", rendered)
+        self.assertIn("波动收敛，等待量价温和放大后的右侧确认", rendered)
+        self.assertNotIn(_m("均线", "粘合"), rendered)
+
+    def test_risk_review_sector_a_kill_does_not_call_unconfirmed_candidate_current_mainline(self):
+        result = build_risk_review_runtime(
+            {
+                "data": {},
+                "target_date": "2026-05-14",
+                "mainline_name": "半导体",
+                "core_stocks": [],
+                "secondary_stocks": [],
+                "step2_bundle": {"gem_observation_stocks": []},
+                "market_research_bundle": {"filtered_out_gem_breathing_candidates": []},
+                "zt_pool_by_sector": {},
+                "dt_pool_by_sector": {},
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+                "build_step3_risk_bundle": lambda *args, **kwargs: {
+                    "stock_rows": [],
+                    "delete_group": [],
+                    "keep_group": [],
+                    "focus_group": [],
+                    "abnormal_green_count": 0,
+                    "abnormal_red_count": 0,
+                    "risk_sectors_from_dt": [],
+                    "mainline_a_kill": False,
+                    "mainline_dt_stocks": [],
+                    "structural_a_kill": False,
+                    "structural_reason": "",
+                    "a_kill_blacklist_updates": [],
+                    "module_logs": [],
+                },
+            },
+            {"label": "Step 3", "title": "明日风险预判"},
+            enabled_node_keys=["sector_a_kill"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("- ✅ **主线状态**: 当前无确认主攻线，只检查候选方向是否出现批量跌停。", rendered)
+        self.assertNotIn("当前主线: '半导体'", rendered)
+        self.assertNotIn("当前主线'半导体'", rendered)
 
     def test_risk_review_runtime_can_render_only_enabled_nodes(self):
         result = build_risk_review_runtime(

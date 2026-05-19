@@ -4,6 +4,12 @@ import hashlib
 import json
 from typing import Any, Dict, List, Mapping
 
+from report.mainline_turnover_summary_support import (
+    resolve_mainline_attack_evidence_summary,
+    resolve_mainline_capacity_regime_summary,
+)
+from selection.candidate_execution_contracts import build_participation_window_policy
+
 
 INPUT_SCHEMA_VERSION = "reasoning_input.v1"
 DECISION_SCHEMA_VERSION = "reasoning_decision.v1"
@@ -38,6 +44,8 @@ def _normalize_candidate(candidate: Mapping[str, Any]) -> Dict[str, Any]:
         or candidate.get("tomorrow_qualification")
         or candidate.get("action_rule")
         or "",
+        "participation_window": candidate.get("participation_window") or "",
+        "participation_window_type": candidate.get("participation_window_type") or "",
         "evidence": _as_dict(candidate.get("evidence")),
     }
 
@@ -47,6 +55,17 @@ def _candidate_pool(snapshot: Mapping[str, Any]) -> List[Dict[str, Any]]:
     if not raw_candidates:
         raw_candidates = _as_list(snapshot.get("core_candidates"))
     return [_normalize_candidate(item) for item in raw_candidates if isinstance(item, Mapping)]
+
+
+def _infer_participation_window(candidate: Mapping[str, Any]) -> tuple[str, str]:
+    participation_window = str(candidate.get("participation_window") or "").strip()
+    participation_window_type = str(candidate.get("participation_window_type") or "").strip()
+    if not participation_window:
+        participation_window = "60分钟确认"
+    if participation_window_type:
+        return participation_window, participation_window_type
+    policy = build_participation_window_policy(participation_window)
+    return participation_window, str(policy.get("participation_window_type") or "structure_confirm")
 
 
 def build_reasoning_input_packet(
@@ -65,6 +84,8 @@ def build_reasoning_input_packet(
         },
         "mainline_snapshot": {
             "current_mainline": mainline_summary.get("current_mainline") or "",
+            "mainline_attack_evidence_summary": resolve_mainline_attack_evidence_summary(snapshot),
+            "mainline_capacity_regime_summary": resolve_mainline_capacity_regime_summary(snapshot),
             "double_mainline_summary": _as_dict(mainline_summary.get("double_mainline_summary")),
             "current_sector_turnover_snapshot": _as_dict(
                 snapshot.get("current_sector_turnover_snapshot")
@@ -207,9 +228,18 @@ def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, A
         return {}
     for candidate in _candidate_pool(snapshot):
         if target_id in {str(candidate.get("id") or ""), str(candidate.get("code") or "")}:
+            participation_window, participation_window_type = _infer_participation_window(candidate)
+            if participation_window_type == "structure_confirm":
+                required_steps = ["主线确认", "承接", "60分钟确认"]
+            else:
+                required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
             return {
                 "name": str(candidate.get("name") or "唯一对象"),
                 "code": str(candidate.get("code") or candidate.get("id") or target_id),
-                "condition": "主线确认 + 承接 + 60分钟确认",
+                "participation_window": participation_window,
+                "participation_window_type": participation_window_type,
+                "required_steps": required_steps,
+                "fallback_state": "不满足回到0%",
+                "condition": "主线确认 + 承接 + 60分钟确认" if participation_window_type == "structure_confirm" else "竞价表态 + 开盘前几分钟 + 回封/打板",
             }
     return {}

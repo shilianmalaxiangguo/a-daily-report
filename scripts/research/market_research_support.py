@@ -46,6 +46,33 @@ __all__ = [
 ]
 
 _MISSING = object()
+_NON_DIRECTIONAL_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
+
+
+def _is_directional_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_DIRECTIONAL_SECTOR_LABELS)
+
+
+def _first_directional_trend_item(items):
+    for item in items or []:
+        if isinstance(item, dict) and _is_directional_sector_label(item.get("sector")):
+            return item
+    return {}
 
 
 def _safe_float(value, default=0.0):
@@ -469,7 +496,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     if state_code == "expand":
         stage_label = "扩张确认"
         stage_reason = "热点、趋势密度和异常承接已经同向共振，市场不再只是局部修复。"
-        stage_action = "可以顺着最强方向做减法，但真正出手仍要等60分钟确认。"
+        stage_action = "可以顺着最强方向做减法，但真正出手要落到竞价表态、开盘承接、回封或60分钟结构确认。"
     elif state_code == "migrate":
         stage_label = "分歧迁移"
         stage_reason = "市场不是全面转弱，而是在主攻线和竞争线之间重新分配权重。"
@@ -533,7 +560,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     else:
         falsification_conditions.append("热点没有继续聚焦，赚钱效应重新变散。")
     falsification_conditions.append("异常对象次日明显转弱，原先“跌不下去”的信号没有继续保住。")
-    falsification_conditions.append("首个60分钟不能确认，或者买点只剩情绪顶点可以追。")
+    falsification_conditions.append("竞价表态、开盘承接、回封或60分钟结构确认都不成立，或者买点只剩情绪顶点可以追。")
     if rise_fall_ratio is not None and _safe_float(rise_fall_ratio, 0.0) > 0:
         falsification_conditions.append(
             f"涨跌比重新恶化到{observation.get('rise_fall_ratio_text', '明显转弱')}附近，且跌停继续增加。"
@@ -584,7 +611,7 @@ def _build_abnormal_projection_summary_legacy_body(abnormal_watch_pool=None):
     if resilient_count >= 2 and failed_count == 0:
         projection_label = "异常承接强化"
         projection_reason = "多个异常信号在后续没有继续塌陷，说明高维主线状态仍在强化。"
-        action = "优先盯“跌不下去/缩量消化”的对象，再等60分钟确认。"
+        action = "优先盯“跌不下去/缩量消化”的对象，再看竞价表态、开盘承接、回封或60分钟结构确认。"
     elif failed_count >= max(2, resilient_count + 1):
         projection_label = "异常失败转弱"
         projection_reason = "异常信号大面积转弱，说明高维状态更像衰减或切换，而不是继续强化。"
@@ -887,7 +914,7 @@ def _build_market_observation_snapshot_legacy_body(
     dt_count = len(data.get("dt_pool", []) or [])
     turnover = _safe_float(data.get("total_turnover", 0.0))
 
-    densest_sector = (sector_trend_snapshot or [None])[0] or {}
+    densest_sector = _first_directional_trend_item(sector_trend_snapshot)
     resilient_count = len([item for item in abnormal_watch_pool if item.get("follow_state") in ("跌不下去", "缩量消化")])
     failed_count = len([item for item in abnormal_watch_pool if item.get("follow_state") == "已经转弱"])
 
@@ -953,8 +980,8 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "reason": f"当前处于{energy_state}，新增买入资格未满足，先研究市场，不做新增参与。",
                 "action": "空仓观察，禁止新开仓",
             }
-        if final_gate.get("allow_conditional_30") and not final_gate.get("should_reduce"):
-            action_text = "只看主线核心是否完成10点确认；确认后最多30%条件试错，未确认不开新仓"
+        if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
+            action_text = "只看主线核心是否命中参与窗口分层确认：强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认；命中后才评估50%标准进攻，未命中按0%不参与"
             if special_probe_action:
                 action_text = f"{special_probe_action}；{action_text}"
             return {
@@ -1014,7 +1041,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             "code": "pullback_only",
             "label": "🟡 只做分歧承接",
             "reason": pulse_action_reason or f"{leading_line or '主线'}仍在，但当前处于{pulse_stage or '高位分歧'}，只能等分歧承接，不能追一致加速。",
-            "action": "只等主线分歧承接后的60分钟确认，不追一致加速",
+            "action": "只做主线分歧承接后的预演参与窗口，不追一致加速",
         }
 
     if state_code == "expand":
@@ -1022,27 +1049,27 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             "code": "follow",
             "label": "🟢 跟随主线",
             "reason": "热点、趋势密度和异常承接正在同向共振，可以跟，但只能跟最强方向。",
-            "action": "只在主线和异常承接对象里等60分钟确认后再买",
+            "action": "只在主线和异常承接对象里按竞价表态、开盘承接、回封或60分钟结构确认分层参与",
         }
     if state_code == "migrate":
         return {
             "code": "single_line_follow",
             "label": "🟡 只跟唯一胜出方向",
             "reason": "热点和趋势还在重排，先研究胜负，不能同时押主线和竞争线。",
-            "action": "先看主线与竞争线谁胜出，60分钟确认前不分散出手",
+            "action": "先看主线与竞争线谁胜出，预演参与窗口未命中前不分散出手",
         }
     if state_code == "probe":
         return {
             "code": "conditional_follow",
             "label": "🟡 条件跟随",
             "reason": "市场还在试探修复，只有异常继续跌不下去，才允许从研究切到跟随。",
-            "action": "轻跟随也必须等60分钟确认，不追一致高潮",
+            "action": "轻跟随也必须命中预演参与窗口，不追一致高潮",
         }
     return {
         "code": "observe",
         "label": "⚠️ 先看环境",
         "reason": f"当前处于{energy_state}，先确认市场没有继续恶化，再谈跟随。",
-        "action": "前30分钟只看环境，60分钟后再定执行",
+        "action": "先看竞价表态与开盘承接，未命中预演参与窗口就保持0%",
     }
 
 
@@ -1082,6 +1109,7 @@ def _render_market_research_snapshot_section_legacy_body(market_research_snapsho
             "competition_result": competition_result,
             "competition_evidence": competition_evidence,
             "mainline_turnover_summary": market_research_snapshot.get("mainline_turnover_summary", {}) or {},
+            "capital_intent_breakdown": market_research_snapshot.get("capital_intent_breakdown", {}) or {},
             "lhb_capital_status": market_research_snapshot.get("lhb_capital_status", {}) or {},
             "capital_conclusion": market_research_snapshot.get("capital_conclusion", {}) or {},
             "rotation_label": rotation_snapshot.get("rotation_label", "-"),

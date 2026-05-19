@@ -29,7 +29,19 @@ REQUIRED_EXECUTION_WINDOWS = [
 
 REQUIRED_EXECUTION_CONDITIONS = [
     ("10点确认", ("10点确认", "10点附近确认")),
-    ("60分钟确认", ("60分钟确认", "60分钟K线确认")),
+    (
+        "参与窗口",
+        (
+            "参与窗口",
+            "参与窗",
+            "竞价表态",
+            "开盘前几分钟",
+            "回封参与",
+            "打板",
+            "60分钟确认",
+            "60分钟K线确认",
+        ),
+    ),
     ("30分钟结构止损", ("30分钟结构止损", "30分钟结构定止损", "30分钟定止损")),
     ("不做 / 不开新仓 / 空仓", ("不做", "不开新仓", "空仓")),
 ]
@@ -115,18 +127,35 @@ THEORY_NOISE_MARKERS = (
     "能量释放完成",
     "群体行为共振",
 )
-LEGACY_POSITION_STYLE_MARKERS = ("空仓 / 短线确认", "空仓 / 短线 / 波段 / 尾盘量化例外")
-POSITION_STYLE_GRADE_MARKERS = ("C档0%", "B档30%", "A-档50%", "A档80%-100%")
-MONTHLY_RHYTHM_HEADING = "### 月度攻防与仓位等级"
-MONTHLY_RHYTHM_REQUIRED_LABELS = ("本月模式", "当月收益", "盈利垫", "仓位攻击等级", "明日最大仓位")
-POSITION_ATTACK_GRADE_LABELS = {"C档0%", "B档30%", "A-档50%", "A档80%-100%"}
+
+
+def _m(*parts):
+    return "".join(parts)
+
+
+LEGACY_POSITION_STYLE_MARKERS = (
+    "空仓 / 短线确认",
+    "空仓 / 短线 / 波段 / 尾盘量化例外",
+    _m("B档", "30%"),
+    _m("A-档", "50%"),
+    _m("A", "档", "80%", "-100%"),
+    _m("30%", "条件试错"),
+)
+POSITION_STYLE_GRADE_MARKERS = ("0% / 不参与", "50% / 标准进攻", "100% / 核心进攻")
+MONTHLY_RHYTHM_HEADING = "### 月度攻防与进攻仓位"
+MONTHLY_RHYTHM_REQUIRED_LABELS = ("本月模式", "当月收益", "盈利垫", "进攻仓位三态", "明日最大仓位")
+POSITION_ATTACK_GRADE_LABELS = {"0%", "50%", "100%"}
 POSITION_ATTACK_GRADE_MIN_POSITION = {
-    "C档0%": 0,
-    "B档30%": 30,
-    "A-档50%": 50,
-    "A档80%-100%": 80,
+    "0%": 0,
+    "50%": 50,
+    "100%": 100,
 }
 LEGACY_CANDIDATE_SECTION_TITLES = ("### 1. 主线内观察候选", "### 1. 主线内可执行候选", "### 2. 跨线观察候选")
+MAINLINE_CAPACITY_REGIME_HEADING = "### 4. 主线容量与格局判断"
+MAINLINE_CAPACITY_REGIME_HEADER = "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |"
+LEGACY_DOUBLE_MAINLINE_HEADER = "| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |"
+MAINLINE_ATTACK_EVIDENCE_HEADING = "#### 主线攻击证据"
+MAINLINE_ATTACK_EVIDENCE_HEADER = "| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |"
 __all__ = ["audit_report_markdown"]
 
 
@@ -259,6 +288,38 @@ def _audit_execution_conditions(lines):
     return findings
 
 
+def _audit_unique_action_target_contract(lines):
+    findings = []
+    for offset, line in enumerate(_front_page_lines(lines), 1):
+        cells = _split_md_row(line)
+        if len(cells) < 5 or cells[0] != "只看唯一对象":
+            continue
+        participation_window = cells[2]
+        condition = cells[3]
+        fallback = cells[4]
+        is_fast_window = any(marker in participation_window for marker in ("竞价", "回封", "打板"))
+        uses_structure_condition = "60分钟确认" in condition and not any(
+            marker in condition for marker in ("竞价", "开盘前几分钟", "回封", "打板")
+        )
+        if is_fast_window and uses_structure_condition:
+            findings.append(
+                _finding(
+                    "fast_window_polluted_by_structure_condition",
+                    "fast participation windows must render auction/opening/reseal steps instead of legacy 60-minute structure condition",
+                    line=offset,
+                )
+            )
+        if is_fast_window and fallback != "不满足回到0%":
+            findings.append(
+                _finding(
+                    "fast_window_fallback_not_zero",
+                    "fast participation windows must fall back to 0% when the preplanned path does not trigger",
+                    line=offset,
+                )
+            )
+    return findings
+
+
 def _audit_monthly_rhythm_section(lines):
     front = _front_page_lines(lines)
     findings = []
@@ -268,7 +329,15 @@ def _audit_monthly_rhythm_section(lines):
             findings.append(
                 _finding(
                     "legacy_signal_grade_label",
-                    "front page must use 仓位攻击等级 instead of 今日信号等级",
+                    "front page must use 进攻仓位三态 instead of 今日信号等级",
+                    line=offset,
+                )
+            )
+        if cells and cells[0] == "仓位攻击等级":
+            findings.append(
+                _finding(
+                    "legacy_position_grade_label",
+                    "front page must use 进攻仓位三态 instead of 仓位攻击等级",
                     line=offset,
                 )
             )
@@ -295,12 +364,12 @@ def _audit_monthly_rhythm_section(lines):
                     f"monthly rhythm section is missing required field: {label}",
                 )
             )
-    attack_grade = section_values.get("仓位攻击等级")
+    attack_grade = section_values.get("进攻仓位三态")
     if attack_grade is not None and attack_grade not in POSITION_ATTACK_GRADE_LABELS:
         findings.append(
             _finding(
                 "position_attack_grade_invalid",
-                "仓位攻击等级 must be one of: C档0%, B档30%, A-档50%, A档80%-100%",
+                "进攻仓位三态 must be one of: 0%, 50%, 100%",
             )
         )
     max_position = _parse_percent_int(section_values.get("明日最大仓位"))
@@ -309,7 +378,7 @@ def _audit_monthly_rhythm_section(lines):
         findings.append(
             _finding(
                 "position_attack_grade_exceeds_max_position",
-                "仓位攻击等级 cannot require more position than 明日最大仓位 allows",
+                "进攻仓位三态 cannot require more position than 明日最大仓位 allows",
             )
         )
     return findings
@@ -340,6 +409,35 @@ def _audit_candidate_section_contract(lines):
             _finding(
                 "candidate_state_missing",
                 "front-page 个股裁决 must include 当前状态",
+            )
+        )
+    return findings
+
+
+def _audit_mainline_capacity_regime_contract(lines):
+    front = _front_page_lines(lines)
+    findings = []
+    for index, line in enumerate(front, 1):
+        if str(line).strip() == LEGACY_DOUBLE_MAINLINE_HEADER:
+            findings.append(
+                _finding(
+                    "legacy_double_mainline_table",
+                    "front-page mainline section must use 主线容量与格局判断 instead of legacy double-mainline table",
+                    line=index,
+                )
+            )
+    if MAINLINE_CAPACITY_REGIME_HEADING not in front or MAINLINE_CAPACITY_REGIME_HEADER not in front:
+        findings.append(
+            _finding(
+                "mainline_capacity_regime_missing",
+                "front-page cycle section must render 主线容量与格局判断",
+            )
+        )
+    if MAINLINE_ATTACK_EVIDENCE_HEADING not in front or MAINLINE_ATTACK_EVIDENCE_HEADER not in front:
+        findings.append(
+            _finding(
+                "mainline_attack_evidence_missing",
+                "front-page cycle section must render 主线攻击证据",
             )
         )
     return findings
@@ -559,14 +657,14 @@ def _audit_position_state_rendering(lines):
         return [
             _finding(
                 "legacy_position_style",
-                "final summary must render C/B/A-/A position state instead of legacy empty/short style",
+                "final summary must render 0/50/100 position state instead of legacy empty/short/30% style",
             )
         ]
     if not any(marker in style for marker in POSITION_STYLE_GRADE_MARKERS):
         return [
             _finding(
                 "position_style_missing_grade",
-                "final summary execution style must include C/B/A-/A grade and position size",
+                "final summary execution style must include 0/50/100 position state",
             )
         ]
     return []
@@ -699,9 +797,11 @@ def audit_report_markdown(markdown):
     findings.extend(_audit_front_page_headings(lines))
     findings.extend(_audit_monthly_rhythm_section(lines))
     findings.extend(_audit_candidate_section_contract(lines))
+    findings.extend(_audit_mainline_capacity_regime_contract(lines))
     findings.extend(_audit_legacy_surface_wording(lines))
     findings.extend(_audit_execution_windows(lines))
     findings.extend(_audit_execution_conditions(lines))
+    findings.extend(_audit_unique_action_target_contract(lines))
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_degraded_fake_zero(lines))

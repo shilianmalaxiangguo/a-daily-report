@@ -9,6 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+def _m(*parts):
+    return "".join(parts)
+
+
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
 import sys
@@ -326,6 +330,36 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["competition_focus"]["sector"], "军工")
         self.assertEqual(result["trusted_tracking_count"], 1)
 
+    def test_build_market_observation_snapshot_support_ignores_board_label_trend_density(self):
+        support = self._load_module()
+
+        result = support.build_market_observation_snapshot(
+            {
+                "indices": {"上证指数": {"涨跌幅": -0.1}},
+                "zt_pool": [],
+                "dt_pool": [],
+            },
+            sector_trend_snapshot=[
+                {"sector": "HS", "trend_count": 27},
+                {"sector": "通信设备", "trend_count": 5},
+            ],
+            helpers={
+                "_split_abnormal_watch_pool": lambda pool: (pool or [], []),
+                "_extract_market_breadth_snapshot": lambda data: {
+                    "up_count": 2500,
+                    "down_count": 2500,
+                    "breadth_available": True,
+                    "rise_fall_ratio": 1.0,
+                    "rise_fall_ratio_text": "1.00:1",
+                },
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_round_or_none": lambda value, digits=4: round(float(value), digits) if value is not None else None,
+            },
+        )
+
+        self.assertEqual(result["densest_sector"], "通信设备")
+        self.assertEqual(result["densest_sector_trend_count"], 5)
+
     def test_build_follow_verdict_support_respects_reduce_only_and_probe_action(self):
         support = self._load_module()
 
@@ -344,19 +378,21 @@ assert follow == {"code": "follow"}
         support = self._load_module()
 
         result = support.build_follow_verdict(
-            {"can_new_entry": False, "should_reduce": False, "allow_conditional_30": True},
+            {"can_new_entry": False, "should_reduce": False, "allow_attack_50_ready": True},
             "二档（防守档）",
             {
                 "energy_state": "收缩防守",
                 "execution_bias": "reduce_only",
-                "pulse_action_reason": "环境未开且主线偏弱，当前只允许处理旧仓，不再给新增执行权。",
+                "pulse_action_reason": "环境未开且主线偏弱，当前只允许处理旧仓，不再给新增参与资格。",
             },
         )
 
         self.assertEqual(result["code"], "conditional_defense")
         self.assertEqual(result["label"], "🟡 条件防守观察")
         self.assertIn("指数结构未坏", result["reason"])
-        self.assertIn("10点确认", result["action"])
+        self.assertIn("参与窗口", result["action"])
+        self.assertIn("50%标准进攻", result["action"])
+        self.assertNotIn(_m("30%", "条件试错"), result["action"])
 
     def test_build_mainline_competition_snapshot_support_builds_ranked_rows(self):
         support = self._load_module()
@@ -720,6 +756,13 @@ lines = render_market_research_snapshot_section({
     'abnormal_projection': {},
     'follow_verdict': {},
     'mainline_turnover_summary': {},
+    'capital_intent_breakdown': {
+        'sector_fund_attitude': '半导体板块攻击资金确认',
+        'strength_feedback': '涨停5，高标4，成交占比+1.6pct',
+        'lhb_validation': '龙虎榜未验证主线',
+        'capital_consistency': '板块攻击成立，龙虎榜未验证',
+        'tomorrow_meaning': '先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决',
+    },
     'lhb_capital_status': {
         'capital_strength': '强',
         'capital_intensity': '净买入集中',
@@ -735,6 +778,8 @@ lines = render_market_research_snapshot_section({
     },
 })
 rendered = '\\n'.join(lines)
+assert '#### 资金意图拆解' in rendered, rendered
+assert '| 半导体板块攻击资金确认 | 涨停5，高标4，成交占比+1.6pct | 龙虎榜未验证主线 | 板块攻击成立，龙虎榜未验证 | 先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决 |' in rendered, rendered
 assert '#### 龙虎榜资金状态' in rendered, rendered
 assert '| 强 | 净买入集中 | 半导体 | 承接主线核心 | 资金向主线集中 | 龙虎榜资金行为 |' in rendered, rendered
 """

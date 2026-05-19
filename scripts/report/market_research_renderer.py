@@ -8,6 +8,7 @@ from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_header_node,
     build_market_research_snapshot_leader_memory_node,
     build_market_research_snapshot_lhb_capital_intent_node,
+    build_market_research_snapshot_mainline_capacity_regime_node,
     build_market_research_snapshot_mainline_focus_node,
     build_market_research_snapshot_cycle_calendar_node,
     build_market_research_snapshot_cycle_interpretation_node,
@@ -43,6 +44,7 @@ MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS = {
     "cycle_calendar": build_market_research_snapshot_cycle_calendar_node,
     "cycle_interpretation": build_market_research_snapshot_cycle_interpretation_node,
     "pivot_mainline_interpretation": build_market_research_snapshot_pivot_mainline_interpretation_node,
+    "mainline_capacity_regime": build_market_research_snapshot_mainline_capacity_regime_node,
     "table_header": build_market_research_snapshot_table_header_node,
     "risk_preference": build_market_research_snapshot_risk_preference_node,
     "mainline_focus": build_market_research_snapshot_mainline_focus_node,
@@ -75,6 +77,12 @@ STEP0_FOLLOW_NODE_BUILDERS = {
 }
 
 
+from report.surface_wording import sanitize_user_visible_text
+
+
+GEM_BREATHING_FOCUS_LINE = "> **只看什么**：波动收敛、量价温和放大、右侧确认。"
+
+
 def render_gem_breathing_step2_section(context):
     context = context or {}
     gem_observation_stocks = context.get("gem_observation_stocks") or []
@@ -85,7 +93,7 @@ def render_gem_breathing_step2_section(context):
     preview = gem_observation_stocks[:2] if display_mvp_mode else gem_observation_stocks[:4]
     lines = [
         "> **主线侧翼弹性层**：若主板强锚仍在，创业板20cm只作为主线白银弹性观察，不单列成独立战场。",
-        "> **观察纪律**：只先进观察池，先看均线粘合/蛇形走位能否继续走成右侧确认；确认前只观察不执行。",
+        "> **观察纪律**：只先进观察池，先看波动收敛、量价温和放大和右侧确认；确认前只观察不执行。",
     ]
     if filtered_out_gem_candidates:
         filtered_preview = filtered_out_gem_candidates[:2] if display_mvp_mode else filtered_out_gem_candidates[:4]
@@ -106,7 +114,7 @@ def render_gem_breathing_step2_section(context):
     for i, item in enumerate(preview, 1):
         lines.append(
             f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
-            f"{item.get('tier', '-') or '-'} | {item.get('abnormal_summary', item.get('note', '-')) or '-'} | "
+            f"{item.get('tier', '-') or '-'} | {sanitize_user_visible_text(item.get('abnormal_summary', item.get('note', '-')) or '-')} | "
             f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和60分钟确认，不满足继续观察 |"
         )
     lines.append("")
@@ -122,7 +130,7 @@ def render_gem_breathing_pool_section(context):
     lines = [
         "#### Step 3.5 - 创业板20cm预启动观察池",
         "> **先看结论**：创业板20cm样本只保留观察权，不单列成独立战场。",
-        "> **只看什么**：均线粘合、蛇形走位和右侧确认。",
+        GEM_BREATHING_FOCUS_LINE,
     ]
     if filtered_out_gem_candidates:
         filtered_text = "；".join(
@@ -137,7 +145,7 @@ def render_gem_breathing_pool_section(context):
     for item in gem_observation_stocks:
         lines.append(
             f"| {item.get('name', '-')}({item.get('code', '-')}) | {item.get('tier', '-') or item.get('core_level', '-')} | "
-            f"{item.get('note', item.get('abnormal_summary', '-'))} | {item.get('watch_anchor_note', item.get('tmr_forecast', '-'))} |"
+            f"{sanitize_user_visible_text(item.get('note', item.get('abnormal_summary', '-')))} | {sanitize_user_visible_text(item.get('watch_anchor_note', item.get('tmr_forecast', '-')))} |"
         )
     lines.append("")
     return lines

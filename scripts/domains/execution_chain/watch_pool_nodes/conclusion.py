@@ -1,3 +1,18 @@
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+
+
+def _confirmed_attack_line(context):
+    summary = resolve_mainline_attack_evidence_summary(context)
+    if not summary:
+        snapshot = context.get("mainline_competition_snapshot", []) or []
+        if snapshot:
+            return str((snapshot[0] or {}).get("sector") or "").strip()
+    primary = str(summary.get("primary_line") or "").strip()
+    if summary.get("attack_state") == "confirmed_attack" and primary:
+        return primary
+    return ""
+
+
 def build_watch_pool_conclusion_node(context, node_meta=None, node_lookup=None):
     watchlist = context.get("watchlist", []) or []
     abnormal_watch_pool = context.get("abnormal_watch_pool", []) or []
@@ -11,13 +26,17 @@ def build_watch_pool_conclusion_node(context, node_meta=None, node_lookup=None):
     lines = [
         "**结论**:",
         f"- **明天观察池**: {len(watchlist)}只，按今日形态预判明日延续性排序",
-        "- **优先顺序**: 一字板/T字板 > 光头涨停 > 放量涨停 > 反包候选",
+        "- **优先顺序**: 分歧转一致/T字板 > 光头涨停 > 放量涨停 > 反包候选；一字板只记录辨识度，等分歧后确认",
     ]
     if abnormal_watch_pool:
         resilient_count = len([item for item in abnormal_watch_pool if item.get("follow_state") in ["跌不下去", "缩量消化"]])
         lines.append(f"- **异动后跟踪**: {len(abnormal_watch_pool)}只里有{resilient_count}只处于“跌不下去/缩量消化”，优先留给明日60分钟确认")
     if mainline_competition_snapshot:
-        lines.append(f"- **主线竞争格局**: {mainline_competition_snapshot[0].get('sector', '未知')}目前是主攻线，其他方向先看是否能继续争夺能量。")
+        confirmed_line = _confirmed_attack_line(context)
+        if confirmed_line:
+            lines.append(f"- **主线竞争格局**: {confirmed_line}目前是主攻线，其他方向先看是否能继续争夺能量。")
+        else:
+            lines.append("- **主线竞争格局**: 当前没有确认主攻线，多方向只做候选观察。")
     if abnormal_projection_summary:
         lines.append(f"- **异常投影视角**: {abnormal_projection_summary.get('projection_label', '-')}")
     if sector_trend_snapshot_step1:

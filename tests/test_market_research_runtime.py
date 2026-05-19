@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from research.market_research_runtime import (
+    _build_sector_attack_evidence_rows,
     build_market_research_snapshot_contract,
     derive_step0_follow_plan_contract,
 )
@@ -80,6 +81,71 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["pivot_mainline_rows"][0]["structure_state"], "上沿承压")
         self.assertRegex(result["pivot_mainline_rows"][0]["interpretation"], r"。$")
 
+    def test_derive_market_research_cycle_layer_separates_daily_attack_from_cycle_mainline(self):
+        result = derive_market_research_cycle_layer(
+            {
+                "recent_mainline_history": [
+                    {"date": "2026-05-12", "primary_mainline": "电力", "market_state": "主导"},
+                    {"date": "2026-05-13", "primary_mainline": "电力", "market_state": "观察"},
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-05-14",
+                    "primary_mainline": "半导体",
+                    "market_state": "观察",
+                },
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "半导体",
+                        "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中",
+                    }
+                },
+            },
+            state_machine={"leading_line": "半导体", "energy_state": "观察"},
+        )
+
+        current = result["cycle_interpretation_rows"][-1]
+        self.assertEqual(current["attack_line"], "半导体")
+        self.assertEqual(current["cycle_stage"], "切换试攻")
+        self.assertEqual(current["transfer_state"], "首次攻击")
+        self.assertIn("二次攻击", current["tomorrow_validation"])
+        self.assertIn("今日攻击成立", current["interpretation"])
+        self.assertIn("不自动升级周期主线", current["interpretation"])
+        self.assertNotIn("正在承担当前周期的主线观察任务", current["interpretation"])
+
+    def test_derive_market_research_cycle_layer_uses_chaotic_attack_state_without_declaring_attack(self):
+        result = derive_market_research_cycle_layer(
+            {
+                "recent_mainline_history": [
+                    {"date": "2026-05-12", "primary_mainline": "电力", "market_state": "主导"},
+                    {"date": "2026-05-13", "primary_mainline": "电力", "market_state": "观察"},
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-05-14",
+                    "primary_mainline": "半导体",
+                    "market_state": "观察",
+                },
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "primary_line": "",
+                        "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    }
+                },
+            },
+            state_machine={"leading_line": "半导体", "energy_state": "观察"},
+        )
+
+        current = result["cycle_interpretation_rows"][-1]
+        self.assertEqual(current["attack_line"], "混沌轮动")
+        self.assertEqual(current["cycle_stage"], "混沌轮动")
+        self.assertEqual(current["transfer_state"], "混沌轮动")
+        self.assertIn("单一方向胜出", current["tomorrow_validation"])
+        self.assertIn("当前多线分散", current["interpretation"])
+        self.assertNotIn("今日攻击成立", current["interpretation"])
+        self.assertNotIn("看半导体是否二次攻击", current["tomorrow_validation"])
+
     def test_derive_market_research_cycle_layer_calendar_uses_latest_25_trading_days(self):
         trading_dates = [
             "2026-04-01",
@@ -140,6 +206,38 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(len(rendered_cells), 25)
         self.assertEqual(rendered_cells[0]["date"], "04-02")
         self.assertEqual(rendered_cells[-1]["date"], "05-06")
+
+    def test_derive_market_research_cycle_layer_calendar_uses_rotation_state_when_market_state_missing(self):
+        result = derive_market_research_cycle_layer(
+            {
+                "recent_mainline_history": [
+                    {
+                        "date": "2026-05-13",
+                        "primary_mainline": "电力",
+                        "rotation_label": "爆发",
+                        "state_code": "expand",
+                    },
+                    {
+                        "date": "2026-05-14",
+                        "primary_mainline": "半导体",
+                        "rotation_label": "",
+                        "state_code": "contract",
+                    },
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-05-15",
+                    "primary_mainline": "半导体",
+                    "rotation_label": "支线轮动",
+                    "state_code": "contract",
+                },
+            },
+            state_machine={"leading_line": "半导体"},
+        )
+
+        row = result["cycle_calendar_rows"][0]
+        self.assertEqual(row["wednesday"], {"date": "05-13", "mainline": "电力", "state": "爆发"})
+        self.assertEqual(row["thursday"], {"date": "05-14", "mainline": "半导体", "state": "收缩分歧"})
+        self.assertEqual(row["friday"], {"date": "05-15", "mainline": "半导体", "state": "支线轮动"})
 
     def test_derive_market_research_cycle_layer_treats_pivot_as_mainline_cycle_carrier(self):
         result = derive_market_research_cycle_layer(
@@ -360,6 +458,175 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["source"], "tencent.fundflow.getHyRank")
         self.assertEqual(result["mainline_turnover_summary"]["current_snapshot"]["source"], "tencent.fundflow.getHyRank")
 
+    def test_build_market_research_snapshot_contract_feeds_structured_attack_evidence_into_mainline_summary(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+        captured = {}
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-15",
+                "total_turnover": 33880.86,
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "半导体", "zljlr": 45.0, "turnover_yi": 4206.7},
+                        {"name": "电力", "zljlr": 8.0, "turnover_yi": 2300.0},
+                    ],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {
+                    "半导体": [
+                        {"名称": "中船特气", "涨停统计": "4连板"},
+                        {"名称": "芯片一号", "涨停统计": "首板"},
+                        {"名称": "芯片二号", "涨停统计": "首板"},
+                        {"名称": "芯片三号", "涨停统计": "首板"},
+                        {"名称": "芯片四号", "涨停统计": "首板"},
+                    ],
+                    "电力": [{"名称": "电力一号", "涨停统计": "首板"}],
+                },
+            },
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "电力",
+            },
+            get_sector_turnover_snapshot_from_tencent_fund_flow=lambda *args, **kwargs: {
+                "date": "2026-05-15",
+                "sector_name": "电力",
+                "sector_turnover": 2300.0,
+                "total_turnover": 33880.86,
+                "turnover_share_pct": 6.79,
+            },
+            build_mainline_turnover_summary=lambda **kwargs: captured.update(kwargs)
+            or {
+                "current_mainline": "半导体",
+                "mainline_attack_evidence_summary": {"attack_state": "confirmed_attack", "primary_line": "半导体"},
+            },
+            **kwargs,
+        )
+
+        evidence_rows = captured["sector_attack_evidence_rows"]
+        semiconductor = next(row for row in evidence_rows if row["sector_name"] == "半导体")
+        self.assertEqual(semiconductor["net_inflow_rank"], 1)
+        self.assertEqual(semiconductor["net_inflow_amount"], 45.0)
+        self.assertEqual(semiconductor["limit_up_count"], 5)
+        self.assertEqual(semiconductor["high_anchor_height"], 4)
+        self.assertEqual(semiconductor["high_anchor_name"], "中船特气")
+        self.assertEqual(semiconductor["turnover_share_pct"], 12.42)
+        self.assertEqual(result["mainline_turnover_summary"]["current_mainline"], "半导体")
+
+    def test_build_sector_attack_evidence_rows_parses_slash_zt_type_as_board_count(self):
+        rows = _build_sector_attack_evidence_rows(
+            {
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "半导体", "zljlr": 12.0},
+                        {"name": "化学制品", "zljlr": 8.0},
+                        {"name": "光伏设备", "zljlr": 5.0},
+                        {"name": "家居用品", "zljlr": 4.0},
+                    ]
+                },
+                "zt_pool_by_sector": {
+                    "半导体": [{"name": "中船特气", "zt_type": "4/3"}],
+                    "化学制品": [{"name": "和远气体", "zt_type": "4/2"}],
+                    "光伏设备": [{"name": "协鑫集成", "zt_type": "1/1"}],
+                    "家居用品": [{"name": "蒙娜丽莎", "zt_type": "5/5"}],
+                    "电力": [{"name": "金房能源", "涨停统计": "4天2板"}],
+                    "军工": [{"name": "军工一号", "涨停统计": "4连板"}],
+                    "算力": [{"name": "算力一号", "涨停统计": "首板"}],
+                },
+            },
+            {},
+            [],
+            0,
+        )
+
+        by_sector = {row["sector_name"]: row for row in rows}
+        self.assertEqual(by_sector["半导体"]["high_anchor_height"], 3)
+        self.assertEqual(by_sector["化学制品"]["high_anchor_height"], 2)
+        self.assertEqual(by_sector["光伏设备"]["high_anchor_height"], 1)
+        self.assertEqual(by_sector["家居用品"]["high_anchor_height"], 5)
+        self.assertEqual(by_sector["电力"]["high_anchor_height"], 2)
+        self.assertEqual(by_sector["军工"]["high_anchor_height"], 4)
+        self.assertEqual(by_sector["算力"]["high_anchor_height"], 1)
+        self.assertNotIn(42, [row["high_anchor_height"] for row in rows])
+
+    def test_build_market_research_snapshot_contract_adds_turnover_share_change_to_attack_evidence(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        captured = {}
+
+        build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-15",
+                "current_mainline_history_record": {"date": "2026-05-15", "primary_mainline": "半导体"},
+                "recent_sector_turnover_history": [
+                    {"date": "2026-05-14", "sector_name": "半导体", "turnover_share_pct": 10.8}
+                ],
+                "current_sector_turnover_snapshot": {
+                    "date": "2026-05-15",
+                    "sector_name": "半导体",
+                    "sector_turnover": 4206.7,
+                    "total_turnover": 33880.86,
+                    "turnover_share_pct": 12.4,
+                },
+                "sector_fund_flow": {
+                    "inflow": [{"name": "半导体", "zljlr": 45.0, "turnover_yi": 4206.7}],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {"半导体": [{"名称": "中船特气", "涨停统计": "4连板"}]},
+            },
+            build_mainline_turnover_summary=lambda **kwargs: captured.update(kwargs) or {"current_mainline": "半导体"},
+            **kwargs,
+        )
+
+        semiconductor = next(row for row in captured["sector_attack_evidence_rows"] if row["sector_name"] == "半导体")
+        self.assertEqual(semiconductor["turnover_share_pct"], 12.4)
+        self.assertEqual(semiconductor["turnover_share_change"], 1.6)
+
+    def test_build_market_research_snapshot_contract_rebuilds_existing_summary_when_attack_evidence_is_missing(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+        captured = {}
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-15",
+                "total_turnover": 33880.86,
+                "mainline_turnover_summary": {
+                    "current_mainline": "电力",
+                    "conclusion": "主线未切换，电力仍是中心",
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-05-15",
+                            "cycle_mainline": "电力",
+                            "mainline_turnover": "2300.00亿",
+                            "market_turnover": "33880.86亿",
+                        }
+                    ],
+                },
+                "current_mainline_history_record": {"date": "2026-05-15", "primary_mainline": "电力"},
+                "sector_fund_flow": {
+                    "inflow": [{"name": "半导体", "zljlr": 45.0, "turnover_yi": 4206.7}],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {
+                    "半导体": [
+                        {"名称": "中船特气", "涨停统计": "4连板"},
+                        {"名称": "芯片一号", "涨停统计": "首板"},
+                        {"名称": "芯片二号", "涨停统计": "首板"},
+                        {"名称": "芯片三号", "涨停统计": "首板"},
+                        {"名称": "芯片四号", "涨停统计": "首板"},
+                    ]
+                },
+            },
+            build_mainline_turnover_summary=lambda **kwargs: captured.update(kwargs)
+            or {
+                "current_mainline": "半导体",
+                "mainline_attack_evidence_summary": {"attack_state": "confirmed_attack", "primary_line": "半导体"},
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(captured["sector_attack_evidence_rows"][0]["sector_name"], "半导体")
+        self.assertEqual(result["mainline_turnover_summary"]["current_mainline"], "半导体")
+
     def test_build_market_research_snapshot_contract_rebuilds_stale_empty_mainline_turnover_summary(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
 
@@ -436,6 +703,110 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["lhb_capital_status"]["capital_strength"], "强")
         self.assertIn("净买入", result["lhb_capital_status"]["capital_intensity"])
         self.assertIn("主线", result["capital_conclusion"]["mainline_attitude"])
+
+    def test_build_market_research_snapshot_contract_ignores_board_labels_for_lhb_direction(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-18",
+                "total_turnover": 29170.74,
+                "lhb_net_buy_top10": [
+                    {"name": "华工科技", "code": "000988", "sector": "HS", "net_buy_amount_yi": 16.98},
+                    {"name": "弘信电子", "code": "300657", "sector": "GEM", "net_buy_amount_yi": 4.09},
+                    {"name": "富创精密", "code": "688409", "sector": "STAR", "net_buy_amount_yi": 7.28},
+                ],
+                "lhb_net_sell_top10": [
+                    {"name": "粤传媒", "code": "002181", "sector": "HS", "net_buy_amount_yi": -2.74},
+                ],
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(result["lhb_capital_status"]["capital_direction"], "未归类")
+        self.assertNotIn("HS", result["lhb_capital_status"]["capital_intensity"])
+        self.assertNotIn("方向在HS", result["capital_conclusion"]["current_capital_state"])
+
+    def test_build_market_research_snapshot_contract_does_not_let_lhb_mismatch_veto_mainline(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-15",
+                "total_turnover": 33880.86,
+                "lhb_net_buy_top10": [
+                    {"name": "电力一号", "code": "000001", "sector": "电力", "net_buy_amount_yi": 14.57},
+                ],
+                "lhb_net_sell_top10": [
+                    {"name": "消费一号", "code": "000002", "sector": "消费", "net_buy_amount_yi": -26.16},
+                ],
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(result["capital_conclusion"]["mainline_attitude"], "龙虎榜未验证半导体")
+        self.assertEqual(result["capital_conclusion"]["tomorrow_action_meaning"], "先看板块攻击证据，龙虎榜只作为验证层")
+        self.assertNotIn("资金没有完全确认主线", result["capital_conclusion"]["mainline_attitude"])
+
+    def test_build_market_research_snapshot_contract_uses_sector_attack_as_primary_capital_evidence(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-15",
+                "total_turnover": 33880.86,
+                "current_mainline_history_record": {"date": "2026-05-15", "primary_mainline": "半导体"},
+                "recent_sector_turnover_history": [
+                    {"date": "2026-05-14", "sector_name": "半导体", "turnover_share_pct": 10.8}
+                ],
+                "current_sector_turnover_snapshot": {
+                    "date": "2026-05-15",
+                    "sector_name": "半导体",
+                    "sector_turnover": 4206.7,
+                    "total_turnover": 33880.86,
+                    "turnover_share_pct": 12.4,
+                },
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "半导体", "zljlr": 45.0, "turnover_yi": 4206.7},
+                        {"name": "电力", "zljlr": 8.0, "turnover_yi": 2300.0},
+                    ],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {
+                    "半导体": [
+                        {"名称": "中船特气", "涨停统计": "4连板"},
+                        {"名称": "芯片一号", "涨停统计": "首板"},
+                        {"名称": "芯片二号", "涨停统计": "首板"},
+                        {"名称": "芯片三号", "涨停统计": "首板"},
+                        {"名称": "芯片四号", "涨停统计": "首板"},
+                    ]
+                },
+                "lhb_net_buy_top10": [
+                    {"name": "电力一号", "code": "000001", "sector": "电力", "net_buy_amount_yi": 14.57},
+                ],
+                "lhb_net_sell_top10": [
+                    {"name": "消费一号", "code": "000002", "sector": "消费", "net_buy_amount_yi": -26.16},
+                ],
+            },
+            build_mainline_turnover_summary=lambda **kwargs: {
+                "current_mainline": "半导体",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "半导体",
+                    "confirmation_evidence": "半导体资金净流入靠前，涨停和高标更集中，成交占比扩张",
+                },
+            },
+            **kwargs,
+        )
+
+        breakdown = result["capital_intent_breakdown"]
+        self.assertEqual(breakdown["sector_fund_attitude"], "半导体板块攻击资金确认：净流入第1，+45.00亿")
+        self.assertEqual(breakdown["strength_feedback"], "涨停5，高标4，成交占比+1.6pct")
+        self.assertEqual(breakdown["lhb_validation"], "龙虎榜方向在电力，未验证主线")
+        self.assertEqual(breakdown["capital_consistency"], "板块攻击成立，龙虎榜未验证")
+        self.assertEqual(breakdown["tomorrow_meaning"], "先按板块攻击线观察，龙虎榜只作为加分，不作为主线否决")
+        self.assertEqual(result["capital_conclusion"]["mainline_attitude"], "板块攻击成立，龙虎榜未验证")
+        old_misleading_attitude = "资金没有完全确认主线，" + "先看是否轮动"
+        self.assertNotEqual(result["capital_conclusion"]["mainline_attitude"], old_misleading_attitude)
 
 
 if __name__ == "__main__":

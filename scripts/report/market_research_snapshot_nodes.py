@@ -1,9 +1,21 @@
 from datetime import datetime, timedelta
 
-from report.mainline_turnover_summary_support import resolve_mainline_turnover_summary, resolve_turnover_share_trend_rows
+from report.mainline_turnover_summary_support import (
+    resolve_mainline_attack_evidence_summary,
+    resolve_mainline_capacity_regime_summary,
+    resolve_mainline_turnover_summary,
+    resolve_turnover_share_trend_rows,
+)
 
 
 _TRADING_DAY_FIELDS = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+_STATE_CODE_LABELS = {
+    "expand": "爆发",
+    "migrate": "切换",
+    "probe": "试探",
+    "contract": "收缩分歧",
+    "observe": "观察",
+}
 
 
 def _full_row(label, current_evidence, derived_judgement, action_effect):
@@ -72,13 +84,21 @@ def _record_mainline(record):
 
 
 def _record_state(record):
-    return str(
-        (record or {}).get("market_state")
-        or (record or {}).get("state")
-        or (record or {}).get("status")
-        or (record or {}).get("structure_state")
-        or "观察"
-    ).strip() or "观察"
+    record = record or {}
+    explicit_state = str(
+        record.get("market_state")
+        or record.get("state")
+        or record.get("status")
+        or record.get("structure_state")
+        or ""
+    ).strip()
+    if explicit_state:
+        return explicit_state
+    rotation_label = str(record.get("rotation_label") or "").strip()
+    if rotation_label:
+        return rotation_label
+    state_code = str(record.get("state_code") or "").strip().lower()
+    return _STATE_CODE_LABELS.get(state_code, "观察")
 
 
 def _format_cycle_calendar_cell(cell):
@@ -124,9 +144,86 @@ def _cycle_market_state(records):
     return states[-1] if states[0] == states[-1] else f"{states[0]}后{states[-1]}"
 
 
-def _cycle_interpretation(label, mainline, market_state):
+def _cycle_stage(label, group_records, attack_summary=None):
+    if label != "当前周期":
+        return "已结束周期"
+    attack_state = str((attack_summary or {}).get("attack_state") or "").strip()
+    if attack_state == "chaotic_rotation":
+        return "混沌轮动"
+    if attack_state == "no_attack":
+        return "无主线"
+    if len(group_records or []) <= 1:
+        return "切换试攻"
+    return "延续验证"
+
+
+def _cycle_transfer_state(label, group_records, market_state, attack_summary=None):
+    if label != "当前周期":
+        return "背景观察"
+    attack_state = str((attack_summary or {}).get("attack_state") or "").strip()
+    if attack_state == "chaotic_rotation":
+        return "混沌轮动"
+    if attack_state == "no_attack":
+        return "无主线"
+    if len(group_records or []) <= 1:
+        return "首次攻击"
+    text = str(market_state or "")
+    if any(marker in text for marker in ("退潮", "衰弱", "分化", "回落")):
+        return "延续但衰弱"
+    if attack_state == "confirmed_attack":
+        return "延续加强"
+    return "待二次验证"
+
+
+def _cycle_tomorrow_validation(label, attack_line, transfer_state):
+    if label != "当前周期":
+        return "观察是否退成背景线"
+    if transfer_state in ("首次攻击", "待二次验证"):
+        return f"看{attack_line}是否二次攻击，不能由单日攻击自动升级周期主线"
+    if transfer_state == "延续加强":
+        return f"看{attack_line}资金排名、涨停扩散和高标反馈能否继续"
+    if transfer_state == "延续但衰弱":
+        return f"看{attack_line}是否修复资金和高标反馈，否则降为背景线"
+    if transfer_state == "混沌轮动":
+        return "看是否有单一方向胜出，否则不强定主线"
+    if transfer_state == "无主线":
+        return "只记录资金是否重新聚焦"
+    return "继续验证传递性"
+
+
+def _cycle_attack_line(label, group_mainline, attack_summary=None):
+    if label != "当前周期":
+        return group_mainline
+    attack_state = str((attack_summary or {}).get("attack_state") or "").strip()
+    primary_line = str((attack_summary or {}).get("primary_line") or "").strip()
+    if attack_state == "confirmed_attack" and primary_line:
+        return primary_line
+    if attack_state == "chaotic_rotation":
+        return "混沌轮动"
+    if attack_state == "no_attack":
+        return "暂无"
+    if attack_state == "candidate_attack":
+        candidates = (attack_summary or {}).get("candidate_lines") or []
+        if candidates:
+            return " / ".join([str(item).strip() for item in candidates[:3] if str(item).strip()]) or "候选线"
+        return "候选线"
+    return group_mainline
+
+
+def _cycle_interpretation(label, mainline, market_state, attack_line=None, transfer_state=None):
+    attack_line = str(attack_line or mainline or "-").strip() or "-"
     if label == "当前周期":
-        return f"{mainline}正在承担当前周期的主线观察任务，市场状态是{market_state}，先看承接能否继续稳定。"
+        if transfer_state == "首次攻击":
+            return f"{attack_line}今日攻击成立，但传递性仍待二次验证；不自动升级周期主线。"
+        if transfer_state == "延续加强":
+            return f"{attack_line}攻击开始出现传递，市场状态是{market_state}，继续看资金、涨停和高标反馈是否同步。"
+        if transfer_state == "延续但衰弱":
+            return f"{attack_line}仍有周期痕迹，但市场状态是{market_state}，先按衰弱延续处理。"
+        if transfer_state == "混沌轮动":
+            return f"当前多线分散，{attack_line}未形成稳定胜出，先按混沌轮动处理。"
+        if transfer_state == "无主线":
+            return "当前没有清晰攻击线，不强行生成周期主线。"
+        return f"{attack_line}处在传递验证阶段，市场状态是{market_state}，先看是否继续攻击。"
     return f"{mainline}主导了上个周期，市场状态从前段推进到{market_state}，当前要观察它是否退成背景线。"
 
 
@@ -203,6 +300,18 @@ def _structure_interpretation(row):
     return f"中枢是主线周期载体：[{mainline}] 承载在{pivot_level}，主线程度是{mainline_degree}，当前演化为{evolution}；{replacement}，动作上先看承接是否稳定。"
 
 
+def _downgrade_pivot_row_for_unconfirmed_attack(pivot_row, attack_summary):
+    if not attack_summary or attack_summary.get("attack_state") == "confirmed_attack":
+        return pivot_row
+    downgraded = dict(pivot_row)
+    downgraded["mainline"] = "暂无确认主线"
+    downgraded["mainline_degree"] = "待确认"
+    downgraded["replacement"] = "待确认"
+    evidence = attack_summary.get("confirmation_evidence") or "板块攻击证据不足"
+    downgraded["interpretation"] = f"中枢只记录候选方向，不把单日热度升级为周期主线；{evidence}。"
+    return downgraded
+
+
 def derive_market_research_cycle_layer(data, state_machine=None):
     data = data or {}
     state_machine = state_machine or {}
@@ -237,17 +346,25 @@ def derive_market_research_cycle_layer(data, state_machine=None):
         calendar_rows.append(row)
 
     cycle_rows = []
+    attack_summary = resolve_mainline_attack_evidence_summary(data)
     labels = ["上个周期", "当前周期"] if len(selected_groups) > 1 else ["当前周期"]
     for label, group in zip(labels, selected_groups):
         market_state = _cycle_market_state(group["records"])
+        attack_line = _cycle_attack_line(label, group["mainline"], attack_summary)
+        cycle_stage = _cycle_stage(label, group["records"], attack_summary)
+        transfer_state = _cycle_transfer_state(label, group["records"], market_state, attack_summary)
         cycle_rows.append(
             {
                 "cycle_label": label,
                 "date_range": _cycle_date_range(group["records"]),
                 "trading_days": f"{len(group['records'])}日",
                 "mainline": group["mainline"],
+                "attack_line": attack_line,
+                "cycle_stage": cycle_stage,
+                "transfer_state": transfer_state,
                 "market_state": market_state,
-                "interpretation": _cycle_interpretation(label, group["mainline"], market_state),
+                "tomorrow_validation": _cycle_tomorrow_validation(label, attack_line, transfer_state),
+                "interpretation": _cycle_interpretation(label, group["mainline"], market_state, attack_line, transfer_state),
             }
         )
 
@@ -270,6 +387,7 @@ def derive_market_research_cycle_layer(data, state_machine=None):
             "replacement": _explicit_or_structural_replacement(row, mainline, previous_mainline),
         }
         pivot_row["interpretation"] = _structure_interpretation({**row, **pivot_row})
+        pivot_row = _downgrade_pivot_row_for_unconfirmed_attack(pivot_row, attack_summary)
         pivot_rows.append(pivot_row)
     if not pivot_rows and cycle_rows:
         current = cycle_rows[-1]
@@ -289,6 +407,7 @@ def derive_market_research_cycle_layer(data, state_machine=None):
             "replacement": _explicit_or_structural_replacement(data, current.get("mainline", "-"), previous_mainline),
         }
         pivot_row["interpretation"] = _structure_interpretation(pivot_row)
+        pivot_row = _downgrade_pivot_row_for_unconfirmed_attack(pivot_row, attack_summary)
         pivot_rows.append(pivot_row)
 
     return {
@@ -359,13 +478,39 @@ def _build_turnover_share_trend_table_lines(context):
     return lines
 
 
+def _build_mainline_attack_evidence_table_lines(context):
+    from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_rows
+
+    rows = resolve_mainline_attack_evidence_rows(context)
+    if not rows:
+        return []
+    lines = [
+        "#### 主线攻击证据",
+        "| 板块 | 攻击状态 | 净流入排名 | 净流入 | 涨停数 | 高标高度 | 成交占比变化 | 结论 |",
+        "|------|----------|------------|--------|--------|----------|--------------|------|",
+    ]
+    for row in rows[:3]:
+        lines.append(
+            "| {sector_name} | {attack_state} | {net_inflow_rank} | {net_inflow_amount} | {limit_up_count} | {high_anchor_height} | {turnover_share_change} | {conclusion} |".format(
+                **row
+            )
+        )
+    return lines
+
+
 def build_market_research_snapshot_mainline_focus_node(context, node_meta=None, node_lookup=None):
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
     competition_result = context.get("competition_result", "主线待定")
     competition_evidence = context.get("competition_evidence", "先看趋势密度、异常承接和资金聚焦谁先胜出")
+    action_effect = "优先聚焦主线对象"
+    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        competition_result = "无确认主攻线"
+        competition_evidence = attack_summary.get("confirmation_evidence") or "主线攻击证据不足"
+        action_effect = "候选只观察，不给买入资格"
     if context.get("compact"):
         lines = [f"- **主线焦点**: {competition_result}；{competition_evidence}"]
     else:
-        lines = [_full_row("主线焦点", competition_result, competition_evidence, "优先聚焦主线对象")]
+        lines = [_full_row("主线焦点", competition_result, competition_evidence, action_effect)]
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
@@ -394,13 +539,46 @@ def build_market_research_snapshot_mainline_turnover_node(context, node_meta=Non
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
+def build_market_research_snapshot_mainline_capacity_regime_node(context, node_meta=None, node_lookup=None):
+    summary = resolve_mainline_capacity_regime_summary(context)
+    if not summary:
+        return {"lines": [], "exports": {}, "module_logs": []}
+    lines = [
+        "### 4. 主线容量与格局判断",
+        "| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |",
+        "|----------|----------|--------|----------------|--------------|--------------|----------|----------|",
+        (
+            "| {mainline_capacity} | {mainline_regime} | {primary_line} | {other_lines} | "
+            "{confirmation_evidence} | {sector_relationship_state} | {mainline_process} | {tomorrow_action} |"
+        ).format(**summary),
+    ]
+    lines.extend(_build_mainline_attack_evidence_table_lines(context))
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
 def build_market_research_snapshot_lhb_capital_intent_node(context, node_meta=None, node_lookup=None):
+    breakdown = context.get("capital_intent_breakdown") or {}
     status = context.get("lhb_capital_status") or {}
     conclusion = context.get("capital_conclusion") or {}
-    if not status and not conclusion:
+    if not breakdown and not status and not conclusion:
         return {"lines": [], "exports": {}, "module_logs": []}
 
     lines = []
+    if breakdown:
+        lines.extend(
+            [
+                "#### 资金意图拆解",
+                "| 板块攻击资金 | 强度反馈 | 龙虎榜验证 | 资金一致性 | 明日含义 |",
+                "|--------------|----------|------------|------------|----------|",
+                "| {sector_fund_attitude} | {strength_feedback} | {lhb_validation} | {capital_consistency} | {tomorrow_meaning} |".format(
+                    sector_fund_attitude=breakdown.get("sector_fund_attitude", "-"),
+                    strength_feedback=breakdown.get("strength_feedback", "-"),
+                    lhb_validation=breakdown.get("lhb_validation", "-"),
+                    capital_consistency=breakdown.get("capital_consistency", "-"),
+                    tomorrow_meaning=breakdown.get("tomorrow_meaning", "-"),
+                ),
+            ]
+        )
     if status:
         lines.extend(
             [
@@ -464,17 +642,20 @@ def build_market_research_snapshot_cycle_interpretation_node(context, node_meta=
 
     lines = [
         "### 2. 周期解读",
-        "| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |",
-        "|------|------|------|------|------|------|",
+        "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
+        "|------|------|------|------|------|------|------|------|------|",
     ]
     for row in rows:
         lines.append(
-            "| {cycle_label} | {date_range} | {trading_days} | {mainline} | {market_state} | {interpretation} |".format(
+            "| {cycle_label} | {date_range} | {trading_days} | {attack_line} | {cycle_stage} | {transfer_state} | {market_state} | {tomorrow_validation} | {interpretation} |".format(
                 cycle_label=row.get("cycle_label", "-"),
                 date_range=row.get("date_range", "-"),
                 trading_days=row.get("trading_days", "-"),
-                mainline=row.get("mainline", "-"),
+                attack_line=row.get("attack_line") or row.get("mainline", "-"),
+                cycle_stage=row.get("cycle_stage") or ("已结束周期" if row.get("cycle_label") != "当前周期" else "待验证"),
+                transfer_state=row.get("transfer_state") or ("背景观察" if row.get("cycle_label") != "当前周期" else "待二次验证"),
                 market_state=row.get("market_state", "-"),
+                tomorrow_validation=row.get("tomorrow_validation") or ("观察是否退成背景线" if row.get("cycle_label") != "当前周期" else "验证是否二次攻击"),
                 interpretation=_structure_interpretation(row),
             )
         )
@@ -511,6 +692,24 @@ def build_market_research_snapshot_pivot_mainline_interpretation_node(context, n
 def build_market_research_snapshot_rotation_node(context, node_meta=None, node_lookup=None):
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        attack_state = attack_summary.get("attack_state")
+        rotation_label = "混沌轮动" if attack_state == "chaotic_rotation" else "候选轮动"
+        if attack_state == "no_attack":
+            rotation_label = "无主线"
+        return {
+            "lines": [
+                _full_row(
+                    "主线内部轮动",
+                    rotation_label,
+                    attack_summary.get("confirmation_evidence") or "板块攻击证据不足",
+                    "不围着单一方向做减法，只保留候选观察",
+                )
+            ],
+            "exports": {},
+            "module_logs": [],
+        }
     return {
         "lines": [
             _full_row(
@@ -528,6 +727,20 @@ def build_market_research_snapshot_rotation_node(context, node_meta=None, node_l
 def build_market_research_snapshot_narrative_node(context, node_meta=None, node_lookup=None):
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        return {
+            "lines": [
+                _full_row(
+                    "叙事节点",
+                    "叙事待验证",
+                    "题材只能做背景，先看板块攻击证据是否胜出",
+                    "不把节点热度当主线确认",
+                )
+            ],
+            "exports": {},
+            "module_logs": [],
+        }
     return {
         "lines": [
             _full_row(
