@@ -1,5 +1,6 @@
 from report.market_overview_node_registry import build_market_overview_node_specs
 from report.market_overview_node_runtime import run_market_overview_nodes
+from report.market_condition_wording import describe_market_turnover_condition
 
 
 def _data(context):
@@ -47,7 +48,7 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     dt_count = len(data.get("dt_pool", []))
     up_count = data.get("market_stats", {}).get("up_count", 0)
     down_count = data.get("market_stats", {}).get("down_count", 0)
-    lines.append(f"| 两市成交额 | {turnover:.2f}亿 | - | {'量能不差，但赚钱效应不足' if turnover >= 15000 else '量能偏弱，先看不做'} |")
+    lines.append(f"| 两市成交额 | {turnover:.2f}亿 | - | {describe_market_turnover_condition(data)} |")
     lines.append(f"| 涨停 / 跌停 | {zt_count} / {dt_count} | - | {'活跃度还在，但亏钱端不轻' if dt_count >= 3 else '情绪尚可'} |")
     lines.append(f"| 涨跌比 | {up_count} / {down_count} | - | {'下跌家数偏多，底色偏防守' if down_count > up_count else '多头仍占优'} |")
     lines.append("")

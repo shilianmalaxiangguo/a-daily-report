@@ -86,6 +86,26 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("### 2. 市场状态结论", rendered)
         self.assertTrue(any(log["step"] == "render.market_trend_sections" for log in result["module_logs"]))
 
+    def test_build_market_trend_sections_contract_keeps_high_turnover_weak_breadth_wording_consistent(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "indices": {
+                    "上证指数": {"点位": 4131.53, "涨跌幅": -0.09},
+                    "深证成指": {"点位": 15530.23, "涨跌幅": -0.20},
+                    "创业板指": {"点位": 3914.88, "涨跌幅": -0.36},
+                },
+                "wind_a_alternative": {"点位": 6477.21, "涨跌幅": -0.06},
+                "total_turnover": 29170.74,
+                "zt_pool": [{"code": "000001"}] * 101,
+                "dt_pool": [{"code": "000002"}] * 53,
+                "market_stats": {"up_count": 2375, "down_count": 3003},
+            },
+            target_date="2026-05-18",
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 两市成交额 | 29170.74亿 | - | 量能充沛，但赚钱效应不足 |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

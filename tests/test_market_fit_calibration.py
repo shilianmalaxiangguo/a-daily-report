@@ -37,6 +37,22 @@ class MarketFitCalibrationTest(unittest.TestCase):
         self.assertEqual(result["fit_label"], "数据不足")
         self.assertEqual(result["action_text"], "先累计强势样本")
 
+    def test_ignores_market_board_labels_when_describing_dominant_sector(self):
+        result = build_market_fit_calibration(
+            strong_samples=[
+                {"name": "华工科技", "code": "000988", "sector": "HS"},
+                {"name": "深科技", "code": "000021", "sector": "HS"},
+                {"name": "弘信电子", "code": "300657", "sector": "GEM"},
+                {"name": "兆易创新", "code": "603986", "sector": "存储芯片"},
+            ],
+            current_mainline="存储芯片",
+            observation_pool=[{"name": "兆易创新", "code": "603986", "sector": "存储芯片"}],
+        )
+
+        self.assertIn("强势样本集中存储芯片", result["cycle_note"])
+        self.assertNotIn("集中HS", result["cycle_note"])
+        self.assertNotIn("集中GEM", result["cycle_note"])
+
 
 if __name__ == "__main__":
     unittest.main()

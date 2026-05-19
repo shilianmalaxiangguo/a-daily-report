@@ -9,15 +9,40 @@ def _normalize_sector(value):
     return str(value or "").strip()
 
 
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "其他",
+    "其它",
+    "-",
+}
+
+
+def _is_valid_sector_label(value):
+    sector = _normalize_sector(value)
+    return bool(sector and sector not in _NON_SECTOR_LABELS)
+
+
 def _sample_sector(sample):
     if not isinstance(sample, dict):
         return ""
-    return _normalize_sector(
+    sector = _normalize_sector(
         sample.get("sector")
         or sample.get("所属行业")
         or sample.get("board")
         or sample.get("industry")
     )
+    return sector if _is_valid_sector_label(sector) else ""
 
 
 def _sample_code(sample):
