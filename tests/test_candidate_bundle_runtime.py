@@ -237,6 +237,202 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(core["change_pct"], 20.01)
         self.assertEqual(core["volume_summary"], "显著放量6.0倍，涨停，强启动信号")
 
+    def test_candidate_bundle_attaches_stock_risk_map_before_conviction_scoring(self):
+        captured = {}
+
+        def capture_extreme_conviction(evaluated_stocks, *args, **kwargs):
+            captured["evaluated_stocks"] = list(evaluated_stocks)
+            return evaluated_stocks[:1]
+
+        result = build_candidate_bundle_contract(
+            data={
+                "stock_risk_map": {
+                    "002342": {
+                        "risk_flags": ["holder_reduce"],
+                        "risk_summary": "控股股东拟减持不超过3%公司股份",
+                        "risk_events": [
+                            {
+                                "risk_type": "holder_reduce",
+                                "title": "控股股东拟减持不超过3%公司股份",
+                                "source": "tushare.stk_holdertrade",
+                            }
+                        ],
+                    }
+                }
+            },
+            exit_analysis={"sector_name": "机器人"},
+            candidates=[],
+            watchlist=[{"name": "巨力索具", "code": "002342", "sector": "机器人", "score": 90}],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-18",
+            normalize_stock_code=lambda code: str(code or "").replace(".SZ", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=capture_extreme_conviction,
+        )
+
+        evaluated = captured["evaluated_stocks"][0]
+        self.assertEqual(evaluated["stock_risk"]["risk_flags"], ["holder_reduce"])
+        self.assertIn("拟减持", evaluated["news_risk_summary"])
+        self.assertEqual(result["extreme_conviction_list"][0]["stock_risk"]["risk_events"][0]["source"], "tushare.stk_holdertrade")
+
+    def test_candidate_bundle_does_not_default_missing_lianban_to_first_board(self):
+        result = build_candidate_bundle_contract(
+            data={},
+            exit_analysis={"sector_name": "绿色电力"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "大唐发电",
+                    "code": "601991",
+                    "sector": "绿色电力",
+                    "score": 96,
+                    "change_pct": 0.13,
+                }
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-18",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda evaluated_stocks, *args, **kwargs: evaluated_stocks[:1],
+        )
+
+        core = result["core_stocks"][0]
+        self.assertEqual(core["连板数"], 0)
+        self.assertEqual(core["core_level"], "✓ 溢价候选")
+        self.assertEqual(core["tmr_forecast"], "明日可能高开溢价")
+        self.assertNotIn("首板", core["core_level"])
+        self.assertNotIn("首板形态好", core["tmr_forecast"])
+
+    def test_candidate_bundle_enriches_limit_up_reason_from_xuangubao(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {
+                            "symbol": "600676.SS",
+                            "name": "交运股份",
+                            "stock_reason": "拟置入文旅体育资产",
+                            "related_plates": [
+                                {"plate_id": 15030162, "plate_name": "资产重组", "plate_reason": "重大资产置换预案"}
+                            ],
+                            "limit_up_days": 1,
+                        }
+                    ]
+                }
+            },
+            exit_analysis={"sector_name": "资产重组"},
+            candidates=[],
+            watchlist=[{"name": "交运股份", "code": "600676", "sector": "资产重组", "score": 60}],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-18",
+            normalize_stock_code=lambda code: str(code or "").replace(".SS", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (
+                [item for item in stocks if item.get("sector") == mainline_name],
+                [],
+            ),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+        )
+
+        core = result["core_stocks"][0]
+        self.assertEqual(core["xuangubao_stock_reason"], "拟置入文旅体育资产")
+        self.assertEqual(core["xuangubao_related_plate_names"], ["资产重组"])
+        self.assertEqual(core["xuangubao_limit_up_days"], 1)
+
+    def test_candidate_bundle_replaces_market_board_sector_from_xuangubao_plate(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {
+                            "symbol": "000988.SZ",
+                            "name": "华工科技",
+                            "stock_reason": "光模块业务订单增长",
+                            "related_plates": [
+                                {"plate_id": 123, "plate_name": "光通信", "plate_reason": "CPO方向活跃"}
+                            ],
+                            "limit_up_days": 1,
+                        }
+                    ]
+                }
+            },
+            exit_analysis={"sector_name": ""},
+            candidates=[],
+            watchlist=[{"name": "华工科技", "code": "000988", "sector": "HS", "score": 80}],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-18",
+            normalize_stock_code=lambda code: str(code or "").replace(".SZ", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda evaluated_stocks, *args, **kwargs: evaluated_stocks[:1],
+        )
+
+        self.assertEqual(result["evaluated_stocks"][0]["sector"], "光通信")
+        self.assertEqual(result["extreme_conviction_list"][0]["sector"], "光通信")
+
+    def test_candidate_bundle_infers_sector_from_stock_info_and_limit_up_reason(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "stock_full_info": {
+                    "300657": {"code": "300657", "industry": "元器件", "所属行业": "元器件", "change_pct": 19.99}
+                },
+                "lianban_data": {
+                    "stocks": [
+                        {
+                            "code": "000417",
+                            "name": "合百集团",
+                            "sector": "待补充板块",
+                            "reason": "间接投资长鑫科技+合肥国资+区域零售",
+                            "lianban_days": 1,
+                        }
+                    ]
+                },
+            },
+            exit_analysis={"sector_name": ""},
+            candidates=[],
+            watchlist=[
+                {"name": "合百集团", "code": "000417", "sector": "待补充板块", "score": 80, "reason": "间接投资长鑫科技+合肥国资+区域零售"},
+                {"name": "弘信电子", "code": "300657", "sector": "未归类", "score": 78, "reason": "Token工厂+昇腾集群+算力租赁"},
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-18",
+            normalize_stock_code=lambda code: str(code or "").replace(".SZ", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda evaluated_stocks, *args, **kwargs: evaluated_stocks[:2],
+        )
+
+        sectors = {item["code"]: item["sector"] for item in result["extreme_conviction_list"]}
+        self.assertEqual(sectors["000417"], "国产芯片")
+        self.assertEqual(sectors["300657"], "算力")
+
 
 if __name__ == "__main__":
     unittest.main()

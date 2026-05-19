@@ -3,6 +3,26 @@ __all__ = [
     "build_step2_candidate_bundle",
 ]
 
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "待补充板块",
+    "待补充",
+    "其他",
+    "其它",
+    "-",
+}
+
 
 def _append_log(logs, step, status, message, **details):
     logs.append(
@@ -14,6 +34,11 @@ def _append_log(logs, step, status, message, **details):
             "details": details,
         }
     )
+
+
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
 
 
 def _build_code_map(items, normalize_stock_code, code_keys):
@@ -39,16 +64,115 @@ def _build_code_map(items, normalize_stock_code, code_keys):
     return mapped
 
 
+def _related_plate_names(related_plates):
+    names = []
+    for plate in related_plates or []:
+        if not isinstance(plate, dict):
+            continue
+        name = str(plate.get("plate_name") or plate.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _first_valid_text(values):
+    for value in values or []:
+        if _is_valid_sector_label(value):
+            return str(value).strip()
+    return ""
+
+
+def _infer_sector_from_reason(text):
+    text = str(text or "")
+    if "长鑫" in text or "国产芯片" in text:
+        return "国产芯片"
+    keyword_groups = [
+        ("半导体", ("长鑫", "存储", "芯片", "光刻", "晶圆", "半导体")),
+        ("算力", ("Token工厂", "昇腾", "算力", "服务器", "数据中心", "液冷")),
+        ("机器人", ("机器人", "减速器", "智能体", "机器视觉")),
+        ("商业航天", ("商业航天", "卫星", "航天", "火箭")),
+        ("低空经济", ("低空", "无人机", "eVTOL")),
+        ("家用电器", ("小家电", "家用电器", "空调")),
+        ("消费电子", ("MiniLED", "车载背光", "VR背光", "背光显示", "消费电子", "无线耳机", "苹果产业链")),
+        ("食品饮料", ("葡萄酒", "白兰地", "保健酒", "食品", "饮料")),
+        ("天然气", ("天然气", "页岩气", "燃气")),
+        ("股权转让", ("股权转让", "资产重组", "并购重组", "控制权")),
+    ]
+    for sector, markers in keyword_groups:
+        if any(marker in text for marker in markers):
+            return sector
+    return ""
+
+
+def _first_valid_stock_plate(item):
+    return _first_valid_text(
+        list(item.get("xuangubao_related_plate_names") or [])
+        + list(item.get("concepts") or [])
+        + list(item.get("plates") or [])
+        + list(item.get("related_plates") or [])
+        + [
+            _infer_sector_from_reason(
+                " / ".join(
+                    str(item.get(key) or "")
+                    for key in ("reason", "涨停统计", "xuangubao_stock_reason", "abnormal_summary", "volume_summary")
+                )
+            ),
+            item.get("industry"),
+            item.get("所属行业"),
+            item.get("sector_name"),
+        ]
+    )
+
+
 def _enrich_candidate_item(item, code, stock_info_map, volume_anomaly_map):
     stock_info = stock_info_map.get(code, {}) or {}
     for key in ("open", "high", "low", "close", "price", "yclose", "change_pct"):
         if key in stock_info and item.get(key) in (None, ""):
             item[key] = stock_info.get(key)
+    for source_key, target_key in (("industry", "industry"), ("所属行业", "所属行业"), ("sector_name", "sector_name")):
+        if stock_info.get(source_key) and item.get(target_key) in (None, ""):
+            item[target_key] = stock_info.get(source_key)
 
     volume_anomaly = volume_anomaly_map.get(code, {}) or {}
     reason = volume_anomaly.get("reason")
     if reason and not item.get("volume_summary"):
         item["volume_summary"] = reason
+
+
+def _enrich_candidate_with_xuangubao_reason(item, code, xuangubao_reason_map):
+    reason = xuangubao_reason_map.get(code, {}) or {}
+    if not reason:
+        return
+    related_plates = reason.get("related_plates", []) or []
+    item["xuangubao_stock_reason"] = reason.get("stock_reason", "")
+    item["xuangubao_related_plates"] = related_plates
+    item["xuangubao_related_plate_names"] = _related_plate_names(related_plates)
+    item["xuangubao_limit_up_days"] = reason.get("limit_up_days", 0)
+
+
+def _enrich_candidate_with_stock_risk(item, code, stock_risk_map):
+    risk = (stock_risk_map or {}).get(code, {}) or {}
+    if not risk:
+        return
+    item["stock_risk"] = risk
+    risk_flags = risk.get("risk_flags") or []
+    if risk_flags:
+        item["news_risk_flags"] = list(dict.fromkeys(list(item.get("news_risk_flags") or []) + list(risk_flags)))
+    risk_summary = str(risk.get("risk_summary") or "").strip()
+    if risk_summary and not item.get("news_risk_summary"):
+        item["news_risk_summary"] = risk_summary
+    risk_events = list(risk.get("risk_events") or [])
+    if risk_events:
+        item["risk_events"] = list(item.get("risk_events") or []) + risk_events
+
+
+def _normalize_candidate_sector(item):
+    sector = str(item.get("sector") or "").strip()
+    if _is_valid_sector_label(sector):
+        return
+    replacement = _first_valid_stock_plate(item)
+    if replacement:
+        item["sector"] = replacement
 
 
 def build_candidate_bundle_contract(
@@ -74,16 +198,30 @@ def build_candidate_bundle_contract(
     logs = []
     stock_info_map = _build_code_map(data.get("stock_full_info", {}), normalize_stock_code, ("code", "代码", "stock_code"))
     volume_anomaly_map = _build_code_map(data.get("volume_anomalies", []), normalize_stock_code, ("stock_code", "code", "代码"))
+    stock_risk_map = _build_code_map(data.get("stock_risk_map", {}), normalize_stock_code, ("code", "stock_code", "ts_code", "代码"))
+    xuangubao_reason_map = _build_code_map(
+        (data.get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []),
+        normalize_stock_code,
+        ("symbol", "code", "stock_code"),
+    )
 
     lianban_data = data.get("lianban_data", {})
     lb_stocks_map = {}
-    if lianban_data and "stocks" in lianban_data:
-        for lb_stock in lianban_data["stocks"]:
+    if isinstance(lianban_data, dict) and "stocks" in lianban_data:
+        lianban_stocks = lianban_data["stocks"]
+    elif isinstance(lianban_data, list):
+        lianban_stocks = lianban_data
+    else:
+        lianban_stocks = []
+    for lb_stock in lianban_stocks:
+        if isinstance(lb_stock, dict):
             code = normalize_stock_code(lb_stock.get("code", ""))
             lb_stocks_map[code] = {
-                "连板数": lb_stock.get("连板数", 1),
+                "连板数": lb_stock.get("连板数", lb_stock.get("lianban_days", 0)),
                 "昨日涨停价": lb_stock.get("昨日涨停价", 0),
-                "涨停原因": lb_stock.get("涨停原因", ""),
+                "涨停原因": lb_stock.get("涨停原因", lb_stock.get("reason", "")),
+                "sector": lb_stock.get("sector") or lb_stock.get("所属行业") or "",
+                "plates": list(lb_stock.get("plates") or []),
             }
 
     evaluated_stocks = []
@@ -92,11 +230,21 @@ def build_candidate_bundle_contract(
         code = item.get("code", "")
         normalized_code = normalize_stock_code(code)
         _enrich_candidate_item(item, normalized_code, stock_info_map, volume_anomaly_map)
+        _enrich_candidate_with_xuangubao_reason(item, normalized_code, xuangubao_reason_map)
+        _enrich_candidate_with_stock_risk(item, normalized_code, stock_risk_map)
+        _normalize_candidate_sector(item)
         base_score = item.get("score", 0)
         abnormal_item = abnormal_watch_map.get(code, {}) or abnormal_watch_map.get(normalized_code, {})
         abnormal_bonus, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
         lb_info = lb_stocks_map.get(code, {})
-        lb_count = lb_info.get("连板数", 1)
+        if item.get("reason") in (None, "") and lb_info.get("涨停原因"):
+            item["reason"] = lb_info.get("涨停原因")
+        if lb_info.get("sector") and item.get("sector") in (None, ""):
+            item["sector"] = lb_info.get("sector")
+        if lb_info.get("plates") and not item.get("plates"):
+            item["plates"] = lb_info.get("plates")
+        _normalize_candidate_sector(item)
+        lb_count = lb_info.get("连板数", 0)
         tomorrow_strength = base_score
 
         if lb_count >= 3:
@@ -128,7 +276,7 @@ def build_candidate_bundle_contract(
 
         if abnormal_item:
             if abnormal_item.get("follow_state") == "跌不下去":
-                tmr_forecast = f"{tmr_forecast}；异动后承接强，优先等60分钟确认"
+                tmr_forecast = f"{tmr_forecast}；异动后承接强，优先看竞价表态、开盘承接和结构确认"
             elif abnormal_item.get("follow_state") == "缩量消化":
                 tmr_forecast = f"{tmr_forecast}；异动后缩量消化，可继续跟"
             elif abnormal_item.get("follow_state") == "已经转弱":

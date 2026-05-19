@@ -15,6 +15,7 @@ DEFAULT_INPUT_REQUEST_KEYS = (
     "sector_fund_flow",
     "lhb_snapshot",
     "new_stock_calendar",
+    "stock_risk_map",
 )
 
 _HELPER_NAME_BY_REQUEST_KEY = {
@@ -29,6 +30,7 @@ _HELPER_NAME_BY_REQUEST_KEY = {
     "sector_fund_flow": "get_sector_fund_flow_from_tushare_first",
     "lhb_snapshot": "get_lhb_snapshot_from_tushare_first",
     "new_stock_calendar": "get_new_stock_calendar_from_tushare_first",
+    "stock_risk_map": "get_stock_risk_map_from_tushare_first",
 }
 
 _FALLBACK_KWARG_BY_REQUEST_KEY = {

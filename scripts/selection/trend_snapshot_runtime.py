@@ -119,6 +119,53 @@ def _text_contains_any(text, markers):
     return any(marker in str(text or "") for marker in markers)
 
 
+_BLOCKING_RISK_FLAGS = {
+    "st",
+    "st_warning",
+    "stock_st",
+    "delist_risk",
+    "delisting_risk",
+    "holder_reduce",
+    "holder_reduce_announcement",
+    "reduction_plan",
+    "risk_warning",
+    "other_risk_warning",
+    "abnormal_volatility",
+    "regulatory_investigation",
+}
+
+
+def _iter_risk_values(value):
+    if value in (None, ""):
+        return
+    if isinstance(value, dict):
+        for key in (
+            "risk_flags",
+            "risk_summary",
+            "source_endpoints",
+            "risk_events",
+            "events",
+            "announcement_risks",
+            "title",
+            "risk_type",
+            "st_reason",
+            "st_explain",
+            "trade_type",
+            "reason",
+            "summary",
+        ):
+            if key in value:
+                yield from _iter_risk_values(value.get(key))
+        return
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_risk_values(item)
+        return
+    text = str(value).strip()
+    if text:
+        yield text
+
+
 def _negative_news_text(stock):
     stock = stock or {}
     parts = []
@@ -127,21 +174,41 @@ def _negative_news_text(stock):
         "news_risk_summary",
         "risk_summary",
         "announcement_risk",
+        "stock_risk",
+        "risk_events",
+        "announcement_risks",
+        "tushare_risk_summary",
+        "st_reason",
+        "st_explain",
+        "stk_shock_reason",
         "监管风险",
         "负面消息",
     ):
         value = stock.get(key)
         if value not in (None, ""):
-            parts.append(str(value))
-    flags = stock.get("news_risk_flags") or stock.get("negative_news_flags") or []
-    if isinstance(flags, (list, tuple, set)):
-        parts.extend(str(item) for item in flags if str(item).strip())
-    elif flags not in (None, ""):
-        parts.append(str(flags))
+            parts.extend(_iter_risk_values(value))
+    for flag_key in ("news_risk_flags", "negative_news_flags", "risk_flags"):
+        flags = stock.get(flag_key) or []
+        parts.extend(_iter_risk_values(flags))
     return " / ".join(parts)
 
 
+def _has_blocking_risk_flag(stock):
+    stock = stock or {}
+    flags = []
+    for flag_key in ("news_risk_flags", "negative_news_flags", "risk_flags"):
+        flags.extend(_iter_risk_values(stock.get(flag_key) or []))
+    flags.extend(_iter_risk_values((stock.get("stock_risk") or {}).get("risk_flags") if isinstance(stock.get("stock_risk"), dict) else []))
+    normalized = {str(flag or "").strip().lower() for flag in flags if str(flag or "").strip()}
+    return bool(normalized & _BLOCKING_RISK_FLAGS)
+
+
 def _has_blocking_negative_news(stock):
+    if _has_blocking_risk_flag(stock):
+        return True
+    name = str((stock or {}).get("name") or (stock or {}).get("名称") or "").upper()
+    if name.startswith("*ST") or name.startswith("ST") or "退" in name:
+        return True
     text = _negative_news_text(stock)
     return _text_contains_any(
         text,
@@ -155,8 +222,18 @@ def _has_blocking_negative_news(stock):
             "实际控制人被抓",
             "刑事",
             "退市风险",
+            "实施其他风险警示",
+            "其他风险警示",
+            "风险警示",
             "重大违法",
             "ST风险",
+            "减持",
+            "拟减持",
+            "被动减持",
+            "集中竞价减持",
+            "大宗交易减持",
+            "异常波动",
+            "风险提示公告",
         ),
     )
 

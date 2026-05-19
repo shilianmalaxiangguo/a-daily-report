@@ -6,10 +6,15 @@ import json
 from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_service import fetch_daily_price_bars
 from market_data.tushare_market_activity_service import (
+    fetch_tushare_announcement_rows,
+    fetch_tushare_holdertrade_rows,
     fetch_tushare_limit_rows,
     fetch_tushare_new_share,
     fetch_tushare_open_trade_dates,
     fetch_tushare_sector_flow,
+    fetch_tushare_shock_rows,
+    fetch_tushare_st_rows,
+    fetch_tushare_stock_st_rows,
     fetch_tushare_ths_daily,
     fetch_tushare_ths_hot,
     fetch_tushare_ths_index_map,
@@ -34,6 +39,7 @@ __all__ = [
     "get_sector_fund_flow_from_tushare_first",
     "get_lhb_snapshot_from_tushare_first",
     "get_new_stock_calendar_from_tushare_first",
+    "get_stock_risk_map_from_tushare_first",
 ]
 
 
@@ -328,6 +334,178 @@ def _lookup_by_code(mapping, row, default=""):
     if value in (None, ""):
         value = (mapping or {}).get(ts_code)
     return str(value or default).strip()
+
+
+def _append_stock_risk_event(risk_map, code, *, flag, title, source, event=None, summary_parts=None):
+    code = _clean_code(code)
+    if not code:
+        return
+    bucket = risk_map.setdefault(
+        code,
+        {
+            "code": code,
+            "risk_flags": [],
+            "risk_events": [],
+            "source_endpoints": [],
+            "risk_summary": "",
+        },
+    )
+    if flag and flag not in bucket["risk_flags"]:
+        bucket["risk_flags"].append(flag)
+    if source and source not in bucket["source_endpoints"]:
+        bucket["source_endpoints"].append(source)
+    event_payload = {
+        "risk_type": flag,
+        "title": _clean_text(title),
+        "source": source,
+    }
+    if isinstance(event, dict):
+        for key in ("ann_date", "pub_date", "imp_date", "trade_date", "url", "holder_name", "change_ratio", "reason"):
+            value = event.get(key)
+            if value not in (None, ""):
+                event_payload[key] = value
+    if event_payload["title"] and event_payload not in bucket["risk_events"]:
+        bucket["risk_events"].append(event_payload)
+    parts = list(summary_parts or [])
+    if event_payload["title"]:
+        parts.append(event_payload["title"])
+    existing = [part.strip() for part in str(bucket.get("risk_summary") or "").split("；") if part.strip()]
+    for part in parts:
+        text = _clean_text(part)
+        if text and text not in existing:
+            existing.append(text)
+    bucket["risk_summary"] = "；".join(existing)
+
+
+def _announcement_risk_type(title):
+    text = str(title or "")
+    if any(marker in text for marker in ("退市风险警示", "其他风险警示", "实施风险警示", "ST")):
+        return "risk_warning"
+    if "减持" in text:
+        return "holder_reduce_announcement"
+    if any(marker in text for marker in ("异常波动", "风险提示公告", "股票交易异常")):
+        return "abnormal_volatility"
+    if any(marker in text for marker in ("立案", "监管函", "问询函", "处罚", "重大违法")):
+        return "regulatory_investigation"
+    return ""
+
+
+def _date_distance_days(date_value, target_date):
+    parsed_date = _parse_date(date_value)
+    parsed_target = _parse_date(target_date)
+    if not parsed_date or not parsed_target:
+        return None
+    return abs((parsed_target - parsed_date).days)
+
+
+def _is_recent_st_row(row, target_date, *, max_days=30):
+    for key in ("imp_date", "pub_date", "trade_date"):
+        distance = _date_distance_days((row or {}).get(key), target_date)
+        if distance is not None and distance <= max_days:
+            return True
+    return False
+
+
+def get_stock_risk_map_from_tushare_first(
+    target_date=None,
+    *,
+    fetch_tushare_st_rows_fn=None,
+    fetch_tushare_stock_st_rows_fn=None,
+    fetch_tushare_holdertrade_rows_fn=None,
+    fetch_tushare_announcement_rows_fn=None,
+    fetch_tushare_shock_rows_fn=None,
+):
+    risk_map = {}
+
+    st_fetcher = fetch_tushare_st_rows_fn or fetch_tushare_st_rows
+    stock_st_fetcher = fetch_tushare_stock_st_rows_fn or fetch_tushare_stock_st_rows
+    holder_fetcher = fetch_tushare_holdertrade_rows_fn or fetch_tushare_holdertrade_rows
+    announcement_fetcher = fetch_tushare_announcement_rows_fn or fetch_tushare_announcement_rows
+    shock_fetcher = fetch_tushare_shock_rows_fn or fetch_tushare_shock_rows
+
+    try:
+        for row in st_fetcher(target_date) or []:
+            if not _is_recent_st_row(row, target_date):
+                continue
+            title = _clean_text(_pick(row, "st_reason", "st_explain", default="实施其他风险警示"))
+            _append_stock_risk_event(
+                risk_map,
+                _pick(row, "ts_code", "code", default=""),
+                flag="st_warning",
+                title=title or "实施其他风险警示",
+                source="tushare.st",
+                event=row,
+                summary_parts=[_pick(row, "st_reason", default=""), _pick(row, "st_explain", default="")],
+            )
+    except Exception:
+        pass
+
+    try:
+        for row in stock_st_fetcher(target_date) or []:
+            _append_stock_risk_event(
+                risk_map,
+                _pick(row, "ts_code", "code", default=""),
+                flag="stock_st",
+                title="交易日ST名单",
+                source="tushare.stock_st",
+                event=row,
+                summary_parts=["交易日ST名单"],
+            )
+    except Exception:
+        pass
+
+    try:
+        for row in holder_fetcher(target_date) or []:
+            trade_type = str(_pick(row, "trade_type", "in_de", default="")).strip().upper()
+            title = f"{_clean_text(_pick(row, 'holder_name', default='股东'))}减持"
+            if trade_type and trade_type != "DE" and "减" not in trade_type:
+                continue
+            _append_stock_risk_event(
+                risk_map,
+                _pick(row, "ts_code", "code", default=""),
+                flag="holder_reduce",
+                title=title,
+                source="tushare.stk_holdertrade",
+                event=row,
+                summary_parts=[title],
+            )
+    except Exception:
+        pass
+
+    try:
+        for row in announcement_fetcher(target_date) or []:
+            title = _clean_text(_pick(row, "title", default=""))
+            risk_type = _announcement_risk_type(title)
+            if not risk_type:
+                continue
+            _append_stock_risk_event(
+                risk_map,
+                _pick(row, "ts_code", "code", default=""),
+                flag=risk_type,
+                title=title,
+                source="tushare.anns_d",
+                event=row,
+                summary_parts=[title],
+            )
+    except Exception:
+        pass
+
+    try:
+        for row in shock_fetcher(target_date) or []:
+            title = _clean_text(_pick(row, "type", "reason", default="股票交易异常波动"))
+            _append_stock_risk_event(
+                risk_map,
+                _pick(row, "ts_code", "code", default=""),
+                flag="abnormal_volatility",
+                title=title or "股票交易异常波动",
+                source="tushare.stk_shock",
+                event=row,
+                summary_parts=[title, _pick(row, "reason", default="")],
+            )
+    except Exception:
+        pass
+
+    return risk_map
 
 
 def get_turnover_rank_from_tushare_first(

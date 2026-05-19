@@ -16,6 +16,7 @@ from input.tushare_runtime import (
     get_sector_hot_plates_from_tushare_first,
     get_stock_hot_rank_from_tushare_first,
     get_new_stock_calendar_from_tushare_first,
+    get_stock_risk_map_from_tushare_first,
     get_total_turnover_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
@@ -39,6 +40,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_sector_fund_flow_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_sector_flow") or {},
             "get_lhb_snapshot_from_tushare_first": lambda *, target_date: calls.append("tushare_lhb") or {},
             "get_new_stock_calendar_from_tushare_first": lambda *, target_date: calls.append("tushare_new_share") or [],
+            "get_stock_risk_map_from_tushare_first": lambda *, target_date: calls.append("tushare_stock_risk") or {},
             "get_total_turnover_from_iwencai": lambda *, target_date: calls.append("legacy_total") or 0.0,
             "get_major_indices_from_iwencai": lambda *, target_date: calls.append("legacy_indices") or {},
             "get_wind_a_from_iwencai": lambda *, target_date: calls.append("legacy_wind_a") or {},
@@ -64,6 +66,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         registry["sector_fund_flow"](target_date="2026-05-13", limit=50)
         registry["lhb_snapshot"](target_date="2026-05-13")
         registry["new_stock_calendar"](target_date="2026-05-13")
+        registry["stock_risk_map"](target_date="2026-05-13")
 
         self.assertEqual(
             calls,
@@ -79,8 +82,80 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 "tushare_sector_flow",
                 "tushare_lhb",
                 "tushare_new_share",
+                "tushare_stock_risk",
             ],
         )
+
+    def test_stock_risk_map_normalizes_st_reduction_announcements_and_shock_rows(self):
+        result = get_stock_risk_map_from_tushare_first(
+            "2026-05-18",
+            fetch_tushare_st_rows_fn=lambda trade_date: [
+                {
+                    "ts_code": "000001.SZ",
+                    "name": "风险样本",
+                    "pub_date": "20260517",
+                    "imp_date": "20260518",
+                    "st_reason": "实施其他风险警示",
+                    "st_explain": "公司内部控制被出具否定意见",
+                }
+            ],
+            fetch_tushare_stock_st_rows_fn=lambda trade_date: [
+                {"ts_code": "000001.SZ", "name": "风险样本", "trade_date": "20260518"}
+            ],
+            fetch_tushare_holdertrade_rows_fn=lambda trade_date: [
+                {
+                    "ts_code": "000002.SZ",
+                    "ann_date": "20260518",
+                    "holder_name": "控股股东",
+                    "trade_type": "DE",
+                    "change_ratio": 2.5,
+                }
+            ],
+            fetch_tushare_announcement_rows_fn=lambda trade_date: [
+                {
+                    "ts_code": "000003.SZ",
+                    "ann_date": "20260518",
+                    "title": "关于控股股东减持计划的预披露公告",
+                    "url": "https://example.invalid/reduce.pdf",
+                }
+            ],
+            fetch_tushare_shock_rows_fn=lambda trade_date: [
+                {
+                    "ts_code": "000004.SZ",
+                    "trade_date": "20260518",
+                    "type": "异常波动",
+                    "reason": "连续三个交易日涨幅偏离值累计超过20%",
+                }
+            ],
+        )
+
+        self.assertIn("st_warning", result["000001"]["risk_flags"])
+        self.assertIn("holder_reduce", result["000002"]["risk_flags"])
+        self.assertIn("holder_reduce_announcement", result["000003"]["risk_flags"])
+        self.assertIn("abnormal_volatility", result["000004"]["risk_flags"])
+        self.assertIn("实施其他风险警示", result["000001"]["risk_summary"])
+        self.assertIn("减持", result["000002"]["risk_summary"])
+        self.assertEqual(result["000003"]["risk_events"][0]["url"], "https://example.invalid/reduce.pdf")
+
+    def test_stock_risk_map_ignores_st_history_far_before_target_without_daily_st_membership(self):
+        result = get_stock_risk_map_from_tushare_first(
+            "2026-05-18",
+            fetch_tushare_st_rows_fn=lambda trade_date: [
+                {
+                    "ts_code": "000005.SZ",
+                    "name": "旧风险样本",
+                    "pub_date": "20200101",
+                    "imp_date": "20200102",
+                    "st_reason": "历史其他风险警示",
+                }
+            ],
+            fetch_tushare_stock_st_rows_fn=lambda trade_date: [],
+            fetch_tushare_holdertrade_rows_fn=lambda trade_date: [],
+            fetch_tushare_announcement_rows_fn=lambda trade_date: [],
+            fetch_tushare_shock_rows_fn=lambda trade_date: [],
+        )
+
+        self.assertEqual(result, {})
 
     def test_total_turnover_uses_tushare_daily_before_legacy_fallback(self):
         fallback_calls = []

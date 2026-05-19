@@ -401,6 +401,85 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual(datang["conviction_rule"], "修复观察只看09:50-10:10承接确认，未确认不参与")
         self.assertIn("修复观察", datang["conviction_reason"])
 
+    def test_build_conviction_list_blocks_structured_tushare_risk_events(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "000001",
+                    "name": "ST风险样本",
+                    "sector": "机器人",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                    "stock_risk": {
+                        "risk_flags": ["st_warning"],
+                        "risk_summary": "实施其他风险警示",
+                        "source_endpoints": ["tushare.st", "tushare.stock_st"],
+                    },
+                },
+                {
+                    "code": "000002",
+                    "name": "减持样本",
+                    "sector": "机器人",
+                    "tomorrow_strength": 98,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                    "risk_events": [
+                        {
+                            "risk_type": "holder_reduce",
+                            "title": "控股股东拟减持不超过3%公司股份",
+                            "source": "tushare.stk_holdertrade",
+                        }
+                    ],
+                },
+                {
+                    "code": "000003",
+                    "name": "异常波动样本",
+                    "sector": "机器人",
+                    "tomorrow_strength": 97,
+                    "score": 97,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                    "announcement_risks": [
+                        {
+                            "risk_type": "abnormal_volatility",
+                            "title": "股票交易异常波动暨风险提示公告",
+                            "url": "https://example.invalid/a.pdf",
+                            "source": "tushare.anns_d",
+                        }
+                    ],
+                },
+                {
+                    "code": "000988",
+                    "name": "华工科技",
+                    "sector": "光通信",
+                    "tomorrow_strength": 88,
+                    "score": 88,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            mainline_name="",
+            sector_snapshot=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["000988"])
+
     def test_build_conviction_list_fieldizes_participation_window_policy(self):
         fast = build_extreme_conviction_list(
             evaluated_stocks=[

@@ -301,6 +301,42 @@ def _run_input_runtime_legacy_body(target_date=None):
         module_logs.extend(new_stock_calendar_result.get("module_logs", []))
 
         try:
+            stock_risk_map = request_registry["stock_risk_map"](target_date=target_date)
+            results["stock_risk_map"] = stock_risk_map or {}
+            data_status["个股风险公告"] = True
+            step_status["个股风险公告获取"] = True
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.stock_risk_map",
+                    "status": "success",
+                    "message": "已获取个股ST/减持/公告风险索引",
+                    "details": {
+                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock",
+                        "target_keys": ["stock_risk_map"],
+                        "stock_count": len(stock_risk_map or {}),
+                    },
+                }
+            )
+        except Exception as error:
+            results["stock_risk_map"] = {}
+            data_status["个股风险公告"] = False
+            step_status["个股风险公告获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.stock_risk_map",
+                    "status": "degraded",
+                    "message": "个股ST/减持/公告风险索引获取失败",
+                    "details": {
+                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock",
+                        "target_keys": ["stock_risk_map"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
             new_stock_research_result = build_new_stock_research_pool(
                 results.get("new_stock_calendar", []),
                 target_date=target_date,

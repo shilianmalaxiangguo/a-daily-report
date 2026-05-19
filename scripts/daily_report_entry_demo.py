@@ -339,6 +339,7 @@ from input.tushare_runtime import (
     get_sector_fund_flow_from_tushare_first,
     get_sector_hot_plates_from_tushare_first,
     get_stock_hot_rank_from_tushare_first,
+    get_stock_risk_map_from_tushare_first,
     get_total_turnover_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,

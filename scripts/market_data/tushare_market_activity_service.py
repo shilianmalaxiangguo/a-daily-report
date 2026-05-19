@@ -4,10 +4,15 @@ from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_client import create_tushare_pro_api
 
 __all__ = [
+    "fetch_tushare_announcement_rows",
+    "fetch_tushare_holdertrade_rows",
     "fetch_tushare_limit_rows",
     "fetch_tushare_new_share",
     "fetch_tushare_open_trade_dates",
     "fetch_tushare_sector_flow",
+    "fetch_tushare_shock_rows",
+    "fetch_tushare_st_rows",
+    "fetch_tushare_stock_st_rows",
     "fetch_tushare_ths_daily",
     "fetch_tushare_ths_hot",
     "fetch_tushare_ths_index_map",
@@ -105,6 +110,51 @@ def fetch_tushare_top_list(trade_date, *, pro=None, ts_module=None):
         "l_sell,l_buy,l_amount,net_amount,net_rate,amount_rate,float_values,reason"
     )
     return _frame_to_records(pro.top_list(trade_date=compact, fields=fields))
+
+
+def fetch_tushare_st_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,name,pub_date,imp_date,st_reason,st_explain"
+    return _frame_to_records(pro.st(fields=fields))
+
+
+def fetch_tushare_stock_st_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,name,trade_date"
+    return _frame_to_records(pro.stock_st(trade_date=compact, fields=fields))
+
+
+def fetch_tushare_holdertrade_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,ann_date,holder_name,holder_type,in_de,change_vol,change_ratio,after_share,after_ratio,avg_price,total_share,begin_date,close_date"
+    return _frame_to_records(pro.stk_holdertrade(ann_date=compact, fields=fields))
+
+
+def fetch_tushare_announcement_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,ann_date,title,url"
+    return _frame_to_records(pro.anns_d(ann_date=compact, fields=fields))
+
+
+def fetch_tushare_shock_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,trade_date,type,reason"
+    return _frame_to_records(pro.stk_shock(trade_date=compact, fields=fields))
 
 
 def fetch_tushare_new_share(start_date, end_date, *, pro=None, ts_module=None):
