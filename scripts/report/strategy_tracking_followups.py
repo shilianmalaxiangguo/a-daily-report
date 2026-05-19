@@ -135,12 +135,12 @@ def _build_recent_target_followup_item(record, as_of_date):
         current_position = f'收于{latest_close:.2f}，已重新站上{contract_reset_breakout_price:.2f}再突破位'
         trigger_ref = contract_trigger_price if contract_trigger_price is not None else confirm_price
         if trigger_ref is not None and contract_void_price is not None:
-            focus_text = f'未来1-3天重点看{contract_void_price:.2f}不能破，并继续站稳{trigger_ref:.2f}之上；当前已重新站上{contract_reset_breakout_price:.2f}再突破位，确认稳住后才考虑30%条件试错'
+            focus_text = f'未来1-3天重点看{contract_void_price:.2f}不能破，并继续站稳{trigger_ref:.2f}之上；当前已重新站上{contract_reset_breakout_price:.2f}再突破位，确认稳住并形成参与窗口后才考虑50%标准进攻'
             timeline_text = f'预启动观察后价格一直没失守{contract_void_price:.2f}，到今天已重新站上{contract_reset_breakout_price:.2f}再突破位。'
         else:
             focus_text = '未来1-3天重点看再突破后能否继续横住，不满足继续只观察。'
             timeline_text = f'预启动观察后价格到今天已重新站上{contract_reset_breakout_price:.2f}再突破位。'
-        review_hint = f'这说明创业板20cm预启动合同仍在{contract_window_days or 5}日窗口内，后续重点看它会不会从观察权升级到30%条件试错。'
+        review_hint = f'这说明创业板20cm预启动合同仍在{contract_window_days or 5}日窗口内，后续重点看它会不会从观察权升级到50%标准进攻预演。'
     elif attribution_label == '个股对了但环境条件未满足':
         path_label = '个股先走出来了'
         if confirm_price is not None:
@@ -411,7 +411,7 @@ def _build_gem_horizontal_compare_cards_legacy_body(gem_cycle_cards=None, review
 
     def _pick_reference(latest_status_label=''):
         latest_status_label = str(latest_status_label or '').strip()
-        if latest_status_label in ('再突破成功但升级偏慢', '已升级到30%条件试错', '已走成再突破'):
+        if latest_status_label in ('再突破成功但升级偏慢', '已升级到标准进攻预演', '已升级到50%标准进攻预演', '已走成再突破'):
             preferred = ('已走成 act right', '个股先走出来了')
         elif latest_status_label in ('仍在观察窗口', '已触发右侧确认'):
             preferred = ('先强后回，进入二次确认', '还在等待确认', '日内确认相对干净', '仍在观察周期')
@@ -431,10 +431,10 @@ def _build_gem_horizontal_compare_cards_legacy_body(gem_cycle_cards=None, review
         if not reference:
             continue
 
-        if latest_status_label in ('再突破成功但升级偏慢', '已升级到30%条件试错', '已走成再突破'):
+        if latest_status_label in ('再突破成功但升级偏慢', '已升级到标准进攻预演', '已升级到50%标准进攻预演', '已走成再突破'):
             same_point = '两者都属于价格上先证明自己的样本，都是市场先替判断作证。'
             key_difference = '区别是20cm弹性和波动都更大，不能直接按10cm唯一动作给50%，必须先过右侧确认、void、reset这条合同链。'
-            system_translation = '系统里要先核对void/trigger/reset三价，再决定是否只给30%条件试错，不能把20cm再突破直接翻译成10cm唯一执行。'
+            system_translation = '系统里要先核对void/trigger/reset三价，再决定是否进入50%标准进攻预演；参与窗口不成立就保持0%观察，不能把20cm再突破直接翻译成10cm唯一执行。'
         elif latest_status_label in ('仍在观察窗口', '已触发右侧确认'):
             same_point = '两者都还停在“有观察资格、没买入资格”的阶段，本质都还没走成唯一动作。'
             key_difference = '区别是20cm多了一层呼吸感合同窗口；窗口过期或失守void，就要比10cm更快降权。'

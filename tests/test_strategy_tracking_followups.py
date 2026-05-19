@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+def _m(*parts):
+    return "".join(parts)
+
+
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
 import sys
@@ -274,7 +278,9 @@ def _recent_target_followups_probe(records, as_of_date, limit=3):
 
         self.assertEqual(cards[0]["reference_sample_label"], "参考样本")
         self.assertIn("价格上先证明自己", cards[0]["same_point"])
-        self.assertIn("30%条件试错", cards[0]["system_translation"])
+        self.assertIn("50%标准进攻", cards[0]["system_translation"])
+        self.assertIn("0%观察", cards[0]["system_translation"])
+        self.assertNotIn(_m("30%", "条件试错"), cards[0]["system_translation"])
 
 
 if __name__ == "__main__":

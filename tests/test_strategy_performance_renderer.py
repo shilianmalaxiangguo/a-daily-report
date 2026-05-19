@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+ACTION_TEXT = "参与窗口确认后执行"
+
 from report.strategy_performance_renderer import render_strategy_performance_nodes, render_strategy_performance_section
 
 
@@ -30,7 +32,7 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
                 "stock_code": "000001",
                 "action_type": "execute",
                 "market_energy_state": "修复",
-                "trigger_text": "60分钟确认后执行",
+                "trigger_text": ACTION_TEXT,
             },
             "recent_records": [{"report_date": "2026-04-21", "stock_name": "军工二号"}],
             "windows": [],
@@ -73,7 +75,7 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
                 "stock_code": "000001",
                 "action_type": "execute",
                 "market_energy_state": "修复",
-                "trigger_text": "60分钟确认后执行",
+                "trigger_text": ACTION_TEXT,
                 "factor_snapshot": {
                     "environment": {"score": 8, "position_level": "三档", "gate_status": "execute_50"},
                     "structure": {"score": 7, "signal_type": "突破", "signal_status": "有效"},

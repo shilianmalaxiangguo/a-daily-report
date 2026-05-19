@@ -217,7 +217,7 @@ def _build_strategy_factor_snapshot_legacy_body(
     if selection_target_position == 50 and best_stock:
         selection_anchor_type = '明天唯一能买的那只'
     elif selection_target_position == 30 and selected_candidate:
-        selection_anchor_type = '30%条件试错仓'
+        selection_anchor_type = '50%标准进攻预演'
     else:
         selection_anchor_type = context.get('watch_anchor_type', '')
 
@@ -304,7 +304,7 @@ def _build_strategy_factor_snapshot_legacy_body(
                 _snapshot_candidate_brief({
                     **(item or {}),
                     'action_type': 'execute',
-                    'participation_mode': str(position_decision.get('participation_mode', '') or 'conditional_30').strip(),
+                    'participation_mode': str(position_decision.get('participation_mode', '') or 'attack_50_ready').strip(),
                     'position_pct': max(int(_safe_float((item or {}).get('position_pct', 0))), selection_target_position),
                 })
                 for item in (context.get('scored_executable_stocks', []) or [])[:3]
@@ -358,7 +358,7 @@ def _build_strategy_plan_context_legacy_body(
     elif target_position_pct == 30 and (best_stock or watch_anchor):
         action_type = 'execute'
         plan_stock = best_stock or watch_anchor
-        anchor_type = '30%条件试错仓'
+        anchor_type = '50%标准进攻预演'
     elif best_stock:
         action_type = 'watch_only'
         plan_stock = best_stock
@@ -433,9 +433,9 @@ def _build_strategy_plan_context_legacy_body(
         confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
         if target_position_pct == 30:
             if confirm_price:
-                trigger_text = f"30%条件试错：首个60分钟站上{confirm_price:.2f}后再执行"
+                trigger_text = f"50%标准进攻预演：首个60分钟站上{confirm_price:.2f}并形成参与窗口后再执行"
             else:
-                trigger_text = "30%条件试错：先完成60分钟确认后再执行"
+                trigger_text = "50%标准进攻预演：先命中参与窗口分层确认后再执行，普通结构才等60分钟确认"
         elif confirm_price:
             trigger_text = f"首个60分钟站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
         elif entry_low is not None and entry_high is not None:
