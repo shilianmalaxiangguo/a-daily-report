@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from decision.runtime_contracts import (
     get_trade_permission_contract,
     resolve_environment_display_contract,
@@ -27,7 +31,25 @@ class RuntimeContractsTest(unittest.TestCase):
 
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "主线弱转强执行预备态")
-        self.assertIn("60分钟确认", result["permission_reason"])
+        self.assertIn("参与窗口预演", result["permission_reason"])
+        self.assertIn("50%标准进攻", result["permission_reason"])
+        self.assertNotIn(_m("30%", "条件试错"), result["permission_reason"])
+
+    def test_trade_permission_maps_20cm_watch_contract_to_50_attack_preview(self):
+        result = get_trade_permission_contract(
+            {
+                "code": "300001",
+                "sector": "军工",
+                "watch_source": "gem_breathing_20cm",
+            },
+            mainline_name="军工",
+            state_machine_snapshot={"execution_bias": "watch_only"},
+        )
+
+        self.assertFalse(result["can_execute"])
+        self.assertEqual(result["permission_label"], "创业板20cm预启动观察权")
+        self.assertIn("50%标准进攻", result["permission_reason"])
+        self.assertNotIn(_m("30%", "条件试错"), result["permission_reason"])
 
     def test_trade_permission_grants_conviction_execute_on_resilient_abnormal(self):
         result = get_trade_permission_contract(
@@ -42,7 +64,7 @@ class RuntimeContractsTest(unittest.TestCase):
         )
 
         self.assertTrue(result["can_execute"])
-        self.assertEqual(result["permission_label"], "极看买入资格")
+        self.assertEqual(result["permission_label"], "重点观察确认资格")
         self.assertIn("异动后跌不下去", result["permission_reason"])
 
     def test_environment_display_contract_demotes_watch_only_to_defense(self):

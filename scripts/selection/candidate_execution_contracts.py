@@ -129,12 +129,15 @@ __all__ = [
     "STRATEGY_HOLDING_DAYS_MAX",
     "STRATEGY_HOLDING_DAYS_MIN",
     "build_candidate_exit_rules",
+    "build_entry_timing_policy",
     "build_gem_textbook_front_text",
     "build_gem_textbook_next_step_text",
     "build_gem_textbook_reference_text",
+    "build_limit_up_inertia_profile",
     "build_participation_window_from_candidate",
     "build_participation_window_policy",
     "build_philosophy_constraint_text",
+    "build_risk_reward_plan",
     "build_weak_to_strong_context",
     "candidate_has_formal_abnormal_setup",
     "candidate_is_resilient_abnormal",
@@ -163,6 +166,129 @@ def _round_or_none(value, digits=2):
         return round(float(value), digits)
     except (TypeError, ValueError):
         return None
+
+
+def _first_number(candidate, *keys, default=None):
+    candidate = candidate or {}
+    for key in keys:
+        value = candidate.get(key)
+        if value not in (None, ""):
+            return _safe_float(value, default if default is not None else 0.0)
+    return default
+
+
+def build_limit_up_inertia_profile(candidate=None):
+    candidate = candidate or {}
+    pattern = str(candidate.get("pattern", "") or "")
+    reason_text = " / ".join(
+        str(candidate.get(key, "") or "")
+        for key in (
+            "conviction_reason",
+            "reason",
+            "conviction_rule",
+            "core_level",
+            "stock_setup",
+        )
+    )
+    combined = f"{pattern} / {reason_text}"
+    lianban = int(_safe_float(candidate.get("连板数", candidate.get("lianban", 0)), 0))
+    change_pct = _first_number(candidate, "change_pct", "change", "pct_chg", "涨跌幅", default=0.0)
+    tomorrow_strength = _first_number(candidate, "tomorrow_strength", "score", default=0.0)
+    is_limit_shape = any(marker in combined for marker in ("涨停", "T字", "一字", "连板", "打板", "回封"))
+
+    if lianban >= 1 or is_limit_shape or any(marker in combined for marker in ("锚定龙", "龙一", "主线核心", "主线内核")):
+        score = 78 + min(lianban, 4) * 7
+        if "主线" in combined or "锚定龙" in combined or "龙一" in combined:
+            score += 8
+        if tomorrow_strength >= 90:
+            score += 5
+        return {
+            "limit_up_inertia_level": "高惯性",
+            "limit_up_inertia_score": min(score, 100),
+            "next_day_limit_probability_band": "高于普通上涨样本",
+            "limit_up_inertia_reason": "昨日涨停/连板/T字板已经被资金选择，次日冲高或再涨停概率高于普通上涨样本；只在竞价、回封或10点承接成立时参与",
+        }
+
+    if change_pct >= 5 or tomorrow_strength >= 80 or "强实体" in combined:
+        return {
+            "limit_up_inertia_level": "中惯性",
+            "limit_up_inertia_score": 58,
+            "next_day_limit_probability_band": "高于弱上涨样本",
+            "limit_up_inertia_reason": "有强趋势或强实体，但不是昨日涨停惯性，先看09:50-10:10承接再决定",
+        }
+
+    return {
+        "limit_up_inertia_level": "低惯性",
+        "limit_up_inertia_score": 32,
+        "next_day_limit_probability_band": "接近普通上涨样本",
+        "limit_up_inertia_reason": "普通上涨不等同于资金已经选择，不能和昨日涨停/连板样本同权处理",
+    }
+
+
+def build_risk_reward_plan(candidate=None, *, min_ratio=2.0):
+    candidate = candidate or {}
+    entry = _first_number(
+        candidate,
+        "probe_entry_price",
+        "ma_reversion_entry",
+        "ma5",
+        "ma10",
+        "close",
+        default=None,
+    )
+    stop = _first_number(
+        candidate,
+        "stop_price",
+        "ma20",
+        "effective_stop",
+        "stop_loss",
+        default=None,
+    )
+    target = _first_number(
+        candidate,
+        "target_price",
+        "limit_up_price",
+        "previous_high",
+        "recent_high",
+        "high",
+        default=None,
+    )
+
+    base = {
+        "risk_reward_min_ratio": float(min_ratio),
+        "risk_reward_ratio": None,
+        "risk_reward_state": "待计算",
+        "risk_reward_plan": f"默认要求盈亏比不低于{min_ratio:g}:1；缺少买点、作废线或上方空间时，不能把均线回归当买点，只观察等价格事实补齐",
+    }
+    if entry is None or stop is None or target is None or entry <= 0 or stop <= 0 or target <= 0:
+        return base
+
+    downside = entry - stop
+    upside = target - entry
+    if downside <= 0 or upside <= 0:
+        base.update(
+            {
+                "risk_reward_state": "不合格",
+                "risk_reward_ratio": 0.0,
+                "risk_reward_plan": "买点、作废线和上方空间不构成正向盈亏比；只观察，不做均线试错",
+            }
+        )
+        return base
+
+    ratio = round(upside / downside, 2)
+    state = "合格" if ratio >= float(min_ratio) else "不合格"
+    if state == "合格":
+        plan = f"试错前要求盈亏比不低于{min_ratio:g}:1；当前约{ratio}:1，允许在09:50-10:10承接成立后小仓参与"
+    else:
+        plan = f"试错前要求盈亏比不低于{min_ratio:g}:1；当前约{ratio}:1，不满足就只观察，不为低价感补仓"
+    base.update(
+        {
+            "risk_reward_ratio": ratio,
+            "risk_reward_state": state,
+            "risk_reward_plan": plan,
+        }
+    )
+    return base
 
 
 def build_gem_textbook_reference_text(label=""):
@@ -209,9 +335,9 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
         prefix = f"{prefix}；{reference_text}"
 
     if target_position_pct == 30:
-        next_step = f"当前已进入30%条件试错候选，{trigger_text}后才允许试错"
+        next_step = f"当前已进入50%标准进攻预演，{trigger_text}后才允许动手，不满足转为0%观察"
     elif label == "A级教材":
-        next_step = f"当前还差右侧确认和60分钟确认，确认后才评估30%条件试错" if not ready else f"反馈已接近到位，{trigger_text}后可评估30%条件试错"
+        next_step = "当前还差右侧确认和参与窗口分层确认，普通结构才等60分钟确认，确认后才评估50%标准进攻" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%标准进攻"
     elif label == "B级教材":
         next_step = "先保留观察合同，等它走成右侧确认后再考虑升级"
     elif label == "C级观察样本":
@@ -434,7 +560,48 @@ def map_setup_id_to_signal_type(setup_id=""):
     return ""
 
 
-def build_participation_window_policy(window="", missed_action=""):
+def build_entry_timing_policy(*, source_tier="extreme_conviction", participation_window_type="", participation_window=""):
+    source_tier = str(source_tier or "extreme_conviction").strip() or "extreme_conviction"
+    window_type = str(participation_window_type or "").strip()
+    window_text = str(participation_window or "").strip()
+    combined = f"{window_type} / {window_text}"
+
+    no_trade_markers = ("只观察", "不开", "不参与", "禁止", "no_trade", "none")
+    if source_tier in ("crossline_watch", "ordinary_watch") or any(marker in combined for marker in no_trade_markers):
+        return {
+            "source_tier": source_tier,
+            "entry_timing": "no_trade",
+            "buy_window": "none",
+            "entry_timing_reason": "非重点观察执行层，或计划明确只观察，不生成买入窗口",
+        }
+
+    if any(marker in combined for marker in ("尾盘", "14:30", "14:45", "收盘前")):
+        return {
+            "source_tier": source_tier,
+            "entry_timing": "tail_exception",
+            "buy_window": "14:30-15:00",
+            "entry_timing_reason": "尾盘只作为例外确认窗口，用于避开盘中分歧消耗",
+        }
+
+    if window_type in ("auction_reseal", "board_or_miss") or any(
+        marker in combined for marker in ("竞价", "回封", "打板")
+    ):
+        return {
+            "source_tier": source_tier,
+            "entry_timing": "open_core",
+            "buy_window": "09:30-09:35",
+            "entry_timing_reason": "强核心必须用开盘表态和回封质量验证，不能等普通60分钟确认",
+        }
+
+    return {
+        "source_tier": source_tier,
+        "entry_timing": "ten_confirm",
+        "buy_window": "09:50-10:10",
+        "entry_timing_reason": "普通结构样本先等早盘承接稳定，再用10点附近确认参与",
+    }
+
+
+def build_participation_window_policy(window="", missed_action="", source_tier="extreme_conviction", candidate=None):
     window = str(window or "").strip()
     missed_action = str(missed_action or "").strip()
     if "打板/错过" in window:
@@ -443,11 +610,12 @@ def build_participation_window_policy(window="", missed_action=""):
         first_minutes_required = True
         board_or_reseal_required = True
         ordinary_structure_confirm_allowed = False
-        required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
+        required_steps = ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
             "first_minutes": "主动资金继续抬价 / 承接连续",
+            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
             "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
             "missed_entry": missed_action,
         }
@@ -457,11 +625,12 @@ def build_participation_window_policy(window="", missed_action=""):
         first_minutes_required = True
         board_or_reseal_required = True
         ordinary_structure_confirm_allowed = False
-        required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
+        required_steps = ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
             "first_minutes": "主动资金继续抬价 / 承接连续",
+            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
             "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
             "missed_entry": missed_action,
         }
@@ -471,10 +640,11 @@ def build_participation_window_policy(window="", missed_action=""):
         first_minutes_required = True
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["开盘前几分钟承接", "主线确认", "60分钟确认"]
+        required_steps = ["开盘前几分钟承接", "日K均线回归", "主线确认", "60分钟确认"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "first_minutes": "主动资金继续抬价 / 承接连续",
+            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
             "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
@@ -484,14 +654,15 @@ def build_participation_window_policy(window="", missed_action=""):
         first_minutes_required = False
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["主线确认", "承接", "60分钟确认"]
+        required_steps = ["日K均线回归", "主线确认", "承接", "60分钟确认"]
         fallback_state = "不满足回到0%"
         participation_basis = {
+            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
             "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
 
-    return {
+    policy = {
         "participation_window_type": window_type,
         "auction_required": auction_required,
         "first_minutes_required": first_minutes_required,
@@ -501,7 +672,23 @@ def build_participation_window_policy(window="", missed_action=""):
         "required_steps": required_steps,
         "fallback_state": fallback_state,
         "participation_basis": participation_basis,
+        "ma_reversion_probe_allowed": source_tier == "extreme_conviction",
+        "ma_reversion_window": "09:50-10:10" if source_tier == "extreme_conviction" else "none",
+        "ma_reversion_probe": "只限昨日重点观察且未被风险拦截的样本；回踩日K MA5/MA10或分时黄线不破，且9:50-10:10承接不再继续杀，才允许小仓试错",
+        "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；站回并连续承接才算试错条件，不是所有股票的低吸理由",
+        "ma20_invalidation": "有效跌破日K MA20或跌破后9:50-10:10不能收回，取消幻想，按A杀风险处理",
+        "tracking_window_trade_days": 25,
     }
+    policy.update(build_limit_up_inertia_profile(candidate))
+    policy.update(build_risk_reward_plan(candidate))
+    policy.update(
+        build_entry_timing_policy(
+            source_tier=source_tier,
+            participation_window_type=window_type,
+            participation_window=window,
+        )
+    )
+    return policy
 
 
 def build_participation_window_from_candidate(candidate=None, *, is_anchor=False, is_mainline=False):

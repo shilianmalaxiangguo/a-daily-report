@@ -106,6 +106,90 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual(memory[0]["code"], "000001")
         self.assertIn("热榜第1", memory[0]["remember_reason"])
 
+    def test_conviction_list_does_not_render_limit_up_candidates_as_unassigned(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "000417",
+                    "name": "合百集团",
+                    "sector": "半导体",
+                    "tomorrow_strength": 80,
+                    "连板数": 1,
+                    "reason": "间接投资长鑫科技+合肥国资+区域零售",
+                    "pattern": "一字板",
+                    "change_pct": 10.07,
+                    "abnormal_follow_state": "缩量消化",
+                    "abnormal_setup_signal_id": "burst_digest",
+                }
+            ],
+            mainline_name="",
+            sector_snapshot=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: bool(mainline) and sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        core = conviction[0]
+        self.assertEqual(core["sector"], "半导体")
+        self.assertEqual(core["core_identity"]["role"], "core_transmitter")
+        self.assertEqual(core["core_identity"]["chain_position"], "middle_transmitter")
+        self.assertIn("首板", core["core_identity"]["basis"])
+
+    def test_build_conviction_list_rejects_first_day_one_word_limit_without_resilient_confirmation(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "000417",
+                    "name": "合百集团",
+                    "sector": "国产芯片",
+                    "tomorrow_strength": 98,
+                    "score": 98,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "一字板",
+                    "change_pct": 10.07,
+                    "open": 7.87,
+                    "high": 7.87,
+                    "low": 7.87,
+                    "close": 7.87,
+                    "abnormal_follow_state": "新异动待观察",
+                    "abnormal_setup_signal_id": "fresh_abnormal_probe",
+                },
+                {
+                    "code": "001259",
+                    "name": "利仁科技",
+                    "sector": "股权转让",
+                    "tomorrow_strength": 86,
+                    "score": 86,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "T字板",
+                    "change_pct": 10.0,
+                    "open": 66.55,
+                    "high": 66.55,
+                    "low": 63.01,
+                    "close": 66.55,
+                    "abnormal_follow_state": "缩量消化",
+                    "abnormal_setup_signal_id": "burst_digest",
+                },
+            ],
+            mainline_name="",
+            sector_snapshot=[
+                {"sector": "国产芯片", "anchor_code": "000417", "density_score": 99},
+                {"sector": "股权转让", "anchor_code": "001259", "density_score": 80},
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: bool(mainline) and sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertNotIn("000417", [item["code"] for item in conviction])
+        self.assertEqual([item["code"] for item in conviction], ["001259"])
+
     def test_build_conviction_list_uses_stable_tiebreaker(self):
         evaluated_stocks = [
             {"code": "000003", "name": "后入池", "sector": "军工", "tomorrow_strength": 80, "连板数": 1, "reason": "", "pattern": ""},
@@ -170,6 +254,152 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual(core["next_day_limit_probability_band"], "高于普通上涨样本")
         self.assertEqual(core["risk_reward_min_ratio"], 2.0)
         self.assertIn("2:1", core["risk_reward_plan"])
+
+    def test_build_conviction_list_rejects_limit_down_and_flat_heat_only_samples(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "-",
+                    "tomorrow_strength": 96,
+                    "score": 96,
+                    "change_pct": 0.13,
+                    "open": 7.68,
+                    "high": 8.12,
+                    "low": 7.63,
+                    "close": 7.93,
+                    "连板数": 0,
+                    "reason": "",
+                    "pattern": "震荡整理(0分)",
+                },
+                {
+                    "code": "002342",
+                    "name": "巨力索具",
+                    "sector": "-",
+                    "tomorrow_strength": 95,
+                    "score": 95,
+                    "change_pct": -9.98,
+                    "open": 17.49,
+                    "high": 17.49,
+                    "low": 17.49,
+                    "close": 17.49,
+                    "连板数": 0,
+                    "reason": "",
+                    "pattern": "缩量调整(0分)",
+                },
+                {
+                    "code": "600396",
+                    "name": "华电辽能",
+                    "sector": "-",
+                    "tomorrow_strength": 94,
+                    "score": 94,
+                    "change_pct": -9.98,
+                    "open": 16.50,
+                    "high": 17.15,
+                    "low": 15.69,
+                    "close": 15.69,
+                    "连板数": 0,
+                    "reason": "",
+                    "pattern": "下跌趋势(0分)",
+                },
+                {
+                    "code": "000988",
+                    "name": "华工科技",
+                    "sector": "光通信",
+                    "tomorrow_strength": 88,
+                    "score": 88,
+                    "change_pct": 10.0,
+                    "open": 137.53,
+                    "high": 147.38,
+                    "low": 137.03,
+                    "close": 147.38,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停(4分)",
+                },
+            ],
+            mainline_name="",
+            sector_snapshot=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["000988"])
+        self.assertNotIn("趋势辨识度高", conviction[0]["conviction_reason"])
+
+    def test_build_conviction_list_blocks_negative_news_and_marks_repair_watch_samples(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "002342",
+                    "name": "巨力索具",
+                    "sector": "商业航天",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                    "news_risk_flags": ["监管立案"],
+                    "negative_news_summary": "公司涉嫌信息披露违法违规被证监会立案",
+                },
+                {
+                    "code": "600396",
+                    "name": "华电辽能",
+                    "sector": "超超临界发电",
+                    "tomorrow_strength": 95,
+                    "score": 95,
+                    "change_pct": -9.98,
+                    "连板数": 0,
+                    "reason": "17天9板高辨识度",
+                    "pattern": "下跌趋势(0分)",
+                },
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "绿色电力",
+                    "tomorrow_strength": 92,
+                    "score": 92,
+                    "change_pct": 0.13,
+                    "连板数": 0,
+                    "reason": "趋势辨识度高",
+                    "pattern": "震荡整理(0分)",
+                    "allow_extreme_conviction": True,
+                },
+                {
+                    "code": "000988",
+                    "name": "华工科技",
+                    "sector": "光通信",
+                    "tomorrow_strength": 88,
+                    "score": 88,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "龙一",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            mainline_name="",
+            sector_snapshot=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        codes = [item["code"] for item in conviction]
+        self.assertNotIn("002342", codes)
+        self.assertNotIn("600396", codes)
+        self.assertIn("601991", codes)
+        datang = next(item for item in conviction if item["code"] == "601991")
+        self.assertEqual(datang["candidate_layer"], "watch_sample")
+        self.assertEqual(datang["execution_eligibility"], "structure_confirm_only")
+        self.assertEqual(datang["conviction_rule"], "修复观察只看09:50-10:10承接确认，未确认不参与")
+        self.assertIn("修复观察", datang["conviction_reason"])
 
     def test_build_conviction_list_fieldizes_participation_window_policy(self):
         fast = build_extreme_conviction_list(

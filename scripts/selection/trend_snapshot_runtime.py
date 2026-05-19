@@ -26,6 +26,8 @@ _NON_SECTOR_LABELS = {
     "北交所",
     "未知",
     "未归类",
+    "待补充板块",
+    "待补充",
     "-",
 }
 
@@ -96,6 +98,205 @@ def _stable_code_rank(value):
         return 999999
 
 
+def _safe_float_or_none(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(str(value).replace("%", "").replace("+", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_number(stock, *keys):
+    for key in keys:
+        value = _safe_float_or_none((stock or {}).get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _text_contains_any(text, markers):
+    return any(marker in str(text or "") for marker in markers)
+
+
+def _negative_news_text(stock):
+    stock = stock or {}
+    parts = []
+    for key in (
+        "negative_news_summary",
+        "news_risk_summary",
+        "risk_summary",
+        "announcement_risk",
+        "监管风险",
+        "负面消息",
+    ):
+        value = stock.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    flags = stock.get("news_risk_flags") or stock.get("negative_news_flags") or []
+    if isinstance(flags, (list, tuple, set)):
+        parts.extend(str(item) for item in flags if str(item).strip())
+    elif flags not in (None, ""):
+        parts.append(str(flags))
+    return " / ".join(parts)
+
+
+def _has_blocking_negative_news(stock):
+    text = _negative_news_text(stock)
+    return _text_contains_any(
+        text,
+        (
+            "监管立案",
+            "立案调查",
+            "证监会立案",
+            "涉嫌信息披露",
+            "信息披露违法",
+            "实控人被抓",
+            "实际控制人被抓",
+            "刑事",
+            "退市风险",
+            "重大违法",
+            "ST风险",
+        ),
+    )
+
+
+def _has_current_price_evidence(stock, pattern=""):
+    stock = stock or {}
+    price_keys = (
+        "change_pct",
+        "change",
+        "pct_chg",
+        "涨跌幅",
+        "open",
+        "high",
+        "low",
+        "close",
+        "开盘价",
+        "最高价",
+        "最低价",
+        "收盘价",
+    )
+    return any(stock.get(key) not in (None, "") for key in price_keys) or bool(str(pattern or "").strip())
+
+
+def _candidate_is_limit_down(stock, change_pct=None, pattern=""):
+    stock = stock or {}
+    if stock.get("is_limit_down"):
+        return True
+    status_text = " / ".join(
+        str(stock.get(key) or "")
+        for key in ("limit_status", "zt_status", "涨停状态", "status", "trade_status", "tag")
+    )
+    if "跌停" in status_text or "跌停" in str(pattern or ""):
+        return True
+    return change_pct is not None and change_pct <= -9.5
+
+
+def _has_extreme_price_entry_signal(stock, *, change_pct=None, pattern="", lianban=0, is_anchor=False, is_mainline=False):
+    stock = stock or {}
+    combined = " / ".join(
+        str(stock.get(key) or "")
+        for key in (
+            "reason",
+            "conviction_reason",
+            "core_level",
+            "volume_summary",
+            "abnormal_summary",
+            "xuangubao_stock_reason",
+        )
+    )
+    pattern_text = str(pattern or "")
+    strong_pattern = _text_contains_any(pattern_text, ("涨停", "T字", "T板", "一字", "光头", "大阳", "强实体"))
+    explicit_limit_up = _text_contains_any(combined, ("涨停", "封板", "连板", "回封", "强实体"))
+    limit_up_days = int(_safe_float(stock.get("xuangubao_limit_up_days", 0), 0) or 0)
+
+    if change_pct is not None:
+        if change_pct >= 5:
+            return True
+        if is_anchor and is_mainline and change_pct >= 3:
+            return True
+        return False
+    return bool(strong_pattern or explicit_limit_up or int(lianban or 0) >= 1 or limit_up_days >= 1)
+
+
+def _is_one_word_limit_candidate(stock, *, pattern="", change_pct=None):
+    stock = stock or {}
+    pattern_text = str(pattern or "")
+    status_text = " / ".join(
+        str(stock.get(key) or "")
+        for key in ("limit_status", "zt_status", "涨停状态", "status", "tag")
+    )
+    if _text_contains_any(f"{pattern_text} / {status_text}", ("一字板", "一字涨停", "一字")):
+        return True
+
+    open_price = _first_number(stock, "open", "开盘价")
+    high_price = _first_number(stock, "high", "最高价")
+    low_price = _first_number(stock, "low", "最低价")
+    close_price = _first_number(stock, "close", "收盘价")
+    if None in (open_price, high_price, low_price, close_price):
+        return False
+    if change_pct is None or change_pct < 9.5:
+        return False
+    prices = [open_price, high_price, low_price, close_price]
+    return max(prices) - min(prices) <= max(abs(close_price) * 0.001, 0.01)
+
+
+def _has_one_word_limit_independent_confirmation(stock):
+    stock = stock or {}
+    if stock.get("one_word_limit_confirmed"):
+        return True
+    setup_id = str(stock.get("abnormal_setup_signal_id") or stock.get("setup_signal_id") or "").strip()
+    follow_state = str(stock.get("abnormal_follow_state") or stock.get("follow_state") or "").strip()
+    return bool(
+        setup_id
+        and setup_id not in ("fresh_abnormal_probe", "abnormal_failed")
+        and follow_state in ("跌不下去", "缩量消化")
+    )
+
+
+def _is_unconfirmed_one_word_limit_candidate(stock, *, change_pct=None, pattern=""):
+    return _is_one_word_limit_candidate(
+        stock,
+        pattern=pattern,
+        change_pct=change_pct,
+    ) and not _has_one_word_limit_independent_confirmation(stock)
+
+
+def _passes_extreme_conviction_price_gate(stock, *, change_pct=None, pattern="", lianban=0, is_anchor=False, is_mainline=False):
+    if _has_blocking_negative_news(stock):
+        return False
+    if stock.get("allow_extreme_conviction"):
+        return True
+    if _candidate_is_limit_down(stock, change_pct=change_pct, pattern=pattern):
+        return False
+    if change_pct is not None and change_pct < -2:
+        return False
+    if _is_unconfirmed_one_word_limit_candidate(stock, change_pct=change_pct, pattern=pattern):
+        return False
+    if _text_contains_any(pattern, ("下跌趋势", "缩量调整", "高位大绿棒")):
+        return False
+    if not _has_current_price_evidence(stock, pattern=pattern):
+        return True
+    if _text_contains_any(pattern, ("震荡整理", "普通形态")) and not _has_extreme_price_entry_signal(
+        stock,
+        change_pct=change_pct,
+        pattern=pattern,
+        lianban=lianban,
+        is_anchor=is_anchor,
+        is_mainline=is_mainline,
+    ):
+        return False
+    return _has_extreme_price_entry_signal(
+        stock,
+        change_pct=change_pct,
+        pattern=pattern,
+        lianban=lianban,
+        is_anchor=is_anchor,
+        is_mainline=is_mainline,
+    )
+
+
 def _conviction_attack_state(stock, *, is_anchor=False, is_mainline=False):
     if is_anchor and is_mainline:
         return "100%"
@@ -158,7 +359,7 @@ def _build_core_identity_fields(
     if early_allowed:
         role = "trend_chain_anchor"
         chain_position = "high_anchor" if int(lianban or 0) >= 2 or pattern_text in ("T字板", "一字板") else "core_transmitter"
-    elif is_mainline or "龙一" in reason_text or int(lianban or 0) >= 2:
+    elif is_mainline or "龙一" in reason_text or int(lianban or 0) >= 2 or pattern_text in ("T字板", "一字板") or int(lianban or 0) >= 1:
         role = "core_transmitter"
         chain_position = "middle_transmitter"
     else:
@@ -170,6 +371,28 @@ def _build_core_identity_fields(
         "early_participation_allowed": early_allowed,
         "position_state": attack_state,
         "basis": basis,
+    }
+
+
+def _candidate_layer_fields(stock, *, is_anchor=False, is_mainline=False, lianban=0, change_pct=None, pattern=""):
+    if _has_blocking_negative_news(stock):
+        return {
+            "candidate_layer": "risk_blocked",
+            "execution_eligibility": "blocked_by_negative_news",
+        }
+    if is_anchor and is_mainline:
+        return {
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "auction_reseal",
+        }
+    if int(lianban or 0) >= 1 or _text_contains_any(pattern, ("涨停", "T字", "一字", "光头", "强实体")):
+        return {
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "auction_reseal",
+        }
+    return {
+        "candidate_layer": "watch_sample",
+        "execution_eligibility": "structure_confirm_only",
     }
 
 
@@ -384,6 +607,16 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
         pattern = str(stock.get("pattern", ""))
         is_mainline = sector_name_matches(sector, mainline_name)
         is_anchor = code in anchor_codes
+        change_pct = _first_number(stock, "change_pct", "change", "pct_chg", "涨跌幅")
+        if not _passes_extreme_conviction_price_gate(
+            stock,
+            change_pct=change_pct,
+            pattern=pattern,
+            lianban=lianban,
+            is_anchor=is_anchor,
+            is_mainline=is_mainline,
+        ):
+            continue
 
         conviction_score = tomorrow_strength
         if is_mainline:
@@ -404,6 +637,8 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             reason_parts.append("板块锚定龙")
         if lianban >= 2:
             reason_parts.append(f"{lianban}连板")
+        elif lianban == 1:
+            reason_parts.append("首板")
         elif "龙一" in reason:
             reason_parts.append("首波先锋")
         if pattern == "T字板":
@@ -412,10 +647,22 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             reason_parts.append("资金顶出辨识度")
         elif "光头" in pattern:
             reason_parts.append("强实体异动")
-        if not reason_parts:
-            reason_parts.append("趋势辨识度高")
+        layer_fields = _candidate_layer_fields(
+            stock,
+            is_anchor=is_anchor,
+            is_mainline=is_mainline,
+            lianban=lianban,
+            change_pct=change_pct,
+            pattern=pattern,
+        )
 
-        action_rule = "只盯分歧后的转强，不追情绪顶点"
+        if not reason_parts:
+            if layer_fields["candidate_layer"] == "watch_sample":
+                reason_parts.append("修复观察")
+            else:
+                reason_parts.append("趋势辨识度高")
+
+        action_rule = "修复观察只看09:50-10:10承接确认，未确认不参与"
         if is_anchor and is_mainline:
             action_rule = "优先盯竞价表态、开盘承接和回封质量，继续强就只做它"
         elif lianban >= 2:
@@ -433,6 +680,7 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
                 "conviction_score": round(conviction_score, 1),
                 "conviction_reason": " / ".join(reason_parts),
                 "conviction_rule": action_rule,
+                **layer_fields,
                 "core_identity": _build_core_identity_fields(
                     is_anchor=is_anchor,
                     is_mainline=is_mainline,

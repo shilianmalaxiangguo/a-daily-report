@@ -1,9 +1,11 @@
 import io
+import json
 import sys
 import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +21,10 @@ from daily_report_render import (
     render_report_preflight_lines,
     generate_markdown_report,
     generate_markdown_report_from_sections,
+    save_report_outputs,
 )
+from daily_report_snapshot_io import LEDGER_MODE_REPLAY
+from report.decision_ledger import build_decision_ledger_snapshot, write_decision_ledger_artifacts
 
 
 class DailyReportRenderTest(unittest.TestCase):
@@ -49,6 +54,49 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertFalse(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+
+    def test_save_replay_outputs_rebuilds_decision_ledger_from_final_full_markdown(self):
+        stale_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-18",
+            extreme_conviction_list=[
+                {"code": "600850", "name": "电科数字", "sector": "数据中心", "conviction_reason": "旧名单"},
+                {"code": "603082", "name": "北自科技", "sector": "机器人", "conviction_reason": "旧名单"},
+            ],
+            market_branch="旧结果",
+            sector_relationship_state="旧结果",
+        )
+        fresh_report = """
+**极度看好名单**（只保留最心动的少数，每只都绑定参与窗口）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 极看理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|
+| 1 | 合百集团 | 000417 | 股权转让 | 板块锚定龙 | 板块锚定龙 | 只盯分歧后的转强 |
+| 2 | 弘信电子 | 300657 | 算力 | 弹性核心 | 主线共振 | 只盯主动转强 |
+| 3 | 利仁科技 | 001259 | 家电 | 高辨识度首板 | 资金承接强 | 不追一致高潮 |
+"""
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(stale_snapshot, root_dir=root)
+
+            save_report_outputs(
+                {REPORT_VARIANT_FULL: fresh_report, REPORT_VARIANT_SUMMARY: "# summary"},
+                "2026-05-18",
+                mode=LEDGER_MODE_REPLAY,
+                output_dir=str(root),
+            )
+
+            snapshot = json.loads((root / "data" / "decision-ledger" / "2026-05-18.json").read_text(encoding="utf-8"))
+            index = json.loads((root / "data" / "decision-ledger" / "index.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([case["stock_code"] for case in snapshot["cases"]], ["000417", "300657", "001259"])
+        same_day_rows = {
+            row["stock_code"]
+            for row in index["extreme_conviction_backtest_rows"]
+            if row["mention_trade_date"] == "2026-05-18"
+        }
+        self.assertEqual(same_day_rows, {"000417", "300657", "001259"})
+        self.assertNotIn("600850", index["by_stock_code"])
+        self.assertNotIn("603082", index["by_stock_code"])
 
     def test_render_report_with_display_mode_forwards_decision_ledger_config(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")
@@ -236,6 +284,33 @@ class DailyReportRenderTest(unittest.TestCase):
         preflight = build_report_preflight(data, "2026-05-18")
 
         self.assertIn("选股通盘中异动", preflight["failures"])
+
+    def test_report_preflight_ignores_stale_xuangubao_failure_log_when_payload_has_news(self):
+        data = {
+            "data_status": {"选股通盘中异动": True},
+            "step_status": {"选股通盘中异动获取": True},
+            "xuangubao_data": {
+                "xuangubao_news": [{"title": "机器人概念股午后拉升"}],
+                "xuangubao_plates": [{"name": "机器人"}],
+                "xuangubao_limit_up_reasons": [{"symbol": "603082.SS"}],
+            },
+            "module_logs": [
+                {
+                    "step": "request.xuangubao",
+                    "status": "failed",
+                    "details": {
+                        "provider": "xuangubao.fetch_xuangubao_data",
+                        "news_count": 0,
+                        "plate_count": 23,
+                        "limit_up_reason_count": 101,
+                    },
+                }
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-18")
+
+        self.assertNotIn("选股通盘中异动", preflight["failures"])
 
     def test_build_report_outputs_aborts_when_snapshot_envelope_contains_critical_failures(self):
         snapshot = {
