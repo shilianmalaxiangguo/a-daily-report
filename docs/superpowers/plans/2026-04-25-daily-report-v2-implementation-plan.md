@@ -268,11 +268,11 @@
 - [x] Fix market gate over-defense when the index is still inside a rising daily zhongshu.
   - Acceptance: an index rising inside zhongshu is not forced to `一档（空仓档）` solely because same-day breadth is weak; it becomes `二档（防守档）` with 10:00 confirmation discipline.
 - [x] Normalize conditional-defense wording across full report appendices.
-  - Acceptance: `二档（防守档） + allow_conditional_30` renders as `10点确认后的30%条件试错`, not absolute buy-ban wording.
+  - Acceptance: `二档（防守档） + allow_attack_50_ready` renders as `参与窗口确认后的50%标准进攻预演`, not absolute buy-ban wording.
 - [x] Make Step0 follow verdict match the conditional-defense gate.
   - Acceptance: conditional defense renders `🟡 条件防守观察` and does not reuse stale `只允许处理旧仓` reasons from the contract-state pulse.
 - [x] Prevent front-page core candidates from showing execution rights when the environment gate is closed.
-  - Acceptance: closed gate renders `仅观察，闸门未开`; conditional-defense gate renders `观察，等10点确认`; no fallback `有条件执行` leak.
+  - Acceptance: closed gate renders `仅观察，条件未开`; conditional-defense gate renders `观察，等10点确认`; no fallback `有条件执行` leak.
 - [x] Rename misleading tracking-memory wording.
   - Acceptance: `中嘉博创` type rows render as `二次确认观察`, not `可信记忆`, and are not implied to be members of the leader-memory bank.
 - [x] Make the current 60-minute confirmation formula auditable in the runtime payload.

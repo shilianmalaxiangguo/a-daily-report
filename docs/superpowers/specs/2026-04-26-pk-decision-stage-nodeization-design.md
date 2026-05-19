@@ -159,7 +159,7 @@ Outputs:
 - `display_pending_candidates`
 - `display_observation_candidates`
 
-This node owns closed-gate observation pool construction. It must preserve the current `allow_conditional_30` behavior and keep-group watch generation.
+This node owns closed-gate observation pool construction. It must preserve the current `allow_attack_50_ready` behavior and keep-group watch generation.
 
 ### `watch_anchor`
 
@@ -325,7 +325,7 @@ The refactor is acceptable only if these remain true:
 5. Stage exports retain the same keys and values for representative open-gate and closed-gate cases.
 6. Stage line order remains PK section first, action plan second, then the trailing blank line.
 7. Closed-gate conditional text remains:
-   - `allow_conditional_30=True` -> `等10点确认，未确认不开`
+   - `allow_attack_50_ready=True` -> `等10点确认，未确认不开`
    - otherwise -> `⛔<position_level>禁止新开仓`
 8. No node may call external APIs; nodes only use helpers already supplied in `stage_context`.
 
