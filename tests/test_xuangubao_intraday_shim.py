@@ -127,6 +127,65 @@ class XuangubaoIntradayShimTest(unittest.TestCase):
         self.assertEqual(news_call[2]["origin"], "https://xuangutong.com.cn")
         self.assertEqual(data["xuangubao_news"][0]["title"], "盘中异动")
 
+    def test_fetch_xuangubao_data_uses_direct_news_when_legacy_has_only_plates(self):
+        module = __import__("xuangubao_intraday", fromlist=["xuangubao_intraday"])
+        captured = {}
+
+        class _LegacyAnalyzer:
+            def fetch_xuangubao_data(self, target_date=None):
+                return {
+                    "xuangubao_news": [],
+                    "xuangubao_plates": [{"name": "旧实现板块"}],
+                    "xuangubao_limit_up_reasons": [],
+                    "diagnostics": {"newsflash": "legacy empty news"},
+                }
+
+        module._load_legacy_analyzer_class = lambda: _LegacyAnalyzer
+
+        class _Response:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def json(self):
+                return self._payload
+
+        class _Session:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, params=None, timeout=0):
+                captured.setdefault("calls", []).append((url, dict(params or {}), dict(self.headers)))
+                if "newsflash" in url:
+                    return _Response(
+                        {
+                            "code": 20000,
+                            "data": {
+                                "messages": [
+                                    {
+                                        "title": "本地新实现新闻",
+                                        "summary": "",
+                                        "created_at": _shanghai_ms("2026-05-18", 10, 0),
+                                        "stocks": [],
+                                    }
+                                ],
+                                "next_cursor": "",
+                            },
+                        }
+                    )
+                return _Response({"code": 20000, "data": {"items": []}})
+
+        class _Requests:
+            Session = _Session
+
+        module.requests = _Requests
+        with patch.dict("os.environ", {"XUANGUBAO_IVANKA_TOKEN": "token-value"}):
+            data = module.XuangubaoIntradayAnalyzer().fetch_xuangubao_data(target_date="2026-05-18")
+
+        news_calls = [call for call in captured["calls"] if "newsflash" in call[0]]
+        self.assertEqual(len(news_calls), 1)
+        self.assertEqual(data["xuangubao_news"][0]["title"], "本地新实现新闻")
+        self.assertEqual(data["xuangubao_plates"][0]["name"], "旧实现板块")
+
     def test_fetch_xuangubao_news_uses_next_cursor_for_next_page(self):
         module = __import__("xuangubao_intraday", fromlist=["xuangubao_intraday"])
         module._load_legacy_analyzer_class = lambda: None

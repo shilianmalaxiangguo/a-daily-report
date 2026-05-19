@@ -28,6 +28,7 @@ def _normalize_request_log(log):
         "error": str(details.get("error") or ""),
         "fallback_used": bool(details.get("fallback_used", False)),
         "upstream_error": str(details.get("upstream_error") or ""),
+        "diagnostic_note": str(details.get("diagnostic_note") or ""),
         "details": details,
     }
 

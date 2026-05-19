@@ -24,6 +24,8 @@ _NON_SECTOR_LABELS = {
     "北交所",
     "未知",
     "未归类",
+    "其他",
+    "其它",
     "-",
 }
 
@@ -31,6 +33,76 @@ _NON_SECTOR_LABELS = {
 def _is_valid_sector_label(value):
     label = str(value or "").strip()
     return bool(label and label not in _NON_SECTOR_LABELS)
+
+
+def _normalize_stock_code(value):
+    code = str(value or "").strip()
+    for suffix in (".SZ", ".SS", ".SH", ".BJ"):
+        if code.endswith(suffix):
+            code = code[: -len(suffix)]
+            break
+    lower_code = code.lower()
+    for prefix in ("sz", "sh", "bj"):
+        if lower_code.startswith(prefix):
+            code = code[len(prefix) :]
+            break
+    return code.strip()
+
+
+def _stock_matches(stock, stock_name, stock_code):
+    if not isinstance(stock, dict):
+        return False
+    expected_code = _normalize_stock_code(stock_code)
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code"):
+        candidate_code = _normalize_stock_code(stock.get(key))
+        if expected_code and candidate_code == expected_code:
+            return True
+    expected_name = str(stock_name or "").strip()
+    for key in ("name", "名称", "stock_name", "stock_chi_name", "prod_name"):
+        if expected_name and str(stock.get(key) or "").strip() == expected_name:
+            return True
+    return False
+
+
+def _first_valid_plate_name(plates):
+    for plate in plates or []:
+        if isinstance(plate, dict):
+            candidates = (
+                plate.get("plate_name"),
+                plate.get("name"),
+                plate.get("concept_name"),
+                plate.get("sector"),
+            )
+        else:
+            candidates = (plate,)
+        for candidate in candidates:
+            if _is_valid_sector_label(candidate):
+                return str(candidate).strip()
+    return ""
+
+
+def _resolve_xuangubao_sector(stock_name, stock_code, xuangubao_data):
+    xgb_data = xuangubao_data or {}
+    for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+        if _stock_matches(item, stock_name, stock_code):
+            plate_name = _first_valid_plate_name(item.get("related_plates") or [])
+            if plate_name:
+                return plate_name
+
+    for news in xgb_data.get("xuangubao_news", []) or []:
+        if not isinstance(news, dict):
+            continue
+        stocks = list(news.get("stocks") or []) + list(news.get("all_stocks") or [])
+        if any(_stock_matches(stock, stock_name, stock_code) for stock in stocks):
+            plate_name = _first_valid_plate_name(
+                news.get("plates")
+                or news.get("bkj_infos")
+                or news.get("plate_infos")
+                or []
+            )
+            if plate_name:
+                return plate_name
+    return ""
 
 
 def get_stock_status(stock_name, stock_code, zt_pool, dt_pool, change_pct=None):
@@ -81,6 +153,7 @@ def get_stock_sector(
     sector_fund_flow=None,
     zt_pool_raw=None,
     dt_pool_raw=None,
+    xuangubao_data=None,
     skip_api_call=False,
 ):
     """Resolve stock sector from structured sources before optional API fallback."""
@@ -98,34 +171,42 @@ def get_stock_sector(
                 if _is_valid_sector_label(sector):
                     return sector
 
+    xgb_sector = _resolve_xuangubao_sector(stock_name, stock_code, xuangubao_data)
+    if xgb_sector:
+        return xgb_sector
+
     if hot_rank_data:
         for stock in hot_rank_data:
-            if stock.get("code") == stock_code or stock.get("name") == stock_name:
+            if _stock_matches(stock, stock_name, stock_code):
                 concepts = stock.get("concepts", [])
-                if concepts:
-                    return concepts[0]
+                concept = _first_valid_plate_name(concepts)
+                if concept:
+                    return concept
 
     if zt_pool_data:
         for sector_name, stocks in zt_pool_data.items():
             for stock in stocks:
-                if stock.get("code") == stock_code or stock.get("name") == stock_name:
+                if _stock_matches(stock, stock_name, stock_code) and _is_valid_sector_label(sector_name):
                     return sector_name
 
     if lianban_data:
         for stock in lianban_data:
-            if stock.get("code") == stock_code or stock.get("name") == stock_name:
+            if _stock_matches(stock, stock_name, stock_code):
                 plates = stock.get("plates", [])
-                if plates:
-                    return plates[0]
+                plate = _first_valid_plate_name(plates)
+                if plate:
+                    return plate
                 reason = stock.get("reason", "")
                 if reason and "概念" in reason:
                     match = re.search(r"(\S+?概念)", reason)
                     if match:
-                        return match.group(1)
+                        concept = match.group(1)
+                        if _is_valid_sector_label(concept):
+                            return concept
 
     if lhb_data:
         for stock in lhb_data:
-            if stock.get("code") == stock_code or stock.get("name") == stock_name:
+            if _stock_matches(stock, stock_name, stock_code):
                 sector = stock.get("sector", "")
                 if _is_valid_sector_label(sector):
                     return sector

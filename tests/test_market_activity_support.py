@@ -105,12 +105,14 @@ with patch.object(daily_report_entry_demo, "run_get_stock_status", return_value=
         "000001",
         hot_rank_data=[{"code": "000001", "concepts": ["机器人"]}],
         zt_pool_raw=[{"代码": "000001", "所属行业": "军工"}],
+        xuangubao_data={"xuangubao_limit_up_reasons": []},
     )
 
 assert status_mock.call_args[0] == ("军工一号", "000001", [{"代码": "000001", "涨停统计": "首板"}], [], 10.0)
 assert sector_mock.call_args[0] == ("军工一号", "000001")
 assert sector_mock.call_args.kwargs["hot_rank_data"] == [{"code": "000001", "concepts": ["机器人"]}]
 assert sector_mock.call_args.kwargs["zt_pool_raw"] == [{"代码": "000001", "所属行业": "军工"}]
+assert sector_mock.call_args.kwargs["xuangubao_data"] == {"xuangubao_limit_up_reasons": []}
 assert status == "+10.00% 涨停(首板)"
 assert sector == "军工"
 """
@@ -174,6 +176,39 @@ assert sector == "军工"
 
         self.assertEqual(sector, "商业航天")
         self.assertEqual(gem_sector, "存储芯片")
+
+    def test_market_activity_support_resolves_sector_from_xuangubao_context(self):
+        support = self._load_module()
+
+        limit_up_sector = support.get_stock_sector(
+            "华工科技",
+            "000988",
+            xuangubao_data={
+                "xuangubao_limit_up_reasons": [
+                    {"symbol": "000988.SZ", "name": "华工科技", "related_plates": [{"plate_name": "光通信"}]},
+                ],
+            },
+            lhb_data=[{"code": "000988", "name": "华工科技", "sector": "HS"}],
+            skip_api_call=True,
+        )
+        news_sector = support.get_stock_sector(
+            "科士达",
+            "002518",
+            xuangubao_data={
+                "xuangubao_news": [
+                    {
+                        "title": "算力方向异动",
+                        "stocks": [{"symbol": "002518.SZ", "name": "科士达"}],
+                        "plates": [{"name": "算力"}],
+                    }
+                ],
+            },
+            lhb_data=[{"code": "002518", "name": "科士达", "sector": "未知"}],
+            skip_api_call=True,
+        )
+
+        self.assertEqual(limit_up_sector, "光通信")
+        self.assertEqual(news_sector, "算力")
 
     def test_market_activity_support_emits_warning_when_eastmoney_lookup_fails(self):
         support = self._load_module()

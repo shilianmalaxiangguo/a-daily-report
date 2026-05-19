@@ -1,9 +1,10 @@
-from domains.market_activity.quote_lookup import build_market_quote_lookup, resolve_change_pct
+from domains.market_activity.quote_lookup import build_market_quote_lookup, normalize_stock_code, resolve_change_pct
 from domains.market_activity.report_section_node_registry import (
     build_market_activity_advanced_node_specs,
     build_market_activity_basic_node_specs,
 )
 from domains.market_activity.report_section_node_runtime import run_market_activity_nodes
+from domains.market_activity.support import _is_valid_sector_label
 
 
 def _data(context):
@@ -69,6 +70,14 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _first_positive_float(*values):
+    for value in values:
+        parsed = _safe_float(value, 0.0)
+        if parsed > 0:
+            return parsed
+    return 0.0
+
+
 def _build_quote_lookup(context):
     data = _data(context)
     return build_market_quote_lookup(
@@ -78,6 +87,70 @@ def _build_quote_lookup(context):
         zt_pool=data.get("zt_pool", []),
         dt_pool=data.get("dt_pool", []),
     )
+
+
+def _stock_matches(stock, stock_name, stock_code):
+    if not isinstance(stock, dict):
+        return False
+    expected_code = normalize_stock_code(stock_code)
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code"):
+        if expected_code and normalize_stock_code(stock.get(key)) == expected_code:
+            return True
+    expected_name = str(stock_name or "").strip()
+    for key in ("name", "名称", "stock_name", "stock_chi_name", "prod_name"):
+        if expected_name and str(stock.get(key) or "").strip() == expected_name:
+            return True
+    return False
+
+
+def _first_valid_plate_name(plates):
+    for plate in plates or []:
+        if isinstance(plate, dict):
+            candidates = (
+                plate.get("plate_name"),
+                plate.get("name"),
+                plate.get("concept_name"),
+                plate.get("sector"),
+            )
+        else:
+            candidates = (plate,)
+        for candidate in candidates:
+            if _is_valid_sector_label(candidate):
+                return str(candidate).strip()
+    return ""
+
+
+def _resolve_context_sector(context, stock_name, stock_code):
+    data = _data(context)
+    xgb_data = data.get("xuangubao_data") or {}
+
+    for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+        if _stock_matches(item, stock_name, stock_code):
+            plate_name = _first_valid_plate_name(item.get("related_plates") or [])
+            if plate_name:
+                return plate_name
+
+    for news in xgb_data.get("xuangubao_news", []) or []:
+        if not isinstance(news, dict):
+            continue
+        stocks = list(news.get("stocks") or []) + list(news.get("all_stocks") or [])
+        if any(_stock_matches(stock, stock_name, stock_code) for stock in stocks):
+            plate_name = _first_valid_plate_name(
+                news.get("plates")
+                or news.get("bkj_infos")
+                or news.get("plate_infos")
+                or []
+            )
+            if plate_name:
+                return plate_name
+
+    for stock in data.get("hot_rank_top30", []) or []:
+        if _stock_matches(stock, stock_name, stock_code):
+            concept = _first_valid_plate_name(stock.get("concepts") or [])
+            if concept:
+                return concept
+
+    return ""
 
 
 def build_hot_rank_header_node(context, node_meta=None, node_lookup=None):
@@ -129,6 +202,8 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
                 dt_pool_raw=dt_pool,
                 lianban_data=_lianban_data(context),
                 lhb_data=_lhb_data(context),
+                xuangubao_data=data.get("xuangubao_data", {}),
+                sector_fund_flow=data.get("sector_fund_flow", {}),
             )
             pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
             lines.append(
@@ -177,17 +252,24 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
             close = info.get("close", 0)
             if callable(get_stock_status):
                 get_stock_status(name, code, zt_pool, dt_pool, change_pct)
-            sector = get_stock_sector(
-                name,
-                code,
-                hot_rank_data=_hot_rank_data(context),
-                zt_pool_data=data.get("zt_pool_by_sector", {}),
-                zt_pool_raw=zt_pool,
-                dt_pool_raw=dt_pool,
-                lianban_data=_lianban_data(context),
-                lhb_data=_lhb_data(context),
-                sector_fund_flow=data.get("sector_fund_flow", {}),
-            )
+            sector = stock.get("sector", "") or stock.get("所属行业", "") or stock.get("industry", "")
+            if not _is_valid_sector_label(sector):
+                sector = _resolve_context_sector(context, name, code)
+            if not _is_valid_sector_label(sector) and callable(get_stock_sector):
+                sector = get_stock_sector(
+                    name,
+                    code,
+                    hot_rank_data=_hot_rank_data(context),
+                    zt_pool_data=data.get("zt_pool_by_sector", {}),
+                    zt_pool_raw=zt_pool,
+                    dt_pool_raw=dt_pool,
+                    lianban_data=_lianban_data(context),
+                    lhb_data=_lhb_data(context),
+                    xuangubao_data=data.get("xuangubao_data", {}),
+                    sector_fund_flow=data.get("sector_fund_flow", {}),
+                )
+            if not _is_valid_sector_label(sector):
+                sector = "待补充板块"
             pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
             judgment = "观望" if stock_turnover > 150 else "关注" if stock_turnover > 120 else "谨慎"
             lines.append(
@@ -263,13 +345,15 @@ def _build_lhb_trade_rows(context, items, amount_title, amount_formatter):
         code = item.get("code", "?")
         info = stock_full_info.get(code, {})
         name = item.get("name") or info.get("name", "?")
-        change_pct = info.get("change_pct", item.get("change_pct", 0))
-        high = info.get("high", 0)
-        low = info.get("low", 0)
-        open_price = info.get("open", 0)
-        close = info.get("close", 0)
+        change_pct = _safe_float(info.get("change_pct", item.get("change_pct", 0)))
+        high = _first_positive_float(info.get("high"), item.get("high"), item.get("high_price"), item.get("最高价"))
+        low = _first_positive_float(info.get("low"), item.get("low"), item.get("low_price"), item.get("最低价"))
+        open_price = _first_positive_float(info.get("open"), item.get("open"), item.get("open_price"), item.get("开盘价"))
+        close = _first_positive_float(info.get("close"), item.get("close"), item.get("close_price"), item.get("收盘价"))
         sector = item.get("sector", "")
-        if (not sector or sector == "未知") and callable(get_stock_sector):
+        if not _is_valid_sector_label(sector):
+            sector = _resolve_context_sector(context, name, code)
+        if not _is_valid_sector_label(sector) and callable(get_stock_sector):
             sector = get_stock_sector(
                 name,
                 code,
@@ -279,10 +363,11 @@ def _build_lhb_trade_rows(context, items, amount_title, amount_formatter):
                 dt_pool_raw=dt_pool,
                 lianban_data=_lianban_data(context),
                 lhb_data=_lhb_data(context),
+                xuangubao_data=data.get("xuangubao_data", {}),
                 skip_api_call=False,
             )
-        if not sector:
-            sector = "未知"
+        if not _is_valid_sector_label(sector):
+            sector = "待补充板块"
         if callable(analyze_candlestick_pattern):
             pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
         else:
@@ -369,11 +454,11 @@ def build_lianban_node(context, node_meta=None, node_lookup=None):
                 name = stock.get("name", "?")
                 code = stock.get("code", "?").replace(".SZ", "").replace(".SS", "")
                 info = stock_full_info.get(code, {})
-                change_pct = info.get("change_pct", stock.get("change_pct", 0))
-                high = info.get("high", 0)
-                low = info.get("low", 0)
-                open_price = info.get("open", 0)
-                close = info.get("close", stock.get("price", 0))
+                change_pct = _safe_float(info.get("change_pct", stock.get("change_pct", 0)))
+                high = _first_positive_float(info.get("high"), stock.get("high"), stock.get("high_price"), stock.get("最高价"))
+                low = _first_positive_float(info.get("low"), stock.get("low"), stock.get("low_price"), stock.get("最低价"))
+                open_price = _first_positive_float(info.get("open"), stock.get("open"), stock.get("open_price"), stock.get("开盘价"))
+                close = _first_positive_float(info.get("close"), stock.get("close"), stock.get("close_price"), stock.get("price"), stock.get("最新价"))
                 first_limit_time = stock.get("first_limit_time", "-")
                 reason = stock.get("reason", "-")
                 if len(reason) > 30:
@@ -387,6 +472,7 @@ def build_lianban_node(context, node_meta=None, node_lookup=None):
                     dt_pool_raw=_dt_pool(context),
                     lianban_data=_lianban_data(context),
                     lhb_data=_lhb_data(context),
+                    xuangubao_data=data.get("xuangubao_data", {}),
                 )
                 pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct, first_limit_time)
                 lines.append(

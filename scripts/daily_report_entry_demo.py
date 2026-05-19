@@ -25,18 +25,19 @@ A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-
 
 严格按照SKILL.md中声明的数据源优先级调用：
 0. 基础市场事实与 snap-ui public data：Tushare-first；AkShare / iwencai 仅作为 fallback only
-1. 热度前十个股：同花顺个股热榜（首选）→ 腾讯财经热股排行（备用）
-2. 板块热榜：同花顺板块热榜
+1. 热度前十个股：Tushare ths_hot 热股（首选）→ 本地同花顺脚本 / 腾讯财经热股排行（备用）
+2. 板块热榜：Tushare ths_hot 概念板块/行业板块（首选）→ 本地同花顺板块脚本（兜底）
 3. 指数数据：Tushare index_daily（首选）→ AkShare / 同花顺问财 / 历史K线（兜底）
 4. 两市成交额：Tushare daily amount（首选）→ AkShare / 同花顺问财（兜底）
-5. 涨停跌停数据：akshare涨停跌停池
-6. 行业资金流向：腾讯财经板块资金流向
-7. 板块涨跌幅排行：腾讯行业资金流（首选）→ 同花顺问财/AkShare（兜底）
+5. 涨停跌停数据：Tushare limit_list_ths / limit_list_d（首选）→ akshare涨停跌停池（兜底）
+6. 行业资金流向：Tushare moneyflow_ind_ths（首选）→ 腾讯财经板块资金流向（兜底）
+7. 板块涨跌幅排行：Tushare ths_index + ths_daily（首选）→ 同花顺问财/AkShare/Tencent（兜底）
 8. 成交额排名：Tushare daily amount（首选）→ 东方财富 / 同花顺问财 / AkShare（兜底）
 9. 预期日历：财联社预期日历（CLS接口，封装在 TencentFinanceData.get_calendar_events）
 10. 选股通异动：选股通盘中异动分析
 11. 顽主杯热门前十：顽主杯API
-12. 龙虎榜数据：finshare龙虎榜接口
+12. 龙虎榜数据：Tushare top_list（首选）→ finshare龙虎榜接口（兜底）
+13. 新股日历：Tushare new_share（首选）→ Sina 新股日历 / 本地解析（兜底）
 
 使用方法：
     python3 daily_report_entry_demo.py [YYYY-MM-DD]
@@ -220,6 +221,9 @@ from market_data.daily_price_runtime import (
     run_with_wall_clock_timeout as run_run_with_wall_clock_timeout,
     to_bs_code as run_to_bs_code,
 )
+from market_data.tushare_turnover_service import (
+    fetch_stock_basic_map as run_fetch_stock_basic_map,
+)
 from risk.a_kill_blacklist_store import (
     get_active_a_kill_records,
     is_stock_in_a_kill_cooldown,
@@ -327,7 +331,14 @@ from input.iwencai_runtime import (
     get_wind_a_from_iwencai,
 )
 from input.tushare_runtime import (
+    get_lhb_snapshot_from_tushare_first,
     get_major_indices_from_tushare_first,
+    get_new_stock_calendar_from_tushare_first,
+    get_limit_pool_snapshot_from_tushare_first,
+    get_sector_change_rank_from_tushare_first,
+    get_sector_fund_flow_from_tushare_first,
+    get_sector_hot_plates_from_tushare_first,
+    get_stock_hot_rank_from_tushare_first,
     get_total_turnover_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
@@ -907,7 +918,7 @@ def ai_group_concepts_into_chains(concepts_list):
 
 _gem_stock_universe_cache = None
 
-def get_stock_sector(stock_name, stock_code, hot_rank_data=None, zt_pool_data=None, lianban_data=None, lhb_data=None, sector_fund_flow=None, zt_pool_raw=None, dt_pool_raw=None, skip_api_call=False):
+def get_stock_sector(stock_name, stock_code, hot_rank_data=None, zt_pool_data=None, lianban_data=None, lhb_data=None, sector_fund_flow=None, zt_pool_raw=None, dt_pool_raw=None, xuangubao_data=None, skip_api_call=False):
     return run_get_stock_sector(
         stock_name,
         stock_code,
@@ -918,6 +929,7 @@ def get_stock_sector(stock_name, stock_code, hot_rank_data=None, zt_pool_data=No
         sector_fund_flow=sector_fund_flow,
         zt_pool_raw=zt_pool_raw,
         dt_pool_raw=dt_pool_raw,
+        xuangubao_data=xuangubao_data,
         skip_api_call=skip_api_call,
     )
 
@@ -2320,6 +2332,26 @@ def _get_gem_stock_universe():
     global _gem_stock_universe_cache
     if _gem_stock_universe_cache is not None:
         return [dict(item) for item in _gem_stock_universe_cache]
+
+    items = []
+    try:
+        basic_map = run_fetch_stock_basic_map() or {}
+        seen_codes = set()
+        for raw_code, meta in basic_map.items():
+            code = normalize_stock_code(raw_code)
+            if not code.startswith('30') or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            items.append({
+                'code': code,
+                'name': str((meta or {}).get('name', '') or '').strip(),
+            })
+    except Exception:
+        items = []
+    if items:
+        _gem_stock_universe_cache = [dict(item) for item in items]
+        return [dict(item) for item in items]
+
     try:
         import akshare as ak
         df = ak.stock_info_a_code_name()

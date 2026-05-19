@@ -113,6 +113,48 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         )
         self.assertEqual(rows, [1.0, 2.5])
 
+    def test_fetch_stock_batch_quote_info_builds_stock_full_info_from_daily_rows(self):
+        from market_data.tushare_turnover_service import fetch_stock_batch_quote_info
+
+        rows = fetch_stock_batch_quote_info(
+            ["000001", "600000"],
+            "2026-05-12",
+            fetch_daily_records_fn=lambda trade_date: [
+                {
+                    "stock_code": "000001",
+                    "name": "",
+                    "open": 10,
+                    "high": 11,
+                    "low": 9.8,
+                    "close": 10.5,
+                    "pct_chg": 5,
+                    "amount_yi": 2.5,
+                    "data_source": "tushare.daily",
+                },
+                {
+                    "stock_code": "600000",
+                    "name": "浦发银行",
+                    "open": 8,
+                    "high": 8.5,
+                    "low": 7.9,
+                    "close": 8.1,
+                    "pct_chg": -1.22,
+                    "amount_yi": 1.0,
+                    "data_source": "tushare.daily",
+                },
+            ],
+            fetch_name_map_fn=lambda: {"000001": {"name": "平安银行", "industry": "银行"}},
+        )
+
+        self.assertEqual(set(rows), {"000001", "600000"})
+        self.assertEqual(rows["000001"]["name"], "平安银行")
+        self.assertEqual(rows["000001"]["industry"], "银行")
+        self.assertEqual(rows["000001"]["所属行业"], "银行")
+        self.assertEqual(rows["000001"]["change_pct"], 5.0)
+        self.assertEqual(rows["000001"]["zt_status"], "正常")
+        self.assertEqual(rows["600000"]["name"], "浦发银行")
+        self.assertEqual(rows["600000"]["data_source"], "tushare.daily")
+
 
 if __name__ == "__main__":
     unittest.main()

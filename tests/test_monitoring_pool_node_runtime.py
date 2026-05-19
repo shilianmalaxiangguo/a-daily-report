@@ -58,6 +58,31 @@ class MonitoringPoolNodeRuntimeTest(unittest.TestCase):
         self.assertIn('石大胜华(603026)', rendered)
         self.assertNotIn('| 标的 | 交易日数 |', rendered)
 
+    def test_render_monitoring_pool_details_shows_xuangubao_limit_up_reason(self):
+        nodes = self._load_nodes_module()
+        result = nodes.render_monitoring_pool_nodes(
+            {
+                'performance_summary': {
+                    'monitoring_pool': {
+                        'main_pool': [{
+                            'stock_name': '交运股份',
+                            'stock_code': '600676',
+                            'assessment_reason': '首板后观察',
+                            'xuangubao_stock_reason': '拟置入文旅体育资产',
+                            'xuangubao_related_plate_names': ['资产重组'],
+                            'monitoring_rows': [{'date': '2026-05-18'}],
+                        }],
+                    }
+                },
+                'enabled_node_keys': ['main_pool_details'],
+            }
+        )
+
+        rendered = '\n'.join(result['lines'])
+        self.assertIn('选股通解释', rendered)
+        self.assertIn('拟置入文旅体育资产', rendered)
+        self.assertIn('资产重组', rendered)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -8,6 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+def _m(*parts):
+    return "".join(parts)
+
+
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
 import sys
@@ -203,11 +207,11 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(pulse["pulse_stage"], "加速")
         self.assertEqual(pulse["execution_bias"], "allow_execute")
 
-    def test_derive_mainline_pulse_snapshot_keeps_conditional_defense_when_gate_allows_30(self):
+    def test_derive_mainline_pulse_snapshot_maps_conditional_defense_to_zero_or_50_model(self):
         support = self._load_module()
 
         pulse = support.derive_mainline_pulse_snapshot(
-            final_gate={"can_new_entry": False, "should_reduce": False, "allow_conditional_30": True},
+            final_gate={"can_new_entry": False, "should_reduce": False, "allow_attack_50_ready": True},
             state_code="contract",
             leading_line="半导体",
             trend_density=2,
@@ -218,7 +222,9 @@ assert leader["name"] == "军工龙头"
         )
 
         self.assertEqual(pulse["execution_bias"], "conditional_defense")
-        self.assertIn("10点确认", pulse["pulse_action_reason"])
+        self.assertIn("参与窗口", pulse["pulse_action_reason"])
+        self.assertIn("50%标准进攻", pulse["pulse_action_reason"])
+        self.assertNotIn(_m("30%", "条件试错"), pulse["pulse_action_reason"])
         self.assertNotIn("只允许处理旧仓", pulse["pulse_action_reason"])
 
     def test_build_market_state_machine_snapshot_support_builds_transition_contract(self):
@@ -268,6 +274,37 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result["resilient_abnormal_count"], 2)
         self.assertEqual(result["driver_type"], "趋势抱团驱动")
         self.assertEqual(result["pulse_action_reason"], "主线仍处于可参与段")
+
+    def test_build_market_state_machine_snapshot_support_ignores_board_label_trend_density(self):
+        support = self._load_module()
+
+        result = support.build_market_state_machine_snapshot(
+            {
+                "indices": {"上证指数": {"涨跌幅": -0.09}},
+                "zt_pool": [{"code": "000001"}] * 20,
+                "dt_pool": [{"code": "000009"}] * 18,
+                "market_stats": {"up_count": 2300, "down_count": 3000},
+            },
+            {"can_new_entry": False, "operation_state": "撤退态"},
+            "一档（空仓档）",
+            {"sector_name": "电力"},
+            main_sectors_info=[{"name": "电力"}],
+            sector_trend_snapshot=[
+                {"sector": "HS", "trend_count": 27},
+                {"sector": "通信设备", "trend_count": 5},
+            ],
+            abnormal_watch_pool=[],
+            helpers={
+                "_split_abnormal_watch_pool": lambda pool: (pool or [], []),
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_round_or_none": lambda value, digits=4: round(float(value), digits) if value is not None else None,
+                "_derive_mainline_pulse_snapshot": lambda **kwargs: {},
+            },
+        )
+
+        self.assertEqual(result["densest_sector"], "通信设备")
+        self.assertEqual(result["densest_sector_trend_count"], 5)
+        self.assertNotIn("HS", result["flow_direction"])
 
     def test_build_market_style_switch_snapshot_support_prefers_trend_when_turnover_and_resilience_align(self):
         support = self._load_module()

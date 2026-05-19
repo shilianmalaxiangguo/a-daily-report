@@ -69,6 +69,39 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertNotIn("| 1 | 军工一号 |", rendered)
         self.assertNotIn("## 五、成交核心结果", rendered)
 
+    def test_hot_rank_table_uses_xuangubao_plate_instead_of_market_board_label(self):
+        def resolve_sector(stock_name, stock_code, **kwargs):
+            xgb_data = kwargs.get("xuangubao_data") or {}
+            for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+                if item.get("symbol") == "000988.SZ":
+                    return item["related_plates"][0]["plate_name"]
+            return "待补充板块"
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [{"name": "华工科技", "code": "000988", "rate": 230000, "popularity_tag": "首板涨停"}],
+                "zt_pool": [{"代码": "000988", "名称": "华工科技", "所属行业": "HS"}],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {"symbol": "000988.SZ", "name": "华工科技", "related_plates": [{"plate_name": "光通信"}]},
+                    ]
+                },
+                "lianban_data": [],
+            },
+            target_date="2026-05-18",
+            stock_full_info={"000988": {"change_pct": 10.0, "high": 147.38, "low": 137.03, "open": 137.53, "close": 147.38}},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=resolve_sector,
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+            enabled_node_keys=["hot_rank_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 华工科技 | 000988 | 23.0w | 光通信 | +10.00% |", rendered)
+        self.assertNotIn("| HS |", rendered)
+
     def test_build_market_activity_report_sections_can_render_turnover_header_without_table(self):
         result = build_market_activity_report_sections(
             data={
@@ -167,6 +200,131 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 1 | 军工一号 | 000001 | 3.20亿 | 军工 | +5.20% |", rendered)
         self.assertNotIn("### 净流出结果", rendered)
         self.assertNotIn("消费一号", rendered)
+
+    def test_lhb_rows_replace_market_board_and_unknown_sector_with_context_sector(self):
+        def resolve_sector(stock_name, stock_code, **kwargs):
+            self.assertIn("xuangubao_data", kwargs)
+            return {
+                "000988": "光通信",
+                "002518": "算力",
+                "300657": "云计算数据中心",
+            }.get(stock_code, "半导体")
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "xuangubao_data": {
+                    "xuangubao_limit_up_reasons": [
+                        {"symbol": "000988.SZ", "name": "华工科技", "related_plates": [{"plate_name": "光通信"}]},
+                    ],
+                    "xuangubao_news": [
+                        {
+                            "title": "算力方向异动",
+                            "stocks": [{"symbol": "002518.SZ", "name": "科士达"}],
+                            "plates": [{"name": "算力"}],
+                        }
+                    ],
+                },
+                "lhb_net_buy_top10": [
+                    {"rank": 1, "code": "000988", "net_buy_amount_yi": 16.99, "name": "华工科技", "zt_status": "正常", "sector": "HS"},
+                    {"rank": 2, "code": "002518", "net_buy_amount_yi": 4.92, "name": "科士达", "zt_status": "正常", "sector": "未知"},
+                ],
+                "lhb_net_sell_top10": [
+                    {"rank": 1, "code": "300657", "net_buy_amount_yi": -4.09, "name": "弘信电子", "zt_status": "正常", "sector": "GEM"},
+                ],
+                "lianban_data": [],
+            },
+            target_date="2026-05-18",
+            stock_full_info={
+                "000988": {"change_pct": 10.0, "high": 147.38, "low": 137.03, "open": 137.53, "close": 147.38, "name": "华工科技"},
+                "002518": {"change_pct": 9.38, "high": 63.71, "low": 58.49, "open": 58.49, "close": 63.35, "name": "科士达"},
+                "300657": {"change_pct": 19.99, "high": 43.4, "low": 43.4, "open": 43.4, "close": 43.4, "name": "弘信电子"},
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=resolve_sector,
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["lhb_header", "lhb_buy", "lhb_sell"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 华工科技 | 000988 | 16.99亿 | 光通信 | +10.00% |", rendered)
+        self.assertIn("| 2 | 科士达 | 002518 | 4.92亿 | 算力 | +9.38% |", rendered)
+        self.assertIn("| 1 | 弘信电子 | 300657 | 4.09亿 | 云计算数据中心 | +19.99% |", rendered)
+        self.assertNotIn("| HS |", rendered)
+        self.assertNotIn("| GEM |", rendered)
+        self.assertNotIn("| 未知 |", rendered)
+
+    def test_lhb_rows_use_prefilled_quote_fields_when_stock_full_info_is_missing(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lhb_net_buy_top10": [
+                    {
+                        "rank": 1,
+                        "code": "688409",
+                        "net_buy_amount_yi": 7.28,
+                        "name": "富创精密",
+                        "sector": "半导体",
+                        "change_pct": 4.67,
+                        "high": 176.8,
+                        "low": 155.74,
+                        "open": 158.09,
+                        "close": 169.85,
+                    }
+                ],
+                "lhb_net_sell_top10": [],
+                "lianban_data": [],
+            },
+            target_date="2026-05-18",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "半导体",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("普通形态", 0, "中"),
+            enabled_node_keys=["lhb_header", "lhb_buy"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 富创精密 | 688409 | 7.28亿 | 半导体 | +4.67% | 176.80 | 155.74 | 158.09 | 169.85 |", rendered)
+        self.assertNotIn("| 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
+
+    def test_turnover_rows_preserve_valid_row_sector_and_replace_unknown(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [
+                    {"name": "佰维存储", "code": "688525", "concepts": ["存储芯片"]},
+                ],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": [
+                    {"name": "中际旭创", "code": "300308", "turnover": 255.46, "sector": "通信设备"},
+                    {"name": "佰维存储", "code": "688525", "turnover": 167.86, "sector": "未知"},
+                ],
+                "turnover_rank": [],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "lianban_data": [],
+            },
+            target_date="2026-05-18",
+            stock_full_info={
+                "300308": {"change_pct": -0.46, "high": 1075, "low": 1030.03, "open": 1030.03, "close": 1045, "name": "中际旭创"},
+                "688525": {"change_pct": 8.10, "high": 345, "low": 308, "open": 308, "close": 331.1, "name": "佰维存储"},
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "不应覆盖",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["turnover_header", "turnover_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 中际旭创 | 300308 | 255.46亿 | 通信设备 | -0.46% |", rendered)
+        self.assertIn("| 2 | 佰维存储 | 688525 | 167.86亿 | 存储芯片 | +8.10% |", rendered)
+        self.assertNotIn("| 未知 |", rendered)
 
     def test_build_market_activity_report_sections_renders_hot_rank_and_lhb(self):
         result = build_market_activity_report_sections(
@@ -347,6 +505,39 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 放量启动 | 军工 | 8.5 | 关注 | 共振最强 | 中 |", rendered)
         self.assertNotIn("__enum__", rendered)
         self.assertTrue(any(log["step"] == "render.advanced_activity_sections" for log in result["module_logs"]))
+
+    def test_lianban_rows_use_row_price_fields_when_stock_full_info_is_missing(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [
+                    {
+                        "lianban_days": 1,
+                        "name": "利仁科技",
+                        "code": "001259",
+                        "sector": "股权转让",
+                        "change_pct": 10.0,
+                        "high_price": 66.55,
+                        "low_price": 63.01,
+                        "open_price": 66.55,
+                        "close_price": 66.55,
+                        "first_limit_time": "09:25:00",
+                        "reason": "控股股东拟协议转让股份",
+                    }
+                ],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "股权转让",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("一字板加速", 10, "强"),
+            enabled_node_keys=["lianban"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 利仁科技 | 001259 | 股权转让 | +10.00% | 09:25:00 | 66.55 | 63.01 | 66.55 | 66.55 |", rendered)
+        self.assertNotIn("| 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
 
     def test_build_advanced_activity_report_sections_can_render_only_enabled_nodes(self):
         result = build_advanced_activity_report_sections(

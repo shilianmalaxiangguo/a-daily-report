@@ -27,6 +27,11 @@ def _provider_from_payload(payload, default_provider):
     return ",".join(unique_sources)
 
 
+def _provider_from_value(value, default_provider):
+    source = getattr(value, "data_source", "")
+    return source or default_provider
+
+
 def collect_market_state_request_bundle(
     target_date,
     *,
@@ -58,9 +63,11 @@ def collect_market_state_request_bundle(
                 "request.total_turnover",
                 "success",
                 "已获取两市成交额",
-                provider="tushare-first",
+                provider=_provider_from_value(total_turnover_float, "tushare-first"),
                 target_keys=["total_turnover", "turnover_data"],
                 total_turnover=total_turnover_float,
+                row_count=getattr(total_turnover_float, "source_row_count", None),
+                retry_count=getattr(total_turnover_float, "source_retry_count", None),
             )
         else:
             data_status["两市成交额"] = False

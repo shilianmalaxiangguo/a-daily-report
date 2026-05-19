@@ -4,12 +4,14 @@ import json
 from pathlib import Path
 
 import pandas as pd
+from market_data.tushare_minute_service import fetch_tushare_minute_bars
 
 DEFAULT_MINUTE_CACHE_DIR = Path(__file__).resolve().parents[1] / "cache" / "minute_price"
 
 __all__ = [
     "DEFAULT_MINUTE_CACHE_DIR",
     "fetch_index_minute_bars",
+    "fetch_tushare_minute_bars",
     "normalize_index_minute_symbol",
     "normalize_minute_bars",
 ]
@@ -95,6 +97,24 @@ def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DE
     if cached and cached.get("bars"):
         cached["source"] = "cache"
         return cached
+    try:
+        bars = fetch_tushare_minute_bars(index_code, period=str(period), is_index=True, target_date=None)
+        if bars:
+            payload = {
+                "success": True,
+                "status": "success",
+                "source": "tushare.stock_mins",
+                "symbol": symbol,
+                "period": str(period),
+                "bars": bars,
+            }
+            try:
+                _write_cache(path, payload)
+            except Exception:
+                pass
+            return payload
+    except Exception:
+        pass
     try:
         import akshare as ak
 

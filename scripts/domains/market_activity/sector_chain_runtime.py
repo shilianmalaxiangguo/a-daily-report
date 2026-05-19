@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 
 __all__ = [
@@ -9,6 +10,12 @@ __all__ = [
 
 _MISSING = object()
 DISPLAY_MVP_MODE = False
+ENABLE_REMOTE_SECTOR_LLM = str(os.getenv("A_DAILY_REPORT_ENABLE_REMOTE_SECTOR_LLM", "")).lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 _llm_call_stats = {
     "total_calls": 0,
     "total_time": 0.0,
@@ -62,10 +69,18 @@ def ai_group_concepts_into_chains(concepts_list, *, helpers=None):
 def _ai_analyze_sector_relationships_legacy_body(sector_list, context_info=""):
     global _llm_call_stats
     start_time = time.time()
+    context_label = context_info or "本地产业链归并"
+
+    if not ENABLE_REMOTE_SECTOR_LLM:
+        return _llm_sector_analysis_legacy_body(sector_list, context_label)
 
     try:
         client = get_llm_service()
+        if client is None:
+            raise RuntimeError("远程产业链增强服务未配置")
         result = client.analyze_sector_relationships(sector_list, context_info)
+        if not isinstance(result, dict) or not result.get("groups"):
+            raise RuntimeError("远程产业链增强返回空结果")
 
         elapsed = time.time() - start_time
         _llm_call_stats["total_calls"] += 1
@@ -76,8 +91,8 @@ def _ai_analyze_sector_relationships_legacy_body(sector_list, context_info=""):
         return result
     except Exception as error:
         elapsed = time.time() - start_time
-        print(f"[ai_analyze_sector_relationships] LLM调用失败({elapsed:.2f}s)，使用兜底方案: {error}")
-        return {"groups": [], "insights": "LLM分析失败，无法生成产业链洞察"}
+        print(f"[ai_analyze_sector_relationships] 远程增强失败({elapsed:.2f}s)，使用本地归链: {error}")
+        return _llm_sector_analysis_legacy_body(sector_list, f"{context_label}；远程增强失败后本地归链")
 
 
 def _ai_group_concepts_into_chains_legacy_body(concepts_list):
@@ -89,7 +104,7 @@ def _ai_group_concepts_into_chains_legacy_body(concepts_list):
     else:
         ai_result = ai_analyze_sector_relationships(concepts_list)
         if not ai_result.get("groups"):
-            ai_result = _llm_sector_analysis_legacy_body(concepts_list, "LLM失败后回退本地归链")
+            ai_result = _llm_sector_analysis_legacy_body(concepts_list, "远程增强未产出后回退本地归链")
 
     chains = {}
     for group in ai_result.get("groups", []):
@@ -119,12 +134,40 @@ def _llm_sector_analysis_legacy_body(sectors, context):
                 "终端应用": ["激光雷达"],
             },
         },
-        "AI算力": {
-            "keywords": ["算力", "AI芯片", "服务器", "数据中心", "云计算", "液冷", "存储芯片", "半导体", "芯片", "通信设备", "通信"],
+        "半导体": {
+            "keywords": ["半导体", "芯片", "存储芯片", "HBM", "DRAM", "NAND", "光刻机", "光刻胶", "EDA", "大基金", "大基金系", "先进封装", "封测", "晶圆", "摩尔线程", "国产芯片"],
             "segments": {
-                "芯片算力": ["AI芯片", "芯片", "半导体", "存储芯片"],
+                "设计与IP": ["EDA", "芯片", "国产芯片", "摩尔线程"],
+                "制造设备": ["光刻机", "晶圆", "半导体设备"],
+                "材料": ["光刻胶", "半导体材料"],
+                "存储与封测": ["HBM", "DRAM", "NAND", "存储芯片", "先进封装", "封测"],
+                "产业资本": ["大基金", "大基金系"],
+            },
+        },
+        "AI算力": {
+            "keywords": ["算力", "AI芯片", "服务器", "数据中心", "云计算", "液冷", "通信设备", "通信", "高速连接器", "连接器", "高速铜缆", "铜缆高速连接"],
+            "segments": {
+                "芯片算力": ["AI芯片"],
                 "基础设施": ["服务器", "数据中心", "云计算", "液冷", "液冷服务器"],
-                "网络通信": ["通信设备", "通信", "算力"],
+                "网络通信": ["通信设备", "通信", "算力", "高速连接器", "连接器", "高速铜缆", "铜缆高速连接"],
+            },
+        },
+        "数字经济": {
+            "keywords": ["数字经济", "工业互联网", "物联网", "电子身份证", "人脸识别", "超高清视频", "空间计算", "数据要素", "网络安全", "人工智能", "AIGC", "信创", "软件服务", "电信运营", "运营商"],
+            "segments": {
+                "数字基础设施": ["工业互联网", "物联网", "数据要素", "电信运营", "运营商"],
+                "身份与安全": ["电子身份证", "人脸识别", "网络安全", "信创"],
+                "内容与交互": ["超高清视频", "空间计算", "AIGC", "人工智能"],
+                "软件服务": ["软件服务"],
+            },
+        },
+        "消费电子": {
+            "keywords": ["消费电子", "苹果产业链", "苹果概念", "无线耳机", "耳机", "LED", "MiniLED", "MicroLED", "面板", "家电", "智能音箱", "智能穿戴", "折叠屏", "MR", "VR", "AR"],
+            "segments": {
+                "品牌链": ["苹果产业链", "苹果概念"],
+                "声学与穿戴": ["无线耳机", "耳机", "智能音箱", "智能穿戴"],
+                "显示": ["LED", "MiniLED", "MicroLED", "面板"],
+                "终端家电": ["家电", "折叠屏", "MR", "VR", "AR"],
             },
         },
         "人形机器人": {
@@ -134,12 +177,21 @@ def _llm_sector_analysis_legacy_body(sectors, context):
                 "整机系统": ["机器人", "人形机器人", "具身智能"],
             },
         },
+        "高端制造": {
+            "keywords": ["高端制造", "新型工业化", "机器视觉", "工业母机", "智能制造", "工业自动化", "工控", "数控机床"],
+            "segments": {
+                "智能制造": ["新型工业化", "智能制造", "工业自动化", "工控"],
+                "感知检测": ["机器视觉"],
+                "核心设备": ["工业母机", "数控机床"],
+            },
+        },
         "新能源": {
-            "keywords": ["光伏", "储能", "锂电池", "电池", "电力", "电网", "风电", "核电", "氢能源", "固态电池", "电网设备", "绿色电力", "绿电"],
+            "keywords": ["光伏", "储能", "锂电池", "电池", "电力", "电网", "风电", "核电", "氢能源", "固态电池", "电网设备", "绿色电力", "绿电", "碳中和", "碳交易", "节能环保"],
             "segments": {
                 "发电端": ["光伏", "风电", "核电", "氢能源", "绿色电力", "绿电"],
                 "储能端": ["储能", "锂电池", "电池", "固态电池"],
                 "输配电": ["电力", "电网", "电网设备"],
+                "双碳政策": ["碳中和", "碳交易", "节能环保"],
             },
         },
         "商业航天": {
@@ -151,11 +203,64 @@ def _llm_sector_analysis_legacy_body(sectors, context):
             },
         },
         "汽车产业链": {
-            "keywords": ["汽车", "汽车零部件", "整车", "新能源车", "智能驾驶", "无人驾驶", "车联网"],
+            "keywords": ["汽车", "汽车零部件", "整车", "新能源车", "新能源汽车", "智能驾驶", "无人驾驶", "车联网", "一体化压铸", "压铸"],
             "segments": {
-                "整车制造": ["整车", "汽车", "新能源车"],
-                "零部件": ["汽车零部件"],
+                "整车制造": ["整车", "汽车", "新能源车", "新能源汽车"],
+                "零部件": ["汽车零部件", "一体化压铸", "压铸"],
                 "智能系统": ["智能驾驶", "无人驾驶", "车联网"],
+            },
+        },
+        "区域国资": {
+            "keywords": ["国资", "上海国资", "浙江国资", "新疆国资", "地方国资", "振兴东北", "东北振兴", "自贸区", "海南自贸", "粤港澳", "长三角", "西部大开发"],
+            "segments": {
+                "地方国资": ["上海国资", "浙江国资", "新疆国资", "地方国资", "国资"],
+                "区域经济": ["振兴东北", "东北振兴", "自贸区", "海南自贸", "粤港澳", "长三角", "西部大开发"],
+            },
+        },
+        "地产基建": {
+            "keywords": ["地产", "房地产", "基建", "水泥", "建材", "家居装饰", "陶瓷", "陶瓷产业", "检测检验", "建筑", "工程机械", "装配式建筑"],
+            "segments": {
+                "地产后周期": ["地产", "房地产", "家居装饰"],
+                "建筑材料": ["水泥", "建材", "陶瓷", "陶瓷产业"],
+                "工程服务": ["基建", "建筑", "检测检验", "工程机械", "装配式建筑"],
+            },
+        },
+        "化工材料": {
+            "keywords": ["化工", "氟化工", "工业气体", "有机硅", "磷化工", "钛白粉", "化纤", "新材料", "碳纤维", "复合材料"],
+            "segments": {
+                "基础化工": ["化工", "氟化工", "磷化工", "钛白粉", "化纤"],
+                "电子/工业材料": ["工业气体", "有机硅", "新材料", "碳纤维", "复合材料"],
+            },
+        },
+        "军工装备": {
+            "keywords": ["军工", "航海装备", "船舶", "航母", "航空发动机", "大飞机", "无人机", "低空经济", "卫星导航", "商业航天"],
+            "segments": {
+                "海空装备": ["航海装备", "船舶", "航母", "航空发动机", "大飞机", "无人机"],
+                "空天信息": ["卫星导航", "商业航天"],
+                "低空场景": ["低空经济"],
+            },
+        },
+        "食品饮料": {
+            "keywords": ["食品饮料", "休闲食品", "代糖", "甜味剂", "白酒", "啤酒", "乳业", "调味品", "预制菜"],
+            "segments": {
+                "大众消费": ["休闲食品", "预制菜", "调味品"],
+                "添加剂": ["代糖", "甜味剂"],
+                "酒饮乳品": ["白酒", "啤酒", "乳业"],
+            },
+        },
+        "出海链": {
+            "keywords": ["出海", "出海概念", "跨境电商", "外贸", "海外收入", "一带一路"],
+            "segments": {
+                "外需链": ["出海", "出海概念", "外贸", "海外收入"],
+                "跨境渠道": ["跨境电商"],
+                "区域合作": ["一带一路"],
+            },
+        },
+        "文旅消费": {
+            "keywords": ["文旅", "旅游", "冰雪产业", "体育产业", "赛事经济", "免税"],
+            "segments": {
+                "旅游休闲": ["文旅", "旅游", "免税"],
+                "体育赛事": ["冰雪产业", "体育产业", "赛事经济"],
             },
         },
     }
@@ -200,8 +305,16 @@ def _llm_sector_analysis_legacy_body(sectors, context):
             investment_logic = "防守属性，博弈医药改革/创新药政策预期"
         elif chain_name == "光通信":
             investment_logic = "AI算力基建受益方向，高速光互联需求驱动"
+        elif chain_name == "半导体":
+            investment_logic = "国产替代与AI硬件周期共振，重点看设备、材料、存储和设计端承接"
         elif chain_name == "AI算力":
             investment_logic = "AI产业核心基础设施，算力需求持续增长"
+        elif chain_name == "数字经济":
+            investment_logic = "数字化基础设施与AI应用扩散方向，资金偏事件催化与应用落地"
+        elif chain_name == "高端制造":
+            investment_logic = "制造业升级与智能工厂方向，重点看设备端订单和国产替代弹性"
+        elif chain_name == "消费电子":
+            investment_logic = "终端创新和品牌链复苏预期，重点看放量订单与新品催化"
         elif chain_name == "人形机器人":
             investment_logic = "智能制造新方向，产业政策支持"
         elif chain_name == "新能源":
@@ -210,6 +323,20 @@ def _llm_sector_analysis_legacy_body(sectors, context):
             investment_logic = "新能源汽车渗透率提升，智能化加速"
         elif chain_name == "商业航天":
             investment_logic = "军工外延与低空场景共振，资金容易围绕卫星/飞行器链条做扩散"
+        elif chain_name == "区域国资":
+            investment_logic = "地方国资改革与区域政策预期，更多按事件驱动和资产重估观察"
+        elif chain_name == "地产基建":
+            investment_logic = "地产后周期和基建稳增长链条，重点看政策落地后的需求修复"
+        elif chain_name == "化工材料":
+            investment_logic = "周期品价格与新材料需求共振，重点看供需拐点和涨价弹性"
+        elif chain_name == "军工装备":
+            investment_logic = "装备升级与订单预期驱动，适合观察趋势承接和事件催化"
+        elif chain_name == "食品饮料":
+            investment_logic = "消费复苏与细分品类景气驱动，更多看业绩弹性和渠道改善"
+        elif chain_name == "出海链":
+            investment_logic = "外需和海外收入弹性方向，重点看订单、汇率和关税扰动"
+        elif chain_name == "文旅消费":
+            investment_logic = "服务消费修复与事件催化方向，适合按节假日和赛事预期观察"
         else:
             investment_logic = "产业链景气度提升，资金关注度高"
 

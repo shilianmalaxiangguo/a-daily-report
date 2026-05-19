@@ -10,6 +10,55 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "待补充板块",
+    "待补充",
+    "其他",
+    "其它",
+    "-",
+}
+
+
+def _is_valid_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
+
+
+def _infer_sector_from_reason(text):
+    text = str(text or "")
+    if "长鑫" in text or "国产芯片" in text:
+        return "国产芯片"
+    keyword_groups = [
+        ("算力", ("Token工厂", "昇腾", "算力", "服务器", "数据中心", "液冷", "东数西算")),
+        ("机器人", ("机器人", "减速器", "智能体", "机器视觉", "智能制造", "智能物流")),
+        ("商业航天", ("商业航天", "卫星", "航天", "火箭")),
+        ("低空经济", ("低空", "无人机", "eVTOL")),
+        ("家用电器", ("小家电", "家用电器", "空调")),
+        ("消费电子", ("MiniLED", "车载背光", "VR背光", "背光显示", "消费电子", "无线耳机", "苹果产业链")),
+        ("食品饮料", ("葡萄酒", "白兰地", "保健酒", "食品", "饮料")),
+        ("天然气", ("天然气", "页岩气", "燃气")),
+        ("资产重组", ("股权转让", "资产重组", "并购重组", "控制权", "重整", "实控人变更", "国资入主", "资产置换")),
+        ("环保", ("环保", "水务")),
+        ("汽车产业链", ("汽车拆解", "汽车", "新能源汽车")),
+    ]
+    for sector, markers in keyword_groups:
+        if any(marker in text for marker in markers):
+            return sector
+    return ""
+
+
 def _build_sector_bucket(records, *, include_zt_type=False):
     buckets = {}
     for item in records or []:
@@ -24,6 +73,27 @@ def _build_sector_bucket(records, *, include_zt_type=False):
             row["zt_type"] = item.get("涨停统计", "")
         buckets[sector].append(row)
     return buckets
+
+
+class _RecordFrame:
+    def __init__(self, rows):
+        self._rows = list(rows or [])
+
+    @property
+    def empty(self):
+        return not self._rows
+
+    def to_dict(self, orient):
+        if orient != "records":
+            return {}
+        return list(self._rows)
+
+    def iterrows(self):
+        for index, row in enumerate(self._rows):
+            yield index, row
+
+    def __len__(self):
+        return len(self._rows)
 
 
 def _normalize_market_stats_value(value):
@@ -96,6 +166,63 @@ def _provider_from_rows(rows, default_provider):
     return ",".join(unique_sources)
 
 
+def _build_integrated_hot_list_from_primary_hot_rank(hot_stocks):
+    integrated = []
+    tag_distribution = {}
+    status_distribution = {}
+    high_lianban_stocks = []
+
+    for index, stock in enumerate(hot_stocks or [], start=1):
+        if not isinstance(stock, dict):
+            continue
+        code = stock.get("code") or stock.get("代码") or stock.get("ts_code") or ""
+        name = stock.get("name") or stock.get("名称") or stock.get("股票简称") or ""
+        if not code and not name:
+            continue
+
+        concepts = stock.get("concepts") or []
+        if isinstance(concepts, str):
+            concepts = [concepts] if concepts else []
+        tags = [str(item).strip() for item in concepts if str(item).strip()]
+        sector = stock.get("sector") or stock.get("所属行业") or ""
+        if sector and sector not in tags:
+            tags.append(str(sector))
+        for tag in tags:
+            tag_distribution[tag] = tag_distribution.get(tag, 0) + 1
+
+        integrated.append(
+            {
+                "rank": stock.get("rank") or index,
+                "code": code,
+                "name": name,
+                "price": stock.get("price"),
+                "change_pct": stock.get("change_pct"),
+                "rate": stock.get("rate"),
+                "sector": sector,
+                "tags": tags,
+                "status_tags": [],
+                "data_source": stock.get("data_source") or "tushare.ths_hot",
+                "source": "primary_hot_rank",
+            }
+        )
+
+    return integrated, tag_distribution, status_distribution, high_lianban_stocks
+
+
+def _normalize_integrated_hot_list_payload(payload):
+    if isinstance(payload, tuple) and len(payload) == 4:
+        return payload
+    if isinstance(payload, list):
+        return payload, {}, {}, []
+    if isinstance(payload, dict):
+        integrated = payload.get("integrated_hot_list") or payload.get("hot_list") or payload.get("items") or []
+        tag_distribution = payload.get("tag_distribution") or {}
+        status_distribution = payload.get("status_distribution") or {}
+        high_lianban_stocks = payload.get("high_lianban_stocks") or []
+        return integrated, tag_distribution, status_distribution, high_lianban_stocks
+    return [], {}, {}, []
+
+
 def _build_code_to_sector_map(existing_results=None):
     existing_results = existing_results or {}
     code_to_sector = {}
@@ -103,17 +230,65 @@ def _build_code_to_sector_map(existing_results=None):
     for stock in existing_results.get("zt_pool", []) or []:
         code = stock.get("代码", "")
         sector = stock.get("所属行业", "")
-        if code and sector:
+        if code and _is_valid_sector_label(sector):
             code_to_sector[code] = sector
 
     for key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
         for stock in existing_results.get(key, []) or []:
             code = str(stock.get("code", "") or "").replace(".SZ", "").replace(".SS", "")
             sector = stock.get("sector", "")
-            if code and sector and sector != "未知":
+            if code and _is_valid_sector_label(sector):
                 code_to_sector[code] = sector
 
     return code_to_sector
+
+
+def _has_limit_pool_snapshot_payload(snapshot):
+    snapshot = snapshot or {}
+    return bool(snapshot.get("zt_pool") or snapshot.get("dt_pool") or snapshot.get("market_stats"))
+
+
+def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
+    snapshot = snapshot or {}
+    zt_pool_records = list(snapshot.get("zt_pool") or [])
+    dt_pool_records = list(snapshot.get("dt_pool") or [])
+    market_stats = dict(snapshot.get("market_stats") or {})
+
+    results["zt_pool"] = zt_pool_records
+    results["limit_up_codes"] = set(snapshot.get("limit_up_codes") or [row.get("代码") for row in zt_pool_records if row.get("代码")])
+    artifacts["limit_up_df"] = snapshot.get("limit_up_df") or _RecordFrame(zt_pool_records)
+    artifacts["limit_up_provider"] = snapshot.get("provider", "tushare.limit_list_ths")
+    data_status["涨停池"] = bool(zt_pool_records)
+    if zt_pool_records:
+        emit(f"   ✅ 涨停池: {len(zt_pool_records)} 只")
+        results["zt_pool_by_sector"] = _build_sector_bucket(zt_pool_records, include_zt_type=True)
+        data_status["涨停股板块分布"] = True
+        emit(f"   ✅ 涨停股板块分布: {len(results['zt_pool_by_sector'])} 个板块")
+    else:
+        results["zt_pool_by_sector"] = {}
+        data_status["涨停股板块分布"] = False
+        emit("   ❌ 涨停池为空")
+
+    results["dt_pool"] = dt_pool_records
+    results["limit_down_codes"] = set(snapshot.get("limit_down_codes") or [row.get("代码") for row in dt_pool_records if row.get("代码")])
+    artifacts["limit_down_df"] = snapshot.get("limit_down_df") or _RecordFrame(dt_pool_records)
+    data_status["跌停池"] = bool(dt_pool_records)
+    if dt_pool_records:
+        emit(f"   ✅ 跌停池: {len(dt_pool_records)} 只")
+        results["dt_pool_by_sector"] = _build_sector_bucket(dt_pool_records)
+        data_status["跌停股板块分布"] = True
+        emit(f"   ✅ 跌停股板块分布: {len(results['dt_pool_by_sector'])} 个板块")
+    else:
+        results["dt_pool_by_sector"] = {}
+        data_status["跌停股板块分布"] = False
+        emit("   ❌ 跌停池为空")
+
+    results["market_stats"] = market_stats
+    data_status["大盘涨跌统计"] = bool(market_stats)
+    if market_stats:
+        emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+    else:
+        emit("   ⚠️ 大盘涨跌统计数据为空")
 
 
 def collect_market_activity_pool_request_bundle(
@@ -122,6 +297,7 @@ def collect_market_activity_pool_request_bundle(
     get_limit_up_pool,
     get_limit_down_pool,
     fetch_market_activity_df,
+    request_registry=None,
     timer,
     emit,
 ):
@@ -131,12 +307,66 @@ def collect_market_activity_pool_request_bundle(
     module_logs = []
     artifacts = {"limit_up_df": None, "limit_down_df": None}
 
-    emit("  4️⃣ 获取涨停跌停数据（akshare涨停跌停池模块）...")
+    emit("  4️⃣ 获取涨停跌停数据（Tushare 优先）...")
     try:
+        limit_pool_fetcher = (request_registry or {}).get("limit_pool_snapshot")
+        if callable(limit_pool_fetcher):
+            snapshot = limit_pool_fetcher(target_date=target_date) or {}
+            if _has_limit_pool_snapshot_payload(snapshot):
+                _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit)
+                step_status["涨停跌停数据获取"] = True
+                elapsed, _ = timer.record("涨停跌停数据获取", 4)
+                emit(f"   ✅ 涨停跌停数据完成 [⏱ {elapsed:.2f}s]")
+                _append_log(
+                    module_logs,
+                    "request.pool_snapshot",
+                    "success" if data_status.get("涨停池") or data_status.get("跌停池") else "degraded",
+                    "已获取涨停跌停池与市场活跃度快照",
+                    provider=snapshot.get("provider", "tushare.limit_list_ths"),
+                    target_keys=["zt_pool", "dt_pool", "zt_pool_by_sector", "dt_pool_by_sector", "market_stats"],
+                    zt_count=len(results.get("zt_pool", [])),
+                    dt_count=len(results.get("dt_pool", [])),
+                    fallback_used=bool(snapshot.get("fallback_used")),
+                )
+                return {
+                    "results": results,
+                    "data_status": data_status,
+                    "step_status": step_status,
+                    "module_logs": module_logs,
+                    "artifacts": artifacts,
+                }
+
+            results["zt_pool"] = []
+            results["dt_pool"] = []
+            results["limit_up_codes"] = set()
+            results["limit_down_codes"] = set()
+            results["market_stats"] = {}
+            data_status["涨停池"] = False
+            data_status["跌停池"] = False
+            data_status["大盘涨跌统计"] = False
+            _append_log(
+                module_logs,
+                "request.pool_snapshot",
+                "degraded",
+                "Tushare-first 涨跌停池返回空",
+                provider=snapshot.get("provider", "tushare.limit_list_ths"),
+                target_keys=["zt_pool", "dt_pool", "zt_pool_by_sector", "dt_pool_by_sector", "market_stats"],
+                fallback_used=bool(snapshot.get("fallback_used")),
+                error=snapshot.get("source_error", "empty_result"),
+            )
+            return {
+                "results": results,
+                "data_status": data_status,
+                "step_status": step_status,
+                "module_logs": module_logs,
+                "artifacts": artifacts,
+            }
+
         date_str = str(target_date or "").replace("-", "")
 
         limit_up_df, limit_up_codes = get_limit_up_pool(date_str)
         artifacts["limit_up_df"] = limit_up_df
+        artifacts["limit_up_provider"] = "akshare.limit_up_pool"
         if not limit_up_df.empty:
             zt_pool_records = limit_up_df.to_dict("records")
             results["zt_pool"] = zt_pool_records
@@ -243,6 +473,7 @@ def collect_market_activity_hot_rank_request_bundle(
     fetch_ths_hot_stock,
     get_integrated_hot_list,
     tencent,
+    request_registry=None,
     timer,
     emit,
 ):
@@ -254,24 +485,92 @@ def collect_market_activity_hot_rank_request_bundle(
     }
     module_logs = []
 
-    emit(f"  5️⃣ 获取{target_date}热度前三十个股（同花顺首选）...")
+    emit(f"  5️⃣ 获取{target_date}热度前三十个股（Tushare 优先）...")
     primary_error = ""
     hot_stocks = []
-    try:
-        hot_stocks = fetch_ths_hot_stock(num=30)
-    except Exception as error:
-        primary_error = str(error)
-        emit(f"   ⚠️ 同花顺热榜失败: {error}，尝试腾讯备用...")
+    registry_attempted = False
+    hot_rank_fetcher = (request_registry or {}).get("stock_hot_rank")
+    if callable(hot_rank_fetcher):
+        registry_attempted = True
+        try:
+            hot_stocks = hot_rank_fetcher(target_date=target_date, limit=30)
+        except Exception as error:
+            primary_error = str(error)
+            emit(f"   ⚠️ Tushare 热榜失败: {error}，尝试腾讯备用...")
+            _append_log(
+                module_logs,
+                "request.hot_rank.primary",
+                "error",
+                "Tushare 热榜请求失败",
+                provider="tushare.ths_hot",
+                target_keys=["hot_rank_top30"],
+                error=str(error),
+            )
+        else:
+            if not hot_stocks:
+                primary_error = "empty_result"
+                emit("   ⚠️ Tushare 热榜返回空，尝试腾讯备用...")
+                _append_log(
+                    module_logs,
+                    "request.hot_rank.primary",
+                    "degraded",
+                    "Tushare 热榜返回空",
+                    provider="tushare.ths_hot",
+                    target_keys=["hot_rank_top30"],
+                    error="empty_result",
+                )
+
+    if hot_stocks:
+        code_to_sector = _build_code_to_sector_map(existing_results)
+        results["code_to_sector"] = code_to_sector
+        for stock in hot_stocks:
+            if stock.get("code") in code_to_sector:
+                stock["sector"] = code_to_sector[stock.get("code")]
+        results["hot_rank_top30"] = hot_stocks
+        data_status["热度前三十个股"] = True
+        step_status["热度前三十个股获取"] = True
+        elapsed, _ = timer.record("热度前三十个股获取", 5)
+        provider = _provider_from_rows(hot_stocks, "tushare.ths_hot")
+        emit(f"   ✅ 热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
         _append_log(
             module_logs,
             "request.hot_rank.primary",
-            "error",
-            "同花顺热榜请求失败",
-            provider="ths_hot_stock",
+            "success",
+            "热榜成功",
+            provider=provider,
             target_keys=["hot_rank_top30"],
-            error=str(error),
+            hot_rank_count=len(hot_stocks),
         )
-    else:
+
+    if not data_status.get("热度前三十个股") and not registry_attempted:
+        try:
+            hot_stocks = fetch_ths_hot_stock(num=30)
+        except Exception as error:
+            primary_error = str(error)
+            emit(f"   ⚠️ 同花顺热榜失败: {error}，尝试腾讯备用...")
+            _append_log(
+                module_logs,
+                "request.hot_rank.primary",
+                "error",
+                "同花顺热榜请求失败",
+                provider="ths_hot_stock",
+                target_keys=["hot_rank_top30"],
+                error=str(error),
+            )
+        else:
+            if not hot_stocks:
+                primary_error = "empty_result"
+                emit("   ⚠️ 同花顺返回空，尝试腾讯备用...")
+                _append_log(
+                    module_logs,
+                    "request.hot_rank.primary",
+                    "degraded",
+                    "同花顺热榜返回空",
+                    provider="ths_hot_stock",
+                    target_keys=["hot_rank_top30"],
+                    error="empty_result",
+                )
+
         if hot_stocks:
             code_to_sector = _build_code_to_sector_map(existing_results)
             results["code_to_sector"] = code_to_sector
@@ -291,18 +590,6 @@ def collect_market_activity_hot_rank_request_bundle(
                 provider="ths_hot_stock",
                 target_keys=["hot_rank_top30"],
                 hot_rank_count=len(hot_stocks),
-            )
-        else:
-            primary_error = "empty_result"
-            emit("   ⚠️ 同花顺返回空，尝试腾讯备用...")
-            _append_log(
-                module_logs,
-                "request.hot_rank.primary",
-                "degraded",
-                "同花顺热榜返回空",
-                provider="ths_hot_stock",
-                target_keys=["hot_rank_top30"],
-                error="empty_result",
             )
 
     if not data_status.get("热度前三十个股"):
@@ -355,9 +642,28 @@ def collect_market_activity_hot_rank_request_bundle(
                 upstream_error=primary_error,
             )
 
-    emit("  5️⃣.5️⃣ 获取整合热榜数据（新数据源）...")
+    emit("  5️⃣.5️⃣ 构建整合热榜数据（Tushare 热榜优先）...")
     try:
-        integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = get_integrated_hot_list(limit=100)
+        hot_rank_provider = _provider_from_rows(results.get("hot_rank_top30", []), "")
+        if results.get("hot_rank_top30"):
+            integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = (
+                _build_integrated_hot_list_from_primary_hot_rank(results.get("hot_rank_top30", []))
+            )
+            integrated_provider = (
+                "tushare.ths_hot.primary_hot_rank" if hot_rank_provider.startswith("tushare.") else "primary_hot_rank"
+            )
+            fallback_used = False
+        else:
+            integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = _normalize_integrated_hot_list_payload(
+                get_integrated_hot_list(limit=100)
+            )
+            integrated_provider = "hot_list_integrated.get_integrated_hot_list"
+            fallback_used = True
+            if not integrated_hot_list and results.get("hot_rank_top30"):
+                integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = (
+                    _build_integrated_hot_list_from_primary_hot_rank(results.get("hot_rank_top30", []))
+                )
+                integrated_provider = "primary_hot_rank.fallback"
         if integrated_hot_list:
             results["integrated_hot_list"] = integrated_hot_list
             results["tag_distribution"] = tag_distribution
@@ -381,8 +687,9 @@ def collect_market_activity_hot_rank_request_bundle(
             "success" if data_status.get("整合热榜") else "degraded",
             "已处理整合热榜请求",
             integrated_count=len(results.get("integrated_hot_list", [])),
-            provider="hot_list_integrated.get_integrated_hot_list",
+            provider=integrated_provider,
             target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
+            fallback_used=fallback_used,
         )
     except Exception as error:
         results["integrated_hot_list"] = []
@@ -415,6 +722,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
     tencent,
     get_sector_change_from_iwencai,
     get_turnover_rank_from_iwencai,
+    request_registry=None,
     timer,
     emit,
     current_dates=None,
@@ -429,9 +737,13 @@ def collect_market_activity_sector_snapshot_request_bundle(
     }
     module_logs = []
 
-    emit("  6️⃣ 获取板块热榜（同花顺）...")
+    emit("  6️⃣ 获取板块热榜（Tushare 优先）...")
     try:
-        hot_plates = fetch_hot_plate()
+        hot_plates_fetcher = (request_registry or {}).get("sector_hot_plates")
+        if callable(hot_plates_fetcher):
+            hot_plates = hot_plates_fetcher(target_date=target_date, limit=20)
+        else:
+            hot_plates = fetch_hot_plate()
         if hot_plates:
             results["hot_plates"] = hot_plates
             data_status["板块热榜"] = True
@@ -447,7 +759,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "request.hot_plates",
             "success" if data_status.get("板块热榜") else "degraded",
             "已处理板块热榜请求",
-            provider="ths_hot_list.fetch_hot_plate",
+            provider=_provider_from_rows(results.get("hot_plates", []), "tushare.ths_hot"),
             target_keys=["hot_plates"],
             plate_count=len(results.get("hot_plates", [])),
         )
@@ -460,15 +772,30 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "request.hot_plates",
             "error",
             "板块热榜请求失败",
-            provider="ths_hot_list.fetch_hot_plate",
+            provider="tushare.ths_hot",
             target_keys=["hot_plates"],
             error=str(error),
         )
 
-    emit("  7️⃣ 获取行业资金流向...")
+    emit("  7️⃣ 获取行业资金流向（Tushare 优先）...")
     try:
         today, yesterday = current_dates or (None, None)
-        if target_date == today or target_date == yesterday:
+        sector_flow_fetcher = (request_registry or {}).get("sector_fund_flow")
+        if callable(sector_flow_fetcher):
+            sector_flow = sector_flow_fetcher(target_date=target_date, limit=50) or {}
+            inflow = _normalize_sector_fund_flow_rows(sector_flow.get("inflow", []))
+            outflow = _normalize_sector_fund_flow_rows(sector_flow.get("outflow", []))
+            results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
+            if inflow or outflow:
+                data_status["行业资金流向"] = True
+                step_status["行业资金流向获取"] = True
+                elapsed, _ = timer.record("行业资金流向获取", 7)
+                emit(f"   ✅ 行业资金流成功: 净流入{len(inflow)}条, 净流出{len(outflow)}条 [⏱ {elapsed:.2f}s]")
+            else:
+                results["sector_fund_flow"] = {"inflow": [], "outflow": []}
+                data_status["行业资金流向"] = False
+                emit("   ❌ 行业资金流向返回空")
+        elif target_date == today or target_date == yesterday:
             inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
             outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
             results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
@@ -497,7 +824,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "request.sector_fund_flow",
             "success" if data_status.get("行业资金流向") else "degraded",
             "已处理行业资金流向请求",
-            provider="tencent.get_sector_fund_flow",
+            provider=(sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths") if "sector_flow" in locals() else "tencent.get_sector_fund_flow",
             target_keys=["sector_fund_flow"],
             historical=bool(results.get("sector_fund_flow", {}).get("is_historical")),
         )
@@ -515,10 +842,15 @@ def collect_market_activity_sector_snapshot_request_bundle(
             error=str(error),
         )
 
-    emit("  8️⃣ 获取板块涨跌幅排行（腾讯行业资金流）...")
+    emit("  8️⃣ 获取板块涨跌幅排行（Tushare 优先）...")
     try:
-        sector_up = get_sector_change_from_iwencai(rank_type="up", limit=10, target_date=target_date)
-        sector_down = get_sector_change_from_iwencai(rank_type="down", limit=10, target_date=target_date)
+        sector_change_fetcher = (request_registry or {}).get("sector_change_rank")
+        if callable(sector_change_fetcher):
+            sector_up = sector_change_fetcher(target_date=target_date, rank_type="up", limit=10)
+            sector_down = sector_change_fetcher(target_date=target_date, rank_type="down", limit=10)
+        else:
+            sector_up = get_sector_change_from_iwencai(rank_type="up", limit=10, target_date=target_date)
+            sector_down = get_sector_change_from_iwencai(rank_type="down", limit=10, target_date=target_date)
         results["sector_change_up"] = sector_up or []
         results["sector_change_down"] = sector_down or []
         data_status["板块涨幅排行"] = bool(sector_up)
@@ -559,9 +891,13 @@ def collect_market_activity_sector_snapshot_request_bundle(
             error=str(error),
         )
 
-    emit("  9️⃣ 获取东方财富成交额排行...")
+    emit("  9️⃣ 获取成交额排行（Tushare 优先）...")
     try:
-        turnover_rank = get_turnover_rank_from_iwencai(limit=50, target_date=target_date)
+        turnover_rank_fetcher = (request_registry or {}).get("turnover_rank")
+        if callable(turnover_rank_fetcher):
+            turnover_rank = turnover_rank_fetcher(target_date=target_date, limit=50)
+        else:
+            turnover_rank = get_turnover_rank_from_iwencai(limit=50, target_date=target_date)
         if turnover_rank:
             over_100b = [stock for stock in turnover_rank if stock.get("turnover", 0) > 100]
             results["turnover_rank"] = turnover_rank
@@ -569,18 +905,18 @@ def collect_market_activity_sector_snapshot_request_bundle(
             data_status["成交额排名"] = True
             step_status["成交额排名获取"] = True
             elapsed, _ = timer.record("成交额排名获取", 9)
-            emit(f"   ✅ 东方财富成交额排行成功: {len(turnover_rank)} 条，>100亿: {len(over_100b)} 只 [⏱ {elapsed:.2f}s]")
+            emit(f"   ✅ 成交额排行成功: {len(turnover_rank)} 条，>100亿: {len(over_100b)} 只 [⏱ {elapsed:.2f}s]")
         else:
             results["turnover_rank"] = []
             results["turnover_over_100b"] = []
             data_status["成交额排名"] = False
-            emit("   ❌ 东方财富成交额排行返回空")
+            emit("   ❌ 成交额排行返回空")
         _append_log(
             module_logs,
             "request.turnover_rank",
             "success" if data_status.get("成交额排名") else "degraded",
             "已处理成交额排行请求",
-            provider=_provider_from_rows(results.get("turnover_rank", []), "eastmoney.turnover_rank"),
+            provider=_provider_from_rows(results.get("turnover_rank", []), "tushare.daily"),
             target_keys=["turnover_rank", "turnover_over_100b"],
             turnover_count=len(results.get("turnover_rank", [])),
             over_100b_count=len(results.get("turnover_over_100b", [])),
@@ -594,8 +930,8 @@ def collect_market_activity_sector_snapshot_request_bundle(
             module_logs,
             "request.turnover_rank",
             "error",
-            "东方财富成交额排行请求失败",
-            provider="eastmoney.turnover_rank",
+            "成交额排行请求失败",
+            provider="tushare.daily",
             target_keys=["turnover_rank", "turnover_over_100b"],
             error=str(error),
         )
@@ -612,13 +948,135 @@ def _normalize_lhb_code(fs_code):
     return str(fs_code or "").replace(".SZ", "").replace(".SH", "").replace(".BJ", "")
 
 
+def _stock_matches_code(stock, code):
+    if not isinstance(stock, dict):
+        return False
+    expected_code = _normalize_quote_code(code)
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code"):
+        if expected_code and _normalize_quote_code(stock.get(key)) == expected_code:
+            return True
+    return False
+
+
+def _first_valid_plate_name(plates):
+    for plate in plates or []:
+        if isinstance(plate, dict):
+            candidates = (
+                plate.get("plate_name"),
+                plate.get("name"),
+                plate.get("concept_name"),
+                plate.get("sector"),
+            )
+        else:
+            candidates = (plate,)
+        for candidate in candidates:
+            if _is_valid_sector_label(candidate):
+                return str(candidate).strip()
+    return ""
+
+
+def _resolve_xuangubao_sector(code, existing_results=None):
+    xgb_data = (existing_results or {}).get("xuangubao_data") or {}
+    for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+        if _stock_matches_code(item, code):
+            plate_name = _first_valid_plate_name(item.get("related_plates") or [])
+            if plate_name:
+                return plate_name
+
+    for news in xgb_data.get("xuangubao_news", []) or []:
+        if not isinstance(news, dict):
+            continue
+        stocks = list(news.get("stocks") or []) + list(news.get("all_stocks") or [])
+        if any(_stock_matches_code(stock, code) for stock in stocks):
+            plate_name = _first_valid_plate_name(
+                news.get("plates")
+                or news.get("bkj_infos")
+                or news.get("plate_infos")
+                or []
+            )
+            if plate_name:
+                return plate_name
+    return ""
+
+
+def _resolve_hot_rank_sector(code, existing_results=None):
+    for stock in (existing_results or {}).get("hot_rank_top30", []) or []:
+        if _stock_matches_code(stock, code):
+            plate_name = _first_valid_plate_name(stock.get("concepts") or [])
+            if plate_name:
+                return plate_name
+    return ""
+
+
 def _resolve_lhb_sector(code, existing_results=None):
     existing_results = existing_results or {}
     for pool_key in ("zt_pool", "dt_pool"):
         for stock in existing_results.get(pool_key, []) or []:
             if stock.get("代码") == code:
-                return stock.get("所属行业", "未知")
-    return "未知"
+                sector = stock.get("所属行业", "未知")
+                if _is_valid_sector_label(sector):
+                    return sector
+    for resolver in (_resolve_xuangubao_sector, _resolve_hot_rank_sector):
+        sector = resolver(code, existing_results)
+        if _is_valid_sector_label(sector):
+            return sector
+    return "待补充板块"
+
+
+def _quote_info_sector(info):
+    info = info or {}
+    for key in ("sector", "所属行业", "industry", "sector_name"):
+        sector = info.get(key)
+        if _is_valid_sector_label(sector):
+            return str(sector).strip()
+    return ""
+
+
+def _related_plate_names(related_plates):
+    names = []
+    for plate in related_plates or []:
+        if not isinstance(plate, dict):
+            continue
+        name = str(plate.get("plate_name") or plate.get("name") or "").strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _resolve_limit_up_row_sector(row, xgb_reason=None, reason_text=""):
+    sector = row.get("所属行业", "未知")
+    if _is_valid_sector_label(sector):
+        return sector
+    plate_name = _first_valid_plate_name((xgb_reason or {}).get("related_plates") or [])
+    if plate_name:
+        return plate_name
+    inferred = _infer_sector_from_reason(
+        " / ".join(
+            str(value or "")
+            for value in (
+                reason_text,
+                (xgb_reason or {}).get("stock_reason"),
+                row.get("涨停统计"),
+                row.get("涨停原因"),
+                row.get("reason"),
+            )
+        )
+    )
+    if inferred:
+        return inferred
+    return "待补充板块"
+
+
+def _build_xuangubao_limit_up_reason_map(existing_results):
+    xgb_data = (existing_results or {}).get("xuangubao_data") or {}
+    mapped = {}
+    for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_quote_code(item.get("symbol") or item.get("code") or item.get("stock_code"))
+        if code:
+            mapped[code] = item
+    return mapped
 
 
 def collect_market_activity_capital_snapshot_request_bundle(
@@ -627,6 +1085,8 @@ def collect_market_activity_capital_snapshot_request_bundle(
     limit_up_df,
     existing_results,
     fetch_lhb_rows,
+    request_registry=None,
+    limit_up_provider="akshare.limit_up_pool",
     timer,
     emit,
 ):
@@ -637,6 +1097,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
         "龙虎榜数据获取": False,
     }
     module_logs = []
+    xuangubao_reason_map = _build_xuangubao_limit_up_reason_map(existing_results)
 
     emit("  1️⃣3️⃣ 从涨停池提取连板梯队... (依赖: 步骤4)")
     try:
@@ -644,8 +1105,6 @@ def collect_market_activity_capital_snapshot_request_bundle(
         if limit_up_df is not None and not limit_up_df.empty:
             for _, row in limit_up_df.iterrows():
                 lianban_days = row.get("连板数", 1)
-                if lianban_days < 2:
-                    continue
                 first_limit_time_raw = str(row.get("首次封板时间", "")).strip()
                 if first_limit_time_raw and len(first_limit_time_raw) >= 6:
                     first_limit_time = f"{first_limit_time_raw[:2]}:{first_limit_time_raw[2:4]}:{first_limit_time_raw[4:6]}"
@@ -653,26 +1112,38 @@ def collect_market_activity_capital_snapshot_request_bundle(
                     first_limit_time = f"{first_limit_time_raw[:2]}:{first_limit_time_raw[2:4]}:00"
                 else:
                     first_limit_time = "15:00:00"
-                lianban_data.append(
-                    {
-                        "code": row["代码"],
-                        "name": row["名称"],
-                        "lianban_days": lianban_days,
-                        "change_pct": row.get("涨跌幅", 0),
-                        "turnover": row.get("成交额", 0),
-                        "sector": row.get("所属行业", "未知"),
-                        "reason": row.get("涨停统计", ""),
-                        "open_price": row.get("开盘价", 0),
-                        "close_price": row.get("最新价", 0),
-                        "high_price": row.get("最高价", 0),
-                        "low_price": row.get("最低价", 0),
-                        "first_limit_time": first_limit_time,
-                    }
-                )
+                xgb_reason = xuangubao_reason_map.get(_normalize_quote_code(row["代码"]), {}) or {}
+                stock_reason = xgb_reason.get("stock_reason", "")
+                reason_text = stock_reason or row.get("涨停统计", "")
+                lianban_item = {
+                    "code": row["代码"],
+                    "name": row["名称"],
+                    "lianban_days": lianban_days,
+                    "change_pct": row.get("涨跌幅", 0),
+                    "turnover": row.get("成交额", 0),
+                    "sector": _resolve_limit_up_row_sector(row, xgb_reason, reason_text),
+                    "reason": reason_text,
+                    "open_price": row.get("开盘价", 0),
+                    "close_price": row.get("最新价", 0),
+                    "high_price": row.get("最高价", 0),
+                    "low_price": row.get("最低价", 0),
+                    "first_limit_time": first_limit_time,
+                }
+                if xgb_reason:
+                    related_plates = xgb_reason.get("related_plates", []) or []
+                    lianban_item.update(
+                        {
+                            "xuangubao_stock_reason": stock_reason,
+                            "xuangubao_related_plates": related_plates,
+                            "xuangubao_related_plate_names": _related_plate_names(related_plates),
+                            "xuangubao_limit_up_days": xgb_reason.get("limit_up_days", 0),
+                        }
+                    )
+                lianban_data.append(lianban_item)
         lianban_data.sort(key=lambda item: (-item["lianban_days"], item["first_limit_time"]))
         results["lianban_data"] = lianban_data
+        step_status["连板梯队提取"] = True
         if lianban_data:
-            step_status["连板梯队提取"] = True
             emit(f"   ✅ 连板梯队提取成功: {len(lianban_data)} 只（最高{lianban_data[0]['lianban_days']}连板）")
         else:
             emit("   ⚠️ 连板梯队数据为空（无连板股）")
@@ -681,7 +1152,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
             "request.lianban_snapshot",
             "success",
             "已处理连板梯队请求",
-            provider="akshare.limit_up_pool",
+            provider=limit_up_provider or "akshare.limit_up_pool",
             target_keys=["lianban_data"],
             lianban_count=len(lianban_data),
         )
@@ -698,76 +1169,93 @@ def collect_market_activity_capital_snapshot_request_bundle(
             error=str(error),
         )
 
-    emit("  1️⃣3️⃣ 获取龙虎榜数据...")
+    emit("  1️⃣3️⃣ 获取龙虎榜数据（Tushare 优先）...")
     try:
-        lhb_rows = fetch_lhb_rows(target_date)
-        grouped = {}
-        for row in lhb_rows or []:
-            code = _normalize_lhb_code(row.get("fs_code", ""))
-            if not code:
-                continue
-            bucket = grouped.setdefault(
-                code,
-                {
-                    "代码": code,
-                    "net_buy_amount": 0,
-                    "close_price": row.get("close_price", 0),
-                    "change_rate": row.get("change_rate", 0),
-                    "fs_code": row.get("fs_code", ""),
-                },
-            )
-            bucket["net_buy_amount"] += row.get("net_buy_amount", 0) or 0
-            bucket["close_price"] = bucket.get("close_price") or row.get("close_price", 0)
-            bucket["change_rate"] = bucket.get("change_rate") or row.get("change_rate", 0)
+        lhb_fetcher = (request_registry or {}).get("lhb_snapshot")
+        if callable(lhb_fetcher):
+            snapshot = lhb_fetcher(target_date=target_date) or {}
+            net_buy_top10 = list(snapshot.get("lhb_net_buy_top10") or [])
+            net_sell_top10 = list(snapshot.get("lhb_net_sell_top10") or [])
+            grouped_rows = list(snapshot.get("lhb_analysis") or [])
+            for item in net_buy_top10 + net_sell_top10:
+                code = item.get("code", "")
+                if code and not _is_valid_sector_label(item.get("sector")):
+                    item["sector"] = _resolve_lhb_sector(code, existing_results)
+        else:
+            lhb_rows = fetch_lhb_rows(target_date)
+            grouped = {}
+            for row in lhb_rows or []:
+                code = _normalize_lhb_code(row.get("fs_code", ""))
+                if not code:
+                    continue
+                bucket = grouped.setdefault(
+                    code,
+                    {
+                        "代码": code,
+                        "net_buy_amount": 0,
+                        "close_price": row.get("close_price", 0),
+                        "change_rate": row.get("change_rate", 0),
+                        "fs_code": row.get("fs_code", ""),
+                    },
+                )
+                bucket["net_buy_amount"] += row.get("net_buy_amount", 0) or 0
+                bucket["close_price"] = bucket.get("close_price") or row.get("close_price", 0)
+                bucket["change_rate"] = bucket.get("change_rate") or row.get("change_rate", 0)
 
-        grouped_rows = list(grouped.values())
-        buy_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0), reverse=True)[:10]
-        sell_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0))[:10]
+            grouped_rows = list(grouped.values())
+            buy_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0), reverse=True)[:10]
+            sell_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0))[:10]
 
-        net_buy_top10 = []
-        for rank, row in enumerate(buy_rows, 1):
-            code = row["代码"]
-            net_buy_top10.append(
-                {
-                    "rank": rank,
-                    "code": code,
-                    "name": "",
-                    "net_buy_amount_yi": (row.get("net_buy_amount", 0) or 0) / 1e8,
-                    "change_pct": row.get("change_rate", 0),
-                    "zt_status": "正常",
-                    "sector": _resolve_lhb_sector(code, existing_results),
-                }
-            )
+            net_buy_top10 = []
+            for rank, row in enumerate(buy_rows, 1):
+                code = row["代码"]
+                net_buy_top10.append(
+                    {
+                        "rank": rank,
+                        "code": code,
+                        "name": "",
+                        "net_buy_amount_yi": (row.get("net_buy_amount", 0) or 0) / 1e8,
+                        "change_pct": row.get("change_rate", 0),
+                        "zt_status": "正常",
+                        "sector": _resolve_lhb_sector(code, existing_results),
+                    }
+                )
 
-        net_sell_top10 = []
-        for rank, row in enumerate(sell_rows, 1):
-            code = row["代码"]
-            net_sell_top10.append(
-                {
-                    "rank": rank,
-                    "code": code,
-                    "name": "",
-                    "net_buy_amount_yi": (row.get("net_buy_amount", 0) or 0) / 1e8,
-                    "change_pct": row.get("change_rate", 0),
-                    "zt_status": "正常",
-                    "sector": _resolve_lhb_sector(code, existing_results),
-                }
-            )
+            net_sell_top10 = []
+            for rank, row in enumerate(sell_rows, 1):
+                code = row["代码"]
+                net_sell_top10.append(
+                    {
+                        "rank": rank,
+                        "code": code,
+                        "name": "",
+                        "net_buy_amount_yi": (row.get("net_buy_amount", 0) or 0) / 1e8,
+                        "change_pct": row.get("change_rate", 0),
+                        "zt_status": "正常",
+                        "sector": _resolve_lhb_sector(code, existing_results),
+                    }
+                )
 
         results["lhb_net_buy_top10"] = net_buy_top10
         results["lhb_net_sell_top10"] = net_sell_top10
         results["lhb_analysis"] = grouped_rows
-        step_status["龙虎榜数据获取"] = True
+        has_lhb_rows = bool(net_buy_top10 or net_sell_top10 or grouped_rows)
+        step_status["龙虎榜数据获取"] = has_lhb_rows
         timer.record("龙虎榜数据获取", 13)
-        emit(f"   ✅ 龙虎榜: 净买{len(net_buy_top10)}只/净卖{len(net_sell_top10)}只（已去重）")
+        if has_lhb_rows:
+            emit(f"   ✅ 龙虎榜: 净买{len(net_buy_top10)}只/净卖{len(net_sell_top10)}只（已去重）")
+        else:
+            emit("   ⚠️ 龙虎榜返回空")
         _append_log(
             module_logs,
             "request.lhb_snapshot",
-            "success",
-            "已处理龙虎榜请求",
-            provider="finshare.get_lhb",
+            "success" if has_lhb_rows else "degraded",
+            "已处理龙虎榜请求" if has_lhb_rows else "龙虎榜返回空",
+            provider=(snapshot or {}).get("provider", "tushare.top_list") if "snapshot" in locals() else "finshare.get_lhb",
             target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
             lhb_count=len(grouped_rows),
+            buy_count=len(net_buy_top10),
+            sell_count=len(net_sell_top10),
         )
     except Exception as error:
         results["lhb_net_buy_top10"] = []
@@ -799,10 +1287,46 @@ def _normalize_quote_code(raw_code):
     return code
 
 
+def _normalize_stock_info_map(stock_full_info):
+    normalized = {}
+    for raw_code, info in (stock_full_info or {}).items():
+        code = _normalize_quote_code(raw_code)
+        if not code or not isinstance(info, dict):
+            continue
+        normalized[code] = info
+    return normalized
+
+
+def _patch_quote_fields(row, info):
+    patched = dict(row or {})
+    info = info or {}
+    if not patched.get("name"):
+        name_from_info = info.get("name") or info.get("名称", "")
+        if name_from_info:
+            patched["name"] = name_from_info
+    if not _is_valid_sector_label(patched.get("sector")):
+        sector_from_info = _quote_info_sector(info)
+        if sector_from_info:
+            patched["sector"] = sector_from_info
+    for target_key, source_key in (
+        ("change_pct", "change_pct"),
+        ("high", "high"),
+        ("low", "low"),
+        ("open", "open"),
+        ("close", "close"),
+        ("zt_status", "zt_status"),
+    ):
+        value = info.get(source_key)
+        if value not in (None, ""):
+            patched[target_key] = value
+    return patched
+
+
 def collect_market_activity_stock_quote_request_bundle(
     *,
     existing_results,
     fetch_stock_batch_info,
+    fetch_tushare_stock_batch_info=None,
     timer,
     emit,
 ):
@@ -831,7 +1355,25 @@ def collect_market_activity_stock_quote_request_bundle(
 
     if all_stock_codes:
         try:
-            stock_full_info = fetch_stock_batch_info(list(all_stock_codes))
+            stock_full_info = {}
+            provider = "tencent.get_stock_batch_info"
+            if callable(fetch_tushare_stock_batch_info):
+                try:
+                    stock_full_info = _normalize_stock_info_map(fetch_tushare_stock_batch_info(list(all_stock_codes)))
+                    if stock_full_info:
+                        provider = "tushare.daily"
+                except Exception as error:
+                    emit(f"   ⚠️ Tushare批量股票补数失败: {error}，切换腾讯兜底")
+
+            missing_codes = sorted(all_stock_codes - set(stock_full_info.keys()))
+            if missing_codes:
+                tencent_info = _normalize_stock_info_map(fetch_stock_batch_info(missing_codes))
+                if tencent_info:
+                    stock_full_info.update({code: info for code, info in tencent_info.items() if code in missing_codes})
+                    if provider == "tushare.daily":
+                        provider = "tushare.daily+tencent.get_stock_batch_info"
+                    else:
+                        provider = "tencent.get_stock_batch_info"
             results["stock_full_info"] = stock_full_info
             elapsed, _ = timer.record("批量获取股票信息", 15)
             emit(f"   ✅ 成功获取 {len(stock_full_info)} 只股票的完整信息 [⏱ {elapsed:.2f}s]")
@@ -840,7 +1382,7 @@ def collect_market_activity_stock_quote_request_bundle(
                 "request.stock_quotes",
                 "success",
                 "已处理批量股票补数请求",
-                provider="tencent.get_stock_batch_info",
+                provider=provider,
                 target_keys=["stock_full_info", "lhb_net_buy_top10", "lhb_net_sell_top10"],
                 stock_count=len(stock_full_info),
             )
@@ -874,13 +1416,8 @@ def collect_market_activity_stock_quote_request_bundle(
         for lhb_list_key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
             patched_rows = []
             for item in existing_results.get(lhb_list_key, []) or []:
-                patched = dict(item)
-                code = _normalize_quote_code(patched.get("code", ""))
-                if not patched.get("name") and code and code in stock_full_info_for_fill:
-                    info = stock_full_info_for_fill[code]
-                    name_from_info = info.get("name") or info.get("名称", "")
-                    if name_from_info:
-                        patched["name"] = name_from_info
+                code = _normalize_quote_code((item or {}).get("code", ""))
+                patched = _patch_quote_fields(item, stock_full_info_for_fill.get(code, {}))
                 patched_rows.append(patched)
             results[lhb_list_key] = patched_rows
 

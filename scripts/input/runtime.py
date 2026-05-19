@@ -25,6 +25,7 @@ from input.request_diagnostics_runtime import (
     render_request_diagnostics_lines,
 )
 from input.request_registry import build_input_request_registry, resolve_request_target_date
+from market_data.tushare_turnover_service import fetch_stock_batch_quote_info, fetch_stock_turnover_history
 from selection.new_stock_narrative_runtime import build_new_stock_research_pool
 
 __all__ = ["run_input_runtime"]
@@ -227,6 +228,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             get_limit_up_pool=get_limit_up_pool,
             get_limit_down_pool=get_limit_down_pool,
             fetch_market_activity_df=_fetch_market_activity_df,
+            request_registry=request_registry,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -244,6 +246,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             fetch_ths_hot_stock=fetch_ths_hot_stock,
             get_integrated_hot_list=get_integrated_hot_list,
             tencent=tencent,
+            request_registry=request_registry,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -276,7 +279,7 @@ def _run_input_runtime_legacy_body(target_date=None):
         
         calendar_events_result = collect_calendar_events_request_bundle(
             target_date,
-            fetch_calendar_events=lambda target_date=None: tencent.get_calendar_events(target_date=target_date),
+            fetch_calendar_events=tencent.get_calendar_events,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -288,6 +291,7 @@ def _run_input_runtime_legacy_body(target_date=None):
         new_stock_calendar_result = collect_new_stock_calendar_request_bundle(
             target_date,
             fetch_pages=fetch_sina_new_stock_calendar_pages,
+            request_registry=request_registry,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -337,6 +341,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             fetch_wanzhu_top10=collector.get_wanzhu_top10,
             fetch_exchange_monitor_payload=_fetch_exchange_monitor_payload,
             fetch_stock_batch_info=lambda codes: TencentFinanceData().get_stock_batch_info(codes),
+            fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -359,6 +364,8 @@ def _run_input_runtime_legacy_body(target_date=None):
             limit_up_df=limit_up_df,
             existing_results=results,
             fetch_lhb_rows=_fetch_lhb_rows,
+            request_registry=request_registry,
+            limit_up_provider=market_activity_pool_artifacts.get("limit_up_provider"),
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -523,6 +530,7 @@ def _run_input_runtime_legacy_body(target_date=None):
         market_activity_quote_result = collect_market_activity_stock_quote_request_bundle(
             existing_results=results,
             fetch_stock_batch_info=lambda codes: TencentFinanceData().get_stock_batch_info(codes),
+            fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -581,6 +589,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             candidates=results.get("candidates", []),
             stock_full_info=results.get("stock_full_info", {}),
             get_cache=get_cache,
+            fetch_tushare_turnover_history=fetch_stock_turnover_history,
             fetch_quicktiny_history=_fetch_quicktiny_history,
             baostock_source_factory=_baostock_source_factory,
             timer=timer,
@@ -649,8 +658,12 @@ def _run_input_runtime_legacy_body(target_date=None):
         if results.get('calendar_events'):
             print(f"📅 预期日历: {len(results['calendar_events'])} 条")
         
-        if results.get('xuangubao_data') and results['xuangubao_data'].get('xuangubao_news'):
-            print(f"📡 选股通异动: {len(results['xuangubao_data'].get('xuangubao_news', []))} 条新闻")
+        if results.get('xuangubao_data'):
+            xgb_news_count = len(results['xuangubao_data'].get('xuangubao_news', []) or [])
+            xgb_plate_count = len(results['xuangubao_data'].get('xuangubao_plates', []) or [])
+            xgb_limit_up_reason_count = len(results['xuangubao_data'].get('xuangubao_limit_up_reasons', []) or [])
+            if xgb_news_count or xgb_plate_count or xgb_limit_up_reason_count:
+                print(f"📡 选股通异动: 新闻{xgb_news_count}条，盘面{xgb_plate_count}个，涨停解释{xgb_limit_up_reason_count}条")
         
         if results.get('wanzhu_top10'):
             print(f"🏆 顽主杯前十: {len(results['wanzhu_top10'])} 只")
@@ -674,12 +687,51 @@ def _run_input_runtime_legacy_body(target_date=None):
                 print(f"      ⚠️ 边缘击球区（<40分）: {hs_analysis['tier4_count']}个")
                 step_status['板块四象限数据获取'] = True
                 data_status['板块四象限'] = True
+                module_logs.append(
+                    {
+                        "module": "input.runtime",
+                        "step": "request.sector_quadrant",
+                        "status": "success",
+                        "message": "已获取板块四象限击球区数据",
+                        "details": {
+                            "provider": quadrant_data.get("provider") or "quicktiny.sector_analysis_quadrant",
+                            "target_keys": ["sector_quadrant"],
+                            "high_strong_count": hs_analysis.get("total", 0),
+                            "tier1_count": hs_analysis.get("tier1_count", 0),
+                        },
+                    }
+                )
             else:
                 print(f"   ⚠️ 板块四象限数据获取失败")
                 data_status['板块四象限'] = False
+                module_logs.append(
+                    {
+                        "module": "input.runtime",
+                        "step": "request.sector_quadrant",
+                        "status": "degraded",
+                        "message": "板块四象限击球区数据为空",
+                        "details": {
+                            "provider": "quicktiny.sector_analysis_quadrant",
+                            "target_keys": ["sector_quadrant"],
+                        },
+                    }
+                )
         except Exception as e:
             print(f"   ⚠️ 板块四象限数据获取异常: {e}")
             data_status['板块四象限'] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.sector_quadrant",
+                    "status": "error",
+                    "message": "板块四象限击球区请求失败",
+                    "details": {
+                        "provider": "quicktiny.sector_analysis_quadrant",
+                        "target_keys": ["sector_quadrant"],
+                        "error": str(e),
+                    },
+                }
+            )
         
         # ========== 添加状态跟踪字典到结果 ==========
         results['data_status'] = data_status

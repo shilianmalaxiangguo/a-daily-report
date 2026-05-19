@@ -10,6 +10,36 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def _normalize_stock_code(raw_code):
+    code = str(raw_code or "")
+    for prefix in (".SZ", ".SS", ".SH", "sz", "sh", "bj"):
+        code = code.replace(prefix, "")
+    return code
+
+
+def _enrich_rows_with_quotes(rows, quote_map):
+    quote_map = quote_map or {}
+    enriched = []
+    for row in rows or []:
+        item = dict(row or {})
+        code = _normalize_stock_code(item.get("code") or item.get("代码"))
+        quote = quote_map.get(code, {}) if isinstance(quote_map, dict) else {}
+        if quote:
+            for source_key, target_key in (
+                ("change_pct", "change_pct"),
+                ("close", "close"),
+                ("turnover", "turnover"),
+                ("high", "high"),
+                ("low", "low"),
+                ("open", "open"),
+            ):
+                if quote.get(source_key) is not None:
+                    item[target_key] = quote.get(source_key)
+            item["quote_source"] = quote.get("data_source") or "tushare.daily"
+        enriched.append(item)
+    return enriched
+
+
 def collect_monitoring_request_bundle(
     target_date,
     *,
@@ -17,6 +47,7 @@ def collect_monitoring_request_bundle(
     fetch_wanzhu_top10,
     fetch_exchange_monitor_payload,
     fetch_stock_batch_info,
+    fetch_tushare_stock_batch_info=None,
     timer,
     emit,
 ):
@@ -32,13 +63,23 @@ def collect_monitoring_request_bundle(
     emit("  1️⃣1️⃣ 获取选股通盘中异动（可选）...")
     try:
         analyzer = analyzer_factory()
-        xuangubao_data = analyzer.fetch_xuangubao_data()
-        if xuangubao_data and xuangubao_data.get("xuangubao_news"):
+        try:
+            xuangubao_data = analyzer.fetch_xuangubao_data(target_date=target_date)
+        except TypeError:
+            xuangubao_data = analyzer.fetch_xuangubao_data()
+        news_count = len((xuangubao_data or {}).get("xuangubao_news", []) or [])
+        plate_count = len((xuangubao_data or {}).get("xuangubao_plates", []) or [])
+        limit_up_reason_count = len((xuangubao_data or {}).get("xuangubao_limit_up_reasons", []) or [])
+        diagnostics = (xuangubao_data or {}).get("diagnostics", {}) or {}
+        diagnostic_note = "; ".join(
+            f"{key}={value}" for key, value in diagnostics.items() if value not in (None, "", {})
+        )
+        if xuangubao_data and (news_count or plate_count or limit_up_reason_count):
             results["xuangubao_data"] = xuangubao_data
             data_status["选股通盘中异动"] = True
             step_status["选股通盘中异动获取"] = True
             elapsed, _ = timer.record("选股通盘中异动获取", 11)
-            emit(f"   ✅ 选股通数据成功: {len(xuangubao_data.get('xuangubao_news', []))} 条新闻 [⏱ {elapsed:.2f}s]")
+            emit(f"   ✅ 选股通数据成功: 新闻{news_count}条，盘面{plate_count}个，涨停解释{limit_up_reason_count}条 [⏱ {elapsed:.2f}s]")
         else:
             results["xuangubao_data"] = {}
             data_status["选股通盘中异动"] = False
@@ -53,6 +94,10 @@ def collect_monitoring_request_bundle(
             target_keys=["xuangubao_data"],
             optional=True,
             news_count=len((results.get("xuangubao_data") or {}).get("xuangubao_news", []) or []),
+            plate_count=len((results.get("xuangubao_data") or {}).get("xuangubao_plates", []) or []),
+            limit_up_reason_count=len((results.get("xuangubao_data") or {}).get("xuangubao_limit_up_reasons", []) or []),
+            diagnostic_note=diagnostic_note,
+            diagnostics=diagnostics,
         )
     except Exception as error:
         results["xuangubao_data"] = {}
@@ -71,7 +116,19 @@ def collect_monitoring_request_bundle(
 
     emit("  1️⃣2️⃣ 获取顽主杯热门前十...")
     try:
-        wanzhu_top10 = fetch_wanzhu_top10(target_date)
+        wanzhu_top10 = list(fetch_wanzhu_top10(target_date) or [])
+        wanzhu_quote_provider = ""
+        wanzhu_quote_fallback_used = False
+        if wanzhu_top10 and callable(fetch_tushare_stock_batch_info):
+            try:
+                quote_codes = [_normalize_stock_code(item.get("code") or item.get("代码")) for item in wanzhu_top10]
+                quote_map = fetch_tushare_stock_batch_info([code for code in quote_codes if code]) or {}
+                if quote_map:
+                    wanzhu_top10 = _enrich_rows_with_quotes(wanzhu_top10, quote_map)
+                    wanzhu_quote_provider = "tushare.daily"
+            except Exception as error:
+                wanzhu_quote_fallback_used = True
+                emit(f"   ⚠️ Tushare顽主杯补价失败: {error}")
         results["wanzhu_top10"] = wanzhu_top10
         if wanzhu_top10:
             data_status["顽主杯热门前十"] = True
@@ -88,6 +145,8 @@ def collect_monitoring_request_bundle(
             "success" if data_status.get("顽主杯热门前十") else "degraded",
             "已处理顽主杯请求",
             provider="AShareDataCollector.get_wanzhu_top10",
+            quote_provider=wanzhu_quote_provider,
+            quote_fallback_used=wanzhu_quote_fallback_used,
             target_keys=["wanzhu_top10"],
             stock_count=len(results.get("wanzhu_top10", []) or []),
         )
@@ -125,7 +184,21 @@ def collect_monitoring_request_bundle(
 
         if today_predictions:
             emit("   📊 获取异动股票实时行情，判断触发状态...")
-            exchange_quotes = fetch_stock_batch_info([item["code"] for item in today_predictions])
+            quote_codes = [item["code"] for item in today_predictions]
+            exchange_quotes = {}
+            quote_provider = "tencent.get_stock_batch_info"
+            quote_fallback_used = False
+            if callable(fetch_tushare_stock_batch_info):
+                try:
+                    exchange_quotes = fetch_tushare_stock_batch_info(quote_codes) or {}
+                    if exchange_quotes:
+                        quote_provider = "tushare.daily"
+                except Exception as error:
+                    quote_fallback_used = True
+                    emit(f"   ⚠️ Tushare异动补价失败: {error}，切换腾讯兜底")
+            if not exchange_quotes:
+                quote_fallback_used = callable(fetch_tushare_stock_batch_info)
+                exchange_quotes = fetch_stock_batch_info(quote_codes)
             for pred in today_predictions:
                 quote = exchange_quotes.get(pred["code"], {}) if isinstance(exchange_quotes, dict) else {}
                 actual_change = quote.get("change_pct")
@@ -145,6 +218,8 @@ def collect_monitoring_request_bundle(
             "success",
             "已处理异动检测请求",
             provider="quicktiny.exchange_monitor",
+            quote_provider=quote_provider if today_predictions else "",
+            quote_fallback_used=quote_fallback_used if today_predictions else False,
             target_keys=["exchange_monitor_today", "exchange_monitor_nextday"],
             today_count=len(today_predictions),
             nextday_count=len(nextday_predictions),

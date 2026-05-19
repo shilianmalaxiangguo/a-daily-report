@@ -254,6 +254,20 @@ def _decision_request_failed(data, steps):
     return not any(str(log.get("status") or "").strip() == "success" for log in logs)
 
 
+def _decision_request_failure_blocks(data, steps, payload_key, allow_empty):
+    if not _decision_request_failed(data, steps):
+        return False
+    step_status = (data or {}).get("step_status") or {}
+    step_success = any(
+        step_label in step_status and step_status.get(step_label) is True
+        for _, step_label, configured_steps, configured_payload_key, _ in DECISION_CRITICAL_REPORT_DATA_FIELDS
+        if configured_payload_key == payload_key and tuple(configured_steps) == tuple(steps)
+    )
+    if step_success and _decision_payload_valid(data, payload_key, allow_empty):
+        return False
+    return True
+
+
 def _decision_field_tracked(data, label, step_label, steps, payload_key):
     data_status = (data or {}).get("data_status") or {}
     step_status = (data or {}).get("step_status") or {}
@@ -276,8 +290,8 @@ def _build_decision_critical_checks(data):
             continue
         data_failed = label in data_status and data_status.get(label) is False
         step_failed = step_label in step_status and step_status.get(step_label) is False
-        request_failed = _decision_request_failed(data, steps)
         payload_failed = not _decision_payload_valid(data, payload_key, allow_empty)
+        request_failed = _decision_request_failure_blocks(data, steps, payload_key, allow_empty)
         status = "failed" if data_failed or step_failed or request_failed or payload_failed else "success"
         checks.append(
             {
@@ -633,7 +647,27 @@ def save_report_outputs(
                 mode=mode,
                 variant=variant,
             )
+    if mode == LEDGER_MODE_REPLAY:
+        _sync_replay_decision_ledger_from_full_report(saved_paths, target_date, output_dir=output_dir)
     return saved_paths
+
+
+def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str, *, output_dir: str | None = None):
+    full_report_path = (saved_paths or {}).get(REPORT_VARIANT_FULL)
+    if not full_report_path:
+        return None
+    from report.decision_ledger import write_decision_ledger_artifacts_from_markdown_report
+
+    root_dir = Path(output_dir) if output_dir else _module_dir().parent
+    result = write_decision_ledger_artifacts_from_markdown_report(
+        full_report_path,
+        trade_date=target_date,
+        market_branch="回放正文重建",
+        sector_relationship_state="以最终报告重点观察名单为准",
+        root_dir=root_dir,
+    )
+    print(f"🧾 replay 决策台账已按最终完整版日报同步: {result.get('case_count', 0)} 个样本")
+    return result
 
 
 def save_stock_diagnostic_output(

@@ -25,6 +25,33 @@ __all__ = [
 ]
 
 _MISSING = object()
+_NON_DIRECTIONAL_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "-",
+}
+
+
+def _is_directional_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_DIRECTIONAL_SECTOR_LABELS)
+
+
+def _first_directional_trend_item(items):
+    for item in items or []:
+        if isinstance(item, dict) and _is_directional_sector_label(item.get("sector")):
+            return item
+    return {}
 
 
 def _install_runtime_bindings(bindings):
@@ -1210,7 +1237,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
     transition_signal = str(transition_signal or "").strip()
     can_new_entry = bool(final_gate.get("can_new_entry"))
     should_reduce = bool(final_gate.get("should_reduce"))
-    allow_conditional_30 = bool(final_gate.get("allow_conditional_30"))
+    allow_attack_50_ready = bool(final_gate.get("allow_attack_50_ready"))
     operation_state = str(final_gate.get("operation_state", "") or "").strip()
 
     if trend_density >= 3 and resilient_count >= 2 and zt_count <= 25:
@@ -1260,10 +1287,10 @@ def _derive_mainline_pulse_snapshot_legacy_body(
             execution_bias = "avoid"
             pulse_action_bias = "禁止参与"
             pulse_action_reason = "环境已转撤退，先退出，等下一轮新脉冲。"
-        elif allow_conditional_30 and not should_reduce:
+        elif allow_attack_50_ready and not should_reduce:
             execution_bias = "conditional_defense"
-            pulse_action_bias = "只保留10点确认后的条件试错"
-            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只看10点确认后的30%条件试错。"
+            pulse_action_bias = "只保留参与窗口预演"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做参与窗口预演，强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认，命中后才评估50%标准进攻。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"
@@ -1344,7 +1371,7 @@ def _build_market_state_machine_snapshot_legacy_body(
     )
     failed_count = len([item for item in abnormal_watch_pool if item.get("follow_state") == "已经转弱"])
 
-    densest_sector = (sector_trend_snapshot or [None])[0] or {}
+    densest_sector = _first_directional_trend_item(sector_trend_snapshot)
     densest_sector_name = densest_sector.get("sector", "")
     trend_density = int(_safe_float(densest_sector.get("trend_count", 0)))
 
@@ -1361,7 +1388,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         state_code = "expand"
         flow_direction = f"能量继续向{leading_line}集中"
         state_reason = "涨停、涨跌比和有势板块数量同步走强，主线具备继续承接能力。"
-        reflection_focus = "只盯主线内异常后跌不下去的对象，等60分钟确认，不做支线分流。"
+        reflection_focus = "只盯主线内异常后跌不下去的对象，按竞价表态、开盘承接、回封或60分钟结构确认分层参与，不做支线分流。"
         transition_signal = ""
         transition_reason = ""
         transition_action = ""

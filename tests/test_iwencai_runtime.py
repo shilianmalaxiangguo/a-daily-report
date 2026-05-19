@@ -95,7 +95,7 @@ class IwencaiRuntimeTest(unittest.TestCase):
         tushare_mock.assert_called_once_with("000001", "2026-05-01", "2026-05-13", is_index=True)
         self.assertEqual(legacy_calls, [])
 
-    def test_major_indices_falls_back_to_price_bars_when_akshare_and_api_key_missing(self):
+    def test_major_indices_uses_tushare_price_bars_when_akshare_and_api_key_missing(self):
         bar_map = {
             "000001": [
                 {"date": "2026-04-21", "open": 3200, "high": 3220, "low": 3190, "close": 3210},
@@ -122,11 +122,11 @@ class IwencaiRuntimeTest(unittest.TestCase):
             )
 
         self.assertEqual(set(result.keys()), {"上证指数", "深证成指", "创业板指"})
-        self.assertEqual(result["上证指数"]["data_source"], "price_bar_fallback")
+        self.assertEqual(result["上证指数"]["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["上证指数"]["change_pct"], (3240 - 3210) / 3210 * 100)
         self.assertEqual(result["创业板指"]["trade_date"], "2026-04-22")
 
-    def test_major_indices_falls_back_without_traceback_when_akshare_empty_and_skill_version_low(self):
+    def test_major_indices_uses_tushare_price_bars_without_calling_iwencai_when_skill_version_low(self):
         bar_map = {
             "000001": [{"date": "2026-04-27", "open": 4074, "high": 4092, "low": 4071, "close": 4086}],
             "399001": [{"date": "2026-04-27", "open": 14960, "high": 15054, "low": 14919, "close": 14995}],
@@ -145,11 +145,27 @@ class IwencaiRuntimeTest(unittest.TestCase):
             )
 
         trace_mock.assert_not_called()
-        self.assertEqual(result["上证指数"]["data_source"], "price_bar_fallback")
+        self.assertEqual(result["上证指数"]["data_source"], "tushare.index_daily")
         self.assertEqual(set(result.keys()), {"上证指数", "深证成指", "创业板指"})
+        self.assertFalse(any("Skill 版本过低" in line for line in logs))
+
+    def test_major_indices_falls_back_without_traceback_when_tushare_empty_and_skill_version_low(self):
+        logs = []
+
+        with patch("traceback.print_exc") as trace_mock, patch.dict(sys.modules, {"akshare": SimpleNamespace()}):
+            result = get_major_indices_from_iwencai(
+                target_date="2026-04-27",
+                api_key="recognized-but-version-low",
+                urlopen_fn=_raise_skill_version_low,
+                fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: [],
+                print_fn=logs.append,
+            )
+
+        trace_mock.assert_not_called()
+        self.assertEqual(result, {})
         self.assertTrue(any("Skill 版本过低" in line for line in logs))
 
-    def test_total_turnover_falls_back_to_akshare_when_skill_version_low(self):
+    def test_total_turnover_falls_back_to_akshare_when_tushare_empty_and_skill_version_low(self):
         import pandas as pd
 
         def fake_index_daily_em(symbol):
@@ -165,7 +181,8 @@ class IwencaiRuntimeTest(unittest.TestCase):
 
         fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fake_index_daily_em)
 
-        with patch.dict(sys.modules, {"akshare": fake_akshare}):
+        with patch.object(iwencai_runtime, "fetch_stock_daily_turnover_records", return_value=[], create=True), \
+             patch.dict(sys.modules, {"akshare": fake_akshare}):
             result = get_total_turnover_from_iwencai(
                 target_date="2026-04-27",
                 api_key="recognized-but-version-low",
@@ -175,24 +192,25 @@ class IwencaiRuntimeTest(unittest.TestCase):
 
         self.assertAlmostEqual(result, 25894.51, places=2)
 
-    def test_total_turnover_uses_akshare_primary_without_calling_iwencai(self):
-        import pandas as pd
-
+    def test_total_turnover_uses_tushare_daily_primary_without_calling_akshare_or_iwencai(self):
         iwencai_calls = []
+        akshare_calls = []
 
-        def fake_index_daily_em(symbol):
-            rows = {
-                "sh000001": [{"date": "2026-04-27", "amount": 1.136052e12}],
-                "sz399001": [{"date": "2026-04-27", "amount": 1.453399e12}],
-            }
-            return pd.DataFrame(rows.get(symbol, []))
+        def fail_index_daily_em(symbol):
+            akshare_calls.append(symbol)
+            raise AssertionError("AkShare should only run after Tushare daily fails")
 
         def fail_iwencai(*args, **kwargs):
             iwencai_calls.append(args)
-            raise AssertionError("iwencai should not be called when AkShare primary succeeds")
+            raise AssertionError("iwencai should not be called when Tushare daily succeeds")
 
-        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fake_index_daily_em)
-        with patch.dict(sys.modules, {"akshare": fake_akshare}):
+        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fail_index_daily_em)
+        with patch.object(
+            iwencai_runtime,
+            "fetch_stock_daily_turnover_records",
+            return_value=[{"amount_yi": 120.5}, {"amount_yi": 80.25}],
+            create=True,
+        ), patch.dict(sys.modules, {"akshare": fake_akshare}):
             result = get_total_turnover_from_iwencai(
                 target_date="2026-04-27",
                 api_key="ok",
@@ -201,76 +219,79 @@ class IwencaiRuntimeTest(unittest.TestCase):
             )
 
         self.assertEqual(iwencai_calls, [])
-        self.assertAlmostEqual(result, 25894.51, places=2)
+        self.assertEqual(akshare_calls, [])
+        self.assertAlmostEqual(result, 200.75, places=2)
 
-    def test_major_indices_use_akshare_primary_without_calling_iwencai(self):
-        import pandas as pd
-
+    def test_major_indices_use_tushare_index_daily_primary_without_calling_akshare_or_iwencai(self):
         iwencai_calls = []
-        index_rows = {
-            "sh000001": [
-                {"date": "2026-04-26", "open": 4070, "high": 4090, "low": 4060, "close": 4079, "amount": 1.10e12},
-                {"date": "2026-04-27", "open": 4074, "high": 4092, "low": 4071, "close": 4086, "amount": 1.13e12},
+        akshare_calls = []
+        bar_map = {
+            "000001": [
+                {"date": "2026-04-26", "open": 4070, "high": 4090, "low": 4060, "close": 4079, "amount_yi": 11000},
+                {"date": "2026-04-27", "open": 4074, "high": 4092, "low": 4071, "close": 4086, "amount_yi": 11300},
             ],
-            "sz399001": [
-                {"date": "2026-04-26", "open": 14900, "high": 15010, "low": 14880, "close": 14940, "amount": 1.40e12},
-                {"date": "2026-04-27", "open": 14960, "high": 15054, "low": 14919, "close": 14995, "amount": 1.45e12},
+            "399001": [
+                {"date": "2026-04-26", "open": 14900, "high": 15010, "low": 14880, "close": 14940, "amount_yi": 14000},
+                {"date": "2026-04-27", "open": 14960, "high": 15054, "low": 14919, "close": 14995, "amount_yi": 14500},
             ],
-            "sz399006": [
-                {"date": "2026-04-26", "open": 3680, "high": 3700, "low": 3625, "close": 3667, "amount": 7.33e11},
-                {"date": "2026-04-27", "open": 3677, "high": 3686, "low": 3640, "close": 3648, "amount": 6.77e11},
+            "399006": [
+                {"date": "2026-04-26", "open": 3680, "high": 3700, "low": 3625, "close": 3667, "amount_yi": 7330},
+                {"date": "2026-04-27", "open": 3677, "high": 3686, "low": 3640, "close": 3648, "amount_yi": 6770},
             ],
         }
 
-        def fake_index_daily_em(symbol):
-            return pd.DataFrame(index_rows.get(symbol, []))
+        def fail_index_daily_em(symbol):
+            akshare_calls.append(symbol)
+            raise AssertionError("AkShare should only run after Tushare index_daily fails")
 
         def fail_iwencai(*args, **kwargs):
             iwencai_calls.append(args)
-            raise AssertionError("iwencai should not be called when AkShare primary succeeds")
+            raise AssertionError("iwencai should not be called when Tushare index_daily succeeds")
 
-        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fake_index_daily_em)
+        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fail_index_daily_em)
         with patch.dict(sys.modules, {"akshare": fake_akshare}):
             result = get_major_indices_from_iwencai(
                 target_date="2026-04-27",
                 api_key="ok",
                 urlopen_fn=fail_iwencai,
+                fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: list(bar_map.get(code, [])),
                 print_fn=lambda *args, **kwargs: None,
             )
 
         self.assertEqual(iwencai_calls, [])
+        self.assertEqual(akshare_calls, [])
         self.assertEqual(set(result.keys()), {"上证指数", "深证成指", "创业板指"})
-        self.assertEqual(result["上证指数"]["data_source"], "akshare.stock_zh_index_daily_em")
+        self.assertEqual(result["上证指数"]["data_source"], "tushare.index_daily")
+        self.assertAlmostEqual(result["上证指数"]["change_pct"], (4086 - 4079) / 4079 * 100)
 
-    def test_wind_a_uses_akshare_primary_without_calling_iwencai(self):
-        import pandas as pd
-
+    def test_wind_a_uses_tushare_index_daily_primary_without_calling_akshare_or_iwencai(self):
         iwencai_calls = []
+        akshare_calls = []
 
-        def fake_index_daily_em(symbol):
-            rows = {
-                "sh000985": [
-                    {"date": "2026-04-26", "close": 6271.17},
-                    {"date": "2026-04-27", "close": 6296.45},
-                ],
-            }
-            return pd.DataFrame(rows.get(symbol, []))
+        def fail_index_daily_em(symbol):
+            akshare_calls.append(symbol)
+            raise AssertionError("AkShare should only run after Tushare index_daily fails")
 
         def fail_iwencai(*args, **kwargs):
             iwencai_calls.append(args)
-            raise AssertionError("iwencai should not be called when AkShare primary succeeds")
+            raise AssertionError("iwencai should not be called when Tushare index_daily succeeds")
 
-        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fake_index_daily_em)
+        fake_akshare = SimpleNamespace(stock_zh_index_daily_em=fail_index_daily_em)
         with patch.dict(sys.modules, {"akshare": fake_akshare}):
             result = get_wind_a_from_iwencai(
                 target_date="2026-04-27",
                 api_key="ok",
                 urlopen_fn=fail_iwencai,
+                fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: [
+                    {"date": "2026-04-26", "close": 6271.17},
+                    {"date": "2026-04-27", "close": 6296.45},
+                ],
                 print_fn=lambda *args, **kwargs: None,
             )
 
         self.assertEqual(iwencai_calls, [])
-        self.assertEqual(result["data_source"], "akshare.stock_zh_index_daily_em")
+        self.assertEqual(akshare_calls, [])
+        self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["change_pct"], (6296.45 - 6271.17) / 6271.17 * 100)
 
     def test_turnover_rank_uses_eastmoney_primary_with_sector(self):

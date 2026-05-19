@@ -177,30 +177,35 @@ def fetch_sina_new_stock_calendar_pages(page_count=2, opener=None):
     return pages
 
 
-def collect_new_stock_calendar_request_bundle(target_date, *, fetch_pages, timer, emit, page_count=2):
+def collect_new_stock_calendar_request_bundle(target_date, *, fetch_pages, timer, emit, page_count=2, request_registry=None):
     results = {"new_stock_calendar": []}
     data_status = {"新股上市日历": False}
     step_status = {"新股上市日历获取": False}
     module_logs = []
 
-    emit("  1️⃣1️⃣ 获取新股上市日历（Sina）...")
+    emit("  1️⃣1️⃣ 获取新股上市日历（Tushare 优先）...")
     try:
-        pages = fetch_pages(page_count=page_count)
-        records = []
-        for page in pages or []:
-            if isinstance(page, dict):
-                html_text = page.get("html", "")
-                source_url = page.get("source_url", "")
-            else:
-                html_text = str(page or "")
-                source_url = ""
-            records.extend(
-                parse_sina_new_stock_calendar_html(
-                    html_text,
-                    target_date=target_date,
-                    source_url=source_url,
+        calendar_fetcher = (request_registry or {}).get("new_stock_calendar")
+        pages = []
+        if callable(calendar_fetcher):
+            records = calendar_fetcher(target_date=target_date) or []
+        else:
+            pages = fetch_pages(page_count=page_count)
+            records = []
+            for page in pages or []:
+                if isinstance(page, dict):
+                    html_text = page.get("html", "")
+                    source_url = page.get("source_url", "")
+                else:
+                    html_text = str(page or "")
+                    source_url = ""
+                records.extend(
+                    parse_sina_new_stock_calendar_html(
+                        html_text,
+                        target_date=target_date,
+                        source_url=source_url,
+                    )
                 )
-            )
 
         results["new_stock_calendar"] = records
         data_status["新股上市日历"] = bool(records)
@@ -216,7 +221,7 @@ def collect_new_stock_calendar_request_bundle(target_date, *, fetch_pages, timer
             "request.new_stock_calendar",
             "success" if records else "degraded",
             "已处理新股上市日历请求",
-            provider="sina_new_stock_calendar",
+            provider="tushare.new_share" if callable(calendar_fetcher) else "sina_new_stock_calendar",
             target_keys=["new_stock_calendar"],
             page_count=len(pages or []),
             calendar_count=len(records),

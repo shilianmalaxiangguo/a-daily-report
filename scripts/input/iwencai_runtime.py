@@ -6,6 +6,8 @@ import os
 
 import daily_report_analysis_utils as analysis_utils
 from market_data.kline_dates import normalize_kline_date_str, parse_kline_date
+from market_data.tushare_service import fetch_daily_price_bars as fetch_tushare_daily_price_bars
+from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
 
 __all__ = [
     "get_major_indices_from_iwencai",
@@ -251,6 +253,19 @@ def _get_total_turnover_akshare_fallback(target_date=None, *, print_fn=print):
         return 0.0
 
 
+def _get_total_turnover_tushare_primary(target_date=None, *, fetch_stock_daily_turnover_records_fn=None, print_fn=print):
+    fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    try:
+        rows = fetcher(target_date) or []
+        total = sum(_safe_float((row or {}).get("amount_yi")) for row in rows)
+        if total > 0:
+            print_fn(f"ℹ️ 两市成交额已使用 Tushare daily: {total:.2f}亿元")
+        return total
+    except Exception as error:
+        print_fn(f"⚠️ 两市成交额 Tushare daily 获取失败: {error}")
+        return 0.0
+
+
 def _get_wind_a_akshare_fallback(target_date=None, *, print_fn=print):
     try:
         row, prev = _latest_index_row("sh000985", target_date)
@@ -264,6 +279,46 @@ def _get_wind_a_akshare_fallback(target_date=None, *, print_fn=print):
         }
     except Exception as error:
         print_fn(f"⚠️ 中证全指 AkShare 回补失败: {error}")
+        return {"price": 0, "change_pct": 0}
+
+
+def _get_wind_a_tushare_primary(target_date=None, *, fetch_daily_price_bars_fn=None, print_fn=print):
+    del print_fn
+    try:
+        query_date = _resolve_query_date(target_date)
+        end_date = query_date.strftime("%Y-%m-%d")
+        start_date = (query_date - datetime.timedelta(days=15)).strftime("%Y-%m-%d")
+        fetcher = fetch_daily_price_bars_fn or fetch_tushare_daily_price_bars
+        bars = fetcher("000985", start_date, end_date, is_index=True) or []
+        valid_bars = [
+            {**(bar or {}), "date": normalize_kline_date_str((bar or {}).get("date"))}
+            for bar in bars
+            if normalize_kline_date_str((bar or {}).get("date")) <= end_date
+        ]
+        valid_bars = [bar for bar in valid_bars if bar.get("date")]
+        valid_bars.sort(key=lambda item: item.get("date", ""))
+        if not valid_bars:
+            return {"price": 0, "change_pct": 0}
+        latest_bar = valid_bars[-1]
+        prev_bar = valid_bars[-2] if len(valid_bars) >= 2 else {}
+        close_price = _safe_float(latest_bar.get("close"))
+        prev_close = _safe_float(prev_bar.get("close"))
+        open_price = _safe_float(latest_bar.get("open"))
+        if close_price <= 0:
+            return {"price": 0, "change_pct": 0}
+        if prev_close > 0:
+            change_pct = (close_price - prev_close) / prev_close * 100
+        elif open_price > 0:
+            change_pct = (close_price - open_price) / open_price * 100
+        else:
+            change_pct = 0.0
+        return {
+            "price": close_price,
+            "change_pct": change_pct,
+            "data_source": "tushare.index_daily",
+            "trade_date": latest_bar.get("date"),
+        }
+    except Exception:
         return {"price": 0, "change_pct": 0}
 
 
@@ -551,11 +606,22 @@ def get_turnover_rank_from_iwencai(
         return _get_turnover_rank_akshare_fallback(limit=limit, print_fn=print_fn)
 
 
-def get_total_turnover_from_iwencai(target_date=None, *, api_key=None, urlopen_fn=None, print_fn=print):
-    """获取两市成交额 - 优先使用 AkShare 指数成交额，必要时回退到问财。"""
-    akshare_total = _get_total_turnover_akshare_fallback(target_date, print_fn=print_fn)
-    if akshare_total > 0:
-        return akshare_total
+def get_total_turnover_from_iwencai(
+    target_date=None,
+    *,
+    api_key=None,
+    urlopen_fn=None,
+    fetch_stock_daily_turnover_records_fn=None,
+    print_fn=print,
+):
+    """获取两市成交额 - 优先使用 Tushare daily，必要时回退到问财/AkShare。"""
+    tushare_total = _get_total_turnover_tushare_primary(
+        target_date,
+        fetch_stock_daily_turnover_records_fn=fetch_stock_daily_turnover_records_fn,
+        print_fn=print_fn,
+    )
+    if tushare_total > 0:
+        return tushare_total
 
     try:
         query_date = _resolve_query_date(target_date)
@@ -617,7 +683,13 @@ def _default_fetch_daily_price_bars(code, start_date, end_date, *, is_index=Fals
     )
 
 
-def _build_major_index_bar_fallback(target_date=None, *, fetch_daily_price_bars_fn=None, print_fn=print):
+def _build_major_index_bar_fallback(
+    target_date=None,
+    *,
+    fetch_daily_price_bars_fn=None,
+    data_source_label="price_bar_fallback",
+    print_fn=print,
+):
     try:
         query_date = _resolve_query_date(target_date)
         end_date = query_date.strftime("%Y-%m-%d")
@@ -661,7 +733,7 @@ def _build_major_index_bar_fallback(target_date=None, *, fetch_daily_price_bars_
                 "change_pct": change_pct,
                 "turnover": 0.0,
                 "涨跌幅": change_pct,
-                "data_source": "price_bar_fallback",
+                "data_source": data_source_label,
                 "trade_date": normalize_kline_date_str(latest_bar.get("date")),
             }
 
@@ -681,10 +753,16 @@ def get_major_indices_from_iwencai(
     fetch_daily_price_bars_fn=None,
     print_fn=print,
 ):
-    """获取主要指数 - 优先使用 AkShare 指数日线，必要时回退到问财/历史K线。"""
-    akshare_indices = _build_major_index_akshare_fallback(target_date, print_fn=print_fn)
-    if len(akshare_indices) >= 3:
-        return akshare_indices
+    """获取主要指数 - 优先使用 Tushare index_daily，必要时回退到问财/AkShare/历史K线。"""
+    tushare_fetcher = fetch_daily_price_bars_fn or fetch_tushare_daily_price_bars
+    tushare_indices = _build_major_index_bar_fallback(
+        target_date,
+        fetch_daily_price_bars_fn=tushare_fetcher,
+        data_source_label="tushare.index_daily",
+        print_fn=print_fn,
+    )
+    if len(tushare_indices) >= 3:
+        return tushare_indices
 
     try:
         query_date = _resolve_query_date(target_date)
@@ -756,11 +834,22 @@ def get_major_indices_from_iwencai(
         )
 
 
-def get_wind_a_from_iwencai(target_date=None, *, api_key=None, urlopen_fn=None, print_fn=print):
-    """获取中证全指 - 优先使用 AkShare 指数日线，必要时回退到问财。"""
-    akshare_wind_a = _get_wind_a_akshare_fallback(target_date, print_fn=print_fn)
-    if _safe_float(akshare_wind_a.get("price")) > 0:
-        return akshare_wind_a
+def get_wind_a_from_iwencai(
+    target_date=None,
+    *,
+    api_key=None,
+    urlopen_fn=None,
+    fetch_daily_price_bars_fn=None,
+    print_fn=print,
+):
+    """获取中证全指 - 优先使用 Tushare index_daily，必要时回退到问财/AkShare。"""
+    tushare_wind_a = _get_wind_a_tushare_primary(
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        print_fn=print_fn,
+    )
+    if _safe_float(tushare_wind_a.get("price")) > 0:
+        return tushare_wind_a
 
     try:
         query_date = _resolve_query_date(target_date)
@@ -794,78 +883,11 @@ def get_wind_a_from_iwencai(target_date=None, *, api_key=None, urlopen_fn=None, 
 
 def get_sector_quadrant_data(period=20, strength_period=3, *, request_get=None, print_fn=print):
     """获取板块四象限数据（击球区分析）。"""
-    import requests
+    from market_data.quicktiny_sector_quadrant_service import fetch_sector_quadrant_data
 
-    request_get = request_get or requests.get
-    try:
-        url = (
-            "https://stock.quicktiny.cn/api/sector-analysis/quadrant"
-            f"?source=dongcai_concept&period={period}&strengthPeriod={strength_period}"
-        )
-        response = request_get(url, timeout=10)
-        if response.status_code != 200:
-            print_fn(f"   ⚠️ 板块四象限API返回状态码: {response.status_code}")
-            return None
-
-        data = response.json()
-        if not data.get("quadrants"):
-            print_fn("   ⚠️ 板块四象限数据格式异常")
-            return None
-
-        quadrants = data["quadrants"]
-        high_strong = quadrants.get("highStrong", [])
-
-        def calculate_quality_score(sector):
-            score = 0
-            if sector["positionInRange"] >= 90:
-                score += 30
-            elif sector["positionInRange"] >= 80:
-                score += 25
-            elif sector["positionInRange"] >= 70:
-                score += 15
-            else:
-                score += 5
-
-            if sector["recentChange"] >= 8:
-                score += 40
-            elif sector["recentChange"] >= 5:
-                score += 30
-            elif sector["recentChange"] >= 3:
-                score += 20
-            else:
-                score += 10
-
-            if sector["volumeRatio"] >= 2.0:
-                score += 30
-            elif sector["volumeRatio"] >= 1.5:
-                score += 20
-            elif sector["volumeRatio"] >= 1.0:
-                score += 10
-
-            return score
-
-        for sector in high_strong:
-            sector["quality_score"] = calculate_quality_score(sector)
-
-        tier1 = [s for s in high_strong if s["quality_score"] >= 80]
-        tier2 = [s for s in high_strong if 60 <= s["quality_score"] < 80]
-        tier3 = [s for s in high_strong if 40 <= s["quality_score"] < 60]
-        tier4 = [s for s in high_strong if s["quality_score"] < 40]
-
-        return {
-            "quadrants": quadrants,
-            "high_strong_analysis": {
-                "total": len(high_strong),
-                "tier1_best": sorted(tier1, key=lambda x: x["quality_score"], reverse=True),
-                "tier2_good": sorted(tier2, key=lambda x: x["quality_score"], reverse=True),
-                "tier3_normal": sorted(tier3, key=lambda x: x["quality_score"], reverse=True),
-                "tier4_edge": sorted(tier4, key=lambda x: x["quality_score"], reverse=True),
-                "tier1_count": len(tier1),
-                "tier2_count": len(tier2),
-                "tier3_count": len(tier3),
-                "tier4_count": len(tier4),
-            },
-        }
-    except Exception as error:
-        print_fn(f"   ⚠️ 板块四象限数据获取失败: {error}")
-        return None
+    return fetch_sector_quadrant_data(
+        period=period,
+        strength_period=strength_period,
+        request_get=request_get,
+        print_fn=print_fn,
+    )

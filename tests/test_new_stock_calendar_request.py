@@ -148,6 +148,29 @@ class NewStockCalendarRequestTest(unittest.TestCase):
         self.assertEqual(timer.records[0], ("新股上市日历获取", 11))
         self.assertTrue(any(log["status"] == "success" for log in result["module_logs"]))
 
+    def test_collect_request_bundle_uses_tushare_registry_before_sina_pages(self):
+        timer = _TimerStub()
+        emitted = []
+        legacy_calls = []
+        registry_calls = []
+
+        result = collect_new_stock_calendar_request_bundle(
+            "2026-05-13",
+            fetch_pages=lambda page_count=2: legacy_calls.append(page_count) or [],
+            request_registry={
+                "new_stock_calendar": lambda *, target_date: registry_calls.append(target_date)
+                or [{"code": "001237", "name": "惠康科技", "listing_date": "2026-05-13", "source": "tushare.new_share"}],
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(registry_calls, ["2026-05-13"])
+        self.assertEqual(legacy_calls, [])
+        self.assertEqual(result["results"]["new_stock_calendar"][0]["source"], "tushare.new_share")
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.new_stock_calendar"], "tushare.new_share")
+
     def test_collect_request_bundle_is_degraded_when_fetch_fails(self):
         timer = _TimerStub()
 

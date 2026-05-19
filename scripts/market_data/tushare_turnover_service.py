@@ -7,6 +7,7 @@ __all__ = [
     "fetch_stock_basic_map",
     "fetch_stock_industry_map",
     "fetch_stock_name_map",
+    "fetch_stock_batch_quote_info",
     "fetch_stock_daily_turnover_records",
     "fetch_stock_moneyflow_map",
     "fetch_stock_turnover_history",
@@ -72,6 +73,17 @@ def _normalize_ts_code(security_code):
     else:
         market = "SZ"
     return f"{code}.{market}"
+
+
+def _clean_code(value):
+    text = str(value or "").strip().upper()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    for prefix in ("SH", "SZ", "BJ"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else ""
 
 
 def _normalize_daily_row(row):
@@ -157,6 +169,70 @@ def fetch_stock_name_map(*, pro=None, ts_module=None):
         if name:
             mapping[key] = name
     return mapping
+
+
+def _resolve_stock_basic_item(name_map, code):
+    item = (name_map or {}).get(code) or {}
+    if isinstance(item, dict):
+        return item
+    return {"name": str(item or "").strip()}
+
+
+def _resolve_stock_industry(basic_item):
+    industry = str((basic_item or {}).get("industry") or "").strip()
+    if not industry or industry in {"HS", "GEM", "STAR", "BJ", "SH", "SZ"}:
+        return ""
+    return industry
+
+
+def _quote_status_from_pct(change_pct):
+    if change_pct >= 9.9:
+        return "涨停"
+    if change_pct <= -9.9:
+        return "跌停"
+    return "正常"
+
+
+def fetch_stock_batch_quote_info(
+    codes,
+    trade_date,
+    *,
+    fetch_daily_records_fn=None,
+    fetch_name_map_fn=None,
+):
+    wanted = {_clean_code(code) for code in codes or []}
+    wanted.discard("")
+    if not wanted:
+        return {}
+
+    fetch_daily_records_fn = fetch_daily_records_fn or fetch_stock_daily_turnover_records
+    fetch_name_map_fn = fetch_name_map_fn or fetch_stock_basic_map
+    name_map = fetch_name_map_fn() or {}
+    daily_records = fetch_daily_records_fn(trade_date) or []
+    result = {}
+
+    for row in daily_records:
+        code = _clean_code((row or {}).get("stock_code") or (row or {}).get("ts_code"))
+        if code not in wanted:
+            continue
+        basic_item = _resolve_stock_basic_item(name_map, code)
+        name = str((row or {}).get("name") or basic_item.get("name") or "").strip()
+        industry = _resolve_stock_industry(basic_item)
+        change_pct = _safe_float((row or {}).get("pct_chg"))
+        result[code] = {
+            "name": name,
+            "industry": industry,
+            "所属行业": industry,
+            "change_pct": round(change_pct, 2),
+            "high": _safe_float((row or {}).get("high")),
+            "low": _safe_float((row or {}).get("low")),
+            "open": _safe_float((row or {}).get("open")),
+            "close": _safe_float((row or {}).get("close")),
+            "turnover": _safe_float((row or {}).get("amount_yi")),
+            "zt_status": _quote_status_from_pct(change_pct),
+            "data_source": (row or {}).get("data_source") or "tushare.daily",
+        }
+    return result
 
 
 def fetch_stock_moneyflow_map(trade_date, *, pro=None, ts_module=None):

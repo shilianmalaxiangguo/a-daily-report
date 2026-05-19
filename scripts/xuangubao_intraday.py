@@ -316,17 +316,32 @@ class XuangubaoIntradayAnalyzer:
         }
 
     def fetch_xuangubao_data(self, target_date=None):
+        legacy_result = {}
         if self._legacy is not None and hasattr(self._legacy, "fetch_xuangubao_data"):
             try:
                 try:
-                    result = dict(self._legacy.fetch_xuangubao_data(target_date=target_date) or {})
+                    legacy_result = dict(self._legacy.fetch_xuangubao_data(target_date=target_date) or {})
                 except TypeError:
-                    result = dict(self._legacy.fetch_xuangubao_data() or {})
-                if result.get("xuangubao_news") or result.get("xuangubao_plates") or result.get("xuangubao_limit_up_reasons"):
-                    return result
+                    legacy_result = dict(self._legacy.fetch_xuangubao_data() or {})
+                if legacy_result.get("xuangubao_news"):
+                    return legacy_result
             except Exception:
-                pass
-        return self._fetch_direct_xuangubao_data(target_date=target_date)
+                legacy_result = {}
+        direct_result = self._fetch_direct_xuangubao_data(target_date=target_date)
+        if not legacy_result:
+            return direct_result
+        return {
+            **legacy_result,
+            **{
+                key: value
+                for key, value in direct_result.items()
+                if key == "diagnostics" or value
+            },
+            "diagnostics": {
+                **(legacy_result.get("diagnostics") or {}),
+                **(direct_result.get("diagnostics") or {}),
+            },
+        }
 
     def __getattr__(self, name):
         if self._legacy is not None:

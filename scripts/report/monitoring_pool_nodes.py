@@ -14,6 +14,15 @@ def _format_pct(context, value):
     return format_pct(value)
 
 
+def _format_xuangubao_reason(item):
+    reason = str(item.get('xuangubao_stock_reason') or '').strip()
+    if not reason:
+        return ''
+    plate_names = item.get('xuangubao_related_plate_names') or []
+    plate_text = f"（{', '.join(plate_names)}）" if plate_names else ''
+    return f"- **选股通解释**: {reason}{plate_text}"
+
+
 def build_main_pool_header_node(context, node_meta=None, node_lookup=None):
     main_pool = ((context.get('performance_summary') or {}).get('monitoring_pool') or {}).get('main_pool', []) or []
     if not main_pool:
@@ -47,6 +56,11 @@ def build_main_pool_details_node(context, node_meta=None, node_lookup=None):
             f"- **容忍带**: {item.get('observation_band_low', '-')} ~ {item.get('observation_band_high', '-')}",
             f"- **失真线**: {item.get('failure_line', '-')}",
             f"- **当前原因**: {item.get('assessment_reason', '-')}",
+        ])
+        xgb_reason_line = _format_xuangubao_reason(item)
+        if xgb_reason_line:
+            lines.append(xgb_reason_line)
+        lines.extend([
             '',
             '| 日期 | 开盘 | 最高 | 最低 | 收盘 | 日涨幅 | 累计涨幅 | 量能 | K线 | 日标签 |',
             '|------|------|------|------|------|--------|----------|------|------|--------|',
@@ -90,6 +104,11 @@ def build_secondary_pool_details_node(context, node_meta=None, node_lookup=None)
             f"- **容忍带**: {item.get('observation_band_low', '-')} ~ {item.get('observation_band_high', '-')}",
             f"- **失真线**: {item.get('failure_line', '-')}",
             f"- **当前原因**: {item.get('assessment_reason', '-')}",
+        ])
+        xgb_reason_line = _format_xuangubao_reason(item)
+        if xgb_reason_line:
+            lines.append(xgb_reason_line)
+        lines.extend([
             '',
             '| 日期 | 开盘 | 最高 | 最低 | 收盘 | 日涨幅 | 累计涨幅 | 量能 | K线 | 日标签 |',
             '|------|------|------|------|------|--------|----------|------|------|--------|',

@@ -61,6 +61,28 @@ class RequestDiagnosticsRuntimeTest(unittest.TestCase):
         self.assertEqual(diagnostics["degraded"][0]["target_keys"], ["indices"])
         self.assertEqual(diagnostics["fallbacks"][0]["provider"], "tencent.get_hot_stocks")
 
+    def test_build_request_diagnostics_preserves_provider_diagnostic_note(self):
+        diagnostics = build_request_diagnostics(
+            module_logs=[
+                {
+                    "module": "domains.watch_candidates.request",
+                    "step": "request.candidate_history",
+                    "status": "success",
+                    "message": "已获取候选股历史成交额快照",
+                    "details": {
+                        "provider": "tushare.daily",
+                        "target_keys": ["stocks_with_history", "history_fetch_stats"],
+                        "diagnostic_note": "Tushare并发4；空数据重试1次；失败代码: 003018",
+                    },
+                }
+            ],
+            data_status={},
+            step_status={},
+        )
+
+        request_log = diagnostics["request_logs"][0]
+        self.assertEqual(request_log["diagnostic_note"], "Tushare并发4；空数据重试1次；失败代码: 003018")
+
     def test_render_request_diagnostics_lines_renders_readable_summary(self):
         diagnostics = build_request_diagnostics(
             module_logs=[

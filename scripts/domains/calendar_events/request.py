@@ -10,6 +10,15 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
+def _fetch_calendar_events_compat(fetch_calendar_events, target_date):
+    try:
+        return fetch_calendar_events(target_date=target_date)
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        return fetch_calendar_events()
+
+
 def collect_calendar_events_request_bundle(
     target_date,
     *,
@@ -24,7 +33,7 @@ def collect_calendar_events_request_bundle(
 
     emit("  🔟 获取预期日历（财联社CLS）...")
     try:
-        calendar = fetch_calendar_events(target_date=target_date)
+        calendar = _fetch_calendar_events_compat(fetch_calendar_events, target_date)
         if calendar:
             results["calendar_events"] = calendar
             data_status["预期日历"] = True
