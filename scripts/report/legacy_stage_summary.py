@@ -128,11 +128,11 @@ def _build_decisive_row(context, stage_meta=None):
 
     if best_stock:
         stock_label = f"{best_stock.get('name')}({best_stock.get('code')})"
-        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；60分钟确认后按条件触发")
+        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按预演参与窗口触发")
     if watch_anchor:
         stock_label = f"{watch_anchor.get('name')}({watch_anchor.get('code')})"
         if trade_gate_open:
-            guidance = f"{stock_label}；先做60分钟确认，只有走成明天唯一能买的那只才允许买入"
+            guidance = f"{stock_label}；先看预演参与窗口，只有走成明天唯一能买的那只才参与"
         else:
             guidance = f"{stock_label}；仅作强弱观察，不构成买入指令"
         if watch_anchor_type:

@@ -40,7 +40,7 @@ def build_execution_gate_stage(ctx):
     execution_permission = (((ctx.get("decision") or {}).get("execution_permission") or {}) or {})
     label = str(execution_permission.get("label", "") or "unknown").strip() or "unknown"
     trigger = str(action_plan.get("trigger", "") or "").strip()
-    status = "ready" if label == "conditional_30" else ("blocked" if label == "watch_only" else "pending")
+    status = "ready" if label == "attack_50_ready" else ("blocked" if label == "watch_only" else "pending")
     summary = f"{label}"
     if trigger:
         summary = f"{summary}；{trigger}"

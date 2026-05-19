@@ -6,7 +6,7 @@ DEFAULT_CANDIDATE_SELECTION_NODE_SPECS = [
     {"node_key": "crossline_watch", "title": "跨线观察候选"},
     {"node_key": "ignored_candidates", "title": "暂不关注"},
     {"node_key": "mainline_summary", "title": "明日核心方向预判"},
-    {"node_key": "conviction_list", "title": "极度看好名单"},
+    {"node_key": "conviction_list", "title": "重点观察名单"},
     {"node_key": "quadrant_analysis", "title": "击球区判断"},
     {"node_key": "conclusion", "title": "结论"},
 ]

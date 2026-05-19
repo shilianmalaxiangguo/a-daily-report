@@ -104,7 +104,7 @@ def _build_abnormal_follow_rule_legacy_body(abnormal_type, follow_state, anchor_
     if follow_state == "跌不下去":
         return f"只看回踩不破{anchor_text}后的60分钟再转强"
     if follow_state == "缩量消化":
-        return f"缩量消化后再等60分钟确认，锚点{anchor_text}"
+        return f"缩量消化后再看结构确认，锚点{anchor_text}"
     if follow_state == "新异动待观察":
         return "先看次日承接，不追大阳当天"
     return f"跌破{anchor_text}说明第一波异动失效"

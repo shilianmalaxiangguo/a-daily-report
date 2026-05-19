@@ -191,7 +191,7 @@ assert bundle == {"focus_group": []}
             safe_float=lambda value, default=0.0: default if value in (None, "") else float(value),
             clamp=lambda value, low, high: max(low, min(high, value)),
             get_abnormal_follow_risk_signal=lambda stock: (
-                {"light": "🟢 绿灯", "delta": -12, "reason": "承接强", "forecast": "等60分钟确认"}
+                {"light": "🟢 绿灯", "delta": -12, "reason": "承接强", "forecast": "等参与窗口确认"}
                 if stock.get("code") == "000001"
                 else {"light": "🔴 红灯", "delta": 22, "reason": "承接弱", "forecast": "可能低开"}
             ),

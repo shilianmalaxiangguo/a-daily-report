@@ -1,3 +1,6 @@
+from report.surface_wording import sanitize_user_visible_text
+
+
 def _render_gem_breathing_pool_lines(gem_observation_stocks=None, filtered_out_gem_candidates=None):
     gem_observation_stocks = gem_observation_stocks or []
     filtered_out_gem_candidates = filtered_out_gem_candidates or []
@@ -7,7 +10,7 @@ def _render_gem_breathing_pool_lines(gem_observation_stocks=None, filtered_out_g
     lines = [
         "#### Step 3.5 - 创业板20cm预启动观察池",
         "> **先看结论**：创业板20cm样本只保留观察权，不单列成独立战场。",
-        "> **只看什么**：均线粘合、蛇形走位和右侧确认。",
+        "> **只看什么**：波动收敛、量价温和放大、右侧确认。",
     ]
     if filtered_out_gem_candidates:
         filtered_text = "；".join(
@@ -23,7 +26,7 @@ def _render_gem_breathing_pool_lines(gem_observation_stocks=None, filtered_out_g
     for item in gem_observation_stocks:
         lines.append(
             f"| {item.get('name', '-')}({item.get('code', '-')}) | {item.get('tier', '-') or item.get('core_level', '-')} | "
-            f"{item.get('note', item.get('abnormal_summary', '-'))} | {item.get('watch_anchor_note', item.get('tmr_forecast', '-'))} |"
+            f"{sanitize_user_visible_text(item.get('note', item.get('abnormal_summary', '-')))} | {sanitize_user_visible_text(item.get('watch_anchor_note', item.get('tmr_forecast', '-')))} |"
         )
     lines.append("")
     return lines

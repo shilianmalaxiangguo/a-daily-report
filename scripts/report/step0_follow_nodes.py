@@ -106,7 +106,7 @@ def build_step0_follow_reminder_node(context, node_meta=None, node_lookup=None):
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日前30分钟先确认环境，真正买点一律等60分钟K线确认；买入后再用30分钟结构定止损。"
+            "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与；买入后再用30分钟结构定止损。"
         ],
         "exports": {},
         "module_logs": [],

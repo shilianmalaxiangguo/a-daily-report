@@ -21,11 +21,11 @@ class UseReportStagesTest(unittest.TestCase):
                     "strategy_contract": {"contract_label": "conditional_entry"},
                 },
                 "decision": {
-                    "execution_permission": {"label": "conditional_30"},
+                    "execution_permission": {"label": "attack_50_ready"},
                     "action_plan": {
                         "action_label": "conditional_entry",
-                        "headline": "沿军工保留30%条件试错",
-                        "trigger": "次日完成60分钟确认",
+                        "headline": "沿军工进入50%标准进攻预演",
+                        "trigger": "次日完成参与窗口确认",
                     },
                 },
             },

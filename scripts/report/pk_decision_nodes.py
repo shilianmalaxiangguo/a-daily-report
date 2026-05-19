@@ -58,9 +58,9 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
         )
         lines.append(f"> **这笔值不值得做**: {best_stock.get('ev', 0):.2f}元/股")
         lines.append(f"> **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-        lines.append("> **真到盘中怎么做**: 明日仍需60分钟确认后再买，买后用30分钟结构止损")
+        lines.append("> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买后用30分钟结构止损")
     else:
-        lines.append("> **真到盘中怎么做**: 明日仅在60分钟确认后按条件触发，买后用30分钟结构止损")
+        lines.append("> **真到盘中怎么做**: 明日按预演参与窗口触发，买后用30分钟结构止损")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

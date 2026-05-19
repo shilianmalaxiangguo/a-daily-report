@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+PERMISSION_LABEL = "参与资格"
+
 from domains.execution_chain.entry_plan_stage import build_entry_plan_runtime, build_entry_plan_stage
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
@@ -39,7 +41,7 @@ class EntryPlanStageTest(unittest.TestCase):
                 "normalize_stock_code": lambda code: str(code or "").strip(),
                 "get_execution_framework_text": lambda: "先60分钟确认，再看30分钟止损",
                 "get_trade_permission": lambda *args, **kwargs: {
-                    "permission_label": "执行权",
+                    "permission_label": PERMISSION_LABEL,
                     "permission_reason": "主线最强，可执行",
                     "can_execute": True,
                 },
@@ -116,7 +118,7 @@ class EntryPlanStageTest(unittest.TestCase):
                 "normalize_stock_code": lambda code: str(code or "").strip(),
                 "get_execution_framework_text": lambda: "先60分钟确认，再看30分钟止损",
                 "get_trade_permission": lambda *args, **kwargs: {
-                    "permission_label": "执行权",
+                    "permission_label": PERMISSION_LABEL,
                     "permission_reason": "主线最强，可执行",
                     "can_execute": True,
                 },

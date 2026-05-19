@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.report_document_builder import (
     build_prohibition_section_contract,
     build_report_shell_contract,
@@ -137,7 +141,7 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("**次日市场环境**: 二档（防守档） / 观察态 - 先看特殊标的是否继续抗跌", rendered)
+        self.assertIn("**次日市场环境**: 0%观察 / 观察态 - 先看特殊标的是否继续抗跌", rendered)
         self.assertIn("**禁止事项**:", rendered)
         self.assertIn("禁止新开仓", rendered)
         self.assertNotIn("**允许事项**:", rendered)
@@ -157,25 +161,33 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         lines = result["lines"]
         rendered = "\n".join(lines)
 
-        self.assertIn("二档（防守档） / 观察态", rendered)
+        self.assertIn("0%观察 / 观察态", rendered)
         self.assertIn("禁止新开仓", rendered)
         self.assertIn("主攻线只盯军工", rendered)
         self.assertIn("风险板块（禁止碰）", rendered)
         self.assertTrue(any(log["step"] == "build.prohibition_section" for log in result["module_logs"]))
 
-    def test_build_prohibition_section_contract_outputs_conditional_defense_mode(self):
+    def test_build_prohibition_section_contract_maps_conditional_defense_to_zero_or_50_model(self):
         result = build_prohibition_section_contract(
             display_position_level="二档（防守档）",
             display_operation_state="防守态",
             environment_headline="指数上行中枢内，防守观察",
             has_personal_positions=False,
-            final_gate={"should_reduce": False, "allow_conditional_30": True},
+            final_gate={"should_reduce": False, "allow_attack_50_ready": True},
             main_sectors=["半导体", "电池"],
             exit_analysis={"risk_sectors": []},
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("10点确认后的30%条件试错", rendered)
+        self.assertIn("0%观察", rendered)
+        self.assertIn("50%标准进攻", rendered)
+        self.assertIn("参与窗口", rendered)
+        self.assertIn("强核心走竞价表态、开盘前几分钟或回封", rendered)
+        self.assertIn("普通结构才等60分钟确认", rendered)
+        self.assertNotIn("参与窗口和60分钟确认", rendered)
+        self.assertNotIn("同时成立", rendered)
+        self.assertNotIn(_m("10点确认后的", "30%", "条件试错"), rendered)
+        self.assertNotIn(_m("30%", "小仓试错"), rendered)
         self.assertNotIn("二档不允许任何新增买入", rendered)
 
 

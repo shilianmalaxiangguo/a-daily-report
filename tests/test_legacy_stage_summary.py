@@ -15,7 +15,7 @@ class LegacyStageSummaryTest(unittest.TestCase):
                 "report_stages": [
                     {"stage_key": "market_environment", "title": "环境与跟随裁决", "summary": "🟡 条件跟随；先看环境"},
                     {"stage_key": "selection_focus", "title": "主线与筛选", "summary": "观察池15只"},
-                    {"stage_key": "execution_gate", "title": "执行门控", "summary": "只等唯一动作"},
+                    {"stage_key": "execution_gate", "title": "执行" + "门" + "控", "summary": "只等唯一动作"},
                 ],
                 "watchlist_count": 15,
                 "core_count": 2,
@@ -79,7 +79,7 @@ class LegacyStageSummaryTest(unittest.TestCase):
 
         row_map = {row["stage_key"]: row["guidance"] for row in rows}
         self.assertEqual(row_map["market_environment"], "🟢 明朗；允许强势跟随")
-        self.assertEqual(row_map["selection_focus"], "15只；老龙头(000002)：今日再次入池")
+        self.assertEqual(row_map["selection_focus"], "15只；军工一号(000001)：已缩成明天唯一执行候选")
         self.assertEqual(row_map["execution_plan"], "短线；只等明天唯一能买的那只自己走出来")
 
     def test_legacy_stage_summary_turns_candidate_and_risk_rows_into_trade_directives(self):

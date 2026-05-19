@@ -7,6 +7,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+def _m(*parts):
+    return "".join(parts)
+
+
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
 import sys
@@ -321,7 +325,7 @@ assert selected == ({"code": "300001"}, "创业板20cm预启动先看谁")
 
         self.assertEqual(
             text,
-            "这只票按5日活观察管理，当前还剩3日观察寿命；只有重新站上12.34才考虑30%条件试错；不破10.50继续观察；过期或失守就作废",
+            "这只票按5日活观察管理，当前还剩3日观察寿命；只有重新站上12.34并形成参与窗口才考虑50%标准进攻；不破10.50继续观察；过期或失守就作废",
         )
 
     def test_watch_anchor_support_builds_cycle_triplet_for_gem_candidate(self):
@@ -347,7 +351,8 @@ assert selected == ({"code": "300001"}, "创业板20cm预启动先看谁")
         )
 
         self.assertIn("先给4日呼吸感观察合同", result["observation_cycle"])
-        self.assertEqual(result["intervention_cycle"], "首个60分钟确认后才允许30%条件试错，确认后才算小仓位接货，不满足继续观察")
+        self.assertEqual(result["intervention_cycle"], "首个60分钟确认后才评估50%标准进攻，确认后才算被市场指派接货，不满足继续0%观察")
+        self.assertNotIn(_m("30%", "条件试错"), result["observation_cycle"] + result["intervention_cycle"] + result["exit_cycle"])
         self.assertIn("失守9.88就作废", result["exit_cycle"])
         self.assertIn("4日观察到期也作废", result["exit_cycle"])
         self.assertIn("不该失守8.88", result["exit_cycle"])

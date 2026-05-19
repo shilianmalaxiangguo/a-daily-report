@@ -40,12 +40,12 @@ def build_candidate_selection_core_candidates_node(context, node_meta=None, node
             elif trade_gate_open:
                 qualification_text = "可做"
             else:
-                qualification_text = "观察，等10点确认" if final_gate.get("allow_conditional_30") else "仅观察，条件未满足"
+                qualification_text = "观察，等10点确认" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
             if not trade_gate_open and "观察" not in str(qualification_text) and "无" not in str(qualification_text):
-                qualification_text = "观察，等10点确认" if final_gate.get("allow_conditional_30") else "仅观察，条件未满足"
-            elif not trade_gate_open and final_gate.get("allow_conditional_30") and str(qualification_text) in ("有条件执行", "资格", "可做"):
+                qualification_text = "观察，等10点确认" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
+            elif not trade_gate_open and final_gate.get("allow_attack_50_ready") and str(qualification_text) in ("有条件执行", "资格", "可做"):
                 qualification_text = "观察，等10点确认"
-            elif not trade_gate_open and not final_gate.get("allow_conditional_30") and str(qualification_text) in ("有条件执行", "资格", "可做"):
+            elif not trade_gate_open and not final_gate.get("allow_attack_50_ready") and str(qualification_text) in ("有条件执行", "资格", "可做"):
                 qualification_text = "仅观察，条件未满足"
             lines.append(
                 f"| {stock.get('name', '-')} | {stock.get('code', '-')} | {stock.get('sector', primary_mainline or '-')} | "
