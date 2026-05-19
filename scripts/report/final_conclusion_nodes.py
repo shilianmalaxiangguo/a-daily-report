@@ -9,6 +9,9 @@ from report.conclusion_support import (
 )
 
 
+LAYERED_PARTICIPATION_TEXT = "竞价/开盘前几分钟/回封/60分钟分层参与窗口"
+
+
 def _build_report_stages_from_context(context):
     report_stages = context.get("report_stages") or []
     if report_stages:
@@ -23,7 +26,7 @@ def _build_report_stages_from_context(context):
                 "strategy_contract": {"contract_label": final_gate.get("gate_status", "")},
             },
             "decision": {
-                "execution_permission": {"label": "conditional_30" if context.get("trade_gate_open") else "watch_only"},
+                "execution_permission": {"label": "attack_50_ready" if context.get("trade_gate_open") else "watch_only"},
                 "action_plan": {"trigger": context.get("front_follow_action_text", "")},
             },
         }
@@ -42,18 +45,18 @@ def _build_mvp_target_row(context):
             return (
                 "| 如果要买只买谁 | "
                 f"{best_stock.get('name')}({best_stock.get('code')})，"
-                f"60分钟确认且触及{entry_range[0]:.2f}-{entry_range[1]:.2f}才允许买入 |"
+                f"按{LAYERED_PARTICIPATION_TEXT}触发，价格预案{entry_range[0]:.2f}-{entry_range[1]:.2f} |"
             )
         return (
             "| 如果要买只买谁 | "
-            f"{best_stock.get('name')}({best_stock.get('code')})，60分钟确认后按条件触发 |"
+            f"{best_stock.get('name')}({best_stock.get('code')})，按{LAYERED_PARTICIPATION_TEXT}触发 |"
         )
     if watch_anchor:
         if trade_gate_open:
             return (
                 "| 明天先盯哪只 | "
                 f"{watch_anchor.get('name')}({watch_anchor.get('code')})，"
-                "先看60分钟确认，只有走成明天唯一能买的那只才允许买入"
+                f"先看{LAYERED_PARTICIPATION_TEXT}是否成立，只有走成明天唯一能买的那只才参与"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
             )
         return (
@@ -79,18 +82,18 @@ def _build_full_mode_strategy_row(context):
         return ("明日策略", "不开新仓，只观察：当前裁决不允许新增跟随，先看环境和主线是否继续强化")
 
     if step0_prediction == "DIFFICULT":
-        return ("明日策略", "开盘再评估：环境仍需确认，前30分钟只看环境，60分钟后再定")
+        return ("明日策略", "开盘再评估：环境仍需确认，只记录竞价表态和开盘承接，不满足预演情境就回到0%")
 
     if best_stock:
         if step0_prediction == "CLEAR":
-            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，60分钟确认后执行，买后用30分钟结构止损，其他标的禁止")
-        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，60分钟确认后再买，其他标的无论多诱人都禁止")
+            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，按竞价表态/开盘前几分钟/回封/60分钟确认分层处理，买后用30分钟结构止损，其他标的禁止")
+        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，满足预演参与窗口才执行，其他标的无论多诱人都禁止")
 
     if watch_anchor:
         if trade_gate_open:
             guidance = (
-                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先做60分钟确认，"
-                "只有走成明天唯一能买的那只才允许买入"
+                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先看预演参与窗口，"
+                "只有走成明天唯一能买的那只才参与"
             )
             if watch_anchor_note:
                 guidance = f"{guidance}；{watch_anchor_note}"
@@ -182,7 +185,13 @@ def build_final_conclusion_risk_guard_node(context, node_meta=None, node_lookup=
 def build_final_conclusion_mvp_discipline_node(context, node_meta=None, node_lookup=None):
     if not context.get("display_mvp_mode"):
         return {"lines": [], "exports": {}, "module_logs": []}
-    return {"lines": ["| 执行纪律 | 前30分钟只确认环境；买点必须等60分钟；买后用30分钟结构止损，最晚单笔-5% |"], "exports": {}, "module_logs": []}
+    return {
+        "lines": [
+            "| 执行纪律 | 竞价表态/开盘前几分钟/回封/60分钟确认分层处理；不满足预演情境就回到0%；买后用30分钟结构止损，最晚单笔-5% |"
+        ],
+        "exports": {},
+        "module_logs": [],
+    }
 
 
 def build_final_conclusion_full_stage_rows_node(context, node_meta=None, node_lookup=None):
@@ -231,7 +240,13 @@ def build_final_conclusion_full_strategy_node(context, node_meta=None, node_look
 def build_final_conclusion_full_discipline_node(context, node_meta=None, node_lookup=None):
     if context.get("display_mvp_mode"):
         return {"lines": [], "exports": {}, "module_logs": []}
-    return {"lines": ["| 执行纪律 | 明日前30分钟先确认环境；买点一律等60分钟确认；若直接高开离计划买点过远则放弃 |"], "exports": {}, "module_logs": []}
+    return {
+        "lines": [
+            "| 执行纪律 | 竞价表态/开盘前几分钟/回封/60分钟确认分层处理；不满足预演情境就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
+        ],
+        "exports": {},
+        "module_logs": [],
+    }
 
 
 def build_final_conclusion_footer_node(context, node_meta=None, node_lookup=None):

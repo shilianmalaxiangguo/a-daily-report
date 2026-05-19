@@ -24,7 +24,7 @@ class UseExecutionPermissionTest(unittest.TestCase):
         self.assertIn("phase=defend", result["patches"]["decision"]["execution_permission"]["reason"])
         self.assertEqual(
             result["patches"]["decision"]["execution_permission"]["framework"]["gate_chain"],
-            ["环境条件满足", "主线确认", "异常/触发", "可交易性", "60分钟确认", "30分钟止损"],
+            ["环境条件满足", "主线确认", "异常/触发", "可交易性", "参与窗口分层确认", "30分钟止损"],
         )
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["execution_permission"]["hook_name"],
@@ -46,12 +46,12 @@ class UseExecutionPermissionTest(unittest.TestCase):
 
         result = run(ctx)
 
-        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "conditional_30")
-        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "execute_50")
+        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "execute_50")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.market_phase", result["diagnostics"]["warnings"])
         self.assertIn(
-            "环境条件满足 -> 主线确认 -> 异常/触发 -> 可交易性 -> 60分钟确认 -> 30分钟止损",
+            "环境条件满足 -> 主线确认 -> 异常/触发 -> 可交易性 -> 参与窗口分层确认 -> 30分钟止损",
             result["patches"]["decision"]["execution_permission"]["reason"],
         )
 
@@ -68,8 +68,8 @@ class UseExecutionPermissionTest(unittest.TestCase):
 
         result = run(ctx)
 
-        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "conditional_30")
-        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "conditional_30")
+        self.assertEqual(result["patches"]["derived"]["execution_permission"]["label"], "execute_50")
+        self.assertEqual(result["patches"]["decision"]["execution_permission"]["label"], "execute_50")
         self.assertEqual(result["diagnostics"]["status"], "degraded")
         self.assertIn("missing derived.mainline", result["diagnostics"]["warnings"])
 
@@ -84,7 +84,7 @@ class UseExecutionPermissionTest(unittest.TestCase):
                     "strategy_contract": {
                         "contract_label": "probe_only",
                         "permission_label": "watch_only",
-                        "contract_reason": "主线未清，不授予执行权",
+                        "contract_reason": "主线未清，不授予参与资格",
                     },
                 }
             },

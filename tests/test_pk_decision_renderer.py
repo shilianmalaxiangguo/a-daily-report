@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+PERMISSION_LABEL = "参与资格"
+
 from report.pk_decision_renderer import render_pk_decision_section
 
 
@@ -18,7 +20,7 @@ class PkDecisionRendererTest(unittest.TestCase):
                 "scored_executable_stocks": [
                     {
                         "name": "军工一号",
-                        "permission_label": "执行权",
+                        "permission_label": PERMISSION_LABEL,
                         "decision_stack": {
                             "environment_score": 9,
                             "mainline_score": 8,
@@ -46,7 +48,7 @@ class PkDecisionRendererTest(unittest.TestCase):
                 "conclusion_lines": [
                     "**结论**:",
                     "- **如果要买只买谁**: 军工一号(000001)",
-                    "- **出手时怎么做**: 明日仅在60分钟确认后按条件触发买入",
+                    "- **出手时怎么做**: 明日仅在参与窗口确认后按条件触发",
                 ],
             }
         )
@@ -56,7 +58,7 @@ class PkDecisionRendererTest(unittest.TestCase):
         self.assertIn("> **先看结论**：真允许出手时，只保留唯一动作；不允许时，只保留观察。", rendered)
         self.assertIn("> **只看什么**：环境、主线、触发、可交易性和历史胜率收益。", rendered)
         self.assertIn("**决策栈排序**（环境 -> 主线 -> EV）:", rendered)
-        self.assertIn("| 军工一号 | 9 | 8 | 7 | 8 | 7 | 8 | 资格 |", rendered)
+        self.assertIn("| 军工一号 | 9 | 8 | 7 | 8 | 7 | 8 | 参与资格 |", rendered)
         self.assertIn("**✅ 明天唯一能买的那只**: 军工一号(000001)", rendered)
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("PK公式", rendered)
@@ -89,7 +91,7 @@ class PkDecisionRendererTest(unittest.TestCase):
                 "scored_executable_stocks": [
                     {
                         "name": "军工一号",
-                        "permission_label": "执行权",
+                        "permission_label": PERMISSION_LABEL,
                         "decision_stack": {
                             "environment_score": 9,
                             "mainline_score": 8,

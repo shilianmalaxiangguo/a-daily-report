@@ -8,6 +8,13 @@ from report.surface_wording import sanitize_user_visible_text
 HOOK_NAME = "report.sections"
 
 
+def _normalize_permission_label(label):
+    label = str(label or "").strip()
+    if label == "attack_50_ready":
+        return "execute_50"
+    return label or "unknown"
+
+
 def _build_environment_section(phase, primary_line, knowledge):
     return "\n".join(
         [
@@ -111,7 +118,7 @@ def run(ctx):
     phase = str(market_phase.get("phase", "") or "unknown").strip() or "unknown"
     primary_line = str(mainline.get("primary_line", "") or "未知").strip() or "未知"
     contract_label = str(strategy_contract.get("contract_label", "") or "unknown").strip() or "unknown"
-    permission = str(execution_permission.get("label", "") or "unknown").strip() or "unknown"
+    permission = _normalize_permission_label(execution_permission.get("label", ""))
     preamble = "\n".join(knowledge.get("report_preamble_lines") or [f"# {target_date} A股日报"]).strip()
 
     sections = sanitize_user_visible_text({

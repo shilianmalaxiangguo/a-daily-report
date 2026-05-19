@@ -7,6 +7,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from selection.special_probe_runtime import (
     build_abnormal_watch_anchor_candidates,
     build_abnormal_probe_group,
@@ -195,7 +199,7 @@ assert "helpers" not in verdict_mock.call_args.kwargs
                 "entry_range": (12.1, 12.6),
                 "minute_plan": {"confirm_price_60m": 12.66, "confirm_support_60m": 11.88},
                 "stop_plan": {"effective_stop": 11.55},
-                "permission_label": "明天执行权",
+                "permission_label": "明天参与资格",
                 "ev_pct": 0.02,
                 "open": 12.0,
                 "high": 12.8,
@@ -397,8 +401,10 @@ assert "helpers" not in verdict_mock.call_args.kwargs
         )
 
         self.assertEqual(verdict["code"], "crossline_probe_upgrade_ready")
-        self.assertTrue(verdict["allows_conditional_30"])
-        self.assertIn("30%条件试错", focus_text)
+        self.assertTrue(verdict["allows_attack_50_ready"])
+        self.assertIn("50%标准进攻", focus_text)
+        self.assertIn("参与窗口", focus_text)
+        self.assertNotIn(_m("30%", "条件试错"), focus_text)
         self.assertIn("跨线探针(300001)", focus_text)
 
 

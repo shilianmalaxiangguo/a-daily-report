@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from selection.gem_breathing_runtime import (
     build_gem_elasticity_context,
     build_gem_breathing_contract,
@@ -78,7 +82,7 @@ class GemBreathingRuntimeTest(unittest.TestCase):
         self.assertEqual(prices["invalidation_price"], 11.55)
         self.assertEqual(prices["reset_breakout_price"], 12.8)
 
-    def test_classify_20cm_branch_allows_conditional_30_for_textbook_ready_sample(self):
+    def test_classify_20cm_branch_allows_attack_50_ready_for_textbook_ready_sample(self):
         result = classify_20cm_branch(
             {
                 "code": "300001",
@@ -91,7 +95,7 @@ class GemBreathingRuntimeTest(unittest.TestCase):
             confirm_price=12.3,
             support_price=11.8,
             feedback_ready=True,
-            allow_conditional_30=True,
+            allow_attack_50_ready=True,
             target_date="2026-04-22",
             mainline_anchor={"name": "成飞集成"},
             helpers={
@@ -105,9 +109,11 @@ class GemBreathingRuntimeTest(unittest.TestCase):
 
         self.assertTrue(result["is_20cm"])
         self.assertTrue(result["allow_watch_pool"])
-        self.assertTrue(result["allow_conditional_30"])
+        self.assertTrue(result["allow_attack_50_ready"])
         self.assertFalse(result["direct_ban"])
         self.assertIn("教材样本", result["reason"])
+        self.assertIn("50%标准进攻", result["reason"])
+        self.assertNotIn(_m("30%", "条件试错"), result["reason"])
 
     def test_build_gem_breathing_contract_normalizes_prices_and_upgrade_text(self):
         contract = build_gem_breathing_contract(
@@ -134,6 +140,8 @@ class GemBreathingRuntimeTest(unittest.TestCase):
         self.assertEqual(contract["reset_breakout_price"], 12.98)
         self.assertIn("12.36", contract["upgrade_condition_text"])
         self.assertIn("11.22", contract["upgrade_condition_text"])
+        self.assertIn("50%标准进攻", contract["upgrade_condition_text"])
+        self.assertNotIn(_m("30%", "条件试错"), contract["upgrade_condition_text"])
 
     def test_build_gem_breathing_watch_anchor_assembles_waiting_plan_and_contract(self):
         watch_anchor = build_gem_breathing_watch_anchor(

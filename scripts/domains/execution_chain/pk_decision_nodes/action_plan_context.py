@@ -3,9 +3,47 @@ from report.surface_wording import sanitize_user_visible_text
 
 def _format_closed_gate_buy_limit_text(position_level, final_gate):
     final_gate = final_gate or {}
-    if final_gate.get("allow_conditional_30"):
-        return "等10点确认，未确认不开"
+    if final_gate.get("allow_attack_50_ready"):
+        return "等参与窗口确认；未确认按0%不参与"
     return f"⛔{position_level}禁止新开仓"
+
+
+def _format_position_display(position_level):
+    text = str(position_level or "").strip()
+    if "一档" in text or "空仓" in text:
+        return "0%不参与"
+    if "二档" in text or "防守" in text:
+        return "0%观察"
+    if "进攻" in text:
+        return "50%标准进攻"
+    return text or "0%观察"
+
+
+def _is_ten_confirm_upgrade_candidate(candidate):
+    candidate = candidate or {}
+    text = " ".join(
+        str(candidate.get(key, "") or "")
+        for key in (
+            "permission_label",
+            "watch_anchor_type",
+            "conviction_reason",
+            "reason",
+            "core_level",
+            "watch_anchor_note",
+        )
+    )
+    minute_plan = candidate.get("minute_plan") or {}
+    return bool(
+        minute_plan.get("confirm_price_60m")
+        and (
+            any(marker in text for marker in ("重点观察名单", "重点观察权", "重点观察确认"))
+            or "极看" in text
+            or "极度看好" in text
+            or "板块锚定龙" in text
+            or "首波先锋" in text
+            or "主线核心" in text
+        )
+    )
 
 
 def build_pk_decision_action_plan_context_node(context, node_meta=None, node_lookup=None):
@@ -38,6 +76,11 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     build_candidate_exit_rules = context.get("build_candidate_exit_rules", lambda candidate, stop_plan=None: {})
     format_holding_window_text = context.get("format_holding_window_text", lambda min_days, max_days: "")
     get_execution_framework_text = context.get("get_execution_framework_text", lambda: "")
+    ten_confirm_upgrade_candidate = next(
+        (candidate for candidate in display_observation_candidates if _is_ten_confirm_upgrade_candidate(candidate)),
+        None,
+    )
+    can_ten_confirm_upgrade = bool(final_gate.get("allow_attack_50_ready") or ten_confirm_upgrade_candidate)
 
     action_rows = []
     if best_stock:
@@ -102,6 +145,22 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 f"{format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
             }
         )
+    elif can_ten_confirm_upgrade and display_observation_candidates:
+        candidate = ten_confirm_upgrade_candidate or display_observation_candidates[0] or {}
+        minute_plan = candidate.get("minute_plan") or {}
+        stop_plan = candidate.get("stop_plan")
+        price_focus = build_trade_price_focus(minute_plan, stop_plan)
+        confirm_price = minute_plan.get("confirm_price_60m")
+        confirm_text = f"09:50-10:10站上{confirm_price:.2f}" if confirm_price else "09:50-10:10完成参与窗口确认"
+        action_rows.append(
+            {
+                "action": "⏳ 确认后执行预案",
+                "name": candidate.get("name"),
+                "code": candidate.get("code"),
+                "trigger": f"{confirm_text}，且板块承接不塌，参与窗口成立后才评估50%标准进攻",
+                "risk_window": (price_focus or {}).get("key_zone_display", "-"),
+            }
+        )
     else:
         action_rows.append(
             {
@@ -145,33 +204,42 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
         append_observation_price_focus_note(backup_observation_lines, price_focus, prefix="  ")
 
     position_section_lines = [
-        f"- **市场环境档位**: {position_level}",
+        f"- **进攻仓位三态**: {_format_position_display(position_level)}",
         f"- **明日裁决**: {step0_prediction_cn}",
         f"- **怎么执行**: {get_execution_framework_text()}",
     ]
     if position_level == "一档（空仓档）":
-        position_section_lines.extend(
-            [
-                "- **现在到底是什么状态**: 空仓",
-                "- **明天仓位放多少**: 0%（必须空仓）",
-                "- **明天具体怎么做**: 清仓或保持空仓，禁止任何买入",
-            ]
-        )
+        if can_ten_confirm_upgrade and display_observation_candidates:
+            position_section_lines.extend(
+                [
+                    "- **现在到底是什么状态**: 0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
+                    "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
+                    "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，命中后才评估50%标准进攻，未命中继续0%",
+                ]
+            )
+        else:
+            position_section_lines.extend(
+                [
+                    "- **现在到底是什么状态**: 空仓",
+                    "- **明天仓位放多少**: 0%（必须空仓）",
+                    "- **明天具体怎么做**: 清仓或保持空仓，禁止任何买入",
+                ]
+            )
     elif position_level == "二档（防守档）":
-        position_section_lines.append("- **现在到底是什么状态**: 防守观察")
+        position_section_lines.append("- **现在到底是什么状态**: 0%观察，等待参与窗口")
         if final_gate.get("should_reduce"):
-            position_section_lines.append("- **明天仓位放多少**: 最多30%（只留强者，不做新增）")
+            position_section_lines.append("- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）")
             position_section_lines.append(
                 "- **明天具体怎么做**: 只处理你的旧仓，去弱留强，禁止新开仓"
                 if has_personal_positions
                 else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，禁止新开仓"
             )
         else:
-            position_section_lines.append("- **明天仓位放多少**: 最多30%（只在10点确认后条件试错）")
+            position_section_lines.append("- **明天仓位放多少**: 0%观察；参与窗口成立后才评估50%标准进攻")
             position_section_lines.append(
-                "- **明天具体怎么做**: 旧强仓可持有；新仓只允许主线核心完成10点确认后小仓试错"
+                "- **明天具体怎么做**: 旧强仓可持有；新仓只看主线核心是否命中参与窗口分层确认，强核心走竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认"
                 if has_personal_positions
-                else "- **明天具体怎么做**: 只观察主线核心是否完成10点确认，确认前不开，确认后最多30%条件试错"
+                else "- **明天具体怎么做**: 只观察主线核心是否命中参与窗口分层确认；未命中0%，命中后才评估50%标准进攻"
             )
     else:
         if not best_stock:
@@ -203,8 +271,8 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    "- **明天仓位放多少**: 最多30%（轻仓试错）",
-                    "- **明天具体怎么做**: 严格按买点触发，不追涨",
+                    "- **明天仓位放多少**: 50%标准进攻（只在参与窗口成立后）",
+                    "- **明天具体怎么做**: 严格按买点触发，不追涨；不满足参与窗口就转为0%",
                 ]
             )
         else:
@@ -257,23 +325,23 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     opening_lines = [
         "- 观察涨跌比、昨日涨停溢价率",
         "- 重新评估Step 0裁决是否仍然成立",
-        "- 观察观察池个股的竞价情况",
-        "- 这30分钟只确认环境，不抢买点",
+        "- 观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步",
+        "- 若竞价表态和开盘前几分钟承接同时成立，按预演参与窗口处理；不成立回到0%",
     ]
     if trade_gate_open and best_stock:
         first_hour_lines = [
-            "- 日线环境未被破坏 + 60分钟结构确认 → 才允许执行买点",
-            "- 直接高开离买点>5% 或 60分钟走弱 → 放弃，等新的买点",
+            "- 竞价/开盘前几分钟未触发时，再看60分钟结构确认",
+            "- 直接高开离计划过远且没有回封/承接方案 → 放弃，等新的买点",
         ]
         intraday_lines = [
-            "- 60分钟确认后，触及买点区间且大盘不崩 → 按预设仓位买入",
+            "- 竞价表态、开盘承接、打板/回封或60分钟确认任一路径命中，且大盘不崩 → 按预设仓位执行",
             "- 买入后用30分钟结构设置止损；若结构止损过深，则直接用单笔-5%硬止损",
             "- 跌破执行止损线 → 无条件止损",
         ]
     elif trade_gate_open and watch_anchor:
         first_hour_lines = [
-            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否完成60分钟确认",
-            "- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入买入流程",
+            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否完成预演参与窗口",
+            "- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入参与流程",
         ]
         intraday_lines = [
             "- 继续只盯明天先盯哪只，不做多票分散",
@@ -281,13 +349,13 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             "- 若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格",
         ]
     else:
-        if final_gate.get("allow_conditional_30"):
+        if can_ten_confirm_upgrade:
             first_hour_lines = [
-                "- 当前仍是防守观察，本时段只确认主线核心是否完成10点确认",
-                "- 重点观察优先锚点是否继续走强；确认后最多30%条件试错，未确认不开",
+                "- 当前是0%观察，本时段只确认主线核心是否命中参与窗口分层确认",
+                "- 重点观察优先锚点是否继续走强；确认后才评估50%标准进攻，未确认保持0%",
             ]
             intraday_lines = [
-                "- 以观察和处理持仓为主；新仓只允许10点确认后的主线核心小仓试错",
+                "- 以观察和处理持仓为主；新仓只允许参与窗口成立后的主线核心50%标准进攻",
                 "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
                 "- 若观察标的全天未形成更强确认 → 继续等待",
             ]

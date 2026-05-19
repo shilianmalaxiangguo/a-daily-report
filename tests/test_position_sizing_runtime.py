@@ -92,7 +92,7 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertEqual(result["participation_mode"], "execute_50")
         self.assertEqual(result["target_position_pct"], 50)
 
-    def test_build_position_sizing_decision_downgrades_execute_when_multiple_targets_remain(self):
+    def test_build_position_sizing_decision_keeps_50_when_multiple_targets_remain_but_feedback_ready(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True, "unique_target_count": 2},
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
@@ -117,10 +117,10 @@ class PositionSizingRuntimeTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["participation_mode"], "conditional_30")
-        self.assertEqual(result["target_position_pct"], 30)
+        self.assertEqual(result["participation_mode"], "execute_50")
+        self.assertEqual(result["target_position_pct"], 50)
         self.assertEqual(result["single_focus_constraint"]["status"], "multiple_candidates")
-        self.assertIn("多候选未缩到唯一对象，只允许30%条件试错/观察", result["sizing_reason"])
+        self.assertIn("按50%标准进攻", result["sizing_reason"])
 
     def test_build_position_sizing_decision_marks_missing_target_when_entry_gate_open_without_best_stock(self):
         result = build_position_sizing_decision(
@@ -156,7 +156,15 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True},
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工", "energy_state": "主线攻击"},
-            best_stock={"name": "军工一号", "code": "000001", "a_grade_candidate": True},
+            best_stock={
+                "name": "军工一号",
+                "code": "000001",
+                "sector": "军工",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+            },
             watch_anchor_type="明天唯一能买的那只",
             mainline_name="军工",
             target_date="2026-06-18",
@@ -178,17 +186,25 @@ class PositionSizingRuntimeTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["signal_grade"], "A")
-        self.assertEqual(result["participation_mode"], "a_grade_100")
+        self.assertEqual(result["signal_grade"], "100")
+        self.assertEqual(result["participation_mode"], "full_100")
         self.assertEqual(result["target_position_pct"], 100)
         self.assertTrue(result["monthly_rhythm"]["allow_full_attack"])
         self.assertTrue(result["monthly_rhythm"]["profit_cushion"])
 
-    def test_earnings_month_caps_full_a_candidate_to_b_level_trial(self):
+    def test_earnings_month_no_longer_caps_full_candidate_to_small_trial(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True},
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工", "energy_state": "主线攻击"},
-            best_stock={"name": "军工一号", "code": "000001", "a_grade_candidate": True},
+            best_stock={
+                "name": "军工一号",
+                "code": "000001",
+                "sector": "军工",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+            },
             watch_anchor_type="明天唯一能买的那只",
             mainline_name="军工",
             target_date="2026-04-22",
@@ -210,16 +226,24 @@ class PositionSizingRuntimeTest(unittest.TestCase):
             },
         )
 
-        self.assertEqual(result["signal_grade"], "B")
-        self.assertEqual(result["participation_mode"], "conditional_30")
-        self.assertEqual(result["target_position_pct"], 30)
-        self.assertFalse(result["monthly_rhythm"]["allow_full_attack"])
+        self.assertEqual(result["signal_grade"], "100")
+        self.assertEqual(result["participation_mode"], "full_100")
+        self.assertEqual(result["target_position_pct"], 100)
+        self.assertTrue(result["monthly_rhythm"]["allow_full_attack"])
 
     def test_calendar_earnings_month_caps_full_a_candidate_without_manual_context(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True},
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工", "energy_state": "主线攻击"},
-            best_stock={"name": "军工一号", "code": "000001", "a_grade_candidate": True},
+            best_stock={
+                "name": "军工一号",
+                "code": "000001",
+                "sector": "军工",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+            },
             watch_anchor_type="明天唯一能买的那只",
             mainline_name="军工",
             target_date="2026-04-22",
@@ -241,8 +265,163 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["monthly_rhythm"]["month_mode"], "earnings_defense")
-        self.assertEqual(result["signal_grade"], "B")
-        self.assertEqual(result["target_position_pct"], 30)
+        self.assertEqual(result["signal_grade"], "100")
+        self.assertEqual(result["target_position_pct"], 100)
+
+    def test_full_attack_requires_explicit_participation_window_and_trend_chain(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "电力", "energy_state": "主线攻击"},
+            best_stock={
+                "name": "电力一号",
+                "code": "000001",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "acceptance_act_right": True,
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明天唯一能买的那只",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": True,
+                    "score": 92,
+                    "reasons": ["60分钟确认链完整", "唯一对象"],
+                    "history_feedback": {"continuous_days": 3},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "execute_50")
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertFalse(result["full_attack_ready"])
+        self.assertIn("参与窗口", result["full_attack_check"]["missing"])
+
+    def test_full_attack_uses_100_when_core_fields_are_complete(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "电力", "energy_state": "主线攻击"},
+            best_stock={
+                "name": "电力一号",
+                "code": "000001",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明天唯一能买的那只",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": True,
+                    "score": 92,
+                    "reasons": ["60分钟确认链完整", "唯一对象"],
+                    "history_feedback": {"continuous_days": 3},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "full_100")
+        self.assertEqual(result["target_position_pct"], 100)
+        self.assertTrue(result["full_attack_ready"])
+        self.assertEqual(result["full_attack_check"]["status"], "ready")
+
+    def test_full_attack_does_not_preserve_legacy_80_or_90_percent_candidates(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "电力", "energy_state": "主线攻击"},
+            best_stock={
+                "name": "电力一号",
+                "code": "000001",
+                "a_grade_candidate": True,
+                "a_grade_position_pct": 90,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明天唯一能买的那只",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": True,
+                    "score": 92,
+                    "reasons": ["60分钟确认链完整", "唯一对象"],
+                    "history_feedback": {"continuous_days": 3},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "full_100")
+        self.assertEqual(result["target_position_pct"], 100)
+        self.assertNotIn(result["target_position_pct"], (80, 90))
+
+    def test_market_ice_point_keeps_position_at_zero_even_for_complete_core_candidate(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "电力", "energy_state": "主线攻击"},
+            best_stock={
+                "name": "电力一号",
+                "code": "000001",
+                "a_grade_candidate": True,
+                "trend_chain_active": True,
+                "participation_window": "竞价表态",
+                "acceptance_act_right": True,
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明天唯一能买的那只",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack", "market_ice_point": True},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": True,
+                    "score": 92,
+                    "reasons": ["60分钟确认链完整", "唯一对象"],
+                    "history_feedback": {"continuous_days": 3},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "observe_0")
+        self.assertEqual(result["target_position_pct"], 0)
+        self.assertFalse(result["full_attack_ready"])
+        self.assertEqual(result["monthly_rhythm"]["target_role"], "defense_0")
 
 
 if __name__ == "__main__":

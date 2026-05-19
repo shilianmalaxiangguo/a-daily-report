@@ -8,6 +8,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+PERMISSION_LABEL = "主线参与资格"
+
 
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
@@ -100,7 +102,7 @@ review_payload = {"items": []}
 
 with patch.object(daily_report_entry_demo, "run_backfill_strategy_record_market_context", return_value=backfill_payload) as backfill_mock, \
      patch.object(daily_report_entry_demo, "run_get_strategy_status_label", return_value="待评估") as status_mock, \
-     patch.object(daily_report_entry_demo, "run_get_plan_action_label", return_value="30%条件试错仓") as action_mock, \
+     patch.object(daily_report_entry_demo, "run_get_plan_action_label", return_value="50%标准进攻预演") as action_mock, \
      patch.object(daily_report_entry_demo, "run_summarize_ev_signal_review", return_value=review_payload) as review_mock, \
      patch.object(daily_report_entry_demo, "run_compound_returns", return_value=0.06) as compound_mock:
     backfill_result = daily_report_entry_demo._backfill_strategy_record_market_context({"report_date": "2026-04-23"})
@@ -124,7 +126,7 @@ assert compound_mock.call_args[0][0] == [0.02, 0.03]
 assert "helpers" not in compound_mock.call_args.kwargs
 assert backfill_result == backfill_payload
 assert status_result == "待评估"
-assert action_result == "30%条件试错仓"
+assert action_result == "50%标准进攻预演"
 assert review_result == review_payload
 assert compound_result == 0.06
 """
@@ -191,7 +193,7 @@ def _support_probe(records, start_date, end_date):
         action_watch = support.get_plan_action_label("watch_only", None)
 
         self.assertEqual(status_label, "待评估（等待确认）")
-        self.assertEqual(action_30, "30%条件试错仓")
+        self.assertEqual(action_30, "50%标准进攻预演")
         self.assertEqual(action_50, "50%执行计划")
         self.assertEqual(action_watch, "仅观察")
 
@@ -469,7 +471,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
                 {
                     "code": "000001",
                     "watch_anchor_type": "执行候选观察锚点",
-                    "permission_label": "主线执行权",
+                    "permission_label": PERMISSION_LABEL,
                     "report_day_close": 11.4,
                     "report_day_high": 11.5,
                     "report_day_low": 10.6,
@@ -569,7 +571,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
             {
                 "code": "000001",
                 "watch_anchor_type": "执行候选观察锚点",
-                "permission_label": "主线执行权",
+                "permission_label": PERMISSION_LABEL,
                 "abnormal_setup_signal_id": "burst_hold",
                 "minute_plan": {"confirm_price_60m": 11.0, "confirm_support_60m": 10.3},
                 "report_day_close": 11.4,

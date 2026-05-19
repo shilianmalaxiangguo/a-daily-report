@@ -35,6 +35,7 @@ def _normalize_mode(mode=""):
         "财报防守": "earnings_defense",
         "季报防守": "earnings_defense",
         "财报/季报防守月": "earnings_defense",
+        "财报/季报高筛选月": "earnings_defense",
         "防守月": "earnings_defense",
         "弱市防守": "weak_market_defense",
         "弱市场防守月": "weak_market_defense",
@@ -77,6 +78,9 @@ def build_monthly_rhythm_decision(
     )
     weak_market = (
         bool(monthly_context.get("weak_market"))
+        or bool(monthly_context.get("market_ice_point"))
+        or bool(state_machine_snapshot.get("market_ice_point"))
+        or bool(final_gate.get("market_ice_point"))
         or explicit_mode == "weak_market_defense"
         or execution_bias in ("avoid", "reduce_only")
     )
@@ -88,10 +92,10 @@ def build_monthly_rhythm_decision(
     )
     profit_cushion = month_return_pct >= profit_cushion_pct
 
-    if earnings_risk:
-        month_mode = "earnings_defense"
-    elif weak_market:
+    if weak_market:
         month_mode = "weak_market_defense"
+    elif earnings_risk:
+        month_mode = "earnings_defense"
     elif profit_cushion and trend_invalid:
         month_mode = "profit_protection"
     elif month_return_pct <= loss_guard_pct:
@@ -104,31 +108,29 @@ def build_monthly_rhythm_decision(
         month_mode = "attack_prepare"
 
     allow_execute = execution_bias == "allow_execute" or bool(final_gate.get("can_new_entry"))
-    if month_mode in ("ordinary_attack", "strong_attack") and allow_execute:
+    if weak_market or trend_invalid:
+        max_position_pct = 0
+        allow_full_attack = False
+        target_role = "defense_0"
+        reason = "大盘冰点、弱市场或趋势失效时，三态模型只允许0%保护本金。"
+    elif allow_execute:
         max_position_pct = 100
         allow_full_attack = True
         target_role = "attack_confirmed"
-        reason = "非财报进攻窗口打开；盈利不是降档理由，走势继续正确时允许A级满仓/重仓。"
-    elif month_mode in ("ordinary_attack", "strong_attack", "attack_prepare"):
+        if month_mode == "earnings_defense":
+            reason = "最新三态模型不再因财报月自动压仓；合格标的至少50%，核心标的允许100%。"
+        else:
+            reason = "进攻窗口打开；盈利不是降档理由，走势继续正确时优先争取100%核心进攻。"
+    elif month_mode in ("ordinary_attack", "strong_attack", "attack_prepare", "earnings_defense", "profit_protection"):
         max_position_pct = 50
         allow_full_attack = False
         target_role = "attack_prepare"
-        reason = "处于进攻准备期，先允许A-以下参与，不开放A级满仓/重仓。"
-    elif month_mode == "profit_protection":
-        max_position_pct = 50
-        allow_full_attack = False
-        target_role = "protect_profit"
-        reason = "盈利垫后走势失真，才进入收益保护，不再开放A级满仓/重仓。"
-    elif month_mode == "earnings_defense":
-        max_position_pct = 30
-        allow_full_attack = False
-        target_role = "defense_0"
-        reason = "财报/季报密集期默认防守，最多保留小仓试错资格。"
+        reason = "已有进攻准备但未形成核心对象；三态模型至少按50%标准进攻预演。"
     else:
         max_position_pct = 0
         allow_full_attack = False
         target_role = "defense_0"
-        reason = "弱市场或亏损触发防守线，先保护账户曲线。"
+        reason = "没有合格标的时，三态模型只允许0%。"
 
     return {
         "month_mode": month_mode,

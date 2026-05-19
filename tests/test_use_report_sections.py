@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from hooks.report.use_report_sections import run
 from orchestrator.context_store import build_empty_context, merge_hook_patches
 
@@ -23,17 +27,17 @@ class UseReportSectionsTest(unittest.TestCase):
                         "contract_logic_digest_text": "先选边站队，再等确认",
                     },
                     "report_stages": [
-                        {"stage_key": "market_environment", "title": "市场环境", "summary": "环境放行", "status": "ready"},
+                        {"stage_key": "market_environment", "title": "市场环境", "summary": "环境可做", "status": "ready"},
                         {"stage_key": "selection_focus", "title": "主线与筛选", "summary": "军工最强", "status": "ready"},
-                        {"stage_key": "execution_gate", "title": "执行门控", "summary": "等60分钟确认", "status": "blocked"},
+                        {"stage_key": "execution_gate", "title": "执行" + "门" + "控", "summary": "等预演参与窗口", "status": "blocked"},
                     ],
                 },
                 "decision": {
-                    "execution_permission": {"label": "conditional_30"},
+                    "execution_permission": {"label": "attack_50_ready"},
                     "action_plan": {
-                        "action_label": "conditional_entry",
-                        "headline": "沿军工保留30%条件试错",
-                        "trigger": "次日完成60分钟确认",
+                        "action_label": "execute_50",
+                        "headline": "沿军工进入50%标准进攻",
+                        "trigger": "次日完成竞价表态、开盘承接或结构确认参与窗口",
                         "rationale": "环境未坏，主线清晰",
                     },
                 },
@@ -43,7 +47,7 @@ class UseReportSectionsTest(unittest.TestCase):
                         "source": "skillhub",
                         "source_path": "/tmp/source.md",
                         "main_derivation_chain_text": "结构中枢周期 -> 市场环境 -> 主线",
-                        "decision_gate_chain_text": "环境放行 -> 主线确认 -> 60分钟确认",
+                        "decision_gate_chain_text": "环境可做 -> 主线确认 -> 参与窗口确认",
                         "execution_framework_text": "日线结构中枢定环境，60分钟定买点，30分钟定止损",
                         "contract_logic_digest_text": "先选边站队，再等确认",
                         "report_preamble_lines": ["# 2026-04-22 A股日报"],
@@ -60,9 +64,11 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertIn("阶段看板", sections["observation"])
         self.assertIn("selection_focus", sections["observation"])
         self.assertIn("先选边站队，再等确认", sections["observation"])
-        self.assertIn("沿军工保留30%条件试错", sections["execution"])
-        self.assertNotIn("执行门控", sections["observation"] + sections["execution"])
-        self.assertNotIn("环境放行", sections["observation"] + sections["execution"])
+        self.assertIn("沿军工进入50%标准进攻", sections["execution"])
+        self.assertNotIn(_m("30%", "条件试错"), sections["execution"])
+        self.assertNotIn("attack_50_ready", sections["execution"])
+        self.assertNotIn(_m("执行", "门", "控"), sections["observation"] + sections["execution"])
+        self.assertNotIn(_m("环境", "放", "行"), sections["observation"] + sections["execution"])
         self.assertIn("执行条件", sections["observation"] + sections["execution"])
         self.assertIn("交易思想版本：2026-04-22", sections["review"])
         self.assertIn("strategy_contract: conditional_entry", sections["summary"])

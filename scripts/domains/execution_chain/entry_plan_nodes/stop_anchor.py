@@ -1,6 +1,5 @@
 def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None):
     final_gate = context.get("final_gate", {}) or {}
-    position_level = str(context.get("position_level", "") or "").strip()
     executable_stocks = context.get("executable_stocks", []) or []
     build_stop_execution_plan = context["build_stop_execution_plan"]
     build_trade_price_focus = context["build_trade_price_focus"]
@@ -56,10 +55,10 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
             lines.append("- 无可执行股票，暂不设置止损")
     else:
         lines.append("**明日止损锚定**:")
-        if final_gate.get("allow_conditional_30"):
-            lines.append(f"- 🟡 {position_level}只保留10点确认后的30%条件试错；未确认前不新增，买入后再用30分钟结构止损")
+        if final_gate.get("allow_attack_50_ready"):
+            lines.append("- 50%标准进攻需要先等参与窗口成立；未确认前按0%处理，确认后用30分钟结构止损管理风险")
         else:
-            lines.append(f"- ⛔ {position_level}禁止买入，无需设置止损")
+            lines.append("- 0%不参与：无合格标的或取消条件已经出现，无需设置新仓止损")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

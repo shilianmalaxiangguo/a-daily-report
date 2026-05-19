@@ -22,7 +22,7 @@ def run(ctx):
     contract_label = str(strategy_contract.get("contract_label", "") or "").strip()
     label = str(strategy_contract.get("permission_label", "") or "").strip()
     if not label:
-        label = "watch_only" if phase == "defend" else "conditional_30"
+        label = "watch_only" if phase == "defend" else "execute_50"
     reason = f"phase={phase}; primary_line={mainline}"
     if contract_label:
         reason = f"{reason}; strategy_contract={contract_label}"

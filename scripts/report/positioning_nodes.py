@@ -84,7 +84,7 @@ def build_positioning_structure_note_node(context, node_meta=None, node_lookup=N
 def build_positioning_intraday_note_node(context, node_meta=None, node_lookup=None):
     return {
         "lines": [
-            "> **真到盘中怎么做**：日报这里只做盘前预案。明日先看前30分钟环境是否匹配，再等首个60分钟K线确认买点，买入后再用30分钟结构刷新止损。",
+            "> **真到盘中怎么做**：日报这里只做盘前预案。明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买入后再用30分钟结构刷新止损。",
             "",
         ],
         "exports": {},

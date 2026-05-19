@@ -17,11 +17,11 @@ class MonthlyRhythmRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["month_mode"], "earnings_defense")
-        self.assertEqual(result["max_position_pct"], 30)
-        self.assertFalse(result["allow_full_attack"])
-        self.assertEqual(result["target_role"], "defense_0")
+        self.assertEqual(result["max_position_pct"], 100)
+        self.assertTrue(result["allow_full_attack"])
+        self.assertEqual(result["target_role"], "attack_confirmed")
 
-    def test_calendar_earnings_month_defaults_to_defense_without_explicit_context(self):
+    def test_calendar_earnings_month_keeps_attack_when_target_is_qualified(self):
         result = build_monthly_rhythm_decision(
             target_date="2026-04-22",
             monthly_context={},
@@ -30,8 +30,8 @@ class MonthlyRhythmRuntimeTest(unittest.TestCase):
 
         self.assertTrue(result["calendar_earnings_month"])
         self.assertEqual(result["month_mode"], "earnings_defense")
-        self.assertEqual(result["max_position_pct"], 30)
-        self.assertFalse(result["allow_full_attack"])
+        self.assertEqual(result["max_position_pct"], 100)
+        self.assertTrue(result["allow_full_attack"])
 
     def test_attack_month_allows_full_attack_before_profit_target_is_reached(self):
         result = build_monthly_rhythm_decision(
@@ -66,10 +66,10 @@ class MonthlyRhythmRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["month_mode"], "profit_protection")
-        self.assertEqual(result["max_position_pct"], 50)
+        self.assertEqual(result["max_position_pct"], 0)
         self.assertFalse(result["allow_full_attack"])
         self.assertTrue(result["profit_cushion"])
-        self.assertEqual(result["target_role"], "protect_profit")
+        self.assertEqual(result["target_role"], "defense_0")
 
     def test_explicit_earnings_defense_overrides_existing_month_profit(self):
         result = build_monthly_rhythm_decision(
@@ -79,8 +79,20 @@ class MonthlyRhythmRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["month_mode"], "earnings_defense")
-        self.assertEqual(result["max_position_pct"], 30)
+        self.assertEqual(result["max_position_pct"], 100)
+        self.assertTrue(result["allow_full_attack"])
+
+    def test_market_ice_point_forces_zero_state(self):
+        result = build_monthly_rhythm_decision(
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack", "market_ice_point": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "energy_state": "主线攻击"},
+        )
+
+        self.assertEqual(result["month_mode"], "weak_market_defense")
+        self.assertEqual(result["max_position_pct"], 0)
         self.assertFalse(result["allow_full_attack"])
+        self.assertEqual(result["target_role"], "defense_0")
 
 
 if __name__ == "__main__":

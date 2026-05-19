@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from domains.execution_chain.entry_plan_node_runtime import run_entry_plan_nodes
 from domains.execution_chain.entry_plan_nodes.conclusion import build_entry_plan_conclusion_node
 from domains.execution_chain.entry_plan_nodes.stop_anchor import build_entry_plan_stop_anchor_node
@@ -48,10 +52,10 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         self.assertTrue(any(log["module"] == "entry_plan.first" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "run.second" for log in result["module_logs"]))
 
-    def test_conditional_defense_gate_does_not_render_absolute_buy_ban(self):
+    def test_legacy_conditional_gate_renders_50_attack_window_not_30_trial(self):
         base_context = {
             "position_level": "二档（防守档）",
-            "final_gate": {"can_new_entry": False, "allow_conditional_30": True},
+            "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
             "build_stop_execution_plan": lambda *args, **kwargs: {},
             "build_trade_price_focus": lambda *args, **kwargs: {},
             "keep_group": [],
@@ -65,10 +69,36 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         stop_lines = "\n".join(build_entry_plan_stop_anchor_node(base_context)["lines"])
         conclusion_lines = "\n".join(build_entry_plan_conclusion_node(base_context)["lines"])
 
-        self.assertIn("10点确认后的30%条件试错", stop_lines)
-        self.assertIn("10点确认后的30%条件试错", conclusion_lines)
+        self.assertIn("50%标准进攻", stop_lines)
+        self.assertIn("50%标准进攻", conclusion_lines)
+        self.assertIn("参与窗口", stop_lines)
+        self.assertIn("参与窗口", conclusion_lines)
+        self.assertNotIn(_m("30%", "条件试错"), stop_lines)
+        self.assertNotIn(_m("30%", "条件试错"), conclusion_lines)
+        self.assertNotIn("二档（防守档）", stop_lines)
+        self.assertNotIn("二档（防守档）", conclusion_lines)
         self.assertNotIn("二档（防守档）禁止买入", stop_lines)
         self.assertNotIn("禁止任何买入操作", conclusion_lines)
+
+    def test_entry_conclusion_names_layered_participation_windows_not_universal_wait(self):
+        context = {
+            "position_level": "三档（进攻档）",
+            "final_gate": {"can_new_entry": True},
+            "keep_group": [],
+            "executable_stocks": [{"name": "大唐发电", "code": "601991"}],
+            "waiting_stocks": [],
+            "untradable_stocks": [],
+            "step4_structure_layer_text": "趋势比价链核心，允许围绕参与窗口预演",
+            "get_execution_framework_text": lambda: "日线定环境；竞价/开盘前几分钟/回封/60分钟分层参与；30分钟定止损",
+        }
+
+        rendered = "\n".join(build_entry_plan_conclusion_node(context)["lines"])
+
+        self.assertIn("竞价/开盘前几分钟/回封/60分钟分层参与", rendered)
+        self.assertIn("参与窗口", rendered)
+        self.assertIn("30分钟结构止损", rendered)
+        self.assertNotIn(_m("即便满足价格条件，也要", "等60", "分钟确认后再买"), rendered)
+        self.assertNotIn(_m("买点必须", "等60分钟"), rendered)
 
     def test_stop_anchor_renders_entry_cycle_stop_policy_instead_of_uniform_five_percent(self):
         context = {

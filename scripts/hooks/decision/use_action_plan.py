@@ -1,5 +1,6 @@
 import time
 
+from knowledge.trading_philosophy import PARTICIPATION_WINDOW_LAYER_TEXT
 from report.surface_wording import sanitize_user_visible_text
 
 
@@ -21,11 +22,12 @@ def run(ctx):
     permission_label = str(execution_permission.get("label", "") or strategy_contract.get("permission_label", "") or "unknown").strip()
     contract_rationale = str(strategy_contract.get("action_plan", "") or strategy_contract.get("contract_reason", "") or "").strip()
 
-    if permission_label == "conditional_30":
-        action_label = "conditional_entry"
-        headline = f"沿{primary_line}保留30%条件试错"
-        trigger = "次日完成60分钟确认"
-        rationale = contract_rationale or f"{primary_line}仍在主线内，允许条件试错"
+    if permission_label == "attack_50_ready":
+        action_label = "execute_50"
+        headline = f"沿{primary_line}进入50%标准进攻"
+        trigger = f"次日按参与窗口分层确认：{PARTICIPATION_WINDOW_LAYER_TEXT}"
+        rationale = contract_rationale or f"{primary_line}仍在趋势比价链内，满足后按50%标准进攻；不满足转为0%不参与"
+        permission_label = "execute_50"
     elif contract_label == "defense_observe" or phase == "defend":
         action_label = "watch_only"
         headline = "只观察，不开新仓"

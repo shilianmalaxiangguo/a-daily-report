@@ -415,7 +415,7 @@ def _get_abnormal_follow_risk_signal_legacy_body(stock):
             "light": "🟡 黄灯",
             "delta": -4,
             "reason": "创业板20cm预启动仍在收拢观察期，先确认它有没有走成右侧确认",
-            "forecast": "先看右侧确认和60分钟确认，再决定是否升级到30%条件试错",
+            "forecast": "先看右侧确认和参与窗口分层确认，再决定是否进入50%标准进攻预演；普通结构才等60分钟确认",
         }
 
     if not state:
@@ -431,7 +431,7 @@ def _get_abnormal_follow_risk_signal_legacy_body(stock):
             "light": "🟢 绿灯",
             "delta": -12,
             "reason": f"{signal_name}承接强，暂未看到继续下杀",
-            "forecast": "异动后承接强，明日重点等60分钟确认",
+            "forecast": "异动后承接强，明日重点看竞价表态、开盘承接和结构确认",
         }
     if state == "缩量消化":
         return {
@@ -861,7 +861,7 @@ def _build_mainline_upgrade_probe_context_legacy_body(candidate=None, mainline_n
     if upgrade_ready:
         probe_state = "probe_mainline_upgrade_ready"
         note = "主线探针已具备升级条件：承接未坏、确认链完整，且已出现连续反馈/主线修复证据。"
-        action = "保留主线可升级探针；若次日继续 act right，可进入30%条件试错观察。"
+        action = "保留主线可升级探针；若次日继续走势符合强势标准并形成参与窗口，可进入50%标准进攻预演。"
     elif active:
         probe_state = "probe_resilient_hold"
         note = "主线探针仍在观察阶段：承接未坏，但升级证据还不够。"
@@ -876,7 +876,7 @@ def _build_mainline_upgrade_probe_context_legacy_body(candidate=None, mainline_n
         "is_mainline": is_mainline,
         "upgrade_ready": upgrade_ready,
         "probe_state": probe_state,
-        "allows_conditional_30": upgrade_ready,
+        "allows_attack_50_ready": upgrade_ready,
         "allows_execute_50": False,
         "note": note,
         "action": action,
@@ -903,7 +903,7 @@ def _build_special_probe_verdict_legacy_body(
             "action": "",
             "probe_candidate": {},
             "probe_state": "no_probe",
-            "allows_conditional_30": False,
+            "allows_attack_50_ready": False,
             "allows_execute_50": False,
         }
 
@@ -934,7 +934,7 @@ def _build_special_probe_verdict_legacy_body(
             note = f"{prefix}不代表主攻线切换{suffix}"
         name = crossline_probe.get("name", "-")
         code = crossline_probe.get("code", "-")
-        probe_state, allows_conditional_30, allows_execute_50 = _probe_contract(crossline_probe, default_state="probe_flow_unconfirmed")
+        probe_state, allows_attack_50_ready, allows_execute_50 = _probe_contract(crossline_probe, default_state="probe_flow_unconfirmed")
         crossline_feedback = _build_candidate_feedback_clock(
             candidate=crossline_probe,
             watch_anchor_type=watch_anchor_type,
@@ -954,11 +954,11 @@ def _build_special_probe_verdict_legacy_body(
             return {
                 "code": "crossline_probe_upgrade_ready",
                 "label": "跨线可升级探针",
-                "summary_text": f"{name}({code}) 虽然仍属跨线对象，但已经先 act right：承接未坏、确认链完整，且连续反馈已出现，只允许升级到30%条件试错，不直接当成主攻线切换。",
-                "action": "先按跨线可升级探针对待；若继续 act right，只允许30%条件试错，不直接放到50%执行。",
+                "summary_text": f"{name}({code}) 虽然仍属跨线对象，但已经先走势符合强势标准：承接未坏、确认链完整，且连续反馈已出现；只进入50%标准进攻预演，不直接当成主攻线切换。",
+                "action": "先按跨线可升级探针对待；若继续走势符合强势标准并形成参与窗口，才评估50%标准进攻。",
                 "probe_candidate": crossline_probe,
                 "probe_state": "probe_crossline_upgrade_ready",
-                "allows_conditional_30": True,
+                "allows_attack_50_ready": True,
                 "allows_execute_50": False,
             }
         return {
@@ -968,7 +968,7 @@ def _build_special_probe_verdict_legacy_body(
             "action": "只观察跨线强弱和资金外溢，不升级买入资格",
             "probe_candidate": crossline_probe,
             "probe_state": probe_state,
-            "allows_conditional_30": allows_conditional_30,
+            "allows_attack_50_ready": allows_attack_50_ready,
             "allows_execute_50": allows_execute_50,
         }
 
@@ -985,14 +985,14 @@ def _build_special_probe_verdict_legacy_body(
             return {
                 "code": "mainline_probe_upgrade_ready",
                 "label": "主线可升级探针",
-                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据，若次日继续 act right，才允许升级到30%条件试错。",
-                "action": "先盯主线可升级探针是否继续证明自己；若次日继续 act right，再考虑30%条件试错，不直接给50%执行。",
+                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据，若次日继续走势符合强势标准并形成参与窗口，才评估50%标准进攻。",
+                "action": "先盯主线可升级探针是否继续证明自己；若次日继续走势符合强势标准，再评估50%标准进攻。",
                 "probe_candidate": mainline_probe,
                 "probe_state": upgrade_probe_context.get("probe_state"),
-                "allows_conditional_30": bool(upgrade_probe_context.get("allows_conditional_30")),
+                "allows_attack_50_ready": bool(upgrade_probe_context.get("allows_attack_50_ready")),
                 "allows_execute_50": False,
             }
-        probe_state, allows_conditional_30, allows_execute_50 = _probe_contract(mainline_probe, default_state="probe_resilient_hold")
+        probe_state, allows_attack_50_ready, allows_execute_50 = _probe_contract(mainline_probe, default_state="probe_resilient_hold")
         return {
             "code": "mainline_probe_watch",
             "label": "主线特殊探针",
@@ -1000,14 +1000,14 @@ def _build_special_probe_verdict_legacy_body(
             "action": "先盯主线特殊标的能不能跌下去，再决定观察权是否保留",
             "probe_candidate": mainline_probe,
             "probe_state": probe_state,
-            "allows_conditional_30": allows_conditional_30,
+            "allows_attack_50_ready": allows_attack_50_ready,
             "allows_execute_50": allows_execute_50,
         }
 
     if validation_probe:
         name = validation_probe.get("name", "-")
         code = validation_probe.get("code", "-")
-        probe_state, allows_conditional_30, allows_execute_50 = _probe_contract(validation_probe, default_state="probe_resilient_hold")
+        probe_state, allows_attack_50_ready, allows_execute_50 = _probe_contract(validation_probe, default_state="probe_resilient_hold")
         return {
             "code": "validation_probe_watch",
             "label": "承接验证探针",
@@ -1015,14 +1015,14 @@ def _build_special_probe_verdict_legacy_body(
             "action": "先看验证探针是否抗跌，再决定是否保留观察权",
             "probe_candidate": validation_probe,
             "probe_state": probe_state,
-            "allows_conditional_30": allows_conditional_30,
+            "allows_attack_50_ready": allows_attack_50_ready,
             "allows_execute_50": allows_execute_50,
         }
 
     if fallback_watch_anchor:
         name = fallback_watch_anchor.get("name", "-")
         code = fallback_watch_anchor.get("code", "-")
-        probe_state, allows_conditional_30, allows_execute_50 = _probe_contract(fallback_watch_anchor, default_state="probe_flow_unconfirmed")
+        probe_state, allows_attack_50_ready, allows_execute_50 = _probe_contract(fallback_watch_anchor, default_state="probe_flow_unconfirmed")
         return {
             "code": "fallback_probe_watch",
             "label": "特殊探针",
@@ -1030,7 +1030,7 @@ def _build_special_probe_verdict_legacy_body(
             "action": "先观察这个特殊对象对调整的反馈，不直接升级买入资格",
             "probe_candidate": fallback_watch_anchor,
             "probe_state": probe_state,
-            "allows_conditional_30": allows_conditional_30,
+            "allows_attack_50_ready": allows_attack_50_ready,
             "allows_execute_50": allows_execute_50,
         }
 
@@ -1041,7 +1041,7 @@ def _build_special_probe_verdict_legacy_body(
         "action": "先观察市场整体，不提前放松买入资格",
         "probe_candidate": {},
         "probe_state": "no_probe",
-        "allows_conditional_30": False,
+        "allows_attack_50_ready": False,
         "allows_execute_50": False,
     }
 
@@ -1069,7 +1069,7 @@ def _build_special_probe_focus_text_legacy_body(
         probe_candidate = special_probe_verdict.get("probe_candidate") or {}
         name = probe_candidate.get("name", "-")
         code = probe_candidate.get("code", "-")
-        return f"{name}({code})，跨线可升级探针：已经先 act right，只允许30%条件试错，不直接当成主攻线切换"
+        return f"{name}({code})，跨线可升级探针：已经先走势符合强势标准，只进入50%标准进攻预演；参与窗口不成立就继续0%观察"
 
     probe_specs = [
         ("mainline_abnormal_probe", "主线异动里先看谁"),

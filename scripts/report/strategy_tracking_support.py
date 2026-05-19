@@ -421,7 +421,7 @@ def _get_plan_action_label_legacy_body(action_type, position_pct=None):
     action_type = action_type or ""
     position_pct = int(_safe_float(position_pct, 0)) if position_pct is not None else None
     if action_type == "execute" and position_pct == 30:
-        return "30%条件试错仓"
+        return "50%标准进攻预演"
     if action_type == "execute" and position_pct == 50:
         return "50%执行计划"
     label_map = {
@@ -727,7 +727,7 @@ def _build_candidate_feedback_clock_legacy_body(
         or candidate.get("is_mainline")
         or "主线" in permission_label
         or "龙头" in permission_label
-        or "极看" in permission_label
+        or "重点观察" in permission_label
         or ("主线" in watch_anchor_type and "跨线" not in watch_anchor_type)
     )
 
@@ -735,7 +735,7 @@ def _build_candidate_feedback_clock_legacy_body(
     reasons = []
     if is_priority_candidate:
         score += 1
-        reasons.append("属于主线/龙头/极看优先对象")
+        reasons.append("属于主线/龙头/重点观察优先对象")
     if follow_state in ("跌不下去", "缩量消化"):
         score += 1
         reasons.append(f"承接状态为{follow_state}")

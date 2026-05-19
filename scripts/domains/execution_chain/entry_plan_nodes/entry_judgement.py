@@ -136,7 +136,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 price_focus = build_trade_price_focus(minute_plan, stop_plan)
                 confirm_price = minute_plan.get("confirm_price_60m")
                 confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                action_text = "60分钟确认后买入" if final_gate.get("can_new_entry", False) else "仅保留执行预案（禁买）"
+                action_text = "按预演参与窗口买入" if final_gate.get("can_new_entry", False) else "仅保留执行预案（禁买）"
                 price_focus_text = (
                     price_focus.get("compact_text", "-")
                     if final_gate.get("can_new_entry", False)

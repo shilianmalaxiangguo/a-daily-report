@@ -1,6 +1,33 @@
 from report.surface_wording import sanitize_user_visible_text
 
 
+def _is_ten_confirm_upgrade_candidate(candidate):
+    candidate = candidate or {}
+    text = " ".join(
+        str(candidate.get(key, "") or "")
+        for key in (
+            "permission_label",
+            "watch_anchor_type",
+            "conviction_reason",
+            "reason",
+            "core_level",
+            "watch_anchor_note",
+        )
+    )
+    minute_plan = candidate.get("minute_plan") or {}
+    return bool(
+        minute_plan.get("confirm_price_60m")
+        and (
+            any(marker in text for marker in ("重点观察名单", "重点观察权", "重点观察确认"))
+            or "极看" in text
+            or "极度看好" in text
+            or "板块锚定龙" in text
+            or "首波先锋" in text
+            or "主线核心" in text
+        )
+    )
+
+
 def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None):
     trade_gate_open = context.get("trade_gate_open", False)
     display_pending_candidates = context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
@@ -23,6 +50,13 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
         lambda confirm_text, observation_price_focus_text: f"{confirm_text} / {observation_price_focus_text}",
     )
     build_stop_execution_plan = context.get("build_stop_execution_plan", lambda *args, **kwargs: {})
+    watch_anchor_for_upgrade = dict(watch_anchor or {})
+    if watch_anchor_type and "watch_anchor_type" not in watch_anchor_for_upgrade:
+        watch_anchor_for_upgrade["watch_anchor_type"] = watch_anchor_type
+    ten_confirm_upgrade_candidate = next(
+        (candidate for candidate in [watch_anchor_for_upgrade] + list(display_observation_candidates) if _is_ten_confirm_upgrade_candidate(candidate)),
+        None,
+    )
 
     pending_lines = []
     if trade_gate_open:
@@ -147,12 +181,17 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
             conclusion_lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-            conclusion_lines.append("- **出手时怎么做**: 明日仅在60分钟确认后买入，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
+            conclusion_lines.append("- **出手时怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
         else:
             conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
-            conclusion_lines.append("- **出手时怎么做**: 明日仅在60分钟确认后按条件触发买入，买后用30分钟结构止损，其他标的禁止操作")
+            conclusion_lines.append("- **出手时怎么做**: 明日按预演参与窗口触发，买后用30分钟结构止损，其他标的禁止操作")
     else:
-        if trade_gate_open and watch_anchor:
+        if ten_confirm_upgrade_candidate:
+            conclusion_lines.append(
+                f"- **盘前不抢跑**: {ten_confirm_upgrade_candidate.get('name')}({ten_confirm_upgrade_candidate.get('code')})只保留盘中确认路径，不按盘前0%直接否定"
+            )
+            conclusion_lines.append("- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察")
+        elif trade_gate_open and watch_anchor:
             conclusion_lines.append(f"- **明天先盯哪只**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
             conclusion_lines.append("- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明")
         else:
@@ -175,8 +214,10 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 conclusion_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(price_focus)}")
             if trade_gate_open:
                 conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
-            elif final_gate.get("allow_conditional_30"):
-                conclusion_lines.append("- **当前先不抢**: 二档防守观察，只在10点确认主线承接后评估30%条件试错")
+            elif ten_confirm_upgrade_candidate:
+                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10参与窗口命中后，再评估50%标准进攻")
+            elif final_gate.get("allow_attack_50_ready"):
+                conclusion_lines.append("- **当前先不抢**: 0%观察，只做参与窗口分层确认；强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认")
             else:
                 conclusion_lines.append(f"- **当前先不买**: {position_level}，当前只允许观察，不允许新买入")
         else:

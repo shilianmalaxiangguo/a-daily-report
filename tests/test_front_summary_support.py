@@ -7,6 +7,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from report.front_summary_builder import (
     build_front_mainline_label_contract,
     build_front_style_action_text_contract,
@@ -298,7 +302,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: (
                     captured_final_gate.update(kwargs.get("final_gate") or {})
-                    or {"target_position_pct": 30, "trigger_text": "完成60分钟确认"}
+                    or {"target_position_pct": 50, "trigger_text": "完成60分钟确认"}
                 ),
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
@@ -308,7 +312,57 @@ assert "helpers" not in structure_mock.call_args.kwargs
 
         self.assertEqual(captured_final_gate["candidate_count"], 2)
         self.assertEqual(captured_final_gate["unique_target_count"], 2)
-        self.assertIn("30%条件试错", result)
+        self.assertIn("50%执行", result)
+        self.assertNotIn(_m("30%", "条件试错"), result)
+
+    def test_front_summary_support_maps_legacy_30_position_to_50_attack_window(self):
+        support = self._load_module()
+
+        follow_text = support.build_front_follow_action_text(
+            final_gate={"can_new_entry": True},
+            best_stock=None,
+            watch_anchor=None,
+            watch_anchor_type="",
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[],
+            position_level="二档（防守档）",
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
+            target_date="2026-04-22",
+            special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
+            helpers={
+                "_build_bridge_prep_context": lambda **kwargs: {"active": False},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "完成60分钟确认"},
+                "_build_execute_anchor_window_text": lambda **kwargs: "",
+                "_build_philosophy_constraint_text": lambda **kwargs: "",
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+            },
+        )
+        structure_text = support.build_front_structure_layer_text(
+            final_gate={"can_new_entry": True},
+            focus_group=[{"name": "军工一号", "code": "000001"}],
+            keep_group=[],
+            best_stock=None,
+            watch_anchor=None,
+            watch_anchor_type="",
+            position_level="二档（防守档）",
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
+            target_date="2026-04-22",
+            special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
+            helpers={
+                "_build_bridge_prep_context": lambda **kwargs: {"active": False},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "完成60分钟确认"},
+                "_build_execute_anchor_window_text": lambda **kwargs: "",
+                "_build_philosophy_constraint_text": lambda **kwargs: "",
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_front_position_guard_label": lambda position_level="": "0%观察",
+            },
+        )
+
+        rendered = f"{follow_text}\n{structure_text}"
+        self.assertIn("50%标准进攻", rendered)
+        self.assertIn("参与窗口", rendered)
+        self.assertNotIn(_m("30%", "条件试错"), rendered)
+        self.assertNotIn(_m("30%", "条件试错仓"), rendered)
 
     def test_front_structure_layer_text_deduplicates_same_code_for_position_sizing(self):
         support = self._load_module()
@@ -367,6 +421,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
         self.assertEqual(result["candidate_label"], "军工一号(000001)")
         self.assertIn("12.34", result["upgrade_text"])
         self.assertIn("11.80", result["upgrade_text"])
+        self.assertNotIn("防守档", result["summary_text"])
 
     def test_front_summary_support_formats_candidate_preview_and_guard_label(self):
         support = self._load_module()
@@ -377,8 +432,8 @@ assert "helpers" not in structure_mock.call_args.kwargs
             limit=2,
         )
         self.assertEqual(preview, "军工一号 / 机器人一号")
-        self.assertEqual(support.front_position_guard_label("二档（防守档）"), "防守档")
-        self.assertEqual(support.front_position_guard_label("三档（进攻档）"), "进攻档")
+        self.assertEqual(support.front_position_guard_label("二档（防守档）"), "0%观察")
+        self.assertEqual(support.front_position_guard_label("三档（进攻档）"), "50%进攻")
         self.assertEqual(support.front_position_guard_label(""), "当前档位")
 
 

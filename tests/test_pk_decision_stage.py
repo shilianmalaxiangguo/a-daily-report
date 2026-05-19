@@ -6,12 +6,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from domains.execution_chain.pk_decision_stage import (
     build_pk_decision_runtime,
     build_pk_decision_stage,
     format_closed_gate_buy_limit_text,
 )
+from domains.execution_chain.pk_decision_nodes.action_plan_context import build_pk_decision_action_plan_context_node
 from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_decision_observation_pool_node
+from domains.execution_chain.pk_decision_nodes.pk_context import build_pk_decision_pk_context_node
 from domains.execution_chain.pk_decision_nodes.watch_anchor import build_pk_decision_watch_anchor_node
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
@@ -99,13 +105,13 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["watch_anchor"]["code"], "000002")
         self.assertEqual(calls[0]["kwargs"].get("fast_fail"), True)
 
-    def test_conditional_defense_gate_formats_as_ten_oclock_confirmation_not_absolute_ban(self):
+    def test_conditional_defense_gate_formats_as_participation_window_not_absolute_ban(self):
         self.assertEqual(
-            format_closed_gate_buy_limit_text("二档（防守档）", {"allow_conditional_30": True}),
-            "等10点确认，未确认不开",
+            format_closed_gate_buy_limit_text("二档（防守档）", {"allow_attack_50_ready": True}),
+            "等参与窗口确认；未确认按0%不参与",
         )
         self.assertEqual(
-            format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_conditional_30": False}),
+            format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_attack_50_ready": False}),
             "⛔一档（空仓档）禁止新开仓",
         )
 
@@ -405,6 +411,124 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("conclusion_lines", captured["pk"])
         self.assertIn("action_rows", captured["action"])
         self.assertIn("position_section_lines", captured["action"])
+
+    def test_action_plan_context_maps_legacy_defense_position_to_zero_or_50_model(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "中性",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        exports = result["exports"]
+        rendered = "\n".join(exports["position_section_lines"] + exports["first_hour_lines"] + exports["intraday_lines"])
+        self.assertIn("0%观察", rendered)
+        self.assertIn("50%标准进攻", rendered)
+        self.assertIn("参与窗口", rendered)
+        self.assertNotIn(_m("最多", "30%"), rendered)
+        self.assertNotIn(_m("30%", "条件试错"), rendered)
+        self.assertNotIn("二档（防守档）", rendered)
+
+    def test_action_plan_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "has_personal_positions": False,
+                "display_observation_candidates": [
+                    {
+                        "name": "利仁科技",
+                        "code": "001259",
+                        "permission_label": "极看观察权",
+                        "watch_anchor_type": "极度看好先看谁",
+                        "minute_plan": {"confirm_price_60m": 60.50},
+                        "stop_plan": {"effective_stop": 57.47},
+                        "conviction_reason": "板块锚定龙 / 首波先锋",
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "key_zone_display": "关键位/带57.47",
+                    "invalid_line_display": "观察失效位57.47",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"10点确认价{confirm_text} / {focus_text}",
+            }
+        )
+
+        exports = result["exports"]
+        action_text = "\n".join(
+            " | ".join(str(row.get(key, "")) for key in ("action", "name", "code", "trigger", "risk_window"))
+            for row in exports["action_rows"]
+        )
+        rendered = "\n".join(
+            [action_text]
+            + exports["position_section_lines"]
+            + exports["observation_priority_lines"]
+            + exports["first_hour_lines"]
+            + exports["intraday_lines"]
+        )
+        self.assertIn("极度看好", rendered)
+        self.assertIn("10点确认价60.50", rendered)
+        self.assertIn("参与窗口成立后才评估50%标准进攻", rendered)
+        self.assertIn("命中后才评估50%标准进攻", rendered)
+        self.assertNotIn("明天没有可买对象", rendered)
+        self.assertNotIn("必须空仓", rendered)
+
+    def test_pk_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
+        conviction_watch = {
+            "name": "利仁科技",
+            "code": "001259",
+            "permission_label": "极看观察权",
+            "watch_anchor_type": "极度看好先看谁",
+            "minute_plan": {"confirm_price_60m": 60.50},
+            "stop_plan": {"effective_stop": 57.47},
+            "conviction_reason": "板块锚定龙 / 首波先锋",
+            "reason": "主线核心先看承接",
+        }
+
+        result = build_pk_decision_pk_context_node(
+            {
+                "trade_gate_open": False,
+                "display_observation_candidates": [conviction_watch],
+                "best_stock": None,
+                "watch_anchor": conviction_watch,
+                "watch_anchor_type": "极度看好先看谁",
+                "position_level": "一档（空仓档）",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+                "front_structure_layer_text": "盘前0%观察",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "compact_text": "盯60.50",
+                    "key_zone_display": "60.50/57.47",
+                    "note_text": "确认价60.50",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("compact_text", "-"),
+                "should_surface_price_note": lambda price_focus: False,
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["conclusion_lines"])
+        self.assertIn("盘前不抢跑", rendered)
+        self.assertIn("09:50-10:10", rendered)
+        self.assertIn("50%标准进攻", rendered)
+        self.assertNotIn("明天没有可买对象", rendered)
+        self.assertNotIn("当前先不买", rendered)
 
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(

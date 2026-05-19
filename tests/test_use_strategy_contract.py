@@ -5,6 +5,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from hooks.infer.use_strategy_contract import run
 from orchestrator.context_store import build_empty_context, merge_hook_patches
 
@@ -25,10 +29,17 @@ class UseStrategyContractTest(unittest.TestCase):
         result = run(ctx)
 
         contract = result["patches"]["derived"]["strategy_contract"]
-        self.assertEqual(contract["contract_label"], "conditional_entry")
-        self.assertEqual(contract["permission_label"], "conditional_30")
-        self.assertIn("60分钟确认", contract["gate_chain"])
+        self.assertEqual(contract["contract_label"], "standard_attack")
+        self.assertEqual(contract["permission_label"], "execute_50")
+        self.assertIn("参与窗口分层确认", contract["gate_chain"])
         self.assertIn("军工", contract["action_plan"])
+        self.assertIn("50%标准进攻", contract["action_plan"])
+        self.assertIn("参与窗口", contract["action_plan"])
+        self.assertIn("强核心", contract["action_plan"])
+        self.assertIn("普通结构", contract["action_plan"])
+        self.assertNotIn("参与窗口和60分钟确认", contract["action_plan"])
+        self.assertNotIn("同时成立", contract["action_plan"])
+        self.assertNotIn(_m("30%", "条件试错"), contract["action_plan"])
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["strategy_contract"]["hook_name"],
             "infer.strategy_contract",

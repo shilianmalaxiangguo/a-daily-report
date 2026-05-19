@@ -2,6 +2,7 @@ import time
 
 from knowledge.trading_philosophy import (
     DECISION_GATE_CHAIN,
+    PARTICIPATION_WINDOW_LAYER_TEXT,
     use_contract_logic_digest_text,
     use_execution_framework_text,
 )
@@ -33,9 +34,9 @@ def run(ctx):
         permission_label = "watch_only"
         action_plan = "主线未清，只保留观察资格，先看探针和竞争线，不授予执行资格"
     else:
-        contract_label = "conditional_entry"
-        permission_label = "conditional_30"
-        action_plan = f"沿{primary_line}保留30%条件试错，前提是次日完成60分钟确认"
+        contract_label = "standard_attack"
+        permission_label = "execute_50"
+        action_plan = f"沿{primary_line}预演50%标准进攻，前提是次日按参与窗口分层确认：{PARTICIPATION_WINDOW_LAYER_TEXT}；不满足即0%不参与"
 
     gate_chain = list(DECISION_GATE_CHAIN)
     gate_chain_text = " -> ".join(gate_chain)

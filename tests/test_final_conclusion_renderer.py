@@ -5,6 +5,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+ACTION_TEXT = "只买军工一号，参与窗口确认后执行"
+
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 
 
@@ -40,7 +42,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 环境与跟随裁决 |", rendered)
         self.assertIn("| 明天观察池 | 12只 |", rendered)
-        self.assertIn("| 唯一动作 | 军工一号(000001)；60分钟确认后按条件触发 |", rendered)
+        self.assertIn("| 唯一动作 | 军工一号(000001)；按预演参与窗口触发 |", rendered)
         self.assertIn("| 明日策略 | 唯一标的条件触发：只操作军工一号", rendered)
         self.assertNotIn("stage_key", rendered)
         self.assertNotIn("Step 4.5", rendered)
@@ -66,7 +68,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "best_stock": {"name": "军工一号", "code": "000001", "r_reward_ratio": 2.4},
                 "watch_anchor": None,
                 "watch_anchor_type": "",
-                "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                "front_follow_action_text": ACTION_TEXT,
                 "abnormal_probe_parts": ["主线异动里先看谁：军工一号(000001)"],
             }
         )
@@ -74,8 +76,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 主看方向 | 军工 / 高端装备 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，60分钟确认后按条件触发 |", rendered)
-        self.assertIn("| 明日唯一动作 | 只买军工一号，60分钟确认后执行 |", rendered)
+        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按竞价/开盘前几分钟/回封/60分钟分层参与窗口触发 |", rendered)
+        self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertIn("| 操作风格 | 短线 |", rendered)
         self.assertIn("| 盈亏比约束 | 预估赚赔比 1:2.4", rendered)
 
@@ -98,7 +100,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                     ]
                 },
                 "best_stock": {"name": "军工一号", "code": "000001", "r_reward_ratio": 2.4},
-                "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                "front_follow_action_text": ACTION_TEXT,
             }
         )
 
@@ -226,7 +228,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "front_structure_layer_text": "可以开仓，但只剩唯一动作",
                 "trade_gate_open": True,
                 "best_stock": {"name": "军工一号", "code": "000001"},
-                "front_follow_action_text": "只买军工一号，60分钟确认后执行",
+                "front_follow_action_text": ACTION_TEXT,
                 "enabled_node_keys": ["header", "table_header", "mvp_target", "mvp_action"],
             }
         )
@@ -234,10 +236,27 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 最终结论", rendered)
         self.assertIn("| 项目 | 明日指引 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，60分钟确认后按条件触发 |", rendered)
-        self.assertIn("| 明日唯一动作 | 只买军工一号，60分钟确认后执行 |", rendered)
+        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按竞价/开盘前几分钟/回封/60分钟分层参与窗口触发 |", rendered)
+        self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertNotIn("| 主看方向 |", rendered)
         self.assertNotIn("| 执行纪律 |", rendered)
+
+    def test_final_conclusion_discipline_uses_layered_participation_windows(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": False,
+                "step0_prediction": "CLEAR",
+                "final_gate": {"can_new_entry": True},
+                "trade_gate_open": True,
+                "best_stock": {"name": "大唐发电", "code": "601991"},
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("竞价表态/开盘前几分钟/回封/60分钟确认分层处理", rendered)
+        self.assertIn("不满足预演情境就回到0%", rendered)
+        self.assertNotIn("明日前30分钟先确认环境", rendered)
+        self.assertNotIn("买点一律" + "等60" + "分钟确认", rendered)
 
 
 if __name__ == "__main__":

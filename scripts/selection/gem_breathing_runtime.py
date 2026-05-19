@@ -254,7 +254,7 @@ def resolve_candidate_contract_prices(candidate=None, signal=None, expose_execut
         _restore_runtime_bindings(previous)
 
 
-def classify_20cm_branch(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_conditional_30=False, target_date="", mainline_anchor=None, *, helpers=None):
+def classify_20cm_branch(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_attack_50_ready=False, target_date="", mainline_anchor=None, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
         return _classify_20cm_branch_legacy_body(
@@ -263,7 +263,7 @@ def classify_20cm_branch(candidate=None, mainline_name="", confirm_price=None, s
             confirm_price=confirm_price,
             support_price=support_price,
             feedback_ready=feedback_ready,
-            allow_conditional_30=allow_conditional_30,
+            allow_attack_50_ready=allow_attack_50_ready,
             target_date=target_date,
             mainline_anchor=mainline_anchor,
         )
@@ -354,14 +354,14 @@ def _resolve_candidate_contract_prices(candidate=None, signal=None, expose_execu
     )
 
 
-def _classify_20cm_branch(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_conditional_30=False, target_date="", mainline_anchor=None):
+def _classify_20cm_branch(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_attack_50_ready=False, target_date="", mainline_anchor=None):
     return _classify_20cm_branch_legacy_body(
         candidate=candidate,
         mainline_name=mainline_name,
         confirm_price=confirm_price,
         support_price=support_price,
         feedback_ready=feedback_ready,
-        allow_conditional_30=allow_conditional_30,
+        allow_attack_50_ready=allow_attack_50_ready,
         target_date=target_date,
         mainline_anchor=mainline_anchor,
     )
@@ -479,7 +479,7 @@ def _evaluate_gem_breathing_window_legacy_body(bars=None, lookback_days=10):
     tier = "tight" if active and recent_spread <= 2.0 and recent_abs_pct <= 1.8 and recent_amp <= 3.2 and recent_sign_changes >= 3 else "loose" if active else ""
     note = ""
     if active:
-        note = "创业板20cm均线粘合+蛇形走位，属于预启动呼吸感观察。" if tier == "tight" else "创业板20cm存在均线收拢与蛇形呼吸，适合先纳入预启动观察。"
+        note = "创业板20cm预启动观察：波动收敛，等待量价温和放大后的右侧确认。" if tier == "tight" else "创业板20cm存在波动收敛与节奏切换，适合先纳入预启动观察。"
 
     return {
         "active": active,
@@ -755,11 +755,11 @@ def _build_gem_breathing_contract_legacy_body(candidate=None):
     )
     active_window_days = min(max(holding_days_max, 3), 5)
     if confirm_price is not None and support_price is not None:
-        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}且不破{support_price:.2f}，才评估升级到30%条件试错"
+        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}且不破{support_price:.2f}，才评估50%标准进攻"
     elif confirm_price is not None:
-        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}，才评估升级到30%条件试错"
+        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}，才评估50%标准进攻"
     else:
-        upgrade_condition_text = "先完成右侧确认和60分钟确认，才评估升级到30%条件试错"
+        upgrade_condition_text = "先完成右侧确认并命中参与窗口分层确认，才评估50%标准进攻；普通结构才等60分钟确认"
     return {
         "active": bool(confirm_price or support_price or reset_breakout_price),
         "contract_kind": "gem_breathing_20cm",
@@ -882,7 +882,7 @@ def _should_hide_gem_execution_entry_range_legacy_body(candidate=None):
     position_pct = int(_safe_float(candidate.get("position_pct", 0)))
     participation_mode = str(candidate.get("participation_mode", "") or "").strip()
     action_type = str(candidate.get("action_type", "") or "").strip()
-    return position_pct <= 0 and participation_mode not in ("conditional_30", "execute_50") and action_type != "execute"
+    return position_pct <= 0 and participation_mode not in ("attack_50_ready", "execute_50") and action_type != "execute"
 
 
 def _resolve_candidate_contract_prices_legacy_body(candidate=None, signal=None, expose_execution_entry_range=None):
@@ -933,13 +933,13 @@ def _resolve_candidate_contract_prices_legacy_body(candidate=None, signal=None, 
     }
 
 
-def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_conditional_30=False, target_date="", mainline_anchor=None):
+def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_price=None, support_price=None, feedback_ready=False, allow_attack_50_ready=False, target_date="", mainline_anchor=None):
     candidate = candidate or {}
     if not _is_20cm_stock(candidate):
         return {
             "is_20cm": False,
             "allow_watch_pool": False,
-            "allow_conditional_30": False,
+            "allow_attack_50_ready": False,
             "observe_only": False,
             "direct_ban": False,
             "reason": "",
@@ -963,7 +963,7 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
         return {
             "is_20cm": True,
             "allow_watch_pool": False,
-            "allow_conditional_30": False,
+            "allow_attack_50_ready": False,
             "observe_only": False,
             "direct_ban": True,
             "reason": "20cm 高波动接力/边界不清样本直接禁做，只保留远离情绪顶点后的后续观察。",
@@ -972,12 +972,12 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
         }
 
     allow_watch_pool = mainline_match and clear_boundary and (right_side_ok or breathing_prep.get("active"))
-    allow_conditional = allow_watch_pool and allow_conditional_30 and ((right_side_ok and feedback_ready) or (textbook_ready and feedback_ready))
+    allow_conditional = allow_watch_pool and allow_attack_50_ready and ((right_side_ok and feedback_ready) or (textbook_ready and feedback_ready))
     if allow_conditional:
         if textbook_ready and not right_side_ok:
-            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入30%条件试错。"
+            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%标准进攻预演；不满足参与窗口则0%观察。"
         else:
-            reason = "20cm 只作为右侧补充分支；主线、确认链和风险边界都清楚时，只允许30%条件试错。"
+            reason = "20cm 只作为右侧补充分支；主线、确认链、参与窗口和风险边界都清楚时，才评估50%标准进攻；不满足则0%观察。"
     elif breathing_prep.get("active") and elasticity_context.get("active"):
         reason = f"{breathing_prep.get('note') or '创业板20cm呼吸感预启动。'}；{elasticity_context.get('reason', '')}"
     elif breathing_prep.get("active"):
@@ -988,7 +988,7 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
     return {
         "is_20cm": True,
         "allow_watch_pool": allow_watch_pool,
-        "allow_conditional_30": allow_conditional,
+        "allow_attack_50_ready": allow_conditional,
         "observe_only": allow_watch_pool and not allow_conditional,
         "direct_ban": False,
         "reason": reason,

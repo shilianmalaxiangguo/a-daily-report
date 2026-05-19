@@ -6,6 +6,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _m(*parts):
+    return "".join(parts)
+
 from daily_report_analysis_utils import merge_position_gate
 from decision.market_phase_context import build_market_phase_context_contract
 
@@ -131,7 +135,9 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertEqual(result["position_level"], "二档（防守档）")
         self.assertTrue(result["final_gate"]["can_hold"])
         self.assertFalse(result["final_gate"]["can_new_entry"])
-        self.assertIn("10点确认", result["final_gate"]["final_action"])
+        self.assertIn("参与窗口", result["final_gate"]["final_action"])
+        self.assertIn("50%标准进攻", result["final_gate"]["final_action"])
+        self.assertNotIn(_m("30%", "条件试错"), result["final_gate"]["final_action"])
         self.assertIn("指数仍在上行中枢内", result["position_reason"])
         self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
 
@@ -176,7 +182,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             resolve_environment_display_contract=lambda **kwargs: {
                 "position_level": kwargs["position_level"],
                 "operation_state": "进攻态",
-                "headline": "环境放行",
+                "headline": "环境可做",
             },
             calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
         )
@@ -184,7 +190,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertEqual(result["position_level"], "三档（进攻档）")
         self.assertTrue(result["final_gate"]["can_new_entry"])
         self.assertIn("普涨行情允许围绕最强趋势参与", result["final_gate"]["final_action"])
-        self.assertEqual(result["environment_display"]["headline"], "环境放行")
+        self.assertEqual(result["environment_display"]["headline"], "环境可做")
         self.assertGreaterEqual(len(result["module_logs"]), 3)
         self.assertTrue(any(log["step"] == "gate_override" for log in result["module_logs"]))
 

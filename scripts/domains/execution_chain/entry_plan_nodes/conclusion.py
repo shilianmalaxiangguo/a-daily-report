@@ -1,7 +1,6 @@
 def build_entry_plan_conclusion_node(context, node_meta=None, node_lookup=None):
     final_gate = context.get("final_gate", {}) or {}
     keep_group = context.get("keep_group", []) or []
-    position_level = str(context.get("position_level", "") or "").strip()
     executable_stocks = context.get("executable_stocks", []) or []
     waiting_stocks = context.get("waiting_stocks", []) or []
     untradable_stocks = context.get("untradable_stocks", []) or []
@@ -22,10 +21,12 @@ def build_entry_plan_conclusion_node(context, node_meta=None, node_lookup=None):
         lines.append(f"- **哪些票看着强但买不进去**: {len(untradable_stocks)}只（如一字/连续一字，只记观察不计执行收益）")
     lines.append(f"- **执行节奏**: {context['get_execution_framework_text']()}")
     if final_gate.get("can_new_entry", False):
-        lines.append("- **⚠️ 重要**: 以上买点基于今日收盘数据预计算，明日若直接高开离买点>5%，则放弃；即便满足价格条件，也要等60分钟确认后再买")
-    elif final_gate.get("allow_conditional_30"):
-        lines.append(f"- **🟡 档位限制**: {position_level}，只保留10点确认后的30%条件试错；没有主线承接就不开新仓")
+        lines.append(
+            "- **⚠️ 重要**: 以上买点基于今日收盘数据预计算；明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层处理，任一路径不满足预演情境就回到0%，买后用30分钟结构止损"
+        )
+    elif final_gate.get("allow_attack_50_ready"):
+        lines.append("- **进攻仓位**: 50%标准进攻（待参与窗口确认）；没有主线承接、竞价表态、开盘前几分钟承接或结构确认就自动转为0%不参与")
     else:
-        lines.append(f"- **⛔ 档位限制**: {position_level}，禁止任何买入操作")
+        lines.append("- **进攻仓位**: 0%不参与；无合格标的或取消条件已经出现")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
