@@ -364,6 +364,129 @@ def _replace_request_module_log(snapshot_data, *, module, step, status, message,
     return replacement
 
 
+def _normalize_replay_quote_code(raw_code):
+    code = str(raw_code or "").strip()
+    for suffix in (".SZ", ".SS", ".SH", ".BJ"):
+        if code.upper().endswith(suffix):
+            code = code[: -len(suffix)]
+            break
+    lower_code = code.lower()
+    for prefix in ("sz", "sh", "bj"):
+        if lower_code.startswith(prefix):
+            code = code[len(prefix):]
+            break
+    digits = "".join(ch for ch in code if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def _normalize_replay_stock_info_map(stock_full_info):
+    normalized = {}
+    for raw_code, info in (stock_full_info or {}).items():
+        code = _normalize_replay_quote_code(raw_code)
+        if code and isinstance(info, dict):
+            normalized[code] = dict(info)
+    return normalized
+
+
+def _patch_replay_quote_fields(row, info):
+    patched = dict(row or {})
+    info = info or {}
+    if not patched.get("name"):
+        name_from_info = info.get("name") or info.get("名称", "")
+        if name_from_info:
+            patched["name"] = name_from_info
+    for target_key, source_key in (
+        ("change_pct", "change_pct"),
+        ("high", "high"),
+        ("low", "low"),
+        ("open", "open"),
+        ("close", "close"),
+        ("zt_status", "zt_status"),
+    ):
+        value = info.get(source_key)
+        if value not in (None, ""):
+            patched[target_key] = value
+    return patched
+
+
+def _collect_replay_quote_codes(snapshot_data):
+    codes = set()
+    for key in ("hot_rank_top30", "turnover_rank", "turnover_over_100b", "lhb_net_buy_top10", "lhb_net_sell_top10", "lianban_data"):
+        for item in snapshot_data.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            code = _normalize_replay_quote_code(
+                item.get("code")
+                or item.get("代码")
+                or item.get("stock_code")
+                or item.get("symbol")
+                or item.get("prod_code")
+            )
+            if code:
+                codes.add(code)
+    return codes
+
+
+def _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    helpers = helpers or {}
+    stock_full_info = _normalize_replay_stock_info_map(snapshot_data.get("stock_full_info") or {})
+    wanted_codes = _collect_replay_quote_codes(snapshot_data)
+    missing_codes = sorted(wanted_codes - set(stock_full_info.keys()))
+    if not missing_codes:
+        snapshot_data["stock_full_info"] = stock_full_info
+        return snapshot_data
+
+    fetcher = helpers.get("fetch_stock_batch_quote_info")
+    if not callable(fetcher):
+        try:
+            from market_data.tushare_turnover_service import fetch_stock_batch_quote_info as fetcher
+        except Exception:
+            fetcher = None
+    if not callable(fetcher):
+        return snapshot_data
+
+    try:
+        fetched = fetcher(missing_codes, target_date)
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        fetched = fetcher(missing_codes)
+    fetched_info = _normalize_replay_stock_info_map(fetched)
+    patched_codes = []
+    for code in missing_codes:
+        info = fetched_info.get(code)
+        if info:
+            stock_full_info[code] = info
+            patched_codes.append(code)
+    if not patched_codes:
+        snapshot_data["stock_full_info"] = stock_full_info
+        return snapshot_data
+
+    snapshot_data["stock_full_info"] = stock_full_info
+    for key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
+        patched_rows = []
+        for item in snapshot_data.get(key) or []:
+            code = _normalize_replay_quote_code((item or {}).get("code"))
+            patched_rows.append(_patch_replay_quote_fields(item, stock_full_info.get(code, {})))
+        snapshot_data[key] = patched_rows
+
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.stock_quotes",
+        status="success",
+        message="已回补 replay 快照股票行情缺口",
+        provider="tushare.daily",
+        target_keys=["stock_full_info", "lhb_net_buy_top10", "lhb_net_sell_top10"],
+        stock_count=len(stock_full_info),
+        patched_count=len(patched_codes),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
 def _refresh_request_diagnostics(snapshot_data):
     try:
         from input.request_diagnostics_runtime import build_request_diagnostics
@@ -533,6 +656,20 @@ def _fetch_replay_wanzhu_top10(target_date, helpers):
     return list(AShareDataCollector().get_wanzhu_top10(target_date) or [])
 
 
+def _fetch_replay_lhb_snapshot(target_date, helpers):
+    fetcher = (helpers or {}).get("get_lhb_snapshot_from_tushare")
+    if callable(fetcher):
+        try:
+            return fetcher(target_date=target_date) or {}
+        except TypeError as error:
+            if "target_date" not in str(error):
+                raise
+            return fetcher(target_date) or {}
+    from input.tushare_runtime import get_lhb_snapshot_from_tushare_first
+
+    return get_lhb_snapshot_from_tushare_first(target_date) or {}
+
+
 def _build_sector_bucket(records, *, include_zt_type=False):
     buckets = {}
     for item in records or []:
@@ -559,6 +696,319 @@ def _fetch_replay_limit_pool_snapshot(target_date, helpers):
         return get_limit_pool_snapshot_from_tushare_first(target_date=target_date) or {}
     except Exception:
         return {}
+
+
+_NON_SECTOR_LABELS = {
+    "HS",
+    "GEM",
+    "STAR",
+    "BJ",
+    "SH",
+    "SZ",
+    "沪深",
+    "创业板",
+    "科创板",
+    "北交所",
+    "未知",
+    "未归类",
+    "待补充板块",
+    "待补充",
+    "其他",
+    "其它",
+    "-",
+}
+
+
+def _is_valid_replay_sector(value):
+    label = str(value or "").strip()
+    return bool(label and label not in _NON_SECTOR_LABELS)
+
+
+def _infer_replay_sector_from_reason(text):
+    text = str(text or "")
+    if "长鑫" in text or "国产芯片" in text:
+        return "国产芯片"
+    keyword_groups = [
+        ("算力", ("Token工厂", "昇腾", "算力", "服务器", "数据中心", "液冷", "东数西算")),
+        ("机器人", ("机器人", "减速器", "智能体", "机器视觉", "智能制造", "智能物流")),
+        ("商业航天", ("商业航天", "卫星", "航天", "火箭")),
+        ("低空经济", ("低空", "无人机", "eVTOL")),
+        ("家用电器", ("小家电", "家用电器", "空调")),
+        ("消费电子", ("MiniLED", "车载背光", "VR背光", "背光显示", "消费电子", "无线耳机", "苹果产业链")),
+        ("食品饮料", ("葡萄酒", "白兰地", "保健酒", "食品", "饮料")),
+        ("天然气", ("天然气", "页岩气", "燃气")),
+        ("资产重组", ("股权转让", "资产重组", "并购重组", "控制权", "重整", "实控人变更", "国资入主", "资产置换")),
+        ("环保", ("环保", "水务")),
+        ("汽车产业链", ("汽车拆解", "汽车", "新能源汽车")),
+    ]
+    for sector, markers in keyword_groups:
+        if any(marker in text for marker in markers):
+            return sector
+    return ""
+
+
+def _normalize_replay_stock_code(value):
+    text = str(value or "").strip()
+    for suffix in (".SZ", ".SS", ".SH", ".BJ"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    lower_text = text.lower()
+    for prefix in ("sz", "sh", "bj"):
+        if lower_text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else text
+
+
+def _replay_stock_matches(item, code):
+    if not isinstance(item, dict):
+        return False
+    expected = _normalize_replay_stock_code(code)
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code"):
+        if expected and _normalize_replay_stock_code(item.get(key)) == expected:
+            return True
+    return False
+
+
+def _first_valid_replay_plate_name(plates):
+    for plate in plates or []:
+        if isinstance(plate, dict):
+            candidates = (
+                plate.get("plate_name"),
+                plate.get("name"),
+                plate.get("concept_name"),
+                plate.get("sector"),
+            )
+        else:
+            candidates = (plate,)
+        for candidate in candidates:
+            if _is_valid_replay_sector(candidate):
+                return str(candidate).strip()
+    return ""
+
+
+def _resolve_replay_xuangubao_reason(snapshot_data, code):
+    xgb_data = (snapshot_data or {}).get("xuangubao_data") or {}
+    for item in xgb_data.get("xuangubao_limit_up_reasons", []) or []:
+        if _replay_stock_matches(item, code):
+            return item
+    return {}
+
+
+def _normalize_replay_limit_time(value):
+    text = str(value or "").strip()
+    if not text:
+        return "15:00:00"
+    if " " in text:
+        text = text.split()[-1]
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) == 2:
+            return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
+        if len(parts) >= 3:
+            return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) > 6:
+        digits = digits[-6:]
+    if len(digits) == 6:
+        return f"{digits[:2]}:{digits[2:4]}:{digits[4:6]}"
+    if len(digits) == 4:
+        return f"{digits[:2]}:{digits[2:4]}:00"
+    return text
+
+
+def _derive_lianban_data_from_zt_pool(snapshot_data):
+    rows = []
+    for item in snapshot_data.get("zt_pool") or []:
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_replay_stock_code(item.get("代码") or item.get("code"))
+        if not code:
+            continue
+        xgb_reason = _resolve_replay_xuangubao_reason(snapshot_data, code)
+        stock_reason = str((xgb_reason or {}).get("stock_reason") or "").strip()
+        sector = item.get("所属行业") or item.get("sector") or ""
+        related_plates = (xgb_reason or {}).get("related_plates", []) or []
+        plate_name = _first_valid_replay_plate_name(related_plates)
+        reason_text = stock_reason or item.get("涨停统计") or item.get("reason") or ""
+        if not _is_valid_replay_sector(sector):
+            sector = plate_name or _infer_replay_sector_from_reason(reason_text) or ""
+        row = {
+            "code": code,
+            "name": item.get("名称") or item.get("name") or "",
+            "lianban_days": int(_safe_float(item.get("连板数", item.get("lianban_days", 1)), 1)),
+            "change_pct": _safe_float(item.get("涨跌幅", item.get("change_pct", 0))),
+            "turnover": _safe_float(item.get("成交额", item.get("turnover", 0))),
+            "sector": sector,
+            "plates": [sector] if _is_valid_replay_sector(sector) else [],
+            "reason": reason_text,
+            "open_price": _safe_float(item.get("开盘价", item.get("open_price", 0))),
+            "close_price": _safe_float(item.get("最新价", item.get("close_price", item.get("price", 0)))),
+            "high_price": _safe_float(item.get("最高价", item.get("high_price", 0))),
+            "low_price": _safe_float(item.get("最低价", item.get("low_price", 0))),
+            "first_limit_time": _normalize_replay_limit_time(item.get("首次封板时间", item.get("first_limit_time", ""))),
+        }
+        if xgb_reason:
+            row.update(
+                {
+                    "xuangubao_stock_reason": stock_reason,
+                    "xuangubao_related_plates": related_plates,
+                    "xuangubao_related_plate_names": [
+                        str(plate.get("plate_name") or plate.get("name") or "").strip()
+                        for plate in related_plates
+                        if isinstance(plate, dict) and str(plate.get("plate_name") or plate.get("name") or "").strip()
+                    ],
+                    "xuangubao_limit_up_days": (xgb_reason or {}).get("limit_up_days", 0),
+                }
+            )
+        rows.append(row)
+    rows.sort(key=lambda item: (-item.get("lianban_days", 0), item.get("first_limit_time", "99:99:99")))
+    return rows
+
+
+def _previous_turnover_window(stock, current_turnover):
+    history = list((stock or {}).get("hist_turnover") or [])
+    if len(history) >= 6 and abs(_safe_float(history[-1]) - current_turnover) < 0.0001:
+        return history[-6:-1]
+    return history[-5:]
+
+
+def _derive_volume_anomalies_from_history(snapshot_data):
+    rows = []
+    for stock in snapshot_data.get("stocks_with_history") or []:
+        if not isinstance(stock, dict):
+            continue
+        current_turnover = _safe_float(stock.get("turnover"))
+        window = [_safe_float(value) for value in _previous_turnover_window(stock, current_turnover) if _safe_float(value) > 0]
+        if current_turnover <= 0 or not window:
+            continue
+        avg_turnover = sum(window) / len(window)
+        if avg_turnover <= 0:
+            continue
+        ratio = current_turnover / avg_turnover
+        if ratio < 1.5:
+            continue
+        if ratio >= 2.0:
+            anomaly_type = "放量突破"
+            strength = "高"
+            percentile = 98
+        else:
+            anomaly_type = "温和放量"
+            strength = "中"
+            percentile = 95
+        rows.append(
+            {
+                "stock_code": _normalize_replay_stock_code(stock.get("code")),
+                "stock_name": stock.get("name", ""),
+                "anomaly_type": anomaly_type,
+                "strength": strength,
+                "volume_percentile": percentile,
+                "price_change": _safe_float(stock.get("change_pct")),
+                "reason": f"当日成交额{current_turnover:.1f}亿，约为近5日均值{ratio:.2f}倍",
+                "turnover": current_turnover,
+                "avg_turnover_5d": round(avg_turnover, 4),
+                "volume_ratio": round(ratio, 4),
+                "sector": stock.get("sector", ""),
+            }
+        )
+    rows.sort(key=lambda item: (item.get("volume_ratio", 0), abs(item.get("price_change", 0))), reverse=True)
+    return rows[:10]
+
+
+def _is_renderable_lhb_analysis(rows):
+    for item in rows or []:
+        if isinstance(item, dict) and item.get("stock_name") not in (None, "") and item.get("net_buy") not in (None, ""):
+            return True
+        if hasattr(item, "stock_name") and hasattr(item, "net_buy"):
+            return True
+    return False
+
+
+def _derive_lhb_analysis_for_render(snapshot_data):
+    rows = []
+    seen = set()
+    for item in (snapshot_data.get("lhb_net_buy_top10") or []) + (snapshot_data.get("lhb_net_sell_top10") or []):
+        if not isinstance(item, dict):
+            continue
+        code = _normalize_replay_stock_code(item.get("code") or item.get("stock_code"))
+        amount = _safe_float(
+            item.get(
+                "net_buy_amount_yi",
+                item.get("net_buy", item.get("net_amount_yi", item.get("net_sell_amount_yi", 0))),
+            )
+        )
+        if item.get("net_sell_amount_yi") not in (None, "") and amount > 0:
+            amount = -amount
+        dedupe_key = code or item.get("name") or item.get("stock_name")
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        abs_amount = abs(amount)
+        if amount >= 0:
+            money_type = "龙虎榜净买入"
+            pattern = "强净买" if abs_amount >= 3 else "净买跟踪"
+        else:
+            money_type = "龙虎榜净卖出"
+            pattern = "强净卖" if abs_amount >= 3 else "净卖分歧"
+        if abs_amount >= 5:
+            signal_strength = "强"
+        elif abs_amount >= 1:
+            signal_strength = "中"
+        else:
+            signal_strength = "弱"
+        rows.append(
+            {
+                "stock_code": code,
+                "stock_name": item.get("name") or item.get("stock_name") or code,
+                "net_buy": amount,
+                "money_type": money_type,
+                "pattern": pattern,
+                "recent_appearances": 1,
+                "signal_strength": signal_strength,
+                "sector": item.get("sector", ""),
+            }
+        )
+    rows.sort(key=lambda item: abs(item.get("net_buy", 0)), reverse=True)
+    return rows[:10]
+
+
+def _ensure_replay_advanced_activity(snapshot_data):
+    changed = False
+    if not _has_rows(snapshot_data.get("volume_anomalies")):
+        volume_anomalies = _derive_volume_anomalies_from_history(snapshot_data)
+        if volume_anomalies:
+            snapshot_data["volume_anomalies"] = volume_anomalies
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.infer",
+                step="infer.volume_anomalies",
+                status="success",
+                message="已从历史成交额派生放量异常",
+                provider="replay.stocks_with_history.derived",
+                target_keys=["volume_anomalies"],
+                volume_anomaly_count=len(volume_anomalies),
+            )
+            changed = True
+
+    lhb_analysis = snapshot_data.get("lhb_analysis")
+    if not isinstance(lhb_analysis, list) or not _is_renderable_lhb_analysis(lhb_analysis):
+        derived_lhb = _derive_lhb_analysis_for_render(snapshot_data)
+        if derived_lhb:
+            snapshot_data["lhb_analysis"] = derived_lhb
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.infer",
+                step="infer.lhb_analysis",
+                status="success",
+                message="已从龙虎榜净买净卖派生多维龙虎榜结果",
+                provider="replay.lhb_top10.derived",
+                target_keys=["lhb_analysis"],
+                lhb_count=len(derived_lhb),
+            )
+            changed = True
+    return changed
 
 
 def _apply_replay_limit_pool_snapshot(snapshot_data, pool_snapshot, safe_float):
@@ -643,11 +1093,11 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 module="domains.market_activity.request",
                 step="request.integrated_hot_rank",
                 status="success",
-                message="已从热度前三十回补整合热榜",
-                provider="primary_hot_rank.fallback",
+                message="已从热度前三十派生整合热榜",
+                provider="primary_hot_rank.derived",
                 target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
                 integrated_count=len(integrated),
-                fallback_used=True,
+                fallback_used=False,
             )
             changed = True
 
@@ -665,14 +1115,25 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
         or xgb_news_count <= 0
     ):
         try:
-            xgb_data = _fetch_replay_xuangubao_data(target_date, helpers)
+            refreshed_xgb_data = _fetch_replay_xuangubao_data(target_date, helpers)
         except Exception:
-            xgb_data = {}
-        news_count = len((xgb_data or {}).get("xuangubao_news", []) or [])
-        plate_count = len((xgb_data or {}).get("xuangubao_plates", []) or [])
-        limit_up_reason_count = len((xgb_data or {}).get("xuangubao_limit_up_reasons", []) or [])
-        if news_count or plate_count or limit_up_reason_count:
-            snapshot_data["xuangubao_data"] = xgb_data
+            refreshed_xgb_data = {}
+        news_count = len((refreshed_xgb_data or {}).get("xuangubao_news", []) or [])
+        plate_count = len((refreshed_xgb_data or {}).get("xuangubao_plates", []) or [])
+        limit_up_reason_count = len((refreshed_xgb_data or {}).get("xuangubao_limit_up_reasons", []) or [])
+        refreshed_count = news_count + plate_count + limit_up_reason_count
+        if refreshed_count:
+            if news_count:
+                next_xgb_data = refreshed_xgb_data
+            elif xgb_news_count > 0:
+                next_xgb_data = {
+                    **(refreshed_xgb_data or {}),
+                    "xuangubao_news": (xgb_data or {}).get("xuangubao_news", []) or [],
+                }
+                news_count = xgb_news_count
+            else:
+                next_xgb_data = refreshed_xgb_data
+            snapshot_data["xuangubao_data"] = next_xgb_data
             _sync_replay_source_status(
                 snapshot_data,
                 data_label="选股通盘中异动",
@@ -694,9 +1155,33 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 limit_up_reason_count=limit_up_reason_count,
                 diagnostic_note="; ".join(
                     f"{key}={value}"
-                    for key, value in ((xgb_data or {}).get("diagnostics", {}) or {}).items()
+                    for key, value in ((refreshed_xgb_data or {}).get("diagnostics", {}) or {}).items()
                     if value not in (None, "", {})
                 ),
+                diagnostics=(refreshed_xgb_data or {}).get("diagnostics", {}),
+            )
+            changed = True
+        elif xgb_news_count > 0:
+            _sync_replay_source_status(
+                snapshot_data,
+                data_label="选股通盘中异动",
+                step_label="选股通盘中异动获取",
+                timer_label="选股通盘中异动获取",
+                safe_float=safe_float,
+            )
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.monitoring.request",
+                step="request.xuangubao",
+                status="success",
+                message="选股通刷新未返回新闻，保留旧快照新闻",
+                provider="snapshot.xuangubao_data",
+                target_keys=["xuangubao_data"],
+                optional=True,
+                news_count=xgb_news_count,
+                plate_count=len((xgb_data or {}).get("xuangubao_plates", []) or []),
+                limit_up_reason_count=len((xgb_data or {}).get("xuangubao_limit_up_reasons", []) or []),
+                diagnostic_note="refresh_missing_news",
                 diagnostics=(xgb_data or {}).get("diagnostics", {}),
             )
             changed = True
@@ -733,9 +1218,10 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
 
     if (
         snapshot_data.get("step_status", {}).get("连板梯队提取") is False
-        or snapshot_data.get("lianban_data") is None
+        or not _has_rows(snapshot_data.get("lianban_data"))
     ):
-        snapshot_data["lianban_data"] = list(snapshot_data.get("lianban_data") or [])
+        derived_lianban = _derive_lianban_data_from_zt_pool(snapshot_data)
+        snapshot_data["lianban_data"] = derived_lianban if derived_lianban else list(snapshot_data.get("lianban_data") or [])
         snapshot_data.setdefault("step_status", {})["连板梯队提取"] = True
         _mark_replayed_step_success(snapshot_data, "连板梯队提取", safe_float)
         _replace_request_module_log(
@@ -743,11 +1229,67 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
             module="domains.market_activity.request",
             step="request.lianban_snapshot",
             status="success",
-            message="已确认连板梯队为空但请求成功",
-            provider="tushare.limit_list_ths",
+            message="已从涨停池派生连板与首板梯队" if derived_lianban else "已确认连板梯队为空但请求成功",
+            provider="replay.zt_pool.derived" if derived_lianban else "tushare.limit_list_ths",
             target_keys=["lianban_data"],
             lianban_count=len(snapshot_data.get("lianban_data") or []),
         )
+        changed = True
+
+    lhb_buy = snapshot_data.get("lhb_net_buy_top10") or []
+    lhb_sell = snapshot_data.get("lhb_net_sell_top10") or []
+    lhb_analysis = snapshot_data.get("lhb_analysis") or []
+    lhb_provider = str(_provider_from_snapshot_log(snapshot_data, "request.lhb_snapshot") or "")
+    if (
+        snapshot_data.get("step_status", {}).get("龙虎榜数据获取") is False
+        or not (lhb_buy or lhb_sell or lhb_analysis)
+        or (lhb_provider.startswith("legacy.") and not (lhb_buy or lhb_sell))
+    ):
+        try:
+            lhb_snapshot = _fetch_replay_lhb_snapshot(target_date, helpers)
+        except Exception:
+            lhb_snapshot = {}
+        refreshed_buy = list((lhb_snapshot or {}).get("lhb_net_buy_top10") or [])
+        refreshed_sell = list((lhb_snapshot or {}).get("lhb_net_sell_top10") or [])
+        refreshed_analysis = list((lhb_snapshot or {}).get("lhb_analysis") or [])
+        if refreshed_buy or refreshed_sell or refreshed_analysis:
+            snapshot_data["lhb_net_buy_top10"] = refreshed_buy
+            snapshot_data["lhb_net_sell_top10"] = refreshed_sell
+            snapshot_data["lhb_analysis"] = refreshed_analysis
+            snapshot_data.setdefault("step_status", {})["龙虎榜数据获取"] = True
+            _mark_replayed_step_success(snapshot_data, "龙虎榜数据获取", safe_float)
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.request",
+                step="request.lhb_snapshot",
+                status="success",
+                message="已从Tushare回补龙虎榜数据",
+                provider=(lhb_snapshot or {}).get("provider", "tushare.top_list"),
+                target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+                lhb_count=len(refreshed_analysis),
+                buy_count=len(refreshed_buy),
+                sell_count=len(refreshed_sell),
+                fallback_used=bool((lhb_snapshot or {}).get("fallback_used")),
+            )
+            changed = True
+        else:
+            snapshot_data.setdefault("step_status", {})["龙虎榜数据获取"] = False
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.request",
+                step="request.lhb_snapshot",
+                status="degraded",
+                message="龙虎榜回补仍为空",
+                provider=(lhb_snapshot or {}).get("provider", "tushare.top_list"),
+                target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+                lhb_count=0,
+                buy_count=0,
+                sell_count=0,
+                fallback_used=bool((lhb_snapshot or {}).get("fallback_used")),
+            )
+            changed = True
+
+    if _ensure_replay_advanced_activity(snapshot_data):
         changed = True
 
     if changed:
@@ -818,6 +1360,7 @@ def build_replay_snapshot_contract(
         safe_float,
         helpers=runtime_helpers,
     )
+    snapshot_data = _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=runtime_helpers)
     snapshot_data = _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=runtime_helpers)
     snapshot_data = _ensure_replay_capital_intent_atoms(snapshot_data)
 

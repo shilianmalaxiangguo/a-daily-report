@@ -135,6 +135,67 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertEqual(render_context["entry_cycle_calibration"]["cases"][0]["name"], "中嘉博创")
         self.assertEqual(result["value"]["exports"]["entry_cycle_calibration"]["cases"][0]["code"], "000889")
 
+    def test_execution_appendix_tail_hook_passes_new_stock_cycle_inputs(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["new-stock-cycle-review"]
+
+        research_pool = [
+            {
+                "code": "920161",
+                "name": "龙辰科技",
+                "new_stock_cycle_state": "single_stock_watch",
+                "upgrade_eligible": False,
+            }
+        ]
+        upgrades = []
+
+        result = run(
+            {
+                "inputs": {
+                    "new_stock_research_pool": research_pool,
+                    "new_stock_candidate_upgrades": upgrades,
+                },
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        render_context = captured["render_context"]
+        self.assertEqual(render_context["new_stock_research_pool"], research_pool)
+        self.assertEqual(render_context["new_stock_candidate_upgrades"], upgrades)
+        self.assertEqual(result["value"]["exports"]["new_stock_research_pool"], research_pool)
+
+    def test_execution_appendix_tail_hook_passes_request_diagnostics_to_renderer(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["data-source-audit"]
+
+        diagnostics = {
+            "request_logs": [
+                {
+                    "step": "request.total_turnover",
+                    "status": "success",
+                    "provider": "tushare.daily",
+                }
+            ]
+        }
+
+        result = run(
+            {
+                "inputs": {
+                    "request_diagnostics": diagnostics,
+                },
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        self.assertEqual(captured["render_context"]["request_diagnostics"], diagnostics)
+        self.assertEqual(result["value"]["exports"]["request_diagnostics"], diagnostics)
+
     def test_execution_appendix_renderer_outputs_appendix_b_and_c_continuity_tables(self):
         lines = render_execution_appendix(
             {

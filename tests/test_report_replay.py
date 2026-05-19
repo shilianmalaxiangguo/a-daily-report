@@ -320,7 +320,9 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(len(data["integrated_hot_list"]), 1)
         self.assertEqual(len(data["xuangubao_data"]["xuangubao_plates"]), 1)
         self.assertEqual(len(data["wanzhu_top10"]), 1)
-        self.assertEqual(data["lianban_data"], [])
+        self.assertEqual(data["lianban_data"][0]["code"], "601991")
+        self.assertEqual(data["lianban_data"][0]["lianban_days"], 1)
+        self.assertEqual(data["lianban_data"][0]["sector"], "电力")
         self.assertTrue(data["data_status"]["整合热榜"])
         self.assertTrue(data["data_status"]["选股通盘中异动"])
         self.assertTrue(data["data_status"]["顽主杯热门前十"])
@@ -331,6 +333,8 @@ def _replay_probe(target_date, refresh_sources=None):
             if item.get("step") in {"request.integrated_hot_rank", "request.xuangubao", "request.wanzhu_top10", "request.lianban_snapshot"}
         }
         self.assertEqual(by_step["request.integrated_hot_rank"]["status"], "success")
+        self.assertEqual(by_step["request.integrated_hot_rank"]["details"]["provider"], "primary_hot_rank.derived")
+        self.assertFalse(by_step["request.integrated_hot_rank"]["details"]["fallback_used"])
         self.assertEqual(by_step["request.xuangubao"]["details"]["plate_count"], 1)
         self.assertEqual(by_step["request.xuangubao"]["details"]["diagnostic_note"], "newsflash=非法的token")
         self.assertEqual(by_step["request.wanzhu_top10"]["details"]["stock_count"], 1)
@@ -405,6 +409,70 @@ def _replay_probe(target_date, refresh_sources=None):
         xgb_log = next(log for log in data["module_logs"] if log.get("step") == "request.xuangubao")
         self.assertEqual(xgb_log["details"]["news_count"], 1)
         self.assertEqual(xgb_log["details"]["diagnostic_note"], "")
+
+    def test_build_replay_snapshot_contract_keeps_existing_xuangubao_news_when_refresh_has_no_news(self):
+        snapshot = {
+            "hot_rank_top30": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "integrated_hot_list": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "xuangubao_data": {
+                "xuangubao_news": [{"title": "旧快照新闻"}],
+                "xuangubao_plates": [{"name": "国产芯片"}],
+                "xuangubao_limit_up_reasons": [{"symbol": "600676.SS"}],
+                "diagnostics": {},
+            },
+            "wanzhu_top10": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "lianban_data": [],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {
+                "整合热榜": True,
+                "选股通盘中异动": False,
+                "顽主杯热门前十": True,
+            },
+            "step_status": {
+                "整合热榜获取": True,
+                "选股通盘中异动获取": False,
+                "顽主杯热门前十获取": True,
+                "连板梯队提取": True,
+                "主要指数获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.monitoring.request",
+                    "step": "request.xuangubao",
+                    "status": "degraded",
+                    "message": "旧状态失败",
+                    "details": {"provider": "xuangubao.fetch_xuangubao_data", "news_count": 1},
+                }
+            ],
+        }
+        xgb_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "fetch_xuangubao_data": lambda target_date=None: xgb_calls.append(target_date) or {
+                    "xuangubao_news": [],
+                    "xuangubao_plates": [{"name": "国产芯片"}, {"name": "光通信"}],
+                    "xuangubao_limit_up_reasons": [{"symbol": "600676.SS"}],
+                    "diagnostics": {"newsflash": "非法的token"},
+                }
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(xgb_calls, ["2026-05-18"])
+        self.assertEqual(data["xuangubao_data"]["xuangubao_news"], [{"title": "旧快照新闻"}])
+        self.assertTrue(data["data_status"]["选股通盘中异动"])
+        self.assertTrue(data["step_status"]["选股通盘中异动获取"])
+        xgb_log = next(log for log in data["module_logs"] if log.get("step") == "request.xuangubao")
+        self.assertEqual(xgb_log["status"], "success")
+        self.assertEqual(xgb_log["details"]["news_count"], 1)
 
     def test_build_replay_snapshot_contract_returns_not_found_when_snapshot_missing(self):
         result = build_replay_snapshot_contract(
@@ -858,6 +926,392 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(degraded_steps, ["request.wind_a"])
         preflight = build_report_preflight(data, "2026-05-13")
         self.assertEqual(preflight["failures"], ["中证全指"])
+
+    def test_build_replay_snapshot_contract_refills_empty_lhb_from_tushare(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29170.74,
+            "turnover_rank": [{"code": "000988", "data_source": "tushare.daily"}],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+            "lhb_net_buy_top10": [],
+            "lhb_net_sell_top10": [],
+            "lhb_analysis": {},
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "选股通盘中异动": True,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "选股通盘中异动获取": True,
+                "龙虎榜数据获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.lhb_snapshot",
+                    "status": "success",
+                    "message": "已处理龙虎榜请求",
+                    "details": {
+                        "provider": "legacy.lhb_snapshot",
+                        "target_keys": ["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+                        "lhb_count": 0,
+                    },
+                }
+            ],
+            "request_diagnostics": {"summary": {"degraded_count": 0}},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_lhb_snapshot_from_tushare": lambda target_date: {
+                    "lhb_net_buy_top10": [
+                        {"rank": 1, "code": "000988", "name": "华工科技", "net_buy_amount_yi": 16.99, "sector": "通信设备"}
+                    ],
+                    "lhb_net_sell_top10": [
+                        {"rank": 1, "code": "688807", "name": "优迅股份", "net_buy_amount_yi": -4.93, "sector": "半导体"}
+                    ],
+                    "lhb_analysis": [{"代码": "000988", "net_buy_amount": 1699000000}],
+                    "provider": "tushare.top_list",
+                    "fallback_used": False,
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["lhb_net_buy_top10"][0]["code"], "000988")
+        self.assertEqual(data["lhb_net_sell_top10"][0]["code"], "688807")
+        self.assertTrue(data["step_status"]["龙虎榜数据获取"])
+        provider_by_step = {
+            item["step"]: item["details"]["provider"]
+            for item in data["module_logs"]
+            if item.get("step") == "request.lhb_snapshot"
+        }
+        self.assertEqual(provider_by_step["request.lhb_snapshot"], "tushare.top_list")
+
+    def test_build_replay_snapshot_contract_refreshes_missing_stock_quotes_for_existing_lhb_rows(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29170.74,
+            "turnover_rank": [{"code": "000988", "data_source": "tushare.daily"}],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+            "stock_full_info": {
+                "000988": {
+                    "name": "华工科技",
+                    "change_pct": 10.0,
+                    "high": 147.38,
+                    "low": 137.03,
+                    "open": 137.53,
+                    "close": 147.38,
+                    "data_source": "tushare.daily",
+                }
+            },
+            "lhb_net_buy_top10": [
+                {"rank": 1, "code": "000988", "name": "华工科技", "net_buy_amount_yi": 16.99, "sector": "通信设备"},
+                {"rank": 2, "code": "688409", "name": "富创精密", "net_buy_amount_yi": 7.28, "sector": "半导体"},
+            ],
+            "lhb_net_sell_top10": [],
+            "lhb_analysis": [{"stock_name": "华工科技", "net_buy": 16.99}],
+            "lianban_data": [],
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "选股通盘中异动": True,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "选股通盘中异动获取": True,
+                "龙虎榜数据获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.stock_quotes",
+                    "status": "success",
+                    "message": "旧快照股票补数不完整",
+                    "details": {"provider": "tushare.daily", "stock_count": 1},
+                }
+            ],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: {
+                    "688409": {
+                        "name": "富创精密",
+                        "change_pct": 4.67,
+                        "high": 176.8,
+                        "low": 155.74,
+                        "open": 158.09,
+                        "close": 169.85,
+                        "data_source": "tushare.daily",
+                    }
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["stock_full_info"]["688409"]["high"], 176.8)
+        self.assertEqual(data["lhb_net_buy_top10"][1]["high"], 176.8)
+        self.assertEqual(data["lhb_net_buy_top10"][1]["close"], 169.85)
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.stock_quotes"
+        }
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["stock_count"], 2)
+
+    def test_build_replay_snapshot_contract_derives_lianban_from_replayed_limit_pool(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "zt_pool": [
+                {
+                    "代码": "000988",
+                    "名称": "华工科技",
+                    "所属行业": "光通信",
+                    "涨跌幅": 10.0,
+                    "成交额": 88.8,
+                    "连板数": 1,
+                    "涨停统计": "光模块+CPO",
+                    "开盘价": 137.53,
+                    "最新价": 147.38,
+                    "最高价": 147.38,
+                    "最低价": 137.03,
+                    "首次封板时间": "2026-05-18 09:25:00",
+                }
+            ],
+            "lianban_data": [],
+            "xuangubao_data": {
+                "xuangubao_news": [{"title": "光通信方向异动"}],
+                "xuangubao_limit_up_reasons": [
+                    {
+                        "symbol": "000988.SZ",
+                        "stock_reason": "光模块放量涨停",
+                        "related_plates": [{"plate_name": "光通信"}],
+                        "limit_up_days": 1,
+                    }
+                ],
+            },
+            "data_status": {"主要指数": True, "选股通盘中异动": True},
+            "step_status": {
+                "主要指数获取": True,
+                "选股通盘中异动获取": True,
+                "连板梯队提取": True,
+            },
+            "module_logs": [],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={},
+        )
+
+        data = result["data"]
+        self.assertEqual(data["lianban_data"][0]["code"], "000988")
+        self.assertEqual(data["lianban_data"][0]["lianban_days"], 1)
+        self.assertEqual(data["lianban_data"][0]["first_limit_time"], "09:25:00")
+        self.assertEqual(data["lianban_data"][0]["reason"], "光模块放量涨停")
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.lianban_snapshot"
+        }
+        self.assertEqual(by_step["request.lianban_snapshot"]["details"]["lianban_count"], 1)
+        self.assertEqual(by_step["request.lianban_snapshot"]["details"]["provider"], "replay.zt_pool.derived")
+
+    def test_build_replay_snapshot_contract_derives_lianban_sector_from_limit_reason(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "zt_pool": [
+                {
+                    "代码": "000417",
+                    "名称": "合百集团",
+                    "所属行业": "未知",
+                    "涨跌幅": 10.0,
+                    "成交额": 230000000,
+                    "连板数": 1,
+                    "涨停统计": "间接投资长鑫科技+合肥国资+区域零售",
+                    "开盘价": 7.87,
+                    "最新价": 7.87,
+                    "最高价": 7.87,
+                    "最低价": 7.87,
+                    "首次封板时间": "09:25:00",
+                },
+                {
+                    "代码": "001259",
+                    "名称": "利仁科技",
+                    "所属行业": "待补充板块",
+                    "涨跌幅": 10.0,
+                    "成交额": 180000000,
+                    "连板数": 1,
+                    "涨停统计": "股份转让+小家电+露营经济",
+                    "开盘价": 66.55,
+                    "最新价": 66.55,
+                    "最高价": 66.55,
+                    "最低价": 63.01,
+                    "首次封板时间": "09:25:00",
+                },
+                {
+                    "代码": "605218",
+                    "名称": "伟时电子",
+                    "所属行业": "未知",
+                    "涨跌幅": 10.0,
+                    "成交额": 120000000,
+                    "连板数": 1,
+                    "涨停统计": "MiniLED车载背光+VR背光+减持终止",
+                    "开盘价": 19.35,
+                    "最新价": 19.35,
+                    "最高价": 19.35,
+                    "最低价": 19.35,
+                    "首次封板时间": "09:33:24",
+                },
+            ],
+            "lianban_data": [],
+            "xuangubao_data": {
+                "xuangubao_news": [{"title": "今日新闻"}],
+                "xuangubao_limit_up_reasons": [],
+            },
+            "data_status": {"主要指数": True, "选股通盘中异动": True},
+            "step_status": {
+                "主要指数获取": True,
+                "选股通盘中异动获取": True,
+                "连板梯队提取": True,
+            },
+            "module_logs": [],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={},
+        )
+
+        by_code = {item["code"]: item for item in result["data"]["lianban_data"]}
+        self.assertEqual(by_code["000417"]["sector"], "国产芯片")
+        self.assertEqual(by_code["000417"]["plates"], ["国产芯片"])
+        self.assertEqual(by_code["000417"]["reason"], "间接投资长鑫科技+合肥国资+区域零售")
+        self.assertEqual(by_code["001259"]["sector"], "家用电器")
+        self.assertEqual(by_code["001259"]["plates"], ["家用电器"])
+        self.assertNotEqual(by_code["001259"]["sector"], "待补充板块")
+        self.assertEqual(by_code["605218"]["sector"], "消费电子")
+        self.assertEqual(by_code["605218"]["plates"], ["消费电子"])
+
+    def test_build_replay_snapshot_contract_derives_advanced_activity_when_snapshot_has_empty_tables(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "stocks_with_history": [
+                {
+                    "code": "300433",
+                    "name": "蓝思科技",
+                    "turnover": 120.0,
+                    "change_pct": 13.12,
+                    "sector": "消费电子",
+                    "hist_turnover": [40.0, 50.0, 55.0, 60.0, 70.0],
+                },
+                {
+                    "code": "603986",
+                    "name": "兆易创新",
+                    "turnover": 100.0,
+                    "change_pct": 6.57,
+                    "sector": "半导体",
+                    "hist_turnover": [90.0, 95.0, 96.0, 98.0, 99.0],
+                },
+            ],
+            "lhb_net_buy_top10": [],
+            "lhb_net_sell_top10": [],
+            "lhb_analysis": {},
+            "volume_anomalies": [],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+            "data_status": {"主要指数": True, "选股通盘中异动": True},
+            "step_status": {
+                "主要指数获取": True,
+                "选股通盘中异动获取": True,
+                "龙虎榜数据获取": True,
+            },
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.lhb_snapshot",
+                    "status": "success",
+                    "message": "旧快照空龙虎榜",
+                    "details": {"provider": "legacy.lhb_snapshot", "lhb_count": 0},
+                }
+            ],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_lhb_snapshot_from_tushare": lambda target_date: {
+                    "lhb_net_buy_top10": [
+                        {"rank": 1, "code": "000988", "name": "华工科技", "net_buy_amount_yi": 16.99, "sector": "光通信"}
+                    ],
+                    "lhb_net_sell_top10": [
+                        {"rank": 1, "code": "688807", "name": "优迅股份", "net_buy_amount_yi": -4.93, "sector": "半导体"}
+                    ],
+                    "lhb_analysis": [{"代码": "000988", "net_buy_amount": 1699000000}],
+                    "provider": "tushare.top_list",
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["volume_anomalies"][0]["stock_code"], "300433")
+        self.assertEqual(data["volume_anomalies"][0]["anomaly_type"], "放量突破")
+        self.assertGreaterEqual(data["volume_anomalies"][0]["volume_percentile"], 95)
+        self.assertEqual(data["lhb_analysis"][0]["stock_name"], "华工科技")
+        self.assertAlmostEqual(data["lhb_analysis"][0]["net_buy"], 16.99)
+        self.assertEqual(data["lhb_analysis"][0]["money_type"], "龙虎榜净买入")
+        self.assertEqual(data["lhb_analysis"][1]["stock_name"], "优迅股份")
+        self.assertAlmostEqual(data["lhb_analysis"][1]["net_buy"], -4.93)
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") in {"infer.volume_anomalies", "infer.lhb_analysis"}
+        }
+        self.assertEqual(by_step["infer.volume_anomalies"]["details"]["volume_anomaly_count"], 1)
+        self.assertEqual(by_step["infer.lhb_analysis"]["details"]["lhb_count"], 2)
 
     def test_build_replay_snapshot_contract_restores_wind_a_from_tushare(self):
         snapshot = {

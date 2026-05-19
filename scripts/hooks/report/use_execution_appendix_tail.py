@@ -49,12 +49,15 @@ def run(ctx):
         "step_status": step_status,
         "normalized_timer_steps": normalized_timer_steps,
         "total_time": total_time,
+        "request_diagnostics": inputs.get("request_diagnostics", {}) or {},
         "target_date": inputs.get("target_date", ""),
         "generated_at": inputs.get("generated_at") or _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "report_version": inputs.get("report_version", "v2.5.0"),
         "appendix_b": inputs.get("appendix_b", {}) or {},
         "appendix_c": inputs.get("appendix_c", {}) or {},
         "entry_cycle_calibration": inputs.get("entry_cycle_calibration", {}) or {},
+        "new_stock_research_pool": inputs.get("new_stock_research_pool", []) or [],
+        "new_stock_candidate_upgrades": inputs.get("new_stock_candidate_upgrades", []) or [],
     }
     lines = render_execution_appendix(render_context) if callable(render_execution_appendix) else []
     _append_log(
@@ -73,6 +76,9 @@ def run(ctx):
         "appendix_b": render_context["appendix_b"],
         "appendix_c": render_context["appendix_c"],
         "entry_cycle_calibration": render_context["entry_cycle_calibration"],
+        "new_stock_research_pool": render_context["new_stock_research_pool"],
+        "new_stock_candidate_upgrades": render_context["new_stock_candidate_upgrades"],
+        "request_diagnostics": render_context["request_diagnostics"],
     }
     return {
         "value": {

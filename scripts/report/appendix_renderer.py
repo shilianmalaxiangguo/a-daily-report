@@ -29,6 +29,66 @@ def _stock_label(item):
     return f"{name}({code})" if code else name
 
 
+def _status_label(status):
+    text = str(status or "").strip() or "unknown"
+    if text == "success":
+        return f"✅ {text}"
+    if text == "degraded":
+        return f"⚠️ {text}"
+    if text == "error":
+        return f"❌ {text}"
+    return text
+
+
+def _timer_elapsed_by_step_name(normalized_timer_steps):
+    mapping = {}
+    for row in normalized_timer_steps or []:
+        if not row or len(row) < 2:
+            continue
+        step_name = str(row[0] or "")
+        try:
+            elapsed = float(row[1])
+        except (TypeError, ValueError):
+            continue
+        mapping[step_name] = elapsed
+    return mapping
+
+
+def _request_step_timer_alias(step):
+    aliases = {
+        "request.total_turnover": "两市成交额获取",
+        "request.major_indices": "主要指数获取",
+        "request.wind_a": "中证全指获取",
+        "request.limit_pool": "涨停跌停数据获取",
+        "request.hot_rank.primary": "热度前三十个股获取",
+        "request.integrated_hot_rank": "整合热榜获取",
+        "request.hot_plates": "板块热榜获取",
+        "request.sector_fund_flow": "行业资金流向获取",
+        "request.sector_change_rank": "板块涨跌幅排行获取",
+        "request.turnover_rank": "成交额排名获取",
+        "request.calendar_events": "预期日历获取",
+        "request.new_stock_calendar": "新股上市日历获取",
+        "request.xuangubao": "选股通盘中异动获取",
+        "request.wanzhu_top10": "顽主杯热门前十获取",
+        "request.exchange_monitor": "异动检测数据获取",
+        "request.lianban_snapshot": "连板梯队提取",
+        "request.lhb_snapshot": "龙虎榜数据获取",
+        "request.stock_batch_info": "批量获取股票信息",
+        "request.candidate_history": "候选股历史成交额获取",
+    }
+    return aliases.get(step, "")
+
+
+def _elapsed_for_request_step(step, elapsed_by_step_name):
+    alias = _request_step_timer_alias(step)
+    if not alias:
+        return None
+    for step_name, elapsed in elapsed_by_step_name.items():
+        if alias in step_name:
+            return elapsed
+    return None
+
+
 def _append_table(lines, title, headers, rows, empty_row=None):
     lines.extend([title, "", "| " + " | ".join(headers) + " |", "|" + "|".join(["------"] * len(headers)) + "|"])
     if rows:
@@ -87,6 +147,38 @@ def _build_appendix_summary_stats_node(context, node_meta=None, node_lookup=None
         success_rate = (success_count / total_count * 100) if total_count > 0 else 0
         lines.append(f"- **步骤执行成功率**: {success_count}/{total_count} ({success_rate:.1f}%)")
     lines.append("")
+    return {"lines": lines, "exports": {}}
+
+
+def _build_data_source_audit_node(context, node_meta=None, node_lookup=None):
+    request_logs = ((_context_value(context, "request_diagnostics", {}) or {}).get("request_logs") or [])
+    elapsed_by_step_name = _timer_elapsed_by_step_name(_context_value(context, "normalized_timer_steps", []) or [])
+    rows = []
+    for item in request_logs:
+        if not isinstance(item, dict):
+            continue
+        elapsed = _elapsed_for_request_step(item.get("step"), elapsed_by_step_name)
+        fallback_used = bool(item.get("fallback_used"))
+        rows.append(
+            [
+                item.get("step"),
+                _status_label(item.get("status")),
+                item.get("provider"),
+                item.get("target_keys") or item.get("target_fields") or [],
+                f"{elapsed:.2f}s" if elapsed is not None else "-",
+                "是" if fallback_used else "否",
+                item.get("upstream_error") or item.get("error") or "-",
+                item.get("diagnostic_note") or "-",
+            ]
+        )
+    lines = []
+    _append_table(
+        lines,
+        "### 数据源请求审计",
+        ["请求步骤", "状态", "实际 provider", "目标字段", "耗时", "是否回退", "上游异常", "诊断明细"],
+        rows,
+        empty_row=["暂无请求日志", "-", "-", "-", "-", "-", "-", "-"],
+    )
     return {"lines": lines, "exports": {}}
 
 
@@ -265,16 +357,51 @@ def _build_entry_cycle_calibration_node(context, node_meta=None, node_lookup=Non
     return {"lines": lines, "exports": {"entry_cycle_calibration": calibration}}
 
 
+def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None):
+    research_pool = _context_value(context, "new_stock_research_pool", []) or []
+    if not research_pool:
+        return {"lines": [], "exports": {}}
+
+    lines = []
+    _append_table(
+        lines,
+        "### 附录A：新股周期判定",
+        ["标的", "上市窗口", "新股周期", "C阶段承接", "情绪出口", "辨识度", "是否升级", "判定"],
+        [
+            [
+                _stock_label(item),
+                item.get("listing_window"),
+                item.get("new_stock_cycle_state"),
+                item.get("c_stage_acceptance"),
+                item.get("emotion_outlet_status"),
+                item.get("new_stock_recognition_status"),
+                "是" if item.get("upgrade_eligible") else "否",
+                item.get("candidate_upgrade_reason"),
+            ]
+            for item in research_pool
+        ],
+    )
+    return {
+        "lines": lines,
+        "exports": {
+            "new_stock_research_pool": research_pool,
+            "new_stock_candidate_upgrades": _context_value(context, "new_stock_candidate_upgrades", []) or [],
+        },
+    }
+
+
 APPENDIX_NODE_BUILDERS = {
     "header": _build_appendix_header_node,
     "data_status": _build_appendix_data_status_node,
     "step_status": _build_appendix_step_status_node,
     "summary_stats": _build_appendix_summary_stats_node,
+    "data_source_audit": _build_data_source_audit_node,
     "metadata": _build_appendix_metadata_node,
     "timer_stats": _build_appendix_timer_stats_node,
     "mainline_continuity": _build_mainline_continuity_node,
     "stock_continuity": _build_stock_continuity_node,
     "entry_cycle_calibration": _build_entry_cycle_calibration_node,
+    "new_stock_cycle_review": _build_new_stock_cycle_review_node,
 }
 
 

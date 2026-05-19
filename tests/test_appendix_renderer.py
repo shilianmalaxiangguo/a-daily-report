@@ -5,10 +5,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.appendix_renderer import render_execution_appendix
+from report.appendix_renderer import _request_step_timer_alias, render_execution_appendix
 
 
 class AppendixRendererTest(unittest.TestCase):
+    def test_xuangubao_request_step_uses_current_alias_for_elapsed_time(self):
+        self.assertEqual(_request_step_timer_alias("request.xuangubao"), "选股通盘中异动获取")
+
     def test_render_execution_appendix_can_render_only_enabled_nodes(self):
         lines = render_execution_appendix(
             {
@@ -60,6 +63,87 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertIn("| collect_hot_rank | 1.20s | 1.20s |", rendered)
         self.assertIn("**报告版本**: v2.5.0", rendered)
         self.assertIn("**数据日期**: 2026-04-22", rendered)
+
+    def test_render_execution_appendix_outputs_data_source_audit_table(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["data_source_audit"],
+                "request_diagnostics": {
+                    "request_logs": [
+                        {
+                            "step": "request.total_turnover",
+                            "status": "success",
+                            "provider": "tushare.daily",
+                            "target_keys": ["total_turnover"],
+                            "fallback_used": False,
+                        },
+                        {
+                            "step": "request.hot_rank.primary",
+                            "status": "degraded",
+                            "provider": "ths_hot_stock",
+                            "target_keys": ["hot_rank_top30"],
+                            "fallback_used": True,
+                            "upstream_error": "tushare empty",
+                        },
+                        {
+                            "step": "request.candidate_history",
+                            "status": "success",
+                            "provider": "tushare.daily",
+                            "target_keys": ["stocks_with_history", "history_fetch_stats"],
+                            "fallback_used": False,
+                            "diagnostic_note": "Tushare并发4；空数据重试1次；失败代码: 003018",
+                        },
+                    ]
+                },
+                "normalized_timer_steps": [
+                    ("步骤1: 两市成交额获取", 1.20, 1.20),
+                    ("步骤5: 热度前三十个股获取", 3.40, 4.60),
+                    ("步骤15: 候选股历史成交额获取", 5.52, 10.12),
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 数据源请求审计", rendered)
+        self.assertIn("| request.total_turnover | ✅ success | tushare.daily | total_turnover | 1.20s | 否 | - | - |", rendered)
+        self.assertIn("| request.hot_rank.primary | ⚠️ degraded | ths_hot_stock | hot_rank_top30 | 3.40s | 是 | tushare empty | - |", rendered)
+        self.assertIn("| request.candidate_history | ✅ success | tushare.daily | stocks_with_history；history_fetch_stats | 5.52s | 否 | - | Tushare并发4；空数据重试1次；失败代码: 003018 |", rendered)
+
+    def test_render_execution_appendix_outputs_new_stock_cycle_table(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["new_stock_cycle_review"],
+                "new_stock_research_pool": [
+                    {
+                        "code": "920161",
+                        "name": "龙辰科技",
+                        "listing_window": "missing_listing_date",
+                        "new_stock_cycle_state": "single_stock_watch",
+                        "c_stage_acceptance": "pending",
+                        "emotion_outlet_status": "none",
+                        "new_stock_recognition_status": "ordinary_new_stock",
+                        "upgrade_eligible": False,
+                        "candidate_upgrade_reason": "暂不升级：新股周期证明不足。",
+                    },
+                    {
+                        "code": "301608",
+                        "name": "C理奇智能",
+                        "listing_window": "recently_listed",
+                        "new_stock_cycle_state": "spread",
+                        "c_stage_acceptance": "confirmed",
+                        "emotion_outlet_status": "market_flag",
+                        "new_stock_recognition_status": "emotion_flag",
+                        "upgrade_eligible": True,
+                        "candidate_upgrade_reason": "新股周期已通过扩散、C阶段承接和情绪出口验证。",
+                    },
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 附录A：新股周期判定", rendered)
+        self.assertIn("| 龙辰科技(920161) | missing_listing_date | single_stock_watch | pending | none | ordinary_new_stock | 否 | 暂不升级：新股周期证明不足。 |", rendered)
+        self.assertIn("| C理奇智能(301608) | recently_listed | spread | confirmed | market_flag | emotion_flag | 是 | 新股周期已通过扩散、C阶段承接和情绪出口验证。 |", rendered)
 
     def test_render_execution_appendix_outputs_empty_continuity_tables_as_recording_contract(self):
         lines = render_execution_appendix(
