@@ -187,6 +187,7 @@ def run(ctx):
                 "energy_state": market_state_snapshot.get("energy_state", "未知"),
                 "flow_direction": market_state_snapshot.get("flow_direction", "-"),
                 "mainline_text": mainline_text,
+                "mainline_turnover_summary": mainline_turnover_summary,
                 "risk_text": risk_text,
                 "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
             },

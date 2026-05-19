@@ -19,6 +19,7 @@ def build_watch_pool_stage(stage_context, stage_meta, stage_lookup=None):
     runtime_result = build_step1_watch_runtime(
         sector_trend_snapshot_step1=stage_context.get("sector_trend_snapshot_step1", []),
         mainline_competition_snapshot=stage_context.get("mainline_competition_snapshot", []),
+        mainline_turnover_summary=stage_context.get("mainline_turnover_summary", {}) or {},
         leader_memory_bank=stage_context.get("leader_memory_bank", []),
         tracking_memory_status=stage_context.get("tracking_memory_status", {}) or {},
         watchlist=stage_context.get("watchlist", []),

@@ -103,6 +103,7 @@ def build_candidate_selection_runtime(stage_context, stage_meta, stage_lookup=No
         "render_gem_breathing_step2_section": render_gem_breathing_step2_section,
         "filtered_out_gem_candidates": market_research_bundle.get("filtered_out_gem_breathing_candidates", []),
         "ai_analyze_sector_relationships": ai_analyze_sector_relationships,
+        "mainline_turnover_summary": stage_context.get("mainline_turnover_summary", {}) or {},
         "primary_mainline": primary_mainline,
         "evaluated_stocks": evaluated_stocks,
         "core_stocks": core_stocks,

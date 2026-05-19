@@ -340,6 +340,34 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(merged["turnover_share_history"][0]["turnover_share_pct"], "3.05%")
         self.assertEqual(merged["turnover_share_history"][0]["source"], "tushare.daily")
 
+    def test_merge_appendix_b_payload_replaces_structure_record_for_same_date(self):
+        existing = {
+            "structure_mainline_records": [
+                {
+                    "date": "05-14",
+                    "date_range": "05-14",
+                    "mainline": "半导体",
+                    "mainline_degree": "周期主线",
+                }
+            ]
+        }
+        derived = {
+            "structure_mainline_records": [
+                {
+                    "date": "05-14",
+                    "date_range": "05-14",
+                    "mainline": "暂无确认主线",
+                    "mainline_degree": "待确认",
+                }
+            ]
+        }
+
+        merged = report_runtime._merge_appendix_b_payload(existing, derived)
+
+        self.assertEqual(len(merged["structure_mainline_records"]), 1)
+        self.assertEqual(merged["structure_mainline_records"][0]["mainline"], "暂无确认主线")
+        self.assertEqual(merged["structure_mainline_records"][0]["mainline_degree"], "待确认")
+
     def test_build_appendix_b_continuity_payload_enriches_structure_mainline_records(self):
         payload = report_runtime._build_appendix_b_continuity_payload(
             pivot_mainline_history=[
@@ -366,6 +394,38 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(row["evolution"], "[半导体] 接替 [电力]")
         self.assertEqual(row["replacement"], "接替前主线")
         self.assertIn("还未进入攻击段", row["interpretation"])
+
+    def test_build_appendix_b_continuity_payload_downgrades_current_structure_when_attack_evidence_is_chaotic(self):
+        payload = report_runtime._build_appendix_b_continuity_payload(
+            target_date="2026-05-14",
+            mainline_turnover_summary={
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "chaotic_rotation",
+                    "primary_line": "",
+                    "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                    "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                }
+            },
+            pivot_mainline_history=[
+                {
+                    "date_range": "05-14",
+                    "pivot_level": "日线中枢",
+                    "pivot_range": "-",
+                    "position": "中枢内",
+                    "mainline": "半导体",
+                    "mainline_degree": "周期主线",
+                    "evolution": "观察",
+                    "replacement": "待确认",
+                    "interpretation": "中枢是主线周期载体：[半导体] 承载在日线中枢。",
+                }
+            ],
+        )
+
+        record = payload["structure_mainline_records"][0]
+        self.assertEqual(record["mainline"], "暂无确认主线")
+        self.assertEqual(record["mainline_degree"], "待确认")
+        self.assertEqual(record["replacement"], "待确认")
+        self.assertEqual(record["interpretation"], "中枢只记录候选方向，不把单日热度升级为周期主线；多方向局部活跃但资金未明显胜出。")
 
     def test_appendix_b_renders_daily_candidate_not_confirmed_zhongshu(self):
         rows = report_runtime._derive_appendix_pivot_mainline_history(
@@ -503,6 +563,78 @@ class ReportRuntimeTest(unittest.TestCase):
                     delattr(report_runtime, "_llm_call_stats")
             else:
                 report_runtime._llm_call_stats = original_stats
+
+    def test_build_calendar_ai_context_uses_local_rules_by_default_without_llm(self):
+        class ExplodingBatchClient:
+            def analyze_events_batch(self, events, batch_size=8):
+                raise AssertionError("DeepSeek should not be called by default")
+
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: ExplodingBatchClient()
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "calendar_events": [
+                        {"date": "2026-05-07", "title": "人形机器人产业大会召开", "star": 5}
+                    ]
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
+            self.assertEqual(result["analysis_source"], "local_rules")
+            self.assertEqual(ai_analysis["main_direction"], "人形机器人")
+            self.assertIn("减速器", ai_analysis["related_sectors"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_falls_back_to_local_rules_when_remote_llm_fails(self):
+        class FailingBatchClient:
+            def analyze_events_batch(self, events, batch_size=8):
+                raise RuntimeError("deepseek timeout")
+
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        emitted = []
+        try:
+            report_runtime.get_llm_service = lambda: FailingBatchClient()
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "calendar_events": [
+                        {"date": "2026-05-07", "title": "人形机器人产业大会召开", "star": 5}
+                    ]
+                },
+                print_fn=emitted.append,
+            )
+
+            ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
+            self.assertEqual(result["analysis_source"], "local_rules")
+            self.assertEqual(result["remote_llm_error"], "deepseek timeout")
+            self.assertEqual(ai_analysis["main_direction"], "人形机器人")
+            self.assertTrue(any("远程LLM失败" in line for line in emitted))
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
 
     def test_get_or_build_market_phase_context_reuses_shared_runtime_cache(self):
         calls = []
@@ -1007,6 +1139,171 @@ class ReportRuntimeTest(unittest.TestCase):
                 config={},
             )
 
+    def test_render_markdown_report_runtime_derives_appendix_c_from_tuple_a_kill_records(self):
+        class _ExecutionAppendixCaptured(RuntimeError):
+            pass
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "filtered_by_a_kill": [
+                        (
+                            {"name": "冷却股", "code": "000003", "sector": "军工"},
+                            {"a_kill_date": "2026-04-20", "remaining_days": 20, "reason": "A杀冷却期"},
+                        )
+                    ],
+                },
+            }
+
+        def _capture_execution_appendix(payload):
+            appendix_c = payload["inputs"]["appendix_c"]
+            record = appendix_c["a_kill_elimination_records"][0]
+            self.assertEqual(record["stock_name"], "冷却股")
+            self.assertEqual(record["stock_code"], "000003")
+            self.assertEqual(record["a_kill_date"], "2026-04-20")
+            self.assertEqual(record["reason"], "A杀冷却期")
+            raise _ExecutionAppendixCaptured("captured")
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_context_tail_sections=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_execution_appendix_tail=_capture_execution_appendix,
+            _default_build_entry_cycle_calibrations=lambda as_of_date="": {},
+        )
+
+        data = {
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+        }
+
+        with self.assertRaises(_ExecutionAppendixCaptured):
+            report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-04-22",
+                helpers=helpers,
+                config={},
+            )
+
+    def test_appendix_c_downgrades_unconfirmed_core_and_limit_down_watch_items(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-05-18",
+            execution_stage_context={
+                "mainline_name": "",
+                "core_stocks": [
+                    {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "sector": "绿色电力",
+                        "change_pct": 0.13,
+                        "pattern": "震荡整理(0分)",
+                        "tmr_forecast": "需看明日竞价强弱",
+                    },
+                    {
+                        "name": "巨力索具",
+                        "code": "002342",
+                        "sector": "商业航天",
+                        "change_pct": -9.98,
+                        "pattern": "缩量调整(0分)",
+                        "tmr_forecast": "需看明日竞价强弱",
+                    },
+                ],
+            },
+        )
+
+        pool = payload["current_stock_monitoring_pool"]
+        lifecycle = payload["stock_lifecycle_records"]
+        self.assertEqual(pool[0]["source_pool"], "候选观察")
+        self.assertEqual(pool[0]["current_action"], "仅观察，等待重新转强")
+        self.assertEqual(pool[1]["source_pool"], "风险回避")
+        self.assertEqual(pool[1]["current_action"], "跌停/接近跌停，取消明日参与")
+        self.assertEqual(lifecycle[1]["current_interpretation"], "跌停/接近跌停，不是明日核心")
+
+    def test_render_markdown_report_runtime_rebuilds_appendix_c_when_snapshot_has_stale_pool(self):
+        class _ExecutionAppendixCaptured(RuntimeError):
+            pass
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "mainline_name": "",
+                    "core_stocks": [
+                        {
+                            "name": "大唐发电",
+                            "code": "601991",
+                            "sector": "绿色电力",
+                            "change_pct": 0.13,
+                            "pattern": "震荡整理(0分)",
+                            "tmr_forecast": "需看明日竞价强弱",
+                        },
+                        {
+                            "name": "巨力索具",
+                            "code": "002342",
+                            "sector": "商业航天",
+                            "change_pct": -9.98,
+                            "pattern": "缩量调整(0分)",
+                            "tmr_forecast": "需看明日竞价强弱",
+                        },
+                    ],
+                },
+            }
+
+        def _capture_execution_appendix(payload):
+            appendix_c = payload["inputs"]["appendix_c"]
+            pool = appendix_c["current_stock_monitoring_pool"]
+            self.assertEqual(pool[0]["source_pool"], "候选观察")
+            self.assertEqual(pool[0]["current_action"], "仅观察，等待重新转强")
+            self.assertEqual(pool[1]["source_pool"], "风险回避")
+            self.assertEqual(pool[1]["current_action"], "跌停/接近跌停，取消明日参与")
+            raise _ExecutionAppendixCaptured("captured")
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_context_tail_sections=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_execution_appendix_tail=_capture_execution_appendix,
+            _default_build_entry_cycle_calibrations=lambda as_of_date="": {},
+        )
+
+        data = {
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+            "appendix_c": {
+                "current_stock_monitoring_pool": [
+                    {"stock_name": "大唐发电", "stock_code": "601991", "source_pool": "主线核心", "current_action": "需看明日竞价强弱"},
+                    {"stock_name": "巨力索具", "stock_code": "002342", "source_pool": "主线核心", "current_action": "需看明日竞价强弱"},
+                ],
+                "stock_lifecycle_records": [],
+                "a_kill_elimination_records": [],
+            },
+        }
+
+        with self.assertRaises(_ExecutionAppendixCaptured):
+            report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-18",
+                helpers=helpers,
+                config={},
+            )
+
     def test_render_markdown_report_runtime_derives_appendix_structure_mainline_from_market_snapshot(self):
         class _ExecutionAppendixCaptured(RuntimeError):
             pass
@@ -1125,6 +1422,16 @@ class ReportRuntimeTest(unittest.TestCase):
                         "lhb_capital_status": {"capital_strength": "强", "capital_intensity": "净买入集中", "capital_direction": "电池", "capital_intent": "轮动试探", "style_shift": "资金偏轮动", "event_attribute": "龙虎榜资金行为"},
                         "capital_conclusion": {"current_capital_state": "龙虎榜资金强", "mainline_attitude": "尚未确认主线", "tomorrow_action_meaning": "先观察是否回到主线"},
                     },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "monthly_rhythm": {
+                            "month_mode": "ordinary_attack",
+                            "month_return_pct": 6.5,
+                            "max_position_pct": 100,
+                        },
+                        "sizing_reason": "月度允许进攻，但仍需唯一对象确认。",
+                    },
                 },
             }
 
@@ -1177,9 +1484,14 @@ class ReportRuntimeTest(unittest.TestCase):
         positions = [rendered.index(marker) for marker in required_order]
         self.assertEqual(positions, sorted(positions))
         self.assertIn("| 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |", rendered)
+        self.assertIn("### 月度攻防与进攻仓位", rendered)
+        self.assertIn("| 本月模式 | 普通进攻月 |", rendered)
+        self.assertIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("### 1. 周期日历主视图", rendered)
         self.assertIn("[半导体] 接力", rendered)
-        self.assertIn("### 4. 双层主线结论", rendered)
+        self.assertIn("### 4. 主线容量与格局判断", rendered)
+        self.assertIn("| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |", rendered)
+        self.assertNotIn("### 4. 双层主线结论", rendered)
         self.assertIn("### 5. 主线成交额占比趋势", rendered)
         self.assertIn("### 1. 龙虎榜资金状态", rendered)
         self.assertIn("### 1. 个股裁决", rendered)
@@ -1417,7 +1729,7 @@ class ReportRuntimeTest(unittest.TestCase):
                 position_level="三档（进攻档）",
                 position_reason="环境修复",
                 exit_analysis={"sector_name": "通信", "overall_level": "黄灯"},
-                execution_framework_text="等60分钟确认",
+                execution_framework_text="等参与窗口确认",
                 high_board_count=3,
                 structure_layer_text="结构层通过",
                 front_follow_action_text="只做核心",
@@ -1481,7 +1793,10 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("### 1. 周期日历主视图", summary_result["report"])
         self.assertIn("| 周次 | 一 | 二 | 三 | 四 | 五 |", summary_result["report"])
         self.assertIn("### 2. 周期解读", summary_result["report"])
-        self.assertIn("| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |", summary_result["report"])
+        self.assertIn(
+            "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
+            summary_result["report"],
+        )
         self.assertIn("### 3. 中枢与主线解读", summary_result["report"])
         self.assertIn("| 时间段 | 中枢级别 | 中枢区间 | 所在位置 | 对应主线 | 主线程度 | 演化状态 | 接替关系 | 结构解读 |", summary_result["report"])
         self.assertIn(
@@ -1575,8 +1890,13 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("[电力] 退潮", rendered)
         self.assertIn("[半导体] 接力", rendered)
         self.assertIn("[半导体] 修复", rendered)
-        self.assertIn("| 上个周期 | 04-17 ~ 04-20 | 2日 | 电力 | 强化后退潮 |", rendered)
-        self.assertIn("| 当前周期 | 04-21 ~ 04-24 | 3日 | 半导体 | 接力后修复接力 |", rendered)
+        self.assertIn(
+            "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
+            rendered,
+        )
+        self.assertIn("| 上个周期 | 04-17 ~ 04-20 | 2日 | 电力 | 已结束周期 | 背景观察 | 强化后退潮 |", rendered)
+        self.assertIn("| 当前周期 | 04-21 ~ 04-24 | 3日 | 半导体 | 延续验证 | 待二次验证 | 接力后修复接力 |", rendered)
+        self.assertIn("不能由单日攻击自动升级周期主线", rendered)
         self.assertIn("| 2026-04-21 ~ 2026-04-24 | 日线中枢 | 3992-4114 | 中枢内 | 半导体 | 周期主线 | 中枢内修复 | 接替电力 | [半导体] 在中枢内接替 [电力]，等待放量确认。 |", rendered)
         self.assertNotIn("主线待累计", rendered)
 
@@ -1683,7 +2003,7 @@ class ReportRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(data["current_mainline_history_record"]["primary_mainline"], "半导体")
-        self.assertIn("| 半导体 | 半导体 | 周期主线与当天主攻线一致 | 继续围绕半导体观察承接 |", result["report"])
+        self.assertIn("| 容量待累计 | 单主线聚焦 | 半导体 | - | 主线确认依据待补充 | 周期主线与当天主攻线一致 | 待观察 | 继续围绕半导体观察承接 |", result["report"])
         self.assertIn("| 2026-04-24 | 半导体 | 半导体 | 数据暂缺 | 26414.92亿 | 待累计 | 待累计 | 缺少板块成交额接口，先记录主线归属 |", result["report"])
 
     def test_render_markdown_report_runtime_uses_structured_turnover_history_for_share_change(self):
@@ -1757,6 +2077,85 @@ class ReportRuntimeTest(unittest.TestCase):
             result["report"],
         )
 
+    def test_render_markdown_report_runtime_prefers_structured_attack_summary_over_stale_stage_summary(self):
+        from report.front_page_v2_renderer import render_front_page_v2 as _render_front_page_v2_actual
+        from report.report_document_builder import build_report_shell_contract as _build_report_shell_contract_actual
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_research_snapshot": {
+                        "state_machine": {"leading_line": "半导体", "energy_state": "观察"},
+                        "mainline_turnover_summary": {
+                            "current_mainline": "",
+                            "conclusion": "主线待确认，暂不输出成交额占比结论",
+                            "mainline_attack_evidence_summary": {
+                                "attack_state": "chaotic_rotation",
+                                "primary_line": "",
+                                "candidate_lines": ["化学制品", "养殖业", "家居用品"],
+                                "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                                "sector_evidence_rows": [
+                                    {
+                                        "sector_name": "化学制品",
+                                        "net_inflow_amount": 3.39,
+                                        "net_inflow_rank": 3,
+                                        "limit_up_count": 5,
+                                        "high_anchor_height": 2,
+                                        "turnover_share_change": 0.0,
+                                    }
+                                ],
+                            },
+                            "mainline_capacity_regime_summary": {
+                                "mainline_capacity": "单线容量",
+                                "mainline_regime": "无主线",
+                                "primary_line": "暂无",
+                                "other_lines": "电力 / 光伏设备",
+                                "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                                "sector_relationship_state": "混沌接力",
+                                "mainline_process": "无",
+                                "tomorrow_action": "不强行找主线，只保留异常观察",
+                            },
+                        },
+                    },
+                    "mainline_turnover_summary": {
+                        "current_mainline": "半导体",
+                        "conclusion": "主线未切换，半导体仍是中心",
+                    },
+                    "current_mainline_history_record": {"date": "2026-05-14", "primary_mainline": "半导体", "market_state": "观察"},
+                    "recent_mainline_history": [{"date": "2026-05-13", "primary_mainline": "电力", "market_state": "观察"}],
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            DISPLAY_MVP_MODE=True,
+            build_report_shell_contract=_build_report_shell_contract_actual,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=_render_front_page_v2_actual,
+        )
+
+        data = {"exchange_monitor_today": [], "exchange_monitor_nextday": []}
+        result = report_runtime.render_markdown_report_runtime(data, "2026-05-14", helpers=helpers, config={})
+
+        self.assertEqual(data["mainline_turnover_summary"]["mainline_attack_evidence_summary"]["attack_state"], "chaotic_rotation")
+        self.assertIn("| 当前周期 | 05-14 | 1日 | 混沌轮动 | 混沌轮动 | 混沌轮动 |", result["report"])
+        self.assertIn("| 单线容量 | 无主线 | 暂无 | 电力 / 光伏设备 | 多方向局部活跃但资金未明显胜出 |", result["report"])
+        self.assertIn("| 化学制品 | 候选线 | 第3 | +3.39亿 | 5 | 2 | +0.0pct |", result["report"])
+        self.assertNotIn("半导体今日攻击成立", result["report"])
+        self.assertNotIn("| 单线容量 | 混沌接力 | 半导体 |", result["report"])
+
     def test_render_markdown_report_runtime_does_not_clear_existing_mainline_atoms_when_context_is_empty(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {"lines": [], "module_logs": [], "context": {}}
@@ -1816,7 +2215,7 @@ class ReportRuntimeTest(unittest.TestCase):
 
         self.assertEqual(data["current_mainline_history_record"]["primary_mainline"], "半导体")
         self.assertEqual(data["mainline_turnover_summary"]["current_mainline"], "半导体")
-        self.assertIn("| 半导体 | 半导体 | 周期主线与当天主攻线一致 | 继续围绕半导体观察承接 |", result["report"])
+        self.assertIn("| 容量待累计 | 单主线聚焦 | 半导体 | - | 主线确认依据待补充 | 周期主线与当天主攻线一致 | 待观察 | 继续围绕半导体观察承接 |", result["report"])
         self.assertIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct | 主线占比继续抬升 |", result["report"])
         self.assertNotIn("| - | - | 主线待确认 |", result["report"])
 
@@ -2026,7 +2425,7 @@ assert rendered == "# migrated"
         self.assertEqual(result["report"], "# runtime report")
         self.assertEqual(data["knowledge"]["llm_wiki"]["source"], "llm_wiki")
         self.assertIn("60分钟确认", data["knowledge"]["llm_wiki"]["report_digest_text"])
-        self.assertEqual(result["artifacts"]["llm_wiki"]["version"], "2026-05-13")
+        self.assertEqual(result["artifacts"]["llm_wiki"]["version"], data["knowledge"]["llm_wiki"]["version"])
 
     def test_render_markdown_report_runtime_exposes_helper_bindings_to_legacy_body(self):
         exec(
@@ -2099,6 +2498,252 @@ def _runtime_binding_probe(
         self.assertEqual(captured["build"]["sector_relationship_state"], "混沌接力")
         self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "601991")
         self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
+
+    def test_runtime_appends_extreme_conviction_tracking_table_after_ledger_write(self):
+        captured = {}
+
+        def _fake_build_snapshot(**kwargs):
+            captured["build"] = kwargs
+            return {"trade_date": kwargs["trade_date"], "cases": []}
+
+        def _fake_write_snapshot(snapshot, *, root_dir="."):
+            captured["write"] = {"snapshot": snapshot, "root_dir": root_dir}
+            return {
+                "snapshot_path": "data/decision-ledger/2026-05-12.json",
+                "index": {
+                    "by_stock_code": {
+                        "600578": [
+                            {
+                                "stock_code": "600578",
+                                "stock_name": "京能电力",
+                                "cycle_start_trade_date": "2026-05-11",
+                                "latest_trade_date": "2026-05-12",
+                                "cycle_day": 2,
+                                "cycle_length_trade_days": 25,
+                                "cycle_closed": False,
+                                "planned_participation": {
+                                    "source_tier": "extreme_conviction",
+                                    "participation_window": "竞价表态 + 回封参与",
+                                    "buy_window": "09:30-09:35",
+                                    "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                                },
+                                "participation_review_status": "预演命中",
+                                "participation_review": {"status": "预演命中", "next_action": "次日看是否继续强于市场"},
+                                "mentions": [{"mention_trade_date": "2026-05-11", "source_section": "极度看好名单"}],
+                            }
+                        ]
+                    }
+                },
+            }
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "extreme_conviction_list": [{"code": "600578", "name": "京能电力", "sector": "电力", "conviction_reason": "板块锚定龙"}],
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            build_decision_ledger_snapshot=_fake_build_snapshot,
+            write_decision_ledger_artifacts=_fake_write_snapshot,
+            persist_decision_ledger=True,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-05-12",
+            helpers=helpers,
+            config={},
+        )
+        rendered = result["report"]
+
+        self.assertIn("**重点观察25日跟踪表**", rendered)
+        self.assertIn("**重点观察历史回测表**", rendered)
+        self.assertIn("| 京能电力 | 600578 | D2/25 | 2026-05-11 | 2026-05-12 | 竞价表态 + 回封参与 | 09:30-09:35 | 预演命中 | 次日看是否继续强于市场 | 有效跌破日K MA20取消幻想 |", rendered)
+        self.assertIn("| 2026-05-11 | 京能电力 | 600578 |", rendered)
+        self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
+
+    def test_runtime_replay_can_render_tracking_table_from_existing_ledger_index(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {"lines": [], "module_logs": [], "context": {}}
+
+        def _fake_load_index(path):
+            return {
+                "by_stock_code": {
+                    "600578": [
+                        {
+                            "stock_code": "600578",
+                            "stock_name": "京能电力",
+                            "cycle_start_trade_date": "2026-05-11",
+                            "latest_trade_date": "2026-05-12",
+                            "cycle_day": 2,
+                            "cycle_length_trade_days": 25,
+                            "cycle_closed": False,
+                            "planned_participation": {
+                                "source_tier": "extreme_conviction",
+                                "participation_window": "竞价表态 + 回封参与",
+                                "buy_window": "09:30-09:35",
+                                "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                            },
+                            "participation_review_status": "预演命中",
+                            "participation_review": {"status": "预演命中", "next_action": "次日看是否继续强于市场"},
+                            "mentions": [{"mention_trade_date": "2026-05-11", "source_section": "极度看好名单"}],
+                        }
+                    ]
+                }
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=_fake_load_index,
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-05-12",
+            helpers=helpers,
+            config={},
+        )
+
+        self.assertIn("**重点观察25日跟踪表**", result["report"])
+        self.assertIn("**重点观察历史回测表**", result["report"])
+        self.assertIn("| 京能电力 | 600578 | D2/25 |", result["report"])
+
+    def test_runtime_filters_stale_same_day_ledger_lines_after_extreme_list_changes(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "extreme_conviction_list": [
+                        {"code": "001259", "name": "利仁科技", "sector": "股权转让", "conviction_reason": "板块锚定龙"}
+                    ],
+                },
+            }
+
+        def _fake_load_index(path):
+            return {
+                "by_stock_code": {
+                    "601991": [
+                        {
+                            "stock_code": "601991",
+                            "stock_name": "大唐发电",
+                            "cycle_start_trade_date": "2026-05-12",
+                            "latest_trade_date": "2026-05-18",
+                            "cycle_day": 2,
+                            "cycle_length_trade_days": 25,
+                            "cycle_closed": False,
+                            "planned_participation": {
+                                "source_tier": "extreme_conviction",
+                                "participation_window": "60分钟确认",
+                                "buy_window": "09:50-10:10",
+                                "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                            },
+                            "participation_review_status": "等待复盘",
+                            "mentions": [
+                                {"mention_trade_date": "2026-05-12", "source_section": "极度看好名单", "reason": "旧的有效样本"},
+                                {
+                                    "mention_trade_date": "2026-05-18",
+                                    "source_section": "极度看好名单",
+                                    "reason": "趋势辨识度高",
+                                    "planned_participation": {
+                                        "source_tier": "extreme_conviction",
+                                        "participation_window": "60分钟确认",
+                                        "buy_window": "09:50-10:10",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                    "001259": [
+                        {
+                            "stock_code": "001259",
+                            "stock_name": "利仁科技",
+                            "cycle_start_trade_date": "2026-05-18",
+                            "latest_trade_date": "2026-05-18",
+                            "cycle_day": 1,
+                            "cycle_length_trade_days": 25,
+                            "cycle_closed": False,
+                            "planned_participation": {
+                                "source_tier": "extreme_conviction",
+                                "participation_window": "竞价表态 + 回封参与",
+                                "buy_window": "09:30-09:35",
+                                "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                            },
+                            "participation_review_status": "等待复盘",
+                            "mentions": [
+                                {"mention_trade_date": "2026-05-18", "source_section": "极度看好名单", "reason": "板块锚定龙"}
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=_fake_load_index,
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-05-18",
+            helpers=helpers,
+            config={},
+        )
+
+        self.assertIn("| 2026-05-18 | 利仁科技 | 001259 |", result["report"])
+        self.assertNotIn("| 2026-05-18 | 大唐发电 | 601991 |", result["report"])
+        self.assertIn("| 2026-05-12 | 大唐发电 | 601991 |", result["report"])
 
     def test_runtime_body_does_not_hand_append_report_copy(self):
         runtime_source = (ROOT / "scripts" / "report" / "runtime.py").read_text()

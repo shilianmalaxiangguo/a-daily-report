@@ -87,6 +87,7 @@ def build_risk_review_runtime(stage_context, stage_meta, stage_lookup=None, enab
         "abnormal_green_count": abnormal_green_count,
         "abnormal_red_count": abnormal_red_count,
         "risk_sectors_from_dt": risk_sectors_from_dt,
+        "mainline_turnover_summary": stage_context.get("mainline_turnover_summary", {}) or {},
         "mainline_a_kill": mainline_a_kill,
         "mainline_dt_stocks": mainline_dt_stocks,
         "structural_a_kill": structural_a_kill,

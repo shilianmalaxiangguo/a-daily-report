@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from report.reasoning_decision_support import derive_unique_action_target_from_reasoning_decision
+
 
 def _label(item):
     code = str(item.get("code") or item.get("股票代码") or "").strip()
@@ -14,6 +16,8 @@ def _label(item):
 def build_candidate_snapshot(data=None, *, market_research_snapshot=None):
     snapshot = market_research_snapshot or {}
     target = snapshot.get("unique_action_target")
+    if "reasoning_decision" in snapshot:
+        target = derive_unique_action_target_from_reasoning_decision(snapshot)
     has_target = isinstance(target, dict) and (target.get("name") or target.get("code"))
     front_page = {
         "unique_object": _label(target) if has_target else "暂无",
