@@ -169,6 +169,80 @@ class CloudflareFreeTurnoverPipelineTest(unittest.TestCase):
             self.assertEqual(first_stock["stock_name"], "平安银行")
             self.assertAlmostEqual(first_stock["net_inflow_yi"], 1.25)
 
+    def test_run_turnover_pipeline_degrades_when_moneyflow_loader_fails(self):
+        from pipelines.cloudflare_free_turnover_pipeline import run_turnover_pipeline
+        from storage.database_service import DatabaseService
+
+        class MoneyflowTimeoutMarketDataService:
+            def __init__(self):
+                self.moneyflow_calls = []
+
+            def get_stock_daily_turnover_records(self, trade_date):
+                return [
+                    {
+                        "trade_date": trade_date,
+                        "ts_code": "000001.SZ",
+                        "stock_code": "000001",
+                        "market": "SZ",
+                        "name": "平安银行",
+                        "open": 10,
+                        "high": 11,
+                        "low": 9,
+                        "close": 10.5,
+                        "pct_chg": 5,
+                        "vol": 1000,
+                        "amount_yi": 2.5,
+                    },
+                    {
+                        "trade_date": trade_date,
+                        "ts_code": "000002.SZ",
+                        "stock_code": "000002",
+                        "market": "SZ",
+                        "name": "万科A",
+                        "open": 8,
+                        "high": 8.2,
+                        "low": 7.8,
+                        "close": 8.1,
+                        "pct_chg": 1,
+                        "vol": 800,
+                        "amount_yi": 1.5,
+                    },
+                ]
+
+            def get_stock_moneyflow_map(self, trade_date):
+                self.moneyflow_calls.append(trade_date)
+                raise TimeoutError("moneyflow timeout")
+
+            def get_stock_name_map(self):
+                return {"000001": "平安银行", "000002": "万科A"}
+
+            def get_stock_industry_map(self):
+                return {"000001": "银行", "000002": "房地产"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            market_data_service = MoneyflowTimeoutMarketDataService()
+            database_service = DatabaseService.sqlite_d1_compatible(tmp_path / "daily.db")
+
+            result = run_turnover_pipeline(
+                "2026-05-12",
+                artifact_root=tmp_path / "r2",
+                market_data_service=market_data_service,
+                database_service=database_service,
+            )
+
+            self.assertEqual(market_data_service.moneyflow_calls, ["2026-05-12"])
+            self.assertEqual(result["quote_count"], 2)
+            self.assertEqual(result["rank_count"], 2)
+            self.assertIn("moneyflow timeout", " ".join(result.get("warnings") or []))
+            payload = json.loads((tmp_path / "r2" / result["export"]["r2_key"]).read_text(encoding="utf-8"))
+            stocks = [
+                stock
+                for sector in payload["latest_sector_breakdown"]["rows"]
+                for stock in sector["stocks"]
+            ]
+            self.assertIsNone(stocks[0]["net_inflow_yi"])
+
     def test_run_turnover_pipeline_aborts_when_tushare_daily_returns_empty(self):
         from pipelines.cloudflare_free_turnover_pipeline import (
             TurnoverPipelineDataUnavailableError,

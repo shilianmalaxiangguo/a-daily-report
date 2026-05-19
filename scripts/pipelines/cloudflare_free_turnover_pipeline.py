@@ -28,6 +28,7 @@ def run_turnover_pipeline(
 ):
     market_data_service = market_data_service or MarketDataService(pro=pro)
     database_service = database_service or DatabaseService.sqlite_d1_compatible(db_path)
+    warnings = []
     rows = market_data_service.get_stock_daily_turnover_records(trade_date)
     run_id = database_service.save_provider_source_run(
         {
@@ -50,7 +51,11 @@ def run_turnover_pipeline(
     name_map_loader = getattr(market_data_service, "get_stock_name_map", None)
     stock_name_map = name_map_loader() if callable(name_map_loader) else {}
     moneyflow_loader = getattr(market_data_service, "get_stock_moneyflow_map", None)
-    stock_moneyflow_map = moneyflow_loader(trade_date) if callable(moneyflow_loader) else {}
+    try:
+        stock_moneyflow_map = moneyflow_loader(trade_date) if callable(moneyflow_loader) else {}
+    except Exception as error:
+        warnings.append(f"moneyflow unavailable: {error}")
+        stock_moneyflow_map = {}
     export_result = CloudflareFreeJsonExportService(
         database_service,
         artifact_root=artifact_root,
@@ -69,4 +74,5 @@ def run_turnover_pipeline(
         "market_total": market_total,
         "rank_count": len(ranks),
         "export": export_result,
+        "warnings": warnings,
     }
