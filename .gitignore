@@ -17,6 +17,8 @@
 # Independent local UI projects
 /snap-ui/
 /snap-ui/**
+/snap-ui-remote-*/
+/snap-ui-remote-*/**
 
 # Local environment and machine-specific files
 /.env
