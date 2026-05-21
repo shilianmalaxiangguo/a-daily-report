@@ -115,8 +115,10 @@ class CandidateExecutionContractsTest(unittest.TestCase):
             "过快封死就沿电力趋势比价链找低位承接",
         )
 
-        self.assertEqual(policy["required_steps"], ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"])
+        self.assertEqual(policy["required_steps"], ["交易逻辑确认", "竞价表态", "开盘前几分钟承接", "MA执行锚点", "回封/打板"])
         self.assertEqual(policy["fallback_state"], "不满足回到0%")
+        self.assertIn("量能", policy["decision_reason_basis"])
+        self.assertIn("MA3/MA5/MA10只优化买卖点", policy["ma_execution_anchor"])
         self.assertEqual(policy["participation_basis"]["auction"], "价格位置 / 匹配金额 / 委托稳定 / 板块同步")
         self.assertEqual(policy["participation_basis"]["first_minutes"], "主动资金继续抬价 / 承接连续")
         self.assertEqual(policy["participation_basis"]["board_or_reseal"], "大单金额持续进入 / 快速回封 / 封单质量改善")
@@ -124,7 +126,7 @@ class CandidateExecutionContractsTest(unittest.TestCase):
 
         ordinary = build_participation_window_policy("60分钟确认")
 
-        self.assertEqual(ordinary["required_steps"], ["日K均线回归", "主线确认", "承接", "60分钟确认"])
+        self.assertEqual(ordinary["required_steps"], ["交易逻辑确认", "主线确认", "承接", "60分钟确认", "MA执行锚点"])
         self.assertEqual(ordinary["participation_basis"]["structure"], "60分钟确认只服务普通结构，不覆盖强核心快路径")
 
     def test_participation_window_policy_includes_ma_reversion_probe_for_extreme_conviction(self):
@@ -139,7 +141,23 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertIn("分时黄线", policy["intraday_yellow_line_probe"])
         self.assertIn("MA20", policy["ma20_invalidation"])
         self.assertEqual(policy["tracking_window_trade_days"], 25)
-        self.assertIn("日K均线回归", policy["required_steps"])
+        self.assertIn("MA执行锚点", policy["required_steps"])
+        self.assertIn("不能因为MA3/MA5/MA10单独买入", policy["ma_reversion_probe"])
+
+    def test_participation_window_policy_fieldizes_intraday_cross_and_ma_roles(self):
+        policy = build_participation_window_policy(
+            "竞价表态 + 回封参与",
+            "过快封死就沿电力趋势比价链找低位承接",
+        )
+
+        self.assertIn("10点前后", policy["intraday_average_line_cross_probe"])
+        self.assertIn("价格上穿分时黄色均价线", policy["intraday_average_line_cross_probe"])
+        self.assertIn("水下强势修复到0轴", policy["zero_axis_reclaim_probe"])
+        self.assertEqual(policy["daily_ma_role_map"]["ma3"], "极度龙头")
+        self.assertEqual(policy["daily_ma_role_map"]["ma5"], "强势")
+        self.assertEqual(policy["daily_ma_role_map"]["ma10"], "趋势")
+        self.assertIn("MA3/MA5/MA10", policy["daily_ma_entry_probe"])
+        self.assertIn("不是买入理由", policy["daily_ma_entry_probe"])
 
     def test_limit_up_inertia_and_risk_reward_separate_limit_up_from_ordinary_rise(self):
         limit_up_policy = build_participation_window_policy(

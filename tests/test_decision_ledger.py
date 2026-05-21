@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -13,6 +14,7 @@ from report.decision_ledger import (
     build_decision_ledger_snapshot,
     build_decision_ledger_snapshot_from_markdown_report,
     build_extreme_conviction_backtest_rows,
+    build_extreme_conviction_mention_rows,
     classify_cycle_acceptance,
     classify_planned_participation_review,
     classify_validation_state,
@@ -20,9 +22,13 @@ from report.decision_ledger import (
     parse_extreme_conviction_list_from_markdown,
     prune_replaced_same_day_extreme_mentions,
     render_extreme_conviction_backtest_lines,
+    render_extreme_conviction_mention_tracking_lines,
     render_extreme_conviction_tracking_lines,
     write_decision_ledger_artifacts_from_markdown_report,
     write_decision_ledger_artifacts,
+)
+from domains.execution_chain.candidate_selection_nodes.conviction_list import (
+    build_candidate_selection_conviction_list_node,
 )
 
 
@@ -80,6 +86,13 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("09:20", script["auction"])
         self.assertIn("09:30-09:35", script["first_minutes"])
         self.assertIn("分时黄线", script["intraday_yellow_line_probe"])
+        self.assertIn("价格上穿分时黄色均价线", script["intraday_average_line_cross_probe"])
+        self.assertIn("水下强势修复到0轴", script["zero_axis_reclaim_probe"])
+        self.assertIn("MA3/MA5/MA10", script["daily_ma_entry_probe"])
+        self.assertIn("不是买入理由", script["daily_ma_entry_probe"])
+        self.assertEqual(script["daily_ma_role_map"]["ma3"], "极度龙头")
+        self.assertEqual(script["daily_ma_role_map"]["ma5"], "强势")
+        self.assertEqual(script["daily_ma_role_map"]["ma10"], "趋势")
         self.assertIn("大单金额", script["board"])
         self.assertIn("快速回封", script["reseal"])
         self.assertIn("趋势比价链", script["missed_action"])
@@ -114,6 +127,102 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("修复观察", items[0]["conviction_reason"])
         self.assertIn("09:50-10:10", items[0]["conviction_rule"])
         self.assertEqual(items[0]["participation_script"]["participation_window"], "09:50-10:10修复确认")
+
+    def test_parses_sniper_primary_backup_table_from_numbered_markdown_report(self):
+        markdown = """
+正文
+
+**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:
+**T-068**
+| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |
+|------|------|--------|--------|--------|--------------|----------|
+| 明日主买对象 | 晶方科技(603005) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，线位有响应，站回VWAP/关键强弱线，修复或再攻击时成交确认 | 通过 |
+| 明日补位对象 | 潍柴重机(000880) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，线位有响应，站回VWAP/关键强弱线，修复或再攻击时成交确认 | 通过 |
+
+**T-069**
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|----------|
+| 1 | 晶方科技 | 603005 | 半导体 | 趋势比价链锚点 / 核心传导 | 可执行候选 | 主线内核 / 板块锚定龙 / 首板 | 优先盯竞价表态、开盘承接和回封质量，继续强就只做它 |
+| 2 | 潍柴重机 | 000880 | 专用机械 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10承接确认，未确认不参与 |
+"""
+
+        items = parse_extreme_conviction_list_from_markdown(markdown)
+
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0]["rank"], 1)
+        self.assertEqual(items[0]["name"], "晶方科技")
+        self.assertEqual(items[0]["code"], "603005")
+        self.assertEqual(items[0]["sector"], "半导体")
+        self.assertEqual(items[0]["sniper_role"], "明日主买对象")
+        self.assertEqual(items[0]["leader_speed_tier"], "极致加速龙头")
+        self.assertEqual(items[0]["buy_ma_line"], "MA3")
+        self.assertEqual(items[0]["sell_ma_line"], "MA5")
+        self.assertIn("主线内核", items[0]["conviction_reason"])
+        self.assertIn("优先盯竞价表态", items[0]["conviction_rule"])
+        self.assertEqual(items[0]["final_risk_review"]["status"], "通过")
+        self.assertEqual(items[1]["name"], "潍柴重机")
+        self.assertEqual(items[1]["code"], "000880")
+        self.assertEqual(items[1]["sector"], "专用机械")
+        self.assertEqual(items[1]["sniper_role"], "明日补位对象")
+
+    def test_parses_quant_anchor_action_column_back_to_participation_script(self):
+        markdown = """
+正文
+
+**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|----------|
+| 1 | 中微公司 | 688012 | 半导体 | 趋势比价链锚点 / 核心传导 | 可执行候选 | 主线内核 / 板块锚定龙 | 只看承接确认 |
+
+**重点观察参与脚本**:
+| 参与窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |
+|----------|----------|--------------|----------|--------|----------|--------------|--------------|----------|----------|------------|----------|----------|----------|
+| 09:50-10:10 | 50% | 量化锚点动作：区间顶部；533.33对子锚点接近前高与MA5；隐藏卖盘更强；冲不过先止盈，放量吃掉并回踩不破再恢复候选 | 中惯性；高于弱上涨样本；先看09:50-10:10承接再决定 | 待计算；默认要求盈亏比不低于2:1 | 不启用 | 不启用 | 09:50-10:10均线回归试错 | 不打板 | 不回封 | 未确认就放弃 | 有效跌破日K MA20取消幻想 | 25个交易日 | 09:50-10:10继续走弱 |
+"""
+
+        items = parse_extreme_conviction_list_from_markdown(markdown)
+
+        plan = items[0]["participation_script"]
+        self.assertEqual(plan["anchor_zone_role"], "区间顶部")
+        self.assertIn("533.33", plan["anchor_line_confluence"])
+        self.assertIn("隐藏卖盘", plan["hidden_liquidity_read"])
+        self.assertIn("冲不过先止盈", plan["anchor_action_plan"])
+
+    def test_quant_anchor_action_markdown_round_trip_preserves_all_fields_with_semicolon(self):
+        expected = {
+            "anchor_zone_role": "区间顶部",
+            "anchor_line_confluence": "533.33对子锚点接近前高与MA5",
+            "hidden_liquidity_read": "隐藏卖盘更强",
+            "anchor_action_plan": "冲不过先止盈；放量吃掉并回踩不破再恢复候选; 站不稳继续降级观察",
+            "common_selection_factors": "持筹者有兑现压力，新买盘需等VWAP确认，主线资金看半导体延续",
+            "momentum_feedback_plan": "越跌越弱时不低吸，站回VWAP后再看",
+            "reversal_exit_plan": "反包先按先手兑现点，吃掉压力后再观察",
+        }
+        rendered = "\n".join(
+            build_candidate_selection_conviction_list_node(
+                {
+                    "extreme_conviction_list": [
+                        {
+                            "name": "中微公司",
+                            "code": "688012",
+                            "sector": "半导体",
+                            "conviction_reason": "区间顶部冲高",
+                            "conviction_rule": "只看承接确认",
+                            "participation_script": {
+                                "participation_window": "09:50-10:10",
+                                **expected,
+                            },
+                        }
+                    ]
+                }
+            )["lines"]
+        )
+
+        items = parse_extreme_conviction_list_from_markdown(rendered)
+
+        plan = items[0]["participation_script"]
+        for field, value in expected.items():
+            self.assertEqual(plan[field], value)
 
     def test_planned_participation_contains_fieldized_policy_flags(self):
         snapshot = build_decision_ledger_snapshot(
@@ -165,6 +274,123 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertFalse(ordinary_plan["board_or_reseal_required"])
         self.assertTrue(ordinary_plan["ordinary_structure_confirm_allowed"])
         self.assertTrue(ordinary_plan["ma_reversion_probe_allowed"])
+
+    def test_planned_participation_preserves_quant_anchor_fields(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            market_branch="指数高位停顿轮动",
+            sector_relationship_state="半导体主攻",
+            extreme_conviction_list=[
+                {
+                    "name": "中微公司",
+                    "code": "688012",
+                    "sector": "半导体",
+                    "conviction_reason": "区间顶部冲高",
+                    "participation_script": {
+                        "participation_window": "09:50-10:10",
+                        "anchor_zone_role": "区间顶部",
+                        "anchor_line_confluence": "533.33对子锚点接近前高与MA5",
+                        "hidden_liquidity_read": "隐藏卖盘更强",
+                        "anchor_action_plan": "冲不过先止盈，放量吃掉并回踩不破再恢复候选",
+                        "common_selection_factors": "持筹者有兑现压力，新买盘需等VWAP确认，主线资金看半导体延续，量化动量冲不过会转弱",
+                        "momentum_feedback_plan": "越跌越弱时不低吸，站回VWAP后再看",
+                        "reversal_exit_plan": "反包先按先手兑现点，吃掉压力后再观察",
+                    },
+                }
+            ],
+        )
+
+        plan = snapshot["cases"][0]["planned_participation"]
+        self.assertEqual(plan["anchor_zone_role"], "区间顶部")
+        self.assertIn("533.33", plan["anchor_line_confluence"])
+        self.assertIn("隐藏卖盘", plan["hidden_liquidity_read"])
+        self.assertIn("冲不过先止盈", plan["anchor_action_plan"])
+        self.assertIn("持筹者", plan["common_selection_factors"])
+        self.assertIn("站回VWAP", plan["momentum_feedback_plan"])
+        self.assertIn("反包先按先手兑现点", plan["reversal_exit_plan"])
+        self.assertEqual(plan["entry_timing"], "ten_confirm")
+
+    def test_default_participation_builds_quant_anchor_plan_from_candidate(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            market_branch="指数高位停顿轮动",
+            sector_relationship_state="半导体主攻",
+            extreme_conviction_list=[
+                {
+                    "name": "通富微电",
+                    "code": "002156",
+                    "sector": "半导体",
+                    "conviction_reason": "底部承接观察",
+                    "anchor_zone_role": "区间底部",
+                    "anchor_line_confluence": "66.88靠近MA5/VWAP与短线箱体下沿",
+                    "hidden_liquidity_read": "隐藏买盘待确认",
+                }
+            ],
+        )
+
+        plan = snapshot["cases"][0]["planned_participation"]
+        self.assertEqual(plan["anchor_zone_role"], "区间底部")
+        self.assertIn("66.88", plan["anchor_line_confluence"])
+        self.assertIn("站回VWAP", plan["anchor_action_plan"])
+        self.assertIn("四方", plan["common_selection_factors"])
+        self.assertIn("反包", plan["reversal_exit_plan"])
+
+    def test_quant_anchor_behavior_samples_keep_execution_boundaries(self):
+        samples = [
+            {
+                "name": "顶部样本",
+                "code": "688100",
+                "sector": "半导体",
+                "conviction_reason": "顶部对子锚点冲不过",
+                "anchor_zone_role": "区间顶部",
+                "anchor_line_confluence": "533.33对子锚点接近前高",
+                "hidden_liquidity_read": "隐藏卖盘更强",
+            },
+            {
+                "name": "底部样本",
+                "code": "688101",
+                "sector": "半导体",
+                "conviction_reason": "底部对子锚点未站回VWAP",
+                "anchor_zone_role": "区间底部",
+                "anchor_line_confluence": "66.88靠近MA5/VWAP",
+                "hidden_liquidity_read": "隐藏买盘待确认",
+            },
+            {
+                "name": "吃掉样本",
+                "code": "688102",
+                "sector": "半导体",
+                "conviction_reason": "放量吃掉对子锚点",
+                "anchor_zone_role": "放量吃掉锚点",
+                "anchor_line_confluence": "88.88对子锚点被放量吃掉",
+                "hidden_liquidity_read": "压力被消化但只恢复候选",
+            },
+            {
+                "name": "反包样本",
+                "code": "688103",
+                "sector": "半导体",
+                "conviction_reason": "高潮后反包",
+                "anchor_zone_role": "高潮反包",
+                "anchor_line_confluence": "222.22对子锚点靠近上影压力",
+                "hidden_liquidity_read": "先手兑现压力更大",
+            },
+        ]
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            market_branch="指数高位停顿轮动",
+            sector_relationship_state="半导体主攻",
+            extreme_conviction_list=samples,
+        )
+
+        plans = [case["planned_participation"] for case in snapshot["cases"]]
+        self.assertIn("冲不过先止盈", plans[0]["anchor_action_plan"])
+        self.assertNotIn("提高主买", plans[0]["anchor_action_plan"])
+        self.assertIn("站回VWAP", plans[1]["anchor_action_plan"])
+        self.assertIn("09:50-10:10确认", plans[1]["anchor_action_plan"])
+        self.assertIn("不直接参与", plans[1]["anchor_action_plan"])
+        self.assertIn("只恢复候选", plans[2]["anchor_action_plan"])
+        self.assertNotIn("自动主买", plans[2]["anchor_action_plan"])
+        self.assertIn("先按先手兑现点", plans[3]["reversal_exit_plan"])
+        self.assertIn("放量吃掉压力", plans[3]["reversal_exit_plan"])
 
     def test_builds_snapshot_from_generated_markdown_report_table(self):
         markdown = """
@@ -238,11 +464,12 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("快速回封", script["reseal"])
         self.assertIn("趋势比价链", script["missed_action"])
         self.assertIn("量价背离", script["cancellation"])
-        self.assertEqual(script["required_steps"], ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"])
+        self.assertEqual(script["required_steps"], ["交易逻辑确认", "竞价表态", "开盘前几分钟承接", "MA执行锚点", "回封/打板"])
         self.assertEqual(script["fallback_state"], "不满足回到0%")
         self.assertEqual(script["participation_basis"]["auction"], "价格位置 / 匹配金额 / 委托稳定 / 板块同步")
         self.assertEqual(script["participation_basis"]["first_minutes"], "主动资金继续抬价 / 承接连续")
         self.assertIn("MA5/MA10", script["participation_basis"]["ma_reversion"])
+        self.assertIn("买入资格后", script["participation_basis"]["ma_reversion"])
         self.assertEqual(script["participation_basis"]["board_or_reseal"], "大单金额持续进入 / 快速回封 / 封单质量改善")
         self.assertEqual(script["tracking_window_trade_days"], 25)
         self.assertEqual(snapshot["cases"][0]["mentions"][0]["planned_participation"]["attack_state"], "100%")
@@ -1603,6 +1830,174 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows[1]["buy_window"], "09:30-09:35")
         self.assertEqual(rows[1]["review_status"], "预演命中")
         self.assertEqual(rows[1]["buy_point_quality"], "买点成立")
+
+    def test_mention_rows_keep_recent_25_trade_dates_and_skip_a_kill_samples(self):
+        by_stock_code = {}
+        for offset in range(26):
+            day = offset + 1
+            code = f"{day:06d}"
+            by_stock_code[code] = [
+                {
+                    "stock_code": code,
+                    "stock_name": f"样本{day}",
+                    "hypothesis": {"sector_candidate": "半导体"},
+                    "latest_trade_date": f"2026-05-{day:02d}",
+                    "cycle_day": 1,
+                    "cycle_closed": False,
+                    "planned_participation": {
+                        "source_tier": "extreme_conviction",
+                        "participation_window": "竞价表态 + 回封参与",
+                        "buy_window": "09:30-09:35",
+                        "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                    },
+                    "participation_review_status": "等待复盘",
+                    "mentions": [
+                        {
+                            "mention_trade_date": f"2026-05-{day:02d}",
+                            "rank": 1,
+                            "source_section": "极度看好名单",
+                            "reason": "板块锚定龙",
+                        }
+                    ],
+                }
+            ]
+        by_stock_code["000999"] = [
+            {
+                "stock_code": "000999",
+                "stock_name": "淘汰样本",
+                "hypothesis": {"sector_candidate": "军工"},
+                "latest_trade_date": "2026-05-26",
+                "cycle_day": 1,
+                "cycle_closed": True,
+                "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:50-10:10"},
+                "trend_fate": {"elimination_event": {"type": "a_kill", "date": "2026-05-26"}},
+                "mentions": [
+                    {"mention_trade_date": "2026-05-26", "rank": 2, "source_section": "极度看好名单"}
+                ],
+            }
+        ]
+
+        rows = build_extreme_conviction_mention_rows({"by_stock_code": by_stock_code}, end_date="2026-05-26", window_days=25)
+
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(rows[0]["mention_trade_date"], "2026-05-02")
+        self.assertEqual(rows[-1]["mention_trade_date"], "2026-05-26")
+        self.assertNotIn("000999", [row["stock_code"] for row in rows])
+
+    def test_renders_extreme_conviction_mention_tracking_table_for_crud_review(self):
+        index = {
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "hypothesis": {"sector_candidate": "电力"},
+                        "latest_trade_date": "2026-05-15",
+                        "cycle_day": 2,
+                        "cycle_closed": False,
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "participation_window": "竞价表态 + 回封参与",
+                            "buy_window": "09:30-09:35",
+                            "ma20_invalidation": "有效跌破日K MA20取消幻想",
+                        },
+                        "participation_review_status": "预演命中",
+                        "participation_review": {
+                            "status": "预演命中",
+                            "next_action": "次日看是否继续强于市场",
+                        },
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-14",
+                                "rank": 1,
+                                "source_section": "极度看好名单",
+                                "reason": "板块锚定龙",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+        rendered = "\n".join(render_extreme_conviction_mention_tracking_lines(index, end_date="2026-05-15"))
+
+        self.assertIn("**明日极度看好近25日跟踪表**", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 买入窗口 | 复盘状态 | 下一步动作 | 作废线 | 记录ID |", rendered)
+        self.assertIn("| 2026-05-14 | 京能电力 | 600578 | 1 | 电力 | 09:30-09:35 | 预演命中 | 次日看是否继续强于市场 | 有效跌破日K MA20取消幻想 | 2026-05-14:600578 |", rendered)
+
+    def test_writer_syncs_recent_mention_rows_from_index_into_fact_db(self):
+        from storage.database_service import DatabaseService
+
+        previous_index = {
+            "artifact_version": 1,
+            "latest_trade_date": "2026-05-19",
+            "selection_rule_version": "extreme-conviction-ledger-v1",
+            "available_trade_dates": ["2026-05-19"],
+            "snapshots": [{"trade_date": "2026-05-19", "path": "data/decision-ledger/2026-05-19.json"}],
+            "selection_input_hash_by_trade_date": {"2026-05-19": "a" * 64},
+            "by_stock_code": {
+                "000586": [
+                    {
+                        "case_id": "2026-05-19-000586-01",
+                        "stock_code": "000586",
+                        "stock_name": "汇源通信",
+                        "cycle_start_trade_date": "2026-05-19",
+                        "latest_trade_date": "2026-05-19",
+                        "cycle_day": 1,
+                        "cycle_closed": False,
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "buy_window": "09:30-09:35",
+                        },
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-19",
+                                "rank": 1,
+                                "source_section": "极度看好名单",
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        current = build_decision_ledger_snapshot(
+            trade_date="2026-05-20",
+            extreme_conviction_list=[
+                {"code": "603005", "name": "晶方科技", "sector": "半导体", "conviction_reason": "主线核心"},
+            ],
+            market_branch="半导体支线轮动",
+            sector_relationship_state="半导体主攻",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            ledger_dir = root / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            (ledger_dir / "index.json").write_text(json.dumps(previous_index, ensure_ascii=False), encoding="utf-8")
+
+            write_decision_ledger_artifacts(current, root_dir=root, review_market_facts_by_stock_code={})
+            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
+            rows = service.query_extreme_conviction_mentions("2026-05-20", window_days=25)
+
+        self.assertEqual([row["stock_code"] for row in rows], ["000586", "603005"])
+
+    def test_writer_returns_fact_db_sync_failure_status(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-20",
+            extreme_conviction_list=[
+                {"code": "603005", "name": "晶方科技", "sector": "半导体", "conviction_reason": "主线核心"},
+            ],
+            market_branch="半导体支线轮动",
+            sector_relationship_state="半导体主攻",
+        )
+
+        with TemporaryDirectory() as tempdir, patch("storage.database_service.DatabaseService.sqlite_d1_compatible") as factory:
+            factory.side_effect = RuntimeError("database unavailable")
+            result = write_decision_ledger_artifacts(snapshot, root_dir=Path(tempdir), review_market_facts_by_stock_code={})
+
+        self.assertEqual(result["fact_db_sync"]["status"], "failed")
+        self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
+        self.assertIn("database unavailable", result["fact_db_sync"]["error"])
 
     def test_backtest_rows_dedupe_repeated_mentions_for_same_stock_and_date(self):
         index = {

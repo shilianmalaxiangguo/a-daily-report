@@ -34,6 +34,24 @@ _STOCK_SECTOR_REPAIRS = {
     "300721": "湿电子化学品",
     "688549": "电子特气",
 }
+_QUANT_ANCHOR_LABELS = {
+    "锚点区间": "anchor_zone_role",
+    "共振线": "anchor_line_confluence",
+    "隐藏盘": "hidden_liquidity_read",
+    "动作": "anchor_action_plan",
+    "共同选择": "common_selection_factors",
+    "动量反馈": "momentum_feedback_plan",
+    "反包兑现": "reversal_exit_plan",
+}
+_QUANT_ANCHOR_FIELDS = (
+    "anchor_zone_role",
+    "anchor_line_confluence",
+    "hidden_liquidity_read",
+    "anchor_action_plan",
+    "common_selection_factors",
+    "momentum_feedback_plan",
+    "reversal_exit_plan",
+)
 
 
 def _normalize_stock_code(value):
@@ -308,6 +326,35 @@ def _header_index(headers, *names):
     return -1
 
 
+def _parse_quant_anchor_action_cell(value):
+    text = _clean_text(value)
+    parsed = {field: "" for field in _QUANT_ANCHOR_FIELDS}
+    if not text or text == "-":
+        return parsed
+
+    body = text.split("：", 1)[1].strip() if text.startswith("量化锚点动作：") else text
+    labeled_parts = [part.strip() for part in body.split("｜") if part.strip()]
+    found_labeled_value = False
+    for part in labeled_parts:
+        if "=" not in part:
+            continue
+        label, raw_value = part.split("=", 1)
+        field = _QUANT_ANCHOR_LABELS.get(label.strip())
+        if field is None:
+            continue
+        parsed[field] = _clean_text(raw_value)
+        found_labeled_value = True
+    if found_labeled_value:
+        return parsed
+
+    legacy_parts = [part.strip() for part in re.split(r"[；;]", body) if part.strip()]
+    for field, part in zip(_QUANT_ANCHOR_FIELDS[:4], legacy_parts[:4]):
+        parsed[field] = part
+    if not parsed["anchor_action_plan"] and body:
+        parsed["anchor_action_plan"] = body
+    return parsed
+
+
 def _parse_markdown_table_after_heading(lines, heading_text):
     table_start = -1
     for idx, line in enumerate(lines):
@@ -345,6 +392,68 @@ def _parse_markdown_table_after_any_heading(lines, *heading_texts):
         if header:
             return header, rows
     return [], []
+
+
+def _is_report_table_number_line(line):
+    text = str(line or "").strip()
+    return text.startswith("**T-") and text.endswith("**")
+
+
+def _parse_markdown_tables_after_heading(lines, heading_text):
+    table_start = -1
+    for idx, line in enumerate(lines):
+        if heading_text in line:
+            table_start = idx + 1
+            break
+    if table_start < 0:
+        return []
+
+    tables = []
+    index = table_start
+    while index < len(lines):
+        stripped = str(lines[index] or "").strip()
+        if "参与脚本" in stripped:
+            break
+        if tables and stripped.startswith("#"):
+            break
+        if tables and stripped.startswith("**") and not _is_report_table_number_line(stripped):
+            break
+        if not stripped or _is_report_table_number_line(stripped):
+            index += 1
+            continue
+        if not stripped.startswith("|"):
+            if tables:
+                break
+            index += 1
+            continue
+
+        header = []
+        rows = []
+        while index < len(lines):
+            table_line = str(lines[index] or "").strip()
+            if not table_line.startswith("|"):
+                break
+            cells = _split_markdown_row(table_line)
+            if _is_markdown_separator(cells):
+                index += 1
+                continue
+            if not header:
+                header = cells
+            else:
+                rows.append(cells)
+            index += 1
+        if header:
+            tables.append((header, rows))
+        continue
+    return tables
+
+
+def _parse_markdown_tables_after_any_heading(lines, *heading_texts):
+    for heading_text in heading_texts:
+        tables = _parse_markdown_tables_after_heading(lines, heading_text)
+        if tables:
+            return tables
+    return []
 
 
 def _execution_layer_fields(layer_label):
@@ -415,6 +524,13 @@ def _normalize_participation_script(item):
         "risk_reward_ratio": _value("risk_reward_ratio"),
         "risk_reward_state": _value("risk_reward_state"),
         "risk_reward_plan": _value("risk_reward_plan"),
+        "anchor_zone_role": _value("anchor_zone_role", "quant_anchor_zone", "price_anchor_zone"),
+        "anchor_line_confluence": _value("anchor_line_confluence", "quant_anchor_confluence", "price_anchor_confluence"),
+        "hidden_liquidity_read": _value("hidden_liquidity_read", "hidden_liquidity", "quant_hidden_liquidity"),
+        "anchor_action_plan": _value("anchor_action_plan", "quant_anchor_action", "price_anchor_action"),
+        "common_selection_factors": _value("common_selection_factors", "quant_common_selection_factors"),
+        "momentum_feedback_plan": _value("momentum_feedback_plan", "quant_momentum_feedback"),
+        "reversal_exit_plan": _value("reversal_exit_plan", "quant_reversal_exit"),
         "auction": _value("auction", "auction_script"),
         "first_minutes": _value("first_minutes", "first_minutes_script", "opening_script"),
         "board": _value("board", "board_script", "limit_board_script"),
@@ -512,6 +628,17 @@ def _build_planned_participation(item):
         "risk_reward_ratio",
         "risk_reward_state",
         "risk_reward_plan",
+        "decision_reason_basis",
+        "ma_execution_anchor",
+        "ma_reversion_probe",
+        "daily_ma_entry_probe",
+        "anchor_zone_role",
+        "anchor_line_confluence",
+        "hidden_liquidity_read",
+        "anchor_action_plan",
+        "common_selection_factors",
+        "momentum_feedback_plan",
+        "reversal_exit_plan",
     ):
         if key in script:
             planned[key] = script[key]
@@ -1071,6 +1198,7 @@ def _parse_participation_scripts(lines):
     auction_idx = _header_index(header, "集合竞价", "竞价表态")
     first_minutes_idx = _header_index(header, "开盘前几分钟", "开盘前分钟")
     ma_reversion_idx = _header_index(header, "均线回归试错", "日K均线回归", "分时黄线承接")
+    quant_anchor_idx = _header_index(header, "量化锚点动作")
     board_idx = _header_index(header, "打板策略", "打板")
     reseal_idx = _header_index(header, "回封参与", "回封")
     missed_idx = _header_index(header, "错过后动作")
@@ -1098,6 +1226,8 @@ def _parse_participation_scripts(lines):
         ratio_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*:\s*1", risk_reward_text)
         if ratio_match:
             risk_reward_ratio = _safe_float(ratio_match.group(1), None)
+        quant_anchor_text = _clean_text(_cell(quant_anchor_idx))
+        quant_anchor_fields = _parse_quant_anchor_action_cell(quant_anchor_text)
 
         script = {
             "participation_window": _clean_text(_cell(window_idx)),
@@ -1107,6 +1237,7 @@ def _parse_participation_scripts(lines):
             "limit_up_inertia_reason": inertia_parts[2] if len(inertia_parts) >= 3 else inertia_text,
             "risk_reward_state": risk_reward_parts[0] if len(risk_reward_parts) >= 1 else "",
             "risk_reward_plan": risk_reward_parts[-1] if risk_reward_parts else risk_reward_text,
+            **quant_anchor_fields,
             "auction": _clean_text(_cell(auction_idx)),
             "first_minutes": _clean_text(_cell(first_minutes_idx)),
             "intraday_yellow_line_probe": _clean_text(_cell(ma_reversion_idx)),
@@ -1126,17 +1257,67 @@ def _parse_participation_scripts(lines):
     return scripts
 
 
-def parse_extreme_conviction_list_from_markdown(markdown_text):
-    lines = str(markdown_text or "").splitlines()
-    header, rows = _parse_markdown_table_after_any_heading(
-        lines,
-        "极度看好名单",
-        "重点观察名单",
-    )
+def _parse_stock_label_with_code(label):
+    text = _clean_text(label)
+    match = re.search(r"(.+?)[（(]\s*([0-9]{6})(?:\.[A-Z]+)?\s*[)）]", text)
+    if match:
+        return _clean_text(match.group(1)), _normalize_stock_code(match.group(2))
+    digits = re.search(r"([0-9]{6})", text)
+    code = _normalize_stock_code(digits.group(1)) if digits else ""
+    name = _clean_text(re.sub(r"[（(]?\s*[0-9]{6}(?:\.[A-Z]+)?\s*[)）]?", "", text), code)
+    return name, code
 
-    if not header:
+
+def _parse_sniper_role_rows(header, rows):
+    role_idx = _header_index(header, "角色")
+    target_idx = _header_index(header, "标的", "股票", "名称")
+    speed_idx = _header_index(header, "速度档")
+    buy_line_idx = _header_index(header, "买点线")
+    sell_line_idx = _header_index(header, "卖点线")
+    repair_idx = _header_index(header, "承接修复条件")
+    risk_idx = _header_index(header, "最终复核")
+    window_idx = _header_index(header, "参与窗", "参与窗口")
+    if role_idx < 0 or target_idx < 0 or buy_line_idx < 0 or sell_line_idx < 0:
         return []
 
+    items = []
+    for sequence, row in enumerate(rows, 1):
+        def _cell(index):
+            return row[index].strip() if 0 <= index < len(row) else ""
+
+        role = _clean_text(_cell(role_idx))
+        if role not in {"明日主买对象", "明日补位对象"}:
+            continue
+        name, code = _parse_stock_label_with_code(_cell(target_idx))
+        if not code and not name:
+            continue
+        repair_condition = _clean_text(_cell(repair_idx), "等待承接修复")
+        risk_status = _clean_text(_cell(risk_idx), "待复核")
+        item = {
+            "rank": sequence,
+            "name": name,
+            "code": code,
+            "sector": _resolve_sector_candidate({"code": code}, "未归类"),
+            "sniper_role": role,
+            "leader_speed_tier": _clean_text(_cell(speed_idx), "待判定"),
+            "buy_ma_line": _clean_text(_cell(buy_line_idx)),
+            "sell_ma_line": _clean_text(_cell(sell_line_idx)),
+            "acceptance_repair_required": repair_condition,
+            "final_risk_review": {"status": risk_status},
+            "candidate_layer_label": "可执行候选",
+            "candidate_layer": "executable_candidate",
+            "execution_eligibility": "auction_reseal",
+            "conviction_reason": f"{role} / {_clean_text(_cell(speed_idx), '待判定')}",
+            "conviction_rule": repair_condition,
+        }
+        participation_window = _clean_text(_cell(window_idx))
+        if participation_window:
+            item["participation_window"] = participation_window
+        items.append(item)
+    return items
+
+
+def _parse_candidate_list_rows(header, rows, participation_scripts):
     rank_idx = _header_index(header, "优先级", "排名")
     name_idx = _header_index(header, "股票", "名称")
     code_idx = _header_index(header, "代码", "股票代码")
@@ -1145,7 +1326,6 @@ def parse_extreme_conviction_list_from_markdown(markdown_text):
     layer_idx = _header_index(header, "执行分层")
     reason_idx = _header_index(header, "观察理由", "极看理由", "理由")
     rule_idx = _header_index(header, "明日原则", "原则")
-    participation_scripts = _parse_participation_scripts(lines)
 
     items = []
     for sequence, row in enumerate(rows, 1):
@@ -1176,6 +1356,98 @@ def parse_extreme_conviction_list_from_markdown(markdown_text):
             item["participation_script"] = _build_planned_participation(participation_scripts[sequence - 1])
         items.append(item)
     return items
+
+
+def _sector_lookup_from_candidate_rows(tables):
+    lookup = {}
+    for header, rows in list(tables or []):
+        sector_idx = _header_index(header, "所属板块", "板块", "所属方向")
+        if sector_idx < 0:
+            continue
+        name_idx = _header_index(header, "股票", "名称", "标的")
+        code_idx = _header_index(header, "代码", "股票代码")
+        for row in rows:
+            def _cell(index):
+                return row[index].strip() if 0 <= index < len(row) else ""
+
+            sector = _clean_text(_cell(sector_idx))
+            if not _is_valid_sector_label(sector):
+                continue
+            code = _normalize_stock_code(_cell(code_idx))
+            if not code:
+                _, code = _parse_stock_label_with_code(_cell(name_idx))
+            if code:
+                lookup[code] = sector
+    return lookup
+
+
+def parse_extreme_conviction_list_from_markdown(markdown_text):
+    lines = str(markdown_text or "").splitlines()
+    tables = _parse_markdown_tables_after_any_heading(
+        lines,
+        "极度看好名单",
+        "重点观察名单",
+    )
+
+    if not tables:
+        return []
+
+    participation_scripts = _parse_participation_scripts(lines)
+    sector_lookup = _sector_lookup_from_candidate_rows(tables)
+    sniper_items = []
+    candidate_items = []
+    for header, rows in tables:
+        parsed_sniper_items = _parse_sniper_role_rows(header, rows)
+        if parsed_sniper_items:
+            for item in parsed_sniper_items:
+                code = _normalize_stock_code(item.get("code"))
+                if _is_valid_sector_label(sector_lookup.get(code)):
+                    item["sector"] = sector_lookup[code]
+            sniper_items.extend(parsed_sniper_items)
+            continue
+        parsed_candidate_items = _parse_candidate_list_rows(header, rows, participation_scripts)
+        if parsed_candidate_items:
+            candidate_items.extend(parsed_candidate_items)
+    if not candidate_items:
+        return sniper_items
+
+    sniper_by_code = {
+        _normalize_stock_code(item.get("code")): item
+        for item in sniper_items
+        if _normalize_stock_code(item.get("code"))
+    }
+    merged = []
+    seen_codes = set()
+    for item in candidate_items:
+        code = _normalize_stock_code(item.get("code"))
+        sniper = sniper_by_code.get(code)
+        if sniper:
+            preserved = {
+                key: item.get(key)
+                for key in (
+                    "rank",
+                    "name",
+                    "code",
+                    "sector",
+                    "conviction_reason",
+                    "conviction_rule",
+                    "core_identity_label",
+                    "candidate_layer_label",
+                    "candidate_layer",
+                    "execution_eligibility",
+                    "participation_script",
+                )
+                if item.get(key) not in (None, "")
+            }
+            item = {**item, **sniper, **preserved, "sector": item.get("sector") or sniper.get("sector")}
+        merged.append(item)
+        if code:
+            seen_codes.add(code)
+    for item in sniper_items:
+        code = _normalize_stock_code(item.get("code"))
+        if code and code not in seen_codes:
+            merged.append(item)
+    return merged
 
 
 def _find_open_previous_case(previous_index, stock_code):
@@ -1743,6 +2015,24 @@ def _clean_markdown_cell(value, default="-"):
     return text.replace("|", "/") or default
 
 
+def _is_a_kill_eliminated_record(record):
+    record = record or {}
+    if record.get("is_a_kill_eliminated") or record.get("a_kill_eliminated"):
+        return True
+    trend_fate = record.get("trend_fate") if isinstance(record.get("trend_fate"), dict) else {}
+    elimination_event = trend_fate.get("elimination_event") if isinstance(trend_fate, dict) else {}
+    cycle_acceptance = record.get("cycle_acceptance") if isinstance(record.get("cycle_acceptance"), dict) else {}
+    texts = [
+        record.get("status"),
+        record.get("participation_review_status"),
+        elimination_event.get("type") if isinstance(elimination_event, dict) else "",
+        elimination_event.get("reason") if isinstance(elimination_event, dict) else "",
+        cycle_acceptance.get("final_label") if isinstance(cycle_acceptance, dict) else "",
+        cycle_acceptance.get("reason") if isinstance(cycle_acceptance, dict) else "",
+    ]
+    return any("A杀" in str(text or "") or str(text or "").lower() in {"a_kill", "a-kill"} for text in texts)
+
+
 def _tracking_sort_key(record):
     return (
         bool(record.get("cycle_closed")),
@@ -1888,11 +2178,112 @@ def _buy_point_quality_label(review):
     return status or "等待事实"
 
 
+def _mention_tracking_record_id(mention_date, stock_code):
+    return f"{_clean_text(mention_date)}:{_clean_text(stock_code)}"
+
+
+def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25, exclude_a_kill=True):
+    index = index or {}
+    end_date = _clean_text(end_date or index.get("latest_trade_date"))
+    rows = []
+    for records in (index.get("by_stock_code") or {}).values():
+        for record in list(records or []):
+            if exclude_a_kill and _is_a_kill_eliminated_record(record):
+                continue
+            extreme_mentions = _extreme_conviction_mentions(record)
+            if not extreme_mentions and _record_is_extreme_conviction(record):
+                extreme_mentions = [_latest_mention(record)]
+            if not extreme_mentions:
+                continue
+            extreme_mention_count = len(extreme_mentions)
+            for mention in extreme_mentions:
+                mention_date = _clean_text(mention.get("mention_trade_date")) or _record_first_mention_date(record)
+                if end_date and mention_date and mention_date > end_date:
+                    continue
+                planned = _mention_planned_participation(mention, record)
+                review = _mention_participation_review(mention, record, extreme_mention_count)
+                stock_code = _clean_text(record.get("stock_code"))
+                rows.append(
+                    {
+                        "record_id": _mention_tracking_record_id(mention_date, stock_code),
+                        "mention_trade_date": mention_date,
+                        "stock_name": record.get("stock_name"),
+                        "stock_code": stock_code,
+                        "rank": mention.get("rank"),
+                        "rank_no": mention.get("rank"),
+                        "sector_candidate": _sector_from_case_or_record(record),
+                        "buy_window": planned.get("buy_window") or planned.get("participation_window"),
+                        "planned_window": planned.get("participation_window"),
+                        "review_status": review.get("status") or record.get("participation_review_status") or "等待复盘",
+                        "next_action": review.get("next_action") or review.get("same_day_action") or "等待计划窗口事实回写",
+                        "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
+                        "reason": mention.get("reason") or "",
+                        "source_section": mention.get("source_section") or "",
+                        "is_a_kill_eliminated": _is_a_kill_eliminated_record(record),
+                    }
+                )
+    rows.sort(
+        key=lambda item: (
+            str(item.get("mention_trade_date") or ""),
+            int(item.get("rank") or 9999),
+            str(item.get("stock_code") or ""),
+        )
+    )
+    if not rows:
+        return []
+    recent_dates = []
+    for row in reversed(rows):
+        date = row.get("mention_trade_date")
+        if not date or date in recent_dates:
+            continue
+        recent_dates.append(date)
+        if len(recent_dates) >= int(window_days or 25):
+            break
+    recent_date_set = set(recent_dates)
+    return [row for row in rows if row.get("mention_trade_date") in recent_date_set]
+
+
+def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
+    if max_rows is not None:
+        rows = list(rows or [])[-int(max_rows):]
+    lines = ["**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:"]
+    if not rows:
+        lines.append("- 暂无近25个交易日内的明日极度看好样本。")
+        lines.append("")
+        return lines
+    lines.append("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 买入窗口 | 复盘状态 | 下一步动作 | 作废线 | 记录ID |")
+    lines.append("|--------|------|------|------|----------|----------|----------|------------|--------|--------|")
+    for row in rows:
+        lines.append(
+            "| {mention_trade_date} | {stock_name} | {stock_code} | {rank} | {sector_candidate} | {buy_window} | {review_status} | {next_action} | {invalidation} | {record_id} |".format(
+                mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
+                stock_name=_clean_markdown_cell(row.get("stock_name")),
+                stock_code=_clean_markdown_cell(row.get("stock_code")),
+                rank=_clean_markdown_cell(row.get("rank")),
+                sector_candidate=_clean_markdown_cell(row.get("sector_candidate")),
+                buy_window=_clean_markdown_cell(row.get("buy_window")),
+                review_status=_clean_markdown_cell(row.get("review_status")),
+                next_action=_clean_markdown_cell(row.get("next_action")),
+                invalidation=_clean_markdown_cell(row.get("invalidation")),
+                record_id=_clean_markdown_cell(row.get("record_id")),
+            )
+        )
+    lines.append("")
+    return lines
+
+
+def render_extreme_conviction_mention_tracking_lines(index, *, end_date="", window_days=25, max_rows=None):
+    rows = build_extreme_conviction_mention_rows(index, end_date=end_date, window_days=window_days)
+    return render_extreme_conviction_mention_tracking_rows(rows, max_rows=max_rows)
+
+
 def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
     index = index or {}
     rows = []
     for records in (index.get("by_stock_code") or {}).values():
         for record in list(records or []):
+            if _is_a_kill_eliminated_record(record):
+                continue
             extreme_mentions = _extreme_conviction_mentions(record)
             if not extreme_mentions and _record_is_extreme_conviction(record):
                 extreme_mentions = [_latest_mention(record)]
@@ -2041,11 +2432,31 @@ def write_decision_ledger_artifacts(snapshot, *, root_dir=".", review_market_fac
     index = build_decision_ledger_index(merged_snapshot, previous_index=previous_index)
     _write_json(snapshot_path, merged_snapshot)
     _write_json(index_path, index)
+    fact_db_sync = {"status": "not_run", "rows": 0}
+    try:
+        from storage.database_service import DatabaseService
+
+        service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
+        current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
+        recent_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=25, exclude_a_kill=False)
+        service.replace_extreme_conviction_mentions_for_trade_date(
+            trade_date,
+            current_rows,
+        )
+        service.upsert_extreme_conviction_mentions(recent_rows)
+        fact_db_sync = {"status": "success", "rows": len(recent_rows)}
+    except Exception as exc:
+        fact_db_sync = {
+            "status": "failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
     return {
         "snapshot_path": str(snapshot_path),
         "index_path": str(index_path),
         "case_count": len(merged_snapshot.get("cases") or []),
         "index": index,
+        "fact_db_sync": fact_db_sync,
     }
 
 
@@ -2223,6 +2634,7 @@ __all__ = [
     "build_decision_ledger_snapshot",
     "build_decision_ledger_snapshot_from_markdown_report",
     "build_extreme_conviction_backtest_rows",
+    "build_extreme_conviction_mention_rows",
     "build_participation_review_facts_from_market_fact",
     "build_decision_ledger_index",
     "classify_cycle_acceptance",
@@ -2232,6 +2644,8 @@ __all__ = [
     "parse_extreme_conviction_list_from_markdown",
     "prune_replaced_same_day_extreme_mentions",
     "render_extreme_conviction_backtest_lines",
+    "render_extreme_conviction_mention_tracking_lines",
+    "render_extreme_conviction_mention_tracking_rows",
     "render_extreme_conviction_tracking_lines",
     "write_decision_ledger_artifacts",
     "write_decision_ledger_artifacts_from_markdown_report",

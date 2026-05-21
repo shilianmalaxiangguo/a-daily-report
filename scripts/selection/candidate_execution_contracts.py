@@ -136,6 +136,7 @@ __all__ = [
     "build_limit_up_inertia_profile",
     "build_participation_window_from_candidate",
     "build_participation_window_policy",
+    "build_quant_anchor_plan",
     "build_philosophy_constraint_text",
     "build_risk_reward_plan",
     "build_weak_to_strong_context",
@@ -601,6 +602,56 @@ def build_entry_timing_policy(*, source_tier="extreme_conviction", participation
     }
 
 
+def build_quant_anchor_plan(candidate=None):
+    candidate = candidate or {}
+
+    def _text(*keys):
+        for key in keys:
+            value = candidate.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        return ""
+
+    zone = _text("anchor_zone_role", "quant_anchor_zone", "price_anchor_zone")
+    confluence = _text("anchor_line_confluence", "quant_anchor_confluence", "price_anchor_confluence")
+    hidden = _text("hidden_liquidity_read", "hidden_liquidity", "quant_hidden_liquidity")
+    action = _text("anchor_action_plan", "quant_anchor_action", "price_anchor_action")
+    factors = _text("common_selection_factors", "quant_common_selection_factors")
+    momentum = _text("momentum_feedback_plan", "quant_momentum_feedback")
+    reversal = _text("reversal_exit_plan", "quant_reversal_exit")
+
+    if not any((zone, confluence, hidden, action, factors, momentum, reversal)):
+        return {}
+
+    if not action:
+        if "顶部" in zone:
+            action = "区间顶部锚点冲不过先止盈；放量吃掉并回踩不破，才恢复候选资格"
+        elif "底部" in zone:
+            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP并完成09:50-10:10确认后，才允许小仓试错"
+        elif "吃掉" in zone or "消化" in hidden:
+            action = "锚点被放量吃掉并回踩不破，只恢复候选资格；不能自动升级主买"
+        elif "高潮" in zone or "反包" in zone:
+            action = "高潮后反包先按先手兑现点；放量吃掉压力并回踩不破，才恢复候选观察"
+        else:
+            action = "锚点只作价格反应观察；必须叠加VWAP、MA和承接确认"
+    if not factors:
+        factors = "共同选择按四方检查：昨日持筹者、明日新买盘、主线资金、量化动量是否一致"
+    if not momentum:
+        momentum = "量化动量助攻才提高参与质量；越跌越弱时不低吸，站回VWAP后再看"
+    if not reversal:
+        reversal = "高潮后反包先按先手兑现点；放量吃掉压力并回踩不破后，才恢复候选观察"
+
+    return {
+        "anchor_zone_role": zone or "待确认",
+        "anchor_line_confluence": confluence or "等待确认VWAP、MA、前高前低或成交密集区共振",
+        "hidden_liquidity_read": hidden or "隐藏买卖盘待确认",
+        "anchor_action_plan": action,
+        "common_selection_factors": factors,
+        "momentum_feedback_plan": momentum,
+        "reversal_exit_plan": reversal,
+    }
+
+
 def build_participation_window_policy(window="", missed_action="", source_tier="extreme_conviction", candidate=None):
     window = str(window or "").strip()
     missed_action = str(missed_action or "").strip()
@@ -610,12 +661,12 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         first_minutes_required = True
         board_or_reseal_required = True
         ordinary_structure_confirm_allowed = False
-        required_steps = ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"]
+        required_steps = ["交易逻辑确认", "竞价表态", "开盘前几分钟承接", "MA执行锚点", "回封/打板"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
             "first_minutes": "主动资金继续抬价 / 承接连续",
-            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
+            "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
             "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
             "missed_entry": missed_action,
         }
@@ -625,12 +676,12 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         first_minutes_required = True
         board_or_reseal_required = True
         ordinary_structure_confirm_allowed = False
-        required_steps = ["竞价表态", "开盘前几分钟承接", "日K均线回归", "回封/打板"]
+        required_steps = ["交易逻辑确认", "竞价表态", "开盘前几分钟承接", "MA执行锚点", "回封/打板"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "auction": "价格位置 / 匹配金额 / 委托稳定 / 板块同步",
             "first_minutes": "主动资金继续抬价 / 承接连续",
-            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
+            "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
             "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
             "missed_entry": missed_action,
         }
@@ -640,11 +691,11 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         first_minutes_required = True
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["开盘前几分钟承接", "日K均线回归", "主线确认", "60分钟确认"]
+        required_steps = ["交易逻辑确认", "开盘前几分钟承接", "主线确认", "60分钟确认", "MA执行锚点"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "first_minutes": "主动资金继续抬价 / 承接连续",
-            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
+            "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
             "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
@@ -654,10 +705,10 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         first_minutes_required = False
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["日K均线回归", "主线确认", "承接", "60分钟确认"]
+        required_steps = ["交易逻辑确认", "主线确认", "承接", "60分钟确认", "MA执行锚点"]
         fallback_state = "不满足回到0%"
         participation_basis = {
-            "ma_reversion": "昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接",
+            "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
             "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
@@ -672,13 +723,24 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         "required_steps": required_steps,
         "fallback_state": fallback_state,
         "participation_basis": participation_basis,
+        "decision_reason_basis": "买卖资格只来自量能、市场情绪、板块效应、资金表态、辨识度和连续承接；技术指标不能单独生成交易理由",
+        "ma_execution_anchor": "MA3/MA5/MA10只优化买卖点和失效线，不能替代交易逻辑",
         "ma_reversion_probe_allowed": source_tier == "extreme_conviction",
         "ma_reversion_window": "09:50-10:10" if source_tier == "extreme_conviction" else "none",
-        "ma_reversion_probe": "只限昨日重点观察且未被风险拦截的样本；回踩日K MA5/MA10或分时黄线不破，且9:50-10:10承接不再继续杀，才允许小仓试错",
-        "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；站回并连续承接才算试错条件，不是所有股票的低吸理由",
+        "ma_reversion_probe": "只限已经由量能、情绪、板块、资金、辨识度和承接给出买入资格的样本；常规回踩日K MA5/MA10，极度龙头可提前看MA3；MA只是执行锚点，不能因为MA3/MA5/MA10单独买入；分时黄线不破，且9:50-10:10承接不再继续杀，才允许小仓试错",
+        "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；10点前后价格上穿分时黄色均价线并形成金叉，或水下强势修复到0轴后承接连续，才算试错条件；不是所有股票的低吸理由",
+        "intraday_average_line_cross_probe": "10点前后价格上穿分时黄色均价线并形成金叉，且上穿后不再快速跌回黄线下方，才允许小仓试错",
+        "zero_axis_reclaim_probe": "水下强势修复到0轴，0轴附近不再放量回落，才允许把修复视为资金重新表态",
+        "daily_ma_entry_probe": "逻辑确认后再看MA3/MA5/MA10：MA3/MA5/MA10分别对应极度龙头/强势/趋势；MA不是买入理由，只是执行锚点和失效参考，仍要叠加分时承接",
+        "daily_ma_role_map": {
+            "ma3": "极度龙头",
+            "ma5": "强势",
+            "ma10": "趋势",
+        },
         "ma20_invalidation": "有效跌破日K MA20或跌破后9:50-10:10不能收回，取消幻想，按A杀风险处理",
         "tracking_window_trade_days": 25,
     }
+    policy.update(build_quant_anchor_plan(candidate))
     policy.update(build_limit_up_inertia_profile(candidate))
     policy.update(build_risk_reward_plan(candidate))
     policy.update(

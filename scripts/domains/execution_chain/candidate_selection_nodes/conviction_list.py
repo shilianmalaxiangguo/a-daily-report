@@ -149,6 +149,55 @@ def _format_risk_reward(script):
     return _clean_cell(f"{state}；{plan}")
 
 
+_QUANT_ANCHOR_FIELDS = (
+    ("anchor_zone_role", "锚点区间"),
+    ("anchor_line_confluence", "共振线"),
+    ("hidden_liquidity_read", "隐藏盘"),
+    ("anchor_action_plan", "动作"),
+    ("common_selection_factors", "共同选择"),
+    ("momentum_feedback_plan", "动量反馈"),
+    ("reversal_exit_plan", "反包兑现"),
+)
+
+
+def _clean_anchor_value(value):
+    return _clean_cell(value, "").replace("｜", "/").strip()
+
+
+def _format_quant_anchor_action(script):
+    labeled_values = []
+    values_by_field = {}
+    for field, label in _QUANT_ANCHOR_FIELDS:
+        value = _clean_anchor_value(script.get(field))
+        if not value:
+            continue
+        values_by_field[field] = value
+        labeled_values.append(f"{label}={value}")
+    if not labeled_values:
+        return "-"
+    summary_values = [
+        values_by_field.get("anchor_zone_role"),
+        values_by_field.get("anchor_action_plan"),
+    ]
+    summary = " / ".join(value for value in summary_values if value) or "已记录"
+    return _clean_cell(f"量化锚点动作：{summary}｜{'｜'.join(labeled_values)}")
+
+
+def _format_stock_label(stock):
+    name = _clean_cell(stock.get("name") or stock.get("stock_name"), "观察对象")
+    code = _clean_cell(stock.get("code") or stock.get("stock_code"), "")
+    return f"{name}({code})" if code else name
+
+
+def _format_risk_review(stock):
+    review = stock.get("final_risk_review")
+    if isinstance(review, dict):
+        status = _clean_cell(review.get("status"), "待复核")
+        reasons = [str(reason).strip() for reason in review.get("reasons") or [] if str(reason).strip()]
+        return _clean_cell(f"{status}：{' / '.join(reasons)}" if reasons else status)
+    return _clean_cell(review, "待复核")
+
+
 def _build_participation_script(stock):
     sector = _clean_cell(stock.get("sector"), "主线")
     participation_script = stock.get("participation_script") or {}
@@ -165,9 +214,25 @@ def _build_participation_script(stock):
                 return _clean_cell(nested)
         return _clean_cell(default)
 
+    def _optional_script_value(field):
+        value = _first_text(stock, field)
+        if value not in (None, ""):
+            return _clean_cell(value)
+        nested = participation_script.get(field)
+        if nested not in (None, ""):
+            return _clean_cell(nested)
+        return ""
+
     script = {
         "participation_window": _clean_cell(_derive_participation_window(stock)),
         "attack_state": _clean_cell(_normalize_attack_state(_first_text(stock, "attack_state", "position_state", "target_position_pct"), stock=stock)),
+        "anchor_zone_role": _optional_script_value("anchor_zone_role"),
+        "anchor_line_confluence": _optional_script_value("anchor_line_confluence"),
+        "hidden_liquidity_read": _optional_script_value("hidden_liquidity_read"),
+        "anchor_action_plan": _optional_script_value("anchor_action_plan"),
+        "common_selection_factors": _optional_script_value("common_selection_factors"),
+        "momentum_feedback_plan": _optional_script_value("momentum_feedback_plan"),
+        "reversal_exit_plan": _optional_script_value("reversal_exit_plan"),
         "auction_script": _script_value(
             "auction_script",
             "auction",
@@ -211,6 +276,22 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
 
     lines = ["**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:"]
     if extreme_conviction_list:
+        sniper_items = [
+            stock for stock in extreme_conviction_list
+            if isinstance(stock, dict) and stock.get("sniper_role") in ("明日主买对象", "明日补位对象")
+        ]
+        if sniper_items:
+            lines.append("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |")
+            lines.append("|------|------|--------|--------|--------|--------------|----------|")
+            for stock in sniper_items:
+                lines.append(
+                    f"| {_clean_cell(stock.get('sniper_role'))} | {_format_stock_label(stock)} | "
+                    f"{_clean_cell(stock.get('leader_speed_tier'), '待判定')} | "
+                    f"{_clean_cell(stock.get('buy_ma_line'))} | {_clean_cell(stock.get('sell_ma_line'))} | "
+                    f"{_clean_cell(stock.get('acceptance_repair_required'), '等待承接修复')} | "
+                    f"{_format_risk_review(stock)} |"
+                )
+            lines.append("")
         lines.append("| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |")
         lines.append("|--------|------|------|----------|----------|----------|----------|----------|")
         for idx, stock in enumerate(extreme_conviction_list, 1):
@@ -221,12 +302,13 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
             )
         lines.append("")
         lines.append("**重点观察参与脚本**:")
-        lines.append("| 参与窗口 | 仓位三态 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |")
-        lines.append("|----------|----------|----------|--------|----------|----------|----------|--------------|--------------|----------|----------|------------|----------|----------|----------|")
+        lines.append("| 参与窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |")
+        lines.append("|----------|----------|--------------|----------|--------|----------|----------|----------|--------------|--------------|----------|----------|------------|----------|----------|----------|")
         for stock in extreme_conviction_list:
             script = _build_participation_script(stock)
             lines.append(
                 f"| {script['participation_window']} | {script['attack_state']} | "
+                f"{_format_quant_anchor_action(script)} | "
                 f"{_format_probability_edge(script)} | {_format_risk_reward(script)} | "
                 f"{_format_required_steps(script)} | {_format_participation_basis(script)} | "
                 f"{script['auction_script']} | {script['first_minutes_script']} | "

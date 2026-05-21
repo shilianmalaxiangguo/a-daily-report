@@ -13,6 +13,9 @@ from domains.execution_chain.candidate_selection_stage import (
     build_candidate_selection_stage,
     build_candidate_selection_runtime,
 )
+from domains.execution_chain.candidate_selection_nodes.conviction_list import (
+    build_candidate_selection_conviction_list_node,
+)
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
 
 
@@ -135,6 +138,32 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertNotIn("认准'半导体'", rendered)
         self.assertNotIn("主线内1只", rendered)
 
+    def test_conviction_list_renders_quant_anchor_action_from_participation_script(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "锚点样本",
+                        "code": "300001",
+                        "sector": "半导体",
+                        "conviction_reason": "区间顶部观察",
+                        "conviction_rule": "等价格确认后再参与",
+                        "participation_script": {
+                            "anchor_zone_role": "区间顶部",
+                            "anchor_line_confluence": "533.33对子锚点接近前高与MA5",
+                            "hidden_liquidity_read": "隐藏卖盘更强",
+                            "anchor_action_plan": "冲不过先止盈，放量吃掉并回踩不破再恢复候选",
+                        },
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("量化锚点动作", rendered)
+        self.assertIn("533.33对子锚点接近前高与MA5", rendered)
+        self.assertIn("冲不过先止盈", rendered)
+
     def test_extreme_conviction_list_renders_quantified_participation_script(self):
         result = build_candidate_selection_runtime(
             {
@@ -166,6 +195,12 @@ class CandidateSelectionStageTest(unittest.TestCase):
                             "name": "大唐发电",
                             "code": "601991",
                             "sector": "电力",
+                            "sniper_role": "明日主买对象",
+                            "leader_speed_tier": "极致加速龙头",
+                            "buy_ma_line": "MA3",
+                            "sell_ma_line": "MA5",
+                            "acceptance_repair_required": "缩量回撤到MA3附近，站回VWAP",
+                            "final_risk_review": {"status": "通过"},
                             "pattern": "T字板",
                             "conviction_reason": "趋势比价链锚定龙 / 分歧转一致",
                             "conviction_rule": "竞价表态强且开盘承接继续才参与",
@@ -191,14 +226,17 @@ class CandidateSelectionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |", rendered)
         self.assertIn("| 1 | 大唐发电 | 601991 | 电力 | 趋势比价链锚点 / 高位锚 | 可执行候选 | 趋势比价链锚定龙 / 分歧转一致 | 竞价表态强且开盘承接继续才参与 |", rendered)
+        self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |", rendered)
+        self.assertIn("| 明日主买对象 | 大唐发电(601991) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，站回VWAP | 通过 |", rendered)
         self.assertNotIn("极看理由", rendered)
-        self.assertIn("| 参与窗口 | 仓位三态 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |", rendered)
+        self.assertIn("| 参与窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |", rendered)
         self.assertIn("高惯性；高于普通上涨样本", rendered)
         self.assertIn("默认要求盈亏比不低于2:1", rendered)
-        self.assertIn("竞价表态 / 开盘前几分钟承接 / 日K均线回归 / 回封/打板", rendered)
-        self.assertIn("价格位置 / 匹配金额 / 委托稳定 / 板块同步；主动资金继续抬价 / 承接连续；昨日重点观察且未被风险拦截，才允许看日K MA5/MA10回归和分时黄线承接；大单金额持续进入 / 快速回封 / 封单质量改善", rendered)
-        self.assertIn("| 竞价表态 | 100% | 高惯性；高于普通上涨样本", rendered)
+        self.assertIn("交易逻辑确认 / 竞价表态 / 开盘前几分钟承接 / MA执行锚点 / 回封/打板", rendered)
+        self.assertIn("价格位置 / 匹配金额 / 委托稳定 / 板块同步；主动资金继续抬价 / 承接连续；量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点；大单金额持续进入 / 快速回封 / 封单质量改善", rendered)
+        self.assertIn("| 竞价表态 | 100% | - | 高惯性；高于普通上涨样本", rendered)
         self.assertIn("09:50-10:10均线回归试错", rendered)
+        self.assertIn("MA只是执行锚点", rendered)
         self.assertIn("分时黄线只作为日内承接确认线", rendered)
         self.assertIn("有效跌破日K MA20", rendered)
         self.assertIn("25个交易日", rendered)
