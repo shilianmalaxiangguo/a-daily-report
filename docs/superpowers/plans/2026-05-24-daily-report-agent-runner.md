@@ -302,7 +302,7 @@ Expected: `OK`.
 - Create: `scripts/agent_runner/daily_report_agent_runner.py`
 - Test: `tests/test_daily_report_agent_runner.py`
 
-- [ ] **Step 1: Write failing tests for runner artifact writing**
+- [x] **Step 1: Write failing tests for runner artifact writing**
 
 Create `tests/test_daily_report_agent_runner.py`:
 
@@ -440,7 +440,7 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -450,7 +450,7 @@ Run:
 
 Expected: fails with `ModuleNotFoundError: No module named 'agent_runner'`.
 
-- [ ] **Step 3: Implement runner module**
+- [x] **Step 3: Implement runner module**
 
 Create `scripts/agent_runner/__init__.py`:
 
@@ -479,7 +479,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from daily_report_entry_demo import get_daily_data, replay_from_snapshot
+from daily_report_entry_demo import replay_from_snapshot
 from daily_report_render import build_report_outputs, save_report_outputs
 from report.decision_ledger import write_decision_ledger_artifacts_from_markdown_report
 from report.report_run_audit import audit_daily_report_run
@@ -488,7 +488,7 @@ from report.report_run_audit import audit_daily_report_run
 @dataclass(frozen=True)
 class DailyReportAgentRequest:
     target_date: str
-    mode: str = "fresh"
+    mode: str = "replay"
     update_decision_ledger: bool = True
     review_prior_participation: bool = True
     output_variant: str = "full"
@@ -507,7 +507,7 @@ class DailyReportAgentDependencies:
 def _default_load_data(request: DailyReportAgentRequest) -> dict[str, Any]:
     if request.mode == "replay":
         return replay_from_snapshot(request.target_date)
-    return get_daily_data(request.target_date)
+    raise RuntimeError("当前 runner 仅支持 replay 模式")
 
 
 class DailyReportAgentRunner:
@@ -668,7 +668,7 @@ def _pending_review_records(decision_ledger_result: dict[str, Any] | None) -> li
     return pending
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run:
 
@@ -684,7 +684,7 @@ Expected: `OK`.
 - Test: `tests/test_report_run_audit.py`
 - Test: `tests/test_daily_report_agent_runner.py`
 
-- [ ] **Step 1: Run both new test files**
+- [x] **Step 1: Run both new test files**
 
 Run:
 
@@ -694,7 +694,7 @@ Run:
 
 Expected: all tests pass.
 
-- [ ] **Step 2: Run nearby existing tests**
+- [x] **Step 2: Run nearby existing tests**
 
 Run:
 
@@ -704,7 +704,9 @@ Run:
 
 Expected: all tests pass. If this is too slow, record the partial output and run the smaller failure-relevant file before reporting.
 
-- [ ] **Step 3: Inspect git diff for scope**
+Observed in this worktree: the new runner/audit tests pass, while the nearby existing suite has two unrelated failures in `tests.test_decision_ledger` and `tests.test_daily_report_render`; both were reproduced individually and are outside this slice.
+
+- [x] **Step 3: Inspect git diff for scope**
 
 Run:
 
