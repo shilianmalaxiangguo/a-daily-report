@@ -45,7 +45,10 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_strategy_tracking"])
         self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
-        self.assertTrue(render_mock.call_args_list[0].kwargs["decision_ledger_root_dir"].endswith("a-daily-report"))
+        self.assertEqual(
+            Path(render_mock.call_args_list[0].kwargs["decision_ledger_root_dir"]).resolve(),
+            ROOT.resolve(),
+        )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
 
     def test_build_report_outputs_does_not_persist_decision_ledger_for_replay(self):

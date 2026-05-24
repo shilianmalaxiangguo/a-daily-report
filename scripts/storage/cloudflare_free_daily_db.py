@@ -38,7 +38,7 @@ def _text(value):
 
 
 def _utc_now_text():
-    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 class CloudflareFreeDailyDb:
@@ -148,6 +148,27 @@ class CloudflareFreeDailyDb:
                     source_run_id INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT '',
                     PRIMARY KEY (trade_date, variant, r2_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS extreme_conviction_mentions (
+                    record_id TEXT PRIMARY KEY,
+                    mention_trade_date TEXT NOT NULL DEFAULT '',
+                    stock_name TEXT NOT NULL DEFAULT '',
+                    stock_code TEXT NOT NULL DEFAULT '',
+                    rank_no INTEGER NOT NULL DEFAULT 0,
+                    sector_candidate TEXT NOT NULL DEFAULT '',
+                    buy_window TEXT NOT NULL DEFAULT '',
+                    planned_window TEXT NOT NULL DEFAULT '',
+                    review_status TEXT NOT NULL DEFAULT '',
+                    next_action TEXT NOT NULL DEFAULT '',
+                    invalidation TEXT NOT NULL DEFAULT '',
+                    reason TEXT NOT NULL DEFAULT '',
+                    source_section TEXT NOT NULL DEFAULT '',
+                    is_a_kill_eliminated INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -517,5 +538,110 @@ class CloudflareFreeDailyDb:
                 FROM report_artifacts
                 ORDER BY trade_date, variant, r2_key
                 """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def replace_extreme_conviction_mentions_for_trade_date(self, trade_date, rows):
+        trade_date = _text(trade_date)
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM extreme_conviction_mentions WHERE mention_trade_date = ?",
+                (trade_date,),
+            )
+            count = self._upsert_extreme_conviction_mentions(conn, rows)
+            conn.commit()
+        return count
+
+    def upsert_extreme_conviction_mentions(self, rows):
+        with self._connect() as conn:
+            count = self._upsert_extreme_conviction_mentions(conn, rows)
+            conn.commit()
+        return count
+
+    def _upsert_extreme_conviction_mentions(self, conn, rows):
+        normalized_rows = []
+        for row in rows or []:
+            record_id = _text((row or {}).get("record_id"))
+            mention_trade_date = _text((row or {}).get("mention_trade_date"))
+            stock_code = _text((row or {}).get("stock_code"))
+            if not record_id or not mention_trade_date or not stock_code:
+                continue
+            normalized_rows.append(
+                (
+                    record_id,
+                    mention_trade_date,
+                    _text((row or {}).get("stock_name")),
+                    stock_code,
+                    _safe_int((row or {}).get("rank_no") or (row or {}).get("rank")),
+                    _text((row or {}).get("sector_candidate")),
+                    _text((row or {}).get("buy_window")),
+                    _text((row or {}).get("planned_window")),
+                    _text((row or {}).get("review_status")),
+                    _text((row or {}).get("next_action")),
+                    _text((row or {}).get("invalidation")),
+                    _text((row or {}).get("reason")),
+                    _text((row or {}).get("source_section")),
+                    1 if (row or {}).get("is_a_kill_eliminated") else 0,
+                    _utc_now_text(),
+                )
+            )
+        conn.executemany(
+            """
+            INSERT INTO extreme_conviction_mentions(
+                record_id, mention_trade_date, stock_name, stock_code, rank_no,
+                sector_candidate, buy_window, planned_window, review_status,
+                next_action, invalidation, reason, source_section,
+                is_a_kill_eliminated, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(record_id) DO UPDATE SET
+                mention_trade_date=excluded.mention_trade_date,
+                stock_name=excluded.stock_name,
+                stock_code=excluded.stock_code,
+                rank_no=excluded.rank_no,
+                sector_candidate=excluded.sector_candidate,
+                buy_window=excluded.buy_window,
+                planned_window=excluded.planned_window,
+                review_status=excluded.review_status,
+                next_action=excluded.next_action,
+                invalidation=excluded.invalidation,
+                reason=excluded.reason,
+                source_section=excluded.source_section,
+                is_a_kill_eliminated=excluded.is_a_kill_eliminated,
+                updated_at=excluded.updated_at
+            """,
+            normalized_rows,
+        )
+        return len(normalized_rows)
+
+    def query_extreme_conviction_mentions(self, end_date, *, window_days=25):
+        end_date = _text(end_date)
+        window_days = max(_safe_int(window_days, 25), 1)
+        with self._connect() as conn:
+            date_rows = conn.execute(
+                """
+                SELECT DISTINCT mention_trade_date
+                FROM extreme_conviction_mentions
+                WHERE mention_trade_date <= ?
+                ORDER BY mention_trade_date DESC
+                LIMIT ?
+                """,
+                (end_date, window_days),
+            ).fetchall()
+            dates = [row["mention_trade_date"] for row in reversed(date_rows)]
+            if not dates:
+                return []
+            placeholders = ",".join("?" for _ in dates)
+            rows = conn.execute(
+                f"""
+                SELECT record_id, mention_trade_date, stock_name, stock_code,
+                       rank_no, sector_candidate, buy_window, planned_window,
+                       review_status, next_action, invalidation, reason,
+                       source_section, is_a_kill_eliminated, updated_at
+                FROM extreme_conviction_mentions
+                WHERE mention_trade_date IN ({placeholders})
+                ORDER BY mention_trade_date ASC, rank_no ASC, stock_code ASC
+                """,
+                dates,
             ).fetchall()
         return [dict(row) for row in rows]
