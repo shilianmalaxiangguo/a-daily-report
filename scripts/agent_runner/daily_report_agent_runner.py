@@ -39,7 +39,19 @@ def _default_load_data(request: DailyReportAgentRequest) -> dict[str, Any]:
         if isinstance(replay_result, tuple):
             return replay_result[0] or {}
         return replay_result or {}
-    raise RuntimeError("当前 runner 仅支持 replay 模式")
+    raise UnsupportedRunModeError("当前 runner 仅支持 replay 模式")
+
+
+class RunnerFailure(RuntimeError):
+    code = "runner_error"
+
+
+class ReplayDataMissingError(RunnerFailure):
+    code = "replay_data_missing"
+
+
+class UnsupportedRunModeError(RunnerFailure):
+    code = "unsupported_run_mode"
 
 
 class DailyReportAgentRunner:
@@ -69,7 +81,7 @@ class DailyReportAgentRunner:
             load_data = self.dependencies.load_data or _default_load_data
             data = load_data(request)
             if request.mode == "replay" and not data:
-                raise RuntimeError(f"回放数据不存在，停止生成：{request.target_date}")
+                raise ReplayDataMissingError(f"回放数据不存在，停止生成：{request.target_date}")
             report_outputs = self.dependencies.build_report_outputs(
                 data,
                 request.target_date,
@@ -107,6 +119,7 @@ class DailyReportAgentRunner:
         except Exception as exc:
             status = "error"
             error = {"type": type(exc).__name__, "message": str(exc)}
+            finding_code = exc.code if isinstance(exc, RunnerFailure) else "runner_error"
             audit_result = {
                 "target_date": request.target_date,
                 "passed": False,
@@ -114,7 +127,7 @@ class DailyReportAgentRunner:
                 "findings": [
                     {
                         "source": "runner",
-                        "code": "runner_error",
+                        "code": finding_code,
                         "message": str(exc),
                     }
                 ],

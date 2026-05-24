@@ -69,6 +69,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error"]["message"], "当前 runner 仅支持 replay 模式")
+            self._assert_error_run_artifacts(root, expected_code="unsupported_run_mode")
 
     def test_runner_stops_when_replay_snapshot_data_is_missing(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -90,7 +91,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error"]["message"], "回放数据不存在，停止生成：2026-05-24")
-            self._assert_error_run_artifacts(root)
+            self._assert_error_run_artifacts(root, expected_code="replay_data_missing")
 
     def test_runner_writes_run_artifacts_and_pending_participation_review(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -282,7 +283,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
             self._assert_error_run_artifacts(root)
 
-    def _assert_error_run_artifacts(self, root):
+    def _assert_error_run_artifacts(self, root, expected_code="runner_error"):
         run_dir = root / "reports" / "runs" / "2026-05-24"
         self.assertTrue((run_dir / "run.json").exists())
         self.assertTrue((run_dir / "audit.json").exists())
@@ -291,6 +292,10 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
         payload = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
         self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["audit"]["findings"][0]["code"], expected_code)
+
+        audit_payload = json.loads((run_dir / "audit.json").read_text(encoding="utf-8"))
+        self.assertEqual(audit_payload["findings"][0]["code"], expected_code)
 
 
 if __name__ == "__main__":
