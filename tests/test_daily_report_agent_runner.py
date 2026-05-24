@@ -52,6 +52,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             result = runner.run(DailyReportAgentRequest(target_date="2026-05-24"))
 
             self.assertEqual(result["mode"], "replay")
+            self.assertEqual(result["status"], "error")
 
     def test_runner_rejects_non_replay_mode_without_live_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -68,6 +69,28 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
 
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error"]["message"], "当前 runner 仅支持 replay 模式")
+
+    def test_runner_stops_when_replay_snapshot_data_is_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            def build_outputs(data, target_date, **kwargs):
+                raise AssertionError("report rendering should not run without replay data")
+
+            runner = DailyReportAgentRunner(
+                root_dir=root,
+                dependencies=DailyReportAgentDependencies(
+                    load_data=lambda request: {},
+                    build_report_outputs=build_outputs,
+                    now=lambda: datetime(2026, 5, 24, 15, 1, 2),
+                ),
+            )
+
+            result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["error"]["message"], "回放数据不存在，停止生成：2026-05-24")
+            self._assert_error_run_artifacts(root)
 
     def test_runner_writes_run_artifacts_and_pending_participation_review(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -178,7 +201,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             runner = DailyReportAgentRunner(
                 root_dir=root,
                 dependencies=DailyReportAgentDependencies(
-                    load_data=lambda request: {},
+                    load_data=lambda request: {"sample": True},
                     build_report_outputs=lambda data, target_date, **kwargs: {"full": "# report"},
                     save_report_outputs=save_outputs,
                     write_decision_ledger_from_markdown=lambda report_path, **kwargs: {"case_count": 0},
@@ -219,7 +242,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             runner = DailyReportAgentRunner(
                 root_dir=root,
                 dependencies=DailyReportAgentDependencies(
-                    load_data=lambda request: {},
+                    load_data=lambda request: {"sample": True},
                     build_report_outputs=build_outputs,
                     now=lambda: datetime(2026, 5, 24, 15, 1, 2),
                 ),
@@ -246,7 +269,7 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             runner = DailyReportAgentRunner(
                 root_dir=root,
                 dependencies=DailyReportAgentDependencies(
-                    load_data=lambda request: {},
+                    load_data=lambda request: {"sample": True},
                     build_report_outputs=lambda data, target_date, **kwargs: {"full": "# report"},
                     save_report_outputs=save_outputs,
                     write_decision_ledger_from_markdown=lambda report_path, **kwargs: {"case_count": 0},

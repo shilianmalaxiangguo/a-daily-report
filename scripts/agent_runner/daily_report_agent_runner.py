@@ -68,6 +68,8 @@ class DailyReportAgentRunner:
         try:
             load_data = self.dependencies.load_data or _default_load_data
             data = load_data(request)
+            if request.mode == "replay" and not data:
+                raise RuntimeError(f"回放数据不存在，停止生成：{request.target_date}")
             report_outputs = self.dependencies.build_report_outputs(
                 data,
                 request.target_date,
