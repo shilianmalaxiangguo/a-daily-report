@@ -71,3 +71,12 @@ class DatabaseService:
 
     def get_report_artifacts(self):
         return self.repository.get_report_artifacts()
+
+    def replace_extreme_conviction_mentions_for_trade_date(self, trade_date, rows):
+        return self.repository.replace_extreme_conviction_mentions_for_trade_date(trade_date, rows)
+
+    def upsert_extreme_conviction_mentions(self, rows):
+        return self.repository.upsert_extreme_conviction_mentions(rows)
+
+    def query_extreme_conviction_mentions(self, end_date, *, window_days=25):
+        return self.repository.query_extreme_conviction_mentions(end_date, window_days=window_days)
