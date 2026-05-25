@@ -23,6 +23,10 @@ from report.mainline_turnover_summary_support import (
 FORBIDDEN_FRONT_PAGE_MARKERS = ("### 🔬 市场研究快照", "Step 0")
 
 
+def _display_latest_first(rows):
+    return list(reversed(list(rows or [])))
+
+
 def _section_between(lines, start_marker, end_marker=None):
     lines = list(lines or [])
     try:
@@ -76,6 +80,46 @@ def _has_unconfirmed_attack_evidence(snapshot):
     return bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
 
 
+def _dragon_pullback_review(snapshot):
+    review = (snapshot or {}).get("dragon_pullback_review") or {}
+    return review if isinstance(review, dict) else {}
+
+
+def _dragon_pullback_review_active(snapshot):
+    review = _dragon_pullback_review(snapshot)
+    return bool(review.get("leader") and review.get("second_confirmation"))
+
+
+def _dragon_pullback_laggard_text(snapshot):
+    laggards = _dragon_pullback_review(snapshot).get("laggard_feedback") or []
+    if isinstance(laggards, str):
+        return laggards.strip()
+    if not isinstance(laggards, list):
+        return ""
+    names = [str(item).strip() for item in laggards if str(item).strip()]
+    return "、".join(names[:3])
+
+
+def _dragon_pullback_lines(snapshot):
+    if not _dragon_pullback_review_active(snapshot):
+        return []
+    review = _dragon_pullback_review(snapshot)
+    leader = str(review.get("leader") or "").strip()
+    laggards = _dragon_pullback_laggard_text(snapshot)
+    if laggards:
+        result = f"{leader}二次确认；{laggards}低位补涨反哺核心辨识度"
+    else:
+        result = f"{leader}二次确认；等待低位补涨继续验证"
+    return [
+        "### 6. 龙头回头复核",
+        "| 项目 | 结论 |",
+        "|------|------|",
+        f"| 龙头回头复核 | {result} |",
+        "龙头第一波后的回撤只算观察，第二波顶住压力且低位补涨同步，才说明市场继续投票",
+        "",
+    ]
+
+
 def _append_sentence(text, addition):
     text = str(text or "").strip()
     addition = str(addition or "").strip()
@@ -120,12 +164,31 @@ def _market_base_lines(report_lines, snapshot=None):
     if any("| 市场贴合度 |" in str(line) for line in lines):
         return lines
 
+    evidence_text = str(calibration.get("evidence_text") or "").strip()
+    fit_row_2col = f"| 市场贴合度 | {fit_label} |"
+    fit_row_3col = f"| 市场贴合度 | {fit_label} | {evidence_text or '结合强势样本、主线命中和观察池命中判断。'} |"
+
     injected = []
     inserted = False
-    for line in lines:
+    for index, line in enumerate(lines):
         injected.append(line)
-        if not inserted and str(line).startswith("| 市场状态 |"):
-            injected.append(f"| 市场贴合度 | {fit_label} |")
+        next_line = str(lines[index + 1]) if index + 1 < len(lines) else ""
+        if inserted:
+            continue
+        text = str(line)
+        if text.startswith("| 项目 | 结论 | 依据 |") and next_line.startswith("|"):
+            continue
+        if text.startswith("|------|") and len(injected) >= 2:
+            header = str(injected[-2])
+            if header.startswith("| 项目 | 结论 | 依据 |"):
+                injected.append(fit_row_3col)
+                inserted = True
+            elif header.startswith("| 项目 | 结论 |"):
+                injected.append(fit_row_2col)
+                inserted = True
+        elif text.startswith("| 市场状态 |"):
+            cells = [part.strip() for part in text.strip().strip("|").split("|")]
+            injected.append(fit_row_3col if len(cells) >= 3 else fit_row_2col)
             inserted = True
     if inserted:
         return injected
@@ -135,16 +198,22 @@ def _market_base_lines(report_lines, snapshot=None):
     except ValueError:
         injected.extend([
             "### 2. 市场状态结论",
-            "| 项目 | 结论 |",
-            "|------|------|",
-            f"| 市场贴合度 | {fit_label} |",
+            "| 项目 | 结论 | 依据 |",
+            "|------|------|------|",
+            fit_row_3col,
         ])
         return injected
 
     insert_at = index + 1
-    while insert_at < len(injected) and str(injected[insert_at]).startswith("|"):
+    while insert_at < len(injected) and not str(injected[insert_at]).startswith("| 项目 | 结论 |"):
         insert_at += 1
-    injected.insert(insert_at, f"| 市场贴合度 | {fit_label} |")
+    if insert_at < len(injected):
+        separator_at = insert_at + 1
+        if separator_at < len(injected) and str(injected[separator_at]).startswith("|"):
+            header = str(injected[insert_at])
+            injected.insert(separator_at + 1, fit_row_3col if "依据" in header else fit_row_2col)
+            return injected
+    injected.insert(index + 1, fit_row_2col)
     return injected
 
 
@@ -196,6 +265,27 @@ def _conditional_defense_active(final_gate):
     )
 
 
+def _countertrend_defense_active(snapshot):
+    snapshot = snapshot or {}
+    summary = snapshot.get("mainline_turnover_summary") or {}
+    state_machine = snapshot.get("state_machine") or {}
+    text = " ".join(
+        str(value or "")
+        for value in (
+            summary.get("share_trend_label"),
+            summary.get("conclusion"),
+            summary.get("action_text"),
+            state_machine.get("style_label"),
+            state_machine.get("style_reason"),
+            state_machine.get("primary_action"),
+            snapshot.get("rotation_label"),
+            snapshot.get("rotation_reason"),
+            snapshot.get("rotation_action"),
+        )
+    )
+    return any(marker in text for marker in ("逆势试攻", "逆势攻击", "放量杀跌", "先防踩踏"))
+
+
 def _grade_from_position_pct(position_pct):
     position_pct = int(_safe_float(position_pct, 0))
     if position_pct >= 50:
@@ -227,6 +317,7 @@ def _position_state_contract(snapshot=None, final_gate=None):
     if not isinstance(position_decision, dict):
         position_decision = {}
 
+    countertrend_defense = _countertrend_defense_active(snapshot)
     grade = _normalize_signal_grade(position_decision.get("signal_grade"))
     if not grade and "target_position_pct" in position_decision:
         grade = _grade_from_position_pct(position_decision.get("target_position_pct"))
@@ -245,6 +336,8 @@ def _position_state_contract(snapshot=None, final_gate=None):
     if not grade:
         grade = "0"
     if grade in ("50", "100") and not _has_unique_action_target(snapshot):
+        grade = "0"
+    if grade in ("50", "100") and countertrend_defense:
         grade = "0"
 
     contract = {
@@ -285,6 +378,8 @@ def _position_state_contract(snapshot=None, final_gate=None):
 def _monthly_profit_cushion_text(monthly_rhythm):
     monthly_rhythm = monthly_rhythm or {}
     threshold = _format_pct(monthly_rhythm.get("profit_cushion_pct", 10.0), signed=True)
+    if monthly_rhythm.get("month_return_pct") in (None, ""):
+        return f"未记录（阈值{threshold}）"
     if monthly_rhythm.get("profit_cushion"):
         return f"已触发（阈值{threshold}）"
     return f"未触发（阈值{threshold}）"
@@ -292,6 +387,8 @@ def _monthly_profit_cushion_text(monthly_rhythm):
 
 def _monthly_profit_handling_text(monthly_rhythm, position_decision):
     monthly_rhythm = monthly_rhythm or {}
+    if monthly_rhythm.get("month_return_pct") in (None, ""):
+        return "未记录真实月度收益，不能按盈利垫调整仓位"
     if monthly_rhythm.get("profit_cushion") and monthly_rhythm.get("trend_invalid"):
         return "盈利垫后趋势失效，回到0%保护本金"
     if monthly_rhythm.get("profit_cushion"):
@@ -331,7 +428,7 @@ def _monthly_rhythm_lines(snapshot):
             0,
         )
     )
-    if not _has_unique_action_target(snapshot):
+    if not _has_unique_action_target(snapshot) or _countertrend_defense_active(snapshot):
         signal_grade = "0"
         max_position = 0
     reason = (
@@ -344,7 +441,7 @@ def _monthly_rhythm_lines(snapshot):
         "| 项目 | 结论 |",
         "|------|------|",
         f"| 本月模式 | {_monthly_mode_label(monthly_rhythm.get('month_mode'))} |",
-        f"| 当月收益 | {_format_pct(monthly_rhythm.get('month_return_pct', 0.0), signed=True)} |",
+        f"| 当月收益 | {_format_pct(monthly_rhythm.get('month_return_pct'), signed=True) if monthly_rhythm.get('month_return_pct') not in (None, '') else '未记录'} |",
         f"| 盈利垫 | {_monthly_profit_cushion_text(monthly_rhythm)} |",
         f"| 进攻仓位三态 | {_position_attack_grade_label(signal_grade)} |",
         f"| 明日最大仓位 | {max_position}% |",
@@ -414,19 +511,25 @@ def _mainline_attack_evidence_lines(snapshot):
 
 def _turnover_share_lines(snapshot):
     rows = resolve_turnover_share_trend_rows(snapshot)
-    has_unconfirmed_attack = _has_unconfirmed_attack_evidence(snapshot)
+    summary_text = str(
+        (snapshot or {}).get("turnover_share_trend_summary")
+        or ((snapshot or {}).get("mainline_turnover_summary") or {}).get("turnover_share_trend_summary")
+        or ""
+    ).strip()
     lines = [
         "### 5. 主线成交额占比趋势",
-        "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-        "|------|----------|------------|------------|------------|------|----------|------|",
     ]
+    if summary_text:
+        lines.append(f"> {summary_text}")
+        lines.append("")
+    lines.extend(
+        [
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+            "|------|----------|------------|------------|------------|------|----------|------|",
+        ]
+    )
     if rows:
-        for row in rows:
-            row = dict(row)
-            if has_unconfirmed_attack:
-                row["cycle_mainline"] = "暂无确认主线"
-                row["daily_attack_line"] = "暂无确认主攻线"
-                row["interpretation"] = "候选方向成交额占比可记录，但未确认主攻线"
+        for row in _display_latest_first(rows):
             lines.append(
                 "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(**row)
             )
@@ -656,19 +759,97 @@ def _unique_target_label(target):
     return label
 
 
+def _resolve_sniper_candidates(snapshot, candidate_snapshot):
+    snapshot = snapshot or {}
+    sources = []
+    if isinstance(candidate_snapshot, dict):
+        sources.append(candidate_snapshot.get("extreme_conviction_list"))
+    sources.append(snapshot.get("extreme_conviction_list"))
+    for key in ("candidate_selection", "step2_bundle", "execution_stage_context"):
+        nested = snapshot.get(key)
+        if isinstance(nested, dict):
+            sources.append(nested.get("extreme_conviction_list"))
+    for items in sources:
+        if isinstance(items, list) and items:
+            return items
+    return []
+
+
 def _effective_unique_action_target(snapshot):
     snapshot = snapshot or {}
+    if _countertrend_defense_active(snapshot):
+        return {}
     if "reasoning_decision" in snapshot:
         return _enrich_unique_action_target(snapshot, derive_unique_action_target_from_reasoning_decision(snapshot))
     target = snapshot.get("unique_action_target") or {}
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         return _enrich_unique_action_target(snapshot, target)
+    selected = snapshot.get("selected_position_candidate") or {}
+    position_decision = snapshot.get("position_decision") or {}
+    if (
+        isinstance(selected, dict)
+        and (selected.get("name") or selected.get("code") or selected.get("stock_code"))
+        and int(_safe_float((position_decision or {}).get("target_position_pct"), 0)) >= 50
+    ):
+        return _enrich_unique_action_target(
+            snapshot,
+            {
+                "name": selected.get("name") or selected.get("stock_name"),
+                "code": selected.get("code") or selected.get("stock_code"),
+                "sector": selected.get("sector") or selected.get("sector_name"),
+                "direction": selected.get("direction") or selected.get("theme"),
+                "participation_window": selected.get("participation_window") or selected.get("buy_window") or "09:50-10:10",
+                "participation_window_type": selected.get("participation_window_type") or "auction_reseal",
+                "required_steps": selected.get("required_steps") or ["竞价表态", "开盘前几分钟承接", "回封/打板"],
+                "fallback_state": selected.get("fallback_state") or "条件不满足回到0%",
+                "condition": selected.get("condition") or "竞价表态 + 开盘前几分钟 + 回封/打板",
+            },
+        )
     return _enrich_unique_action_target(snapshot, derive_unique_action_target_from_reasoning_decision(snapshot))
+
+
+def _conditional_observation_target(snapshot):
+    snapshot = snapshot or {}
+    selected = snapshot.get("selected_position_candidate") or {}
+    if not isinstance(selected, dict) or not (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return {}
+    if _countertrend_defense_active(snapshot):
+        return {}
+    return _enrich_unique_action_target(
+        snapshot,
+        {
+            "name": selected.get("name") or selected.get("stock_name"),
+            "code": selected.get("code") or selected.get("stock_code"),
+            "sector": selected.get("sector") or selected.get("sector_name"),
+            "direction": selected.get("direction") or selected.get("theme"),
+            "participation_window": selected.get("participation_window") or selected.get("buy_window") or "09:50-10:10",
+            "participation_window_type": selected.get("participation_window_type") or "structure_confirm",
+            "required_steps": selected.get("required_steps") or [],
+            "fallback_state": selected.get("fallback_state") or "不满足继续0%",
+            "condition": selected.get("condition") or "主线承接 + 个股强弱重新确认",
+        },
+    )
 
 
 def _has_unique_action_target(snapshot):
     target = _effective_unique_action_target(snapshot)
     return isinstance(target, dict) and bool(target.get("name") or target.get("code"))
+
+
+def _candidate_section_unique_object_label(
+    snapshot,
+    *,
+    observation_target=None,
+    has_observation_target=False,
+    front_page=None,
+    is_zero_participation=False,
+):
+    if is_zero_participation and has_observation_target:
+        return f"条件观察：{_unique_target_label(observation_target)}"
+    if _has_unique_action_target(snapshot):
+        return _unique_target_label(_effective_unique_action_target(snapshot))
+    front_page = front_page if isinstance(front_page, dict) else {}
+    return front_page.get("unique_object") or "暂无"
 
 
 def _candidate_lines(report_lines, snapshot=None, final_gate=None):
@@ -678,25 +859,95 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     if not isinstance(candidate_snapshot, dict):
         candidate_snapshot = build_candidate_snapshot({}, market_research_snapshot=snapshot)
     front_page = candidate_snapshot.get("front_page") or {}
-    has_unique_object = str(front_page.get("unique_object") or "").strip() not in ("", "-", "暂无", "不做")
-    stock_state = position_state["stock_state"] if has_unique_object else position_state.get("stock_state_without_target", position_state["stock_state"])
+    is_zero_participation = position_state.get("grade") == "0"
+    observation_target = _conditional_observation_target(snapshot) if is_zero_participation else {}
+    has_observation_target = isinstance(observation_target, dict) and bool(
+        observation_target.get("name") or observation_target.get("code")
+    )
+    has_unique_object = (
+        _has_unique_action_target(snapshot)
+        or has_observation_target
+        or str(front_page.get("unique_object") or "").strip() not in ("", "-", "暂无", "不做")
+    )
+    if is_zero_participation and has_observation_target:
+        stock_state = "0%条件观察"
+    else:
+        stock_state = position_state["stock_state"] if has_unique_object else position_state.get("stock_state_without_target", position_state["stock_state"])
+    front_no_buy_reason = str(front_page.get("no_buy_reason") or "").strip()
+    if has_unique_object and (not front_no_buy_reason or "没有唯一对象" in front_no_buy_reason):
+        no_buy_reason = "有条件观察对象，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有唯一对象，只等参与窗口确认；条件不满足回到0%"
+    else:
+        no_buy_reason = front_no_buy_reason or "没有唯一对象，完整候选仅保留在附录和快照"
     backup_watch = front_page.get("backup_watch") if isinstance(front_page.get("backup_watch"), list) else []
+    sniper_candidates = _resolve_sniper_candidates(snapshot, candidate_snapshot)
+    if position_state.get("grade") == "0" or not has_unique_object:
+        sniper_candidates = []
+    effective_target = _effective_unique_action_target(snapshot)
+    effective_target_code = _text_value(effective_target.get("code"), effective_target.get("stock_code")) if isinstance(effective_target, dict) else ""
+    if effective_target_code:
+        has_target_in_sniper = any(
+            isinstance(item, dict)
+            and _text_value(item.get("code"), item.get("stock_code")) == effective_target_code
+            for item in sniper_candidates
+        )
+        if not has_target_in_sniper:
+            sniper_candidates = []
+    sniper_title = "明日候选观察" if is_zero_participation else "明日主买与补位"
+    sniper_header = (
+        "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |"
+        if is_zero_participation
+        else "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 | 参与窗 |"
+    )
     lines = [
         "## 五、个股解读",
         "### 1. 个股裁决",
         "| 项目 | 结论 |",
         "|------|------|",
-        f"| 唯一对象 | {_unique_target_label(_effective_unique_action_target(snapshot)) if _has_unique_action_target(snapshot) else front_page.get('unique_object') or '暂无'} |",
+        f"| 唯一对象 | {_candidate_section_unique_object_label(snapshot, observation_target=observation_target, has_observation_target=has_observation_target, front_page=front_page, is_zero_participation=is_zero_participation)} |",
         f"| 当前状态 | {stock_state} |",
         f"| 备用观察 | {front_page.get('backup_text') or '暂无'} |",
-        f"| 今日不买原因 | {front_page.get('no_buy_reason') or '没有唯一对象，完整候选仅保留在附录和快照'} |",
+        f"| 今日不买原因 | {no_buy_reason} |",
         f"| 明日触发 | {front_page.get('trigger_condition') or '10点确认 + 主线承接 + 个股突破或回踩确认'} |",
         f"| 明日失效 | {front_page.get('failure_condition') or '主线回落 / 放量不承接'} |",
         "",
-        "### 2. 备用观察",
+        f"### 2. {sniper_title}",
+        sniper_header,
+        "|------|------|--------|--------|--------|--------------|----------|--------|",
+    ]
+    sniper_rows = 0
+    for item in sniper_candidates:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("sniper_role") or "").strip()
+        if role not in ("明日主买对象", "明日补位对象"):
+            continue
+        label = _unique_target_label(item)
+        risk_review = item.get("final_risk_review") or {}
+        if isinstance(risk_review, dict):
+            risk_status = str(risk_review.get("status") or "待复核").strip()
+        else:
+            risk_status = str(risk_review or "待复核").strip()
+        lines.append(
+            "| {role} | {label} | {tier} | {buy_line} | {sell_line} | {repair} | {risk_status} | {window} |".format(
+                role=role,
+                label=label,
+                tier=item.get("leader_speed_tier") or "待判定",
+                buy_line=item.get("buy_ma_line") or "-",
+                sell_line=item.get("sell_ma_line") or "-",
+                repair=item.get("acceptance_repair_required") or "等待承接修复",
+                risk_status=risk_status,
+                window=item.get("participation_window") or item.get("buy_window") or "09:50-10:10",
+            )
+        )
+        sniper_rows += 1
+    if not sniper_rows:
+        lines.append("| 暂无 | - | - | - | - | - | - | - |")
+    lines.extend([
+        "",
+        "### 3. 备用观察",
         "| 对象 | 所属方向 | 定位 | 触发条件 | 失效条件 |",
         "|------|----------|------|----------|----------|",
-    ]
+    ])
     if backup_watch:
         for item in backup_watch[:3]:
             if not isinstance(item, dict):
@@ -714,17 +965,26 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         lines.append("| 暂无 | - | - | - | - |")
     lines.extend([
         "",
-        "### 3. 个股结论",
+        "### 4. 个股结论",
         "| 前台显示 | 完整候选 | 动作原则 |",
         "|----------|----------|----------|",
-        "| 只保留唯一对象和备用观察 | 完整候选单保留在结构化快照与附录 | 竞价表态、开盘前几分钟、打板/回封、60分钟确认分层处理，买后30分钟结构止损 |",
+        "| 只保留唯一对象和备用观察 | 完整候选单保留在结构化快照与附录 | {principle} |".format(
+            principle=(
+                "最终0%时只观察，不做新增参与；观察对象重新成立后再进入明日动作评估"
+                if is_zero_participation
+                else "竞价表态、开盘前几分钟、打板/回封、60分钟确认分层处理，买后30分钟结构止损"
+            )
+        ),
         "",
     ])
     return lines
 
 
-def _unique_action_target_lines(snapshot):
-    target = _effective_unique_action_target(snapshot)
+def _unique_action_target_lines(snapshot, final_gate=None):
+    position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    is_zero_participation = position_state.get("grade") == "0"
+    observation_target = _conditional_observation_target(snapshot) if is_zero_participation else {}
+    target = observation_target if observation_target else _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         label = _unique_target_label(target)
         participation_window = str(target.get("participation_window") or "").strip()
@@ -747,6 +1007,14 @@ def _unique_action_target_lines(snapshot):
         condition = "主线确认 + 承接 + 60分钟确认未同时满足"
         participation_window_type = "structure_confirm"
         fallback_state = "不做"
+    if is_zero_participation:
+        action_label = "只看条件观察对象" if observation_target else "只看唯一对象"
+        return [
+            "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |",
+            "|--------------|------|------|------|--------------|",
+            f"| {action_label} | {label} | {participation_window or '60分钟确认'} | {condition} | {fallback_state} |",
+            "",
+        ]
     return [
         "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |",
         "|--------------|------|------|------|--------------|",
@@ -755,21 +1023,36 @@ def _unique_action_target_lines(snapshot):
     ]
 
 
-def _execution_plan_lines(snapshot=None):
+def _execution_plan_lines(snapshot=None, final_gate=None):
     decision_lines = render_reasoning_decision_lines((snapshot or {}).get("reasoning_decision"))
+    position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    if position_state.get("grade") == "0":
+        schedule_lines = [
+            "| 09:25-09:40 | 只看风险是否钝化 | 无 | 有旧仓先看是否需要降风险 | 不做新增参与 |",
+            "| 09:30-09:35 | 只看跌停扩散、主攻线承接和唯一对象是否出现 | 无 | 弱仓/错仓先降风险 | 观察，不抢开盘 |",
+            "| 09:50-10:10 | 观察市场底色、主线承接、唯一对象强弱 | 无 | 10:00左右处理弱仓/错仓 | 条件未同时满足继续0% |",
+            "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
+            "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
+            "| 午后 | 看主线是否延续，不追轮动末端 | 无 | 若走弱继续降风险 | 不做情绪补偿 |",
+            "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+        ]
+    else:
+        schedule_lines = [
+            "| 09:25-09:40 | 竞价表态、主线核心是否被核、跌停扩散 | 仅核心竞价表态清楚才可做 | 有旧仓先看是否需要降风险 | 合格则参与，不合格回到0% |",
+            "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 核心对象承接连续可按预演参与 | 弱仓/错仓先降风险 | 前几分钟进攻窗口 |",
+            "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入结构确认 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |",
+            "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
+            "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价/前几分钟/回封未触发时，再看60分钟确认 | 买后用30分钟结构止损 | 50%/100%或0% |",
+            "| 午后 | 看主线是否延续，不追轮动末端 | 默认谨慎 | 若走弱继续降风险 | 不做情绪补偿 |",
+            "| 尾盘 | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不尾盘开新仓 | 例外，不是常规 |",
+        ]
     return [
         "## 六、明日执行计划",
         *decision_lines,
-        *_unique_action_target_lines(snapshot),
+        *_unique_action_target_lines(snapshot, final_gate=final_gate),
         "| 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |",
         "|----------|----------|----------|-----------|------|",
-        "| 09:25-09:40 | 竞价表态、主线核心是否被核、跌停扩散 | 仅核心竞价表态清楚才可做 | 有旧仓先看是否需要降风险 | 合格则参与，不合格回到0% |",
-        "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 核心对象承接连续可按预演参与 | 弱仓/错仓先降风险 | 前几分钟进攻窗口 |",
-        "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入结构确认 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |",
-        "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
-        "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价/前几分钟/回封未触发时，再看60分钟确认 | 买后用30分钟结构止损 | 50%/100%或0% |",
-        "| 午后 | 看主线是否延续，不追轮动末端 | 默认谨慎 | 若走弱继续降风险 | 不做情绪补偿 |",
-        "| 尾盘 | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不尾盘开新仓 | 例外，不是常规 |",
+        *schedule_lines,
         "",
     ]
 
@@ -784,9 +1067,10 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     action = position_state["default_action"]
-    target = _effective_unique_action_target(snapshot)
+    observation_target = _conditional_observation_target(snapshot) if position_state.get("grade") == "0" else {}
+    target = observation_target if observation_target else _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
-        unique_target = _unique_target_label(target)
+        unique_target = f"条件观察：{_unique_target_label(target)}" if observation_target else _unique_target_label(target)
         one_line_action = position_state["action_with_target"]
     else:
         unique_target = "暂无"
@@ -817,10 +1101,11 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     lines.extend(_mainline_capacity_regime_lines(snapshot))
     lines.extend(_mainline_attack_evidence_lines(snapshot))
     lines.extend(_turnover_share_lines(snapshot))
+    lines.extend(_dragon_pullback_lines(snapshot))
 
     lines.extend(_capital_intent_lines(snapshot))
     lines.extend(_candidate_lines(report_lines, snapshot, final_gate=final_gate))
-    lines.extend(_execution_plan_lines(snapshot))
+    lines.extend(_execution_plan_lines(snapshot, final_gate=final_gate))
     lines.extend(_final_summary_lines(report_lines, snapshot, final_gate=final_gate))
     lines = [line for line in lines if not any(marker in str(line) for marker in FORBIDDEN_FRONT_PAGE_MARKERS)]
     return sanitize_front_page_text(lines)

@@ -1,4 +1,5 @@
 from report.market_fit_calibration import build_market_fit_calibration
+import daily_report_analysis_utils as analysis_utils
 
 
 def _safe_float(value, default=0.0):
@@ -45,6 +46,93 @@ def _has_resolved_mainline_turnover_summary(summary):
         if has_mainline_turnover and missing_market_turnover:
             return False
     return True
+
+
+def _confirmed_attack_line(mainline_turnover_summary):
+    if not isinstance(mainline_turnover_summary, dict):
+        return ""
+    attack_summary = mainline_turnover_summary.get("mainline_attack_evidence_summary") or {}
+    if not isinstance(attack_summary, dict):
+        return ""
+    if str(attack_summary.get("attack_state") or "").strip() != "confirmed_attack":
+        return ""
+    return str(attack_summary.get("primary_line") or "").strip()
+
+
+def _align_current_mainline_history_record_with_attack(current_record, mainline_turnover_summary, target_date):
+    primary_line = _confirmed_attack_line(mainline_turnover_summary)
+    if not primary_line:
+        return current_record or {}
+
+    current_record = dict(current_record or {})
+    old_mainline = str(
+        current_record.get("primary_mainline")
+        or current_record.get("leading_line")
+        or ""
+    ).strip()
+    if old_mainline == primary_line:
+        return current_record
+
+    attack_summary = mainline_turnover_summary.get("mainline_attack_evidence_summary") or {}
+    evidence = str(
+        attack_summary.get("confirmation_evidence")
+        or mainline_turnover_summary.get("conclusion")
+        or f"{primary_line}攻击证据成立"
+    ).strip()
+    existing_rotation_label = str(current_record.get("rotation_label") or "").strip()
+    existing_rotation_summary = str(current_record.get("rotation_summary") or "").strip()
+    current_record["date"] = str(current_record.get("date") or target_date or "").strip()
+    current_record["primary_mainline"] = primary_line
+    current_record["leading_line"] = primary_line
+    current_record["secondary_mainline"] = ""
+    current_record["competition_mainline"] = ""
+    if existing_rotation_label == "逆势攻击" and existing_rotation_summary:
+        current_record["rotation_summary"] = (
+            existing_rotation_summary
+            if evidence and evidence in existing_rotation_summary
+            else "；".join([part for part in (existing_rotation_summary, evidence) if part])
+        )
+    else:
+        current_record["rotation_summary"] = evidence
+    current_record["source"] = "market_research_snapshot.confirmed_attack"
+    return current_record
+
+
+def _refresh_current_mainline_record_from_rotation(current_record, rotation_snapshot, target_date):
+    current_record = dict(current_record or {})
+    rotation_snapshot = rotation_snapshot or {}
+    rotation_label = str(rotation_snapshot.get("rotation_label") or "").strip()
+    rotation_summary = str(
+        rotation_snapshot.get("summary_text")
+        or rotation_snapshot.get("rotation_reason")
+        or ""
+    ).strip()
+    if not rotation_label and not rotation_summary:
+        return current_record
+
+    current_record["date"] = str(current_record.get("date") or target_date or "").strip()
+    if rotation_label:
+        current_record["rotation_label"] = rotation_label
+    if rotation_summary:
+        current_record["rotation_summary"] = rotation_summary
+    return current_record
+
+
+def _mainline_turnover_summary_conflicts_with_current_record(summary, current_record):
+    if not isinstance(summary, dict):
+        return True
+    current_record = current_record or {}
+    record_text = " ".join(
+        str(current_record.get(key) or "")
+        for key in ("rotation_label", "market_state", "state", "rotation_summary")
+    )
+    conclusion_text = " ".join(
+        str(summary.get(key) or "")
+        for key in ("share_trend_label", "conclusion", "data_text", "action_text")
+    )
+    if ("逆势攻击" in record_text or "放量杀跌" in record_text) and "主线切换" in conclusion_text:
+        return True
+    return False
 
 
 def _resolve_effective_total_turnover(
@@ -261,6 +349,81 @@ def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
         return loader(target_date, lookback_days=25)
 
 
+def _mainline_name_from_history_record(record):
+    record = record or {}
+    return str(record.get("primary_mainline") or record.get("leading_line") or "").strip()
+
+
+def _history_date(record):
+    return str((record or {}).get("date") or (record or {}).get("trade_date") or "").strip()
+
+
+def _load_recent_turnover_by_daily_mainline(loader, recent_mainline_history, target_date):
+    records_by_sector = {}
+    record_by_date = {}
+    for record in recent_mainline_history or []:
+        record_date = _history_date(record)
+        mainline = _mainline_name_from_history_record(record)
+        if not record_date or not mainline:
+            continue
+        records_by_sector.setdefault(mainline, set()).add(record_date)
+        record_by_date[record_date] = record
+
+    rows_by_date = {}
+    for mainline, expected_dates in records_by_sector.items():
+        try:
+            rows = loader(target_date, mainline, lookback_days=25) or []
+        except TypeError:
+            rows = loader(target_date, mainline) or []
+        except Exception:
+            rows = []
+        for row in rows or []:
+            row = dict(row or {})
+            row_date = _history_date(row)
+            if row_date not in expected_dates:
+                continue
+            record = record_by_date.get(row_date) or {}
+            row["date"] = row_date
+            row.setdefault("cycle_mainline", mainline)
+            row.setdefault("daily_attack_line", str((record or {}).get("daily_attack_line") or mainline).strip())
+            rows_by_date[row_date] = row
+    return [rows_by_date[date] for date in sorted(rows_by_date)]
+
+
+def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_history, recent_mainline_history):
+    rows_by_date = {
+        _history_date(row): dict(row or {})
+        for row in recent_sector_turnover_history or []
+        if _history_date(row)
+    }
+    completed = []
+    for record in recent_mainline_history or []:
+        record_date = _history_date(record)
+        mainline = _mainline_name_from_history_record(record)
+        if not record_date or not mainline:
+            continue
+        row = rows_by_date.get(record_date)
+        if row:
+            row.setdefault("date", record_date)
+            row.setdefault("cycle_mainline", mainline)
+            row.setdefault("daily_attack_line", str((record or {}).get("daily_attack_line") or mainline).strip())
+            completed.append(row)
+            continue
+        completed.append(
+            {
+                "date": record_date,
+                "sector_name": mainline,
+                "cycle_mainline": mainline,
+                "daily_attack_line": str((record or {}).get("daily_attack_line") or mainline).strip(),
+                "sector_turnover": 0.0,
+                "total_turnover": 0.0,
+                "turnover_share_pct": 0.0,
+                "source_status": "history_missing",
+            }
+        )
+    return completed[-25:]
+
+
 def _sector_name_from_row(row):
     row = row or {}
     return str(row.get("sector_name") or row.get("name") or row.get("sector") or row.get("行业") or "").strip()
@@ -271,7 +434,7 @@ def _sector_names_match(left, right):
     right = str(right or "").strip()
     if not left or not right:
         return False
-    return left == right or left in right or right in left
+    return analysis_utils.sector_name_matches(left, right)
 
 
 def _pick_first_number(row, *keys):
@@ -290,6 +453,92 @@ def _flow_turnover_yi(row):
     if cje is None:
         return None
     return cje / 1e4
+
+
+def _flow_row_key(row):
+    row = row or {}
+    code = str(row.get("code") or row.get("ts_code") or "").strip()
+    name = _sector_name_from_row(row)
+    return code or name
+
+
+def _sector_flow_entries(sector_fund_flow):
+    if isinstance(sector_fund_flow, dict):
+        inflow_rows = sector_fund_flow.get("inflow") or []
+        outflow_rows = sector_fund_flow.get("outflow") or []
+    else:
+        inflow_rows = sector_fund_flow or []
+        outflow_rows = []
+
+    entries = []
+    seen = set()
+    for rank, row in enumerate(inflow_rows, 1):
+        if not isinstance(row, dict) or not _sector_name_from_row(row):
+            continue
+        key = _flow_row_key(row)
+        if key:
+            seen.add(key)
+        entries.append((rank, row))
+
+    for row in outflow_rows:
+        if not isinstance(row, dict) or not _sector_name_from_row(row):
+            continue
+        key = _flow_row_key(row)
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        entries.append((None, row))
+    return entries
+
+
+def _append_unique_sector_name(target, sector_name):
+    sector_name = str(sector_name or "").strip()
+    if sector_name and not any(_sector_names_match(existing, sector_name) for existing in target):
+        target.append(sector_name)
+
+
+def _merge_flow_rows_for_sector(sector_name, flow_entries):
+    matches = [
+        (rank, row)
+        for rank, row in flow_entries or []
+        if _sector_names_match(_sector_name_from_row(row), sector_name)
+    ]
+    if not matches:
+        return None, {}
+
+    rank_values = [rank for rank, _ in matches if rank]
+    net_total = 0.0
+    has_net = False
+    turnover_total = 0.0
+    has_turnover = False
+    matched_names = []
+    for _, row in matches:
+        row_name = _sector_name_from_row(row)
+        if row_name and row_name not in matched_names:
+            matched_names.append(row_name)
+        net_inflow = _pick_first_number(
+            row,
+            "net_inflow_amount",
+            "net_inflow_yi",
+            "zljlr",
+            "inflow",
+            "fund_flow",
+        )
+        if net_inflow is not None:
+            net_total += net_inflow
+            has_net = True
+        turnover = _flow_turnover_yi(row)
+        if turnover is not None and turnover > 0:
+            turnover_total += turnover
+            has_turnover = True
+
+    merged = {"name": sector_name, "matched_flow_names": matched_names}
+    if has_net:
+        merged["zljlr"] = round(net_total, 2)
+    if has_turnover:
+        merged["turnover_yi"] = round(turnover_total, 2)
+    return min(rank_values) if rank_values else None, merged
 
 
 def _extract_board_height(stock):
@@ -319,6 +568,46 @@ def _extract_board_height(stock):
     return int(digits) if digits else 0
 
 
+def _stock_display_name(stock):
+    stock = stock or {}
+    for key in ("名称", "name", "stock_name", "股票简称", "code", "代码"):
+        value = str(stock.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _truthy_evidence(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    text = str(value or "").strip().lower()
+    return text in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "是",
+        "有",
+        "确认",
+        "已确认",
+        "成立",
+        "顶住",
+        "顶住压力",
+        "二次确认",
+        "第二波确认",
+    }
+
+
+def _leader_pressure_hold_confirmed(stock):
+    stock = stock or {}
+    return any(
+        _truthy_evidence(stock.get(key))
+        for key in ("pressure_hold_confirmed", "second_wave_confirmed", "held_pressure", "顶住压力")
+    )
+
+
 def _sector_zt_stocks(zt_pool_by_sector, sector_name):
     if not isinstance(zt_pool_by_sector, dict):
         return None
@@ -326,6 +615,41 @@ def _sector_zt_stocks(zt_pool_by_sector, sector_name):
         if _sector_names_match(key, sector_name):
             return list(stocks or [])
     return []
+
+
+def _derive_dragon_pullback_review(data, mainline_name):
+    mainline_name = str(mainline_name or "").strip()
+    if not mainline_name:
+        return {}
+    stocks = _sector_zt_stocks((data or {}).get("zt_pool_by_sector"), mainline_name)
+    if not stocks:
+        return {}
+
+    leader = max(stocks, key=_extract_board_height)
+    leader_height = _extract_board_height(leader)
+    leader_name = _stock_display_name(leader)
+    if not leader_name or leader_height <= 2 or not _leader_pressure_hold_confirmed(leader):
+        return {}
+
+    laggard_feedback = []
+    for stock in stocks:
+        if stock is leader:
+            continue
+        height = _extract_board_height(stock)
+        name = _stock_display_name(stock)
+        if 0 < height <= 2 and name:
+            laggard_feedback.append(name)
+    if not laggard_feedback:
+        return {}
+
+    return {
+        "sector": mainline_name,
+        "leader": leader_name,
+        "leader_height": leader_height,
+        "second_confirmation": True,
+        "laggard_feedback": laggard_feedback,
+        "pullback": "第一波后回撤观察，当前用低位反馈复核",
+    }
 
 
 def _sector_previous_share(recent_sector_turnover_history, sector_name):
@@ -362,38 +686,24 @@ def _build_sector_attack_evidence_rows(
 ):
     data = data or {}
     sector_fund_flow = data.get("sector_fund_flow") or {}
-    inflow_rows = sector_fund_flow.get("inflow") if isinstance(sector_fund_flow, dict) else sector_fund_flow
-    inflow_rows = [row for row in (inflow_rows or []) if isinstance(row, dict) and _sector_name_from_row(row)]
+    flow_entries = _sector_flow_entries(sector_fund_flow)
     zt_pool_by_sector = data.get("zt_pool_by_sector")
     has_zt_pool = isinstance(zt_pool_by_sector, dict)
 
     ordered_sectors = []
-    flow_by_sector = {}
-    for rank, row in enumerate(inflow_rows, 1):
-        sector_name = _sector_name_from_row(row)
-        if sector_name not in ordered_sectors:
-            ordered_sectors.append(sector_name)
-        flow_by_sector[sector_name] = (rank, row)
-
     if has_zt_pool:
         for sector_name in zt_pool_by_sector.keys():
-            sector_name = str(sector_name or "").strip()
-            if sector_name and not any(_sector_names_match(existing, sector_name) for existing in ordered_sectors):
-                ordered_sectors.append(sector_name)
+            _append_unique_sector_name(ordered_sectors, sector_name)
+
+    for _, row in flow_entries:
+        _append_unique_sector_name(ordered_sectors, _sector_name_from_row(row))
 
     if not ordered_sectors:
         return None
 
     evidence_rows = []
     for sector_name in ordered_sectors:
-        rank, flow_row = next(
-            (
-                (rank, row)
-                for flow_sector, (rank, row) in flow_by_sector.items()
-                if _sector_names_match(flow_sector, sector_name)
-            ),
-            (None, {}),
-        )
+        rank, flow_row = _merge_flow_rows_for_sector(sector_name, flow_entries)
         evidence_row = {"sector_name": sector_name}
         net_inflow = _pick_first_number(
             flow_row,
@@ -405,7 +715,8 @@ def _build_sector_attack_evidence_rows(
         )
         if net_inflow is not None:
             evidence_row["net_inflow_amount"] = round(net_inflow, 2)
-            evidence_row["net_inflow_rank"] = rank
+            if rank is not None:
+                evidence_row["net_inflow_rank"] = rank
 
         zt_stocks = _sector_zt_stocks(zt_pool_by_sector, sector_name)
         if zt_stocks is not None:
@@ -533,6 +844,12 @@ def build_market_research_snapshot_contract(
             },
         )
 
+    current_mainline_history_record = _refresh_current_mainline_record_from_rotation(
+        current_mainline_history_record,
+        mainline_rotation_snapshot,
+        target_date,
+    )
+
     current_mainline_name = str(
         (current_mainline_history_record or {}).get("primary_mainline")
         or (current_mainline_history_record or {}).get("leading_line")
@@ -574,10 +891,21 @@ def build_market_research_snapshot_contract(
         )
 
     if not recent_sector_turnover_history and current_mainline_name and callable(load_recent_sector_turnover_history):
+        recent_sector_turnover_history = _load_recent_turnover_by_daily_mainline(
+            load_recent_sector_turnover_history,
+            recent_mainline_history,
+            target_date,
+        )
+    if not recent_sector_turnover_history and current_mainline_name and callable(load_recent_sector_turnover_history):
         recent_sector_turnover_history = load_recent_sector_turnover_history(
             target_date,
             current_mainline_name,
-            lookback_days=5,
+            lookback_days=25,
+        )
+    if recent_mainline_history:
+        recent_sector_turnover_history = _fill_turnover_placeholders_for_mainline_history(
+            recent_sector_turnover_history,
+            recent_mainline_history,
         )
 
     sector_attack_evidence_rows = _build_sector_attack_evidence_rows(
@@ -586,6 +914,7 @@ def build_market_research_snapshot_contract(
         recent_sector_turnover_history,
         total_turnover,
     )
+    realtime_tag_evidence_snapshot = data.get("realtime_tag_evidence_snapshot") or {}
     should_rebuild_for_attack_evidence = bool(
         sector_attack_evidence_rows
         and not (mainline_turnover_summary or {}).get("mainline_attack_evidence_summary")
@@ -593,6 +922,10 @@ def build_market_research_snapshot_contract(
 
     if (
         should_rebuild_for_attack_evidence
+        or _mainline_turnover_summary_conflicts_with_current_record(
+            mainline_turnover_summary,
+            current_mainline_history_record,
+        )
         or not _has_resolved_mainline_turnover_summary(mainline_turnover_summary)
     ) and callable(build_mainline_turnover_summary):
         mainline_turnover_summary = build_mainline_turnover_summary(
@@ -602,7 +935,20 @@ def build_market_research_snapshot_contract(
             current_sector_turnover_snapshot=current_sector_turnover_snapshot,
             recent_sector_turnover_history=recent_sector_turnover_history,
             sector_attack_evidence_rows=sector_attack_evidence_rows,
+            realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
         )
+
+    current_mainline_history_record = _align_current_mainline_history_record_with_attack(
+        current_mainline_history_record,
+        mainline_turnover_summary,
+        target_date,
+    )
+    current_mainline_name = str(
+        (current_mainline_history_record or {}).get("primary_mainline")
+        or (current_mainline_history_record or {}).get("leading_line")
+        or current_mainline_name
+        or ""
+    ).strip()
 
     market_fit_calibration = build_market_fit_calibration(
         strong_samples=_collect_market_fit_strong_samples(data),
@@ -624,6 +970,7 @@ def build_market_research_snapshot_contract(
         lhb_capital_status,
         capital_conclusion,
     )
+    dragon_pullback_review = _derive_dragon_pullback_review(data, current_mainline_name)
 
     return {
         "observation": observation_snapshot,
@@ -639,10 +986,12 @@ def build_market_research_snapshot_contract(
         "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
         "recent_sector_turnover_history": recent_sector_turnover_history,
         "mainline_turnover_summary": mainline_turnover_summary,
+        "realtime_tag_evidence_snapshot": realtime_tag_evidence_snapshot,
         "market_fit_calibration": market_fit_calibration,
         "capital_intent_breakdown": capital_intent_breakdown,
         "lhb_capital_status": lhb_capital_status,
         "capital_conclusion": capital_conclusion,
+        "dragon_pullback_review": dragon_pullback_review,
         "sector_ai_analysis": sector_ai_analysis,
         "final_gate": final_gate,
         "module_logs": logs,

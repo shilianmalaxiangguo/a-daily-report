@@ -54,6 +54,38 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 明日最大仓位 | 50% |", rendered)
         self.assertIn("| 收益处理 | 未到盈利垫，按进攻仓位三态执行 |", rendered)
 
+    def test_front_page_does_not_render_missing_month_return_as_zero(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-20",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "unique_action_target": {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "condition": "参与窗口确认",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "monthly_rhythm": {
+                            "month_mode": "attack_prepare",
+                            "month_return_pct": None,
+                            "month_return_source": "missing",
+                            "profit_cushion_pct": 10.0,
+                            "profit_cushion": False,
+                            "max_position_pct": 50,
+                        },
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 当月收益 | 未记录 |", rendered)
+        self.assertIn("| 盈利垫 | 未记录（阈值+10.00%） |", rendered)
+        self.assertNotIn("| 当月收益 | +0.00% |", rendered)
+
     def test_front_page_execution_plan_uses_layered_participation_windows(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -138,6 +170,24 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
         self.assertNotIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
 
+    def test_front_page_renders_dragon_pullback_second_confirmation(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-24",
+                market_research_snapshot={
+                    "dragon_pullback_review": {
+                        "leader": "华电辽能",
+                        "second_confirmation": True,
+                        "laggard_feedback": ["京能电力", "大唐发电"],
+                    }
+                },
+            )
+        )
+
+        self.assertIn("| 龙头回头复核 | 华电辽能二次确认；京能电力、大唐发电低位补涨反哺核心辨识度 |", rendered)
+        self.assertIn("龙头第一波后的回撤只算观察，第二波顶住压力且低位补涨同步，才说明市场继续投票", rendered)
+
     def test_front_page_current_mainline_fields_downgrade_when_attack_evidence_is_chaotic(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -186,10 +236,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("| 05-14 | 日线中枢 | - | 中枢内 | 暂无确认主线 | 待确认 | 观察 | 待确认 | 中枢只记录候选方向，不把单日热度升级为周期主线；多方向局部活跃但资金未明显胜出。 |", rendered)
-        self.assertIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 候选方向成交额占比可记录，但未确认主攻线 |", rendered)
+        self.assertIn("| 2026-05-14 | 半导体 | 半导体 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 主线成交额占比可用，继续观察占比抬升或回落 |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 暂无确认主线 | 暂无确认主攻线 |", rendered)
         self.assertNotIn("| 05-14 | 日线中枢 | - | 中枢内 | 半导体 | 周期主线 |", rendered)
-        self.assertNotIn("| 2026-05-14 | 半导体 | 半导体 |", rendered)
+        self.assertNotIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿", rendered)
         self.assertNotIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 |", rendered)
 
     def test_front_page_maps_position_attack_grade_to_fixed_position_slabs(self):
@@ -338,6 +388,320 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("B档", rendered)
         self.assertIn("| 0%不参与 |", rendered)
 
+    def test_front_page_uses_extreme_conviction_target_as_tomorrow_action_target(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-19",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "selected_position_candidate": {
+                        "name": "汇源通信",
+                        "code": "000586",
+                        "sector": "通信设备",
+                        "source_tier": "extreme_conviction",
+                        "participation_window": "竞价表态 + 回封参与",
+                        "participation_window_type": "auction_reseal",
+                        "required_steps": ["竞价表态", "开盘前几分钟承接", "回封/打板"],
+                        "fallback_state": "条件不满足回到0%",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "participation_mode": "attack_50_preview",
+                        "monthly_rhythm": {"month_mode": "ordinary_attack", "max_position_pct": 50},
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 唯一对象 | 000586 汇源通信（通信设备） |", rendered)
+        self.assertIn("| 当前状态 | 50%标准进攻对象 |", rendered)
+        self.assertIn("| 只看唯一对象 | 000586 汇源通信（通信设备） | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 条件不满足回到0% |", rendered)
+        self.assertIn("| 50%标准进攻", rendered)
+        self.assertNotIn("| 唯一对象 | 暂无 |", rendered)
+
+    def test_countertrend_attack_market_keeps_unique_target_observation_only(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "人形机器人",
+                        "share_trend_label": "逆势试攻",
+                        "conclusion": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理",
+                    },
+                    "state_machine": {
+                        "style_label": "放量杀跌",
+                        "primary_action": "先防踩踏，等指数图形和主攻线承接同时修复后再给买入资格。",
+                    },
+                    "selected_position_candidate": {
+                        "name": "华微电子",
+                        "code": "600360",
+                        "sector": "半导体",
+                        "source_tier": "extreme_conviction",
+                        "participation_window": "09:50-10:10",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                },
+                final_gate={"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 唯一对象 | 暂无 |", rendered)
+        self.assertIn("| 当前状态 | 0%无合格标的 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 人形机器人 | 人形机器人 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
+        self.assertNotIn("50%标准进攻对象", rendered)
+        self.assertNotIn("50%标准进攻，只做预演命中的合格对象", rendered)
+
+    def test_zero_participation_surfaces_selected_candidate_as_conditional_observation(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-22",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "元器件"},
+                    "selected_position_candidate": {
+                        "name": "风华高科",
+                        "code": "000636",
+                        "sector": "元器件",
+                        "source_tier": "extreme_conviction",
+                        "participation_window": "09:50-10:10",
+                        "condition": "09:50-10:10站上37.62，且元器件/PCB链承接不塌",
+                        "fallback_state": "不满足继续0%",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 唯一对象 | 条件观察：000636 风华高科（元器件） |", rendered)
+        self.assertIn("| 当前状态 | 0%条件观察 |", rendered)
+        self.assertIn(
+            "| 只看条件观察对象 | 000636 风华高科（元器件） | 09:50-10:10 | 09:50-10:10站上37.62，且元器件/PCB链承接不塌 | 不满足继续0% |",
+            rendered,
+        )
+        self.assertIn(
+            "| 0%不参与 | 不确定时不值得主动参与 | 元器件 | 元器件 | 先看市场基底 | 条件观察：000636 风华高科（元器件） | 0% / 不参与 | 0%：条件不满足，即使有观察对象也不新增 |",
+            rendered,
+        )
+        self.assertNotIn("| 补位对象 | 风华高科", rendered)
+        self.assertNotIn("| 只看唯一对象 | 暂无 |", rendered)
+
+    def test_zero_participation_does_not_surface_sniper_rows_as_actionable(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "混沌轮动",
+                        "share_trend_label": "放量杀跌",
+                    },
+                    "candidate_snapshot": {
+                        "extreme_conviction_list": [
+                            {
+                                "name": "豫能控股",
+                                "code": "001896",
+                                "sector": "火力发电",
+                                "sniper_role": "明日主买对象",
+                                "leader_speed_tier": "极致加速龙头",
+                                "final_risk_review": {"status": "通过"},
+                            },
+                            {
+                                "name": "浙江世宝",
+                                "code": "002703",
+                                "sector": "汽车配件",
+                                "sniper_role": "明日补位对象",
+                                "leader_speed_tier": "极致加速龙头",
+                                "final_risk_review": {"status": "通过"},
+                            },
+                        ],
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 唯一对象 | 暂无 |", rendered)
+        self.assertIn("| 当前状态 | 0%无合格标的 |", rendered)
+        self.assertIn("### 2. 明日候选观察", rendered)
+        self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |", rendered)
+        self.assertIn("| 暂无 | - | - | - | - | - | - | - |", rendered)
+        self.assertIn("| 只保留唯一对象和备用观察 | 完整候选单保留在结构化快照与附录 | 最终0%时只观察，不做新增参与；观察对象重新成立后再进入明日动作评估 |", rendered)
+        self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", rendered)
+        self.assertNotIn("### 2. 明日主买与补位", rendered)
+        self.assertNotIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)
+        self.assertIn("| 暂无 | - | - | - | - | - | - | - |", rendered)
+        self.assertNotIn("001896 豫能控股", rendered)
+        self.assertNotIn("002703 浙江世宝", rendered)
+        self.assertNotIn("| 明日主买对象 |", rendered)
+        self.assertNotIn("| 明日补位对象 |", rendered)
+        self.assertIn("| 09:25-09:40 | 只看风险是否钝化 | 无 | 有旧仓先看是否需要降风险 | 不做新增参与 |", rendered)
+        self.assertNotIn("买后用30分钟结构止损", rendered)
+        self.assertNotIn("合格则参与，不合格回到0%", rendered)
+        self.assertNotIn("买后用30分钟结构止损", rendered)
+
+    def test_front_page_renders_sniper_primary_backup_speed_and_risk_review(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "selected_position_candidate": {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "sector": "电力",
+                        "source_tier": "extreme_conviction",
+                        "participation_window": "竞价表态 + 回封参与",
+                        "participation_window_type": "auction_reseal",
+                        "required_steps": ["竞价表态", "开盘前几分钟承接", "回封/打板"],
+                        "fallback_state": "条件不满足回到0%",
+                    },
+                    "candidate_snapshot": {
+                        "extreme_conviction_list": [
+                            {
+                                "name": "大唐发电",
+                                "code": "601991",
+                                "sector": "电力",
+                                "sniper_role": "明日主买对象",
+                                "leader_speed_tier": "极致加速龙头",
+                                "buy_ma_line": "MA3",
+                                "sell_ma_line": "MA5",
+                                "acceptance_repair_required": "缩量回撤到MA3附近，站回VWAP",
+                                "final_risk_review": {"status": "通过"},
+                                "participation_window": "竞价表态 + 回封参与",
+                            },
+                            {
+                                "name": "华电辽能",
+                                "code": "600396",
+                                "sector": "电力",
+                                "sniper_role": "明日补位对象",
+                                "leader_speed_tier": "大容量趋势龙头",
+                                "buy_ma_line": "MA10",
+                                "sell_ma_line": "MA20",
+                                "acceptance_repair_required": "缩量回撤到MA10附近，站回VWAP",
+                                "final_risk_review": {"status": "通过"},
+                                "participation_window": "09:50-10:10",
+                            },
+                        ],
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "participation_mode": "attack_50_preview",
+                        "monthly_rhythm": {"month_mode": "ordinary_attack", "max_position_pct": 50},
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("### 2. 明日主买与补位", rendered)
+        self.assertIn("| 明日主买对象 | 601991 大唐发电（电力） | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，站回VWAP | 通过 | 竞价表态 + 回封参与 |", rendered)
+        self.assertIn("| 明日补位对象 | 600396 华电辽能（电力） | 大容量趋势龙头 | MA10 | MA20 | 缩量回撤到MA10附近，站回VWAP | 通过 | 09:50-10:10 |", rendered)
+
+    def test_front_page_reads_sniper_candidates_from_top_level_snapshot_fallback(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "selected_position_candidate": {
+                        "name": "大唐发电",
+                        "code": "601991",
+                        "sector": "电力",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                    "extreme_conviction_list": [
+                        {
+                            "name": "大唐发电",
+                            "code": "601991",
+                            "sector": "电力",
+                            "sniper_role": "明日主买对象",
+                            "leader_speed_tier": "极致加速龙头",
+                            "buy_ma_line": "MA3",
+                            "sell_ma_line": "MA5",
+                            "acceptance_repair_required": "缩量回撤到MA3附近，站回VWAP",
+                            "final_risk_review": {"status": "通过"},
+                            "participation_window": "竞价表态 + 回封参与",
+                        }
+                    ],
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 明日主买对象 | 601991 大唐发电（电力） | 极致加速龙头 | MA3 | MA5 |", rendered)
+
+    def test_sniper_rows_follow_unique_action_target_when_final_target_differs(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "unique_action_target": {
+                        "name": "华微电子",
+                        "code": "600360",
+                        "sector": "半导体",
+                        "participation_window": "09:50-10:10",
+                    },
+                    "candidate_snapshot": {
+                        "extreme_conviction_list": [
+                            {
+                                "name": "豫能控股",
+                                "code": "001896",
+                                "sector": "火力发电",
+                                "sniper_role": "明日主买对象",
+                            },
+                            {
+                                "name": "浙江世宝",
+                                "code": "002703",
+                                "sector": "汽车配件",
+                                "sniper_role": "明日补位对象",
+                            },
+                        ]
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn("| 只看唯一对象 | 600360 华微电子（半导体） | 09:50-10:10 |", rendered)
+        self.assertIn("| 暂无 | - | - | - | - | - | - | - |", rendered)
+        self.assertNotIn("001896 豫能控股", rendered)
+        self.assertNotIn("002703 浙江世宝", rendered)
+
     def test_candidate_section_uses_structured_snapshot_summary_and_hides_full_candidate_table(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -377,7 +741,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 今日不买原因 | 60分钟确认未完成 |", stock_section)
         self.assertIn("| 明日触发 | 10点确认；主线承接 |", stock_section)
         self.assertIn("| 明日失效 | 主线回落；跌破关键位 |", stock_section)
-        self.assertIn("### 2. 备用观察", stock_section)
+        self.assertIn("### 2. 明日候选观察", stock_section)
+        self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |", stock_section)
+        self.assertIn("### 3. 备用观察", stock_section)
         self.assertIn("| 富瀚微(300613) | 半导体 | 主线备选 | 10点确认承接 | 跌破关键位 |", stock_section)
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", stock_section)
 
@@ -451,7 +817,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("### 0. 推理裁决", rendered)
         self.assertNotIn("思维链", rendered)
         self.assertNotIn("chain-of-thought", rendered)
-        reasoning_section = rendered[rendered.index("### 0. 推理裁决") : rendered.index("| 明日唯一动作 |")]
+        reasoning_section = rendered[rendered.index("### 0. 推理裁决") : rendered.index("| 明日观察动作 |")]
         for line in reasoning_section.splitlines():
             if line.startswith("|") and not line.startswith("|------"):
                 self.assertEqual(line.count("|"), 3, line)
@@ -593,6 +959,11 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("| 0%不参与 |", rendered)
+        self.assertIn("| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |", rendered)
+        self.assertIn("| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |", rendered)
+        self.assertNotIn("10:00左右买", rendered)
+        self.assertNotIn("新仓止损", rendered)
+        self.assertNotIn("尾盘开新仓", rendered)
         self.assertNotIn(_m("30%", "条件试错"), rendered)
         self.assertNotIn("B档", rendered)
         self.assertNotIn("| 空仓 / 短线确认 |", rendered)
@@ -761,6 +1132,57 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
         self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | 待累计 |", rendered)
 
+    def test_turnover_share_lines_preserve_trend_table_labels_when_current_attack_unconfirmed(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "混沌轮动",
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "chaotic_rotation",
+                            "primary_line": "",
+                            "confirmation_evidence": "多线分散，主攻线尚未胜出",
+                        },
+                        "turnover_share_trend_rows": [
+                            {
+                                "date": "2026-05-19",
+                                "cycle_mainline": "电力",
+                                "daily_attack_line": "电力",
+                                "mainline_turnover": "665.00亿",
+                                "market_turnover": "29089.77亿",
+                                "share": "2.3%",
+                                "share_change": "+0.6pct",
+                                "interpretation": "电力支线轮动，先看回流强度",
+                            },
+                            {
+                                "date": "2026-05-20",
+                                "cycle_mainline": "半导体",
+                                "daily_attack_line": "半导体",
+                                "mainline_turnover": "4050.00亿",
+                                "market_turnover": "29764.59亿",
+                                "share": "13.6%",
+                                "share_change": "+1.5pct",
+                                "interpretation": "半导体支线轮动，成交额占比明显抬升",
+                            },
+                        ],
+                    },
+                },
+            )
+        )
+
+        turnover_section = rendered[rendered.index("### 5. 主线成交额占比趋势") :]
+        self.assertIn(
+            "| 2026-05-19 | 电力 | 电力 | 665.00亿 | 29089.77亿 | 2.3% | +0.6pct | 电力支线轮动，先看回流强度 |",
+            turnover_section,
+        )
+        self.assertIn(
+            "| 2026-05-20 | 半导体 | 半导体 | 4050.00亿 | 29764.59亿 | 13.6% | +1.5pct | 半导体支线轮动，成交额占比明显抬升 |",
+            turnover_section,
+        )
+        self.assertNotIn("| 2026-05-20 | 暂无确认主线 | 暂无确认主攻线 | 4050.00亿", turnover_section)
+
     def test_front_page_replaces_double_mainline_with_capacity_regime_table(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -832,9 +1254,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "| 指标 | 数值 | 涨跌幅 | 解读 |",
                     "| 上证指数 | 4079.90 | -0.33% | 震荡修复 |",
                     "### 2. 市场状态结论",
-                    "| 项目 | 结论 |",
-                    "|------|------|",
-                    "| 市场状态 | 收缩防守 |",
+                    "| 项目 | 结论 | 依据 |",
+                    "|------|------|------|",
+                    "| 市场状态 | 收缩防守 | 指数弱、跌多涨少 |",
                     "## 三、周期与主线",
                     "**主线内可执行候选**:",
                     "| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |",
@@ -863,6 +1285,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         }
                     ],
                     "mainline_turnover_summary": {
+                        "turnover_share_trend_summary": "近25个交易日主线成交额占比趋势：当前10.0%，区间10.0%-17.5%，主线成交占比回落，先看重新聚焦能否持续。",
                         "double_mainline_summary": {
                             "cycle_mainline": "半导体",
                             "daily_attack_line": "半导体",
@@ -903,11 +1326,15 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 市场贴合度 | 主线有效，池子偏窄 |", rendered)
+        self.assertIn("| 市场贴合度 | 主线有效，池子偏窄 | 强势样本3只，主线命中2只，观察池命中0只 |", rendered)
+        market_base = rendered[rendered.index("### 2. 市场状态结论") : rendered.index("## 三、周期与主线")]
+        self.assertLess(market_base.index("| 项目 | 结论 | 依据 |"), market_base.index("| 市场贴合度 |"))
+        self.assertNotIn("### 2. 市场状态结论\n| 市场贴合度 |", market_base)
         self.assertIn("强势样本集中半导体", rendered)
         self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
         turnover_section = rendered[rendered.index("### 5. 主线成交额占比趋势") :]
-        self.assertLess(turnover_section.index("2026-04-23"), turnover_section.index("2026-04-24"))
+        self.assertIn("> 近25个交易日主线成交额占比趋势：当前10.0%，区间10.0%-17.5%，主线成交占比回落，先看重新聚焦能否持续。", turnover_section)
+        self.assertLess(turnover_section.index("2026-04-24"), turnover_section.index("2026-04-23"))
         front_stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", front_stock_section)
         self.assertIn("| 唯一对象 | 300613 富瀚微 |", front_stock_section)

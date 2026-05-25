@@ -113,6 +113,39 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertIn("不自动升级周期主线", current["interpretation"])
         self.assertNotIn("正在承担当前周期的主线观察任务", current["interpretation"])
 
+    def test_derive_market_research_cycle_layer_keeps_countertrend_attack_defensive(self):
+        result = derive_market_research_cycle_layer(
+            {
+                "recent_mainline_history": [
+                    {"date": "2026-05-20", "primary_mainline": "半导体", "rotation_label": "支线轮动"},
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-05-21",
+                    "primary_mainline": "人形机器人",
+                    "rotation_label": "逆势攻击",
+                    "rotation_summary": "当前逆势攻击；放量杀跌中只有人形机器人局部攻击",
+                },
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    }
+                },
+            },
+            state_machine={"leading_line": "人形机器人", "energy_state": "收缩防守"},
+        )
+
+        current = result["cycle_interpretation_rows"][-1]
+        self.assertEqual(current["market_state"], "逆势攻击")
+        self.assertEqual(current["transfer_state"], "逆势试攻")
+        self.assertIn("先防踩踏", current["tomorrow_validation"])
+        self.assertIn("放量杀跌", current["interpretation"])
+        pivot = result["pivot_mainline_rows"][-1]
+        self.assertEqual(pivot["mainline_degree"], "观察主攻线")
+        self.assertEqual(pivot["evolution"], "逆势攻击")
+        self.assertIn("不按周期主线处理", pivot["interpretation"])
+
     def test_derive_market_research_cycle_layer_uses_chaotic_attack_state_without_declaring_attack(self):
         result = derive_market_research_cycle_layer(
             {
@@ -399,6 +432,103 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(calls, [("2026-04-24", {"lookback_days": 25, "max_scan_days": 60})])
         self.assertEqual(len(result["recent_mainline_history"]), 2)
 
+    def test_build_market_research_snapshot_contract_loads_latest_25_sector_turnover_days(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-20"
+        calls = []
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-05-20", "total_turnover": 29764.59},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: [],
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-20",
+                "sector_name": sector_name,
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            load_recent_sector_turnover_history=lambda target_date, sector_name, **load_kwargs: calls.append(
+                (target_date, sector_name, load_kwargs)
+            )
+            or [
+                {
+                    "date": "2026-05-19",
+                    "sector_name": sector_name,
+                    "sector_turnover": 3440.0,
+                    "total_turnover": 29089.77,
+                    "turnover_share_pct": 11.83,
+                }
+            ],
+            build_mainline_turnover_summary=lambda **summary_kwargs: {
+                "current_mainline": summary_kwargs["current_mainline_history_record"]["primary_mainline"],
+                "turnover_share_trend_rows": [],
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(calls, [("2026-05-20", "半导体", {"lookback_days": 25})])
+        self.assertEqual(result["recent_sector_turnover_history"][0]["date"], "2026-05-19")
+
+    def test_build_market_research_snapshot_contract_loads_turnover_by_each_daily_mainline(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-20"
+        calls = []
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-05-20", "total_turnover": 29764.59},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: [
+                {"date": "2026-05-18", "primary_mainline": "电力", "daily_attack_line": "电力"},
+                {"date": "2026-05-19", "primary_mainline": "电力", "daily_attack_line": "电力"},
+            ],
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-20",
+                "sector_name": sector_name,
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            load_recent_sector_turnover_history=lambda target_date, sector_name, **load_kwargs: calls.append(
+                (target_date, sector_name, load_kwargs)
+            )
+            or [
+                {
+                    "date": "2026-05-18",
+                    "sector_name": sector_name,
+                    "sector_turnover": 486.0,
+                    "total_turnover": 29170.74,
+                    "turnover_share_pct": 1.67,
+                },
+                {
+                    "date": "2026-05-19",
+                    "sector_name": sector_name,
+                    "sector_turnover": 665.0,
+                    "total_turnover": 29089.77,
+                    "turnover_share_pct": 2.29,
+                }
+            ],
+            build_mainline_turnover_summary=lambda **summary_kwargs: {
+                "current_mainline": summary_kwargs["current_mainline_history_record"]["primary_mainline"],
+                "turnover_share_trend_rows": summary_kwargs["recent_sector_turnover_history"],
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                ("2026-05-20", "电力", {"lookback_days": 25}),
+            ],
+        )
+        self.assertEqual([row["cycle_mainline"] for row in result["recent_sector_turnover_history"]], ["电力", "电力"])
+
     def test_build_market_research_snapshot_contract_uses_tencent_sector_flow_turnover_before_ths(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
 
@@ -513,6 +643,264 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(semiconductor["turnover_share_pct"], 12.42)
         self.assertEqual(result["mainline_turnover_summary"]["current_mainline"], "半导体")
 
+    def test_build_market_research_snapshot_contract_derives_dragon_pullback_review_from_ladder_feedback(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "zt_pool_by_sector": {
+                    "电力": [
+                        {"名称": "华电辽能", "涨停统计": "5连板", "pressure_hold_confirmed": True},
+                        {"名称": "高位跟随", "涨停统计": "3连板"},
+                        {"名称": "京能电力", "涨停统计": "2连板"},
+                        {"名称": "大唐发电", "涨停统计": "首板"},
+                    ]
+                }
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(
+            result.get("dragon_pullback_review"),
+            {
+                "sector": "电力",
+                "leader": "华电辽能",
+                "leader_height": 5,
+                "second_confirmation": True,
+                "laggard_feedback": ["京能电力", "大唐发电"],
+                "pullback": "第一波后回撤观察，当前用低位反馈复核",
+            },
+        )
+
+    def test_build_market_research_snapshot_contract_keeps_dragon_pullback_empty_without_leader_pressure_hold(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "zt_pool_by_sector": {
+                    "电力": [
+                        {"名称": "华电辽能", "涨停统计": "5连板"},
+                        {"名称": "京能电力", "涨停统计": "2连板"},
+                        {"名称": "大唐发电", "涨停统计": "首板"},
+                    ]
+                }
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(result.get("dragon_pullback_review"), {})
+
+    def test_build_market_research_snapshot_contract_keeps_dragon_pullback_empty_without_laggard_feedback(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "zt_pool_by_sector": {
+                    "电力": [
+                        {"名称": "华电辽能", "涨停统计": "5连板", "second_wave_confirmed": True},
+                        {"名称": "高位跟随", "涨停统计": "3连板"},
+                    ]
+                }
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(result.get("dragon_pullback_review"), {})
+
+    def test_build_market_research_snapshot_contract_rewrites_current_history_from_confirmed_attack(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-21"
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-05-21", "total_turnover": 35072.8},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+                "secondary_mainline": "电力",
+                "competition_mainline": "证券",
+                "rotation_label": "爆发",
+                "rotation_summary": "主攻线半导体 / 次强线电力 / 竞争线证券",
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: [
+                {"date": "2026-05-20", "primary_mainline": "半导体"}
+            ],
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-21",
+                "sector_name": sector_name,
+                "sector_turnover": 4655.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 13.27,
+            },
+            load_recent_sector_turnover_history=lambda *args, **kwargs: [],
+            build_mainline_turnover_summary=lambda **kwargs: {
+                "current_mainline": "人形机器人",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+            **kwargs,
+        )
+
+        current_record = result["current_mainline_history_record"]
+        self.assertEqual(current_record["primary_mainline"], "人形机器人")
+        self.assertEqual(current_record["leading_line"], "人形机器人")
+        self.assertEqual(current_record["secondary_mainline"], "")
+        self.assertIn("人形机器人资金净流入靠前", current_record["rotation_summary"])
+        self.assertNotIn("主攻线半导体", current_record["rotation_summary"])
+
+    def test_build_market_research_snapshot_contract_keeps_countertrend_label_when_attack_line_rewrites_history(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-21"
+
+        def build_rotation(**rotation_kwargs):
+            return {
+                "rotation_label": "逆势攻击",
+                "summary_text": "当前逆势攻击；放量杀跌中只有人形机器人局部攻击",
+                "rotation_action": "先防踩踏，只观察次日是否修复承接",
+            }
+        kwargs["build_mainline_rotation_snapshot"] = build_rotation
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-05-21", "total_turnover": 35072.8},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+                "secondary_mainline": "电力",
+                "competition_mainline": "证券",
+                "rotation_label": payload["mainline_rotation_snapshot"]["rotation_label"],
+                "rotation_summary": payload["mainline_rotation_snapshot"]["summary_text"],
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: [
+                {"date": "2026-05-20", "primary_mainline": "半导体", "rotation_label": "支线轮动"}
+            ],
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-21",
+                "sector_name": sector_name,
+                "sector_turnover": 880.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 2.51,
+            },
+            load_recent_sector_turnover_history=lambda *args, **kwargs: [],
+            build_mainline_turnover_summary=lambda **summary_kwargs: {
+                "current_mainline": "人形机器人",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+            **kwargs,
+        )
+
+        current_record = result["current_mainline_history_record"]
+        self.assertEqual(current_record["primary_mainline"], "人形机器人")
+        self.assertEqual(current_record["rotation_label"], "逆势攻击")
+        self.assertIn("放量杀跌", current_record["rotation_summary"])
+        self.assertNotEqual(current_record["rotation_label"], "爆发")
+
+    def test_build_market_research_snapshot_contract_refreshes_cycle_layer_after_countertrend_attack_rewrite(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-21"
+        kwargs["build_mainline_rotation_snapshot"] = lambda **rotation_kwargs: {
+            "rotation_label": "逆势攻击",
+            "summary_text": "当前逆势攻击；放量杀跌中只有人形机器人局部攻击",
+            "rotation_action": "先防踩踏，只观察次日是否修复承接",
+        }
+
+        result = build_market_research_snapshot_contract(
+            data={"target_date": "2026-05-21", "total_turnover": 35072.8},
+            build_mainline_history_record=lambda target_date, payload: {
+                "date": target_date,
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+                "rotation_label": payload["mainline_rotation_snapshot"]["rotation_label"],
+                "rotation_summary": payload["mainline_rotation_snapshot"]["summary_text"],
+            },
+            load_recent_mainline_history=lambda target_date, **load_kwargs: [
+                {"date": "2026-05-20", "primary_mainline": "半导体", "rotation_label": "支线轮动"}
+            ],
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-21",
+                "sector_name": sector_name,
+                "sector_turnover": 880.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 2.51,
+            },
+            load_recent_sector_turnover_history=lambda *args, **kwargs: [],
+            build_mainline_turnover_summary=lambda **summary_kwargs: {
+                "current_mainline": "人形机器人",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+            **kwargs,
+        )
+
+        cycle_layer = derive_market_research_cycle_layer(result, result["state_machine"])
+        current = cycle_layer["cycle_interpretation_rows"][-1]
+        self.assertEqual(current["market_state"], "逆势攻击")
+        self.assertEqual(current["transfer_state"], "逆势试攻")
+        self.assertIn("先防踩踏", current["tomorrow_validation"])
+
+    def test_build_market_research_snapshot_contract_refreshes_stale_current_record_before_countertrend_attack_alignment(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        kwargs["target_date"] = "2026-05-21"
+        kwargs["build_mainline_rotation_snapshot"] = lambda **rotation_kwargs: {
+            "rotation_label": "逆势攻击",
+            "summary_text": "当前逆势攻击；放量杀跌中只有人形机器人局部攻击",
+            "rotation_action": "先防踩踏，只观察次日是否修复承接",
+        }
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-21",
+                "total_turnover": 35072.8,
+                "current_mainline_history_record": {
+                    "date": "2026-05-21",
+                    "primary_mainline": "半导体",
+                    "leading_line": "半导体",
+                    "secondary_mainline": "电力",
+                    "competition_mainline": "证券",
+                    "rotation_label": "爆发",
+                    "rotation_summary": "旧结论：成交额继续回升，而异常承接和趋势密度都还在",
+                },
+            },
+            get_sector_turnover_snapshot_from_ths=lambda sector_name, **snapshot_kwargs: {
+                "date": "2026-05-21",
+                "sector_name": sector_name,
+                "sector_turnover": 880.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 2.51,
+            },
+            load_recent_sector_turnover_history=lambda *args, **kwargs: [],
+            build_mainline_turnover_summary=lambda **summary_kwargs: {
+                "current_mainline": "人形机器人",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+            **kwargs,
+        )
+
+        current_record = result["current_mainline_history_record"]
+        self.assertEqual(current_record["primary_mainline"], "人形机器人")
+        self.assertEqual(current_record["rotation_label"], "逆势攻击")
+        self.assertIn("放量杀跌", current_record["rotation_summary"])
+        self.assertNotIn("异常承接和趋势密度都还在", current_record["rotation_summary"])
+
+        cycle_layer = derive_market_research_cycle_layer(result, result["state_machine"])
+        current_cycle = cycle_layer["cycle_interpretation_rows"][-1]
+        self.assertEqual(current_cycle["market_state"], "逆势攻击")
+        self.assertEqual(current_cycle["transfer_state"], "逆势试攻")
+
     def test_build_sector_attack_evidence_rows_parses_slash_zt_type_as_board_count(self):
         rows = _build_sector_attack_evidence_rows(
             {
@@ -549,6 +937,37 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(by_sector["算力"]["high_anchor_height"], 1)
         self.assertNotIn(42, [row["high_anchor_height"] for row in rows])
 
+    def test_build_sector_attack_evidence_rows_merges_cross_taxonomy_sector_flow(self):
+        rows = _build_sector_attack_evidence_rows(
+            {
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "IT服务", "zljlr": 42.0, "turnover_yi": 538.0},
+                        {"name": "软件开发", "zljlr": 14.0, "turnover_yi": 323.0},
+                    ],
+                    "outflow": [
+                        {"name": "建筑装饰", "zljlr": -2.0, "turnover_yi": 212.0},
+                        {"name": "工程机械", "zljlr": -5.0, "turnover_yi": 53.0},
+                    ],
+                },
+                "zt_pool_by_sector": {
+                    "软件服务": [{"name": "彩讯股份", "zt_type": "2/2"}],
+                    "建筑工程": [{"name": "圣晖集成", "zt_type": "4/3"}],
+                },
+            },
+            {},
+            [],
+            29089.77,
+        )
+
+        by_sector = {row["sector_name"]: row for row in rows}
+        self.assertEqual(by_sector["软件服务"]["net_inflow_amount"], 56.0)
+        self.assertEqual(by_sector["软件服务"]["sector_turnover"], 861.0)
+        self.assertEqual(by_sector["软件服务"]["turnover_share_pct"], 2.96)
+        self.assertEqual(by_sector["建筑工程"]["net_inflow_amount"], -7.0)
+        self.assertEqual(by_sector["建筑工程"]["sector_turnover"], 265.0)
+        self.assertEqual(by_sector["建筑工程"]["turnover_share_pct"], 0.91)
+
     def test_build_market_research_snapshot_contract_adds_turnover_share_change_to_attack_evidence(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
         captured = {}
@@ -580,6 +999,44 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         semiconductor = next(row for row in captured["sector_attack_evidence_rows"] if row["sector_name"] == "半导体")
         self.assertEqual(semiconductor["turnover_share_pct"], 12.4)
         self.assertEqual(semiconductor["turnover_share_change"], 1.6)
+
+    def test_build_market_research_snapshot_contract_passes_realtime_tag_snapshot_to_mainline_summary(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="元器件")
+        captured = {}
+        tag_snapshot = {
+            "groups": [
+                {
+                    "采用名称": "国产芯片替代",
+                    "大方向": "泛半导体/硬科技电子",
+                    "当日主攻分支": "国产芯片替代",
+                    "表层行业名": ["元器件", "芯片"],
+                    "辅助名称": ["PCB"],
+                    "关系判断": "父子",
+                }
+            ]
+        }
+
+        build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-24",
+                "realtime_tag_evidence_snapshot": tag_snapshot,
+                "sector_fund_flow": {
+                    "inflow": [{"name": "元器件", "zljlr": 38.0, "turnover_yi": 3200.0}],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {
+                    "元器件": [
+                        {"名称": "芯片一号", "涨停统计": "4连板"},
+                        {"名称": "芯片二号", "涨停统计": "首板"},
+                        {"名称": "芯片三号", "涨停统计": "首板"},
+                    ]
+                },
+            },
+            build_mainline_turnover_summary=lambda **kwargs: captured.update(kwargs) or {"current_mainline": "国产芯片替代"},
+            **kwargs,
+        )
+
+        self.assertIs(captured["realtime_tag_evidence_snapshot"], tag_snapshot)
 
     def test_build_market_research_snapshot_contract_rebuilds_existing_summary_when_attack_evidence_is_missing(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
@@ -680,6 +1137,115 @@ class MarketResearchRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["mainline_turnover_summary"]["current_mainline"], "半导体")
         self.assertEqual(result["mainline_turnover_summary"]["turnover_share_trend_rows"][0]["share"], "10.0%")
+
+    def test_build_market_research_snapshot_contract_rebuilds_stale_switch_summary_after_countertrend_rotation_refresh(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
+        captured = {}
+        kwargs["build_mainline_rotation_snapshot"] = lambda **kwargs: {
+            "rotation_label": "逆势攻击",
+            "summary_text": "当前逆势攻击；成交额继续回升但指数大跌、跌停扩散、涨跌比极差，说明这不是增量进攻。",
+            "rotation_action": "先防踩踏，只观察人形机器人次日是否修复承接",
+        }
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "target_date": "2026-05-21",
+                "total_turnover": 35072.8,
+                "current_mainline_history_record": {
+                    "date": "2026-05-21",
+                    "primary_mainline": "半导体",
+                    "rotation_label": "爆发",
+                },
+                "recent_mainline_history": [
+                    {"date": "2026-05-20", "primary_mainline": "半导体", "rotation_label": "支线轮动"},
+                ],
+                "mainline_turnover_summary": {
+                    "current_mainline": "人形机器人",
+                    "previous_mainline": "半导体",
+                    "share_trend_label": "切换",
+                    "conclusion": "主线切换为人形机器人，旧主线半导体退出中心",
+                    "data_text": "最近3日主线 电力 -> 半导体 -> 人形机器人；成交额占比 2.3% -> 13.6% -> 2.5%，节奏偏切换",
+                    "action_text": "只围绕新主线人形机器人重新收缩，不对旧主线做回流预判",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    },
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-05-21",
+                            "cycle_mainline": "人形机器人",
+                            "daily_attack_line": "人形机器人",
+                            "mainline_turnover": "880.00亿",
+                            "market_turnover": "35072.80亿",
+                            "share": "2.5%",
+                            "share_change": "-11.1pct",
+                            "interpretation": "主线成交额占比可用，继续观察占比抬升或回落",
+                        }
+                    ],
+                },
+                "current_sector_turnover_snapshot": {
+                    "date": "2026-05-21",
+                    "sector_name": "半导体",
+                    "sector_turnover": 4655.0,
+                    "total_turnover": 35072.8,
+                    "turnover_share_pct": 13.3,
+                },
+                "recent_sector_turnover_history": [
+                    {
+                        "date": "2026-05-20",
+                        "sector_name": "半导体",
+                        "sector_turnover": 4050.0,
+                        "total_turnover": 29764.59,
+                        "turnover_share_pct": 13.6,
+                    }
+                ],
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "汽车零部件", "zljlr": 30.0, "turnover_yi": 778.0},
+                        {"name": "电机", "zljlr": 9.0, "turnover_yi": 102.0},
+                    ],
+                    "outflow": [],
+                },
+                "zt_pool_by_sector": {
+                    "汽车零部件": [
+                        {"名称": "三花智控", "涨停统计": "首板"},
+                        {"名称": "拓普集团", "涨停统计": "首板"},
+                        {"名称": "五洲新春", "涨停统计": "首板"},
+                    ],
+                    "电机": [
+                        {"名称": "鸣志电器", "涨停统计": "首板"},
+                        {"名称": "昊志机电", "涨停统计": "首板"},
+                    ],
+                },
+            },
+            build_mainline_turnover_summary=lambda **kwargs: captured.update(kwargs)
+            or {
+                "current_mainline": "人形机器人",
+                "share_trend_label": "逆势试攻",
+                "conclusion": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理",
+                "data_text": "最近2日主线 半导体 -> 人形机器人；成交额占比 13.6% -> 2.5%，节奏偏逆势试攻",
+                "action_text": "人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接",
+                "double_mainline_summary": {
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "人形机器人",
+                    "relationship": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线处理",
+                },
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+            **kwargs,
+        )
+
+        self.assertEqual(captured["current_mainline_history_record"]["rotation_label"], "逆势攻击")
+        self.assertIn("指数大跌", captured["current_mainline_history_record"]["rotation_summary"])
+        self.assertEqual(result["current_mainline_history_record"]["primary_mainline"], "人形机器人")
+        self.assertEqual(result["mainline_turnover_summary"]["share_trend_label"], "逆势试攻")
+        self.assertIn("观察主攻线", result["mainline_turnover_summary"]["conclusion"])
+        self.assertNotIn("主线切换为人形机器人", result["mainline_turnover_summary"]["conclusion"])
 
     def test_build_market_research_snapshot_contract_derives_lhb_capital_intent_from_lhb_rows(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="通信")
