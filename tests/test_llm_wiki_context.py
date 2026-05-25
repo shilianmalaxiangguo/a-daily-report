@@ -196,6 +196,20 @@ class LlmWikiContextTest(unittest.TestCase):
         ]:
             self.assertIn(required, flow_text)
 
+    def test_build_llm_wiki_context_exposes_vehicle_mismatch_and_new_theme_timing(self):
+        context = build_llm_wiki_context()
+        digest = context["report_digest_text"]
+
+        self.assertIn(
+            "资金载体错配 -> 叙事、核心锚、弹性载体和参与资金不在同一周期时，不能用统一持股剧本",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "新题材早信/不信 -> 真新题材只在早期主动性和第一确认窗口提高参与质量，后手只观察或等分歧确认",
+            context["field_mappings"],
+        )
+        self.assertIn("先判断买的是产业趋势、核心锚、量化弹性还是情绪后排", digest)
+
     def test_build_llm_wiki_context_exposes_knowledge_compounding_candidates(self):
         context = build_llm_wiki_context()
 

@@ -686,6 +686,7 @@ class MarketResearchRendererTest(unittest.TestCase):
                     "stage_reason": "还没到普涨乱做",
                     "index_profit_relation": "指数偏弱但赚钱效应修复",
                     "index_profit_reason": "主线承接好于指数",
+                    "index_profit_action": "先区分核心锚、量化弹性和情绪后排。",
                     "focus_label": "主线集中",
                     "focus_action": "只做军工主线",
                     "candidate_focus": "军工核心与承接对象",
@@ -700,6 +701,7 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证+0.56%", rendered)
         self.assertIn("| 主线焦点 | 主攻线 军工 | 趋势密度和异常承接都在军工 |", rendered)
         self.assertIn("### 🧠 辩证决策补充", rendered)
+        self.assertIn("先区分核心锚、量化弹性和情绪后排", rendered)
         self.assertIn("什么情况下先不认这轮修复", rendered)
 
     def test_render_step0_follow_section_compact(self):

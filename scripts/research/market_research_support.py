@@ -563,7 +563,10 @@ def _build_dialectical_decision_snapshot_legacy_body(
             f"指数上涨{benchmark_change:+.2f}%时，上涨{up_count}家、下跌{down_count}家，"
             f"更像少数方向的窄池子进攻，不是普涨环境。"
         )
-        index_profit_action = f"只看{densest_sector or '被资金持续选择的方向'}，没有站对板块路径时不因指数上涨提高参与资格。"
+        index_profit_action = (
+            f"只看{densest_sector or '被资金持续选择的方向'}，没有站对板块路径时不因指数上涨提高参与资格；"
+            "先区分核心锚、量化弹性和情绪后排，不能用同一个板块结论覆盖不同持仓周期。"
+        )
     elif benchmark_change <= -0.1 and profit_effect_strong:
         index_profit_relation = "指数承压，但赚钱效应还在主线里"
         index_profit_reason = (

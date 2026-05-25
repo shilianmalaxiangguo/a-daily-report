@@ -968,6 +968,7 @@ def build_market_research_snapshot_dialectical_decision_node(context, node_meta=
         "### 🧠 辩证决策补充",
         f"- **现在更像什么阶段**: {dialectical_decision.get('stage_label', '-')}；{dialectical_decision.get('stage_reason', '-')}",
         f"- **指数和赚钱效应是否背离**: {dialectical_decision.get('index_profit_relation', '-')}；{dialectical_decision.get('index_profit_reason', '-')}",
+        f"- **背离后怎么处理**: {dialectical_decision.get('index_profit_action', '-')}",
         f"- **赚钱效应现在往哪聚**: {_display_text(dialectical_decision.get('focus_label', '-'), context)}；{_display_text(dialectical_decision.get('focus_action', '-'), context)}",
         f"- **明天优先看哪类对象**: {dialectical_decision.get('candidate_focus', '-')}；{dialectical_decision.get('candidate_action', '-')}",
         f"- **什么情况下先不认这轮修复**: {_display_text(' / '.join(dialectical_decision.get('falsification_conditions', []) or ['暂无']), context)}",

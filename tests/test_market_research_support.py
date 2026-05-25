@@ -343,6 +343,9 @@ assert follow == {"code": "follow"}
         self.assertIn("上涨2181家、下跌3225家", result["index_profit_reason"])
         self.assertIn("窄池子进攻", result["index_profit_reason"])
         self.assertIn("光通信/CPO", result["index_profit_action"])
+        self.assertIn("核心锚", result["index_profit_action"])
+        self.assertIn("量化弹性", result["index_profit_action"])
+        self.assertIn("情绪后排", result["index_profit_action"])
 
     def test_build_abnormal_projection_summary_support_summarizes_follow_state_mix(self):
         support = self._load_module()
