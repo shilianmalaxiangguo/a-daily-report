@@ -23,10 +23,56 @@ def _format_pct(value):
         return str(value)
 
 
+def _format_plain_pct(value):
+    if value in (None, ""):
+        return "-"
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _format_amount_yi(value):
+    if value in (None, ""):
+        return "-"
+    try:
+        return f"{float(value):.2f}亿"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _display_latest_first(rows):
+    return list(reversed(list(rows or [])))
+
+
 def _stock_label(item):
     name = item.get("stock_name") or item.get("name") or "-"
     code = item.get("stock_code") or item.get("code") or ""
     return f"{name}({code})" if code else name
+
+
+def _stock_name(item):
+    return item.get("stock_name") or item.get("name") or "-"
+
+
+def _stock_code(item):
+    return item.get("stock_code") or item.get("code") or "-"
+
+
+def _review_reasons(item):
+    review = item.get("trend_aesthetic_review") or {}
+    if isinstance(review, dict):
+        reasons = review.get("reasons") or []
+        if reasons:
+            return "；".join(str(reason) for reason in reasons if reason not in (None, ""))
+    return item.get("review_basis") or item.get("reason") or item.get("conviction_reason") or "-"
+
+
+def _repair_action(item):
+    review = item.get("trend_aesthetic_review") or {}
+    if isinstance(review, dict) and review.get("action"):
+        return review.get("action")
+    return item.get("repair_action") or item.get("action") or "-"
 
 
 def _status_label(status):
@@ -182,6 +228,28 @@ def _build_data_source_audit_node(context, node_meta=None, node_lookup=None):
     return {"lines": lines, "exports": {}}
 
 
+def _build_margin_pressure_detail_node(context, node_meta=None, node_lookup=None):
+    snapshot = _context_value(context, "margin_pressure", {}) or {}
+    rows = list(snapshot.get("rows") or [])
+    if not rows:
+        return {"lines": [], "exports": {"margin_pressure": snapshot}}
+    lines = [
+        "### 附录A：融资承接压力完整25日表",
+        "",
+        "| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 压力差 | 状态 | 较前日 |",
+        "|------|----------|------------|------------|--------|------|--------|",
+    ]
+    for row in _display_latest_first(rows[-25:]):
+        lines.append(
+            f"| {row.get('trade_date', '')} | {_format_amount_yi(row.get('margin_balance_yi'))} | "
+            f"{_format_amount_yi(row.get('market_turnover_yi'))} | {_format_plain_pct(row.get('margin_turnover_ratio_pct'))} | "
+            f"{_format_pct(row.get('pressure_diff_pct'))} | {row.get('pressure_label', '待累计')} | "
+            f"{row.get('change_text', '待累计')} |"
+        )
+    lines.append("")
+    return {"lines": lines, "exports": {"margin_pressure": snapshot}}
+
+
 def _build_appendix_metadata_node(context, node_meta=None, node_lookup=None):
     return {
         "lines": [
@@ -264,6 +332,57 @@ def _build_mainline_continuity_node(context, node_meta=None, node_lookup=None):
         empty_row=["暂无", "-", "-", "-", "-", "待累计", "待累计", "待确认", "今天开始记录"],
     )
     return {"lines": lines, "exports": {}}
+
+
+def _build_visible_candidate_lists_node(context, node_meta=None, node_lookup=None):
+    extreme_conviction_list = _context_value(context, "extreme_conviction_list", []) or []
+    dragon_rebound_watch_pool = _context_value(context, "dragon_rebound_watch_pool", []) or []
+    lines = []
+    _append_table(
+        lines,
+        "### 附录A：明日极度看好列表",
+        ["序号", "股票", "代码", "板块", "名单身份", "观察理由", "明日原则"],
+        [
+            [
+                idx,
+                _stock_name(item),
+                _stock_code(item),
+                item.get("sector"),
+                item.get("sniper_role") or item.get("execution_layer") or item.get("role"),
+                item.get("conviction_reason") or item.get("reason"),
+                item.get("conviction_rule") or item.get("next_action") or item.get("principle"),
+            ]
+            for idx, item in enumerate(extreme_conviction_list, 1)
+            if isinstance(item, dict)
+        ],
+        empty_row=["暂无", "-", "-", "-", "无正式名单", "今日没有可展示样本", "只看盘中事实"],
+    )
+    _append_table(
+        lines,
+        "### 附录A：龙回头观察池",
+        ["股票", "代码", "板块", "状态", "走势问题", "修复条件", "下一步"],
+        [
+            [
+                _stock_name(item),
+                _stock_code(item),
+                item.get("sector"),
+                item.get("repair_status") or item.get("review_status") or "龙回头观察",
+                _review_reasons(item),
+                _repair_action(item),
+                item.get("next_action") or "重新站回短中线承接后再评估",
+            ]
+            for item in dragon_rebound_watch_pool
+            if isinstance(item, dict)
+        ],
+        empty_row=["暂无", "-", "-", "无龙回头样本", "-", "-", "今天没有单独观察对象"],
+    )
+    return {
+        "lines": lines,
+        "exports": {
+            "extreme_conviction_list": list(extreme_conviction_list),
+            "dragon_rebound_watch_pool": list(dragon_rebound_watch_pool),
+        },
+    }
 
 
 def _build_stock_continuity_node(context, node_meta=None, node_lookup=None):
@@ -391,11 +510,13 @@ def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None
 
 
 APPENDIX_NODE_BUILDERS = {
+    "visible_candidate_lists": _build_visible_candidate_lists_node,
     "header": _build_appendix_header_node,
     "data_status": _build_appendix_data_status_node,
     "step_status": _build_appendix_step_status_node,
     "summary_stats": _build_appendix_summary_stats_node,
     "data_source_audit": _build_data_source_audit_node,
+    "margin_pressure_detail": _build_margin_pressure_detail_node,
     "metadata": _build_appendix_metadata_node,
     "timer_stats": _build_appendix_timer_stats_node,
     "mainline_continuity": _build_mainline_continuity_node,

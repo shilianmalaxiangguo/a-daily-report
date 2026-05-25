@@ -20,6 +20,7 @@ from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_
 from domains.execution_chain.pk_decision_nodes.pk_context import build_pk_decision_pk_context_node
 from domains.execution_chain.pk_decision_nodes.watch_anchor import build_pk_decision_watch_anchor_node
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
+from report.action_plan_renderer import render_action_plan_section
 
 
 class PkDecisionStageTest(unittest.TestCase):
@@ -112,7 +113,7 @@ class PkDecisionStageTest(unittest.TestCase):
         )
         self.assertEqual(
             format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_attack_50_ready": False}),
-            "⛔一档（空仓档）禁止新开仓",
+            "保持空仓，不新增参与",
         )
 
     def test_pk_decision_runtime_can_run_only_render_node_for_diagnostics(self):
@@ -434,9 +435,31 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("0%观察", rendered)
         self.assertIn("50%标准进攻", rendered)
         self.assertIn("参与窗口", rendered)
+        self.assertNotIn("禁止新开仓", rendered)
         self.assertNotIn(_m("最多", "30%"), rendered)
         self.assertNotIn(_m("30%", "条件试错"), rendered)
         self.assertNotIn("二档（防守档）", rendered)
+
+    def test_action_plan_context_zero_position_uses_participation_wording(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "暂不跟随",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "has_personal_positions": False,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "最终0%时只观察",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["position_section_lines"])
+        self.assertIn("不新增参与", rendered)
+        self.assertNotIn("禁止任何买入", rendered)
 
     def test_action_plan_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
         result = build_pk_decision_action_plan_context_node(
@@ -489,6 +512,361 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("命中后才评估50%标准进攻", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)
+
+    def test_action_plan_context_exports_candidate_quality_inputs_from_daily_candidates(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
+                "has_personal_positions": True,
+                "best_stock": {"name": "晶方科技", "code": "603005"},
+                "watch_anchor": {"name": "上峰水泥", "code": "000672"},
+                "display_observation_candidates": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "selection_quality": "高",
+                        "entry_cost_state": "高成本",
+                        "is_core": True,
+                        "cost_flags": ["远离MA/VWAP"],
+                    }
+                ],
+                "waiting_stocks": [
+                    {
+                        "name": "上峰水泥",
+                        "code": "000672",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                        "current_position_shares": 400,
+                        "sellable_shares": 300,
+                        "locked_shares": 100,
+                        "trend_context": "冲高后回踩MA/VWAP",
+                    }
+                ],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        exports = result["exports"]
+        self.assertEqual(exports["candidate_quality_panel_fields"]["market_emotion_label"], "0%观察")
+        self.assertEqual(exports["candidate_quality_panel_fields"]["account_attention_load"], "有持仓需先处理")
+        self.assertEqual(exports["candidate_quality_panel_fields"]["daily_new_entry_limit"], 0)
+        self.assertEqual(exports["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"], "603005")
+        self.assertEqual(exports["candidate_quality_panel_fields"]["backup_candidate"]["code"], "000672")
+        self.assertIn("亏损后补仓", exports["candidate_quality_panel_fields"]["forbidden_actions"])
+        self.assertEqual(
+            [sample["code"] for sample in exports["candidate_quality_samples"]],
+            ["603005", "000672"],
+        )
+
+    def test_action_plan_context_clears_backup_candidate_when_same_as_primary(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "晶方科技", "code": "603005"},
+                "watch_anchor": {"name": "晶方科技", "code": "603005"},
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        panel_fields = result["exports"]["candidate_quality_panel_fields"]
+        self.assertEqual(panel_fields["primary_buy_candidate"]["code"], "603005")
+        self.assertIsNone(panel_fields["backup_candidate"])
+
+    def test_action_plan_context_marks_primary_candidate_quality_defaults_without_overwriting_explicit_fields(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "主线核心", "code": "000001"},
+                "watch_anchor": {"name": "补位观察", "code": "000002"},
+                "display_observation_candidates": [
+                    {
+                        "name": "主线核心",
+                        "code": "000001",
+                        "selection_quality": "低",
+                        "entry_cost_state": "低成本",
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        samples = {sample["code"]: sample for sample in result["exports"]["candidate_quality_samples"]}
+        self.assertEqual(samples["000001"]["selection_quality"], "高")
+        self.assertEqual(samples["000001"]["entry_cost_state"], "确认中")
+        self.assertEqual(samples["000001"]["is_core"], True)
+        self.assertEqual(samples["000001"]["quality_role"], "主买对象")
+        self.assertEqual(samples["000002"]["selection_quality"], "中")
+        self.assertEqual(samples["000002"]["entry_cost_state"], "确认中")
+        self.assertEqual(samples["000002"]["quality_role"], "补位对象")
+
+    def test_action_plan_context_merges_role_defaults_with_richer_same_code_sample_fields(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "主线核心", "code": "000001"},
+                "watch_anchor": None,
+                "display_observation_candidates": [
+                    {
+                        "name": "主线核心",
+                        "code": "000001",
+                        "risk_flags": ["风险信息缺失"],
+                        "cost_flags": ["远离MA/VWAP"],
+                        "current_position_shares": 100,
+                        "sellable_shares": 0,
+                        "locked_shares": 100,
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        samples = result["exports"]["candidate_quality_samples"]
+        self.assertEqual(len([sample for sample in samples if sample["code"] == "000001"]), 1)
+        sample = samples[0]
+        self.assertEqual(sample["selection_quality"], "高")
+        self.assertEqual(sample["entry_cost_state"], "确认中")
+        self.assertEqual(sample["quality_role"], "主买对象")
+        self.assertEqual(sample["risk_flags"], ["风险信息缺失"])
+        self.assertEqual(sample["cost_flags"], ["远离MA/VWAP"])
+        self.assertEqual(sample["current_position_shares"], 100)
+        self.assertEqual(sample["locked_shares"], 100)
+
+    def test_action_plan_context_merges_risk_and_cost_lists_for_same_code_samples(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {
+                    "name": "主线核心",
+                    "code": "000001",
+                    "risk_flags": ["公告待确认"],
+                    "cost_flags": ["靠近VWAP"],
+                },
+                "watch_anchor": None,
+                "display_observation_candidates": [
+                    {
+                        "name": "主线核心",
+                        "code": "000001",
+                        "risk_flags": ["风险信息缺失", "公告待确认"],
+                        "cost_flags": ["远离MA/VWAP", "靠近VWAP"],
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        sample = result["exports"]["candidate_quality_samples"][0]
+        self.assertEqual(sample["risk_flags"], ["公告待确认", "风险信息缺失"])
+        self.assertEqual(sample["cost_flags"], ["靠近VWAP", "远离MA/VWAP"])
+
+    def test_action_plan_context_keeps_explicit_high_cost_when_merging_primary_defaults(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "主线核心", "code": "000001"},
+                "watch_anchor": None,
+                "display_observation_candidates": [
+                    {
+                        "name": "主线核心",
+                        "code": "000001",
+                        "entry_cost_state": "高成本",
+                        "cost_flags": ["远离MA/VWAP"],
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        sample = result["exports"]["candidate_quality_samples"][0]
+        self.assertEqual(sample["quality_role"], "主买对象")
+        self.assertEqual(sample["selection_quality"], "高")
+        self.assertEqual(sample["entry_cost_state"], "高成本")
+        self.assertEqual(sample["cost_flags"], ["远离MA/VWAP"])
+
+    def test_action_plan_context_does_not_overwrite_primary_own_high_cost_default(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {
+                    "name": "主线核心",
+                    "code": "000001",
+                    "entry_cost_state": "高成本",
+                    "cost_flags": ["远离MA/VWAP"],
+                },
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            }
+        )
+
+        sample = result["exports"]["candidate_quality_samples"][0]
+        self.assertEqual(sample["quality_role"], "主买对象")
+        self.assertEqual(sample["selection_quality"], "高")
+        self.assertEqual(sample["entry_cost_state"], "高成本")
+        self.assertEqual(sample["cost_flags"], ["远离MA/VWAP"])
+
+    def test_render_sections_passes_candidate_quality_inputs_to_action_plan_renderer(self):
+        captured = {}
+
+        def render_action(context):
+            captured.update(context)
+            return ["action"]
+
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_section": render_action,
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "daily_new_entry_limit": 0,
+                },
+                "candidate_quality_samples": [{"name": "晶方科技", "code": "603005"}],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        self.assertEqual(result["lines"], ["pk", "action", ""])
+        self.assertIn("candidate_quality_panel_fields", captured)
+        self.assertIn("candidate_quality_samples", captured)
+
+    def test_render_sections_passes_action_plan_enabled_nodes_for_candidate_quality(self):
+        captured = {}
+
+        def render_action(context):
+            captured.update(context)
+            return ["action"]
+
+        build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_section": render_action,
+                "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        self.assertEqual(captured["enabled_node_keys"], ["overview", "candidate_quality"])
+
+    def test_runtime_can_render_candidate_quality_markdown_when_enabled(self):
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "account_attention_load": "中",
+                    "holding_priority_action": "先处理旧仓，再看新增",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": {"name": "晶方科技", "code": "603005"},
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "selection_quality": "高",
+                        "entry_cost_state": "高成本",
+                        "is_core": True,
+                        "cost_flags": ["远离MA/VWAP"],
+                    }
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("#### 明日操作计划", rendered)
+        self.assertIn("##### 候选质量与动作分层", rendered)
+        self.assertNotIn("\n## 候选质量与动作分层", rendered)
+        self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
+        self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 不舒服 | 核心观察 |", rendered)
+        self.assertIn("- 成本项：远离MA/VWAP", rendered)
+
+    def test_runtime_does_not_render_primary_buy_when_daily_new_entry_limit_is_zero(self):
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+                "best_stock": {"name": "晶方科技", "code": "603005"},
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["action_plan_context", "render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 今日新增上限 | 0 |", rendered)
+        self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
+        self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 等确认 | 核心观察 |", rendered)
+        self.assertNotIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 等确认 | 主买 |", rendered)
 
     def test_pk_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
         conviction_watch = {
@@ -793,7 +1171,9 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("#### 明日操作计划", rendered)
-        self.assertIn("- **当前先不买**: 一档（空仓档），当前只允许观察，不允许新买入", "\n".join(captured["conclusion_lines"]))
+        captured_lines = "\n".join(captured["conclusion_lines"])
+        self.assertIn("- **当前只观察**: 一档（空仓档），不新增参与", captured_lines)
+        self.assertNotIn("不允许新买入", captured_lines)
         self.assertNotIn("为什么先不买", "\n".join(captured["conclusion_lines"]))
 
 

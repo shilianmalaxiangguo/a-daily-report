@@ -109,6 +109,39 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertIn("| request.hot_rank.primary | ⚠️ degraded | ths_hot_stock | hot_rank_top30 | 3.40s | 是 | tushare empty | - |", rendered)
         self.assertIn("| request.candidate_history | ✅ success | tushare.daily | stocks_with_history；history_fetch_stats | 5.52s | 否 | - | Tushare并发4；空数据重试1次；失败代码: 003018 |", rendered)
 
+    def test_render_execution_appendix_outputs_margin_pressure_full_25_day_table(self):
+        margin_rows = []
+        for index in range(25):
+            margin_rows.append(
+                {
+                    "trade_date": f"2026-05-{index + 1:02d}",
+                    "margin_balance_yi": 28000 + index,
+                    "market_turnover_yi": 30000 + index,
+                    "margin_turnover_ratio_pct": 93 + index / 10,
+                    "pressure_diff_pct": -7 + index / 10,
+                    "pressure_label": "中性",
+                    "change_text": "待累计" if index == 0 else "+0.10pct",
+                }
+            )
+
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["margin_pressure_detail"],
+                "margin_pressure": {
+                    "available": True,
+                    "rows": margin_rows,
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 附录A：融资承接压力完整25日表", rendered)
+        self.assertIn("| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 压力差 | 状态 | 较前日 |", rendered)
+        self.assertIn("| 2026-05-01 | 28000.00亿 | 30000.00亿 | 93.00% | -7.00% | 中性 | 待累计 |", rendered)
+        self.assertIn("| 2026-05-25 | 28024.00亿 | 30024.00亿 | 95.40% | -4.60% | 中性 | +0.10pct |", rendered)
+        self.assertLess(rendered.index("2026-05-25"), rendered.index("2026-05-01"))
+        self.assertEqual(rendered.count("| 2026-05-"), 25)
+
     def test_render_execution_appendix_outputs_new_stock_cycle_table(self):
         lines = render_execution_appendix(
             {

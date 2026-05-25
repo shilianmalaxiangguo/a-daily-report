@@ -25,6 +25,10 @@ from input.request_diagnostics_runtime import (
     render_request_diagnostics_lines,
 )
 from input.request_registry import build_input_request_registry, resolve_request_target_date
+from market_data.xueqiu_hot_stock_service import (
+    try_fetch_xueqiu_a_share_hot_24h,
+    try_fetch_xueqiu_hot_stock_arguments,
+)
 from market_data.tushare_turnover_service import fetch_stock_batch_quote_info, fetch_stock_turnover_history
 from selection.new_stock_narrative_runtime import build_new_stock_research_pool
 
@@ -247,6 +251,8 @@ def _run_input_runtime_legacy_body(target_date=None):
             get_integrated_hot_list=get_integrated_hot_list,
             tencent=tencent,
             request_registry=request_registry,
+            xueqiu_hot_rank_fetcher=lambda: try_fetch_xueqiu_a_share_hot_24h(size=100),
+            xueqiu_argument_fetcher=try_fetch_xueqiu_hot_stock_arguments,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -303,16 +309,16 @@ def _run_input_runtime_legacy_body(target_date=None):
         try:
             stock_risk_map = request_registry["stock_risk_map"](target_date=target_date)
             results["stock_risk_map"] = stock_risk_map or {}
-            data_status["个股风险公告"] = True
-            step_status["个股风险公告获取"] = True
+            data_status["个股风险快照"] = True
+            step_status["个股风险快照获取"] = True
             module_logs.append(
                 {
                     "module": "input.runtime",
                     "step": "request.stock_risk_map",
                     "status": "success",
-                    "message": "已获取个股ST/减持/公告风险索引",
+                    "message": "已获取个股ST/减持/公告/互动问答风险快照",
                     "details": {
-                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock",
+                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock+investor_qa",
                         "target_keys": ["stock_risk_map"],
                         "stock_count": len(stock_risk_map or {}),
                     },
@@ -320,17 +326,190 @@ def _run_input_runtime_legacy_body(target_date=None):
             )
         except Exception as error:
             results["stock_risk_map"] = {}
-            data_status["个股风险公告"] = False
-            step_status["个股风险公告获取"] = False
+            data_status["个股风险快照"] = False
+            step_status["个股风险快照获取"] = False
             module_logs.append(
                 {
                     "module": "input.runtime",
                     "step": "request.stock_risk_map",
                     "status": "degraded",
-                    "message": "个股ST/减持/公告风险索引获取失败",
+                    "message": "个股ST/减持/公告/互动问答风险快照获取失败",
                     "details": {
-                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock",
+                        "provider": "tushare.st+stock_st+stk_holdertrade+anns_d+stk_shock+investor_qa",
                         "target_keys": ["stock_risk_map"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
+            new_high_fetcher = request_registry.get("new_high_feedback") if isinstance(request_registry, dict) else None
+            if callable(new_high_fetcher):
+                new_high_feedback = new_high_fetcher(
+                    target_date=target_date,
+                    stock_risk_map=results.get("stock_risk_map", {}),
+                )
+            else:
+                new_high_feedback = {}
+            results["new_high_feedback"] = new_high_feedback or {}
+            data_status["创新高趋势反馈"] = bool((new_high_feedback or {}).get("available"))
+            step_status["创新高趋势反馈获取"] = bool((new_high_feedback or {}).get("available"))
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.new_high_feedback",
+                    "status": "success" if (new_high_feedback or {}).get("available") else "degraded",
+                    "message": "已获取创新高趋势反馈",
+                    "details": {
+                        "provider": (new_high_feedback or {}).get("source") or "tushare.stk_factor_pro.topdays",
+                        "target_keys": ["new_high_feedback"],
+                        "new_high_count": (new_high_feedback or {}).get("new_high_count", 0),
+                    },
+                }
+            )
+        except Exception as error:
+            results["new_high_feedback"] = {}
+            data_status["创新高趋势反馈"] = False
+            step_status["创新高趋势反馈获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.new_high_feedback",
+                    "status": "degraded",
+                    "message": "创新高趋势反馈获取失败",
+                    "details": {
+                        "provider": "tushare.stk_factor_pro.topdays",
+                        "target_keys": ["new_high_feedback"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
+            top50_series_fetcher = (
+                request_registry.get("top50_turnover_share_series") if isinstance(request_registry, dict) else None
+            )
+            if callable(top50_series_fetcher):
+                top50_series = top50_series_fetcher(target_date=target_date, window_days=25, limit=50)
+            else:
+                top50_series = {}
+            results["top50_turnover_share_series"] = top50_series or {}
+            top50_rows = (top50_series or {}).get("rows") or []
+            data_status["Top50成交额占比趋势"] = bool(top50_rows)
+            step_status["Top50成交额占比趋势获取"] = bool(top50_rows)
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.top50_turnover_share_series",
+                    "status": "success" if top50_rows else "degraded",
+                    "message": "已获取Top50成交额占比趋势",
+                    "details": {
+                        "provider": (top50_series or {}).get("source") or "storage.turnover_rank_daily",
+                        "target_keys": ["top50_turnover_share_series"],
+                        "row_count": len(top50_rows),
+                    },
+                }
+            )
+        except Exception as error:
+            results["top50_turnover_share_series"] = {}
+            data_status["Top50成交额占比趋势"] = False
+            step_status["Top50成交额占比趋势获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.top50_turnover_share_series",
+                    "status": "degraded",
+                    "message": "Top50成交额占比趋势获取失败",
+                    "details": {
+                        "provider": "storage.turnover_rank_daily",
+                        "target_keys": ["top50_turnover_share_series"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
+            price_band_fetcher = (
+                request_registry.get("price_band_style_series") if isinstance(request_registry, dict) else None
+            )
+            if callable(price_band_fetcher):
+                price_band_series = price_band_fetcher(target_date=target_date, window_days=25)
+            else:
+                price_band_series = {}
+            results["price_band_style_series"] = price_band_series or {}
+            price_band_rows = (price_band_series or {}).get("rows") or []
+            data_status["价格带风格趋势"] = bool(price_band_rows)
+            step_status["价格带风格趋势获取"] = bool(price_band_rows)
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.price_band_style_series",
+                    "status": "success" if price_band_rows else "degraded",
+                    "message": "已获取价格带风格趋势",
+                    "details": {
+                        "provider": (price_band_series or {}).get("source") or "tushare.ths_daily.price_band_style",
+                        "target_keys": ["price_band_style_series"],
+                        "row_count": len(price_band_rows),
+                    },
+                }
+            )
+        except Exception as error:
+            results["price_band_style_series"] = {}
+            data_status["价格带风格趋势"] = False
+            step_status["价格带风格趋势获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.price_band_style_series",
+                    "status": "degraded",
+                    "message": "价格带风格趋势获取失败",
+                    "details": {
+                        "provider": "tushare.ths_daily.price_band_style",
+                        "target_keys": ["price_band_style_series"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
+            margin_pressure_fetcher = (
+                request_registry.get("margin_pressure") if isinstance(request_registry, dict) else None
+            )
+            if callable(margin_pressure_fetcher):
+                margin_pressure = margin_pressure_fetcher(target_date=target_date, window_days=25, calibration_days=250)
+            else:
+                margin_pressure = {}
+            results["margin_pressure"] = margin_pressure or {}
+            margin_rows = (margin_pressure or {}).get("rows") or []
+            data_status["融资承接压力"] = bool((margin_pressure or {}).get("available") and margin_rows)
+            step_status["融资承接压力获取"] = bool((margin_pressure or {}).get("available") and margin_rows)
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.margin_pressure",
+                    "status": "success" if (margin_pressure or {}).get("available") and margin_rows else "degraded",
+                    "message": "已获取融资承接压力",
+                    "details": {
+                        "provider": (margin_pressure or {}).get("source") or "tushare.margin+tushare.index_daily.market_amount",
+                        "target_keys": ["margin_pressure"],
+                        "row_count": len(margin_rows),
+                        "latest_pressure_label": (margin_pressure or {}).get("latest_pressure_label", ""),
+                    },
+                }
+            )
+        except Exception as error:
+            results["margin_pressure"] = {}
+            data_status["融资承接压力"] = False
+            step_status["融资承接压力获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.margin_pressure",
+                    "status": "degraded",
+                    "message": "融资承接压力获取失败",
+                    "details": {
+                        "provider": "tushare.margin+tushare.index_daily.market_amount",
+                        "target_keys": ["margin_pressure"],
                         "error": str(error),
                     },
                 }

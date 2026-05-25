@@ -10,8 +10,19 @@ __all__ = ["refresh_tracking_memory"]
 
 TRACKING_MEMORY_KEEP_DAYS = 20
 TRACKING_MEMORY_TENTATIVE_EXPIRE_DAYS = 5
+TRACKING_MEMORY_RECALL_KEEP_DAYS = 45
 TRACKING_MEMORY_MAX_ITEMS = 40
 TRACKING_MEMORY_PROMOTE_CONFIRMATIONS = 2
+INACTIVE_MEMORY_STATUSES = {"inactive_failed", "inactive_recall"}
+HIGH_VALUE_MEMORY_KEYWORDS = (
+    "首波",
+    "龙头",
+    "龙一",
+    "锚定龙",
+    "资金记住",
+    "连板已被资金记住",
+    "高惯性",
+)
 
 
 def _safe_float(value, default=0.0):
@@ -32,6 +43,86 @@ def _safe_parse_report_date(date_text):
         return datetime.datetime.strptime(str(date_text), "%Y-%m-%d").date()
     except Exception:
         return None
+
+
+def _safe_int(value, default=0):
+    try:
+        if value in (None, ""):
+            return int(default)
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _as_source_set(value):
+    if isinstance(value, (list, tuple, set)):
+        return {str(item) for item in value if item}
+    if value:
+        return {str(value)}
+    return set()
+
+
+def _is_high_value_memory_item(item):
+    item = item or {}
+    if item.get("status") == "validated":
+        return True
+
+    sources = _as_source_set(item.get("sources"))
+    evidence_score = _safe_float(item.get("evidence_score"), 0)
+    confirmations = _safe_int(item.get("confirmations"), 0)
+    reason_text = " / ".join(
+        str(item.get(key, "") or "")
+        for key in ("last_reason", "remember_reason", "inactive_reason")
+    )
+
+    if confirmations >= 2 or evidence_score >= 5:
+        return True
+    if "leader_memory" in sources and ("abnormal_watch" in sources or "watchlist" in sources):
+        return True
+    return any(keyword in reason_text for keyword in HIGH_VALUE_MEMORY_KEYWORDS)
+
+
+def _build_inactive_memory_item(
+    previous,
+    entry,
+    *,
+    target_date,
+    status,
+    inactive_reason,
+    follow_state="",
+    evidence_score=None,
+    failures=None,
+    appearances=None,
+    days_since_seen=None,
+):
+    previous = previous or {}
+    entry = entry or {}
+    code = entry.get("code") or previous.get("code", "")
+    reasons = [str(reason) for reason in entry.get("reasons", []) if reason]
+    previous_reason = previous.get("last_reason", "")
+    last_reason_parts = [part for part in [previous_reason, *reasons] if part]
+
+    item = {
+        **previous,
+        "name": entry.get("name") or previous.get("name", ""),
+        "code": code,
+        "sector": entry.get("sector") or previous.get("sector", ""),
+        "status": status,
+        "first_seen_date": previous.get("first_seen_date", target_date),
+        "last_seen_date": entry.get("last_seen_date") or previous.get("last_seen_date", target_date),
+        "confirmations": _safe_int(previous.get("confirmations"), 0),
+        "failures": _safe_int(previous.get("failures"), 0) if failures is None else failures,
+        "appearances": _safe_int(previous.get("appearances"), 0) if appearances is None else appearances,
+        "sources": sorted(entry.get("sources", []) or previous.get("sources", [])),
+        "last_reason": " / ".join(last_reason_parts[:4]),
+        "follow_state": follow_state or entry.get("follow_state", "") or previous.get("follow_state", ""),
+        "evidence_score": _safe_float(previous.get("evidence_score"), 0) if evidence_score is None else evidence_score,
+        "inactive_since_date": target_date,
+        "inactive_reason": inactive_reason,
+    }
+    if days_since_seen is not None:
+        item["days_since_seen"] = days_since_seen
+    return item
 
 
 def _load_tracking_memory_state():
@@ -68,6 +159,7 @@ def refresh_tracking_memory(
     safe_float_fn=None,
     keep_days=TRACKING_MEMORY_KEEP_DAYS,
     tentative_expire_days=TRACKING_MEMORY_TENTATIVE_EXPIRE_DAYS,
+    recall_keep_days=TRACKING_MEMORY_RECALL_KEEP_DAYS,
     max_items=TRACKING_MEMORY_MAX_ITEMS,
     promote_confirmations=TRACKING_MEMORY_PROMOTE_CONFIRMATIONS,
 ):
@@ -153,6 +245,8 @@ def refresh_tracking_memory(
     new_items = []
     promoted_items = []
     dropped_items = []
+    inactive_items = []
+    reactivated_items = []
     kept_items = []
     today_validated_items = []
     today_tentative_items = []
@@ -200,16 +294,35 @@ def refresh_tracking_memory(
             verdict = "tentative"
 
         if verdict == "fail":
-            dropped_items.append(
-                {
-                    "name": entry.get("name", ""),
-                    "code": code,
-                    "reason": "今日已经转弱，旧记忆失效",
-                }
-            )
+            if previous and _is_high_value_memory_item(previous):
+                inactive_item = _build_inactive_memory_item(
+                    previous,
+                    entry,
+                    target_date=target_date,
+                    status="inactive_failed",
+                    inactive_reason="今日已经转弱，取消买入资格，但旧强势样本保留为冷却回看",
+                    follow_state=follow_state,
+                    evidence_score=evidence_score,
+                    failures=failures,
+                    appearances=appearances,
+                )
+                kept_items.append(inactive_item)
+                inactive_items.append(inactive_item)
+            else:
+                dropped_items.append(
+                    {
+                        "name": entry.get("name", ""),
+                        "code": code,
+                        "reason": "今日已经转弱，普通旧记忆失效",
+                    }
+                )
             continue
 
+        was_inactive = previous_status in INACTIVE_MEMORY_STATUSES
         status = "validated" if previous_status == "validated" or confirmations >= promote_confirmations else "tentative"
+        last_reason = " / ".join(entry.get("reasons", [])[:3])
+        if was_inactive:
+            last_reason = f"旧强势样本再激活 / {last_reason}".strip(" /")
         memory_item = {
             "name": entry.get("name", ""),
             "code": code,
@@ -221,14 +334,19 @@ def refresh_tracking_memory(
             "failures": failures,
             "appearances": appearances,
             "sources": sorted(entry.get("sources", [])),
-            "last_reason": " / ".join(entry.get("reasons", [])[:3]),
+            "last_reason": last_reason,
             "follow_state": follow_state,
             "evidence_score": evidence_score,
         }
+        if was_inactive:
+            memory_item["reactivated_from_status"] = previous_status
+            memory_item["inactive_reason"] = previous.get("inactive_reason", "")
         kept_items.append(memory_item)
 
         if code not in previous_map:
             new_items.append(memory_item)
+        elif was_inactive:
+            reactivated_items.append(memory_item)
         elif previous_status != "validated" and status == "validated":
             promoted_items.append(memory_item)
 
@@ -247,11 +365,25 @@ def refresh_tracking_memory(
             days_missing = max((today_date_obj - last_seen_obj).days, 0)
 
         previous_status = previous.get("status", "tentative")
+        previous_is_inactive = previous_status in INACTIVE_MEMORY_STATUSES
         should_drop = (
             (previous_status == "tentative" and days_missing > tentative_expire_days)
+            or (previous_is_inactive and days_missing > recall_keep_days)
             or days_missing > keep_days
         )
         if should_drop:
+            if not previous_is_inactive and _is_high_value_memory_item(previous) and days_missing <= recall_keep_days:
+                inactive_item = _build_inactive_memory_item(
+                    previous,
+                    {},
+                    target_date=target_date,
+                    status="inactive_recall",
+                    inactive_reason="连续多日未再次入池，转入冷却回看；不提供买入资格，只保留再激活线索",
+                    days_since_seen=days_missing,
+                )
+                kept_items.append(inactive_item)
+                inactive_items.append(inactive_item)
+                continue
             dropped_items.append(
                 {
                     "name": previous.get("name", ""),
@@ -261,7 +393,10 @@ def refresh_tracking_memory(
             )
             continue
 
-        kept_items.append({**previous, "days_since_seen": days_missing})
+        kept_previous = {**previous, "days_since_seen": days_missing}
+        kept_items.append(kept_previous)
+        if previous_is_inactive:
+            inactive_items.append(kept_previous)
 
     kept_items.sort(
         key=lambda item: (
@@ -281,10 +416,12 @@ def refresh_tracking_memory(
     return {
         "validated_items": validated_items,
         "tentative_items": tentative_items,
+        "inactive_items": inactive_items,
         "today_validated_items": today_validated_items,
         "today_tentative_items": today_tentative_items,
         "new_items": new_items,
         "promoted_items": promoted_items,
+        "reactivated_items": reactivated_items,
         "dropped_items": dropped_items,
         "total_items": kept_items,
         "today_seen_count": len(today_entries),

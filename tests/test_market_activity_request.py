@@ -448,6 +448,19 @@ class MarketActivityRequestTest(unittest.TestCase):
             request_registry={
                 "sector_hot_plates": lambda *, target_date, limit=20: registry_calls.append(("hot", target_date, limit))
                 or [{"name": "人形机器人", "rank": 1, "data_source": "tushare.ths_hot"}],
+                "concept_fund_flow": lambda *, target_date, hot_plates=None, limit=20: registry_calls.append(
+                    ("concept_flow", target_date, tuple(item.get("name") for item in hot_plates or []), limit)
+                )
+                or {
+                    "rows": [
+                        {
+                            "name": "人形机器人",
+                            "net_inflow": 6.5,
+                            "data_source": "tushare.ths_member+tushare.moneyflow",
+                        }
+                    ],
+                    "provider": "tushare.ths_member+tushare.moneyflow",
+                },
                 "sector_fund_flow": lambda *, target_date, limit=50: registry_calls.append(("flow", target_date, limit))
                 or {
                     "inflow": [{"name": "证券", "net_amount": 12.5, "data_source": "tushare.moneyflow_ind_ths"}],
@@ -475,6 +488,7 @@ class MarketActivityRequestTest(unittest.TestCase):
             [
                 ("hot", "2026-05-13", 20),
                 ("flow", "2026-05-13", 50),
+                ("concept_flow", "2026-05-13", ("人形机器人",), 20),
                 ("change", "up", "2026-05-13", 10),
                 ("change", "down", "2026-05-13", 10),
             ],
@@ -482,10 +496,12 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(legacy_calls, [])
         self.assertEqual(result["results"]["hot_plates"][0]["data_source"], "tushare.ths_hot")
         self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["data_source"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(result["results"]["concept_fund_flow"]["rows"][0]["data_source"], "tushare.ths_member+tushare.moneyflow")
         self.assertEqual(result["results"]["sector_change_up"][0]["data_source"], "tushare.ths_daily")
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.hot_plates"], "tushare.ths_hot")
         self.assertEqual(provider_by_step["request.sector_fund_flow"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(provider_by_step["request.concept_fund_flow"], "tushare.ths_member+tushare.moneyflow")
         self.assertEqual(provider_by_step["request.sector_change_rank"], "tushare.ths_daily")
 
     def test_collect_market_activity_hot_rank_request_bundle_builds_integrated_from_primary_hot_rank(self):
@@ -514,6 +530,89 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(integrated_log["status"], "success")
         self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank")
         self.assertFalse(integrated_log["details"]["fallback_used"])
+
+    def test_collect_market_activity_hot_rank_request_bundle_collects_xueqiu_factors(self):
+        timer = _TimerStub()
+        emitted = []
+        argument_calls = []
+
+        result = collect_market_activity_hot_rank_request_bundle(
+            "2026-05-22",
+            existing_results={},
+            fetch_ths_hot_stock=lambda num=30: [
+                {"code": "300476", "full_code": "SZ300476", "name": "胜宏科技", "rank": 1, "data_source": "tushare.ths_hot"},
+            ],
+            get_integrated_hot_list=lambda limit=100: {},
+            tencent=_TencentStub(),
+            xueqiu_hot_rank_fetcher=lambda: {
+                "provider": "xueqiu.hot_stock.type22",
+                "status": "ok",
+                "rows": [{"code": "300476", "full_code": "SZ300476", "name": "胜宏科技"}],
+                "can_continue_report": True,
+                "diagnostic_note": "",
+            },
+            xueqiu_argument_fetcher=lambda symbols: argument_calls.append(list(symbols))
+            or {
+                "provider": "xueqiu.hot_stock.argument",
+                "status": "ok",
+                "rows": [{"code": "300476", "full_code": "SZ300476", "argument": "AI服务器PCB"}],
+                "can_continue_report": True,
+                "diagnostic_note": "",
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(result["results"]["xueqiu_hot_rank_top100"][0]["full_code"], "SZ300476")
+        self.assertEqual(result["results"]["xueqiu_hot_stock_arguments"][0]["argument"], "AI服务器PCB")
+        self.assertEqual(argument_calls, [["SZ300476"]])
+        self.assertTrue(result["data_status"]["雪球A股24小时热榜"])
+        self.assertTrue(result["data_status"]["雪球热榜AI解释"])
+        self.assertTrue(result["step_status"]["雪球A股24小时热榜获取"])
+        self.assertTrue(result["step_status"]["雪球热榜AI解释获取"])
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.xueqiu_hot_rank"], "xueqiu.hot_stock.type22")
+        self.assertEqual(provider_by_step["request.xueqiu_hot_stock_arguments"], "xueqiu.hot_stock.argument")
+
+    def test_collect_market_activity_hot_rank_request_bundle_marks_xueqiu_factor_failure(self):
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_market_activity_hot_rank_request_bundle(
+            "2026-05-22",
+            existing_results={},
+            fetch_ths_hot_stock=lambda num=30: [
+                {"code": "300476", "full_code": "SZ300476", "name": "胜宏科技", "rank": 1, "data_source": "tushare.ths_hot"},
+            ],
+            get_integrated_hot_list=lambda limit=100: {},
+            tencent=_TencentStub(),
+            xueqiu_hot_rank_fetcher=lambda: {
+                "provider": "xueqiu.hot_stock.type22",
+                "status": "error",
+                "rows": [],
+                "can_continue_report": False,
+                "diagnostic_note": "雪球接口返回空，关键数据不完整，停止生成",
+            },
+            xueqiu_argument_fetcher=lambda symbols: {
+                "provider": "xueqiu.hot_stock.argument",
+                "status": "error",
+                "rows": [],
+                "can_continue_report": False,
+                "diagnostic_note": "雪球接口返回空，关键数据不完整，停止生成",
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(result["results"]["xueqiu_hot_rank_top100"], [])
+        self.assertEqual(result["results"]["xueqiu_hot_stock_arguments"], [])
+        self.assertFalse(result["data_status"]["雪球A股24小时热榜"])
+        self.assertFalse(result["data_status"]["雪球热榜AI解释"])
+        self.assertFalse(result["step_status"]["雪球A股24小时热榜获取"])
+        self.assertFalse(result["step_status"]["雪球热榜AI解释获取"])
+        xueqiu_logs = [log for log in result["module_logs"] if log["step"].startswith("request.xueqiu")]
+        self.assertEqual([log["status"] for log in xueqiu_logs], ["error", "error"])
+        self.assertTrue(all("关键数据不完整，停止生成" in log["details"].get("error", "") for log in xueqiu_logs))
 
     def test_collect_market_activity_sector_snapshot_request_bundle_passes_target_date_and_logs_actual_providers(self):
         timer = _TimerStub()

@@ -60,6 +60,29 @@ class DecisionBoardNodeRuntimeTest(unittest.TestCase):
         self.assertIn("- **主线确认**: 多方向局部活跃但资金未明显胜出", rendered)
         self.assertNotIn("- **核心主攻线**: 半导体", rendered)
 
+    def test_render_decision_board_section_uses_adopted_mainline_label(self):
+        lines = render_decision_board_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "mainline_section"],
+                "high_board_count": 2,
+                "exit_analysis": {"sector_name": "元件"},
+                "main_sectors": ["元件"],
+                "mainline_turnover_summary": {
+                    "current_mainline": "国产芯片替代",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "国产芯片替代",
+                        "confirmation_evidence": "国产芯片替代资金净流入靠前，涨停和高标更集中",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **核心主攻线**: 国产芯片替代", rendered)
+        self.assertNotIn("- **核心主攻线**: 元件", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

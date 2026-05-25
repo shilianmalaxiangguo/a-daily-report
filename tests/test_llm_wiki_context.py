@@ -17,7 +17,7 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-05-25")
+        self.assertEqual(context["version"], "2026-05-26")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
@@ -30,6 +30,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("wiki/交易思想/实际账户情况.md", context["source_paths"])
         self.assertEqual(context["source_paths"].count("wiki/交易思想/扣分系统与动作分层.md"), 1)
         self.assertIn("wiki/交易思想/判断样本与市场演变.md", context["source_paths"])
+        self.assertIn("wiki/交易思想/AI摩擦与知识复利.md", context["source_paths"])
         self.assertIn("wiki/板块补充/板块中枢与主线延续.md", context["source_paths"])
         self.assertIn("wiki/交易思想/日报术语契约.md", context["source_paths"])
         self.assertIn("wiki/运行契约/日报数据源契约.md", context["source_paths"])
@@ -77,9 +78,13 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("量化看图 -> 技术图形、成交数据和消息会放大线位反应，只作执行环境不作买入理由", context["field_mappings"])
         self.assertIn("消息归因降权 -> 除个股直接风险外，消息只确认风险，不生成买点，不替代价格量能承接和仓位判断", context["field_mappings"])
         self.assertIn("集中大赚 -> 必须先写代价和平衡，不能把追求大赚变成无边界押注", context["field_mappings"])
+        self.assertIn("AI摩擦与知识复利 -> 消除低效摩擦后必须补上反馈机制；复利方向由接入过程决定，知识节点碰撞形成个人护城河", context["field_mappings"])
+        self.assertIn("必要认知摩擦 -> AI生成后至少复述、重写、对比或沉淀成知识节点，避免只复制结果", context["field_mappings"])
         self.assertIn("板块节奏 -> 量化环境下先看板块路径和资金选择，再看单一龙头定价", context["field_mappings"])
         self.assertIn("迹象识别链 -> 从反复出现的市场迹象提炼现象规律，再在实战中识别、验证和主动运用，不把单次巧合当规律", context["field_mappings"])
         self.assertIn("相对优势进攻 -> 等弱方向开始掉队、强方向仍有资金扩散和核心承接时，才从观察进入参与", context["field_mappings"])
+        self.assertIn("主战场能力圈 -> 短线/超短线追求500强水平；趋势容量、机构抱团和慢推行情只求不拖后腿", context["field_mappings"])
+        self.assertIn("非主战场纪律 -> 低适配行情不扩战法，不为证明全能而新增参与", context["field_mappings"])
         self.assertIn("资金阶段 -> 小资金允许追求高弹性，但只做市场承认的热门核心，不做随机高波动", context["field_mappings"])
         self.assertIn("小资金优势校准 -> 小资金优势是灵活切换核心，不是频繁乱动或救错误仓", context["field_mappings"])
         self.assertIn("AI辅助边界 -> AI负责筛核心、拦错误、做复盘，不承诺省心躺赚", context["field_mappings"])
@@ -188,6 +193,27 @@ class LlmWikiContextTest(unittest.TestCase):
         ]:
             self.assertIn(required, flow_text)
 
+    def test_build_llm_wiki_context_exposes_knowledge_compounding_candidates(self):
+        context = build_llm_wiki_context()
+
+        candidates = context.get("knowledge_compounding_candidates")
+        self.assertIsInstance(candidates, list)
+        self.assertEqual(len(candidates), 1)
+
+        candidate = candidates[0]
+        self.assertEqual(
+            candidate.get("related_nodes"),
+            ["AI摩擦与知识复利", "判断样本与市场演变"],
+        )
+        self.assertEqual(candidate.get("status"), "待确认")
+        self.assertEqual(
+            candidate.get("new_insight"),
+            "判断样本是日报里的反馈机制，用来把 AI 省掉的认知摩擦补回来。",
+        )
+        self.assertIn("只进入知识复利候选", candidate.get("action", ""))
+        self.assertIn("不自动写入正式 wiki", candidate.get("action", ""))
+        self.assertIn("不改变交易动作", candidate.get("action", ""))
+
     def test_build_llm_wiki_context_keeps_report_digest_short_and_fieldized(self):
         context = build_llm_wiki_context()
         digest = context["report_digest_text"]
@@ -216,6 +242,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("板块节奏优先", digest)
         self.assertIn("迹象到规律再到实战运用", digest)
         self.assertIn("弱方向掉队强方向扩散承接才参与", digest)
+        self.assertIn("短线超短主战场追求500强", digest)
+        self.assertIn("非主战场不拖后腿不扩战法", digest)
         self.assertIn("非0%且资格成立才给明日主买1只补位1只", digest)
         self.assertIn("0%无唯一对象只观察", digest)
         self.assertIn("历史表统一观察位窗口", digest)
@@ -265,7 +293,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("买卖窗口0930-0935/0950-1010/1430-1455", digest)
         self.assertIn("30分钟止损", digest)
         self.assertIn("资格、条件、可做和参与", digest)
-        self.assertLessEqual(len(digest), 930)
+        self.assertLessEqual(len(digest), 970)
         self.assertNotIn("缠论原文", digest)
         self.assertNotIn("能量学", digest)
         self.assertNotIn("教你炒股票", digest)

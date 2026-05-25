@@ -358,7 +358,7 @@ def _parse_quant_anchor_action_cell(value):
 def _parse_markdown_table_after_heading(lines, heading_text):
     table_start = -1
     for idx, line in enumerate(lines):
-        if heading_text in line:
+        if _is_markdown_heading_line_for_text(line, heading_text):
             table_start = idx + 1
             break
     if table_start < 0:
@@ -399,10 +399,19 @@ def _is_report_table_number_line(line):
     return text.startswith("**T-") and text.endswith("**")
 
 
+def _is_markdown_heading_line_for_text(line, heading_text):
+    text = str(line or "").strip()
+    if heading_text not in text:
+        return False
+    if text.startswith("#"):
+        return True
+    return text.startswith("**") and heading_text in text[: text.find("**", 2) if text.find("**", 2) > 1 else len(text)]
+
+
 def _parse_markdown_tables_after_heading(lines, heading_text):
     table_start = -1
     for idx, line in enumerate(lines):
-        if heading_text in line:
+        if _is_markdown_heading_line_for_text(line, heading_text):
             table_start = idx + 1
             break
     if table_start < 0:
@@ -988,11 +997,11 @@ def _standard_action_text(entry_timing, buy_window, decision):
     if decision == "skip":
         return "0%不参与；等下一次预演条件重新成立"
     if decision == "waiting_window_review":
-        return f"仅凭日线不能判死{window}窗口；等待分钟窗口承接事实回写后再定买点质量"
+        return f"仅凭日线不能判死{window}窗口；等待分钟窗口承接事实回写后再定观察位质量"
     if decision == "window_confirm_buy":
         return f"按{window}承接成立参与；只做计划内试错，不因盘中噪音临时加码"
     if decision == "window_confirm_failed":
-        return f"{window}继续走弱，0%不参与；不把日内反抽当买点"
+        return f"{window}继续走弱，0%不参与；不把日内反抽当观察位"
     if entry_timing == "open_core":
         return f"按{window}开盘核心参与；只在竞价表态、开盘承接、回封/打板同时成立时买"
     if entry_timing == "ten_confirm":
@@ -1800,6 +1809,9 @@ def _record_planned_participation(record):
 def _record_is_extreme_conviction(record):
     latest = _latest_mention(record)
     planned = _record_planned_participation(record)
+    source_tier = planned.get("source_tier")
+    if source_tier:
+        return source_tier == "extreme_conviction"
     return planned.get("source_tier") == "extreme_conviction" or "极度看好" in str(latest.get("source_section") or "")
 
 
@@ -2015,6 +2027,20 @@ def _clean_markdown_cell(value, default="-"):
     return text.replace("|", "/") or default
 
 
+def _historical_standard_action_text(value):
+    text = _clean_text(value, "-")
+    replacements = (
+        ("开盘核心参与", "开盘核心观察"),
+        ("同时成立时买", "同时成立时记录为历史预演"),
+        ("买入动作", "新增参与动作"),
+    )
+    for source, target in replacements:
+        text = text.replace(source, target)
+    if text != "-" and "不作为明日新增参与依据" not in text:
+        text = f"{text}；不作为明日新增参与依据"
+    return text
+
+
 def _is_a_kill_eliminated_record(record):
     record = record or {}
     if record.get("is_a_kill_eliminated") or record.get("a_kill_eliminated"):
@@ -2040,6 +2066,13 @@ def _tracking_sort_key(record):
         str(record.get("cycle_start_trade_date") or ""),
         str(record.get("stock_code") or ""),
     )
+
+
+def _history_action_text(value):
+    text = _clean_text(value)
+    if text.startswith("若已买入，"):
+        text = text.replace("若已买入，", "历史复盘：", 1)
+    return text
 
 
 def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
@@ -2076,7 +2109,7 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
         return lines
 
     rows.sort(key=lambda item: _tracking_sort_key(item["_record"]))
-    lines.append("| 股票 | 代码 | 周期日 | 首次入选 | 最近复盘 | 计划窗口 | 买入窗口 | 预演复盘 | 下一步动作 | 作废线 |")
+    lines.append("| 股票 | 代码 | 周期日 | 首次入选 | 最近复盘 | 计划窗口 | 观察位窗口 | 预演复盘 | 历史复盘动作 | 作废线 |")
     lines.append("|------|------|--------|----------|----------|----------|----------|----------|------------|--------|")
     for row in rows[:max_rows]:
         lines.append(
@@ -2089,7 +2122,7 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
                 planned_window=_clean_markdown_cell(row.get("planned_window")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
-                next_action=_clean_markdown_cell(row.get("next_action")),
+                next_action=_clean_markdown_cell(_history_action_text(row.get("next_action"))),
                 invalidation=_clean_markdown_cell(row.get("invalidation")),
             )
         )
@@ -2166,11 +2199,11 @@ def _buy_point_quality_label(review):
     if status == "主目标不可成交" or decision == "unavailable":
         return "主目标不可成交"
     if status == "预演作废" or decision == "skip":
-        return "买点作废"
+        return "观察位作废"
     if status == "预演过早":
-        return "买点过早"
+        return "观察位过早"
     if decision in {"open_buy", "ten_confirm_buy", "tail_confirm"} or status == "预演命中":
-        return "买点成立"
+        return "观察位成立"
     if status == "错过后方案命中":
         return "错过后方案成立"
     if status == "等待复盘":
@@ -2251,7 +2284,7 @@ def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
         lines.append("- 暂无近25个交易日内的明日极度看好样本。")
         lines.append("")
         return lines
-    lines.append("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 买入窗口 | 复盘状态 | 下一步动作 | 作废线 | 记录ID |")
+    lines.append("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |")
     lines.append("|--------|------|------|------|----------|----------|----------|------------|--------|--------|")
     for row in rows:
         lines.append(
@@ -2263,7 +2296,7 @@ def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
                 sector_candidate=_clean_markdown_cell(row.get("sector_candidate")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
-                next_action=_clean_markdown_cell(row.get("next_action")),
+                next_action=_clean_markdown_cell(_history_action_text(row.get("next_action"))),
                 invalidation=_clean_markdown_cell(row.get("invalidation")),
                 record_id=_clean_markdown_cell(row.get("record_id")),
             )
@@ -2323,13 +2356,15 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
 
 def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
     rows = build_extreme_conviction_backtest_rows(index, max_rows=max_rows)
-    lines = ["**重点观察历史回测表**（拆分选股样本、买点质量、执行复盘）:"]
+    lines = ["**重点观察历史回测表**（拆分选股样本、观察位质量、执行复盘）:"]
     if not rows:
         lines.append("- 暂无可复盘的重点观察历史样本。")
         lines.append("")
         return lines
 
-    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 买点窗口 | 盈亏比 | 买点质量 | 执行复盘 | 标准动作 |")
+    lines.append("> 历史回测表仅记录过去预演，不作为明日新增参与依据。")
+    lines.append("")
+    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |")
     lines.append("|--------|------|------|----------|----------|--------|----------|----------|----------|")
     for row in rows:
         lines.append(
@@ -2342,7 +2377,7 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
                 risk_reward=_clean_markdown_cell(row.get("risk_reward")),
                 buy_point_quality=_clean_markdown_cell(row.get("buy_point_quality")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
-                standard_action=_clean_markdown_cell(row.get("standard_action")),
+                standard_action=_clean_markdown_cell(_historical_standard_action_text(row.get("standard_action"))),
             )
         )
     lines.append("")
@@ -2491,6 +2526,19 @@ def write_decision_ledger_artifacts_from_markdown_report(
         },
         generated_at=generated_at,
     )
+    if not snapshot.get("cases"):
+        ledger_dir = root / "data" / "decision-ledger"
+        snapshot_path = ledger_dir / f"{trade_date}.json"
+        existing_snapshot = _read_json_if_exists(snapshot_path)
+        existing_case_count = len((existing_snapshot or {}).get("cases") or [])
+        if existing_case_count:
+            return {
+                "snapshot_path": str(snapshot_path),
+                "index_path": str(ledger_dir / "index.json"),
+                "case_count": existing_case_count,
+                "skipped_empty_markdown": True,
+                "fact_db_sync": {"status": "skipped", "rows": 0},
+            }
     return write_decision_ledger_artifacts(snapshot, root_dir=root)
 
 

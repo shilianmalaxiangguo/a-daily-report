@@ -143,7 +143,8 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("**次日市场环境**: 0%观察 / 观察态 - 先看特殊标的是否继续抗跌", rendered)
         self.assertIn("**禁止事项**:", rendered)
-        self.assertIn("禁止新开仓", rendered)
+        self.assertIn("不新增参与", rendered)
+        self.assertNotIn("禁止新开仓", rendered)
         self.assertNotIn("**允许事项**:", rendered)
         self.assertNotIn("风险板块（禁止碰）", rendered)
 
@@ -162,7 +163,8 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         rendered = "\n".join(lines)
 
         self.assertIn("0%观察 / 观察态", rendered)
-        self.assertIn("禁止新开仓", rendered)
+        self.assertIn("不新增参与", rendered)
+        self.assertNotIn("禁止新开仓", rendered)
         self.assertIn("主攻线只盯军工", rendered)
         self.assertIn("风险板块（禁止碰）", rendered)
         self.assertTrue(any(log["step"] == "build.prohibition_section" for log in result["module_logs"]))

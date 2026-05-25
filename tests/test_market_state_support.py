@@ -275,6 +275,44 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result["driver_type"], "趋势抱团驱动")
         self.assertEqual(result["pulse_action_reason"], "主线仍处于可参与段")
 
+    def test_market_performance_evidence_combines_top50_and_new_high_without_overriding_defense(self):
+        support = self._load_module()
+
+        result = support.build_market_state_machine_snapshot(
+            {
+                "indices": {"上证指数": {"涨跌幅": -0.4}},
+                "zt_pool": [{"code": "000001"}] * 10,
+                "dt_pool": [{"code": "000009"}] * 18,
+                "market_stats": {"up_count": 1100, "down_count": 3900},
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 126.0, "sector": "半导体"} for _ in range(50)],
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 126,
+                    "all_a_share_pct": 2.52,
+                    "sector_distribution": [
+                        {"sector": "半导体", "new_high_count": 35, "share_pct": 27.78},
+                        {"sector": "机器人", "new_high_count": 21, "share_pct": 16.67},
+                    ],
+                },
+            },
+            {"can_new_entry": False, "operation_state": "撤退态", "should_reduce": True},
+            "一档（空仓档）",
+            {"sector_name": "半导体"},
+            main_sectors_info=[{"name": "半导体"}],
+            sector_trend_snapshot=[{"sector": "半导体", "trend_count": 3}],
+            abnormal_watch_pool=[{"follow_state": "跌不下去"}],
+        )
+
+        evidence = result["market_performance_evidence"]
+        self.assertEqual(evidence["funding_activity"]["regime"], "资金活跃期")
+        self.assertEqual(evidence["new_high_attack"]["leading_sectors"], ["半导体", "机器人"])
+        self.assertIn("雨量", evidence["summary"])
+        self.assertIn("雨区", evidence["summary"])
+        self.assertIn("单指标不直接给买入或加仓", evidence["decision_boundary"])
+        self.assertEqual(result["state_code"], "contract")
+        self.assertEqual(result["execution_bias"], "avoid")
+
     def test_build_market_state_machine_snapshot_support_ignores_board_label_trend_density(self):
         support = self._load_module()
 
@@ -353,6 +391,54 @@ assert leader["name"] == "军工龙头"
         self.assertIn("2026-04-20:11000亿", result["turnover_series_text"])
         self.assertIn("异常承接2强/0弱", result["evidence_text"])
 
+    def test_build_market_style_switch_snapshot_reads_heavy_turnover_drop_as_selloff_not_trend(self):
+        support = self._load_module()
+
+        result = support.build_market_style_switch_snapshot(
+            "2026-05-21",
+            {
+                "benchmark_change_pct": -2.04,
+                "total_turnover": 35072.8,
+                "zt_count": 35,
+                "dt_count": 65,
+                "rise_fall_ratio": 0.15,
+                "status_distribution": {"3板": 1, "2板": 2},
+                "tag_distribution": {},
+                "integrated_hot_list": [],
+                "zt_pool": [{"name": "机器人一号"}],
+                "hot_rank_top30": [],
+            },
+            observation_snapshot={
+                "resilient_abnormal_count": 2,
+                "failed_abnormal_count": 0,
+                "densest_sector_trend_count": 6,
+                "densest_sector": "人形机器人",
+                "leader_memory_count": 3,
+                "trusted_tracking_count": 1,
+            },
+            abnormal_projection={},
+            helpers={
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_round_or_none": lambda value, digits=2: round(float(value), digits) if value is not None else None,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "load_recent_market_turnover_history": lambda target_date, lookback_days=2, max_scan_days=8: [
+                    {"date": "2026-05-19", "turnover": 29089.77},
+                    {"date": "2026-05-20", "turnover": 29764.59},
+                ],
+                "_parse_status_board_count": lambda label: int(str(label).replace("板", "")) if str(label).replace("板", "").isdigit() else 0,
+                "_count_keyword_hits_in_mapping": lambda mapping, keywords: 0,
+                "_count_keyword_hits_in_items": lambda items, keywords, fields: 0,
+            },
+        )
+
+        self.assertEqual(result["style_code"], "defense")
+        self.assertEqual(result["style_label"], "放量杀跌")
+        self.assertEqual(result["turnover_state"], "rising")
+        self.assertIn("指数大跌", result["style_reason"])
+        self.assertIn("量化动量", result["style_reason"])
+        self.assertIn("先防踩踏", result["primary_action"])
+        self.assertNotIn("趋势分歧优先", result["style_label"])
+
     def test_market_state_support_loads_recent_sector_flow_history_from_snapshots(self):
         support = self._load_module()
 
@@ -361,6 +447,7 @@ assert leader["name"] == "军工龙头"
             "军工",
             lookback_days=2,
             helpers={
+                "DatabaseService": None,
                 "_normalize_kline_date_str": lambda value: str(value),
                 "get_previous_date_str": lambda value: {
                     "2026-04-22": "2026-04-21",
@@ -404,6 +491,7 @@ assert leader["name"] == "军工龙头"
             "2026-04-22",
             lookback_days=2,
             helpers={
+                "DatabaseService": None,
                 "_normalize_kline_date_str": lambda value: str(value),
                 "get_previous_date_str": lambda value: {
                     "2026-04-22": "2026-04-21",
@@ -429,6 +517,70 @@ assert leader["name"] == "军工龙头"
             ],
         )
 
+    def test_market_state_support_loads_recent_market_turnover_history_from_database_before_snapshots(self):
+        support = self._load_module()
+        snapshot_calls = []
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                return cls()
+
+            def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+                if trade_date == "2026-05-21":
+                    return {"trade_date": "2026-05-21", "total_amount_yi": 29246.59}
+                return {}
+
+        result = support.load_recent_market_turnover_history(
+            "2026-05-22",
+            lookback_days=1,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-22": "2026-05-21",
+                    "2026-05-21": "",
+                }.get(value, ""),
+                "load_data_snapshot": lambda cursor: snapshot_calls.append(cursor) or ({}, None),
+            },
+        )
+
+        self.assertEqual(result, [{"date": "2026-05-21", "turnover": 29246.59}])
+        self.assertEqual(snapshot_calls, [])
+
+    def test_market_state_support_loads_recent_sector_flow_history_from_database_before_snapshots(self):
+        support = self._load_module()
+        snapshot_calls = []
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                return cls()
+
+            def query_sector_fund_flow_series(self, end_date, sector_name, *, window_days=8):
+                calls.append((end_date, sector_name, window_days))
+                return [{"date": "2026-05-21", "sector_name": "半导体", "inflow": 12.34}]
+
+        calls = []
+        result = support.load_recent_sector_flow_history(
+            "2026-05-22",
+            "半导体",
+            lookback_days=1,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-22": "2026-05-21",
+                    "2026-05-21": "",
+                }.get(value, ""),
+                "load_data_snapshot": lambda cursor: snapshot_calls.append(cursor) or ({}, None),
+            },
+        )
+
+        self.assertEqual(result, [{"date": "2026-05-21", "inflow": 12.34}])
+        self.assertEqual(snapshot_calls, [])
+        self.assertEqual(calls, [("2026-05-21", "半导体", 1)])
+
     def test_market_state_support_history_helpers_use_runtime_defaults_when_omitted(self):
         support = self._load_module()
         snapshots = {
@@ -449,6 +601,7 @@ assert leader["name"] == "军工龙头"
         }
 
         with patch.object(support, "_normalize_kline_date_str", side_effect=lambda value: str(value)) as normalize_mock, \
+             patch.object(support, "DatabaseService", None, create=True), \
              patch.object(
                  support,
                  "get_previous_date_str",
@@ -734,6 +887,106 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result[1]["strength"], "probe")
         self.assertEqual(result[2]["role"], "observe")
         self.assertLess(result[2]["unified_score"], result[1]["unified_score"])
+
+    def test_build_unified_sector_strength_rows_uses_hot_plate_change_when_fund_flow_missing(self):
+        support = self._load_module()
+
+        result = support.build_unified_sector_strength_rows(
+            {
+                "target_date": "2026-05-19",
+                "zt_pool_by_sector": {},
+                "sector_fund_flow": {"inflow": [], "outflow": []},
+                "hot_plates": [
+                    {
+                        "name": "共封装光学(CPO)",
+                        "rank": 4,
+                        "rate": 145006.5,
+                        "change_pct": 1.43,
+                    }
+                ],
+                "hot_rank_top30": [
+                    {"code": "002281", "sector": "通信设备", "concepts": ["共封装光学(CPO)", "光模块"]},
+                    {"code": "000988", "sector": "光电共封装CPO", "concepts": ["CPO"]},
+                ],
+                "tag_distribution": {"CPO": 2},
+                "sector_quadrant": {
+                    "high_strong_analysis": {
+                        "tier3_normal": [
+                            {"name": "CPO", "quality_score": 45, "todayChange": 1.13}
+                        ]
+                    }
+                },
+            },
+            helpers={
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_clamp": lambda value, low, high: max(low, min(high, value)),
+                "_score_to_star_rank": lambda score: 5 if score >= 84 else 4 if score >= 72 else 3 if score >= 58 else 2 if score >= 42 else 1,
+                "stock_matches_sector": lambda stock, sector_name: sector_name in stock.get("concepts", []) or sector_name in stock.get("sector", ""),
+                "load_recent_sector_flow_history": lambda target_date, sector_name, lookback_days=2: [],
+            },
+        )
+
+        cpo = result[0]
+        self.assertEqual(cpo["name"], "共封装光学(CPO)")
+        self.assertEqual(cpo["hot_plate_rank"], 4)
+        self.assertEqual(cpo["change"], 1.43)
+        self.assertEqual(cpo["change_source"], "hot_plate")
+        self.assertFalse(cpo["net_inflow_available"])
+        self.assertEqual(cpo["trend_label"], "资金流向未匹配")
+        self.assertEqual(cpo["flow_trend"], "unknown")
+        self.assertIn("板块热榜#4", cpo["evidence"])
+
+    def test_build_unified_sector_strength_rows_uses_concept_member_moneyflow(self):
+        support = self._load_module()
+
+        result = support.build_unified_sector_strength_rows(
+            {
+                "target_date": "2026-05-19",
+                "zt_pool_by_sector": {},
+                "sector_fund_flow": {"inflow": [], "outflow": []},
+                "concept_fund_flow": {
+                    "rows": [
+                        {
+                            "name": "共封装光学(CPO)",
+                            "code": "886033.TI",
+                            "net_inflow": 84.6281,
+                            "change_pct": 1.43,
+                            "matched_member_count": 179,
+                            "data_source": "tushare.ths_member+tushare.moneyflow",
+                        }
+                    ]
+                },
+                "hot_plates": [
+                    {
+                        "name": "共封装光学(CPO)",
+                        "rank": 4,
+                        "rate": 145006.5,
+                        "change_pct": 1.43,
+                    }
+                ],
+                "hot_rank_top30": [
+                    {"code": "002281", "sector": "通信设备", "concepts": ["共封装光学(CPO)", "光模块"]},
+                    {"code": "000988", "sector": "光电共封装CPO", "concepts": ["CPO"]},
+                ],
+                "tag_distribution": {"CPO": 2},
+                "sector_quadrant": {},
+            },
+            helpers={
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_clamp": lambda value, low, high: max(low, min(high, value)),
+                "_score_to_star_rank": lambda score: 5 if score >= 84 else 4 if score >= 72 else 3 if score >= 58 else 2 if score >= 42 else 1,
+                "stock_matches_sector": lambda stock, sector_name: sector_name in stock.get("concepts", []) or sector_name in stock.get("sector", ""),
+                "load_recent_sector_flow_history": lambda target_date, sector_name, lookback_days=2: [],
+            },
+        )
+
+        cpo = result[0]
+        self.assertEqual(cpo["name"], "共封装光学(CPO)")
+        self.assertEqual(cpo["net_inflow"], 84.63)
+        self.assertTrue(cpo["net_inflow_available"])
+        self.assertEqual(cpo["net_inflow_source"], "concept_member_moneyflow")
+        self.assertEqual(cpo["concept_matched_member_count"], 179)
+        self.assertIn("资金+84.6亿", cpo["evidence"])
 
 
 if __name__ == "__main__":

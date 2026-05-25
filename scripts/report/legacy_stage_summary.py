@@ -7,7 +7,9 @@ from report.conclusion_support import (
     build_risk_trade_note,
     derive_trade_style,
     get_watch_anchor_note,
+    resolve_selected_position_candidate,
     resolve_today_focus_items,
+    selected_target_is_attack_ready,
 )
 
 
@@ -61,7 +63,7 @@ def _build_environment_row(context, stage_meta=None):
 def _build_selection_row(context, stage_meta=None):
     watchlist_count = int(context.get("watchlist_count", 0) or 0)
     guidance = f"{watchlist_count}只"
-    if resolve_today_focus_items(context):
+    if resolve_today_focus_items(context) or resolve_selected_position_candidate(context):
         guidance = f"{guidance}；{build_focus_recap_text(context)}"
     return _row("selection_focus", _resolve_stage_title(stage_meta, "明天观察池"), guidance)
 
@@ -93,7 +95,10 @@ def _build_risk_row(context, stage_meta=None):
     prefer_data_driven_rows = bool(context.get("prefer_data_driven_stage_rows")) or not bool(context.get("report_stages"))
     if prefer_data_driven_rows:
         risk_note = build_risk_trade_note(context)
-        guidance = f"{risk_summary}；{risk_note}" if risk_summary else risk_note
+        if resolve_selected_position_candidate(context) and selected_target_is_attack_ready(context):
+            guidance = risk_note
+        else:
+            guidance = f"{risk_summary}；{risk_note}" if risk_summary else risk_note
     else:
         guidance = risk_summary or "-"
     return _row("risk_review", _resolve_stage_title(stage_meta, "明日风险预判"), guidance)
@@ -101,9 +106,12 @@ def _build_risk_row(context, stage_meta=None):
 
 def _build_execution_row(context, stage_meta=None):
     trade_gate_open = bool(context.get("trade_gate_open"))
+    selected = resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
-    if trade_gate_open:
+    if selected and selected_target_is_attack_ready(context):
+        guidance = "只等明日目标标的自己走出参与窗口"
+    elif trade_gate_open:
         if best_stock:
             guidance = "只等明天唯一能买的那只自己走出来"
         elif watch_anchor:
@@ -120,12 +128,18 @@ def _build_execution_row(context, stage_meta=None):
 
 
 def _build_decisive_row(context, stage_meta=None):
+    selected = resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     watch_anchor_type = str(context.get("watch_anchor_type", "") or "").strip()
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = get_watch_anchor_note(watch_anchor)
 
+    if selected:
+        stock_label = f"{selected.get('name')}({selected.get('code') or selected.get('stock_code')})"
+        if selected_target_is_attack_ready(context):
+            return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按参与窗口确认，不满足回到0%")
+        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；先观察强弱，不抢跑")
     if best_stock:
         stock_label = f"{best_stock.get('name')}({best_stock.get('code')})"
         return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按预演参与窗口触发")

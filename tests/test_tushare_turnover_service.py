@@ -155,6 +155,66 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         self.assertEqual(rows["600000"]["name"], "浦发银行")
         self.assertEqual(rows["600000"]["data_source"], "tushare.daily")
 
+    def test_fetch_stock_basic_map_includes_list_date_for_recent_stock_filtering(self):
+        from market_data.tushare_turnover_service import fetch_stock_basic_map
+
+        class BasicPro:
+            def __init__(self):
+                self.calls = []
+
+            def stock_basic(self, **kwargs):
+                self.calls.append(kwargs)
+                return _FakeFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "name": "平安银行",
+                            "industry": "银行",
+                            "list_date": "19910403",
+                        }
+                    ]
+                )
+
+        pro = BasicPro()
+        result = fetch_stock_basic_map(pro=pro)
+
+        self.assertIn("list_date", pro.calls[0]["fields"])
+        self.assertEqual(result["000001"]["list_date"], "19910403")
+        self.assertEqual(result["000001.SZ"]["list_date"], "19910403")
+
+    def test_fetch_stock_factor_pro_rows_uses_supported_page_size(self):
+        from market_data.tushare_turnover_service import fetch_stock_factor_pro_rows
+
+        class FactorPro:
+            def __init__(self):
+                self.calls = []
+
+            def stk_factor_pro(self, **kwargs):
+                self.calls.append(kwargs)
+                if kwargs.get("limit") and kwargs["limit"] > 6000:
+                    return _FakeFrame([])
+                return _FakeFrame(
+                    [
+                        {
+                            "ts_code": "000001.SZ",
+                            "trade_date": "20260520",
+                            "close": 12.3,
+                            "high": 12.8,
+                            "pct_chg": 5.2,
+                            "amount": 2500000,
+                            "topdays": 260,
+                        }
+                    ]
+                )
+
+        pro = FactorPro()
+        rows = fetch_stock_factor_pro_rows("2026-05-20", pro=pro)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(pro.calls[0]["trade_date"], "20260520")
+        self.assertEqual(pro.calls[0]["limit"], 6000)
+        self.assertEqual(pro.calls[0].get("offset", 0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

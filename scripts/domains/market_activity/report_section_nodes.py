@@ -532,8 +532,31 @@ def build_volume_anomalies_node(context, node_meta=None, node_lookup=None):
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
+def _display_lhb_provider(provider):
+    text = str(provider or "").strip()
+    if text in {"legacy.lhb_snapshot", "finshare.get_lhb"}:
+        return "Tushare top_list / 备用龙虎榜源"
+    return text or "Tushare top_list"
+
+
+def _render_lhb_rank_row(item):
+    if not isinstance(item, dict):
+        return ""
+    name = item.get("stock_name") or item.get("name") or item.get("code") or ""
+    net_buy = item.get("net_buy")
+    if net_buy in (None, ""):
+        net_buy = item.get("net_buy_amount_yi", 0)
+    net_buy_value = _safe_float(net_buy)
+    money_type = "龙虎榜净买入" if net_buy_value >= 0 else "龙虎榜净卖出"
+    pattern = item.get("pattern") or item.get("sector") or "-"
+    signal_strength = item.get("signal_strength") or item.get("zt_status") or "-"
+    return f"| {name} | {net_buy_value:+.2f} | {money_type} | {_display_text(pattern)} | - | {_display_text(signal_strength)} |"
+
+
 def build_lhb_analysis_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
+    lhb_status = str(data.get("lhb_data_status") or "").strip()
+    lhb_provider = _display_lhb_provider(data.get("lhb_provider"))
     lines = [
         "### 2. 龙虎榜结果",
         "| 股票 | 净买入(亿) | 资金性质 | 行为模式 | 近3日上榜 | 信号强度 |",
@@ -551,7 +574,19 @@ def build_lhb_analysis_node(context, node_meta=None, node_lookup=None):
                     f"| {item.stock_name} | {item.net_buy:+.2f} | {_display_text(item.money_type)} | {_display_text(item.pattern)} | {item.recent_appearances}次 | {_display_text(item.signal_strength)} |"
                 )
     else:
-        lines.append("| - | - | - | - | - | 当前无龙虎榜结果 |")
+        rank_rows = (data.get("lhb_net_buy_top10", []) or []) + (data.get("lhb_net_sell_top10", []) or [])
+        if rank_rows:
+            for item in rank_rows[:10]:
+                rendered = _render_lhb_rank_row(item)
+                if rendered:
+                    lines.append(rendered)
+            if len(lines) > 3:
+                lines.append("")
+                return {"lines": lines, "exports": {}, "module_logs": []}
+        if lhb_status == "upstream_empty":
+            lines.append(f"| - | - | - | - | - | {lhb_provider} 龙虎榜暂未返回数据，待发布后再判断 |")
+        else:
+            lines.append("| - | - | - | - | - | 当前无龙虎榜结果 |")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

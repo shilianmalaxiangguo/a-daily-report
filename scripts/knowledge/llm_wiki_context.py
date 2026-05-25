@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict, List
 
 
-WIKI_VERSION = "2026-05-25"
+WIKI_VERSION = "2026-05-26"
 WIKI_SOURCE = "llm_wiki"
 WIKI_LANGUAGE = "zh-CN"
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +21,7 @@ SOURCE_PATHS = [
     "wiki/交易思想/扣分系统与动作分层.md",
     "wiki/交易思想/实际账户情况.md",
     "wiki/交易思想/判断样本与市场演变.md",
+    "wiki/交易思想/AI摩擦与知识复利.md",
     "wiki/板块补充/板块中枢与主线延续.md",
     "wiki/交易思想/缠论体系.md",
     "wiki/交易思想/缠论-日报使用边界.md",
@@ -76,8 +77,12 @@ FIELD_MAPPINGS = [
     "量化看图 -> 技术图形、成交数据和消息会放大线位反应，只作执行环境不作买入理由",
     "消息归因降权 -> 除个股直接风险外，消息只确认风险，不生成买点，不替代价格量能承接和仓位判断",
     "集中大赚 -> 必须先写代价和平衡，不能把追求大赚变成无边界押注",
+    "AI摩擦与知识复利 -> 消除低效摩擦后必须补上反馈机制；复利方向由接入过程决定，知识节点碰撞形成个人护城河",
+    "必要认知摩擦 -> AI生成后至少复述、重写、对比或沉淀成知识节点，避免只复制结果",
     "迹象识别链 -> 从反复出现的市场迹象提炼现象规律，再在实战中识别、验证和主动运用，不把单次巧合当规律",
     "相对优势进攻 -> 等弱方向开始掉队、强方向仍有资金扩散和核心承接时，才从观察进入参与",
+    "主战场能力圈 -> 短线/超短线追求500强水平；趋势容量、机构抱团和慢推行情只求不拖后腿",
+    "非主战场纪律 -> 低适配行情不扩战法，不为证明全能而新增参与",
     "资金阶段 -> 小资金允许追求高弹性，但只做市场承认的热门核心，不做随机高波动",
     "小资金优势校准 -> 小资金优势是灵活切换核心，不是频繁乱动或救错误仓",
     "AI辅助边界 -> AI负责筛核心、拦错误、做复盘，不承诺省心躺赚",
@@ -174,6 +179,15 @@ PUBLISH_POLICY = [
     "public data contract check runs before deploy",
 ]
 
+KNOWLEDGE_COMPOUNDING_CANDIDATES = [
+    {
+        "related_nodes": ["AI摩擦与知识复利", "判断样本与市场演变"],
+        "new_insight": "判断样本是日报里的反馈机制，用来把 AI 省掉的认知摩擦补回来。",
+        "status": "待确认",
+        "action": "只进入知识复利候选，不自动写入正式 wiki，不改变交易动作。",
+    }
+]
+
 PROCESS_FLOWS = [
     """选股形态审美 ASCII 流程图
 [数据输入]
@@ -241,6 +255,7 @@ REPORT_DIGEST_TEXT = (
     "3%-5%浮亏先检查买入理由结构破坏才处理个股-10%是事故极限胜率难绝对统治时靠赔率"
     "震荡市连跌轻仓低吸、反弹卖回趋势股图形走弱越跌越减MA3/MA5/MA10/MA20只做均线执行锚点"
     "迹象到规律再到实战运用弱方向掉队强方向扩散承接才参与"
+    "短线超短主战场追求500强非主战场不拖后腿不扩战法"
     "非0%且资格成立才给明日主买1只补位1只0%无唯一对象只观察历史表统一观察位窗口"
     "上证缠论明日计划明日抉择同向只观察速度档共同选择对子整数只作锚点"
     "顶部冲不过先止盈底部站回VWAP和10点确认才试错反包先按兑现点"
@@ -271,6 +286,7 @@ def build_llm_wiki_context() -> Dict[str, object]:
         "write_boundaries": list(WRITE_BOUNDARIES),
         "data_source_policy": list(DATA_SOURCE_POLICY),
         "publish_policy": list(PUBLISH_POLICY),
+        "knowledge_compounding_candidates": [dict(item) for item in KNOWLEDGE_COMPOUNDING_CANDIDATES],
         "process_flows": list(PROCESS_FLOWS),
         "report_digest_text": REPORT_DIGEST_TEXT,
     }

@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 import time
 
+from knowledge.realtime_tag_evidence_snapshot import format_tag_evidence_snapshot_for_context
+from knowledge.sector_narrative_alias import resolve_sector_narrative_label
+
 __all__ = [
     "ai_analyze_sector_relationships",
     "ai_group_concepts_into_chains",
@@ -50,10 +53,14 @@ def get_llm_service():
     return None
 
 
-def ai_analyze_sector_relationships(sector_list, context_info="", *, helpers=None):
+def ai_analyze_sector_relationships(sector_list, context_info="", *, helpers=None, tag_evidence_snapshot=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
-        return _ai_analyze_sector_relationships_legacy_body(sector_list, context_info=context_info)
+        return _ai_analyze_sector_relationships_legacy_body(
+            sector_list,
+            context_info=context_info,
+            tag_evidence_snapshot=tag_evidence_snapshot,
+        )
     finally:
         _restore_runtime_bindings(previous)
 
@@ -66,10 +73,19 @@ def ai_group_concepts_into_chains(concepts_list, *, helpers=None):
         _restore_runtime_bindings(previous)
 
 
-def _ai_analyze_sector_relationships_legacy_body(sector_list, context_info=""):
+def _merge_tag_snapshot_context(context_info, tag_evidence_snapshot):
+    snapshot_text = format_tag_evidence_snapshot_for_context(tag_evidence_snapshot)
+    if not snapshot_text:
+        return context_info
+    context_text = str(context_info or "").strip()
+    return f"{context_text}\n{snapshot_text}" if context_text else snapshot_text
+
+
+def _ai_analyze_sector_relationships_legacy_body(sector_list, context_info="", tag_evidence_snapshot=None):
     global _llm_call_stats
     start_time = time.time()
-    context_label = context_info or "本地产业链归并"
+    merged_context = _merge_tag_snapshot_context(context_info, tag_evidence_snapshot)
+    context_label = merged_context or "本地产业链归并"
 
     if not ENABLE_REMOTE_SECTOR_LLM:
         return _llm_sector_analysis_legacy_body(sector_list, context_label)
@@ -78,7 +94,7 @@ def _ai_analyze_sector_relationships_legacy_body(sector_list, context_info=""):
         client = get_llm_service()
         if client is None:
             raise RuntimeError("远程产业链增强服务未配置")
-        result = client.analyze_sector_relationships(sector_list, context_info)
+        result = client.analyze_sector_relationships(sector_list, merged_context)
         if not isinstance(result, dict) or not result.get("groups"):
             raise RuntimeError("远程产业链增强返回空结果")
 
@@ -269,9 +285,10 @@ def _llm_sector_analysis_legacy_body(sectors, context):
     unmatched = []
     for sector in sectors:
         matched = False
+        narrative_sector = resolve_sector_narrative_label(sector, sectors)
         for chain_name, chain_info in industry_chains.items():
             for keyword in chain_info["keywords"]:
-                if keyword in sector or sector in keyword:
+                if keyword in narrative_sector or narrative_sector in keyword:
                     if chain_name not in matched_groups:
                         matched_groups[chain_name] = {
                             "sectors": [],

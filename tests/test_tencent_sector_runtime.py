@@ -55,6 +55,31 @@ class TencentSectorRuntimeTest(unittest.TestCase):
         self.assertEqual(result["turnover_share_pct"], 9.99)
         self.assertEqual(result["leader_stock"], "富瀚微")
 
+    def test_snapshot_keeps_preloaded_fund_flow_source(self):
+        runtime = self._load_module()
+
+        result = runtime.get_sector_turnover_snapshot_from_tencent_fund_flow(
+            "半导体",
+            {
+                "inflow": [
+                    {
+                        "name": "半导体",
+                        "code": "881121.TI",
+                        "turnover_yi": 3440.0,
+                        "lead_stock": "沪硅产业",
+                        "data_source": "tushare.moneyflow_ind_ths",
+                    }
+                ],
+                "outflow": [],
+            },
+            target_date="2026-05-19",
+            total_turnover=29089.77,
+        )
+
+        self.assertEqual(result["sector_turnover"], 3440.0)
+        self.assertEqual(result["source"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(result["source_query"], "turnover_yi")
+
 
 if __name__ == "__main__":
     unittest.main()

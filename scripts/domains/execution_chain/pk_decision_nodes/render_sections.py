@@ -24,6 +24,9 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "intraday_lines": context.get("intraday_lines", []),
         "closing_lines": context.get("closing_lines", []),
         "alert_rows": context.get("alert_rows", []),
+        "candidate_quality_panel_fields": context.get("candidate_quality_panel_fields"),
+        "candidate_quality_samples": context.get("candidate_quality_samples", []),
+        "enabled_node_keys": context.get("action_plan_enabled_node_keys"),
     }
     lines.extend(context["render_pk_decision_section"](pk_context))
     lines.extend(context["render_action_plan_section"](action_context))

@@ -138,6 +138,170 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertNotIn("认准'半导体'", rendered)
         self.assertNotIn("主线内1只", rendered)
 
+    def test_candidate_selection_summary_uses_confirmed_attack_line_over_stale_exit_sector(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-05-21",
+                "exit_analysis": {"sector_name": "半导体"},
+                "candidates": [{"name": "华微电子", "code": "600360"}],
+                "watchlist": [{"name": "华微电子", "code": "600360", "sector": "半导体", "score": 65}],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [{"name": "华微电子", "code": "600360", "sector": "半导体"}],
+                "zt_pool_by_sector": {"半导体": [{"name": "华微电子"}]},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["半导体"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "render_gem_breathing_step2_section": lambda *args, **kwargs: [],
+                "mainline_turnover_summary": {
+                    "share_trend_label": "逆势试攻",
+                    "current_mainline": "人形机器人",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    },
+                },
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [{"name": "华微电子", "code": "600360", "sector": "半导体", "tomorrow_strength": 50}],
+                    "core_stocks": [{"name": "华微电子", "code": "600360", "sector": "半导体", "tomorrow_strength": 50}],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "半导体",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["mainline_summary"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**明日核心方向预判**: 人形机器人", rendered)
+        self.assertIn("局部逆势活跃只按观察处理", rendered)
+        self.assertIn("不把局部强势当成参与资格", rendered)
+        self.assertNotIn("可执行爆发", rendered)
+        self.assertNotIn("**明日核心方向预判**: 半导体", rendered)
+        self.assertNotIn("认准'半导体'", rendered)
+
+    def test_candidate_selection_summary_and_quadrant_use_adopted_mainline_label(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {
+                    "sector_quadrant": {
+                        "high_strong_analysis": {
+                            "tier1_count": 1,
+                            "tier2_count": 0,
+                            "tier3_count": 0,
+                            "tier4_count": 0,
+                            "tier1_best": [{"name": "国产芯片替代", "quality_score": 88}],
+                            "tier2_good": [],
+                            "tier3_normal": [],
+                        }
+                    }
+                },
+                "target_date": "2026-05-22",
+                "exit_analysis": {"sector_name": "元件"},
+                "candidates": [{"name": "风华高科", "code": "000636"}],
+                "watchlist": [{"name": "风华高科", "code": "000636", "sector": "元器件", "score": 65}],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [{"name": "风华高科", "code": "000636", "sector": "元器件"}],
+                "zt_pool_by_sector": {"元器件": [{"name": "风华高科"}]},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["元件"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "render_gem_breathing_step2_section": lambda *args, **kwargs: [],
+                "mainline_turnover_summary": {
+                    "current_mainline": "国产芯片替代",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "国产芯片替代",
+                        "confirmation_evidence": "国产芯片替代资金净流入靠前，涨停和高标更集中",
+                    },
+                },
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [{"name": "风华高科", "code": "000636", "sector": "元器件", "tomorrow_strength": 40}],
+                    "core_stocks": [{"name": "风华高科", "code": "000636", "sector": "元器件", "tomorrow_strength": 40}],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "元件",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["mainline_summary", "quadrant_analysis"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**明日核心方向预判**: 国产芯片替代", rendered)
+        self.assertIn("**主线位置判断**: 当前主线'国产芯片替代'位于", rendered)
+        self.assertNotIn("**明日核心方向预判**: 元件", rendered)
+        self.assertNotIn("当前主线'元件'", rendered)
+
+    def test_candidate_selection_summary_does_not_sum_composite_stock_strength_as_sector_strength(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-05-24",
+                "exit_analysis": {"sector_name": "机器人"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["机器人"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [
+                        {"name": "机器人一号", "code": "000001", "sector": "机器人", "tomorrow_strength": 92},
+                        {"name": "机器人二号", "code": "000002", "sector": "机器人", "tomorrow_strength": 88},
+                    ],
+                    "secondary_stocks": [
+                        {"name": "机器人三号", "code": "000003", "sector": "机器人", "tomorrow_strength": 76},
+                    ],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [],
+                    "mainline_name": "机器人",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["mainline_summary"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**明日核心方向预判**: 机器人（主线内3只，最强样本92分）", rendered)
+        self.assertIn("综合分只用于个股排序，不累加成板块分", rendered)
+        self.assertNotIn("主线内强度256分", rendered)
+        self.assertNotIn("板块强度256分", rendered)
+
     def test_conviction_list_renders_quant_anchor_action_from_participation_script(self):
         result = build_candidate_selection_conviction_list_node(
             {
@@ -163,6 +327,166 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("量化锚点动作", rendered)
         self.assertIn("533.33对子锚点接近前高与MA5", rendered)
         self.assertIn("冲不过先止盈", rendered)
+
+    def test_conviction_list_does_not_upgrade_core_labels_to_full_attack_without_position_decision(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "核心样本",
+                        "code": "000001",
+                        "sector": "机器人",
+                        "a_grade_candidate": True,
+                        "pattern": "2连板",
+                        "conviction_reason": "主线内核 / 连板 / 龙一",
+                        "conviction_rule": "只在竞价表态和开盘承接同时成立后再参与",
+                        "participation_window": "竞价表态 + 回封参与",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("主线内核 / 连板 / 龙一", rendered)
+        self.assertIn("| 竞价表态 + 回封参与 | 50% |", rendered)
+        self.assertNotIn("| 竞价表态 + 回封参与 | 100% |", rendered)
+
+    def test_candidate_selection_renders_shape_repair_pool_separately(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-05-21",
+                "exit_analysis": {"sector_name": "光通信"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["光通信"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [{"name": "光迅科技", "code": "002281", "sector": "光通信"}],
+                    "shape_repair_pool": [
+                        {
+                            "name": "博杰股份",
+                            "code": "002975",
+                            "sector": "机器人",
+                            "repair_status": "待修复",
+                            "trend_aesthetic_review": {
+                                "reasons": ["短线承接转弱", "历史好形态"],
+                                "action": "历史趋势样本待修复，重新站回短中线承接后再评估",
+                            },
+                            "next_action": "保留跟踪，重新站回短中线承接后再评估；继续走坏再取关淘汰",
+                        }
+                    ],
+                    "mainline_name": "光通信",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["conviction_list"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**形态待修复池**", rendered)
+        self.assertIn("| 博杰股份 | 002975 | 机器人 | 待修复 | 短线承接转弱 / 历史好形态 | 历史趋势样本待修复，重新站回短中线承接后再评估 | 保留跟踪，重新站回短中线承接后再评估；继续走坏再取关淘汰 |", rendered)
+        self.assertEqual(result["exports"]["shape_repair_pool"][0]["code"], "002975")
+
+    def test_candidate_selection_renders_historical_extreme_review_destinations(self):
+        result = build_candidate_selection_runtime(
+            {
+                "data": {"sector_quadrant": {}},
+                "target_date": "2026-05-21",
+                "exit_analysis": {"sector_name": "光通信"},
+                "candidates": [],
+                "watchlist": [],
+                "abnormal_watch_map": {},
+                "dragon_stocks": [],
+                "zt_pool_by_sector": {},
+                "market_research_bundle": {
+                    "gem_breathing_candidates": [],
+                    "filtered_out_gem_breathing_candidates": [],
+                },
+                "main_sectors": ["光通信"],
+                "display_mvp_mode": False,
+                "safe_float": float,
+                "build_step2_candidate_bundle": lambda *args, **kwargs: {
+                    "evaluated_stocks": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "ignored_stocks": [],
+                    "crossline_observation_stocks": [],
+                    "gem_observation_stocks": [],
+                    "sector_trend_snapshot": [],
+                    "extreme_conviction_list": [{"name": "光迅科技", "code": "002281", "sector": "光通信"}],
+                    "shape_repair_pool": [],
+                    "historical_extreme_review": [
+                        {
+                            "mention_trade_date": "2026-05-20",
+                            "name": "光迅科技",
+                            "code": "002281",
+                            "sector": "光通信",
+                            "source_section": "极度看好名单",
+                            "destination": "正式重点观察名单",
+                            "review_status": "当前合格",
+                            "review_basis": "进入正式重点观察名单",
+                            "next_action": "按最终仓位结论统一收口",
+                        },
+                        {
+                            "mention_trade_date": "2026-05-19",
+                            "name": "汇源通信",
+                            "code": "000586",
+                            "sector": "通信设备",
+                            "source_section": "极度看好名单",
+                            "destination": "龙回头观察池",
+                            "review_status": "龙回头观察",
+                            "review_basis": "龙回头样本 / A杀未修复",
+                            "next_action": "单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰",
+                        },
+                    ],
+                    "dragon_rebound_watch_pool": [
+                        {
+                            "name": "汇源通信",
+                            "code": "000586",
+                            "sector": "通信设备",
+                            "repair_status": "龙回头观察",
+                            "trend_aesthetic_review": {
+                                "reasons": ["龙回头样本", "A杀未修复"],
+                                "action": "重新站回短中线承接后再评估",
+                            },
+                            "next_action": "单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰",
+                        }
+                    ],
+                    "mainline_name": "光通信",
+                    "module_logs": [],
+                },
+                "ai_analyze_sector_relationships": lambda sector_names, context: {"groups": [], "insights": ""},
+            },
+            {"label": "Step 2", "title": "明日核心标的"},
+            enabled_node_keys=["conviction_list"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**历史重点观察样本去向**", rendered)
+        self.assertIn("**龙回头观察池**", rendered)
+        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 龙回头观察 | 龙回头样本 / A杀未修复 | 重新站回短中线承接后再评估 | 单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰 |", rendered)
+        self.assertIn("| 2026-05-20 | 光迅科技 | 002281 | 光通信 | 极度看好名单 | 正式重点观察名单 | 当前合格 | 进入正式重点观察名单 | 按最终仓位结论统一收口 |", rendered)
+        self.assertIn("| 2026-05-19 | 汇源通信 | 000586 | 通信设备 | 极度看好名单 | 龙回头观察池 | 龙回头观察 | 龙回头样本 / A杀未修复 | 单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰 |", rendered)
+        self.assertEqual(result["exports"]["dragon_rebound_watch_pool"][0]["code"], "000586")
+        self.assertEqual(result["exports"]["historical_extreme_review"][1]["code"], "000586")
 
     def test_extreme_conviction_list_renders_quantified_participation_script(self):
         result = build_candidate_selection_runtime(

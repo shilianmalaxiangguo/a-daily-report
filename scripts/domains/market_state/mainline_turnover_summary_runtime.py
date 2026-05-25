@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from knowledge.sector_narrative_alias import merge_sector_evidence_rows_by_narrative
+
 __all__ = [
     "build_mainline_attack_evidence_summary",
     "build_mainline_turnover_summary",
+    "build_overtake_window_summary",
+    "build_trading_arena_fit_summary",
     "should_rebuild_mainline_turnover_summary",
 ]
 
@@ -114,6 +118,8 @@ def _build_conclusion(current_mainline, previous_mainline, share_trend_label):
 
 
 def _build_action_text(current_mainline, previous_mainline, share_trend_label):
+    if share_trend_label == "逆势试攻":
+        return f"{current_mainline}只按观察主攻线处理，先防踩踏，再看次日是否修复承接"
     if current_mainline and previous_mainline and current_mainline != previous_mainline:
         return f"只围绕新主线{current_mainline}重新收缩，不对旧主线做回流预判"
     if current_mainline and share_trend_label == "强化":
@@ -151,6 +157,17 @@ def _format_share_change(current_share, previous_share):
 def _format_signed_pct(value):
     value = _safe_float(value)
     return f"{value:+.1f}%"
+
+
+def _source_scope_text(item):
+    source = str((item or {}).get("source") or (item or {}).get("data_source") or "").strip()
+    if source == "tushare.moneyflow_ind_ths":
+        return "Tushare行业资金流入+流出"
+    if source == "thsdk.market_data_block":
+        return "同花顺板块总金额"
+    if source == "tencent.fundflow.getHyRank":
+        return "腾讯行业资金成交额"
+    return ""
 
 
 def _median(values):
@@ -288,6 +305,14 @@ def _default_regime_action(regime, current_mainline, action_text):
     return action_text or "先看主线证据是否继续聚焦"
 
 
+def _is_countertrend_attack_record(current_record):
+    text = " ".join(
+        str((current_record or {}).get(key) or "")
+        for key in ("rotation_label", "market_state", "state", "rotation_summary")
+    )
+    return "逆势攻击" in text or "放量杀跌" in text
+
+
 def _sector_evidence_labels(row):
     labels = []
     if row["net_inflow_amount"] > 0 and row["net_inflow_rank"] <= 3:
@@ -323,6 +348,13 @@ def _normalize_sector_evidence_row(row):
         "turnover_share_pct": _safe_float(row.get("turnover_share_pct")),
         "turnover_share_change": _safe_float(row.get("turnover_share_change")),
     }
+    surface_names = [
+        str(item or "").strip()
+        for item in (row.get("surface_sector_names") or [])
+        if str(item or "").strip()
+    ]
+    if surface_names:
+        normalized["surface_sector_names"] = surface_names
     missing = []
     for key in (
         "net_inflow_amount",
@@ -424,10 +456,56 @@ def _sector_local_evidence_count(row):
     return count
 
 
-def build_mainline_attack_evidence_summary(*, sector_evidence_rows=None, market_regime=""):
+def _snapshot_terms(group):
+    terms = []
+    for key in ("采用名称", "当日主攻分支", "大方向"):
+        value = str((group or {}).get(key) or "").strip()
+        if value:
+            terms.append(value)
+    for key in ("表层行业名", "辅助名称"):
+        terms.extend([str(item or "").strip() for item in ((group or {}).get(key) or []) if str(item or "").strip()])
+    return terms
+
+
+def _apply_tag_snapshot_to_evidence_rows(rows, snapshot):
+    groups = list((snapshot or {}).get("groups") or [])
+    if not groups:
+        return rows
+    patched_rows = []
+    for row in rows or []:
+        row = dict(row or {})
+        row_name = str(row.get("sector_name") or row.get("sector") or "").strip()
+        row_terms = [row_name]
+        row_terms.extend([str(item or "").strip() for item in (row.get("surface_sector_names") or []) if str(item or "").strip()])
+        row_terms.extend([str(item or "").strip() for item in (row.get("concepts") or []) if str(item or "").strip()])
+        matched_group = None
+        for group in groups:
+            if str(group.get("关系判断") or "") == "证据不足":
+                continue
+            group_terms = _snapshot_terms(group)
+            if any(left and right and (left == right or left in right or right in left) for left in row_terms for right in group_terms):
+                matched_group = group
+                break
+        if matched_group:
+            adopted = str(matched_group.get("采用名称") or "").strip()
+            if adopted:
+                surface_names = list(row.get("surface_sector_names") or [])
+                if row_name and row_name not in surface_names and row_name != adopted:
+                    surface_names.append(row_name)
+                for surface in matched_group.get("表层行业名") or []:
+                    if surface and surface not in surface_names and surface != adopted:
+                        surface_names.append(surface)
+                row["sector_name"] = adopted
+                row["surface_sector_names"] = surface_names
+        patched_rows.append(row)
+    return patched_rows
+
+
+def build_mainline_attack_evidence_summary(*, sector_evidence_rows=None, market_regime="", realtime_tag_evidence_snapshot=None):
+    sector_evidence_rows = _apply_tag_snapshot_to_evidence_rows(sector_evidence_rows or [], realtime_tag_evidence_snapshot)
     rows = [
         _normalize_sector_evidence_row(row)
-        for row in (sector_evidence_rows or [])
+        for row in merge_sector_evidence_rows_by_narrative(sector_evidence_rows or [])
         if str((row or {}).get("sector_name") or (row or {}).get("sector") or "").strip()
     ]
     ranked = _rank_sector_evidence(rows)
@@ -487,6 +565,155 @@ def build_mainline_attack_evidence_summary(*, sector_evidence_rows=None, market_
     }
 
 
+def _overtake_primary_row(attack_summary):
+    primary = str((attack_summary or {}).get("primary_line") or "").strip()
+    for row in (attack_summary or {}).get("sector_evidence_rows") or []:
+        if str((row or {}).get("sector_name") or "").strip() == primary:
+            return row
+    return {}
+
+
+def _overtake_rival_rows(attack_summary):
+    primary = str((attack_summary or {}).get("primary_line") or "").strip()
+    return [
+        row
+        for row in (attack_summary or {}).get("sector_evidence_rows") or []
+        if str((row or {}).get("sector_name") or "").strip() and str((row or {}).get("sector_name") or "").strip() != primary
+    ]
+
+
+def _overtake_row_is_slowing(row):
+    row = row or {}
+    return (
+        _safe_float(row.get("net_inflow_amount")) <= 0
+        or _safe_float(row.get("turnover_share_change")) <= -0.5
+        or int(_safe_float(row.get("limit_up_count"))) <= 1
+        or int(_safe_float(row.get("local_evidence_count"))) <= 1
+    )
+
+
+def _overtake_row_still_competes(row):
+    row = row or {}
+    return (
+        int(_safe_float(row.get("fund_evidence_count"))) > 0
+        and int(_safe_float(row.get("strength_evidence_count"))) > 0
+    ) or int(_safe_float(row.get("evidence_count"))) >= 3
+
+
+def _line_list_text(rows):
+    names = [str((row or {}).get("sector_name") or "").strip() for row in rows if str((row or {}).get("sector_name") or "").strip()]
+    return "、".join(names[:2])
+
+
+def build_overtake_window_summary(
+    *,
+    mainline_attack_evidence_summary=None,
+    mainline_capacity_regime_summary=None,
+    current_mainline_history_record=None,
+):
+    attack_summary = mainline_attack_evidence_summary or {}
+    capacity_summary = mainline_capacity_regime_summary or {}
+    current_record = current_mainline_history_record or {}
+    attack_state = str(attack_summary.get("attack_state") or "").strip()
+    primary_line = str(attack_summary.get("primary_line") or capacity_summary.get("primary_line") or "").strip()
+    primary_row = _overtake_primary_row(attack_summary)
+    primary_labels = list((primary_row or {}).get("evidence_labels") or attack_summary.get("evidence_labels") or [])
+    has_fund = any(label in ("资金净流入靠前", "资金净流入明显领先", "成交占比扩张") for label in primary_labels)
+    has_strength = any(label in ("批量涨停", "高标强度突出", "板块普涨", "高涨幅集群") for label in primary_labels)
+    own_holds = attack_state == "confirmed_attack" and bool(primary_line) and has_fund and has_strength
+    rival_rows = _overtake_rival_rows(attack_summary)
+    slowing_rows = [row for row in rival_rows if _overtake_row_is_slowing(row)]
+    competing_rows = [row for row in rival_rows if _overtake_row_still_competes(row)]
+    has_named_rival = bool(
+        str(current_record.get("secondary_mainline") or current_record.get("competition_mainline") or current_record.get("background_mainline") or "").strip()
+    )
+    rivals_slow = bool(slowing_rows) or (has_named_rival and attack_state == "confirmed_attack" and not competing_rows)
+
+    if attack_state == "confirmed_attack" and own_holds and rivals_slow and not competing_rows:
+        return {
+            "window_state": "open",
+            "primary_line": primary_line,
+            "rival_slowdown": (
+                f"{_line_list_text(slowing_rows) or '旧主线'}承接转弱，竞争线冲高回落"
+            ),
+            "own_stability": f"{primary_line}资金扩散，核心承接稳定",
+            "speed_gap": "失速差拉开",
+            "action": f"只在{primary_line}核心里找参与资格",
+            "evidence_labels": ["对手失速", "我方稳住", "失速差拉开"],
+            "evidence_gaps": [],
+        }
+
+    if attack_state == "confirmed_attack" and own_holds:
+        return {
+            "window_state": "confirm_next",
+            "primary_line": primary_line,
+            "rival_slowdown": "旧主线或竞争线尚未完全退开" if competing_rows else "对手失速仍待确认",
+            "own_stability": f"{primary_line}资金扩散，核心承接稳定",
+            "speed_gap": "未拉开",
+            "action": "等竞价、开盘承接、回封或60分钟确认",
+            "evidence_labels": ["我方稳住"],
+            "evidence_gaps": ["对手失速待确认"],
+        }
+
+    if attack_state in ("chaotic_rotation", "candidate_attack"):
+        return {
+            "window_state": "observe",
+            "primary_line": primary_line,
+            "rival_slowdown": "多方向都有局部热度",
+            "own_stability": "当前方向强度不足",
+            "speed_gap": "未拉开",
+            "action": "仅观察，不给新增参与资格",
+            "evidence_labels": [],
+            "evidence_gaps": ["失速差未形成"],
+        }
+
+    return {
+        "window_state": "no_trade",
+        "primary_line": primary_line,
+        "rival_slowdown": "旧方向失速或全市场同步走弱",
+        "own_stability": "当前方向没有资金和强度扩散",
+        "speed_gap": "未拉开",
+        "action": "不参与，先防风险",
+        "evidence_labels": [],
+        "evidence_gaps": ["我方未稳住"],
+    }
+
+
+def build_trading_arena_fit_summary(*, mainline_capacity_regime_summary=None, overtake_window_summary=None):
+    capacity_summary = mainline_capacity_regime_summary or {}
+    overtake_summary = overtake_window_summary or {}
+    regime = str(capacity_summary.get("mainline_regime") or "").strip()
+    capacity = str(capacity_summary.get("mainline_capacity") or "").strip()
+    primary_line = str(overtake_summary.get("primary_line") or capacity_summary.get("primary_line") or "").strip()
+    window_state = str(overtake_summary.get("window_state") or "").strip()
+    home_regimes = {"单主线聚焦", "混沌接力", "双主线竞争", "主线+背景线"}
+    non_home_markers = ("趋势", "机构", "抱团", "慢推")
+    is_non_home = any(marker in regime for marker in non_home_markers) or capacity == "牛市多线容量"
+    if window_state == "open" and regime in home_regimes and not is_non_home:
+        return {
+            "fit_state": "home_arena",
+            "arena_label": "短线/超短线主战场",
+            "market_style": regime or "主线扩散",
+            "fit_reason": "量能、资金扩散、板块效应和核心承接进入短线/超短线可发挥区",
+            "action": f"按短线/超短线主战场处理，围绕{primary_line or '主攻线'}核心继续寻找参与资格",
+        }
+    if is_non_home:
+        return {
+            "fit_state": "low_fit",
+            "arena_label": "非主战场",
+            "market_style": regime or capacity or "容量行情",
+            "fit_reason": "更接近趋势容量、机构抱团或慢推行情，不是当前短线/超短线主战场",
+            "action": "不扩战法，不为证明全能而新增参与，只保持不拖后腿",
+        }
+    return {
+        "fit_state": "neutral_fit",
+        "arena_label": "等待主战场",
+        "market_style": regime or "未分出",
+        "fit_reason": "短线/超短线主战场条件尚未充分展开",
+        "action": "继续等量能异常、资金扩散、板块效应和核心承接同时出现",
+    }
+
+
 def _build_mainline_capacity_regime_summary(
     *,
     current_mainline,
@@ -540,19 +767,27 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
     source_status = str(item.get("source_status") or "").strip()
     share = _safe_float(item.get("turnover_share_pct"))
     sector_turnover = _safe_float(item.get("sector_turnover"))
-    sector_name = str(item.get("sector_name") or fallback_mainline or "-").strip() or "-"
-    row_daily_attack_line = str(
-        item.get("daily_attack_line") or item.get("attack_line") or daily_attack_line or sector_name or "-"
+    cycle_mainline = str(
+        item.get("cycle_mainline")
+        or item.get("primary_mainline")
+        or item.get("sector_name")
+        or fallback_mainline
+        or "-"
     ).strip() or "-"
+    row_daily_attack_line = str(
+        item.get("daily_attack_line") or item.get("attack_line") or daily_attack_line or cycle_mainline or "-"
+    ).strip() or "-"
+    source_scope = _source_scope_text(item)
     if source_status == "missing_dependency":
         interpretation = "缺少板块成交额接口，先记录主线归属，成交额占比待后续数据累计"
     elif share > 0:
-        interpretation = "主线成交额占比可用，继续观察占比抬升或回落"
+        prefix = f"{source_scope}口径，" if source_scope else ""
+        interpretation = f"{prefix}主线成交额占比可用，继续观察占比抬升或回落"
     else:
         interpretation = "主线成交额占比暂缺，先不据此放大买入资格"
     return {
         "date": str(item.get("date") or "-").strip() or "-",
-        "cycle_mainline": sector_name,
+        "cycle_mainline": cycle_mainline,
         "daily_attack_line": row_daily_attack_line,
         "mainline_turnover": _format_amount_yi(sector_turnover),
         "market_turnover": _format_amount_yi(item.get("total_turnover")),
@@ -564,7 +799,7 @@ def _build_turnover_share_row(item, *, fallback_mainline="", daily_attack_line="
 
 def _turnover_row_mainline(item, fallback_mainline=""):
     item = item or {}
-    return str(item.get("sector_name") or item.get("cycle_mainline") or fallback_mainline or "").strip()
+    return str(item.get("cycle_mainline") or item.get("primary_mainline") or item.get("sector_name") or fallback_mainline or "").strip()
 
 
 def _turnover_row_key(item):
@@ -572,23 +807,11 @@ def _turnover_row_key(item):
     return (str(item.get("date") or "").strip(), _turnover_row_mainline(item))
 
 
-def _limit_turnover_share_source_rows(source_rows, current_mainline, limit=5):
+def _limit_turnover_share_source_rows(source_rows, current_mainline, limit=25):
     source_rows = list(source_rows or [])
     if len(source_rows) <= limit:
         return source_rows
-    limited = source_rows[-limit:]
-    current_mainline = str(current_mainline or "").strip()
-    previous_distinct_item = None
-    for item in reversed(source_rows):
-        row_mainline = _turnover_row_mainline(item)
-        if row_mainline and current_mainline and row_mainline != current_mainline:
-            previous_distinct_item = item
-            break
-    if previous_distinct_item and _turnover_row_key(previous_distinct_item) not in {
-        _turnover_row_key(item) for item in limited
-    }:
-        limited = [previous_distinct_item] + limited[-(limit - 1) :]
-    return limited
+    return source_rows[-limit:]
 
 
 def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_snapshot, current_mainline):
@@ -611,6 +834,59 @@ def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_sna
             previous_share_by_mainline[row_mainline] = share
             previous_share_any_mainline = share
     return rows
+
+
+def _share_points_from_source_rows(source_rows):
+    points = []
+    for item in source_rows or []:
+        share = round(_safe_float((item or {}).get("turnover_share_pct")), 1)
+        if share <= 0:
+            continue
+        points.append(
+            {
+                "date": str((item or {}).get("date") or "").strip(),
+                "share": share,
+            }
+        )
+    return points
+
+
+def _share_direction_text(delta):
+    delta = _safe_float(delta)
+    if delta >= 0.5:
+        return "主线成交占比抬升，资金聚焦度走强。"
+    if delta <= -0.5:
+        return "主线成交占比回落，先看重新聚焦能否持续。"
+    return "主线成交占比横向震荡，暂按边走边确认处理。"
+
+
+def _build_turnover_share_trend_summary(recent_sector_turnover_history, current_snapshot, current_mainline):
+    source_rows = list(recent_sector_turnover_history or []) + ([current_snapshot] if current_snapshot else [])
+    limited_rows = _limit_turnover_share_source_rows(source_rows, current_mainline, limit=25)
+    points = _share_points_from_source_rows(limited_rows)
+    if not points:
+        return "近25个交易日主线成交额占比趋势：关键数据不完整，停止生成趋势判断。"
+    shares = [point["share"] for point in points]
+    current_share = shares[-1]
+    low_share = min(shares)
+    high_share = max(shares)
+    window_label = f"近{len(limited_rows)}个交易日" if len(limited_rows) == 25 else f"近{len(points)}个有效交易日"
+    recent_change_text = ""
+    if len(shares) >= 5:
+        direction_delta = current_share - shares[-5]
+        recent_change_text = f"近5日{direction_delta:+.1f}pct，"
+    elif len(shares) >= 2:
+        direction_delta = current_share - shares[0]
+        recent_change_text = f"区间首尾{direction_delta:+.1f}pct，"
+    else:
+        direction_delta = 0.0
+    return (
+        f"{window_label}主线成交额占比趋势："
+        f"当前{current_share:.1f}%，"
+        f"{recent_change_text}"
+        f"区间{low_share:.1f}%-{high_share:.1f}%，"
+        f"{_share_direction_text(direction_delta)}"
+    )
 
 
 def _snapshot_from_attack_evidence(current_snapshot, attack_evidence_summary, target_date):
@@ -660,6 +936,7 @@ def build_mainline_turnover_summary(
     current_sector_turnover_snapshot=None,
     recent_sector_turnover_history=None,
     sector_attack_evidence_rows=None,
+    realtime_tag_evidence_snapshot=None,
 ):
     current_record = current_mainline_history_record or {}
     current_snapshot = current_sector_turnover_snapshot or {}
@@ -668,6 +945,7 @@ def build_mainline_turnover_summary(
         build_mainline_attack_evidence_summary(
             sector_evidence_rows=sector_attack_evidence_rows,
             market_regime=current_record.get("market_regime"),
+            realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
         )
         if sector_attack_evidence_rows is not None
         else {}
@@ -685,9 +963,14 @@ def build_mainline_turnover_summary(
         target_date,
     )
     previous_mainline = _pick_previous_mainline(recent_mainline_history, current_mainline)
+    is_countertrend_attack = bool(current_mainline and _is_countertrend_attack_record(current_record))
     share_series = _build_share_series(recent_sector_turnover_history, current_snapshot)
     share_trend_label = _resolve_share_trend_label(current_mainline, previous_mainline, share_series)
-    conclusion = _build_conclusion(current_mainline, previous_mainline, share_trend_label)
+    if is_countertrend_attack:
+        share_trend_label = "逆势试攻"
+        conclusion = f"{current_mainline}只是放量杀跌中的观察主攻线，不按周期主线切换处理"
+    else:
+        conclusion = _build_conclusion(current_mainline, previous_mainline, share_trend_label)
     mainline_path = _build_mainline_path_text(recent_mainline_history, current_mainline)
     share_path = _format_share_series(share_series)
     data_text = f"最近{len(share_series)}日主线 {mainline_path}；成交额占比 {share_path}，节奏偏{share_trend_label}" if mainline_path and share_path else ""
@@ -703,6 +986,11 @@ def build_mainline_turnover_summary(
             current_record_for_regime["sector_relationship_state"] = evidence_relationship
         if attack_evidence_summary.get("attack_state") in ("no_attack", "chaotic_rotation"):
             current_mainline_for_regime = ""
+    if is_countertrend_attack:
+        current_record_for_regime["mainline_regime"] = "观察主攻线"
+        current_record_for_regime["sector_relationship_state"] = "逆势试攻"
+        current_record_for_regime["mainline_process"] = "逆势试攻"
+        current_record_for_regime["mainline_regime_action"] = action_text
 
     capacity_regime_summary = _build_mainline_capacity_regime_summary(
         current_mainline=current_mainline_for_regime,
@@ -710,6 +998,15 @@ def build_mainline_turnover_summary(
         current_snapshot=current_snapshot,
         recent_sector_turnover_history=recent_sector_turnover_history,
         action_text=action_text,
+    )
+    overtake_window_summary = build_overtake_window_summary(
+        mainline_attack_evidence_summary=attack_evidence_summary,
+        mainline_capacity_regime_summary=capacity_regime_summary,
+        current_mainline_history_record=current_record_for_regime,
+    )
+    trading_arena_fit_summary = build_trading_arena_fit_summary(
+        mainline_capacity_regime_summary=capacity_regime_summary,
+        overtake_window_summary=overtake_window_summary,
     )
     return {
         "date": str(target_date or current_record.get("date") or current_snapshot.get("date") or "").strip(),
@@ -721,13 +1018,24 @@ def build_mainline_turnover_summary(
         "data_text": data_text,
         "action_text": action_text,
         "double_mainline_summary": {
-            "cycle_mainline": current_mainline or "-",
+            "cycle_mainline": previous_mainline if is_countertrend_attack and previous_mainline else (current_mainline or "-"),
             "daily_attack_line": current_mainline or "-",
-            "relationship": "周期主线与当天主攻线一致" if current_mainline else "主线待确认",
+            "relationship": (
+                f"{current_mainline}只是放量杀跌中的观察主攻线，不按周期主线处理"
+                if is_countertrend_attack and current_mainline
+                else "周期主线与当天主攻线一致" if current_mainline else "主线待确认"
+            ),
             "tomorrow_action": action_text,
         },
         "mainline_attack_evidence_summary": attack_evidence_summary,
         "mainline_capacity_regime_summary": capacity_regime_summary,
+        "overtake_window_summary": overtake_window_summary,
+        "trading_arena_fit_summary": trading_arena_fit_summary,
+        "turnover_share_trend_summary": _build_turnover_share_trend_summary(
+            recent_sector_turnover_history,
+            current_snapshot,
+            current_mainline,
+        ),
         "turnover_share_trend_rows": _build_turnover_share_trend_rows(
             recent_sector_turnover_history,
             current_snapshot,

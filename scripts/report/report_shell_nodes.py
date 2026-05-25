@@ -105,7 +105,7 @@ def _build_prohibition_payload(
     if display_position_level == "一档（空仓档）":
         headline = environment_headline or "环境关闭，只做等待，不做新增参与"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
-        payload["prohibition_items"].append("- ✅ 禁止新开仓：当前不允许新增任何买入")
+        payload["prohibition_items"].append("- ✅ 保持空仓：当前不新增参与")
         if has_personal_positions:
             payload["prohibition_items"].append("- ✅ 禁止恋战：你的现有仓位只做退出，不做摊平和自救")
         else:
@@ -120,7 +120,7 @@ def _build_prohibition_payload(
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
             payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%观察；{PARTICIPATION_WINDOW_LAYER_TEXT}，命中预演情境才评估50%标准进攻")
         else:
-            payload["prohibition_items"].append("- ✅ 禁止新开仓：当前按0%不参与，未形成参与窗口前不新增")
+            payload["prohibition_items"].append("- ✅ 不新增参与：当前按0%不参与，未形成参与窗口前只观察")
         if final_gate.get("should_reduce"):
             if has_personal_positions:
                 payload["prohibition_items"].append("- ✅ 禁止抱弱留弱：你的旧仓里，不在最强趋势的票要优先处理")

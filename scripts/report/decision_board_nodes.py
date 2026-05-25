@@ -1,6 +1,9 @@
 from report.decision_board_node_registry import build_decision_board_node_specs
 from report.decision_board_node_runtime import run_decision_board_nodes
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    resolve_display_mainline_name,
+    resolve_mainline_attack_evidence_summary,
+)
 
 
 def _safe_float(value, default=0.0):
@@ -29,7 +32,10 @@ def build_decision_board_mainline_section_node(context, node_meta=None, node_loo
         return {"lines": [], "exports": {}, "module_logs": []}
     exit_analysis = context.get("exit_analysis", {}) or {}
     main_sectors = context.get("main_sectors", []) or []
-    primary_mainline = exit_analysis.get("sector_name", "") or (main_sectors[0] if main_sectors else "")
+    primary_mainline = resolve_display_mainline_name(
+        context,
+        fallback=exit_analysis.get("sector_name", "") or (main_sectors[0] if main_sectors else ""),
+    )
     attack_summary = resolve_mainline_attack_evidence_summary(context)
     has_unconfirmed_attack_evidence = bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
     high_board_count = int(context.get("high_board_count", 0) or 0)

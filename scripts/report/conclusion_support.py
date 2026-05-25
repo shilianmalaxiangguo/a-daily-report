@@ -12,6 +12,22 @@ def format_stock_label(stock):
     return name or code or "-"
 
 
+def resolve_selected_position_candidate(context):
+    selected = context.get("selected_position_candidate") or {}
+    if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return selected
+    return {}
+
+
+def selected_target_is_attack_ready(context):
+    position_decision = context.get("position_decision") or {}
+    try:
+        target_pct = int(float(position_decision.get("target_position_pct") or 0))
+    except (TypeError, ValueError):
+        target_pct = 0
+    return target_pct >= 50
+
+
 def resolve_today_focus_items(context):
     direct_items = context.get("today_validated_items")
     if direct_items is not None:
@@ -24,6 +40,12 @@ def build_market_outlook_text(context):
     prediction_text = str(context.get("step0_prediction_cn", "") or "").strip()
     action_text = str(context.get("step0_action", "") or "").strip()
     final_gate = context.get("final_gate") or {}
+    selected = resolve_selected_position_candidate(context)
+    if selected and selected_target_is_attack_ready(context):
+        final_action = str(final_gate.get("final_action", "") or "").strip()
+        parts = [part for part in (prediction_text, final_action) if part]
+        if parts:
+            return "；".join(parts)
     parts = [part for part in (prediction_text, action_text) if part]
     if parts:
         return "；".join(parts)
@@ -37,6 +59,12 @@ def build_market_outlook_text(context):
 
 
 def build_focus_recap_text(context):
+    selected = resolve_selected_position_candidate(context)
+    if selected:
+        if selected_target_is_attack_ready(context):
+            return f"{format_stock_label(selected)}：明日目标标的，参与窗口确认才执行"
+        return f"{format_stock_label(selected)}：明日目标标的，先观察强弱与承接"
+
     best_stock = context.get("best_stock") or {}
     if best_stock:
         return f"{format_stock_label(best_stock)}：已缩成明天唯一执行候选"
@@ -79,16 +107,22 @@ def build_candidate_trade_directive(context):
     crossline_count = int(context.get("crossline_count", 0) or 0)
     summary = f"{core_count}只主线核心 / {secondary_count}只备选 / {crossline_count}只跨线观察"
 
+    selected = resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
-    if best_stock:
+    if selected:
+        if selected_target_is_attack_ready(context):
+            directive = f"已缩到明日目标标的{format_stock_label(selected)}，只看参与窗口是否成立"
+        else:
+            directive = f"已缩到明日目标标的{format_stock_label(selected)}，先观察强弱与承接"
+    elif best_stock:
         directive = f"先只在主线核心里做减法，目标缩到{format_stock_label(best_stock)}"
     elif core_count > 0:
-        directive = "先只在主线核心里做减法，不把跨线对象直接当买点"
+        directive = "先只在主线核心里做减法，不把跨线对象直接当观察位"
     elif watch_anchor:
         directive = f"主线核心还不够，只把{format_stock_label(watch_anchor)}当观察锚点"
     else:
-        directive = "当前还没缩出可执行对象，先继续观察"
+        directive = "当前还没缩出具备参与资格的对象，先继续观察"
     return f"{summary}；{directive}"
 
 
@@ -97,9 +131,12 @@ def derive_trade_style(context):
     if explicit_style:
         return explicit_style
     position_level = str(context.get("position_level", "") or "").strip()
+    final_gate = context.get("final_gate") or {}
+    selected = resolve_selected_position_candidate(context)
+    if selected and selected_target_is_attack_ready(context):
+        return "条件进攻"
     if "空仓" in position_level:
         return "空仓"
-    final_gate = context.get("final_gate") or {}
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     style_switch = context.get("style_switch", {}) or {}
@@ -121,6 +158,9 @@ def derive_trade_style(context):
 
 
 def build_risk_trade_note(context):
+    selected = resolve_selected_position_candidate(context)
+    if selected and selected_target_is_attack_ready(context):
+        return "参与窗口失败回到0%，只接受小亏试错，不接受大亏硬扛"
     best_stock = context.get("best_stock") or {}
     rr = best_stock.get("r_reward_ratio")
     if rr not in (None, ""):
@@ -133,6 +173,9 @@ def build_risk_trade_note(context):
 
 
 def derive_risk_guard_text(context):
+    selected = resolve_selected_position_candidate(context)
+    if selected and selected_target_is_attack_ready(context):
+        return "明日目标标的只做参与窗口确认；不满足回到0%，不为抢跑承担大亏"
     best_stock = context.get("best_stock") or {}
     rr = best_stock.get("r_reward_ratio")
     if rr not in (None, ""):

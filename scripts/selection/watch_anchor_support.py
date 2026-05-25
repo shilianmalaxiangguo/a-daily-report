@@ -13,6 +13,7 @@ from selection.candidate_execution_contracts import (
     format_holding_window_text as _default_format_holding_window_text,
     is_bridge_priority_setup as _default_is_bridge_priority_setup,
 )
+from selection.advantage_dedup_runtime import build_grouped_advantage_score
 
 __all__ = [
     "append_watch_anchor_note",
@@ -682,36 +683,56 @@ def _sort_watch_anchor_candidates_legacy_body(candidates, mainline_name="", stat
                 "leading_line": mainline_name or state_machine_snapshot.get("leading_line", ""),
             },
         )
+        weak_to_strong_score = _safe_float(weak_to_strong_context.get("score_bonus", 0))
+        advantage_points = [
+            {"group": "watch_bucket", "label": label, "score": bucket * 1000},
+            {"group": "shape_confirmation", "label": "异动承接形态", "score": abnormal_priority_score},
+            {"group": "market_selection", "label": "主攻线同向", "score": _safe_float(stack.get("mainline_score", 0)) * 8},
+            {"group": "market_selection", "label": "历史记忆", "score": _safe_float(stack.get("memory_score", 0)) * 6},
+            {"group": "shape_confirmation", "label": "触发强度", "score": _safe_float(stack.get("trigger_score", 0))},
+            {"group": "tradability", "label": "执行完整度", "score": _safe_float(stack.get("tradability_score", 0)) * 3},
+            {"group": "repair_quality", "label": "原始修复分", "score": min(raw_risk_score, 40) * 1.2},
+            {"group": "repair_quality", "label": "修复项数量", "score": repair_count * 25},
+            {"group": "ev", "label": "策略期望", "score": _safe_float(candidate.get("composite_score", 0)) * 100},
+        ]
+        if weak_to_strong_score >= 0:
+            advantage_points.append({"group": "shape_confirmation", "label": "弱转强提示", "score": weak_to_strong_score})
+        else:
+            advantage_points.append({"group": "shape_penalty", "label": "弱转强失败", "score": weak_to_strong_score})
+        if has_formal_setup:
+            advantage_points.append({"group": "shape_confirmation", "label": "正式异动形态", "score": 180})
+        if is_resilient_abnormal:
+            advantage_points.append({"group": "shape_confirmation", "label": "抗跌样本", "score": 90})
+        if watch_source == "keep_group_watch":
+            advantage_points.append({"group": "watch_source", "label": "保留观察", "score": 40})
+        if watch_source == "waiting_layer":
+            advantage_points.append({"group": "watch_source", "label": "等待层", "score": -20})
+        if watch_source == "abnormal_probe":
+            advantage_points.append({"group": "watch_source", "label": "异动试探", "score": 120})
+        if _is_bridge_priority_setup(candidate, mainline_name=mainline_name):
+            advantage_points.append({"group": "shape_confirmation", "label": "主线桥接", "score": 180})
+
+        advantage_dedup = build_grouped_advantage_score(
+            advantage_points,
+            group_caps={
+                "market_selection": 100,
+                "shape_confirmation": 180,
+                "tradability": 100,
+                "repair_quality": 80,
+                "ev": 100,
+                "watch_source": 120,
+            },
+        )
         observation_priority_score = (
-            bucket * 1000
-            + abnormal_priority_score * 12
-            + _safe_float(stack.get("mainline_score", 0)) * 8
-            + _safe_float(stack.get("memory_score", 0)) * 6
-            + _safe_float(stack.get("trigger_score", 0)) * 5
-            + _safe_float(stack.get("tradability_score", 0)) * 3
-            + min(raw_risk_score, 40) * 1.2
-            + repair_count * 25
+            advantage_dedup["total_score"]
             - risk_score * 4
             - risk_penalty_count * 4
-            + _safe_float(candidate.get("composite_score", 0)) * 100
-            + _safe_float(weak_to_strong_context.get("score_bonus", 0))
         )
-        if has_formal_setup:
-            observation_priority_score += 180
-        if is_resilient_abnormal:
-            observation_priority_score += 90
-        if watch_source == "keep_group_watch":
-            observation_priority_score += 40
-        if watch_source == "waiting_layer":
-            observation_priority_score -= 20
-        if watch_source == "abnormal_probe":
-            observation_priority_score += 120
-        if _is_bridge_priority_setup(candidate, mainline_name=mainline_name):
-            observation_priority_score += 180
 
         candidate["watch_priority_bucket"] = bucket
         candidate["watch_priority_label"] = label
         candidate["watch_priority_score"] = round(observation_priority_score, 2)
+        candidate["watch_advantage_dedup"] = advantage_dedup
         candidate["watch_anchor_type"] = _derive_watch_anchor_type(candidate, mainline_name=mainline_name)
         base_watch_anchor_note = _derive_watch_anchor_note(candidate, mainline_name=mainline_name)
         weak_note = str(weak_to_strong_context.get("note_text", "") or "").strip()
@@ -726,10 +747,6 @@ def _sort_watch_anchor_candidates_legacy_body(candidates, mainline_name="", stat
         prepared,
         key=lambda item: (
             _safe_float(item.get("watch_priority_score", 0)),
-            (item.get("decision_stack", {}) or {}).get("setup_priority_score", 0),
-            (item.get("decision_stack", {}) or {}).get("mainline_score", 0),
-            (item.get("decision_stack", {}) or {}).get("memory_score", 0),
-            (item.get("decision_stack", {}) or {}).get("trigger_score", 0),
             -(_safe_float(item.get("risk_score", 0))),
             _safe_float(item.get("composite_score", 0)),
         ),

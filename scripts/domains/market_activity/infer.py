@@ -2,6 +2,8 @@ from domains.market_activity.quote_lookup import (
     build_market_quote_lookup,
     resolve_market_quote,
 )
+from knowledge.realtime_tag_evidence_snapshot import build_realtime_tag_evidence_snapshot
+from knowledge.sector_narrative_alias import resolve_sector_narrative_label
 
 
 def _append_log(logs, step, status, message, **details):
@@ -47,6 +49,321 @@ def normalize_stock_code(code):
     return str(code or "")
 
 
+_THEME_PROPAGATING_RISK_FLAGS = {
+    "abnormal_volatility",
+    "delist_risk",
+    "holder_reduce",
+    "holder_reduce_announcement",
+    "regulatory_investigation",
+    "risk_warning",
+    "st_warning",
+    "stock_st",
+}
+
+_RISK_FLAG_LABELS = {
+    "abnormal_volatility": "异常波动",
+    "delist_risk": "退市风险",
+    "holder_reduce": "减持",
+    "holder_reduce_announcement": "减持预披露",
+    "regulatory_investigation": "监管风险",
+    "risk_warning": "风险警示",
+    "st_warning": "ST风险",
+    "stock_st": "ST名单",
+}
+
+_ST_RISK_FLAGS = {"st_warning", "stock_st", "risk_warning", "delist_risk"}
+
+
+def _clean_text(value):
+    try:
+        if value != value:
+            return ""
+    except Exception:
+        pass
+    text = str(value or "").strip()
+    return "" if text.lower() == "nan" else text
+
+
+def _clean_stock_code(value):
+    text = _clean_text(normalize_stock_code(value)).upper()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    for prefix in ("SH", "SZ", "BJ"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def _split_terms(value):
+    if isinstance(value, dict):
+        terms = []
+        for item in value.values():
+            terms.extend(_split_terms(item))
+        return terms
+    if isinstance(value, (list, tuple, set)):
+        terms = []
+        for item in value:
+            terms.extend(_split_terms(item))
+        return terms
+    text = _clean_text(value)
+    if not text:
+        return []
+    for marker in (";", "；", "、", "|", "/", "，"):
+        text = text.replace(marker, ",")
+    return [_clean_text(item) for item in text.split(",") if _clean_text(item)]
+
+
+def _iter_stock_risk_rows(stock_risk_map):
+    if isinstance(stock_risk_map, dict):
+        for key, value in stock_risk_map.items():
+            if isinstance(value, dict):
+                row = dict(value)
+                row.setdefault("code", key)
+                yield row
+    elif isinstance(stock_risk_map, (list, tuple)):
+        for value in stock_risk_map:
+            if isinstance(value, dict):
+                yield dict(value)
+
+
+def _iter_new_stock_context_rows(data):
+    data = data or {}
+    for key in ("new_stock_research_pool", "new_stock_candidate_upgrades", "new_stock_calendar"):
+        for row in data.get(key, []) or []:
+            if isinstance(row, dict):
+                yield dict(row)
+
+    profiles = data.get("new_stock_profiles") or {}
+    if isinstance(profiles, dict):
+        for key, profile in profiles.items():
+            if isinstance(profile, dict):
+                row = dict(profile)
+                if not row.get("code") and _clean_stock_code(key):
+                    row["code"] = key
+                if not row.get("name") and not _clean_stock_code(key):
+                    row["name"] = key
+                yield row
+    elif isinstance(profiles, (list, tuple)):
+        for profile in profiles:
+            if isinstance(profile, dict):
+                yield dict(profile)
+
+
+def _stock_name_from_risk_event(risk_row):
+    for key in ("name", "stock_name", "名称"):
+        name = _clean_text((risk_row or {}).get(key))
+        if name:
+            return name
+    for event in (risk_row or {}).get("risk_events", []) or []:
+        title = _clean_text((event or {}).get("title"))
+        if "：" in title:
+            return _clean_text(title.split("：", 1)[0])
+        if ":" in title:
+            return _clean_text(title.split(":", 1)[0])
+    return ""
+
+
+def _find_new_stock_context(data, code, name):
+    code = _clean_stock_code(code)
+    name = _clean_text(name)
+    for row in _iter_new_stock_context_rows(data):
+        row_code = _clean_stock_code(row.get("code") or row.get("stock_code") or row.get("ts_code"))
+        row_name = _clean_text(row.get("name") or row.get("stock_name") or row.get("名称"))
+        if code and row_code == code:
+            return row
+        if name and row_name == name:
+            return row
+    return {}
+
+
+def _new_stock_context_terms(row):
+    terms = []
+    for key in ("concept_tags", "concepts", "concept_list", "sector_tags", "all_tags", "tags", "sector", "sector_name", "industry"):
+        terms.extend(_split_terms((row or {}).get(key)))
+    return terms
+
+
+def _is_new_stock_context(row, name=""):
+    if not row:
+        return False
+    window = _clean_text(row.get("listing_window"))
+    if window in {"today_listing", "recently_listed"}:
+        return True
+    days_since_listing = row.get("days_since_listing")
+    if isinstance(days_since_listing, int) and 0 <= days_since_listing <= 60:
+        return True
+    terms = _new_stock_context_terms(row)
+    if any(("次新" in term or "新股" in term) for term in terms):
+        return True
+    clean_name = _clean_text(name or row.get("name"))
+    return clean_name.startswith(("N", "C")) and len(clean_name) >= 2
+
+
+def _new_stock_theme_name(row):
+    terms = _new_stock_context_terms(row)
+    if any("次新" in term for term in terms):
+        return "次新股"
+    if _clean_text((row or {}).get("listing_window")) == "recently_listed":
+        return "次新股"
+    days_since_listing = (row or {}).get("days_since_listing")
+    if isinstance(days_since_listing, int) and days_since_listing >= 1:
+        return "次新股"
+    return "新股"
+
+
+def _select_theme_risk_flag(risk_row):
+    flags = list((risk_row or {}).get("risk_flags") or [])
+    for flag in (
+        "delist_risk",
+        "st_warning",
+        "stock_st",
+        "risk_warning",
+        "regulatory_investigation",
+        "abnormal_volatility",
+        "holder_reduce_announcement",
+        "holder_reduce",
+    ):
+        if flag in flags:
+            return flag
+    for flag in flags:
+        if flag in _THEME_PROPAGATING_RISK_FLAGS:
+            return flag
+    return ""
+
+
+def _risk_event_for_flag(risk_row, flag):
+    events = list((risk_row or {}).get("risk_events") or [])
+    for event in events:
+        if (event or {}).get("risk_type") == flag:
+            return event or {}
+    return events[0] if events else {}
+
+
+def _risk_row_text(risk_row):
+    parts = [
+        _clean_text((risk_row or {}).get("risk_summary")),
+        _clean_text((risk_row or {}).get("reason")),
+    ]
+    for event in (risk_row or {}).get("risk_events", []) or []:
+        parts.append(_clean_text((event or {}).get("title")))
+        parts.append(_clean_text((event or {}).get("reason")))
+    return " ".join(part for part in parts if part)
+
+
+def _is_st_resume_risk_row(risk_row):
+    flags = set((risk_row or {}).get("risk_flags") or [])
+    if not flags.intersection(_ST_RISK_FLAGS):
+        return False
+    text = _risk_row_text(risk_row)
+    has_st = any(marker in text for marker in ("ST", "风险警示", "退市风险", "其他风险警示"))
+    has_resume = any(marker in text for marker in ("复牌", "停牌", "停牌核查"))
+    return has_st and has_resume
+
+
+def _format_trigger_stock(code, name):
+    code = _clean_stock_code(code)
+    name = _clean_text(name) or code or "ST风险股"
+    return f"{name}({code})" if code else name
+
+
+def _derive_st_resume_experience_risks(data):
+    triggers = []
+    seen_codes = set()
+    for risk_row in _iter_stock_risk_rows((data or {}).get("stock_risk_map")):
+        if not _is_st_resume_risk_row(risk_row):
+            continue
+        code = _clean_stock_code(risk_row.get("code") or risk_row.get("stock_code") or risk_row.get("ts_code"))
+        if code and code in seen_codes:
+            continue
+        if code:
+            seen_codes.add(code)
+        name = _stock_name_from_risk_event(risk_row)
+        triggers.append(
+            {
+                "code": code,
+                "name": name,
+                "label": _format_trigger_stock(code, name),
+                "reason": _risk_row_text(risk_row),
+            }
+        )
+
+    if not triggers:
+        return {"theme_impacts": [], "systemic_warnings": []}
+
+    trigger_count = len(triggers)
+    trigger_labels = [item["label"] for item in triggers]
+    theme_reason = f"{trigger_count}只突发ST复牌，经验上容易带动ST股与风险偏好杀跌。"
+    theme_impact = {
+        "name": "ST股",
+        "risk_level": "high",
+        "risk_source": "st_resume_experience",
+        "trigger_count": trigger_count,
+        "trigger_stocks": trigger_labels,
+        "reason": theme_reason,
+        "action": "先看复牌股跌停封单与ST扩散是否钝化，不接ST线反抽",
+    }
+
+    systemic_warnings = []
+    if trigger_count >= 2:
+        systemic_warnings.append(
+            {
+                "name": "全市场",
+                "risk_level": "high",
+                "risk_source": "st_resume_experience",
+                "trigger_count": trigger_count,
+                "trigger_stocks": trigger_labels,
+                "reason": f"{trigger_count}只突发ST复牌，经验上容易触发量化/风控卖出，明日有4000+下跌风险。",
+                "action": "降低明日主动出手预期，先看跌停/ST扩散是否钝化",
+            }
+        )
+
+    return {"theme_impacts": [theme_impact], "systemic_warnings": systemic_warnings}
+
+
+def _derive_risk_theme_impacts(data):
+    impacts = []
+    seen = set()
+    for risk_row in _iter_stock_risk_rows((data or {}).get("stock_risk_map")):
+        flag = _select_theme_risk_flag(risk_row)
+        if not flag:
+            continue
+        code = _clean_stock_code(risk_row.get("code") or risk_row.get("stock_code") or risk_row.get("ts_code"))
+        name = _stock_name_from_risk_event(risk_row)
+        context_row = _find_new_stock_context(data, code, name)
+        if not _is_new_stock_context(context_row, name):
+            continue
+        name = name or _clean_text(context_row.get("name")) or code
+        theme = _new_stock_theme_name(context_row)
+        event = _risk_event_for_flag(risk_row, flag)
+        summary = _clean_text(risk_row.get("risk_summary"))
+        title = _clean_text((event or {}).get("title"))
+        reason_source = summary or title
+        label = _RISK_FLAG_LABELS.get(flag, flag)
+        reason = f"{name}触发{label}"
+        if reason_source:
+            reason = f"{reason}：{reason_source}"
+        key = (theme, code, flag, reason)
+        if key in seen:
+            continue
+        seen.add(key)
+        risk_level = "medium" if flag in {"holder_reduce", "holder_reduce_announcement"} else "high"
+        impacts.append(
+            {
+                "name": theme,
+                "risk_level": risk_level,
+                "risk_source": "stock_risk_event",
+                "trigger_code": code,
+                "trigger_stock": name,
+                "risk_type": flag,
+                "reason": reason,
+                "source_endpoints": list((risk_row or {}).get("source_endpoints") or []),
+                "action": "只做风险观察，不追次新一致加速" if theme == "次新股" else "只做风险观察，不追新股一致加速",
+            }
+        )
+    return impacts
+
+
 def analyze_market_and_sectors(data, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
@@ -70,6 +387,8 @@ def _analyze_market_and_sectors_legacy_body(data):
         "main_sectors": [],
         "secondary_sectors": [],
         "risk_sectors": [],
+        "risk_theme_impacts": [],
+        "systemic_risk_warnings": [],
         "sector_analysis": {},
         "unified_sector_rows": [],
     }
@@ -111,10 +430,19 @@ def _analyze_market_and_sectors_legacy_body(data):
     analysis["main_sectors"] = [dict(item) for item in main_rows[:5]]
     analysis["secondary_sectors"] = [dict(item) for item in secondary_rows[:5]]
 
+    st_resume_risks = _derive_st_resume_experience_risks(data)
+    analysis["systemic_risk_warnings"] = st_resume_risks["systemic_warnings"]
+    risk_theme_impacts = st_resume_risks["theme_impacts"] + _derive_risk_theme_impacts(data)
+    analysis["risk_theme_impacts"] = risk_theme_impacts
+    analysis["risk_sectors"].extend(analysis["systemic_risk_warnings"])
+    analysis["risk_sectors"].extend(risk_theme_impacts)
+
     if data.get("sector_fund_flow"):
         outflow = data["sector_fund_flow"].get("outflow", [])
         for sector in outflow[:10]:
             name = sector.get("name", "")
+            if any(item.get("name") == name for item in analysis["risk_sectors"]):
+                continue
             zljlr = abs(sector.get("zljlr", 0))
             zdf = sector.get("zdf", 0)
 
@@ -199,6 +527,19 @@ def analyze_single_sector_ai(sector_name: str, all_sectors: set) -> dict:
         "type": "unknown",
         "confidence": 0.5,
     }
+
+    narrative_name = resolve_sector_narrative_label(sector_name, all_sectors)
+    if narrative_name != sector_name:
+        analysis["standard_name"] = narrative_name
+        analysis["type"] = "概念"
+        analysis["confidence"] = 0.88
+        analysis["parent"] = narrative_name
+        if narrative_name == "人形机器人":
+            analysis["related"] = ["汽车产业链"]
+        elif narrative_name == "算电协同":
+            analysis["parent"] = "绿电"
+            analysis["related"] = ["算力", "数据中心"]
+        return analysis
 
     if any(keyword in sector_name for keyword in ["轨交", "轨道交通", "高铁", "铁路", "城轨"]):
         analysis["standard_name"] = "轨道交通"
@@ -319,6 +660,7 @@ def build_sector_tree(sector_relationships: dict) -> dict:
 def analyze_sectors_comprehensive(all_data: dict) -> dict:
     all_sectors = set()
     sector_sources = {}
+    tag_snapshot = build_realtime_tag_evidence_snapshot(all_data)
 
     if all_data.get("sector_fund_flow"):
         for item in all_data["sector_fund_flow"].get("inflow", []):
@@ -368,8 +710,25 @@ def analyze_sectors_comprehensive(all_data: dict) -> dict:
         sector_relationships[sector] = analysis
 
     mapping = {original: analysis["standard_name"] for original, analysis in sector_relationships.items()}
+    for group in tag_snapshot.get("groups") or []:
+        adopted = _clean_text(group.get("采用名称"))
+        if not adopted or group.get("关系判断") == "证据不足":
+            continue
+        all_sectors.add(adopted)
+        for surface in group.get("表层行业名") or []:
+            if surface:
+                mapping[surface] = adopted
+        mapping.setdefault(adopted, adopted)
     standard_sectors = sorted(set(mapping.values()))
     sector_tree = build_sector_tree(sector_relationships)
+    for group in tag_snapshot.get("groups") or []:
+        adopted = _clean_text(group.get("采用名称"))
+        if not adopted or group.get("关系判断") == "证据不足":
+            continue
+        sector_tree.setdefault(adopted, {"children": [], "all_sectors": []})
+        for surface in group.get("表层行业名") or []:
+            if surface and surface not in sector_tree[adopted]["all_sectors"]:
+                sector_tree[adopted]["all_sectors"].append(surface)
 
     return {
         "relationships": sector_relationships,
@@ -378,6 +737,7 @@ def analyze_sectors_comprehensive(all_data: dict) -> dict:
         "sector_tree": sector_tree,
         "sector_count": len(all_sectors),
         "standard_count": len(standard_sectors),
+        "realtime_tag_evidence_snapshot": tag_snapshot,
     }
 
 
@@ -408,7 +768,10 @@ def build_market_activity_sector_analysis_bundle(
         standard_count=sector_analysis["standard_count"],
     )
     return {
-        "results": {"sector_ai_analysis": sector_analysis},
+        "results": {
+            "sector_ai_analysis": sector_analysis,
+            "realtime_tag_evidence_snapshot": sector_analysis.get("realtime_tag_evidence_snapshot") or {},
+        },
         "module_logs": module_logs,
     }
 
@@ -540,6 +903,15 @@ def _safe_signal_value(signal, key):
     return getattr(signal, key, None)
 
 
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _backfill_volume_anomaly_price_change(volume_anomalies, quote_lookup):
     normalized = []
 
@@ -569,6 +941,56 @@ def _backfill_volume_anomaly_price_change(volume_anomalies, quote_lookup):
     return normalized
 
 
+def _previous_turnover_window(stock, current_turnover):
+    history = list((stock or {}).get("hist_turnover") or [])
+    if len(history) >= 6 and abs(_safe_float(history[-1]) - current_turnover) < 0.0001:
+        return history[-6:-1]
+    return history[-5:]
+
+
+def _derive_volume_anomalies_from_history(stocks_with_history, *, min_ratio=1.5):
+    rows = []
+    for stock in stocks_with_history or []:
+        if not isinstance(stock, dict):
+            continue
+        current_turnover = _safe_float(stock.get("turnover"))
+        window = [_safe_float(value) for value in _previous_turnover_window(stock, current_turnover) if _safe_float(value) > 0]
+        if current_turnover <= 0 or not window:
+            continue
+        avg_turnover = sum(window) / len(window)
+        if avg_turnover <= 0:
+            continue
+        ratio = current_turnover / avg_turnover
+        if ratio < float(min_ratio or 1.5):
+            continue
+        if ratio >= 2.0:
+            anomaly_type = "放量突破"
+            strength = "高"
+            percentile = 98
+        else:
+            anomaly_type = "温和放量"
+            strength = "中"
+            percentile = 95
+        rows.append(
+            {
+                "stock_code": str(stock.get("code") or "").strip(),
+                "stock_name": stock.get("name", ""),
+                "anomaly_type": anomaly_type,
+                "strength": strength,
+                "volume_percentile": percentile,
+                "price_change": _safe_float(stock.get("change_pct")),
+                "reason": f"当日成交额{current_turnover:.1f}亿，约为近5日均值{ratio:.2f}倍",
+                "turnover": current_turnover,
+                "avg_turnover_5d": round(avg_turnover, 4),
+                "volume_ratio": round(ratio, 4),
+                "sector": stock.get("sector", ""),
+                "data_source": "stocks_with_history",
+            }
+        )
+    rows.sort(key=lambda item: (item.get("volume_ratio", 0), abs(item.get("price_change", 0))), reverse=True)
+    return rows[:10]
+
+
 def build_market_activity_quant_signal_bundle(
     all_data,
     *,
@@ -596,6 +1018,10 @@ def build_market_activity_quant_signal_bundle(
     try:
         if stocks_with_history:
             volume_anomalies = analyze_volume_anomaly(stocks_with_history, {})
+            if not volume_anomalies:
+                volume_anomalies = _derive_volume_anomalies_from_history(stocks_with_history)
+                if volume_anomalies:
+                    emit(f"   ✅ 已从历史成交额派生 {len(volume_anomalies)} 个放量结果")
             volume_anomalies = _backfill_volume_anomaly_price_change(volume_anomalies, market_quote_lookup)
             results["volume_anomalies"] = volume_anomalies
             emit(f"   ✅ 检测到 {len(volume_anomalies)} 个放量异常, 历史数据覆盖{len(stocks_with_history)}只")

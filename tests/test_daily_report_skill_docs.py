@@ -208,6 +208,41 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_extreme_conviction_wiki_documents_selection_shape_ascii_flow(self):
+        wiki = self._read("wiki/交易思想/极度看好参与时机.md")
+
+        for required in [
+            "选股形态审美 ASCII 流程图",
+            "fetch_recent_price_bars",
+            "lookback_days=120",
+            "recent_bars",
+            "重点观察25日跟踪表",
+            "明日极度看好近25日跟踪表",
+            "附录A：明日极度看好列表",
+            "附录A：龙回头观察池",
+            "固定标题",
+            "买卖窗口期",
+            "09:30-09:35",
+            "09:50-10:10",
+            "14:30-14:55",
+            "重点观察历史回测表",
+            "观察位窗口",
+            "观察位质量",
+            "_build_trend_aesthetic_review",
+            "selection_shape_review",
+            "final_risk_review",
+            "common_selection_check",
+            "明日极度看好比较",
+            "0%不参与",
+            "上证缠论",
+            "明日执行计划",
+            "明日抉择",
+            "不作为明日新增参与依据",
+            "+-->",
+            "|",
+        ]:
+            self.assertIn(required, wiki)
+
     def test_skill_and_report_contract_inherit_reasoning_mode_contract(self):
         skill = self._read("SKILL.md")
         report_contract = self._read("references/report-contract.md")
@@ -308,6 +343,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "wiki/交易思想/缠论-级别联立.md",
             "wiki/个股分析/缠论结构观察模板.md",
             "wiki/板块补充/板块中枢与主线延续.md",
+            "wiki/板块补充/实时Tag池维护与使用.md",
             "wiki/个股炒作逻辑复盘/缠论视角复盘模板.md",
         ]:
             self._read(path)
@@ -328,6 +364,21 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "AI可引用",
             "原文不直接进入日报主链",
             "日线结构中枢定环境",
+            "价格带风格读法",
+            "百元股涨跌幅 - 低价股涨跌幅",
+            "-2pct 到 +2pct",
+            "创新高趋势读法",
+            "低于 `2%` 看冰点",
+            "高于 `5%` 看高潮",
+            "资金扩散方向雷达",
+            "只提高方向关注度",
+            "不能直接提高个股买入资格",
+            "市场情绪总状态",
+            "盘面亏钱效应",
+            "局部过热",
+            "整体高潮",
+            "给出当前解读",
+            "状态列",
             "60分钟确认",
             "30分钟止损",
             "市场环境优先，个股结构执行",
@@ -341,6 +392,9 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "能力空白",
             "缺失字段",
             "卖出原因可复盘",
+            "盈亏同审",
+            "盈利仓不因小波动提前卖",
+            "失效仓不因亏损扩大继续死拿",
             "风险信号和情绪信号",
             "来源保真",
             "原文可直接支持",
@@ -361,10 +415,51 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "单一龙头定价权",
             "能量聚集",
             "能量释放",
+            "指数价跌量增",
+            "放量杀跌",
+            "逆势试攻",
+            "指数止跌",
+            "跌停收敛",
+            "主攻线连续承接",
             "稳定知识写入 LLM Wiki",
             ".cleanup-archive/a-daily-report-2026-05-07/chanlun",
         ]:
             self.assertIn(required, combined)
+
+    def test_llm_wiki_documents_realtime_tag_pool_maintenance_and_use(self):
+        wiki_readme = self._read("wiki/README.md")
+        tag_pool = self._read("wiki/板块补充/实时Tag池维护与使用.md")
+
+        self.assertIn("实时Tag池维护与使用", wiki_readme)
+        self.assertIn("wiki/板块补充/实时Tag池维护与使用.md", wiki_readme)
+        for required in [
+            "实时 tag 池",
+            "行业、概念、板块",
+            "注意力入口层",
+            "细分归因层",
+            "反证校验层",
+            "上涨板块候选",
+            "上涨理由",
+            "主 tag",
+            "辅助 tag",
+            "噪音 tag",
+            "反证 tag",
+            "同花顺",
+            "淘股吧",
+            "雪球 AI 解释",
+            "东方财富 label",
+            "问董秘",
+            "公告澄清",
+            "涨跌幅排行",
+            "成交额",
+            "资金流",
+            "扩散",
+            "核心承接",
+            "日报落地",
+            "盘中问股落地",
+            "不把 tag 热度当买点",
+        ]:
+            self.assertIn(required, tag_pool)
 
     def test_llm_wiki_contains_report_surface_wording_contract(self):
         wiki_readme = self._read("wiki/README.md")
@@ -382,6 +477,66 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "旧工程口径",
             "日志",
             "前台",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_llm_wiki_records_ai_friction_and_knowledge_compounding(self):
+        wiki_readme = self._read("wiki/README.md")
+        node = self._read("wiki/交易思想/AI摩擦与知识复利.md")
+        combined = "\n".join([wiki_readme, node])
+
+        for required in [
+            "AI摩擦与知识复利",
+            "复利有方向",
+            "摩擦是资产不是成本",
+            "知识复利即个人护城河",
+            "必要认知摩擦",
+            "低效摩擦",
+            "反馈机制",
+            "正向复利",
+            "负向复利",
+            "复述",
+            "重写",
+            "对比",
+            "知识节点",
+            "不把 AI 生成结果直接当作理解",
+            "不把知识管理停留在收藏",
+            "knowledge_updates",
+            "知识复利提示",
+            "只在本次报告确有知识更新时出现",
+            "知识复利候选",
+            "待确认候选",
+            "不自动写入正式 wiki",
+            "不改变交易动作",
+            "AI摩擦与知识复利 + 判断样本与市场演变",
+        ]:
+            self.assertIn(required, combined)
+
+    def test_llm_wiki_records_actual_account_situation(self):
+        wiki_readme = self._read("wiki/README.md")
+        account_node = self._read("wiki/交易思想/实际账户情况.md")
+        combined = "\n".join([wiki_readme, account_node])
+
+        for required in [
+            "实际账户情况",
+            "当前本金按约1w处理",
+            "实际可买",
+            "实际不可买",
+            "计划仓位档",
+            "实际仓位",
+            "仓位偏离",
+            "40%-60%",
+            "688开头标的当前账户不参与",
+            "一手金额超过当前可用资金",
+            "一手6000",
+            "一手4000",
+            "市场核心",
+            "周期身份",
+            "仍在池内",
+            "只观察强度",
+            "不参与今日比较",
+            "决策看档位，账户看实际",
+            "不能把买不了写成不核心",
         ]:
             self.assertIn(required, combined)
 
@@ -432,7 +587,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "do not silently fall back to 3.11",
             "Tushare gateway",
             "TUSHARE_HTTP_URL",
-            "http://118.89.66.41:8010/",
+            "http://121.40.135.59:8010/",
             "create_tushare_pro_api",
         ]:
             self.assertIn(required, combined)
@@ -480,6 +635,41 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         self.assertIn("新股日历：Tushare new_share", entry)
         self.assertNotIn("指数数据：AkShare 指数日线（首选）", entry)
         self.assertNotIn("两市成交额：AkShare 指数成交额（首选）", entry)
+
+    def test_data_source_contract_records_xueqiu_a_share_hot_rank_type(self):
+        contract = self._read("wiki/运行契约/日报数据源契约.md")
+        tag_wiki = self._read("wiki/板块补充/板块中枢与主线延续.md")
+        service = self._read("scripts/market_data/xueqiu_hot_stock_service.py")
+
+        self.assertIn("xueqiu.hot_stock.type22", contract)
+        self.assertIn("type=22", contract)
+        self.assertIn("A 股 / CN / 24 小时热榜", contract)
+        self.assertIn("type=10", contract)
+        self.assertIn("不能当作纯 A 股热榜源", contract)
+        self.assertIn("xueqiu.hot_stock.type22", tag_wiki)
+        self.assertIn("XUEQIU_A_SHARE_24H_HOT_TYPE = 22", service)
+        self.assertNotIn("XUEQIU_A_SHARE_24H_HOT_TYPE = 10", service)
+
+    def test_data_source_contract_records_xueqiu_ai_argument_source(self):
+        contract = self._read("wiki/运行契约/日报数据源契约.md")
+        tag_wiki = self._read("wiki/板块补充/板块中枢与主线延续.md")
+        service = self._read("scripts/market_data/xueqiu_hot_stock_service.py")
+
+        self.assertIn("xueqiu.hot_stock.argument", contract)
+        self.assertIn("hot_stock_argument.json", contract)
+        self.assertIn("炒作理由候选", contract)
+        self.assertIn("XUEQIU_COOKIE", contract)
+        self.assertIn("XUEQIU_COOKIE_CAPTURE_DIR", contract)
+        self.assertIn("雪球登录态失效或缺失", contract)
+        self.assertIn("关键数据不完整，停止生成", contract)
+        self.assertIn("data_status=False", contract)
+        self.assertIn("step_status=False", contract)
+        self.assertIn("价格带风格趋势", contract)
+        self.assertNotIn("雪球源失败停止生成", contract)
+        self.assertIn("雪球AI炒作理由候选", service)
+        self.assertIn("api.xueqiu.com/rainbow/ai/question/generate/hot_stock_argument.json", service)
+        self.assertIn("雪球 AI 解释", tag_wiki)
+        self.assertIn("当前炒作理由候选", tag_wiki)
 
     def test_scripts_do_not_hardcode_legacy_user_visible_wording(self):
         forbidden = (

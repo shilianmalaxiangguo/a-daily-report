@@ -1,3 +1,6 @@
+from report.mainline_turnover_summary_support import normalize_display_text_by_tag_pool
+
+
 def build_watch_pool_trend_density_node(context, node_meta=None, node_lookup=None):
     sector_trend_snapshot = context.get("sector_trend_snapshot_step1", []) or []
     display_mvp_mode = bool(context.get("display_mvp_mode", False))
@@ -14,8 +17,9 @@ def build_watch_pool_trend_density_node(context, node_meta=None, node_lookup=Non
         anchor_text = f"{item.get('anchor_name', '-')}"
         if item.get("anchor_code"):
             anchor_text += f"({item.get('anchor_code')})"
+        sector = normalize_display_text_by_tag_pool(item.get("sector", "-"), context)
         lines.append(
-            f"| {item.get('sector', '-')} | {item.get('trend_count', 0)}只 | "
+            f"| {sector} | {item.get('trend_count', 0)}只 | "
             f"{item.get('strong_count', 0)}只 | {item.get('limit_up_count', 0)}只 | "
             f"{anchor_text} | {item.get('anchor_reason', '-')} |"
         )

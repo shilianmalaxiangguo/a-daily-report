@@ -174,6 +174,11 @@ def render_core_mvp_digest_contract(
             "mainline_label": mainline_label,
             "mainline_turnover_text": mainline_turnover_text,
             "mainline_capacity_regime_summary": resolve_mainline_capacity_regime_summary(market_research_snapshot),
+            "turnover_share_trend_summary": str(
+                (market_research_snapshot.get("mainline_turnover_summary") or {}).get("turnover_share_trend_summary")
+                or market_research_snapshot.get("turnover_share_trend_summary")
+                or ""
+            ).strip(),
             "turnover_share_trend_rows": resolve_turnover_share_trend_rows(market_research_snapshot),
             "special_probe_text": special_probe_text,
             "philosophy_constraint_text": philosophy_constraint_text,
@@ -375,16 +380,6 @@ def render_mvp_focus_summary_contract(
         mainline_name=mainline_name,
         target_date=target_date,
     )
-    mainline_anchor = {}
-    for item in core_stocks or []:
-        if candidate_matches_mainline(item, mainline_name):
-            mainline_anchor = item
-            break
-    if not mainline_anchor:
-        for item in leader_memory_bank or []:
-            if candidate_matches_mainline(item, mainline_name):
-                mainline_anchor = item
-                break
     position_decision = build_position_sizing_decision(
         final_gate=final_gate,
         state_machine_snapshot=state_machine,
@@ -394,7 +389,7 @@ def render_mvp_focus_summary_contract(
         mainline_name=mainline_name,
         target_date=target_date,
         special_probe_verdict=special_probe_verdict,
-        mainline_anchor=mainline_anchor,
+        mainline_anchor={},
     )
     cycle_triplet = build_cycle_triplet_texts(
         position_decision=position_decision,
@@ -453,7 +448,7 @@ def render_mvp_focus_summary_contract(
     validation_probe = abnormal_probe_group.get("validation_probe")
     fallback_watch_anchor = abnormal_probe_group.get("fallback_watch_anchor") or watch_anchor or {}
     mainline_probe_text = ""
-    if mainline_abnormal_probe or fallback_watch_anchor:
+    if mainline_abnormal_probe:
         mainline_probe_text = format_abnormal_probe_text(
             mainline_abnormal_probe,
             role_label="主线异动里先看谁",

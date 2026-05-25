@@ -80,6 +80,8 @@ def build_risk_review_runtime(stage_context, stage_meta, stage_lookup=None, enab
         "stage_title": stage_title,
         "next_stage_label": next_stage_label,
         "mainline_name": mainline_name,
+        "data": data,
+        "realtime_tag_evidence_snapshot": data.get("realtime_tag_evidence_snapshot") or {},
         "stock_rows": step3_bundle.get("stock_rows", []) or [],
         "delete_group": delete_group,
         "keep_group": keep_group,

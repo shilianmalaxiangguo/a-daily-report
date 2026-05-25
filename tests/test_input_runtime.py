@@ -215,6 +215,10 @@ class InputRuntimeTest(unittest.TestCase):
             "AShareDataCollector": AShareDataCollector,
             "TencentFinanceData": TencentFinanceData,
             "build_input_request_registry": lambda helpers: {},
+            "get_new_high_feedback_from_tushare_first": lambda *args, **kwargs: {},
+            "get_top50_turnover_share_series_from_tushare_first": lambda *args, **kwargs: {},
+            "get_price_band_style_series_from_tushare_first": lambda *args, **kwargs: {},
+            "get_margin_pressure_from_tushare_first": lambda *args, **kwargs: {},
             "resolve_request_target_date": lambda target_date=None: str(target_date),
             "collect_market_state_request_bundle": _market_state_bundle,
             "collect_market_activity_pool_request_bundle": _market_activity_pool_bundle,
@@ -274,7 +278,54 @@ with patch.object(
 
 assert runtime_mock.call_args[0] == ("2026-04-22",)
 assert "helpers" in runtime_mock.call_args.kwargs
+assert "get_new_high_feedback_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert "get_top50_turnover_share_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert "get_price_band_style_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert "get_margin_pressure_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert result["target_date"] == "2026-04-22"
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_legacy_lhb_snapshot_normalizes_finshare_rows_for_tushare_fallback(self):
+        result = _run_legacy_entry_probe(
+            """
+import daily_report_entry_demo
+import sys
+import types
+
+class FrameStub:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def __len__(self):
+        return len(self.rows)
+
+    def to_dict(self, orient):
+        assert orient == "records"
+        return list(self.rows)
+
+rows = [
+    {"fs_code": "000636.SZ", "net_buy_amount": 151351267.58, "close_price": 32.37, "change_rate": 9.9898},
+    {"fs_code": "000417.SZ", "net_buy_amount": 54875999.06, "close_price": 8.66, "change_rate": 10.0381},
+]
+calls = []
+
+finshare_stub = types.ModuleType("finshare")
+def get_lhb(start_date=None, end_date=None):
+    calls.append((start_date, end_date))
+    return FrameStub(rows)
+finshare_stub.get_lhb = get_lhb
+sys.modules["finshare"] = finshare_stub
+
+snapshot = daily_report_entry_demo.get_legacy_lhb_snapshot("2026-05-19")
+
+assert calls == [("20260519", "20260519")]
+assert snapshot["provider"] == "finshare.get_lhb"
+assert snapshot["lhb_net_buy_top10"][0]["code"] == "000636"
+assert snapshot["lhb_net_buy_top10"][0]["net_buy_amount_yi"] == 1.513513
+assert snapshot["lhb_analysis"][0]["data_source"] == "finshare.get_lhb"
 """
         )
 
@@ -384,6 +435,98 @@ assert result["target_date"] == "2026-04-22"
         provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
         self.assertEqual(provider_by_step["request.sector_quadrant"], "quicktiny.sector_analysis_quadrant")
         self.assertTrue(result["data_status"]["板块四象限"])
+
+    def test_run_input_runtime_fetches_top50_turnover_share_series(self):
+        input_runtime = importlib.import_module("input.runtime")
+        calls = []
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "top50_turnover_share_series": lambda *, target_date, window_days=25, limit=50: calls.append(
+                (target_date, window_days, limit)
+            )
+            or {
+                "rows": [
+                    {
+                        "trade_date": "2026-05-18",
+                        "top_amount_yi": 6150.0,
+                        "market_amount_yi": 30000.0,
+                        "share_pct": 20.5,
+                    }
+                ]
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-05-18", helpers=helpers)
+
+        self.assertEqual(calls, [("2026-05-18", 25, 50)])
+        self.assertEqual(result["top50_turnover_share_series"]["rows"][0]["share_pct"], 20.5)
+        self.assertTrue(result["data_status"]["Top50成交额占比趋势"])
+        self.assertTrue(result["step_status"]["Top50成交额占比趋势获取"])
+        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        self.assertEqual(provider_by_step["request.top50_turnover_share_series"], "storage.turnover_rank_daily")
+
+    def test_run_input_runtime_fetches_price_band_style_series(self):
+        input_runtime = importlib.import_module("input.runtime")
+        calls = []
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "price_band_style_series": lambda *, target_date, window_days=25: calls.append((target_date, window_days))
+            or {
+                "available": True,
+                "source": "tushare.ths_daily.price_band_style",
+                "rows": [{"trade_date": "2026-05-18", "spread_pct": 1.1}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-05-18", helpers=helpers)
+
+        self.assertEqual(calls, [("2026-05-18", 25)])
+        self.assertEqual(result["price_band_style_series"]["rows"][0]["spread_pct"], 1.1)
+        self.assertTrue(result["data_status"]["价格带风格趋势"])
+        self.assertTrue(result["step_status"]["价格带风格趋势获取"])
+        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        self.assertEqual(provider_by_step["request.price_band_style_series"], "tushare.ths_daily.price_band_style")
+
+    def test_run_input_runtime_fetches_margin_pressure(self):
+        input_runtime = importlib.import_module("input.runtime")
+        calls = []
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "margin_pressure": lambda *, target_date, window_days=25, calibration_days=250: calls.append(
+                (target_date, window_days, calibration_days)
+            )
+            or {
+                "available": True,
+                "source": "tushare.margin+tushare.index_daily.market_amount",
+                "rows": [{"trade_date": "2026-05-18", "margin_turnover_ratio_pct": 99.0}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-05-18", helpers=helpers)
+
+        self.assertEqual(calls, [("2026-05-18", 25, 250)])
+        self.assertEqual(result["margin_pressure"]["rows"][0]["margin_turnover_ratio_pct"], 99.0)
+        self.assertTrue(result["data_status"]["融资承接压力"])
+        self.assertTrue(result["step_status"]["融资承接压力获取"])
+        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        self.assertEqual(provider_by_step["request.margin_pressure"], "tushare.margin+tushare.index_daily.market_amount")
+
+    def test_run_input_runtime_passes_xueqiu_fetchers_to_hot_rank_request(self):
+        input_runtime = importlib.import_module("input.runtime")
+        captured = {}
+        helpers = self._new_stock_runtime_helpers()
+
+        def collect_hot_rank(*args, **kwargs):
+            captured["xueqiu_hot_rank_fetcher"] = kwargs.get("xueqiu_hot_rank_fetcher")
+            captured["xueqiu_argument_fetcher"] = kwargs.get("xueqiu_argument_fetcher")
+            return {"results": {}, "data_status": {}, "step_status": {}, "module_logs": []}
+
+        helpers["collect_market_activity_hot_rank_request_bundle"] = collect_hot_rank
+
+        input_runtime.run_input_runtime("2026-05-22", helpers=helpers)
+
+        self.assertIs(captured["xueqiu_argument_fetcher"], input_runtime.try_fetch_xueqiu_hot_stock_arguments)
+        self.assertTrue(callable(captured["xueqiu_hot_rank_fetcher"]))
 
 
 if __name__ == "__main__":

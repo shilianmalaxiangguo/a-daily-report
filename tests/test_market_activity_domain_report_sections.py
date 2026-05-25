@@ -722,6 +722,71 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("*当前无交易信号*", rendered)
         self.assertNotIn("*暂无交易信号*", rendered)
 
+    def test_build_advanced_activity_report_sections_explains_upstream_empty_lhb(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "lhb_data_status": "upstream_empty",
+                "lhb_provider": "tushare.top_list",
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("tushare.top_list 龙虎榜暂未返回数据", rendered)
+        self.assertNotIn("| - | - | - | - | - | 当前无龙虎榜结果 |", rendered)
+
+    def test_build_advanced_activity_report_sections_renders_lhb_rank_rows_when_analysis_empty(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "lhb_net_buy_top10": [
+                    {"name": "弘信电子", "net_buy_amount_yi": 9.656255, "sector": "元器件", "zt_status": "涨停"}
+                ],
+                "lhb_net_sell_top10": [
+                    {"name": "西部材料", "net_buy_amount_yi": -3.627309, "sector": "小金属", "zt_status": "正常"}
+                ],
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 弘信电子 | +9.66 | 龙虎榜净买入 | 元器件 | - | 涨停 |", rendered)
+        self.assertIn("| 西部材料 | -3.63 | 龙虎榜净卖出 | 小金属 | - | 正常 |", rendered)
+        self.assertNotIn("| - | - | - | - | - | 当前无龙虎榜结果 |", rendered)
+
+    def test_build_advanced_activity_report_sections_hides_internal_lhb_provider_when_empty(self):
+        result = build_advanced_activity_report_sections(
+            data={
+                "lianban_data": [],
+                "volume_anomalies": [],
+                "lhb_analysis": [],
+                "lhb_data_status": "upstream_empty",
+                "lhb_provider": "legacy.lhb_snapshot",
+                "resonance_scores": {},
+                "trade_signals": [],
+            },
+            stock_full_info={},
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("涨停", 95, "强"),
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("Tushare top_list / 备用龙虎榜源 龙虎榜暂未返回数据", rendered)
+        self.assertNotIn("legacy.lhb_snapshot", rendered)
+
     def test_build_advanced_activity_report_sections_uses_result_wording_for_low_score_trade_signals(self):
         result = build_advanced_activity_report_sections(
             data={

@@ -6,6 +6,8 @@ import daily_report_analysis_utils as analysis_utils
 from daily_report_snapshot_io import load_data_snapshot
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 
+_DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
+
 __all__ = [
     "build_market_style_switch_snapshot",
     "build_market_state_machine_snapshot",
@@ -54,6 +56,143 @@ def _first_directional_trend_item(items):
     return {}
 
 
+def _turnover_rank_amount(row):
+    row = row or {}
+    for key in ("turnover", "amount_yi", "turnover_yi", "成交额"):
+        amount = _safe_float(row.get(key))
+        if amount > 0:
+            return amount
+    return 0.0
+
+
+def _funding_activity_from_top50(data):
+    data = data or {}
+    total_turnover = _safe_float(data.get("total_turnover"))
+    rank_rows = list(data.get("turnover_rank") or [])
+    top50_amount = sum(_turnover_rank_amount(row) for row in rank_rows[:50])
+    if total_turnover <= 0 or top50_amount <= 0:
+        return {
+            "available": False,
+            "top50_share_pct": 0.0,
+            "regime": "待累计",
+            "meaning": "缺少成交额前50或两市成交额，暂不判断资金雨量。",
+        }
+
+    share_pct = round(top50_amount / total_turnover * 100, 2)
+    if share_pct > 20:
+        regime = "资金活跃期"
+        meaning = "Top50成交额占比超过20%，说明雨量变大，资金处于活跃期。"
+    elif share_pct >= 18:
+        regime = "震荡蓄势期"
+        meaning = "Top50成交额占比处于18%到20%，资金有活跃但仍在震荡蓄势。"
+    else:
+        regime = "资金低温期"
+        meaning = "Top50成交额占比低于18%，头部资金活跃度不足。"
+
+    return {
+        "available": True,
+        "top50_share_pct": share_pct,
+        "regime": regime,
+        "meaning": meaning,
+    }
+
+
+def _new_high_attack_from_feedback(data):
+    feedback = (data or {}).get("new_high_feedback") or {}
+    if not feedback.get("available"):
+        return {
+            "available": False,
+            "new_high_count": 0,
+            "all_a_share_pct": 0.0,
+            "leading_sectors": [],
+            "strength_label": "待累计",
+            "meaning": "缺少阶段新高反馈，暂不判断资金表态方向。",
+        }
+
+    count = int(_safe_float(feedback.get("new_high_count")))
+    all_a_share_pct = round(_safe_float(feedback.get("all_a_share_pct")), 2)
+    sector_rows = []
+    for row in feedback.get("sector_distribution") or []:
+        sector = str((row or {}).get("sector") or "").strip()
+        if _is_directional_sector_label(sector):
+            sector_rows.append(
+                {
+                    "sector": sector,
+                    "new_high_count": int(_safe_float((row or {}).get("new_high_count"))),
+                    "share_pct": round(_safe_float((row or {}).get("share_pct")), 2),
+                }
+            )
+    leading_sectors = [row["sector"] for row in sector_rows[:3]]
+    if all_a_share_pct >= 3 or count >= 150:
+        strength_label = "表态强"
+    elif all_a_share_pct >= 1.5 or count >= 75:
+        strength_label = "表态有效"
+    elif count > 0:
+        strength_label = "局部表态"
+    else:
+        strength_label = "待表态"
+
+    direction = "、".join(leading_sectors) if leading_sectors else "未形成清晰雨区"
+    return {
+        "available": True,
+        "new_high_count": count,
+        "all_a_share_pct": all_a_share_pct,
+        "leading_sectors": leading_sectors,
+        "sector_distribution": sector_rows[:5],
+        "strength_label": strength_label,
+        "meaning": f"阶段新高用于观察资金表态方向，当前雨区主要在{direction}，强度为{strength_label}。",
+    }
+
+
+def _target_sector_alignment(leading_line, new_high_attack):
+    leading_line = str(leading_line or "").strip()
+    sectors = list((new_high_attack or {}).get("leading_sectors") or [])
+    if not leading_line or not sectors:
+        return {
+            "aligned": False,
+            "label": "待确认",
+            "meaning": "主线或新高雨区不足，暂不判断标的是否站在雨里。",
+        }
+    aligned = any(sector_name_matches(leading_line, sector) for sector in sectors)
+    if aligned:
+        return {
+            "aligned": True,
+            "label": "主线在雨区",
+            "meaning": f"{leading_line}与阶段新高集中方向重合，说明明日核心对象若也在该方向，容器才有放大依据。",
+        }
+    return {
+        "aligned": False,
+        "label": "主线不在雨区",
+        "meaning": f"{leading_line}不在阶段新高集中方向，市场有雨但暂不证明该方向可放大容器。",
+    }
+
+
+def _build_market_performance_evidence(data, leading_line):
+    funding_activity = _funding_activity_from_top50(data)
+    new_high_attack = _new_high_attack_from_feedback(data)
+    alignment = _target_sector_alignment(leading_line, new_high_attack)
+    rain_label = funding_activity.get("regime", "待累计")
+    attack_label = new_high_attack.get("strength_label", "待累计")
+    if funding_activity.get("available") and new_high_attack.get("available"):
+        summary = (
+            f"资金雨量处于{rain_label}；阶段新高显示{attack_label}，"
+            f"雨区主要在{'、'.join(new_high_attack.get('leading_sectors') or []) or '待确认'}。"
+        )
+    elif funding_activity.get("available"):
+        summary = f"资金雨量处于{rain_label}；新高雨区待累计。"
+    elif new_high_attack.get("available"):
+        summary = f"资金雨量待累计；阶段新高显示{attack_label}。"
+    else:
+        summary = "资金雨量和阶段新高雨区均待累计。"
+    return {
+        "funding_activity": funding_activity,
+        "new_high_attack": new_high_attack,
+        "target_sector_alignment": alignment,
+        "summary": summary,
+        "decision_boundary": "单指标不直接给买入或加仓；只作为旧市场表现、主线承接和参与窗口的证据。",
+    }
+
+
 def _install_runtime_bindings(bindings):
     previous = {}
     module_globals = globals()
@@ -74,6 +213,37 @@ def _restore_runtime_bindings(previous):
             module_globals[key] = value
 
 
+def _resolve_database_service_cls():
+    service_cls = globals().get("DatabaseService", _MISSING)
+    if service_cls is not _MISSING:
+        return service_cls
+    try:
+        from storage.database_service import DatabaseService as service_cls
+    except Exception:
+        return None
+    globals()["DatabaseService"] = service_cls
+    return service_cls
+
+
+def _create_database_service():
+    service_cls = _resolve_database_service_cls()
+    if service_cls is None:
+        return None
+    factory = getattr(service_cls, "sqlite_d1_compatible", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory()
+    except Exception:
+        return None
+
+
+def _should_skip_fact_db(helpers):
+    if helpers and "DatabaseService" in helpers:
+        return helpers.get("DatabaseService") is None
+    return load_data_snapshot is not _DEFAULT_LOAD_DATA_SNAPSHOT
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -81,6 +251,18 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _optional_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        if ":" in text:
+            text = text.split(":", 1)[0]
+        return float(text)
+    except (TypeError, ValueError):
+        return None
 
 
 def _round_or_none(value, digits=2):
@@ -96,6 +278,50 @@ def _clamp(value, low, high):
     except (TypeError, ValueError):
         return low
     return max(low, min(high, value))
+
+
+def _data_market_breadth_value(data, observation_snapshot, key):
+    data = data or {}
+    observation_snapshot = observation_snapshot or {}
+    market_stats = data.get("market_stats", {}) or {}
+    return data.get(key, market_stats.get(key, observation_snapshot.get(key)))
+
+
+def _is_heavy_turnover_selloff_context(data, observation_snapshot, current_turnover, turnover_state, turnover_label):
+    data = data or {}
+    observation_snapshot = observation_snapshot or {}
+    indices = data.get("indices", {}) or {}
+    sh_index = indices.get("上证指数", {}) or {}
+    benchmark_change = _optional_float(
+        data.get(
+            "benchmark_change_pct",
+            sh_index.get("涨跌幅", sh_index.get("change_pct", observation_snapshot.get("benchmark_change_pct"))),
+        )
+    )
+    dt_count = int(
+        _safe_float(
+            data.get(
+                "dt_count",
+                len(data.get("dt_pool", []) or [])
+                if data.get("dt_pool") is not None
+                else observation_snapshot.get("dt_count", 0),
+            )
+        )
+    )
+    rise_fall_ratio = _optional_float(_data_market_breadth_value(data, observation_snapshot, "rise_fall_ratio"))
+    if rise_fall_ratio is None:
+        rise_fall_ratio = _optional_float(_data_market_breadth_value(data, observation_snapshot, "rise_fall_ratio_text"))
+    turnover_is_expanding = turnover_state in ("rising", "rebound") or any(
+        keyword in str(turnover_label or "") for keyword in ("回升", "放大")
+    )
+    breadth_broken = dt_count >= 30 or (rise_fall_ratio is not None and rise_fall_ratio < 0.4)
+    return bool(
+        benchmark_change is not None
+        and benchmark_change <= -1.5
+        and current_turnover > 0
+        and turnover_is_expanding
+        and breadth_broken
+    )
 
 
 def _normalize_kline_date_str(value):
@@ -227,8 +453,17 @@ def normalize_flow_to_yi(value, *, helpers=None):
 
 
 def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, max_scan_days=8, *, helpers=None):
+    skip_fact_db = _should_skip_fact_db(helpers)
     previous = _install_runtime_bindings(helpers or {})
     try:
+        if not skip_fact_db:
+            history = _load_recent_sector_flow_history_from_fact_db(
+                target_date,
+                sector_name,
+                lookback_days=lookback_days,
+            )
+            if history is not None:
+                return history
         return _load_recent_sector_flow_history_legacy_body(
             target_date,
             sector_name,
@@ -240,8 +475,17 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
 
 
 def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_days=8, *, helpers=None):
+    skip_fact_db = _should_skip_fact_db(helpers)
     previous = _install_runtime_bindings(helpers or {})
     try:
+        if not skip_fact_db:
+            history = _load_recent_market_turnover_history_from_fact_db(
+                target_date,
+                lookback_days=lookback_days,
+                max_scan_days=max_scan_days,
+            )
+            if history is not None:
+                return history
         return _load_recent_market_turnover_history_legacy_body(
             target_date,
             lookback_days=lookback_days,
@@ -491,6 +735,33 @@ def _extract_sector_signed_flow(snapshot_data, sector_name):
     return 0.0
 
 
+def _load_recent_sector_flow_history_from_fact_db(target_date, sector_name, lookback_days=2):
+    service = _create_database_service()
+    if service is None:
+        return None
+    end_date = get_previous_date_str(_normalize_kline_date_str(target_date) or target_date)
+    if not end_date:
+        return None
+    try:
+        rows = service.query_sector_fund_flow_series(
+            end_date,
+            sector_name,
+            window_days=max(int(lookback_days or 0), 1),
+        )
+    except Exception:
+        return None
+    history = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        date = str(row.get("date") or row.get("trade_date") or "").strip()
+        inflow = _safe_float(row.get("inflow", row.get("net_inflow_yi")))
+        if not date or date >= str(target_date):
+            continue
+        history.append({"date": date, "inflow": round(inflow, 2)})
+    return history[-max(int(lookback_days or 0), 1):]
+
+
 def _load_recent_sector_flow_history_legacy_body(target_date, sector_name, lookback_days=2, max_scan_days=8):
     history = []
     cursor = _normalize_kline_date_str(target_date)
@@ -512,6 +783,40 @@ def _load_recent_sector_flow_history_legacy_body(target_date, sector_name, lookb
             {
                 "date": cursor,
                 "inflow": round(_safe_float(flow_value), 2),
+            }
+        )
+
+    history.reverse()
+    return history
+
+
+def _load_recent_market_turnover_history_from_fact_db(target_date, lookback_days=2, max_scan_days=8):
+    service = _create_database_service()
+    if service is None:
+        return None
+    history = []
+    cursor = _normalize_kline_date_str(target_date)
+    scanned_days = 0
+    target_count = max(int(lookback_days or 0), 1)
+
+    while cursor and len(history) < target_count and scanned_days < max_scan_days:
+        cursor = get_previous_date_str(cursor)
+        if not cursor:
+            break
+        scanned_days += 1
+        try:
+            row = service.query_market_daily_total(cursor, market_scope="all_a")
+        except Exception:
+            return None
+        if not row:
+            continue
+        turnover = _safe_float(row.get("total_amount_yi", row.get("total_turnover_yi", row.get("turnover"))))
+        if turnover <= 0:
+            continue
+        history.append(
+            {
+                "date": cursor,
+                "turnover": round(turnover, 2),
             }
         )
 
@@ -811,15 +1116,23 @@ def _get_or_create_sector_bucket(sector_buckets, sector_name):
         "dt_count": 0,
         "dragon_count": 0,
         "net_inflow": 0.0,
+        "net_inflow_available": False,
+        "net_inflow_source": "",
         "change": 0.0,
+        "change_available": False,
+        "change_source": "",
         "hot_plate_rank": None,
         "hot_plate_heat": 0.0,
+        "hot_plate_change": None,
         "hot_weight": 0.0,
         "hot_stock_count": 0,
         "quadrant_quality_score": 0.0,
         "quadrant_label": "",
         "quadrant_position": None,
         "quadrant_recent_change": None,
+        "quadrant_today_change": None,
+        "concept_matched_member_count": 0,
+        "concept_missing_member_count": 0,
     }
     sector_buckets.append(bucket)
     return bucket
@@ -845,6 +1158,7 @@ def _match_sector_quadrant_snapshot(sector_name, sector_quadrant):
                     "label": tier_label,
                     "position_in_range": _safe_float(item.get("positionInRange")),
                     "recent_change": _safe_float(item.get("recentChange")),
+                    "today_change": _optional_float(item.get("todayChange")),
                 }
 
     quadrants = (sector_quadrant.get("quadrants") or {}) if isinstance(sector_quadrant, dict) else {}
@@ -857,6 +1171,7 @@ def _match_sector_quadrant_snapshot(sector_name, sector_quadrant):
                     "label": quadrant_name,
                     "position_in_range": _safe_float(item.get("positionInRange")),
                     "recent_change": _safe_float(item.get("recentChange")),
+                    "today_change": _optional_float(item.get("todayChange")),
                 }
     return {}
 
@@ -964,7 +1279,23 @@ def _build_market_style_switch_snapshot_legacy_body(target_date, data, observati
         speculative_signal_count += 1
         speculative_evidence.append(f"ST活跃{int(st_stock_count)}只")
 
-    if turnover_state in ("rising", "rebound") and trend_signal_count >= max(2, speculative_signal_count):
+    heavy_turnover_selloff = _is_heavy_turnover_selloff_context(
+        data,
+        observation_snapshot,
+        current_turnover,
+        turnover_state,
+        turnover_label,
+    )
+    if heavy_turnover_selloff:
+        style_code = "defense"
+        style_label = "放量杀跌"
+        style_reason = (
+            f"{turnover_label}但指数大跌、跌停扩散、涨跌比极差，说明这不是增量进攻，"
+            "更像量化动量和风控卖出互相强化后的卖压释放。"
+        )
+        primary_action = "先防踩踏，等指数图形和主攻线承接同时修复后再给买入资格。"
+        switch_action = "若次日放量反包且跌停明显收敛，再重新看局部主攻线是否变成可参与方向。"
+    elif turnover_state in ("rising", "rebound") and trend_signal_count >= max(2, speculative_signal_count):
         style_code = "trend"
         style_label = "趋势分歧优先"
         style_reason = f"{turnover_label}，而异常承接和趋势密度都还在，明天更适合等主线趋势分歧，不适合抢纯情绪一致加速。"
@@ -1053,27 +1384,71 @@ def _build_unified_sector_strength_rows_legacy_body(data):
         bucket = _get_or_create_sector_bucket(sector_buckets, item.get("name", ""))
         if not bucket:
             continue
-        bucket["net_inflow"] = _safe_float(item.get("zljlr", bucket.get("net_inflow", 0.0)))
-        bucket["change"] = _safe_float(item.get("zdf", bucket.get("change", 0.0)))
+        net_inflow = _optional_float(item.get("zljlr", item.get("net_inflow", item.get("net_amount"))))
+        if net_inflow is not None:
+            bucket["net_inflow"] = net_inflow
+            bucket["net_inflow_available"] = True
+            bucket["net_inflow_source"] = "fund_flow"
+        change = _optional_float(item.get("zdf", item.get("change_pct")))
+        if change is not None:
+            bucket["change"] = change
+            bucket["change_available"] = True
+            bucket["change_source"] = "fund_flow"
 
     for item in sector_fund_flow.get("outflow", []) or []:
         bucket = _get_or_create_sector_bucket(sector_buckets, item.get("name", ""))
         if not bucket:
             continue
-        if abs(_safe_float(bucket.get("net_inflow", 0.0))) < 1e-9:
-            bucket["net_inflow"] = _safe_float(item.get("zljlr", 0.0))
-        if abs(_safe_float(bucket.get("change", 0.0))) < 1e-9:
-            bucket["change"] = _safe_float(item.get("zdf", 0.0))
+        net_inflow = _optional_float(item.get("zljlr", item.get("net_inflow", item.get("net_amount"))))
+        if net_inflow is not None and not bucket.get("net_inflow_available"):
+            bucket["net_inflow"] = net_inflow
+            bucket["net_inflow_available"] = True
+            bucket["net_inflow_source"] = "fund_flow"
+        change = _optional_float(item.get("zdf", item.get("change_pct")))
+        if change is not None and not bucket.get("change_available"):
+            bucket["change"] = change
+            bucket["change_available"] = True
+            bucket["change_source"] = "fund_flow"
+
+    concept_flow = data.get("concept_fund_flow") or {}
+    concept_flow_rows = []
+    if isinstance(concept_flow, dict):
+        concept_flow_rows = list(concept_flow.get("rows") or [])
+    elif isinstance(concept_flow, list):
+        concept_flow_rows = list(concept_flow)
+    for item in concept_flow_rows:
+        bucket = _get_or_create_sector_bucket(sector_buckets, (item or {}).get("name", ""))
+        if not bucket:
+            continue
+        net_inflow = _optional_float((item or {}).get("net_inflow", (item or {}).get("net_amount")))
+        if net_inflow is not None:
+            bucket["net_inflow"] = net_inflow
+            bucket["net_inflow_available"] = True
+            bucket["net_inflow_source"] = "concept_member_moneyflow"
+        change = _optional_float((item or {}).get("change_pct", (item or {}).get("zdf")))
+        if change is not None and not bucket.get("change_available"):
+            bucket["change"] = change
+            bucket["change_available"] = True
+            bucket["change_source"] = "concept_member_moneyflow"
+        bucket["concept_matched_member_count"] = int(_safe_float((item or {}).get("matched_member_count"), 0))
+        bucket["concept_missing_member_count"] = int(_safe_float((item or {}).get("missing_member_count"), 0))
 
     for plate in hot_plates[:20]:
         bucket = _get_or_create_sector_bucket(sector_buckets, plate.get("name", ""))
         if not bucket:
             continue
-        plate_rank = int(_safe_float(plate.get("order", 0)) or 0) or None
+        plate_rank = int(_safe_float(plate.get("order", plate.get("rank", 0))) or 0) or None
         current_rank = bucket.get("hot_plate_rank")
         if current_rank is None or (plate_rank and plate_rank < current_rank):
             bucket["hot_plate_rank"] = plate_rank
         bucket["hot_plate_heat"] = max(bucket.get("hot_plate_heat", 0.0), _safe_float(plate.get("rate", 0.0)))
+        plate_change = _optional_float(plate.get("change_pct", plate.get("zdf", plate.get("change"))))
+        if plate_change is not None:
+            bucket["hot_plate_change"] = plate_change
+            if not bucket.get("change_available"):
+                bucket["change"] = plate_change
+                bucket["change_available"] = True
+                bucket["change_source"] = "hot_plate"
 
     for bucket in sector_buckets:
         bucket["hot_weight"] = _safe_float(get_sector_hotlist_weight(bucket.get("name", ""), tag_distribution))
@@ -1082,6 +1457,11 @@ def _build_unified_sector_strength_rows_legacy_body(data):
         bucket["quadrant_label"] = quadrant_snapshot.get("label", "")
         bucket["quadrant_position"] = quadrant_snapshot.get("position_in_range")
         bucket["quadrant_recent_change"] = quadrant_snapshot.get("recent_change")
+        bucket["quadrant_today_change"] = quadrant_snapshot.get("today_change")
+        if bucket["quadrant_today_change"] is not None and not bucket.get("change_available"):
+            bucket["change"] = bucket["quadrant_today_change"]
+            bucket["change_available"] = True
+            bucket["change_source"] = "sector_quadrant"
 
     for stock in hot_rank_top30[:30]:
         for bucket in sector_buckets:
@@ -1102,6 +1482,10 @@ def _build_unified_sector_strength_rows_legacy_body(data):
             hot_weight=bucket.get("hot_weight", 0.0),
             inflow_history=inflow_history,
         )
+        if not bucket.get("net_inflow_available"):
+            star_snapshot = dict(star_snapshot)
+            star_snapshot["trend_label"] = "资金流向未匹配"
+            star_snapshot["flow_trend"] = "unknown"
 
         base_score = _safe_float(star_snapshot.get("score_pct", 0.0))
         hot_plate_rank = bucket.get("hot_plate_rank")
@@ -1180,7 +1564,11 @@ def _build_unified_sector_strength_rows_legacy_body(data):
                 "zt_count": int(bucket.get("zt_count", 0)),
                 "dt_count": int(bucket.get("dt_count", 0)),
                 "change": round(_safe_float(bucket.get("change", 0.0)), 2),
+                "change_available": bool(bucket.get("change_available")),
+                "change_source": bucket.get("change_source", ""),
                 "net_inflow": round(_safe_float(bucket.get("net_inflow", 0.0)), 2),
+                "net_inflow_available": bool(bucket.get("net_inflow_available")),
+                "net_inflow_source": bucket.get("net_inflow_source", ""),
                 "strength": strength,
                 "star_level": star_snapshot.get("star_level", "⭐"),
                 "star_score_pct": round(base_score, 1),
@@ -1188,10 +1576,13 @@ def _build_unified_sector_strength_rows_legacy_body(data):
                 "role": role,
                 "dragon_count": int(bucket.get("dragon_count", 0)),
                 "hot_plate_rank": hot_plate_rank,
+                "hot_plate_change": _round_or_none(bucket.get("hot_plate_change")),
                 "hot_stock_count": int(bucket.get("hot_stock_count", 0)),
                 "hot_weight": round(_safe_float(bucket.get("hot_weight", 0.0)), 2),
                 "quadrant_quality_score": round(_safe_float(bucket.get("quadrant_quality_score", 0.0)), 1),
                 "quadrant_label": bucket.get("quadrant_label", ""),
+                "concept_matched_member_count": int(bucket.get("concept_matched_member_count", 0)),
+                "concept_missing_member_count": int(bucket.get("concept_missing_member_count", 0)),
                 "trend_label": star_snapshot.get("trend_label", ""),
                 "flow_trend": star_snapshot.get("flow_trend", ""),
                 "score_detail": {
@@ -1456,6 +1847,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         transition_reason = ""
         transition_action = ""
 
+    market_performance_evidence = _build_market_performance_evidence(data, leading_line)
     observation_summary = (
         f"上证{sh_change:+.2f}% / 涨停{zt_count} / 跌停{dt_count} / "
         f"涨跌比{breadth_snapshot.get('rise_fall_ratio_text', '暂无')} / 有势板块{high_strong_sector_text}"
@@ -1482,6 +1874,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         "state_reason": state_reason,
         "reflection_focus": reflection_focus,
         "observation_summary": observation_summary,
+        "market_performance_evidence": market_performance_evidence,
         "leading_line": leading_line,
         "mainline_candidates": mainline_candidates[:3],
         "secondary_candidates": secondary_candidates[:3],

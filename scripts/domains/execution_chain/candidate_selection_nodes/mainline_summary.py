@@ -68,13 +68,16 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         else ""
     )
     no_confirmed_attack = bool(attack_summary) and not confirmed_attack_line
+    share_trend_label = str((context.get("mainline_turnover_summary") or {}).get("share_trend_label") or "").strip()
+    countertrend_attack = bool(confirmed_attack_line and share_trend_label == "逆势试攻")
 
     core_sectors = {}
-    sector_strength = {}
+    sector_best_strength = {}
     for stock in core_stocks + secondary_stocks:
         sector = stock.get("sector", "其他")
         core_sectors[sector] = core_sectors.get(sector, 0) + 1
-        sector_strength[sector] = sector_strength.get(sector, 0) + stock.get("tomorrow_strength", 0)
+        strength = safe_float(stock.get("tomorrow_strength", 0))
+        sector_best_strength[sector] = max(sector_best_strength.get(sector, 0), strength)
 
     lines = []
     if no_confirmed_attack:
@@ -98,11 +101,34 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         lines.append("")
         return {"lines": lines, "exports": {}, "module_logs": []}
 
-    if primary_mainline:
-        mainline_count = len(core_stocks) + len(secondary_stocks)
-        mainline_strength = sum(safe_float(stock.get("tomorrow_strength", 0)) for stock in core_stocks + secondary_stocks)
-        lines.append(f"**明日核心方向预判**: {primary_mainline}（主线内{mainline_count}只，主线内强度{int(mainline_strength)}分）")
-        lines.append(f"> **明日纪律**: 认准'{primary_mainline}'，只在主线里等最强对象自己走出来。")
+    effective_mainline = confirmed_attack_line or primary_mainline
+    if effective_mainline:
+        matching_stocks = [
+            stock
+            for stock in core_stocks + secondary_stocks
+            if str((stock or {}).get("sector") or "").strip() == effective_mainline
+        ]
+        if not matching_stocks and effective_mainline == primary_mainline:
+            matching_stocks = list(core_stocks + secondary_stocks)
+        mainline_count = len(matching_stocks)
+        mainline_best_strength = max((safe_float(stock.get("tomorrow_strength", 0)) for stock in matching_stocks), default=0)
+        if countertrend_attack:
+            lines.append(f"**明日核心方向预判**: {effective_mainline}（局部逆势活跃只按观察处理）")
+            lines.append("> **明日纪律**: 放量杀跌里先防踩踏，只看次日承接修复，不把局部强势当成参与资格。")
+            if primary_mainline and primary_mainline != effective_mainline:
+                lines.append(f"> **候选补充**: {primary_mainline}只是局部活口，不视为确认主攻线。")
+            lines.extend(
+                _render_gem_breathing_step2_section(
+                    context,
+                    gem_observation_stocks,
+                    filtered_out_gem_candidates,
+                    display_mvp_mode,
+                )
+            )
+            lines.append("")
+            return {"lines": lines, "exports": {}, "module_logs": []}
+        lines.append(f"**明日核心方向预判**: {effective_mainline}（主线内{mainline_count}只，最强样本{int(mainline_best_strength)}分）")
+        lines.append(f"> **明日纪律**: 认准'{effective_mainline}'，只在主线里等最强对象自己走出来；综合分只用于个股排序，不累加成板块分。")
         if crossline_observation_stocks:
             strongest_crossline = sorted(
                 crossline_observation_stocks,
@@ -125,10 +151,10 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         return {"lines": lines, "exports": {}, "module_logs": []}
 
     if core_sectors:
-        sorted_sectors = sorted(core_sectors.items(), key=lambda item: (item[1], sector_strength[item[0]]), reverse=True)
+        sorted_sectors = sorted(core_sectors.items(), key=lambda item: (item[1], sector_best_strength[item[0]]), reverse=True)
         main_sector = sorted_sectors[0]
-        lines.append(f"**明日核心方向预判**: {main_sector[0]}（{main_sector[1]}只，板块强度{sector_strength.get(main_sector[0], 0)}分）")
-        lines.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，就干该板块核心")
+        lines.append(f"**明日核心方向预判**: {main_sector[0]}（{main_sector[1]}只，最强样本{int(sector_best_strength.get(main_sector[0], 0))}分）")
+        lines.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，只看该板块核心是否满足参与条件；综合分不累加成板块分。")
         lines.extend(
             _render_gem_breathing_step2_section(
                 context,

@@ -1,3 +1,9 @@
+from knowledge.sector_narrative_alias import (
+    merge_sector_evidence_rows_by_narrative,
+    normalize_sector_list_by_narrative,
+)
+
+
 def resolve_mainline_turnover_summary(context=None):
     context = context or {}
     summary = dict(context.get("mainline_turnover_summary") or {})
@@ -77,10 +83,7 @@ def _directional_string_list(value):
 
 
 def resolve_mainline_attack_evidence_summary(context=None):
-    context = context or {}
-    source = dict(context.get("mainline_attack_evidence_summary") or {})
-    if not source:
-        source = dict((context.get("mainline_turnover_summary") or {}).get("mainline_attack_evidence_summary") or {})
+    source = _normalized_attack_source(context)
     if not source:
         return {}
     primary_line = str(source.get("primary_line") or "").strip()
@@ -175,8 +178,149 @@ def _attack_source_summary(context):
     return source
 
 
-def resolve_mainline_attack_evidence_rows(context=None, limit=3):
+def _normalized_attack_source(context):
     source = _attack_source_summary(context)
+    if not source:
+        return {}
+    normalized = dict(source)
+    source_rows = [row for row in source.get("sector_evidence_rows") or [] if isinstance(row, dict)]
+    context_terms = []
+    for row in source_rows:
+        context_terms.append((row or {}).get("sector_name"))
+        context_terms.extend((row or {}).get("surface_sector_names") or [])
+    normalized_rows = merge_sector_evidence_rows_by_narrative(source_rows)
+    normalized["sector_evidence_rows"] = normalized_rows
+    primary_lines = normalize_sector_list_by_narrative([source.get("primary_line")], context_terms or source_rows)
+    normalized["primary_line"] = primary_lines[0] if primary_lines else ""
+    normalized["candidate_lines"] = normalize_sector_list_by_narrative(
+        source.get("candidate_lines"),
+        context_terms or source_rows,
+    )
+    normalized["background_lines"] = normalize_sector_list_by_narrative(
+        source.get("background_lines"),
+        context_terms or source_rows,
+    )
+    return normalized
+
+
+def _snapshot_terms(group):
+    terms = []
+    for key in ("采用名称", "当日主攻分支", "大方向"):
+        value = str((group or {}).get(key) or "").strip()
+        if value:
+            terms.append(value)
+    for key in ("表层行业名", "辅助名称"):
+        terms.extend([str(item or "").strip() for item in ((group or {}).get(key) or []) if str(item or "").strip()])
+    return terms
+
+
+def _snapshot_groups(context):
+    if not isinstance(context, dict):
+        return []
+    snapshot = context.get("realtime_tag_evidence_snapshot") or {}
+    if not snapshot:
+        snapshot = ((context.get("sector_ai_analysis") or {}).get("realtime_tag_evidence_snapshot") or {})
+    if not snapshot:
+        snapshot = ((context.get("market_research_snapshot") or {}).get("realtime_tag_evidence_snapshot") or {})
+    if not snapshot:
+        snapshot = (((context.get("data") or {}).get("sector_ai_analysis") or {}).get("realtime_tag_evidence_snapshot") or {})
+    if not snapshot:
+        snapshot = ((context.get("data") or {}).get("realtime_tag_evidence_snapshot") or {})
+    return [group for group in (snapshot.get("groups") or []) if isinstance(group, dict)]
+
+
+def _map_label_by_tag_snapshot(label, context=None):
+    label = str(label or "").strip()
+    if not label:
+        return ""
+    for group in _snapshot_groups(context or {}):
+        if str(group.get("关系判断") or "") == "证据不足":
+            continue
+        adopted = str(group.get("采用名称") or "").strip()
+        if not adopted:
+            continue
+        terms = _snapshot_terms(group)
+        if any(term and (label == term or label in term or term in label) for term in terms):
+            return adopted
+    return label
+
+
+def _has_unwanted_term_prefix(text, start):
+    prefix2 = text[max(0, start - 2) : start]
+    return prefix2 in {"被动", "主动", "电子"}
+
+
+def _replace_display_term(text, term, adopted):
+    if not text or not term or not adopted or term == adopted:
+        return text
+    result = []
+    cursor = 0
+    term_len = len(term)
+    while True:
+        index = text.find(term, cursor)
+        if index < 0:
+            result.append(text[cursor:])
+            break
+        result.append(text[cursor:index])
+        before = text[index - 1] if index > 0 else ""
+        after_index = index + term_len
+        after = text[after_index] if after_index < len(text) else ""
+        if term_len <= 2 and _has_unwanted_term_prefix(text, index):
+            result.append(term)
+        else:
+            result.append(adopted)
+        cursor = after_index
+    return "".join(result)
+
+
+def normalize_display_text_by_tag_pool(text, context=None):
+    normalized = str(text or "")
+    groups = _snapshot_groups(context or {})
+    replacements = []
+    for group in groups:
+        if str(group.get("关系判断") or "") == "证据不足":
+            continue
+        adopted = str(group.get("采用名称") or "").strip()
+        if not adopted:
+            continue
+        for term in _snapshot_terms(group):
+            if term and term != adopted:
+                replacements.append((term, adopted))
+    replacements.sort(key=lambda item: len(item[0]), reverse=True)
+    for term, adopted in replacements:
+        normalized = _replace_display_term(normalized, term, adopted)
+    return normalized
+
+
+def resolve_display_mainline_name(context=None, fallback=""):
+    context = context or {}
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
+    if attack_summary.get("attack_state") == "confirmed_attack" and attack_summary.get("primary_line"):
+        return _map_label_by_tag_snapshot(attack_summary.get("primary_line"), context)
+
+    summary = context.get("mainline_turnover_summary") or {}
+    if not summary and isinstance(context.get("data"), dict):
+        summary = (context.get("data") or {}).get("mainline_turnover_summary") or {}
+    for value in (
+        summary.get("current_mainline"),
+        (summary.get("mainline_capacity_regime_summary") or {}).get("primary_line"),
+        (context.get("current_mainline_history_record") or {}).get("primary_mainline"),
+        fallback,
+    ):
+        mapped = _map_label_by_tag_snapshot(value, context)
+        if _is_directional_sector_label(mapped):
+            return mapped
+    return ""
+
+
+def _row_value(row, key):
+    if key in set((row or {}).get("missing_fields") or []):
+        return None
+    return (row or {}).get(key)
+
+
+def resolve_mainline_attack_evidence_rows(context=None, limit=3):
+    source = _normalized_attack_source(context)
     if not source:
         return []
     source_rows = [row for row in source.get("sector_evidence_rows") or [] if isinstance(row, dict)]
@@ -196,11 +340,11 @@ def resolve_mainline_attack_evidence_rows(context=None, limit=3):
             {
                 "sector_name": str(row.get("sector_name") or "暂无").strip() or "暂无",
                 "attack_state": state_label,
-                "net_inflow_rank": _format_rank(row.get("net_inflow_rank")),
-                "net_inflow_amount": _format_signed_amount_yi(row.get("net_inflow_amount")),
-                "limit_up_count": _format_plain_count(row.get("limit_up_count")),
-                "high_anchor_height": _format_plain_count(row.get("high_anchor_height")),
-                "turnover_share_change": _format_signed_pct_change(row.get("turnover_share_change")),
+                "net_inflow_rank": _format_rank(_row_value(row, "net_inflow_rank")),
+                "net_inflow_amount": _format_signed_amount_yi(_row_value(row, "net_inflow_amount")),
+                "limit_up_count": _format_plain_count(_row_value(row, "limit_up_count")),
+                "high_anchor_height": _format_plain_count(_row_value(row, "high_anchor_height")),
+                "turnover_share_change": _format_signed_pct_change(_row_value(row, "turnover_share_change")),
                 "conclusion": _attack_row_conclusion(source, row, state_label),
             }
         )
@@ -282,6 +426,69 @@ def resolve_mainline_capacity_regime_summary(context=None):
         "mainline_process": str(source.get("mainline_process") or "-").strip() or "-",
         "tomorrow_action": str(source.get("tomorrow_action") or "-").strip() or "-",
     }
+
+
+def resolve_overtake_window_summary(context=None):
+    context = context or {}
+    source = dict(context.get("overtake_window_summary") or {})
+    if not source:
+        source = dict((context.get("mainline_turnover_summary") or {}).get("overtake_window_summary") or {})
+    if not source:
+        return {}
+    return {
+        "window_state": str(source.get("window_state") or "-").strip() or "-",
+        "primary_line": str(source.get("primary_line") or "-").strip() or "-",
+        "rival_slowdown": str(source.get("rival_slowdown") or "-").strip() or "-",
+        "own_stability": str(source.get("own_stability") or "-").strip() or "-",
+        "speed_gap": str(source.get("speed_gap") or "-").strip() or "-",
+        "action": str(source.get("action") or "-").strip() or "-",
+        "evidence_labels": _string_list(source.get("evidence_labels")),
+        "evidence_gaps": _string_list(source.get("evidence_gaps")),
+    }
+
+
+def resolve_overtake_window_rows(context=None):
+    summary = resolve_overtake_window_summary(context)
+    if not summary:
+        return []
+    return [
+        {
+            "rival_slowdown": summary["rival_slowdown"],
+            "own_stability": summary["own_stability"],
+            "speed_gap": summary["speed_gap"],
+            "action": summary["action"],
+        }
+    ]
+
+
+def resolve_trading_arena_fit_summary(context=None):
+    context = context or {}
+    source = dict(context.get("trading_arena_fit_summary") or {})
+    if not source:
+        source = dict((context.get("mainline_turnover_summary") or {}).get("trading_arena_fit_summary") or {})
+    if not source:
+        return {}
+    return {
+        "fit_state": str(source.get("fit_state") or "-").strip() or "-",
+        "arena_label": str(source.get("arena_label") or "-").strip() or "-",
+        "market_style": str(source.get("market_style") or "-").strip() or "-",
+        "fit_reason": str(source.get("fit_reason") or "-").strip() or "-",
+        "action": str(source.get("action") or "-").strip() or "-",
+    }
+
+
+def resolve_trading_arena_fit_rows(context=None):
+    summary = resolve_trading_arena_fit_summary(context)
+    if not summary:
+        return []
+    return [
+        {
+            "arena_label": summary["arena_label"],
+            "market_style": summary["market_style"],
+            "fit_reason": summary["fit_reason"],
+            "action": summary["action"],
+        }
+    ]
 
 
 def _safe_pct_float(value):
@@ -367,8 +574,6 @@ def resolve_turnover_share_trend_rows(context=None):
     rows = context.get("turnover_share_trend_rows")
     if rows is None:
         rows = (context.get("mainline_turnover_summary") or {}).get("turnover_share_trend_rows")
-    attack_summary = resolve_mainline_attack_evidence_summary(context)
-    has_unconfirmed_attack = bool(attack_summary) and attack_summary.get("attack_state") != "confirmed_attack"
     normalized = []
     for row in rows or []:
         row = row or {}
@@ -384,9 +589,16 @@ def resolve_turnover_share_trend_rows(context=None):
             ).strip() or "-",
             "interpretation": str(row.get("interpretation") or "-").strip() or "-",
         }
-        if has_unconfirmed_attack:
-            normalized_row["cycle_mainline"] = "暂无确认主线"
-            normalized_row["daily_attack_line"] = "暂无确认主攻线"
-            normalized_row["interpretation"] = "候选方向成交额占比可记录，但未确认主攻线"
         normalized.append(normalized_row)
     return normalized
+
+
+def resolve_turnover_share_trend_summary(context=None):
+    context = context or {}
+    summary = str(context.get("turnover_share_trend_summary") or "").strip()
+    if summary:
+        return summary
+    summary_source = context.get("mainline_turnover_summary") or {}
+    if isinstance(summary_source, dict):
+        return str(summary_source.get("turnover_share_trend_summary") or "").strip()
+    return ""

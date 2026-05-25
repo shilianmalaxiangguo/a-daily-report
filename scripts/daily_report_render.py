@@ -40,8 +40,21 @@ DECISION_CRITICAL_REPORT_DATA_FIELDS = (
     ("选股通盘中异动", "选股通盘中异动获取", ("request.xuangubao",), "xuangubao_data", False),
     ("顽主杯热门前十", "顽主杯热门前十获取", ("request.wanzhu_top10",), "wanzhu_top10", False),
     ("连板梯队", "连板梯队提取", ("request.lianban_snapshot",), "lianban_data", True),
+    ("创新高趋势反馈", "创新高趋势反馈获取", ("request.new_high_feedback",), "new_high_feedback", False),
+    ("Top50成交额占比趋势", "Top50成交额占比趋势获取", ("request.top50_turnover_share_series",), "top50_turnover_share_series", False),
+    ("龙虎榜数据", "龙虎榜数据获取", ("request.lhb_snapshot",), "lhb_analysis", False),
+    ("概念资金流向", "概念资金流向获取", ("request.concept_fund_flow",), "concept_fund_flow", False),
+    ("雪球A股24小时热榜", "雪球A股24小时热榜获取", ("request.xueqiu_hot_rank",), "xueqiu_hot_rank_top100", False),
+    ("雪球热榜AI解释", "雪球热榜AI解释获取", ("request.xueqiu_hot_stock_arguments",), "xueqiu_hot_stock_arguments", False),
+    ("融资承接压力", "融资承接压力获取", ("request.margin_pressure",), "margin_pressure", False),
 )
 FAILED_REQUEST_STATUSES = {"error", "degraded"}
+ALLOW_EMPTY_DATA_STATUS_LABELS = {
+    "涨停池",
+    "涨停股板块分布",
+    "跌停池",
+    "跌停股板块分布",
+}
 
 
 class ReportCriticalDataMissingError(RuntimeError):
@@ -225,6 +238,10 @@ def _row_count_for_steps(data, steps, payload_key):
             if details.get(key) not in (None, ""):
                 return details.get(key)
     payload = data.get(payload_key)
+    if payload_key == "new_high_feedback" and isinstance(payload, dict):
+        return len(payload.get("trend_rows") or []) or (1 if payload else 0)
+    if payload_key == "margin_pressure" and isinstance(payload, dict):
+        return len(payload.get("rows") or []) or (1 if payload else 0)
     if isinstance(payload, (list, tuple)):
         return len(payload)
     if isinstance(payload, dict):
@@ -239,12 +256,56 @@ def _decision_payload_valid(data, payload_key, allow_empty):
     if payload_key == "xuangubao_data":
         if not isinstance(payload, dict):
             return False
-        return bool(payload.get("xuangubao_news"))
+        return any(
+            payload.get(key)
+            for key in ("xuangubao_news", "xuangubao_plates", "xuangubao_limit_up_reasons")
+        )
+    if payload_key == "new_high_feedback":
+        return isinstance(payload, dict) and payload.get("available") is True
+    if payload_key == "top50_turnover_share_series":
+        return isinstance(payload, dict) and bool(payload.get("rows") or [])
+    if payload_key == "concept_fund_flow":
+        if not isinstance(payload, dict):
+            return False
+        return bool(payload.get("rows") or [])
+    if payload_key == "margin_pressure":
+        return isinstance(payload, dict) and payload.get("available") is True and bool(payload.get("rows") or [])
+    if payload_key == "lhb_analysis":
+        return bool(
+            payload
+            or data.get("lhb_net_buy_top10")
+            or data.get("lhb_net_sell_top10")
+        )
     if allow_empty:
         return payload is not None
     if isinstance(payload, (list, tuple, dict)):
         return bool(payload)
     return payload not in (None, "", 0, 0.0)
+
+
+def _format_preflight_pct(value):
+    try:
+        return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return "待累计"
+
+
+def _new_high_recent_trend_echo(data, limit=25):
+    payload = (data or {}).get("new_high_feedback") or {}
+    if not isinstance(payload, dict):
+        return []
+    rows = [row for row in payload.get("trend_rows") or [] if isinstance(row, dict)]
+    if not rows:
+        return []
+    lines = ["  创新高近25个交易日:"]
+    for row in rows[-int(limit or 25):]:
+        date = str(row.get("trade_date") or row.get("date") or "").strip()
+        count = row.get("new_high_count", "")
+        pct = _format_preflight_pct(row.get("all_a_share_pct"))
+        change_text = str(row.get("change_text") or "待累计").strip()
+        leading = str(row.get("leading_sectors") or "待补充板块").strip()
+        lines.append(f"  - {date} {count} {pct} {change_text} {leading}")
+    return lines
 
 
 def _decision_request_failed(data, steps):
@@ -301,10 +362,108 @@ def _build_decision_critical_checks(data):
                 "status": status,
                 "provider": _provider_for_steps(data, steps) or "unknown",
                 "row_count": _row_count_for_steps(data, steps, payload_key),
+                "echo_lines": _new_high_recent_trend_echo(data) if payload_key == "new_high_feedback" else [],
                 "data_status": data_status.get(label),
                 "step_status": step_status.get(step_label),
             }
         )
+    return checks
+
+
+def _has_quant_signal_inputs(data):
+    sector_fund_flow = data.get("sector_fund_flow") or {}
+    return bool(data.get("zt_pool")) and bool(sector_fund_flow.get("inflow") or []) and bool(data.get("stocks_with_history"))
+
+
+def _build_quant_factor_checks(data):
+    data = data or {}
+    logs = _request_logs_for_steps(data, ("infer.quant_signals",))
+    if not logs:
+        return []
+    latest = logs[-1]
+    details = latest.get("details") or {}
+    checks = []
+    resonance_count = int(_safe_float(details.get("resonance_count"), 0))
+    if _has_quant_signal_inputs(data) and resonance_count <= 0:
+        checks.append(
+            {
+                "label": "板块共振结果",
+                "step_label": "AI多维量化分析",
+                "payload_key": "resonance_scores",
+                "status": "failed",
+                "provider": "quantitative_analyzer.calculate_resonance",
+                "row_count": resonance_count,
+                "step_status": latest.get("status"),
+            }
+        )
+    return checks
+
+
+def _status_label_to_factor_label(label):
+    text = str(label or "").strip()
+    for suffix in ("获取", "提取"):
+        if text.endswith(suffix):
+            return text[: -len(suffix)] or text
+    return text
+
+
+def _dedupe_labels(labels):
+    deduped = []
+    seen = set()
+    for label in labels or []:
+        text = str(label or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return deduped
+
+
+def _build_registered_status_failure_checks(data, known_labels=None):
+    data = data or {}
+    known = set(known_labels or [])
+    checks = []
+    seen = set()
+
+    for label, status in (data.get("data_status") or {}).items():
+        factor_label = str(label or "").strip()
+        if not factor_label or factor_label in known or factor_label in seen:
+            continue
+        if factor_label in ALLOW_EMPTY_DATA_STATUS_LABELS:
+            continue
+        if status is False:
+            seen.add(factor_label)
+            checks.append(
+                {
+                    "label": factor_label,
+                    "step_label": "",
+                    "payload_key": "",
+                    "status": "failed",
+                    "provider": "status.data_status",
+                    "row_count": 0,
+                    "step_status": "",
+                }
+            )
+
+    for step_label, status in (data.get("step_status") or {}).items():
+        factor_label = _status_label_to_factor_label(step_label)
+        if not factor_label or factor_label in known or factor_label in seen:
+            continue
+        if factor_label in ALLOW_EMPTY_DATA_STATUS_LABELS:
+            continue
+        if status is False:
+            seen.add(factor_label)
+            checks.append(
+                {
+                    "label": factor_label,
+                    "step_label": step_label,
+                    "payload_key": "",
+                    "status": "failed",
+                    "provider": "status.step_status",
+                    "row_count": 0,
+                    "step_status": status,
+                }
+            )
     return checks
 
 
@@ -354,13 +513,15 @@ def build_report_preflight(data, target_date):
                 "data_status": data_status.get(label),
             }
         )
-    decision_checks = _build_decision_critical_checks(data)
+    decision_checks = _build_decision_critical_checks(data) + _build_quant_factor_checks(data)
+    known_labels = [check["label"] for check in checks + decision_checks]
+    decision_checks.extend(_build_registered_status_failure_checks(data, known_labels=known_labels))
     decision_failures = [check["label"] for check in decision_checks if check["status"] == "failed"]
-    all_failures = [
+    all_failures = _dedupe_labels([
         check["label"]
         for check in checks
         if check["label"] in failures or check["status"] == "failed"
-    ] + decision_failures
+    ] + decision_failures)
     return {
         "target_date": target_date,
         "status": "failed" if all_failures else "success",
@@ -400,6 +561,7 @@ def render_report_preflight_lines(preflight):
                     step_status=check.get("step_status", ""),
                 )
             )
+            lines.extend(check.get("echo_lines") or [])
     if preflight.get("failures"):
         lines.append("失败字段: {}".format("、".join(preflight.get("failures") or [])))
     return lines
@@ -567,7 +729,7 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
-        persist_decision_ledger=run_mode == LEDGER_MODE_FROZEN,
+        persist_decision_ledger=True,
         decision_ledger_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
@@ -585,10 +747,6 @@ def build_report_outputs(
         emit_helper_diagnostics=False,
         shared_runtime_cache=shared_runtime_cache,
     )
-
-    if position_report_text:
-        full_report += position_report_text
-        summary_report += position_report_text
 
     return {
         REPORT_VARIANT_FULL: _inject_report_variant_banner(full_report, REPORT_VARIANT_FULL),
@@ -666,7 +824,10 @@ def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str,
         sector_relationship_state="以最终报告重点观察名单为准",
         root_dir=root_dir,
     )
-    print(f"🧾 replay 决策台账已按最终完整版日报同步: {result.get('case_count', 0)} 个样本")
+    if result.get("skipped_empty_markdown"):
+        print(f"🧾 replay 决策台账保留已有结构化样本: {result.get('case_count', 0)} 个样本")
+    else:
+        print(f"🧾 replay 决策台账已按最终完整版日报同步: {result.get('case_count', 0)} 个样本")
     return result
 
 

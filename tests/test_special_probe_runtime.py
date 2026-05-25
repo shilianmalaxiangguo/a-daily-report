@@ -248,6 +248,54 @@ assert "helpers" not in verdict_mock.call_args.kwargs
         self.assertTrue(stack["has_formal_abnormal_setup"])
         self.assertTrue(scored["report_day_is_one_word"] is False)
 
+    def test_score_candidate_decision_stack_uses_single_confirmation_bonus_when_washout_and_trend_overlap(self):
+        scored = score_candidate_decision_stack(
+            {
+                "code": "000001",
+                "name": "军工一号",
+                "sector": "军工",
+                "entry_range": (12.1, 12.6),
+                "minute_plan": {"confirm_price_60m": 12.66},
+                "stop_plan": {"effective_stop": 11.55},
+                "ev_pct": 0.02,
+            },
+            final_gate={"can_new_entry": True},
+            mainline_name="军工",
+            conviction_codes={"000001"},
+            leader_memory_codes={"000001"},
+            target_date="2026-04-22",
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda left, right: left == right,
+                "_resolve_candidate_follow_state": lambda item: "跌不下去",
+                "_resolve_candidate_setup_id": lambda item: "burst_hold",
+                "_is_one_word_limit_bar": lambda **kwargs: False,
+                "_get_setup_priority_score": lambda setup_id="", follow_state="": 92,
+                "_build_washout_reclaim_context": lambda *args, **kwargs: {
+                    "active": True,
+                    "recognition_ok": True,
+                    "within_3d_window": True,
+                },
+                "_build_trend_continuation_context": lambda *args, **kwargs: {
+                    "active": True,
+                    "recognition_ok": True,
+                    "act_right": True,
+                },
+                "_candidate_has_formal_abnormal_setup": lambda item: True,
+                "_candidate_is_resilient_abnormal": lambda item: True,
+                "_safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "_clamp": lambda value, low, high: max(low, min(high, value)),
+            },
+        )
+
+        stack = scored["decision_stack"]
+        self.assertEqual(stack["trigger_score"], 102)
+        self.assertEqual(stack["setup_priority_score"], 92)
+        self.assertNotEqual(stack["setup_priority_score"], stack["trigger_score"])
+        self.assertGreaterEqual(stack["advantage_dedup"]["repeated_advantage_count"], 1)
+        self.assertEqual(stack["advantage_dedup"]["group_scores"]["price_acceptance_bonus"], 10)
+        self.assertEqual(stack["market_selection_score"], 100)
+
     def test_sort_decision_stack_candidates_uses_stack_then_composite_tiebreakers(self):
         ordered = sort_decision_stack_candidates(
             [

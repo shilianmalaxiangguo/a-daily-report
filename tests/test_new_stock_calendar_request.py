@@ -171,6 +171,27 @@ class NewStockCalendarRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.new_stock_calendar"], "tushare.new_share")
 
+    def test_collect_request_bundle_treats_empty_calendar_as_successful_no_event_day(self):
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_new_stock_calendar_request_bundle(
+            "2026-05-19",
+            fetch_pages=lambda page_count=2: [],
+            request_registry={"new_stock_calendar": lambda *, target_date: []},
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(result["results"]["new_stock_calendar"], [])
+        self.assertTrue(result["data_status"]["新股上市日历"])
+        self.assertTrue(result["step_status"]["新股上市日历获取"])
+        self.assertEqual(timer.records[0], ("新股上市日历获取(空)", 11))
+        log = result["module_logs"][0]
+        self.assertEqual(log["status"], "success")
+        self.assertEqual(log["details"]["calendar_count"], 0)
+        self.assertIn("无新股上市", log["details"]["diagnostic_note"])
+
     def test_collect_request_bundle_is_degraded_when_fetch_fails(self):
         timer = _TimerStub()
 

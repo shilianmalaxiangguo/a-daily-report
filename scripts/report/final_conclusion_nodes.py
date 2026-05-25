@@ -5,7 +5,10 @@ from report.conclusion_support import (
     build_market_outlook_text as _build_market_outlook_text,
     derive_risk_guard_text as _derive_risk_guard_text,
     derive_trade_style as _derive_trade_style,
+    format_stock_label as _format_stock_label,
     get_watch_anchor_note as _get_watch_anchor_note,
+    resolve_selected_position_candidate as _resolve_selected_position_candidate,
+    selected_target_is_attack_ready as _selected_target_is_attack_ready,
 )
 
 
@@ -34,11 +37,22 @@ def _build_report_stages_from_context(context):
     return [{**stage, "use_dynamic_title": False} for stage in generated_stages]
 
 def _build_mvp_target_row(context):
+    selected = _resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = _get_watch_anchor_note(watch_anchor)
 
+    if selected:
+        if _selected_target_is_attack_ready(context):
+            return (
+                "| 如果要买只买谁 | "
+                f"{_format_stock_label(selected)}，按{LAYERED_PARTICIPATION_TEXT}触发 |"
+            )
+        return (
+            "| 重点观察谁 | "
+            f"{_format_stock_label(selected)}，只看强弱与承接，不抢跑 |"
+        )
     if best_stock:
         entry_range = best_stock.get("entry_range") or ()
         if len(entry_range) >= 2:
@@ -71,10 +85,18 @@ def _build_mvp_target_row(context):
 def _build_full_mode_strategy_row(context):
     final_gate = context.get("final_gate") or {}
     step0_prediction = str(context.get("step0_prediction", "") or "").strip()
+    selected = _resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = _get_watch_anchor_note(watch_anchor)
+
+    if selected and _selected_target_is_attack_ready(context):
+        return (
+            "明日策略",
+            f"明日目标标的条件触发：只操作{selected.get('name') or selected.get('code') or selected.get('stock_code')}，"
+            "按竞价表态/开盘前几分钟/回封/60分钟确认分层处理，不满足回到0%",
+        )
 
     if not final_gate.get("can_new_entry"):
         if final_gate.get("should_reduce"):
@@ -198,10 +220,11 @@ def build_final_conclusion_full_stage_rows_node(context, node_meta=None, node_lo
     if context.get("display_mvp_mode"):
         return {"lines": [], "exports": {}, "module_logs": []}
     report_stages = _build_report_stages_from_context(context)
+    selected_ready = bool(_resolve_selected_position_candidate(context) and _selected_target_is_attack_ready(context))
     stage_rows = build_legacy_report_stage_rows(
         {
             "report_stages": report_stages,
-            "prefer_data_driven_stage_rows": not bool(context.get("report_stages")),
+            "prefer_data_driven_stage_rows": selected_ready or not bool(context.get("report_stages")),
             "step0_prediction_cn": context.get("step0_prediction_cn", ""),
             "step0_action": context.get("step0_action", ""),
             "watchlist_count": context.get("watchlist_count", 0),
@@ -218,6 +241,8 @@ def build_final_conclusion_full_stage_rows_node(context, node_meta=None, node_lo
             "best_stock": context.get("best_stock"),
             "watch_anchor": context.get("watch_anchor"),
             "watch_anchor_type": context.get("watch_anchor_type", ""),
+            "selected_position_candidate": context.get("selected_position_candidate"),
+            "position_decision": context.get("position_decision"),
             "position_level": context.get("position_level", ""),
             "trade_style": context.get("trade_style", ""),
             "abnormal_probe_parts": context.get("abnormal_probe_parts") or [],

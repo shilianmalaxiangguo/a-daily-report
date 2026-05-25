@@ -199,8 +199,14 @@ from portfolio.position_management_report import (
     analyze_position_management as run_analyze_position_management,
     parse_position_string as run_parse_position_string,
 )
+from portfolio.position_strategy_report import (
+    render_position_strategy_report,
+    save_position_strategy_report,
+)
 from publish.snap_ui_public_data import publish_snap_ui_public_data
+from export.sh_index_chanlun_html import save_sh_index_chanlun_html_report
 from replay.report_replay import replay_from_snapshot as run_replay_from_snapshot
+from report.report_acceptance_audit import audit_report_markdown
 from market_data.daily_price_runtime import (
     compute_bar_change_pct as run_compute_bar_change_pct,
     compute_stop_loss_mainline_anchor as run_compute_stop_loss_mainline_anchor,
@@ -297,6 +303,7 @@ from selection.special_probe_runtime import (
     sort_decision_stack_candidates as run_sort_decision_stack_candidates,
 )
 from selection.trend_snapshot_runtime import (
+    build_extreme_conviction_groups as run_build_extreme_conviction_groups,
     build_extreme_conviction_list as run_build_extreme_conviction_list,
     build_leader_memory_bank as run_build_leader_memory_bank,
     build_sector_trend_snapshot as run_build_sector_trend_snapshot,
@@ -331,6 +338,8 @@ from input.iwencai_runtime import (
     get_wind_a_from_iwencai,
 )
 from input.tushare_runtime import (
+    get_margin_pressure_from_tushare_first,
+    get_hot_concept_fund_flow_from_tushare_first,
     get_lhb_snapshot_from_tushare_first,
     get_major_indices_from_tushare_first,
     get_new_stock_calendar_from_tushare_first,
@@ -339,7 +348,10 @@ from input.tushare_runtime import (
     get_sector_fund_flow_from_tushare_first,
     get_sector_hot_plates_from_tushare_first,
     get_stock_hot_rank_from_tushare_first,
+    get_new_high_feedback_from_tushare_first,
+    get_price_band_style_series_from_tushare_first,
     get_stock_risk_map_from_tushare_first,
+    get_top50_turnover_share_series_from_tushare_first,
     get_total_turnover_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
@@ -716,10 +728,11 @@ def reset_llm_call_stats():
         'sector_analysis_time': 0.0,
     }
 
-def ai_analyze_sector_relationships(sector_list, context_info=""):
+def ai_analyze_sector_relationships(sector_list, context_info="", tag_evidence_snapshot=None):
     return run_ai_analyze_sector_relationships(
         sector_list,
         context_info=context_info,
+        tag_evidence_snapshot=tag_evidence_snapshot,
         helpers={
             "_llm_call_stats": _llm_call_stats,
             "get_llm_service": get_llm_service,
@@ -821,6 +834,13 @@ from history_cache import get_cache, HistoryCache
 from llm_service import get_llm_service
 
 
+def _resolve_remote_calendar_llm_enabled():
+    raw = os.getenv("A_DAILY_REPORT_ENABLE_REMOTE_CALENDAR_LLM")
+    if raw is not None and str(raw).strip():
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return bool(str(os.getenv("DEEPSEEK_API_KEY", "") or "").strip())
+
+
 # ========== 蜡烛图形态判断函数 ==========
 def analyze_candlestick_pattern(open_price, close_price, high_price, low_price, change_pct, first_limit_time=None):
     return run_analyze_candlestick_pattern(
@@ -843,6 +863,78 @@ def get_daily_data(target_date=None):
         },
         config={},
     )
+
+
+def _normalize_lhb_code(fs_code):
+    text = str(fs_code or "").strip().upper()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def get_legacy_lhb_snapshot(target_date=None):
+    from finshare import get_lhb
+
+    lhb_date = str(target_date or "").replace("-", "")
+    lhb_df = get_lhb(start_date=lhb_date, end_date=lhb_date)
+    if lhb_df is None or len(lhb_df) == 0:
+        return {
+            "lhb_net_buy_top10": [],
+            "lhb_net_sell_top10": [],
+            "lhb_analysis": [],
+            "provider": "finshare.get_lhb",
+        }
+    grouped = {}
+    for row in lhb_df.to_dict("records") or []:
+        code = _normalize_lhb_code(row.get("fs_code") or row.get("ts_code") or row.get("code"))
+        if not code:
+            continue
+        bucket = grouped.setdefault(
+            code,
+            {
+                "代码": code,
+                "fs_code": row.get("fs_code") or row.get("ts_code") or "",
+                "name": row.get("name", ""),
+                "net_buy_amount": 0.0,
+                "close_price": 0.0,
+                "change_rate": 0.0,
+                "reasons": [],
+                "data_source": "finshare.get_lhb",
+            },
+        )
+        bucket["net_buy_amount"] += _safe_float(row.get("net_buy_amount"), 0.0)
+        bucket["close_price"] = bucket.get("close_price") or _safe_float(row.get("close_price"), 0.0)
+        bucket["change_rate"] = bucket.get("change_rate") or _safe_float(row.get("change_rate"), 0.0)
+        reason = str(row.get("reason") or "").strip()
+        if reason and reason not in bucket["reasons"]:
+            bucket["reasons"].append(reason)
+
+    grouped_rows = list(grouped.values())
+    buy_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0), reverse=True)[:10]
+    sell_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0))[:10]
+
+    def _ranked(rows):
+        return [
+            {
+                "rank": rank,
+                "code": row["代码"],
+                "name": row.get("name", ""),
+                "net_buy_amount_yi": round(_safe_float(row.get("net_buy_amount"), 0.0) / 1e8, 6),
+                "change_pct": _safe_float(row.get("change_rate"), 0.0),
+                "zt_status": "正常",
+                "sector": "未知",
+                "data_source": "finshare.get_lhb",
+            }
+            for rank, row in enumerate(rows, start=1)
+        ]
+
+    return {
+        "lhb_net_buy_top10": _ranked(buy_rows),
+        "lhb_net_sell_top10": _ranked(sell_rows),
+        "lhb_analysis": grouped_rows,
+        "provider": "finshare.get_lhb",
+    }
 
 
 
@@ -1316,12 +1408,28 @@ def build_sector_trend_snapshot(candidates, watchlist, evaluated_stocks, dragon_
     )
 
 
-def build_extreme_conviction_list(evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3):
+def build_extreme_conviction_list(evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None):
     return run_build_extreme_conviction_list(
         evaluated_stocks,
         mainline_name,
         sector_snapshot=sector_snapshot,
         top_n=top_n,
+        risk_context=risk_context,
+        helpers={
+            "normalize_stock_code": normalize_stock_code,
+            "sector_name_matches": sector_name_matches,
+            "_safe_float": _safe_float,
+        },
+    )
+
+
+def build_extreme_conviction_groups(evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None):
+    return run_build_extreme_conviction_groups(
+        evaluated_stocks,
+        mainline_name,
+        sector_snapshot=sector_snapshot,
+        top_n=top_n,
+        risk_context=risk_context,
         helpers={
             "normalize_stock_code": normalize_stock_code,
             "sector_name_matches": sector_name_matches,
@@ -2983,6 +3091,8 @@ def build_step2_candidate_bundle(
             "build_gem_observation_pool": _build_gem_20cm_observation_pool,
             "build_sector_trend_snapshot": build_sector_trend_snapshot,
             "build_extreme_conviction_list": build_extreme_conviction_list,
+            "build_extreme_conviction_groups": build_extreme_conviction_groups,
+            "fetch_recent_price_bars": fetch_recent_price_bars,
         },
     )
 
@@ -3484,6 +3594,7 @@ def generate_markdown_report(
         config={
             "persist_decision_ledger": persist_decision_ledger,
             "decision_ledger_root_dir": decision_ledger_root_dir or str(Path(__file__).resolve().parents[1]),
+            "ENABLE_REMOTE_CALENDAR_LLM": _resolve_remote_calendar_llm_enabled(),
         },
     )
     return runtime_result["report"]
@@ -3565,6 +3676,30 @@ def generate_single_stock_diagnostic_markdown(
     )
 
 
+def _resolve_chanlun_tomorrow_decision(data):
+    snapshot = data.get("market_research_snapshot") if isinstance(data, dict) else {}
+    if isinstance(snapshot, dict):
+        for key in ("front_page_final_gate", "final_gate"):
+            decision = snapshot.get(key)
+            if isinstance(decision, dict) and decision:
+                return decision
+    final_gate = data.get("final_gate") if isinstance(data, dict) else {}
+    return final_gate if isinstance(final_gate, dict) and final_gate else None
+
+
+def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path):
+    full_report = (report_outputs or {}).get(REPORT_VARIANT_FULL, "")
+    companion_html = Path(chanlun_html_path).read_text(encoding="utf-8") if chanlun_html_path else None
+    result = audit_report_markdown(full_report, companion_html=companion_html)
+    if result.get("passed"):
+        print("日报一致性检查通过")
+        return result
+    for finding in result.get("findings", []):
+        line_suffix = f":{finding['line']}" if "line" in finding else ""
+        print(f"{finding['code']}{line_suffix} {finding['message']}")
+    raise ReportCriticalDataMissingError("日报一致性检查未通过，停止生成")
+
+
 def main():
     """主函数"""
     import argparse
@@ -3582,6 +3717,8 @@ def main():
                        help='生成单票诊断，输入股票代码，如 002364')
     parser.add_argument('--stock-name', type=str, default='',
                        help='单票诊断可选股票名称，提升可读性')
+    parser.add_argument('--publish-snap-ui', action='store_true',
+                       help='显式发布 snap-ui 静态数据并运行契约检查；默认只生成日报与快照')
     
     args = parser.parse_args()
     
@@ -3630,19 +3767,30 @@ def main():
             else:
                 print(f"   ⚠️ 持仓信息解析失败，请检查格式")
 
-        position_report = ""
-        if positions:
-            position_report = analyze_position_management(data, target_date, positions)
-
         report_outputs = build_report_outputs(
             data,
             target_date,
             supplementary_perspective="",
-            has_personal_positions=bool(positions),
+            has_personal_positions=False,
             run_mode=run_mode,
-            position_report_text=position_report,
+            position_report_text="",
         )
         save_report_outputs(report_outputs, target_date, mode=run_mode)
+        chanlun_html_path = save_sh_index_chanlun_html_report(
+            target_date,
+            root=Path(__file__).resolve().parents[1],
+            tomorrow_decision=_resolve_chanlun_tomorrow_decision(data),
+        )
+        print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
+        _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path)
+        if positions:
+            position_strategy_report = render_position_strategy_report(
+                data,
+                target_date,
+                positions,
+                source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
+            )
+            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
 
     if args.stock and data:
         stock_report = generate_single_stock_diagnostic_markdown(
@@ -3657,7 +3805,10 @@ def main():
     # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
     if data:
         _save_data_snapshot(data, target_date, mode=run_mode)
-        publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
+        if args.publish_snap_ui:
+            publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
+        else:
+            print("ℹ️ 已跳过 snap-ui 静态数据发布；如需维护前端数据，请显式传入 --publish-snap-ui。")
     
     return 0
 

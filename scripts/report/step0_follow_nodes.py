@@ -1,3 +1,6 @@
+from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+
+
 def _full_row(label, current_evidence, derived_judgement, action_effect):
     return f"| {label} | {current_evidence} | {derived_judgement} | {action_effect} |"
 
@@ -61,13 +64,24 @@ def build_step0_follow_style_background_node(context, node_meta=None, node_looku
 
 
 def build_step0_follow_mainline_focus_node(context, node_meta=None, node_lookup=None):
+    attack_summary = resolve_mainline_attack_evidence_summary(context)
     densest_sector = context.get("densest_sector", "暂无明确主线")
     trend_count = context.get("densest_sector_trend_count", 0)
     derived = f"趋势密度最强方向为{context.get('densest_sector', '待确认')}，活跃趋势股{trend_count}只"
+    action_effect = "优先聚焦主线对象"
+    if attack_summary and attack_summary.get("attack_state") == "confirmed_attack":
+        primary_line = str(attack_summary.get("primary_line") or "").strip()
+        if primary_line:
+            densest_sector = f"主攻线 {primary_line}"
+            derived = attack_summary.get("confirmation_evidence") or f"{primary_line}攻击证据成立"
+    elif attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+        densest_sector = "无确认主攻线"
+        derived = attack_summary.get("confirmation_evidence") or "主线攻击证据不足"
+        action_effect = "候选只观察，不给买入资格"
     if context.get("compact"):
-        lines = [f"**主线焦点**: {densest_sector}；趋势股{trend_count}只"]
+        lines = [f"**主线焦点**: {densest_sector}；{derived}"]
     else:
-        lines = [_full_row("主线焦点", densest_sector, derived, "优先聚焦主线对象")]
+        lines = [_full_row("主线焦点", densest_sector, derived, action_effect)]
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
@@ -101,13 +115,38 @@ def build_step0_follow_conclusion_node(context, node_meta=None, node_lookup=None
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
+def _zero_participation_context(context):
+    context = context or {}
+    position_decision = context.get("position_decision") or {}
+    if isinstance(position_decision, dict):
+        grade = str(position_decision.get("signal_grade") or "").strip()
+        if grade.startswith("0"):
+            return True
+        try:
+            if "target_position_pct" in position_decision and float(position_decision.get("target_position_pct") or 0) <= 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+    final_gate = context.get("final_gate") or {}
+    if isinstance(final_gate, dict):
+        text = " ".join(str(final_gate.get(key) or "") for key in ("final_action", "action", "summary", "reason"))
+        if "0%不参与" in text or "禁止参与" in text or "不新增参与" in text:
+            return True
+        if final_gate.get("can_new_entry") is False and str(final_gate.get("operation_state") or "") in {"撤退态", "观察态"}:
+            return True
+    return False
+
+
 def build_step0_follow_reminder_node(context, node_meta=None, node_lookup=None):
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
+    if _zero_participation_context(context):
+        reminder = "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日不新增参与，只观察风险是否钝化、主攻线承接和唯一对象是否重新成立。"
+    else:
+        reminder = "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与；买入后再用30分钟结构定止损。"
     return {
-        "lines": [
-            "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与；买入后再用30分钟结构定止损。"
-        ],
+        "lines": [reminder],
         "exports": {},
         "module_logs": [],
     }

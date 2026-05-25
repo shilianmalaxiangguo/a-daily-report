@@ -5,6 +5,18 @@ import datetime
 from daily_report_snapshot_io import load_data_snapshot
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 
+try:
+    from storage.database_service import DatabaseService
+except Exception:  # pragma: no cover - optional runtime dependency
+    DatabaseService = None
+
+try:
+    from domains.market_state.daily_metric_history_index import (
+        ensure_daily_metric_history_index as _default_ensure_daily_metric_history_index,
+    )
+except Exception:  # pragma: no cover - optional runtime dependency
+    _default_ensure_daily_metric_history_index = None
+
 __all__ = [
     "build_mainline_history_record",
     "extract_mainline_history_record",
@@ -59,6 +71,12 @@ def _normalize_date(value):
 
 def _normalize_kline_date_str(value):
     return _default_normalize_kline_date_str(value)
+
+
+def ensure_daily_metric_history_index(**kwargs):
+    if callable(_default_ensure_daily_metric_history_index):
+        return _default_ensure_daily_metric_history_index(**kwargs)
+    return {"indexed_count": 0, "dates": []}
 
 
 def get_previous_date_str(target_date):
@@ -226,9 +244,74 @@ def _iter_recent_mainline_history(payload, depth=0, max_depth=4):
     return records
 
 
+def _load_recent_mainline_history_from_fact_db(target_date, lookback_days=25, *, db_path=None):
+    service_cls = globals().get("DatabaseService")
+    if service_cls is None:
+        return []
+    try:
+        service = service_cls.sqlite_d1_compatible(db_path)
+        rows = service.query_mainline_daily_series(
+            _normalize_kline_date_str(target_date) or target_date,
+            window_days=lookback_days,
+        )
+    except Exception:
+        return []
+    normalized = []
+    for row in rows or []:
+        record = _normalize_history_record(row, fallback_date=row.get("trade_date") if isinstance(row, dict) else "")
+        if record and str(record.get("date") or "") < str(target_date):
+            normalized.append(record)
+    return normalized[-lookback_days:]
+
+
+def _history_latest_date(history):
+    dates = [str((item or {}).get("date") or "").strip() for item in history or []]
+    dates = [date for date in dates if date]
+    return max(dates) if dates else ""
+
+
+def _history_is_stale(history, target_date):
+    latest = _history_latest_date(history)
+    previous_target = get_previous_date_str(_normalize_kline_date_str(target_date) or target_date)
+    return bool(previous_target and latest and latest < previous_target)
+
+
+def _history_is_short(history, lookback_days):
+    try:
+        target_count = max(int(lookback_days or 0), 1)
+    except (TypeError, ValueError):
+        target_count = 1
+    return len(list(history or [])) < target_count
+
+
 def load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        if globals().get("DatabaseService") is not None:
+            db_history = _load_recent_mainline_history_from_fact_db(
+                target_date,
+                lookback_days=lookback_days,
+            )
+            if (
+                db_history
+                and (
+                    _history_is_stale(db_history, target_date)
+                    or _history_is_short(db_history, lookback_days)
+                )
+                and callable(globals().get("ensure_daily_metric_history_index"))
+            ):
+                globals()["ensure_daily_metric_history_index"](
+                    end_date=_normalize_kline_date_str(target_date) or target_date,
+                    window_days=lookback_days,
+                    max_scan_days=max_scan_days,
+                )
+                db_history = _load_recent_mainline_history_from_fact_db(
+                    target_date,
+                    lookback_days=lookback_days,
+                )
+            if db_history:
+                return db_history
+
         history_by_date = {}
         cursor = _normalize_kline_date_str(target_date)
         scanned_days = 0

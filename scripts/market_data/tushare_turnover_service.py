@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import requests
+
 from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_client import create_tushare_pro_api
 
@@ -7,8 +9,13 @@ __all__ = [
     "fetch_stock_basic_map",
     "fetch_stock_industry_map",
     "fetch_stock_name_map",
+    "fetch_stock_factor_pro_rows",
     "fetch_stock_batch_quote_info",
     "fetch_stock_daily_turnover_records",
+    "fetch_market_daily_amount_rows",
+    "fetch_market_index_amount_rows",
+    "fetch_market_margin_balance_rows",
+    "fetch_margin_balance_rows",
     "fetch_stock_moneyflow_map",
     "fetch_stock_turnover_history",
 ]
@@ -36,6 +43,14 @@ def _frame_to_records(frame):
     if hasattr(frame, "to_dict"):
         return frame.to_dict("records")
     return []
+
+
+def _eastmoney_rows(payload):
+    if not isinstance(payload, dict):
+        return []
+    result = payload.get("result") or {}
+    rows = result.get("data") or []
+    return list(rows) if isinstance(rows, list) else []
 
 
 def _split_ts_code(ts_code):
@@ -127,12 +142,204 @@ def fetch_stock_daily_turnover_records(trade_date, *, pro=None, ts_module=None):
     return records
 
 
+def _is_hs_a_share_ts_code(ts_code):
+    text = str(ts_code or "").strip().upper()
+    if not text.endswith((".SH", ".SZ")):
+        return False
+    code = text.split(".", 1)[0]
+    if code.startswith(("900", "200")):
+        return False
+    return True
+
+
+def fetch_market_daily_amount_rows(start_date, end_date, *, pro=None, ts_module=None, page_limit=6000):
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+    if not start or not end:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    rows = []
+    offset = 0
+    while True:
+        frame = pro.daily(
+            start_date=start,
+            end_date=end,
+            fields="ts_code,trade_date,amount",
+            limit=int(page_limit or 6000),
+            offset=offset,
+        )
+        page_rows = _frame_to_records(frame)
+        rows.extend(page_rows)
+        if len(page_rows) < int(page_limit or 6000):
+            break
+        offset += int(page_limit or 6000)
+    buckets = {}
+    for row in rows:
+        ts_code = str((row or {}).get("ts_code") or "").strip().upper()
+        if not _is_hs_a_share_ts_code(ts_code):
+            continue
+        trade_date = normalize_kline_date_str((row or {}).get("trade_date"))
+        amount_raw = _safe_float((row or {}).get("amount"))
+        if not trade_date or amount_raw <= 0:
+            continue
+        bucket = buckets.setdefault(trade_date, {"trade_date": trade_date, "market_turnover_yi": 0.0, "stock_count": 0})
+        bucket["market_turnover_yi"] += amount_raw / 100000.0
+        bucket["stock_count"] += 1
+    return sorted(
+        [
+            {
+                **item,
+                "market_turnover_yi": round(item.get("market_turnover_yi", 0.0), 6),
+                "source_policy": "tushare.daily",
+            }
+            for item in buckets.values()
+        ],
+        key=lambda item: item.get("trade_date", ""),
+    )
+
+
+def fetch_market_index_amount_rows(
+    start_date,
+    end_date,
+    *,
+    pro=None,
+    ts_module=None,
+    index_codes=("000001.SH", "399001.SZ"),
+):
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+    if not start or not end:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    buckets = {}
+    for ts_code in index_codes or ():
+        frame = pro.index_daily(ts_code=ts_code, start_date=start, end_date=end)
+        for row in _frame_to_records(frame):
+            trade_date = normalize_kline_date_str((row or {}).get("trade_date"))
+            amount_raw = _safe_float((row or {}).get("amount"))
+            if not trade_date or amount_raw <= 0:
+                continue
+            bucket = buckets.setdefault(
+                trade_date,
+                {
+                    "trade_date": trade_date,
+                    "market_turnover_yi": 0.0,
+                    "index_count": 0,
+                },
+            )
+            bucket["market_turnover_yi"] += amount_raw / 100000.0
+            bucket["index_count"] += 1
+    return sorted(
+        [
+            {
+                **item,
+                "market_turnover_yi": round(item.get("market_turnover_yi", 0.0), 6),
+                "stock_count": item.get("index_count", 0),
+                "source_policy": "tushare.index_daily.market_amount",
+            }
+            for item in buckets.values()
+        ],
+        key=lambda item: item.get("trade_date", ""),
+    )
+
+
+def fetch_market_margin_balance_rows(start_date, end_date, *, session=None):
+    start = normalize_kline_date_str(start_date)
+    end = normalize_kline_date_str(end_date)
+    if not start or not end:
+        return []
+    client = session or requests
+    params = {
+        "reportName": "RPTA_RZRQ_LSHJ",
+        "columns": "ALL",
+        "source": "WEB",
+        "sortColumns": "DIM_DATE",
+        "sortTypes": "-1",
+        "pageNumber": "1",
+        "pageSize": "500",
+        "filter": "",
+    }
+    response = client.get(
+        "https://datacenter-web.eastmoney.com/api/data/v1/get",
+        params=params,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://data.eastmoney.com/rzrq/total.html",
+        },
+        timeout=20,
+    )
+    payload = response.json()
+    rows = []
+    for row in _eastmoney_rows(payload):
+        trade_date = normalize_kline_date_str((row or {}).get("DIM_DATE"))
+        margin_balance = _safe_float((row or {}).get("RZYE")) / 1e8
+        short_balance = _safe_float((row or {}).get("RQYE")) / 1e8
+        margin_trading_balance = _safe_float((row or {}).get("RZRQYE")) / 1e8
+        if not trade_date or trade_date < start or trade_date > end or margin_balance <= 0:
+            continue
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "margin_balance_yi": round(margin_balance, 6),
+                "short_selling_balance_yi": round(short_balance, 6),
+                "margin_trading_balance_yi": round(margin_trading_balance, 6),
+                "exchange_count": 1,
+                "is_market_level_margin_balance": True,
+                "source_policy": "eastmoney.rzrq.total.RZYE",
+            }
+        )
+    return sorted(rows, key=lambda item: item.get("trade_date", ""))
+
+
+def fetch_margin_balance_rows(start_date, end_date, *, pro=None, ts_module=None):
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+    if not start or not end:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    frame = pro.margin(start_date=start, end_date=end)
+    buckets = {}
+    for row in _frame_to_records(frame):
+        trade_date = normalize_kline_date_str((row or {}).get("trade_date"))
+        if not trade_date:
+            continue
+        bucket = buckets.setdefault(
+            trade_date,
+            {
+                "trade_date": trade_date,
+                "margin_balance_yi": 0.0,
+                "short_selling_balance_yi": 0.0,
+                "margin_trading_balance_yi": 0.0,
+                "exchange_ids": set(),
+            },
+        )
+        exchange_id = str((row or {}).get("exchange_id") or "").strip()
+        if exchange_id:
+            bucket["exchange_ids"].add(exchange_id)
+        bucket["margin_balance_yi"] += _safe_float((row or {}).get("rzye")) / 1e8
+        bucket["short_selling_balance_yi"] += _safe_float((row or {}).get("rqye")) / 1e8
+        bucket["margin_trading_balance_yi"] += _safe_float((row or {}).get("rzrqye")) / 1e8
+    result = []
+    for item in buckets.values():
+        result.append(
+            {
+                "trade_date": item["trade_date"],
+                "margin_balance_yi": round(item["margin_balance_yi"], 6),
+                "short_selling_balance_yi": round(item["short_selling_balance_yi"], 6),
+                "margin_trading_balance_yi": round(item["margin_trading_balance_yi"], 6),
+                "exchange_count": len(item["exchange_ids"]),
+                "source_policy": "tushare.margin",
+            }
+        )
+    return sorted(result, key=lambda item: item.get("trade_date", ""))
+
+
 def fetch_stock_basic_map(*, pro=None, ts_module=None):
     pro = pro or create_tushare_pro_api(ts_module=ts_module)
     frame = pro.stock_basic(
         exchange="",
         list_status="L",
-        fields="ts_code,name,industry",
+        fields="ts_code,name,industry,list_date",
     )
     mapping = {}
     for row in _frame_to_records(frame):
@@ -142,14 +349,34 @@ def fetch_stock_basic_map(*, pro=None, ts_module=None):
         item = {
             "name": str(row.get("name") or "").strip(),
             "industry": str(row.get("industry") or "").strip(),
+            "list_date": str(row.get("list_date") or "").strip(),
         }
-        if not item["name"] and not item["industry"]:
+        if not item["name"] and not item["industry"] and not item["list_date"]:
             continue
         ts_code = str(row.get("ts_code") or "").strip().upper()
         mapping[stock_code] = item
         if ts_code:
             mapping[ts_code] = item
     return mapping
+
+
+def fetch_stock_factor_pro_rows(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,trade_date,open,high,low,close,pct_chg,vol,amount,topdays"
+    page_limit = 6000
+    rows = []
+    offset = 0
+    while True:
+        frame = pro.stk_factor_pro(trade_date=compact, fields=fields, limit=page_limit, offset=offset)
+        page_rows = _frame_to_records(frame)
+        rows.extend(page_rows)
+        if len(page_rows) < page_limit:
+            break
+        offset += page_limit
+    return rows
 
 
 def fetch_stock_industry_map(*, pro=None, ts_module=None):

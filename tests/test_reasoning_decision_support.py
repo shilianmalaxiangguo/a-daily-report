@@ -44,6 +44,12 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
             "recent_sector_turnover_history": [
                 {"date": "2026-04-23", "sector_name": "半导体", "turnover_share_pct": 15.8}
             ],
+            "market_performance_evidence": {
+                "funding_activity": {"regime": "资金活跃期", "top50_share_pct": 21.0},
+                "new_high_attack": {"leading_sectors": ["半导体"], "all_a_share_pct": 2.52},
+                "summary": "资金雨量处于资金活跃期，雨区主要在半导体。",
+                "decision_boundary": "单指标不直接给买入或加仓。",
+            },
             "candidate_pool": [
                 {
                     "code": "300613",
@@ -63,6 +69,9 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
         self.assertEqual(packet["mainline_snapshot"]["current_mainline"], "半导体")
         self.assertEqual(packet["mainline_snapshot"]["mainline_capacity_regime_summary"]["mainline_regime"], "混沌接力")
         self.assertEqual(packet["mainline_snapshot"]["mainline_capacity_regime_summary"]["primary_line"], "半导体")
+        self.assertEqual(packet["market_base"]["market_performance_evidence"]["funding_activity"]["regime"], "资金活跃期")
+        self.assertIn("半导体", packet["market_base"]["market_performance_evidence"]["new_high_attack"]["leading_sectors"])
+        self.assertIn("单指标不直接", packet["market_base"]["market_performance_evidence"]["decision_boundary"])
         self.assertEqual(packet["candidate_pool"][0]["id"], "300613")
         self.assertEqual(packet["candidate_pool"][0]["name"], "富瀚微")
         self.assertEqual(packet["execution_contract"]["final_action"], "观察")

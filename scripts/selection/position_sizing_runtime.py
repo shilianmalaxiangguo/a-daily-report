@@ -117,7 +117,7 @@ def _read_single_focus_count(final_gate=None, state_machine_snapshot=None):
     return None
 
 
-def _build_single_focus_constraint(final_gate=None, state_machine_snapshot=None, best_stock=None):
+def _build_single_focus_constraint(final_gate=None, state_machine_snapshot=None, best_stock=None, candidate=None, watch_anchor_type=""):
     focus_count = _read_single_focus_count(
         final_gate=final_gate,
         state_machine_snapshot=state_machine_snapshot,
@@ -128,6 +128,11 @@ def _build_single_focus_constraint(final_gate=None, state_machine_snapshot=None,
             "reason": "多候选未缩到唯一对象，只能在50%标准进攻和0%等待之间二选一。",
         }
     if not best_stock:
+        if candidate and _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type):
+            return {
+                "status": "clear",
+                "reason": "已缩到明日极度看好目标，等待参与窗口确认。",
+            }
         return {
             "status": "missing_target",
             "reason": "缺少唯一执行对象，当前只能保持观察。",
@@ -255,6 +260,13 @@ def _has_active_trend_chain(candidate, mainline_name=""):
     return bool(mainline_name and sector and (sector in mainline_name or mainline_name in sector))
 
 
+def _has_explicit_trend_chain(candidate):
+    candidate = candidate or {}
+    if _truthy_field(candidate, "trend_chain_active", "relative_price_chain_active", "mainline_chain_active"):
+        return True
+    return bool(str(candidate.get("trend_chain") or candidate.get("relative_price_chain") or "").strip())
+
+
 def _has_acceptance_act_right(candidate, feedback_clock=None):
     if _truthy_field(candidate, "acceptance_act_right", "acceptance_ready", "stock_acceptance", "act_right"):
         return True
@@ -265,6 +277,10 @@ def _has_acceptance_act_right(candidate, feedback_clock=None):
             return True
     feedback_clock = feedback_clock or {}
     return bool(feedback_clock.get("ready") and _safe_float(feedback_clock.get("score", 0), 0) >= 90)
+
+
+def _has_explicit_acceptance_act_right(candidate):
+    return _truthy_field(candidate, "acceptance_act_right", "acceptance_ready", "stock_acceptance", "act_right")
 
 
 def _build_full_attack_check(
@@ -288,11 +304,11 @@ def _build_full_attack_check(
         missing.append("非冰点进攻环境")
     if not _candidate_allows_full_a_grade(candidate):
         missing.append("核心强度")
-    if not _has_active_trend_chain(candidate, mainline_name=mainline_name):
+    if not _has_explicit_trend_chain(candidate):
         missing.append("趋势比价链")
     if not _has_explicit_participation_window(candidate):
         missing.append("参与窗口")
-    if not _has_acceptance_act_right(candidate, feedback_clock=feedback_clock):
+    if not _has_explicit_acceptance_act_right(candidate):
         missing.append("承接继续正确")
     if not _has_clear_invalidation(candidate, support_price):
         missing.append("失效价")
@@ -317,6 +333,32 @@ def _grade_for_position(position_pct):
 def _full_a_position_pct(candidate):
     _ = candidate or {}
     return 100
+
+
+def _is_explicit_extreme_conviction_target(candidate=None, watch_anchor_type=""):
+    candidate = candidate or {}
+    text = " ".join(
+        str(value or "")
+        for value in [
+            watch_anchor_type,
+            candidate.get("source_tier"),
+            candidate.get("source_section"),
+            candidate.get("watch_anchor_type"),
+            candidate.get("identity"),
+        ]
+    )
+    return "极度看好" in text or "extreme_conviction" in text
+
+
+def _explicit_market_ice_point(monthly_context=None, state_machine_snapshot=None, final_gate=None):
+    monthly_context = monthly_context or {}
+    state_machine_snapshot = state_machine_snapshot or {}
+    final_gate = final_gate or {}
+    return any(
+        source.get("market_ice_point") is True
+        for source in (monthly_context, state_machine_snapshot, final_gate)
+        if isinstance(source, dict)
+    )
 
 
 def _apply_monthly_rhythm_to_decision(
@@ -437,6 +479,7 @@ def _build_position_sizing_decision_legacy_body(
     final_gate = final_gate or {}
     state_machine_snapshot = state_machine_snapshot or {}
     special_probe_verdict = special_probe_verdict or {}
+    monthly_context = monthly_context or {}
     mainline_name = str(mainline_name or state_machine_snapshot.get("leading_line", "") or "").strip()
     execution_bias = str(state_machine_snapshot.get("execution_bias", "") or "").strip()
     candidate = best_stock or watch_anchor or {}
@@ -487,6 +530,8 @@ def _build_position_sizing_decision_legacy_body(
         final_gate=final_gate,
         state_machine_snapshot=state_machine_snapshot,
         best_stock=best_stock,
+        candidate=candidate,
+        watch_anchor_type=watch_anchor_type,
     )
     monthly_rhythm = _build_monthly_rhythm_decision(
         target_date=target_date,
@@ -539,7 +584,11 @@ def _build_position_sizing_decision_legacy_body(
     if probe_state == "probe_deep_fall":
         decision["sizing_reason"] = "特殊探针已经深跌失效，继续维持0%观察。"
         return _finalize(decision)
-    if probe_state == "probe_flow_unconfirmed" and special_probe_verdict:
+    if (
+        probe_state == "probe_flow_unconfirmed"
+        and special_probe_verdict
+        and not _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type)
+    ):
         decision["sizing_reason"] = "特殊探针只到承接/观察阶段，外溢确认不足，继续维持0%。"
         return _finalize(decision)
 
@@ -632,6 +681,32 @@ def _build_position_sizing_decision_legacy_body(
                 "participation_mode": "execute_50",
                 "target_position_pct": 50,
                 "sizing_reason": _standard_attack_reason(),
+            }
+        )
+        return _finalize(decision)
+
+    if (
+        candidate
+        and _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type)
+        and not _explicit_market_ice_point(monthly_context, state_machine_snapshot, final_gate)
+        and feedback_clock.get("ready")
+        and not branch_20cm.get("observe_only")
+    ):
+        monthly_rhythm.update(
+            {
+                "month_mode": "attack_prepare",
+                "target_role": "attack_prepare",
+                "max_position_pct": max(int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)), 50),
+                "allow_full_attack": False,
+                "trend_invalid": False,
+                "reason": "市场不是极端冰点且已有明日极度看好目标，保留50%标准进攻预演；失败回到0%。",
+            }
+        )
+        decision.update(
+            {
+                "participation_mode": "attack_50_preview",
+                "target_position_pct": 50,
+                "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，参与窗口失败回到0%。",
             }
         )
         return _finalize(decision)

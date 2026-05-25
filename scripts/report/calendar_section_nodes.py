@@ -49,7 +49,7 @@ def build_calendar_section_event_table_node(context, node_meta=None, node_lookup
         elif any(keyword in title for keyword in ["风险", "警告", "谨慎", "监管"]):
             direction = "回避"
         elif ai.get("expectation") == "利好":
-            direction = "关注埋伏"
+            direction = "事件观察"
         elif ai.get("expectation") == "利空":
             direction = "回避/对冲"
         else:

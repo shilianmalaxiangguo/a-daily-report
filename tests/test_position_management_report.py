@@ -70,6 +70,7 @@ sys.modules.update(
             HistoryCache=type("HistoryCache", (), {{}}),
         ),
         "llm_service": _stub_module("llm_service", get_llm_service=lambda *args, **kwargs: None),
+        "pandas": _stub_module("pandas"),
     }}
 )
 """.format(scripts_path=str(ROOT / "scripts"))

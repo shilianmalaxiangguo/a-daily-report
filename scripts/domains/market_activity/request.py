@@ -474,6 +474,8 @@ def collect_market_activity_hot_rank_request_bundle(
     get_integrated_hot_list,
     tencent,
     request_registry=None,
+    xueqiu_hot_rank_fetcher=None,
+    xueqiu_argument_fetcher=None,
     timer,
     emit,
 ):
@@ -642,6 +644,16 @@ def collect_market_activity_hot_rank_request_bundle(
                 upstream_error=primary_error,
             )
 
+    _collect_xueqiu_hot_rank_factors(
+        results,
+        data_status,
+        step_status,
+        module_logs,
+        xueqiu_hot_rank_fetcher=xueqiu_hot_rank_fetcher,
+        xueqiu_argument_fetcher=xueqiu_argument_fetcher,
+        emit=emit,
+    )
+
     emit("  5️⃣.5️⃣ 构建整合热榜数据（Tushare 热榜优先）...")
     try:
         hot_rank_provider = _provider_from_rows(results.get("hot_rank_top30", []), "")
@@ -713,6 +725,91 @@ def collect_market_activity_hot_rank_request_bundle(
         "step_status": step_status,
         "module_logs": module_logs,
     }
+
+
+def _collect_xueqiu_hot_rank_factors(
+    results,
+    data_status,
+    step_status,
+    module_logs,
+    *,
+    xueqiu_hot_rank_fetcher=None,
+    xueqiu_argument_fetcher=None,
+    emit,
+):
+    if not callable(xueqiu_hot_rank_fetcher) or not callable(xueqiu_argument_fetcher):
+        return
+
+    emit("  5️⃣.1️⃣ 获取雪球A股24小时热榜和AI解释...")
+    hot_rank_result = xueqiu_hot_rank_fetcher() or {}
+    hot_rank_rows = list(hot_rank_result.get("rows") or [])
+    hot_rank_ok = bool(hot_rank_rows) and hot_rank_result.get("can_continue_report") is not False
+    results["xueqiu_hot_rank_top100"] = hot_rank_rows
+    data_status["雪球A股24小时热榜"] = hot_rank_ok
+    step_status["雪球A股24小时热榜获取"] = hot_rank_ok
+    if hot_rank_ok:
+        emit(f"   ✅ 雪球A股24小时热榜成功: {len(hot_rank_rows)} 只")
+    else:
+        emit(f"   ❌ 雪球A股24小时热榜失败: {hot_rank_result.get('diagnostic_note', '')}")
+    _append_log(
+        module_logs,
+        "request.xueqiu_hot_rank",
+        "success" if hot_rank_ok else "error",
+        "已处理雪球A股24小时热榜请求",
+        provider=hot_rank_result.get("provider", "xueqiu.hot_stock.type22"),
+        target_keys=["xueqiu_hot_rank_top100"],
+        row_count=len(hot_rank_rows),
+        error=hot_rank_result.get("diagnostic_note", ""),
+    )
+
+    symbols = _xueqiu_argument_symbols(hot_rank_rows, results.get("hot_rank_top30", []))
+    argument_result = xueqiu_argument_fetcher(symbols) if symbols else {
+        "provider": "xueqiu.hot_stock.argument",
+        "status": "error",
+        "rows": [],
+        "can_continue_report": False,
+        "diagnostic_note": "雪球接口返回空，关键数据不完整，停止生成",
+    }
+    argument_rows = list((argument_result or {}).get("rows") or [])
+    argument_ok = bool(argument_rows) and (argument_result or {}).get("can_continue_report") is not False
+    results["xueqiu_hot_stock_arguments"] = argument_rows
+    data_status["雪球热榜AI解释"] = argument_ok
+    step_status["雪球热榜AI解释获取"] = argument_ok
+    if argument_ok:
+        emit(f"   ✅ 雪球热榜AI解释成功: {len(argument_rows)} 条")
+    else:
+        emit(f"   ❌ 雪球热榜AI解释失败: {(argument_result or {}).get('diagnostic_note', '')}")
+    _append_log(
+        module_logs,
+        "request.xueqiu_hot_stock_arguments",
+        "success" if argument_ok else "error",
+        "已处理雪球热榜AI解释请求",
+        provider=(argument_result or {}).get("provider", "xueqiu.hot_stock.argument"),
+        target_keys=["xueqiu_hot_stock_arguments"],
+        row_count=len(argument_rows),
+        symbol_count=len(symbols),
+        error=(argument_result or {}).get("diagnostic_note", ""),
+    )
+
+
+def _xueqiu_argument_symbols(*row_groups):
+    symbols = []
+    seen = set()
+    for rows in row_groups:
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("full_code") or "").strip().upper()
+            if not symbol:
+                code = "".join(ch for ch in str(row.get("code") or "") if ch.isdigit())
+                if len(code) == 6:
+                    symbol = ("SH" if code.startswith("6") else "SZ") + code
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                symbols.append(symbol)
+            if len(symbols) >= 30:
+                return symbols
+    return symbols
 
 
 def collect_market_activity_sector_snapshot_request_bundle(
@@ -839,6 +936,54 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "行业资金流向请求失败",
             provider="tencent.get_sector_fund_flow",
             target_keys=["sector_fund_flow"],
+            error=str(error),
+        )
+
+    emit("  7️⃣.5️⃣ 获取概念板块资金流（成分股聚合）...")
+    try:
+        concept_flow_fetcher = (request_registry or {}).get("concept_fund_flow")
+        concept_flow = {}
+        if callable(concept_flow_fetcher):
+            concept_flow = concept_flow_fetcher(
+                target_date=target_date,
+                hot_plates=results.get("hot_plates", []),
+                limit=20,
+            ) or {}
+        rows = list((concept_flow or {}).get("rows") or [])
+        results["concept_fund_flow"] = {
+            "rows": rows,
+            "inflow": list((concept_flow or {}).get("inflow") or []),
+            "outflow": list((concept_flow or {}).get("outflow") or []),
+            "provider": (concept_flow or {}).get("provider", ""),
+        }
+        data_status["概念资金流向"] = bool(rows)
+        step_status["概念资金流向获取"] = bool(rows)
+        elapsed, _ = timer.record("概念资金流向获取", "7.5")
+        if rows:
+            emit(f"   ✅ 概念资金流成功: {len(rows)} 个概念板块 [⏱ {elapsed:.2f}s]")
+        else:
+            emit("   ⚠️ 概念资金流未取得，概念板块不写成0")
+        _append_log(
+            module_logs,
+            "request.concept_fund_flow",
+            "success" if rows else "degraded",
+            "已处理概念板块资金流请求",
+            provider=(concept_flow or {}).get("provider", ""),
+            target_keys=["concept_fund_flow"],
+            row_count=len(rows),
+        )
+    except Exception as error:
+        results["concept_fund_flow"] = {"rows": [], "inflow": [], "outflow": []}
+        data_status["概念资金流向"] = False
+        step_status["概念资金流向获取"] = False
+        emit(f"   ⚠️ 概念资金流获取失败: {error}")
+        _append_log(
+            module_logs,
+            "request.concept_fund_flow",
+            "degraded",
+            "概念板块资金流请求失败",
+            provider="tushare.ths_member+tushare.moneyflow",
+            target_keys=["concept_fund_flow"],
             error=str(error),
         )
 
@@ -1240,6 +1385,9 @@ def collect_market_activity_capital_snapshot_request_bundle(
         results["lhb_net_sell_top10"] = net_sell_top10
         results["lhb_analysis"] = grouped_rows
         has_lhb_rows = bool(net_buy_top10 or net_sell_top10 or grouped_rows)
+        lhb_provider = (snapshot or {}).get("provider", "tushare.top_list") if "snapshot" in locals() else "finshare.get_lhb"
+        results["lhb_provider"] = lhb_provider
+        results["lhb_data_status"] = "available" if has_lhb_rows else "upstream_empty"
         step_status["龙虎榜数据获取"] = has_lhb_rows
         timer.record("龙虎榜数据获取", 13)
         if has_lhb_rows:
@@ -1251,7 +1399,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
             "request.lhb_snapshot",
             "success" if has_lhb_rows else "degraded",
             "已处理龙虎榜请求" if has_lhb_rows else "龙虎榜返回空",
-            provider=(snapshot or {}).get("provider", "tushare.top_list") if "snapshot" in locals() else "finshare.get_lhb",
+            provider=lhb_provider,
             target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
             lhb_count=len(grouped_rows),
             buy_count=len(net_buy_top10),
@@ -1261,6 +1409,8 @@ def collect_market_activity_capital_snapshot_request_bundle(
         results["lhb_net_buy_top10"] = []
         results["lhb_net_sell_top10"] = []
         results["lhb_analysis"] = []
+        results["lhb_provider"] = "finshare.get_lhb"
+        results["lhb_data_status"] = "error"
         emit(f"   ⚠️ 龙虎榜获取失败: {error}")
         _append_log(
             module_logs,

@@ -13,6 +13,12 @@ from typing import Any, Dict
 
 MAX_SINGLE_TRADE_LOSS_PCT = 0.05
 
+_SECTOR_ALIAS_GROUPS = (
+    ("软件服务", "IT服务", "软件开发"),
+    ("建筑工程", "建筑装饰", "工程机械", "工程服务"),
+    ("元器件", "元件", "电子元件"),
+)
+
 __all__ = [
     "MAX_SINGLE_TRADE_LOSS_PCT",
     "normalize_stock_code",
@@ -82,9 +88,13 @@ def sector_name_matches(sector_a, sector_b):
     """判断两个板块名称是否指向同一方向。"""
     if not sector_a or not sector_b:
         return False
-    a = str(sector_a)
-    b = str(sector_b)
-    return a == b or a in b or b in a
+    a = str(sector_a).strip()
+    b = str(sector_b).strip()
+    if not a or not b:
+        return False
+    if a == b or a in b or b in a:
+        return True
+    return any(a in group and b in group for group in _SECTOR_ALIAS_GROUPS)
 
 
 def _is_degraded_abnormal_snapshot(item):

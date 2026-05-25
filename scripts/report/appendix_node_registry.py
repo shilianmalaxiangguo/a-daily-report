@@ -1,8 +1,10 @@
 DEFAULT_APPENDIX_NODE_SPECS = [
+    {"node_key": "visible_candidate_lists", "title": "明日极度看好与龙回头观察"},
     {"node_key": "mainline_continuity", "title": "历史主线连续性"},
     {"node_key": "stock_continuity", "title": "个股观察连续性"},
     {"node_key": "entry_cycle_calibration", "title": "介入周期止损校准"},
     {"node_key": "new_stock_cycle_review", "title": "新股周期判定"},
+    {"node_key": "margin_pressure_detail", "title": "融资承接压力完整表"},
     {"node_key": "header", "title": "附录标题"},
     {"node_key": "data_status", "title": "数据获取清单"},
     {"node_key": "step_status", "title": "执行步骤清单"},

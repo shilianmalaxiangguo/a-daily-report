@@ -231,6 +231,62 @@ assert follow == {"code": "follow"}
         self.assertIn("current_mainline_history_record", forwarded_data)
         self.assertIn("pivot_mainline_history", forwarded_data)
 
+    def test_render_market_research_snapshot_support_carries_tag_pool_to_decision_text(self):
+        support = self._load_module()
+        tag_snapshot = {
+            "groups": [
+                {
+                    "采用名称": "国产芯片替代",
+                    "关系判断": "父子",
+                    "表层行业名": ["元件", "元器件"],
+                }
+            ]
+        }
+
+        lines = support.render_market_research_snapshot_section(
+            {
+                "observation": {
+                    "densest_sector": "元器件",
+                    "densest_sector_trend_count": 12,
+                },
+                "mainline_rotation_snapshot": {
+                    "rotation_label": "支线轮动",
+                    "summary_text": "主攻线元件 / 次强线电力；趋势密度12只",
+                    "rotation_action": "先盯元件的承接是否继续",
+                    "narrative_label": "泛半导体/硬科技电子节点",
+                    "narrative_reason": "元件在归链里更接近泛半导体/硬科技电子这一节点",
+                    "narrative_action": "先盯元件的承接是否继续",
+                },
+                "state_machine": {
+                    "energy_state": "收缩防守",
+                    "state_reason": "风险释放优先",
+                    "flow_direction": "趋势密度最强的是元器件",
+                },
+                "dialectical_decision": {
+                    "stage_label": "收缩防守",
+                    "stage_reason": "风险释放仍优先",
+                    "index_profit_relation": "指数和赚钱效应同步修复",
+                    "index_profit_reason": "指数、热点聚焦同向改善",
+                    "focus_label": "赚钱效应继续向元器件聚集",
+                    "focus_action": "只在元器件和相关异常承接对象里继续做减法。",
+                    "candidate_focus": "优先率先转强的对象",
+                    "candidate_action": "先观察",
+                    "falsification_conditions": ["元器件的趋势密度和承接同时走弱"],
+                },
+                "realtime_tag_evidence_snapshot": tag_snapshot,
+            },
+            compact=False,
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("主攻线国产芯片替代", rendered)
+        self.assertIn("先盯国产芯片替代的承接是否继续", rendered)
+        self.assertIn("趋势密度最强的是国产芯片替代", rendered)
+        self.assertIn("赚钱效应继续向国产芯片替代聚集", rendered)
+        self.assertIn("国产芯片替代的趋势密度和承接同时走弱", rendered)
+        self.assertNotIn("主攻线元件", rendered)
+        self.assertNotIn("向元器件聚集", rendered)
+
     def test_build_dialectical_decision_snapshot_support_builds_stage_and_falsification_contract(self):
         support = self._load_module()
 
@@ -464,6 +520,48 @@ assert follow == {"code": "follow"}
         self.assertIn("上看高端制造", result["narrative_reason"])
         self.assertIn("相关环节卫星 / 导弹", result["narrative_reason"])
 
+    def test_build_mainline_rotation_snapshot_marks_confirmed_attack_as_countertrend_when_market_sells_off(self):
+        support = self._load_module()
+
+        result = support.build_mainline_rotation_snapshot(
+            observation={
+                "benchmark_change_pct": -2.04,
+                "turnover": 35072.8,
+                "zt_count": 35,
+                "dt_count": 65,
+                "rise_fall_ratio": 0.15,
+                "mainline_competition_snapshot": [
+                    {"role": "主攻线", "sector": "人形机器人"},
+                    {"role": "次强线", "sector": "半导体"},
+                    {"role": "竞争线", "sector": "证券"},
+                ],
+                "mainline_candidates": ["人形机器人"],
+                "secondary_candidates": ["半导体"],
+                "densest_sector_trend_count": 6,
+                "resilient_abnormal_count": 0,
+                "failed_abnormal_count": 0,
+            },
+            state_machine={"leading_line": "人形机器人", "state_code": "expand", "pulse_stage": "加速"},
+            style_switch={
+                "style_code": "trend",
+                "turnover_label": "成交额继续回升",
+                "turnover_state": "rising",
+                "style_reason": "成交额继续回升，而异常承接和趋势密度都还在",
+            },
+            helpers={
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "sector_name_matches": lambda left, right: left == right,
+            },
+        )
+
+        self.assertEqual(result["rotation_label"], "逆势攻击")
+        self.assertIn("放量杀跌", result["rotation_reason"])
+        self.assertIn("量化动量", result["rotation_reason"])
+        self.assertIn("承接不足", result["rotation_action"])
+        self.assertNotEqual(result["rotation_label"], "爆发")
+        self.assertIn("当前逆势攻击", result["summary_text"])
+        self.assertNotIn("当前爆发", result["summary_text"])
+
     def test_render_market_research_support_builds_renderer_payload(self):
         support = self._load_module()
 
@@ -503,6 +601,52 @@ assert follow == {"code": "follow"}
         self.assertEqual(payload["mainline_turnover_summary"]["conclusion"], "主线未切换，军工仍是中心")
         self.assertEqual(payload["state_energy"], "修复")
         self.assertEqual(payload["dialectical_decision"]["stage_label"], "主升")
+
+    def test_render_step0_follow_support_passes_confirmed_attack_summary_to_renderer(self):
+        support = self._load_module()
+
+        with patch(
+            "research.market_research_support.render_step0_follow_section_renderer",
+            side_effect=lambda payload: payload,
+        ):
+            payload = support.render_step0_follow_section(
+                {"step0_prediction_cn": "观察", "step0_reason": "等承接", "step0_action": "先观察"},
+                {
+                    "observation": {"densest_sector": "元器件", "densest_sector_trend_count": 6},
+                    "mainline_turnover_summary": {
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "confirmed_attack",
+                            "primary_line": "人形机器人",
+                            "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                        }
+                    },
+                },
+                compact=False,
+            )
+
+        self.assertEqual(
+            payload["mainline_turnover_summary"]["mainline_attack_evidence_summary"]["primary_line"],
+            "人形机器人",
+        )
+
+    def test_render_step0_follow_support_passes_final_zero_context_to_renderer(self):
+        support = self._load_module()
+
+        with patch(
+            "research.market_research_support.render_step0_follow_section_renderer",
+            side_effect=lambda payload: payload,
+        ):
+            payload = support.render_step0_follow_section(
+                {"step0_prediction_cn": "观察", "step0_reason": "等承接", "step0_action": "先观察"},
+                {
+                    "front_page_final_gate": {"final_action": "空仓等待，禁止参与"},
+                    "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                },
+                compact=False,
+            )
+
+        self.assertEqual(payload["final_gate"]["final_action"], "空仓等待，禁止参与")
+        self.assertEqual(payload["position_decision"]["signal_grade"], "0")
 
     def test_build_market_research_snapshot_support_derives_mainline_turnover_summary_from_runtime_helpers(self):
         support = self._load_module()

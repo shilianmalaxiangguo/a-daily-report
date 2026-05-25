@@ -22,6 +22,7 @@ from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_style_note_node,
     build_market_research_snapshot_table_header_node,
     build_market_research_snapshot_trend_density_node,
+    derive_market_research_cycle_layer,
 )
 from report.step0_follow_node_registry import build_step0_follow_node_specs
 from report.step0_follow_node_runtime import run_step0_follow_nodes
@@ -152,7 +153,7 @@ def render_gem_breathing_pool_section(context):
 
 
 def render_market_research_snapshot_section(context):
-    context = context or {}
+    context = _with_fresh_cycle_layer(context or {})
     compact = bool(context.get("compact"))
     if context.get("enabled_node_keys") and "lhb_capital_intent" in context.get("enabled_node_keys"):
         builders = dict(MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS)
@@ -171,6 +172,22 @@ def render_market_research_snapshot_section(context):
     if not context.get("enabled_node_keys") and (context.get("lhb_capital_status") or context.get("capital_conclusion")):
         result["lines"].extend(build_market_research_snapshot_lhb_capital_intent_node(context).get("lines", []))
     return result["lines"]
+
+
+def _with_fresh_cycle_layer(context):
+    context = dict(context or {})
+    has_refresh_source = bool(
+        context.get("current_mainline_history_record")
+        or context.get("recent_mainline_history")
+        or context.get("pivot_mainline_history")
+    )
+    if not has_refresh_source:
+        return context
+    cycle_layer = derive_market_research_cycle_layer(context, context.get("state_machine") or {})
+    for key, value in cycle_layer.items():
+        if value:
+            context[key] = value
+    return context
 
 
 def render_step0_follow_section(context):

@@ -118,6 +118,23 @@ def _resolve_turnover_yi(row):
     return 0.0
 
 
+def _row_source(row):
+    return str((row or {}).get("data_source") or "tencent.fundflow.getHyRank").strip()
+
+
+def _row_source_query(row):
+    row = row or {}
+    if row.get("turnover_yi") not in (None, ""):
+        return "turnover_yi"
+    if row.get("sector_turnover_yi") not in (None, ""):
+        return "sector_turnover_yi"
+    if row.get("sector_turnover") not in (None, ""):
+        return "sector_turnover"
+    if row.get("cje") not in (None, ""):
+        return "cje"
+    return "cje"
+
+
 def _fetch_tencent_sector_fund_flow_rows():
     import requests
 
@@ -166,6 +183,8 @@ def get_sector_turnover_snapshot_from_tencent_fund_flow(
                 "matched_sector_names": [str(row.get("name") or sector_name or "").strip()],
                 "matched_sector_codes": [str(row.get("code") or "").strip()] if row.get("code") else [],
                 "matched_sector_count": 1 if row.get("code") else 0,
+                "source": _row_source(row),
+                "source_query": _row_source_query(row),
                 "source_error": "missing cje/turnover_yi",
             }
         )
@@ -187,8 +206,8 @@ def get_sector_turnover_snapshot_from_tencent_fund_flow(
         "turnover_share_pct": round((sector_turnover / total_turnover) * 100, 2) if total_turnover > 0 else 0.0,
         "leader_stock": leader_stock,
         "leader_stocks": [leader_stock] if leader_stock else [],
-        "source": "tencent.fundflow.getHyRank",
-        "source_query": "cje",
+        "source": _row_source(row),
+        "source_query": _row_source_query(row),
         "source_status": "success",
         "source_error": "",
     }

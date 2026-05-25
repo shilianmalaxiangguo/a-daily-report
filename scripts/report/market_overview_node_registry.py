@@ -2,6 +2,9 @@ DEFAULT_MARKET_OVERVIEW_NODE_SPECS = [
     {"node_key": "header", "title": "章节标题"},
     {"node_key": "indices", "title": "指数表现"},
     {"node_key": "volume", "title": "量能分析"},
+    {"node_key": "price_band_style", "title": "价格带风格"},
+    {"node_key": "new_high", "title": "创新高趋势反馈"},
+    {"node_key": "margin_pressure", "title": "融资承接压力"},
     {"node_key": "sentiment", "title": "市场情绪"},
 ]
 

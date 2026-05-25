@@ -34,10 +34,20 @@ class SnapUiStaticSyncTest(unittest.TestCase):
         self.assertNotIn("def sync_snap_ui_static_data(", source)
         self.assertNotIn("日报已生成但前端静态数据未刷新", source)
 
-    def test_daily_entry_calls_sync_after_snapshot_save(self):
+    def test_daily_entry_defaults_to_skipping_snap_ui_publish(self):
         source = self._source()
         save_index = source.index("_save_data_snapshot(data, target_date, mode=run_mode)")
         publish_index = source.index("publish_snap_ui_public_data(", save_index)
+
+        self.assertIn("parser.add_argument('--publish-snap-ui'", source)
+        self.assertIn("if args.publish_snap_ui:", source[save_index:publish_index])
+
+    def test_daily_entry_still_exposes_snap_ui_publish_as_opt_in(self):
+        source = self._source()
+        save_index = source.index("_save_data_snapshot(data, target_date, mode=run_mode)")
+        publish_index = source.index("publish_snap_ui_public_data(", save_index)
+
+        self.assertIn("publish_snap_ui_public_data", source)
         self.assertGreater(publish_index, save_index)
 
 

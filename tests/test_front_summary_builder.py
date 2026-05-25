@@ -301,6 +301,147 @@ class FrontSummaryBuilderTest(unittest.TestCase):
         self.assertEqual(captured_final_gate["candidate_count"], 2)
         self.assertEqual(captured_final_gate["unique_target_count"], 1)
 
+    def test_render_mvp_focus_summary_contract_keeps_background_core_anchor_out_of_position_sizing(self):
+        captured_position_kwargs = {}
+
+        payload = render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "军工"}, "style_switch": {}, "observation": {}},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            leader_memory_bank=[{"name": "记忆龙头", "code": "000002", "sector": "军工"}],
+            core_stocks=[{"name": "旧核心", "code": "000001", "sector": "军工", "core_level": "昨日核心"}],
+            crossline_observation_stocks=[],
+            gem_breathing_candidates=[],
+            filtered_out_gem_candidates=[],
+            structure_layer_text="",
+            focus_group=[],
+            keep_group=[],
+            delete_group=[],
+            best_stock={"name": "创业弹性", "code": "300001", "sector": "军工"},
+            watch_anchor=None,
+            watch_anchor_type="重点观察谁",
+            abnormal_probe_group={},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            target_date="2026-04-22",
+            compact=False,
+            resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
+            split_abnormal_watch_pool=lambda pool: (pool or [], []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "结构层通过",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: " / ".join(formatter(item) for item in items[:limit]),
+            candidate_matches_mainline=lambda item, mainline_name: item.get("sector") == mainline_name,
+            build_position_sizing_decision=lambda **kwargs: (
+                captured_position_kwargs.update(kwargs) or {"branch_20cm": {}}
+            ),
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
+            build_front_follow_action_text=lambda **kwargs: "只等唯一目标确认",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertEqual(captured_position_kwargs["mainline_anchor"], {})
+        self.assertIn("旧核心", payload["core_preview"])
+        self.assertIn("记忆龙头", payload["memory_preview"])
+
+    def test_render_mvp_focus_summary_contract_keeps_background_memory_anchor_out_of_position_sizing(self):
+        captured_position_kwargs = {}
+
+        payload = render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "军工"}, "style_switch": {}, "observation": {}},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            leader_memory_bank=[{"name": "记忆龙头", "code": "000002", "sector": "军工"}],
+            core_stocks=[],
+            crossline_observation_stocks=[],
+            gem_breathing_candidates=[],
+            filtered_out_gem_candidates=[],
+            structure_layer_text="",
+            focus_group=[],
+            keep_group=[],
+            delete_group=[],
+            best_stock={"name": "创业弹性", "code": "300001", "sector": "军工"},
+            watch_anchor=None,
+            watch_anchor_type="重点观察谁",
+            abnormal_probe_group={},
+            final_gate={"can_new_entry": True},
+            position_level="三档（进攻档）",
+            target_date="2026-04-22",
+            compact=False,
+            resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
+            split_abnormal_watch_pool=lambda pool: (pool or [], []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "结构层通过",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: "",
+            candidate_matches_mainline=lambda item, mainline_name: item.get("sector") == mainline_name,
+            build_position_sizing_decision=lambda **kwargs: (
+                captured_position_kwargs.update(kwargs) or {"branch_20cm": {}}
+            ),
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: "",
+            build_front_follow_action_text=lambda **kwargs: "只等唯一目标确认",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertEqual(captured_position_kwargs["mainline_anchor"], {})
+        self.assertIn("记忆龙头", payload["memory_preview"])
+
+    def test_render_mvp_focus_summary_contract_does_not_render_fallback_watch_anchor_as_mainline_abnormal_probe(self):
+        payload = render_mvp_focus_summary_contract(
+            market_research_snapshot={"state_machine": {"leading_line": "军工"}, "style_switch": {}, "observation": {}},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            leader_memory_bank=[],
+            core_stocks=[],
+            crossline_observation_stocks=[],
+            gem_breathing_candidates=[],
+            filtered_out_gem_candidates=[],
+            structure_layer_text="",
+            focus_group=[],
+            keep_group=[],
+            delete_group=[],
+            best_stock=None,
+            watch_anchor={"name": "普通观察", "code": "000009", "watch_anchor_note": "只看强弱"},
+            watch_anchor_type="重点观察谁",
+            abnormal_probe_group={"fallback_watch_anchor": {"name": "普通观察", "code": "000009"}},
+            final_gate={"can_new_entry": False},
+            position_level="二档（防守档）",
+            target_date="2026-04-22",
+            compact=False,
+            resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
+            split_abnormal_watch_pool=lambda pool: (pool or [], []),
+            build_bridge_prep_context=lambda **kwargs: {"active": False},
+            build_front_structure_layer_text=lambda **kwargs: "结构层通过",
+            build_special_probe_verdict=lambda **kwargs: {"summary_text": ""},
+            build_special_probe_focus_text=lambda **kwargs: "",
+            build_mainline_rotation_snapshot=lambda **kwargs: {"summary_text": "", "narrative_text": ""},
+            split_candidates_by_mainline=lambda watchlist, mainline_name: ([], []),
+            format_candidate_preview=lambda items, formatter, limit=2: "",
+            candidate_matches_mainline=lambda item, mainline_name: False,
+            build_position_sizing_decision=lambda **kwargs: {"branch_20cm": {}},
+            build_cycle_triplet_texts=lambda **kwargs: {"observation_cycle": "", "intervention_cycle": "", "exit_cycle": ""},
+            build_execute_anchor_window_text=lambda **kwargs: "",
+            format_abnormal_probe_text=lambda probe, role_label="", mainline_name="", fallback_watch_anchor=None: (
+                f"{role_label}:{(probe or fallback_watch_anchor or {}).get('name', '-')}"
+            ),
+            build_front_follow_action_text=lambda **kwargs: "只观察不参与",
+            render_mvp_focus_summary=lambda payload: payload,
+        )
+
+        self.assertEqual(payload["mainline_probe_text"], "")
+        self.assertIn("普通观察(000009)", payload["watch_target_text"])
+        self.assertIn("不构成买入指令", payload["watch_target_text"])
+
 
 if __name__ == "__main__":
     unittest.main()

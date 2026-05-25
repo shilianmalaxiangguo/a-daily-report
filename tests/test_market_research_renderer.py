@@ -56,6 +56,48 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertNotIn("04-23 [电力] 反抽", rendered)
         self.assertNotIn("电力主导", rendered)
 
+    def test_state_summary_renders_market_performance_evidence_without_action_shortcut(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["state_summary"],
+                "state_energy": "收缩防守",
+                "state_reason": "跌停和涨跌比进入收缩区",
+                "state_flow_direction": "风险释放优先",
+                "market_performance_evidence": {
+                    "summary": "资金雨量处于资金活跃期；阶段新高显示表态有效，雨区主要在半导体。",
+                    "decision_boundary": "单指标不直接给买入或加仓；只作为旧市场表现、主线承接和参与窗口的证据。",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**市场表现证据**", rendered)
+        self.assertIn("资金雨量处于资金活跃期", rendered)
+        self.assertIn("单指标不直接给买入或加仓", rendered)
+        self.assertNotIn("Top50大于20%直接加仓", rendered)
+        self.assertNotIn("新高多直接买入", rendered)
+
+    def test_risk_preference_explains_heavy_turnover_index_drop_as_quant_stampede_mechanism(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["risk_preference"],
+                "benchmark_change": -2.04,
+                "turnover": 35072.8,
+                "observation": {
+                    "zt_count": 35,
+                    "dt_count": 65,
+                    "rise_fall_ratio_text": "0.15",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证-2.04% / 涨停35 / 跌停65 / 涨跌比0.15 / 成交额35073亿 |", rendered)
+        self.assertIn("有量配合的下跌更像指数图形走弱后，量化动量和风控卖出互相强化", rendered)
+        self.assertIn("越跌图形越丑，越丑承接越弱，容易形成踩踏", rendered)
+
     def test_render_market_research_snapshot_section_renders_cycle_interpretation_table(self):
         lines = render_market_research_snapshot_section(
             {
@@ -166,7 +208,18 @@ class MarketResearchRendererTest(unittest.TestCase):
                     "conclusion": "主线未切换，通信仍是中心",
                     "data_text": "最近3日主线 通信 -> 通信 -> 通信；成交额占比 12.4% -> 15.8% -> 18.1%，节奏偏强化",
                     "action_text": "继续围绕通信做减法，不追支线分流",
+                    "turnover_share_trend_summary": "近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。",
                     "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-04-23",
+                            "cycle_mainline": "电力",
+                            "daily_attack_line": "电力",
+                            "mainline_turnover": "2000.00亿",
+                            "market_turnover": "12000.00亿",
+                            "share": "16.0%",
+                            "share_change": "-",
+                            "interpretation": "旧周期退潮",
+                        },
                         {
                             "date": "2026-04-24",
                             "cycle_mainline": "通信",
@@ -189,8 +242,10 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("最近3日主线 通信 -> 通信 -> 通信；成交额占比 12.4% -> 15.8% -> 18.1%，节奏偏强化", rendered)
         self.assertIn("继续围绕通信做减法，不追支线分流", rendered)
         self.assertIn("#### 主线成交额占比趋势", rendered)
+        self.assertIn("> 近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。", rendered)
         self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
         self.assertIn("| 2026-04-24 | 通信 | 通信 | 2180.00亿 | 12834.00亿 | 17.0% | +1.2pct | 主线占比继续抬升 |", rendered)
+        self.assertLess(rendered.index("2026-04-24"), rendered.index("2026-04-23"))
         self.assertNotIn("| 盘面风险偏好 |", rendered)
 
     def test_render_market_research_snapshot_section_renders_mainline_capacity_regime_node(self):
@@ -232,6 +287,20 @@ class MarketResearchRendererTest(unittest.TestCase):
                                 "turnover_share_change": -0.5,
                             },
                         ],
+                    },
+                    "overtake_window_summary": {
+                        "window_state": "open",
+                        "rival_slowdown": "旧主线承接转弱，竞争线冲高回落",
+                        "own_stability": "半导体资金扩散，核心承接稳定",
+                        "speed_gap": "失速差拉开",
+                        "action": "只在半导体核心里找参与资格",
+                    },
+                    "trading_arena_fit_summary": {
+                        "fit_state": "home_arena",
+                        "arena_label": "短线/超短线主战场",
+                        "market_style": "单主线聚焦",
+                        "fit_reason": "量能、资金扩散、板块效应和核心承接进入短线/超短线可发挥区",
+                        "action": "按短线/超短线主战场处理，围绕半导体核心继续寻找参与资格",
                     }
                 },
             }
@@ -244,6 +313,12 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 双线孕育 | 混沌接力 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
         self.assertIn("#### 主线攻击证据", rendered)
         self.assertIn("| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |", rendered)
+        self.assertIn("#### 超车窗口判断", rendered)
+        self.assertIn("| 对手失速 | 我方稳住 | 失速差 | 明日动作 |", rendered)
+        self.assertIn("| 旧主线承接转弱，竞争线冲高回落 | 半导体资金扩散，核心承接稳定 | 失速差拉开 | 只在半导体核心里找参与资格 |", rendered)
+        self.assertIn("#### 能力圈匹配判断", rendered)
+        self.assertIn("| 适配位置 | 行情类型 | 适配理由 | 明日动作 |", rendered)
+        self.assertIn("| 短线/超短线主战场 | 单主线聚焦 | 量能、资金扩散、板块效应和核心承接进入短线/超短线可发挥区 | 按短线/超短线主战场处理，围绕半导体核心继续寻找参与资格 |", rendered)
 
     def test_render_market_research_snapshot_mainline_focus_downgrades_when_attack_evidence_is_chaotic(self):
         lines = render_market_research_snapshot_section(
@@ -265,6 +340,27 @@ class MarketResearchRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("| 主线焦点 | 无确认主攻线 | 多方向局部活跃但资金未明显胜出 | 候选只观察，不给买入资格 |", rendered)
+        self.assertNotIn("主攻线 半导体", rendered)
+
+    def test_render_market_research_snapshot_mainline_focus_uses_confirmed_attack_over_stale_context(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["mainline_focus"],
+                "competition_result": "主攻线 半导体",
+                "competition_evidence": "旧焦点",
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线焦点 | 主攻线 人形机器人 | 人形机器人资金净流入靠前，涨停更集中 | 优先聚焦主线对象 |", rendered)
         self.assertNotIn("主攻线 半导体", rendered)
 
     def test_render_market_research_snapshot_turnover_rows_downgrade_when_attack_evidence_is_chaotic(self):
@@ -299,8 +395,8 @@ class MarketResearchRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 候选方向成交额占比可记录，但未确认主攻线 |", rendered)
-        self.assertNotIn("| 2026-05-14 | 半导体 | 半导体 |", rendered)
+        self.assertIn("| 2026-05-14 | 半导体 | 半导体 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 主线成交额占比可用，继续观察占比抬升或回落 |", rendered)
+        self.assertNotIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿", rendered)
 
     def test_render_market_research_snapshot_rotation_downgrades_when_attack_evidence_is_chaotic(self):
         lines = render_market_research_snapshot_section(
@@ -326,6 +422,58 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertNotIn("主攻线半导体", rendered)
         self.assertNotIn("继续围着半导体做减法", rendered)
 
+    def test_render_market_research_snapshot_rotation_uses_countertrend_attack_line_instead_of_stale_rotation_text(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "rotation"],
+                "rotation_label": "逆势攻击",
+                "rotation_summary_text": "当前逆势攻击；主攻线半导体 / 次强线电力 / 竞争线证券",
+                "rotation_action": "先防踩踏，只观察半导体次日是否修复承接",
+                "mainline_turnover_summary": {
+                    "share_trend_label": "逆势试攻",
+                    "conclusion": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理",
+                    "action_text": "人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线内部轮动 | 逆势攻击 | 人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理 | 人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接 |", rendered)
+        self.assertNotIn("主攻线半导体", rendered)
+        self.assertNotIn("只观察半导体", rendered)
+
+    def test_render_market_research_snapshot_narrative_uses_countertrend_attack_line_instead_of_stale_narrative(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["header", "narrative"],
+                "narrative_label": "半导体节点",
+                "narrative_reason": "半导体设备在归链里更接近半导体这一节点",
+                "narrative_action": "先盯半导体的承接是否继续",
+                "mainline_turnover_summary": {
+                    "share_trend_label": "逆势试攻",
+                    "conclusion": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理",
+                    "action_text": "人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 叙事节点 | 逆势观察 | 人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理 | 人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接 |", rendered)
+        self.assertNotIn("半导体节点", rendered)
+        self.assertNotIn("先盯半导体", rendered)
+
     def test_render_market_research_snapshot_narrative_downgrades_when_attack_evidence_is_chaotic(self):
         lines = render_market_research_snapshot_section(
             {
@@ -349,6 +497,61 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 叙事节点 | 叙事待验证 | 题材只能做背景，先看板块攻击证据是否胜出 | 不把节点热度当主线确认 |", rendered)
         self.assertNotIn("半导体目前是主攻线", rendered)
         self.assertNotIn("继续盯半导体", rendered)
+
+    def test_market_research_snapshot_decision_lines_use_adopted_tag_label(self):
+        tag_snapshot = {
+            "groups": [
+                {
+                    "采用名称": "国产芯片替代",
+                    "关系判断": "父子",
+                    "表层行业名": ["元件", "元器件"],
+                }
+            ]
+        }
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": [
+                    "rotation",
+                    "narrative",
+                    "state_summary",
+                    "trend_density",
+                    "dialectical_decision",
+                ],
+                "realtime_tag_evidence_snapshot": tag_snapshot,
+                "rotation_label": "支线轮动",
+                "rotation_summary_text": "主攻线元件 / 次强线电力；趋势密度12只",
+                "rotation_action": "先盯元件的承接是否继续",
+                "narrative_label": "泛半导体/硬科技电子节点",
+                "narrative_reason": "元件在归链里更接近泛半导体/硬科技电子这一节点",
+                "narrative_action": "先盯元件的承接是否继续",
+                "state_energy": "收缩防守",
+                "state_reason": "风险释放优先",
+                "state_flow_direction": "趋势密度最强的是元器件",
+                "observation": {"densest_sector": "元器件", "densest_sector_trend_count": 12},
+                "dialectical_decision": {
+                    "stage_label": "收缩防守",
+                    "stage_reason": "风险释放仍优先",
+                    "index_profit_relation": "指数和赚钱效应同步修复",
+                    "index_profit_reason": "指数、热点聚焦同向改善",
+                    "focus_label": "赚钱效应继续向元器件聚集",
+                    "focus_action": "只在元器件和相关异常承接对象里继续做减法。",
+                    "candidate_focus": "优先率先转强的对象",
+                    "candidate_action": "先观察",
+                    "falsification_conditions": ["元器件的趋势密度和承接同时走弱"],
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("主攻线国产芯片替代", rendered)
+        self.assertIn("先盯国产芯片替代的承接是否继续", rendered)
+        self.assertIn("趋势密度最强的是国产芯片替代", rendered)
+        self.assertIn("- **最强趋势密度**: 国产芯片替代 当前有12只活跃趋势股", rendered)
+        self.assertIn("赚钱效应继续向国产芯片替代聚集", rendered)
+        self.assertIn("国产芯片替代的趋势密度和承接同时走弱", rendered)
+        self.assertNotIn("主攻线元件", rendered)
+        self.assertNotIn("向元器件聚集", rendered)
 
     def test_render_market_research_snapshot_section_renders_lhb_capital_intent_tables(self):
         lines = render_market_research_snapshot_section(
@@ -522,6 +725,27 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("**明日裁决**: 🟡 中性", rendered)
         self.assertIn("**异常承接**: 4强 / 1弱；异常承接偏强", rendered)
 
+    def test_render_step0_follow_section_uses_confirmed_attack_for_mainline_focus(self):
+        lines = render_step0_follow_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["table_header", "mainline_focus"],
+                "densest_sector": "元器件",
+                "densest_sector_trend_count": 6,
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线焦点 | 主攻线 人形机器人 | 人形机器人资金净流入靠前，涨停更集中 | 优先聚焦主线对象 |", rendered)
+        self.assertNotIn("| 主线焦点 | 元器件 |", rendered)
+
     def test_render_step0_follow_section_can_render_only_enabled_nodes(self):
         lines = render_step0_follow_section(
             {
@@ -550,6 +774,22 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("> **Step 0 结论**: 环境未坏，但还需确认", rendered)
         self.assertNotIn("| 盘面风险偏好 |", rendered)
         self.assertNotIn("> **⚠️ 重要提醒**", rendered)
+
+    def test_render_step0_follow_reminder_respects_zero_participation(self):
+        lines = render_step0_follow_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["reminder"],
+                "final_gate": {"final_action": "空仓等待，禁止参与；若你有仓位，只做退出不做幻想"},
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("明日不新增参与", rendered)
+        self.assertIn("只观察风险是否钝化、主攻线承接和唯一对象是否重新成立", rendered)
+        self.assertNotIn("分层参与", rendered)
+        self.assertNotIn("买入后再用30分钟结构定止损", rendered)
 
     def test_render_gem_breathing_sections(self):
         step2_lines = render_gem_breathing_step2_section(

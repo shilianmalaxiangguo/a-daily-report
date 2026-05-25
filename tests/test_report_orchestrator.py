@@ -164,6 +164,8 @@ class ReportOrchestratorTest(unittest.TestCase):
         self.assertEqual(ctx["knowledge"]["trading_philosophy"]["source"], "skillhub")
         self.assertEqual(ctx["knowledge"]["llm_wiki"]["source"], "llm_wiki")
         self.assertIn("60分钟确认", ctx["knowledge"]["llm_wiki"]["report_digest_text"])
+        self.assertIn("process_flows", ctx["knowledge"]["llm_wiki"])
+        self.assertIn("选股形态审美 ASCII 流程图", "\n".join(ctx["knowledge"]["llm_wiki"]["process_flows"]))
         self.assertIn("环境条件满足", ctx["knowledge"]["trading_philosophy"]["decision_gate_chain"])
         self.assertIn("#", ctx["rendered"]["markdown_document"])
         self.assertIn("watch_only", ctx["rendered"]["markdown_document"])
@@ -171,6 +173,8 @@ class ReportOrchestratorTest(unittest.TestCase):
             f"LLM Wiki版本：{ctx['knowledge']['llm_wiki']['version']}",
             ctx["rendered"]["markdown_document"],
         )
+        self.assertIn("选股形态审美 ASCII 流程图", ctx["rendered"]["markdown_document"])
+        self.assertIn("fetch_recent_price_bars", ctx["rendered"]["markdown_document"])
         self.assertNotIn("交易理念底线", ctx["rendered"]["markdown_document"])
         self.assertNotIn("教你炒股票", ctx["rendered"]["markdown_document"])
         self.assertNotIn("能量学", ctx["rendered"]["markdown_document"])

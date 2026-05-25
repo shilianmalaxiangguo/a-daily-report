@@ -21,6 +21,30 @@ __all__ = [
 GENERIC_CALENDAR_DIRECTION = "政策催化"
 GENERIC_CALENDAR_SECTORS = ["政策催化"]
 _INVALID_CALENDAR_SECTOR_LABELS = {"", "其他", "需盘面确认", "相关产业链标的"}
+_SEMANTIC_PRIORITY_DIRECTIONS = {
+    "云计算",
+    "电子元器件",
+    "新能源",
+    "汽车产业链",
+    "原油",
+    "有色金属",
+    "消费电子",
+    "本地生活",
+    "宏观经济",
+    "供应链服务",
+    "金融流动性",
+    "海峡概念",
+    "文旅体育",
+}
+_BROAD_REMOTE_DIRECTIONS = {
+    "半导体",
+    "外贸投资",
+    "宏观经济",
+    "周期资源",
+    "消费",
+    "金融",
+    "政策催化",
+}
 _MISSING = object()
 _llm_call_stats = {
     "total_calls": 0,
@@ -148,6 +172,30 @@ def _is_invalid_calendar_label(value) -> bool:
     return str(value or "").strip() in _INVALID_CALENDAR_SECTOR_LABELS
 
 
+def _is_generic_calendar_label(value) -> bool:
+    return str(value or "").strip() == GENERIC_CALENDAR_DIRECTION
+
+
+def _should_prefer_title_semantics(result: dict, fallback_result: dict) -> bool:
+    fallback_direction = str((fallback_result or {}).get("main_direction") or "").strip()
+    remote_direction = str((result or {}).get("main_direction") or "").strip()
+    if (
+        not fallback_direction
+        or _is_invalid_calendar_label(fallback_direction)
+        or _is_generic_calendar_label(fallback_direction)
+        or fallback_direction == remote_direction
+    ):
+        return False
+    if fallback_direction not in _SEMANTIC_PRIORITY_DIRECTIONS:
+        return False
+    confidence = str((result or {}).get("confidence") or "").strip()
+    if confidence == "低":
+        return True
+    if confidence in ("", "中") and remote_direction in _BROAD_REMOTE_DIRECTIONS:
+        return True
+    return False
+
+
 def _dedupe_valid_calendar_sectors(sectors) -> list:
     if isinstance(sectors, str):
         candidates = [sectors]
@@ -172,13 +220,21 @@ def normalize_calendar_ai_analysis(result, event_title: str = "", event_summary:
 
     direction = str(result.get("main_direction") or "").strip()
     needs_concrete_direction = _is_invalid_calendar_label(direction)
-    if needs_concrete_direction and allow_rule_fallback:
+    needs_semantic_override = _is_generic_calendar_label(direction)
+    fallback_result = None
+    if (needs_concrete_direction or needs_semantic_override) and allow_rule_fallback:
         fallback_result = _minimal_fallback_analysis_legacy_body(event_title, event_summary)
         fallback_direction = str((fallback_result or {}).get("main_direction") or "").strip()
-        if not _is_invalid_calendar_label(fallback_direction):
+        if not _is_invalid_calendar_label(fallback_direction) and not _is_generic_calendar_label(fallback_direction):
             result = fallback_result
             direction = fallback_direction
             needs_concrete_direction = False
+
+    if allow_rule_fallback and not needs_concrete_direction and not needs_semantic_override:
+        fallback_result = fallback_result or _minimal_fallback_analysis_legacy_body(event_title, event_summary)
+        if _should_prefer_title_semantics(result, fallback_result):
+            result = fallback_result
+            direction = str(result.get("main_direction") or "").strip()
 
     if needs_concrete_direction:
         generic_result = _generic_calendar_analysis(
@@ -218,6 +274,14 @@ def analyze_event_sector(event_title, event_summary="", xuangubao_data=None, hot
 def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str = "") -> dict:
     full_text = f"{event_title} {event_summary}".lower()
 
+    if any(term in full_text for term in ["fomc", "美联储", "利率决议", "经济预期摘要", "降息", "加息"]):
+        return {
+            "main_direction": "金融流动性",
+            "related_sectors": ["美元流动性", "黄金", "银行", "券商", "汇率"],
+            "trading_logic": "涉及全球利率和流动性预期，主要影响金融、黄金和风险偏好",
+            "expectation": "中性",
+            "confidence": "中",
+        }
     if any(term in full_text for term in ["逆回购", "mlf", "shibor", "同业存单", "流动性", "央行公开市场"]):
         return {
             "main_direction": "金融流动性",
@@ -242,11 +306,27 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
-    if any(term in full_text for term in ["google i/o", "谷歌开发者", "aigc", "人工智能技术大会", "agentarts", "智能体", "meta", "ai应用", "生成式ai"]):
+    if any(term in full_text for term in ["google i/o", "谷歌开发者", "aigc", "人工智能技术大会", "agentarts", "智能体", "meta", "ai应用", "生成式ai", "ai峰会", "ai技术论坛", "金蝶ai", "ai生态"]):
         return {
             "main_direction": "AI应用",
             "related_sectors": ["AI应用", "大模型", "智能体", "多模态"],
             "trading_logic": "涉及AI应用、开发者生态或智能体平台事件，映射到AI应用链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["小米汽车", "yu7", "新车型", "整车上市", "汽车上市", "新车上市"]):
+        return {
+            "main_direction": "汽车产业链",
+            "related_sectors": ["整车", "汽车零部件", "智能驾驶", "新能源车"],
+            "trading_logic": "涉及汽车新品上市或车企产品周期，映射到整车、零部件和智能驾驶链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["汽车产业链", "汽车供应链", "汽车及供应链", "中汽协", "汽车产业生态"]):
+        return {
+            "main_direction": "汽车产业链",
+            "related_sectors": ["整车", "汽车零部件", "智能驾驶", "机器人", "工业自动化"],
+            "trading_logic": "涉及汽车产业链生态和供应链协同，主线映射到汽车，制造端可联动机器人和自动化",
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
@@ -258,11 +338,59 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
+    if any(term in full_text for term in ["绿色燃料", "绿色燃料未来论坛", "氢燃料", "生物燃料", "可持续燃料", "绿色能源"]):
+        return {
+            "main_direction": "新能源",
+            "related_sectors": ["氢能源", "生物燃料", "绿色电力", "储能", "能源设备"],
+            "trading_logic": "涉及绿色燃料和能源转型议题，映射到新能源、氢能和绿电链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["computex", "台北电脑展", "电脑展", "pc展", "消费电子展"]):
+        return {
+            "main_direction": "消费电子",
+            "related_sectors": ["AI PC", "半导体", "存储", "散热", "消费电子"],
+            "trading_logic": "涉及PC和消费电子新品/供应链展示，映射到消费电子与AI PC链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["spacex", "星舰", "火箭发射", "商业航天", "卫星互联网"]):
+        return {
+            "main_direction": "商业航天",
+            "related_sectors": ["商业航天", "卫星互联网", "火箭发射", "航天装备"],
+            "trading_logic": "涉及商业航天公司、火箭发射或上市融资事件，映射到商业航天链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["美团", "本地生活", "外卖", "即时零售", "到店酒旅"]):
+        return {
+            "main_direction": "本地生活",
+            "related_sectors": ["平台经济", "本地生活", "即时零售", "酒旅消费", "外卖配送"],
+            "trading_logic": "涉及互联网平台财报或本地生活业务，映射到平台经济和服务消费链",
+            "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["世界杯", "足球联赛", "体育场", "体育赛事", "东北超", "城市足球"]):
+        return {
+            "main_direction": "文旅体育",
+            "related_sectors": ["体育产业", "赛事运营", "文化传媒", "文旅消费"],
+            "trading_logic": "涉及体育赛事和线下文旅消费场景，映射到体育、文化传媒和文旅消费链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
     if any(term in full_text for term in ["半导体", "集微", "集成电路", "芯片大会", "晶圆", "先进封装"]):
         return {
             "main_direction": "半导体",
             "related_sectors": ["半导体设备", "半导体材料", "先进封装", "存储芯片"],
             "trading_logic": "涉及半导体产业会议或技术生态，映射到半导体链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["天微电子", "电子元器件", "元器件", "传感器", "电子产品价格上调"]) or ("电子" in full_text and any(term in full_text for term in ["价格上调", "产品价格", "涨价", "调价"])):
+        return {
+            "main_direction": "电子元器件",
+            "related_sectors": ["电子元器件", "半导体元件", "传感器", "消费电子"],
+            "trading_logic": "涉及电子元器件产品涨价或供需变化，映射到电子元器件链",
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
@@ -338,6 +466,22 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": "中性",
             "confidence": "中",
         }
+    if any(term in full_text for term in ["圣彼得堡国际经济论坛", "夏季达沃斯", "达沃斯论坛", "国际经济论坛"]):
+        return {
+            "main_direction": "宏观经济",
+            "related_sectors": ["宏观经济", "外贸投资", "顺周期", "金融"],
+            "trading_logic": "涉及国际经济论坛或宏观议题，主要用于观察宏观预期和顺周期风险偏好",
+            "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["供应链促进博览会", "供应链博览会", "国际供应链"]):
+        return {
+            "main_direction": "供应链服务",
+            "related_sectors": ["供应链服务", "物流", "跨境贸易", "港口航运"],
+            "trading_logic": "涉及供应链展会和产业协同，映射到供应链服务、物流和外贸链",
+            "expectation": "中性",
+            "confidence": "中",
+        }
     if any(term in full_text for term in ["国民经济运行", "经济运行情况", "统计局", "国新办"]):
         return {
             "main_direction": "宏观经济",
@@ -346,11 +490,19 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": "中性",
             "confidence": "中",
         }
-    if any(term in full_text for term in ["原油", "油价", "石油", "燃油", "opec", "伊朗"]):
+    if any(term in full_text for term in ["lme", "铅", "锌", "铜", "铝", "镍", "锡", "小金属", "有色金属"]):
         return {
-            "main_direction": "周期资源",
-            "related_sectors": ["石油", "能源"],
-            "trading_logic": "涉及原油/油价相关事件，影响石油产业链",
+            "main_direction": "有色金属",
+            "related_sectors": ["铅锌", "小金属", "有色金属", "期货"],
+            "trading_logic": "涉及LME金属合约规则或价格约束，映射到有色金属和小金属链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["原油", "成品油", "油价", "石油", "燃油", "opec", "伊朗", "iea"]):
+        return {
+            "main_direction": "原油",
+            "related_sectors": ["原油", "油气开采", "石油化工", "大宗商品", "成品油"],
+            "trading_logic": "涉及原油、成品油或能源机构报告，映射到原油和大宗商品链",
             "expectation": "根据具体事件判断",
             "confidence": "中",
         }

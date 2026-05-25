@@ -1,10 +1,14 @@
 from datetime import datetime, timedelta
 
 from report.mainline_turnover_summary_support import (
+    normalize_display_text_by_tag_pool,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
+    resolve_overtake_window_rows,
+    resolve_trading_arena_fit_rows,
     resolve_mainline_turnover_summary,
     resolve_turnover_share_trend_rows,
+    resolve_turnover_share_trend_summary,
 )
 
 
@@ -18,8 +22,16 @@ _STATE_CODE_LABELS = {
 }
 
 
+def _display_latest_first(rows):
+    return list(reversed(list(rows or [])))
+
+
 def _full_row(label, current_evidence, derived_judgement, action_effect):
     return f"| {label} | {current_evidence} | {derived_judgement} | {action_effect} |"
+
+
+def _display_text(value, context):
+    return normalize_display_text_by_tag_pool(value, context)
 
 
 def _observation(context):
@@ -32,6 +44,26 @@ def _benchmark_change(context):
 
 def _turnover(context):
     return float(context.get("turnover", 0) or 0)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return None if default is None else float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return None if default is None else float(default)
+
+
+def _risk_preference_action_effect(benchmark_change, turnover, observation):
+    dt_count = int(_safe_float(observation.get("dt_count"), 0))
+    rise_fall_ratio = _safe_float(observation.get("rise_fall_ratio"), None)
+    if rise_fall_ratio is None:
+        rise_fall_ratio = _safe_float(observation.get("rise_fall_ratio_text"), None)
+    has_heavy_down_pressure = benchmark_change <= -1.5 and (dt_count >= 30 or (rise_fall_ratio is not None and rise_fall_ratio < 0.4))
+    if turnover > 0 and has_heavy_down_pressure:
+        return "有量配合的下跌更像指数图形走弱后，量化动量和风控卖出互相强化；越跌图形越丑，越丑承接越弱，容易形成踩踏。"
+    return "先看风险偏好，再决定能否继续往下判断"
 
 
 def _short_date(value):
@@ -147,6 +179,8 @@ def _cycle_market_state(records):
 def _cycle_stage(label, group_records, attack_summary=None):
     if label != "当前周期":
         return "已结束周期"
+    if _cycle_market_state(group_records) == "逆势攻击":
+        return "逆势试攻"
     attack_state = str((attack_summary or {}).get("attack_state") or "").strip()
     if attack_state == "chaotic_rotation":
         return "混沌轮动"
@@ -160,6 +194,8 @@ def _cycle_stage(label, group_records, attack_summary=None):
 def _cycle_transfer_state(label, group_records, market_state, attack_summary=None):
     if label != "当前周期":
         return "背景观察"
+    if str(market_state or "").strip() == "逆势攻击":
+        return "逆势试攻"
     attack_state = str((attack_summary or {}).get("attack_state") or "").strip()
     if attack_state == "chaotic_rotation":
         return "混沌轮动"
@@ -188,6 +224,8 @@ def _cycle_tomorrow_validation(label, attack_line, transfer_state):
         return "看是否有单一方向胜出，否则不强定主线"
     if transfer_state == "无主线":
         return "只记录资金是否重新聚焦"
+    if transfer_state == "逆势试攻":
+        return f"先防踩踏，再看{attack_line}是否修复承接，不能按顺势爆发追"
     return "继续验证传递性"
 
 
@@ -215,6 +253,8 @@ def _cycle_interpretation(label, mainline, market_state, attack_line=None, trans
     if label == "当前周期":
         if transfer_state == "首次攻击":
             return f"{attack_line}今日攻击成立，但传递性仍待二次验证；不自动升级周期主线。"
+        if transfer_state == "逆势试攻":
+            return f"{attack_line}今日只是放量杀跌中的局部逆势攻击，先按观察主攻线处理，不自动升级周期主线。"
         if transfer_state == "延续加强":
             return f"{attack_line}攻击开始出现传递，市场状态是{market_state}，继续看资金、涨停和高标反馈是否同步。"
         if transfer_state == "延续但衰弱":
@@ -245,6 +285,9 @@ def _mainline_degree(row, pivot_level):
     explicit = str(row.get("mainline_degree") or row.get("degree") or row.get("mainline_strength") or "").strip()
     if explicit:
         return explicit
+    evolution_text = str(row.get("evolution") or row.get("market_state") or row.get("structure_state") or "").strip()
+    if evolution_text == "逆势攻击":
+        return "观察主攻线"
     pivot_level = str(pivot_level or "")
     if "大" in pivot_level:
         return "大主线"
@@ -297,6 +340,8 @@ def _structure_interpretation(row):
     mainline_degree = str(row.get("mainline_degree") or "周期主线").strip()
     evolution = str(row.get("evolution") or row.get("structure_state") or "待确认").strip()
     replacement = str(row.get("replacement") or "待确认").strip()
+    if evolution == "逆势攻击":
+        return f"[{mainline}] 只是放量杀跌中的观察主攻线，不按周期主线处理；动作上先防踩踏，再等承接修复。"
     return f"中枢是主线周期载体：[{mainline}] 承载在{pivot_level}，主线程度是{mainline_degree}，当前演化为{evolution}；{replacement}，动作上先看承接是否稳定。"
 
 
@@ -402,7 +447,7 @@ def derive_market_research_cycle_layer(data, state_machine=None):
             "position": data.get("pivot_position") or "中枢内",
             "structure_state": data.get("structure_state") or state_machine.get("energy_state") or "结构待确认",
             "mainline": current.get("mainline", "-"),
-            "mainline_degree": _mainline_degree(data, level),
+            "mainline_degree": _mainline_degree({**data, "evolution": evolution}, level),
             "evolution": evolution,
             "replacement": _explicit_or_structural_replacement(data, current.get("mainline", "-"), previous_mainline),
         }
@@ -438,11 +483,12 @@ def build_market_research_snapshot_risk_preference_node(context, node_meta=None,
     observation = _observation(context)
     benchmark_change = _benchmark_change(context)
     turnover = _turnover(context)
+    action_effect = _risk_preference_action_effect(benchmark_change, turnover, observation)
     if context.get("compact"):
         lines = [
             (
                 f"- **盘面风险偏好**: 上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
-                f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿"
+                f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿；{action_effect}"
             )
         ]
     else:
@@ -454,7 +500,7 @@ def build_market_research_snapshot_risk_preference_node(context, node_meta=None,
                     f"上证{benchmark_change:+.2f}% / 涨停{observation.get('zt_count', 0)} / "
                     f"跌停{observation.get('dt_count', 0)} / 涨跌比{observation.get('rise_fall_ratio_text', '暂无')} / 成交额{turnover:.0f}亿"
                 ),
-                "先看风险偏好，再决定能否继续往下判断",
+                action_effect,
             )
         ]
     return {"lines": lines, "exports": {}, "module_logs": []}
@@ -464,17 +510,26 @@ def _build_turnover_share_trend_table_lines(context):
     rows = resolve_turnover_share_trend_rows(context)
     if not rows:
         return []
+    summary = resolve_turnover_share_trend_summary(context)
     lines = [
         "#### 主线成交额占比趋势",
-        "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-        "|------|----------|------------|------------|------------|------|----------|------|",
     ]
-    for row in rows:
+    if summary:
+        lines.append(f"> {summary}")
+        lines.append("")
+    lines.extend(
+        [
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+            "|------|----------|------------|------------|------------|------|----------|------|",
+        ]
+    )
+    for row in _display_latest_first(rows):
         lines.append(
             "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
                 **row
             )
         )
+    lines.append("")
     return lines
 
 
@@ -498,12 +553,53 @@ def _build_mainline_attack_evidence_table_lines(context):
     return lines
 
 
+def _build_overtake_window_table_lines(context):
+    rows = resolve_overtake_window_rows(context)
+    if not rows:
+        return []
+    lines = [
+        "#### 超车窗口判断",
+        "| 对手失速 | 我方稳住 | 失速差 | 明日动作 |",
+        "|----------|----------|--------|----------|",
+    ]
+    for row in rows[:1]:
+        lines.append(
+            "| {rival_slowdown} | {own_stability} | {speed_gap} | {action} |".format(
+                **row
+            )
+        )
+    return lines
+
+
+def _build_trading_arena_fit_table_lines(context):
+    rows = resolve_trading_arena_fit_rows(context)
+    if not rows:
+        return []
+    lines = [
+        "#### 能力圈匹配判断",
+        "| 适配位置 | 行情类型 | 适配理由 | 明日动作 |",
+        "|----------|----------|----------|----------|",
+    ]
+    for row in rows[:1]:
+        lines.append(
+            "| {arena_label} | {market_style} | {fit_reason} | {action} |".format(
+                **row
+            )
+        )
+    return lines
+
+
 def build_market_research_snapshot_mainline_focus_node(context, node_meta=None, node_lookup=None):
     attack_summary = resolve_mainline_attack_evidence_summary(context)
     competition_result = context.get("competition_result", "主线待定")
     competition_evidence = context.get("competition_evidence", "先看趋势密度、异常承接和资金聚焦谁先胜出")
     action_effect = "优先聚焦主线对象"
-    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+    if attack_summary and attack_summary.get("attack_state") == "confirmed_attack":
+        primary_line = str(attack_summary.get("primary_line") or "").strip()
+        if primary_line:
+            competition_result = f"主攻线 {primary_line}"
+            competition_evidence = attack_summary.get("confirmation_evidence") or f"{primary_line}攻击证据成立"
+    elif attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
         competition_result = "无确认主攻线"
         competition_evidence = attack_summary.get("confirmation_evidence") or "主线攻击证据不足"
         action_effect = "候选只观察，不给买入资格"
@@ -553,6 +649,8 @@ def build_market_research_snapshot_mainline_capacity_regime_node(context, node_m
         ).format(**summary),
     ]
     lines.extend(_build_mainline_attack_evidence_table_lines(context))
+    lines.extend(_build_overtake_window_table_lines(context))
+    lines.extend(_build_trading_arena_fit_table_lines(context))
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
@@ -693,6 +791,20 @@ def build_market_research_snapshot_rotation_node(context, node_meta=None, node_l
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
     attack_summary = resolve_mainline_attack_evidence_summary(context)
+    turnover_summary = resolve_mainline_turnover_summary(context)
+    if str((context.get("mainline_turnover_summary") or {}).get("share_trend_label") or "").strip() == "逆势试攻":
+        return {
+            "lines": [
+                _full_row(
+                    "主线内部轮动",
+                    context.get("rotation_label", "-"),
+                    turnover_summary.get("conclusion", "-") if turnover_summary else context.get("rotation_summary_text", "-"),
+                    turnover_summary.get("action_text", "-") if turnover_summary else context.get("rotation_action", "-"),
+                )
+            ],
+            "exports": {},
+            "module_logs": [],
+        }
     if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
         attack_state = attack_summary.get("attack_state")
         rotation_label = "混沌轮动" if attack_state == "chaotic_rotation" else "候选轮动"
@@ -715,8 +827,8 @@ def build_market_research_snapshot_rotation_node(context, node_meta=None, node_l
             _full_row(
                 "主线内部轮动",
                 context.get("rotation_label", "-"),
-                context.get("rotation_summary_text", "-") or context.get("rotation_reason", "-"),
-                context.get("rotation_action", "-"),
+                _display_text(context.get("rotation_summary_text", "-") or context.get("rotation_reason", "-"), context),
+                _display_text(context.get("rotation_action", "-"), context),
             )
         ],
         "exports": {},
@@ -728,6 +840,20 @@ def build_market_research_snapshot_narrative_node(context, node_meta=None, node_
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
     attack_summary = resolve_mainline_attack_evidence_summary(context)
+    turnover_summary = resolve_mainline_turnover_summary(context)
+    if str((context.get("mainline_turnover_summary") or {}).get("share_trend_label") or "").strip() == "逆势试攻":
+        return {
+            "lines": [
+                _full_row(
+                    "叙事节点",
+                    "逆势观察",
+                    turnover_summary.get("conclusion", "-") if turnover_summary else "局部方向只按逆势观察处理",
+                    turnover_summary.get("action_text", "-") if turnover_summary else "先防踩踏，再看次日是否修复承接",
+                )
+            ],
+            "exports": {},
+            "module_logs": [],
+        }
     if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
         return {
             "lines": [
@@ -746,8 +872,8 @@ def build_market_research_snapshot_narrative_node(context, node_meta=None, node_
             _full_row(
                 "叙事节点",
                 context.get("narrative_label", "-"),
-                context.get("narrative_reason", "-"),
-                context.get("narrative_action", "-"),
+                _display_text(context.get("narrative_reason", "-"), context),
+                _display_text(context.get("narrative_action", "-"), context),
             )
         ],
         "exports": {},
@@ -791,8 +917,12 @@ def build_market_research_snapshot_state_summary_node(context, node_meta=None, n
     if not context.get("compact"):
         lines.append("")
     lines.append(
-        f"- **统一状态判断**: {context.get('state_energy', '-')}；{context.get('state_reason', '-')}；{context.get('state_flow_direction', '-')}"
+        f"- **统一状态判断**: {context.get('state_energy', '-')}；{context.get('state_reason', '-')}；{_display_text(context.get('state_flow_direction', '-'), context)}"
     )
+    market_performance = context.get("market_performance_evidence") or {}
+    if market_performance:
+        boundary = market_performance.get("decision_boundary") or "单指标不直接给买入或加仓。"
+        lines.append(f"- **市场表现证据**: {market_performance.get('summary', '-')}；{boundary}")
     return {"lines": lines, "exports": {}, "module_logs": []}
 
 
@@ -817,7 +947,7 @@ def build_market_research_snapshot_trend_density_node(context, node_meta=None, n
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            f"- **最强趋势密度**: {observation.get('densest_sector')} 当前有{observation.get('densest_sector_trend_count', 0)}只活跃趋势股"
+            f"- **最强趋势密度**: {_display_text(observation.get('densest_sector'), context)} 当前有{observation.get('densest_sector_trend_count', 0)}只活跃趋势股"
         ],
         "exports": {},
         "module_logs": [],
@@ -838,9 +968,9 @@ def build_market_research_snapshot_dialectical_decision_node(context, node_meta=
         "### 🧠 辩证决策补充",
         f"- **现在更像什么阶段**: {dialectical_decision.get('stage_label', '-')}；{dialectical_decision.get('stage_reason', '-')}",
         f"- **指数和赚钱效应是否背离**: {dialectical_decision.get('index_profit_relation', '-')}；{dialectical_decision.get('index_profit_reason', '-')}",
-        f"- **赚钱效应现在往哪聚**: {dialectical_decision.get('focus_label', '-')}；{dialectical_decision.get('focus_action', '-')}",
+        f"- **赚钱效应现在往哪聚**: {_display_text(dialectical_decision.get('focus_label', '-'), context)}；{_display_text(dialectical_decision.get('focus_action', '-'), context)}",
         f"- **明天优先看哪类对象**: {dialectical_decision.get('candidate_focus', '-')}；{dialectical_decision.get('candidate_action', '-')}",
-        f"- **什么情况下先不认这轮修复**: {' / '.join(dialectical_decision.get('falsification_conditions', []) or ['暂无'])}",
+        f"- **什么情况下先不认这轮修复**: {_display_text(' / '.join(dialectical_decision.get('falsification_conditions', []) or ['暂无']), context)}",
     ]
     return {"lines": lines, "exports": {}, "module_logs": []}
 

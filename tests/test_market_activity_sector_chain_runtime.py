@@ -122,6 +122,18 @@ class MarketActivitySectorChainRuntimeTest(unittest.TestCase):
         for group in result["groups"]:
             self.assertNotEqual(group["reason"], "独立板块，暂无明确产业链关联")
 
+    def test_ai_analyze_sector_relationships_maps_auto_parts_to_robot_when_robot_context_exists(self):
+        result = ai_analyze_sector_relationships(
+            ["汽车零部件", "电机", "人形机器人", "传感器"],
+            helpers={"ENABLE_REMOTE_SECTOR_LLM": False},
+        )
+
+        groups = {group["name"]: group for group in result["groups"]}
+        self.assertIn("人形机器人", groups)
+        self.assertIn("汽车零部件", groups["人形机器人"]["sectors"])
+        self.assertIn("电机", groups["人形机器人"]["sectors"])
+        self.assertNotIn("汽车产业链", groups)
+
     def test_ai_analyze_sector_relationships_remote_failure_falls_back_to_local_chain_without_failure_text(self):
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -183,6 +195,44 @@ class MarketActivitySectorChainRuntimeTest(unittest.TestCase):
         self.assertEqual(stats["sector_analysis_calls"], 1)
         self.assertEqual(failure["groups"][0]["name"], "军工装备")
         self.assertNotIn("LLM分析失败", failure["insights"])
+
+    def test_ai_analyze_sector_relationships_passes_realtime_tag_snapshot_to_remote_context(self):
+        captured = {}
+
+        def _analyze_sector_relationships(sector_list, context_info=""):
+            captured["sector_list"] = sector_list
+            captured["context_info"] = context_info
+            return {
+                "groups": [{"name": "国产芯片替代", "sectors": sector_list}],
+                "insights": "采用tag快照",
+            }
+
+        result = ai_analyze_sector_relationships(
+            ["元器件", "芯片"],
+            "测试上下文",
+            tag_evidence_snapshot={
+                "groups": [
+                    {
+                        "采用名称": "国产芯片替代",
+                        "大方向": "泛半导体/硬科技电子",
+                        "当日主攻分支": "国产芯片替代",
+                        "表层行业名": ["元器件", "芯片"],
+                        "关系判断": "父子",
+                    }
+                ]
+            },
+            helpers={
+                "ENABLE_REMOTE_SECTOR_LLM": True,
+                "get_llm_service": lambda: types.SimpleNamespace(
+                    analyze_sector_relationships=_analyze_sector_relationships
+                ),
+            },
+        )
+
+        self.assertEqual(result["groups"][0]["name"], "国产芯片替代")
+        self.assertIn("实时tag证据快照", captured["context_info"])
+        self.assertIn("采用名称：国产芯片替代", captured["context_info"])
+        self.assertIn("测试上下文", captured["context_info"])
 
 
 if __name__ == "__main__":

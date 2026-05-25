@@ -27,9 +27,6 @@ def _normalize_attack_state(value, stock=None):
         return "50%"
     if raw in ("0", "0%"):
         return "0%"
-    stock = stock or {}
-    if stock.get("allow_full_attack") or stock.get("a_grade_candidate"):
-        return "100%"
     return "50%"
 
 
@@ -198,6 +195,25 @@ def _format_risk_review(stock):
     return _clean_cell(review, "待复核")
 
 
+def _format_shape_repair_reasons(stock):
+    review = stock.get("trend_aesthetic_review") or {}
+    if not isinstance(review, dict):
+        review = {}
+    reasons = [str(reason).strip() for reason in review.get("reasons") or [] if str(reason).strip()]
+    return _clean_cell(" / ".join(reasons), "走势待修复")
+
+
+def _format_shape_repair_action(stock):
+    review = stock.get("trend_aesthetic_review") or {}
+    if not isinstance(review, dict):
+        review = {}
+    return _clean_cell(review.get("action"), "重新站回短中线承接后再评估")
+
+
+def _format_historical_review_date(stock):
+    return _clean_cell(stock.get("mention_trade_date") or stock.get("trade_date"), "-")
+
+
 def _build_participation_script(stock):
     sector = _clean_cell(stock.get("sector"), "主线")
     participation_script = stock.get("participation_script") or {}
@@ -273,6 +289,9 @@ def _build_participation_script(stock):
 
 def build_candidate_selection_conviction_list_node(context, node_meta=None, node_lookup=None):
     extreme_conviction_list = context.get("extreme_conviction_list", []) or []
+    shape_repair_pool = context.get("shape_repair_pool", []) or []
+    dragon_rebound_watch_pool = context.get("dragon_rebound_watch_pool", []) or []
+    historical_extreme_review = context.get("historical_extreme_review", []) or []
 
     lines = ["**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:"]
     if extreme_conviction_list:
@@ -319,5 +338,42 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
             )
     else:
         lines.append("- 暂无重点观察标的，说明当下更适合广泛观察而不是集中出手。")
+    if shape_repair_pool:
+        lines.append("")
+        lines.append("**形态待修复池**（历史形态值得继续看，但当前不进正式名单）:")
+        lines.append("| 股票 | 代码 | 板块 | 状态 | 走势问题 | 修复条件 | 下一步 |")
+        lines.append("|------|------|------|------|----------|----------|--------|")
+        for stock in shape_repair_pool:
+            lines.append(
+                f"| {_clean_cell(stock.get('name'))} | {_clean_cell(stock.get('code'))} | "
+                f"{_clean_cell(stock.get('sector'))} | {_clean_cell(stock.get('repair_status'), '待修复')} | "
+                f"{_format_shape_repair_reasons(stock)} | {_format_shape_repair_action(stock)} | "
+                f"{_clean_cell(stock.get('next_action'), '保留跟踪，重新站回短中线承接后再评估；继续走坏再取关淘汰')} |"
+            )
+    if dragon_rebound_watch_pool:
+        lines.append("")
+        lines.append("**龙回头观察池**（有历史辨识度，但当前A杀或弱反抽未修复，不进正式名单）:")
+        lines.append("| 股票 | 代码 | 板块 | 状态 | 走势问题 | 修复条件 | 下一步 |")
+        lines.append("|------|------|------|------|----------|----------|--------|")
+        for stock in dragon_rebound_watch_pool:
+            lines.append(
+                f"| {_clean_cell(stock.get('name'))} | {_clean_cell(stock.get('code'))} | "
+                f"{_clean_cell(stock.get('sector'))} | {_clean_cell(stock.get('repair_status'), '龙回头观察')} | "
+                f"{_format_shape_repair_reasons(stock)} | {_format_shape_repair_action(stock)} | "
+                f"{_clean_cell(stock.get('next_action'), '单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰')} |"
+            )
+    if historical_extreme_review:
+        lines.append("")
+        lines.append("**历史重点观察样本去向**（逐个复核，不把走坏样本混进正式名单）:")
+        lines.append("| 入选日 | 股票 | 代码 | 板块 | 来源 | 去向 | 当前判断 | 依据 | 下一步 |")
+        lines.append("|--------|------|------|------|------|------|----------|------|--------|")
+        for stock in historical_extreme_review:
+            lines.append(
+                f"| {_format_historical_review_date(stock)} | {_clean_cell(stock.get('name'))} | "
+                f"{_clean_cell(stock.get('code'))} | {_clean_cell(stock.get('sector'))} | "
+                f"{_clean_cell(stock.get('source_section'), '极度看好名单')} | "
+                f"{_clean_cell(stock.get('destination'))} | {_clean_cell(stock.get('review_status'))} | "
+                f"{_clean_cell(stock.get('review_basis'))} | {_clean_cell(stock.get('next_action'))} |"
+            )
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}

@@ -334,8 +334,8 @@ def build_market_research_context_bundle_contract(
                     "score": max(0, 30 - idx * 2) + (10 if change >= 7 else 0),
                     "source": f"热榜第{idx}",
                     "pattern": "放量冲高",
-                    "reason": f"热榜第{idx}+涨幅{change:.1f}%，明日可能反包" if change < 9.9 else f"热榜第{idx}",
-                    "tomorrow_expectation": "反包预期" if change < 9.9 else "连板预期",
+                    "reason": f"热榜第{idx}+涨幅{change:.1f}%，仅作热度观察" if change < 9.9 else f"热榜第{idx}",
+                    "tomorrow_expectation": "热度观察" if change < 9.9 else "连板预期",
                 }
             )
 

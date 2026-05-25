@@ -42,6 +42,7 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
                 "promoted_items": [{"code": "000002"}],
                 "today_tentative_items": [],
                 "dropped_items": [],
+                "inactive_items": [{"name": "冷却老龙", "code": "000004", "status": "inactive_recall", "inactive_reason": "连续多日未再次入池，转入冷却回看"}],
                 "today_validated_items": [{"name": "老龙头", "code": "000002", "sources": ["watchlist"], "follow_state": "今日再次入池"}],
             },
             watchlist=[{"name": "军工一号", "code": "000001", "sector": "军工", "pattern": "涨停", "score": 88, "tomorrow_expectation": "连板预期", "reason": "板块龙一"}],
@@ -61,6 +62,8 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertIn("| 排名 | 股票 | 代码 | 所属板块 | 今日形态 | 预判分数 | 明日预期 | 入池依据 |", rendered)
         self.assertIn("**龙头记忆库**", rendered)
         self.assertIn("二次确认观察", rendered)
+        self.assertIn("冷却回看", rendered)
+        self.assertIn("冷却老龙(000004)", rendered)
         self.assertNotIn("可信记忆", rendered)
         self.assertIn("**异动后观察池**", rendered)
         self.assertIn("**结论**:", rendered)
@@ -158,6 +161,102 @@ class ExecutionChainStep1SectionsTest(unittest.TestCase):
         self.assertIn("- **主线竞争格局**: 当前没有确认主攻线，多方向只做候选观察。", rendered)
         self.assertNotIn("| 主攻线 | 半导体 |", rendered)
         self.assertNotIn("半导体目前是主攻线", rendered)
+
+    def test_build_step1_watch_sections_downgrades_stale_attack_line_when_confirmed_line_differs(self):
+        lines = build_step1_watch_sections(
+            sector_trend_snapshot_step1=[],
+            mainline_competition_snapshot=[
+                {"role": "主攻线", "sector": "半导体", "evidence": "趋势2只 / 涨停2只", "judgement": "当前最值得粘住的方向", "action": "只在这条线里找买入资格"},
+                {"role": "次强线", "sector": "电力", "evidence": "趋势3只 / 涨停4只", "judgement": "有承接", "action": "有共振才看"},
+            ],
+            leader_memory_bank=[],
+            tracking_memory_status={},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            abnormal_projection_summary={},
+            filtered_by_a_kill=[],
+            display_mvp_mode=False,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            format_abnormal_observation_columns=lambda item: ("历史锚点", "次日边界"),
+            mainline_turnover_summary={
+                "share_trend_label": "逆势试攻",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+            },
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 候选观察 | 半导体 | 趋势2只 / 涨停2只 | 已不是当前确认方向，不能确认为主攻线 | 只观察强弱，不给买入资格 |", rendered)
+        self.assertIn("- **主线竞争格局**: 人形机器人只是观察主攻线，先防踩踏，再看次日是否修复承接。", rendered)
+        self.assertNotIn("| 主攻线 | 半导体 |", rendered)
+        self.assertNotIn("半导体目前是主攻线", rendered)
+
+    def test_build_step1_watch_sections_uses_adopted_tag_label_in_decision_lines(self):
+        tag_snapshot = {
+            "groups": [
+                {
+                    "采用名称": "国产芯片替代",
+                    "关系判断": "父子",
+                    "表层行业名": ["元件", "元器件"],
+                }
+            ]
+        }
+        lines = build_step1_watch_sections(
+            sector_trend_snapshot_step1=[
+                {
+                    "sector": "元器件",
+                    "trend_count": 12,
+                    "strong_count": 0,
+                    "limit_up_count": 30,
+                    "anchor_name": "风华高科",
+                    "anchor_code": "000636",
+                    "anchor_reason": "板块辨识度最高",
+                }
+            ],
+            mainline_competition_snapshot=[
+                {
+                    "role": "主攻线",
+                    "sector": "元件",
+                    "evidence": "趋势12只 / 涨停30只",
+                    "judgement": "当前最值得粘住的方向",
+                    "action": "只在这条线里找买入资格",
+                }
+            ],
+            leader_memory_bank=[],
+            tracking_memory_status={},
+            watchlist=[],
+            abnormal_watch_pool=[],
+            abnormal_projection_summary={},
+            filtered_by_a_kill=[],
+            display_mvp_mode=False,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            format_abnormal_observation_columns=lambda item: ("历史锚点", "次日边界"),
+            mainline_turnover_summary={
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "国产芯片替代",
+                    "confirmation_evidence": "国产芯片替代资金净流入靠前，涨停更集中",
+                    "sector_evidence_rows": [
+                        {
+                            "sector_name": "国产芯片替代",
+                            "surface_sector_names": ["元件", "元器件"],
+                        }
+                    ],
+                }
+            },
+            enabled_node_keys=["trend_density", "mainline_competition", "conclusion"],
+            realtime_tag_evidence_snapshot=tag_snapshot,
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主攻线 | 国产芯片替代 | 趋势12只 / 涨停30只 | 当前最值得粘住的方向 | 只在这条线里找买入资格 |", rendered)
+        self.assertIn("- **主线竞争格局**: 国产芯片替代目前是主攻线，其他方向先看是否能继续争夺能量。", rendered)
+        self.assertIn("- **趋势密度最高**: 国产芯片替代，当前活跃趋势股12只，优先盯风华高科", rendered)
+        self.assertNotIn("| 主攻线 | 元件 |", rendered)
+        self.assertNotIn("趋势密度最高**: 元器件", rendered)
 
 
 if __name__ == "__main__":

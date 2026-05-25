@@ -219,7 +219,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             elif final_gate.get("allow_attack_50_ready"):
                 conclusion_lines.append("- **当前先不抢**: 0%观察，只做参与窗口分层确认；强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认")
             else:
-                conclusion_lines.append(f"- **当前先不买**: {position_level}，当前只允许观察，不允许新买入")
+                conclusion_lines.append(f"- **当前只观察**: {position_level}，不新增参与")
         else:
             conclusion_lines.append("- **明天先怎么观察**: 空仓观望")
     conclusion_lines.append("")

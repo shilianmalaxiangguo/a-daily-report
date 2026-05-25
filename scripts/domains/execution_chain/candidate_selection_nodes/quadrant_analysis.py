@@ -1,4 +1,20 @@
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    resolve_display_mainline_name,
+    resolve_mainline_attack_evidence_summary,
+)
+
+
+def _call_ai_sector_relationships(ai_analyze_sector_relationships, sector_names, context_text, tag_evidence_snapshot):
+    try:
+        return ai_analyze_sector_relationships(
+            sector_names,
+            context_text,
+            tag_evidence_snapshot=tag_evidence_snapshot,
+        )
+    except TypeError as error:
+        if "tag_evidence_snapshot" not in str(error):
+            raise
+        return ai_analyze_sector_relationships(sector_names, context_text)
 
 
 def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, node_lookup=None):
@@ -18,7 +34,10 @@ def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, no
         return {"lines": [], "exports": {"mainline_in_quadrant": None, "mainline_score": 0}, "module_logs": []}
 
     hs_analysis = quadrant_data["high_strong_analysis"]
-    current_mainline = "" if has_unconfirmed_attack_evidence else (primary_mainline or exit_analysis.get("sector_name", ""))
+    current_mainline = "" if has_unconfirmed_attack_evidence else resolve_display_mainline_name(
+        context,
+        fallback=primary_mainline or exit_analysis.get("sector_name", ""),
+    )
     mainline_in_quadrant = None
     mainline_score = 0
     if current_mainline:
@@ -73,7 +92,12 @@ def build_candidate_selection_quadrant_analysis_node(context, node_meta=None, no
                 sector_name = sector.get("name", "")
                 if sector_name and sector_name not in all_sector_names:
                     all_sector_names.append(sector_name)
-        ai_analysis = ai_analyze_sector_relationships(all_sector_names, f"市场环境: {position_level}, 日期: {target_date}")
+        ai_analysis = _call_ai_sector_relationships(
+            ai_analyze_sector_relationships,
+            all_sector_names,
+            f"市场环境: {position_level}, 日期: {target_date}",
+            data.get("realtime_tag_evidence_snapshot") or context.get("realtime_tag_evidence_snapshot") or {},
+        )
         if ai_analysis.get("groups"):
             lines.append("**板块归并结果**")
             lines.append("> **只看什么**: 哪些分散标签其实指向同一条主线。")

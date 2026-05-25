@@ -34,6 +34,25 @@ class CalendarSectionNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("### 重点事件明细", rendered)
         self.assertNotIn("### AI板块关联分析", rendered)
 
+    def test_event_table_uses_observation_wording_for_bullish_events(self):
+        lines = render_calendar_section(
+            {
+                "enabled_node_keys": ["event_table"],
+                "calendar_analysis": [
+                    {
+                        "date": "2026-05-22",
+                        "title": "产业链供需改善",
+                        "star": "⭐⭐",
+                        "ai_analysis": {"main_direction": "半导体", "expectation": "利好"},
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 2026-05-22 | 产业链供需改善 | ⭐⭐ | 半导体 | 📈利好 | 事件观察 |", rendered)
+        self.assertNotIn("关注埋伏", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

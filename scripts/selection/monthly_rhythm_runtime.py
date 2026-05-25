@@ -17,6 +17,15 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _optional_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _target_month(target_date=""):
     text = str(target_date or "").strip()
     try:
@@ -59,9 +68,9 @@ def build_monthly_rhythm_decision(
     state_machine_snapshot = dict(state_machine_snapshot or {})
     final_gate = dict(final_gate or {})
 
-    month_return_pct = _safe_float(
-        monthly_context.get("month_return_pct", monthly_context.get("monthly_return_pct", 0.0))
-    )
+    raw_month_return = monthly_context.get("month_return_pct", monthly_context.get("monthly_return_pct"))
+    month_return_pct = _optional_float(raw_month_return)
+    has_month_return = month_return_pct is not None
     profit_cushion_pct = _safe_float(monthly_context.get("profit_cushion_pct", 10.0), 10.0)
     loss_guard_pct = _safe_float(monthly_context.get("loss_guard_pct", -3.0), -3.0)
     month = _target_month(target_date)
@@ -90,7 +99,7 @@ def build_monthly_rhythm_decision(
         or monthly_context.get("structure_invalid")
         or final_gate.get("should_reduce")
     )
-    profit_cushion = month_return_pct >= profit_cushion_pct
+    profit_cushion = bool(has_month_return and month_return_pct >= profit_cushion_pct)
 
     if weak_market:
         month_mode = "weak_market_defense"
@@ -98,7 +107,7 @@ def build_monthly_rhythm_decision(
         month_mode = "earnings_defense"
     elif profit_cushion and trend_invalid:
         month_mode = "profit_protection"
-    elif month_return_pct <= loss_guard_pct:
+    elif has_month_return and month_return_pct <= loss_guard_pct:
         month_mode = "weak_market_defense"
     elif explicit_mode:
         month_mode = explicit_mode
@@ -136,6 +145,7 @@ def build_monthly_rhythm_decision(
         "month_mode": month_mode,
         "target_role": target_role,
         "month_return_pct": month_return_pct,
+        "month_return_source": monthly_context.get("month_return_source") or ("recorded" if has_month_return else "missing"),
         "profit_cushion_pct": profit_cushion_pct,
         "loss_guard_pct": loss_guard_pct,
         "max_position_pct": max_position_pct,

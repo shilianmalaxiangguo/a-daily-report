@@ -1,4 +1,7 @@
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    normalize_display_text_by_tag_pool,
+    resolve_mainline_attack_evidence_summary,
+)
 
 
 def _confirmed_attack_line(context):
@@ -6,10 +9,10 @@ def _confirmed_attack_line(context):
     if not summary:
         snapshot = context.get("mainline_competition_snapshot", []) or []
         if snapshot:
-            return str((snapshot[0] or {}).get("sector") or "").strip()
+            return normalize_display_text_by_tag_pool((snapshot[0] or {}).get("sector"), context).strip()
     primary = str(summary.get("primary_line") or "").strip()
     if summary.get("attack_state") == "confirmed_attack" and primary:
-        return primary
+        return normalize_display_text_by_tag_pool(primary, context).strip()
     return ""
 
 
@@ -34,15 +37,21 @@ def build_watch_pool_conclusion_node(context, node_meta=None, node_lookup=None):
     if mainline_competition_snapshot:
         confirmed_line = _confirmed_attack_line(context)
         if confirmed_line:
-            lines.append(f"- **主线竞争格局**: {confirmed_line}目前是主攻线，其他方向先看是否能继续争夺能量。")
+            summary = resolve_mainline_attack_evidence_summary(context)
+            share_trend_label = str((context.get("mainline_turnover_summary") or {}).get("share_trend_label") or "").strip()
+            if share_trend_label == "逆势试攻":
+                lines.append(f"- **主线竞争格局**: {confirmed_line}只是观察主攻线，先防踩踏，再看次日是否修复承接。")
+            else:
+                lines.append(f"- **主线竞争格局**: {confirmed_line}目前是主攻线，其他方向先看是否能继续争夺能量。")
         else:
             lines.append("- **主线竞争格局**: 当前没有确认主攻线，多方向只做候选观察。")
     if abnormal_projection_summary:
         lines.append(f"- **异常投影视角**: {abnormal_projection_summary.get('projection_label', '-')}")
     if sector_trend_snapshot_step1:
         densest_sector = sector_trend_snapshot_step1[0]
+        sector_name = normalize_display_text_by_tag_pool(densest_sector.get("sector", "未知"), context)
         lines.append(
-            f"- **趋势密度最高**: {densest_sector.get('sector', '未知')}，当前活跃趋势股{densest_sector.get('trend_count', 0)}只，优先盯{densest_sector.get('anchor_name', '锚定龙头')}"
+            f"- **趋势密度最高**: {sector_name}，当前活跃趋势股{densest_sector.get('trend_count', 0)}只，优先盯{densest_sector.get('anchor_name', '锚定龙头')}"
         )
     if leader_memory_bank:
         memory_names = [f"{item.get('name')}({item.get('code')})" for item in leader_memory_bank[:3]]

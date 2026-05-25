@@ -58,7 +58,7 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
         if final_gate.get("allow_attack_50_ready"):
             lines.append("- 50%标准进攻需要先等参与窗口成立；未确认前按0%处理，确认后用30分钟结构止损管理风险")
         else:
-            lines.append("- 0%不参与：无合格标的或取消条件已经出现，无需设置新仓止损")
+            lines.append("- 0%不参与：无合格标的或取消条件已经出现，无需设置新增参与止损")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

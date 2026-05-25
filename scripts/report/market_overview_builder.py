@@ -13,13 +13,14 @@ def _append_log(logs, step, status, message, **details):
     )
 
 
-def build_market_trend_sections_contract(data, target_date, *, enabled_node_keys=None):
+def build_market_trend_sections_contract(data, target_date, *, enabled_node_keys=None, daily_fact_db_path=None):
     data = data or {}
     node_result = build_market_overview_section_result(
         {
             "data": data,
             "target_date": target_date,
             "enabled_node_keys": enabled_node_keys,
+            "daily_fact_db_path": daily_fact_db_path,
         }
     )
     lines = list(node_result.get("lines") or [])

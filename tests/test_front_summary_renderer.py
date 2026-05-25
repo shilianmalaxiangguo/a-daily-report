@@ -48,6 +48,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "style_action_text": "主线内做减法",
                 "risk_parts": ["跌停2只"],
                 "can_open_text": "只等确认",
+                "turnover_share_trend_summary": "近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。",
                 "mainline_capacity_regime_summary": {
                     "mainline_capacity": "双线孕育",
                     "mainline_regime": "主线+背景线",
@@ -59,6 +60,16 @@ class FrontSummaryRendererTest(unittest.TestCase):
                     "tomorrow_action": "先看资金是否继续选择半导体；背景线只观察回流",
                 },
                 "turnover_share_trend_rows": [
+                    {
+                        "date": "04-23",
+                        "cycle_mainline": "电力",
+                        "daily_attack_line": "电力",
+                        "mainline_turnover": "2000亿",
+                        "market_turnover": "12000亿",
+                        "share": "16.0%",
+                        "share_change": "-",
+                        "interpretation": "旧周期退潮",
+                    },
                     {
                         "date": "04-24",
                         "cycle_mainline": "半导体",
@@ -77,8 +88,10 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("| 主线容量 | 主线格局 | 主攻线 | 竞争线/背景线 | 主线确认依据 | 板块关系状态 | 主线进程 | 明日动作 |", rendered)
         self.assertIn("| 双线孕育 | 主线+背景线 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
         self.assertNotIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
+        self.assertIn("> 近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。", rendered)
         self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
         self.assertIn("| 04-24 | 半导体 | 算力 | 2180亿 | 12834亿 | 17.0% | +1.2pct | 主线占比继续抬升，资金仍在主线内加强 |", rendered)
+        self.assertLess(rendered.index("04-24"), rendered.index("04-23"))
 
     def test_render_front_digest_outputs_full_contract_summary(self):
         lines = render_front_digest(

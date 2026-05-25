@@ -306,6 +306,47 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertFalse(result["full_attack_ready"])
         self.assertIn("参与窗口", result["full_attack_check"]["missing"])
 
+    def test_full_attack_does_not_treat_mainline_sector_and_follow_state_as_independent_100_qualification(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": True},
+            state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "电力", "energy_state": "主线攻击"},
+            best_stock={
+                "name": "电力一号",
+                "code": "000001",
+                "sector": "电力",
+                "a_grade_candidate": True,
+                "abnormal_follow_state": "跌不下去",
+                "participation_window": "竞价表态",
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明天唯一能买的那只",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": True,
+                    "score": 92,
+                    "reasons": ["60分钟确认链完整", "唯一对象"],
+                    "history_feedback": {"continuous_days": 3},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "execute_50")
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertEqual(result["signal_grade"], "50")
+        self.assertFalse(result["full_attack_ready"])
+        self.assertIn("趋势比价链", result["full_attack_check"]["missing"])
+        self.assertIn("承接继续正确", result["full_attack_check"]["missing"])
+
     def test_full_attack_uses_100_when_core_fields_are_complete(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": True},
@@ -422,6 +463,87 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertEqual(result["target_position_pct"], 0)
         self.assertFalse(result["full_attack_ready"])
         self.assertEqual(result["monthly_rhythm"]["target_role"], "defense_0")
+
+    def test_extreme_conviction_target_keeps_50_attack_preview_in_non_ice_avoid_state(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": False, "should_reduce": True, "market_ice_point": False},
+            state_machine_snapshot={
+                "execution_bias": "avoid",
+                "leading_line": "通信设备",
+                "energy_state": "收缩防守",
+                "market_ice_point": False,
+            },
+            watch_anchor={
+                "name": "汇源通信",
+                "code": "000586",
+                "sector": "通信设备",
+                "source_tier": "extreme_conviction",
+                "participation_window": "竞价表态 + 回封参与",
+                "acceptance_act_right": True,
+                "invalidation_price": 19.37,
+            },
+            watch_anchor_type="明日极度看好目标标的",
+            mainline_name="通信设备",
+            target_date="2026-05-19",
+            monthly_context={"market_ice_point": False, "month_mode": "ordinary_attack"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 20.57,
+                    "support_price": 19.37,
+                    "ready": True,
+                    "score": 88,
+                    "reasons": ["极度看好目标进入参与窗口预演"],
+                    "history_feedback": {},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "attack_50_preview")
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertEqual(result["signal_grade"], "50")
+        self.assertIn("明日极度看好", result["sizing_reason"])
+        self.assertEqual(result["single_focus_constraint"]["status"], "clear")
+
+    def test_extreme_conviction_target_is_not_zeroed_by_unconfirmed_special_probe(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": False, "should_reduce": True, "market_ice_point": False},
+            state_machine_snapshot={"execution_bias": "avoid", "leading_line": "通信设备", "market_ice_point": False},
+            watch_anchor={
+                "name": "汇源通信",
+                "code": "000586",
+                "sector": "通信设备",
+                "source_tier": "extreme_conviction",
+                "participation_window": "竞价表态 + 回封参与",
+            },
+            watch_anchor_type="明日极度看好目标标的",
+            mainline_name="通信设备",
+            target_date="2026-05-19",
+            monthly_context={"market_ice_point": False, "month_mode": "ordinary_attack"},
+            special_probe_verdict={"probe_state": "probe_flow_unconfirmed"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 20.57,
+                    "support_price": 19.37,
+                    "ready": True,
+                    "score": 88,
+                    "reasons": ["极度看好目标进入参与窗口预演"],
+                    "history_feedback": {},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertIn("50%标准进攻预演", result["sizing_reason"])
 
 
 if __name__ == "__main__":

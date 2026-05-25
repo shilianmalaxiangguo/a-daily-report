@@ -239,7 +239,7 @@ def resolve_environment_reason_contract(position_reason="", environment_display=
                 headline or "环境关闭，只做等待，不做新增参与",
                 energy_state or "收缩防守",
                 state_reason,
-                "顶层环境以状态机执行偏置为准，不再沿用旧的偏多口径。",
+                "顶层环境以执行条件为准，不再沿用旧的偏多口径。",
             )
             if part
         ]

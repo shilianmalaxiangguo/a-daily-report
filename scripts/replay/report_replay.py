@@ -1,3 +1,5 @@
+from pathlib import Path
+
 __all__ = [
     "build_replay_snapshot_contract",
     "build_replay_report_outputs_contract",
@@ -14,11 +16,17 @@ def _load_default_mainline_helpers():
     )
     from domains.market_state.mainline_turnover_summary_runtime import build_mainline_turnover_summary
     from domains.market_state.sector_turnover_history_runtime import load_recent_sector_turnover_history
-    from input.tushare_runtime import get_wind_a_from_tushare_first
+    from input.tushare_runtime import (
+        get_new_high_feedback_from_tushare_first,
+        get_price_band_style_series_from_tushare_first,
+        get_wind_a_from_tushare_first,
+    )
+    from market_data.tushare_market_activity_service import fetch_tushare_open_trade_dates
     from input.ths_sector_runtime import get_sector_turnover_snapshot_from_ths
     from research.market_research_runtime import (
         _fill_sector_snapshot_total_turnover,
         _has_resolved_mainline_turnover_summary,
+        _mainline_turnover_summary_conflicts_with_current_record,
         _resolve_effective_total_turnover,
     )
     from research.market_research_support import (
@@ -26,8 +34,16 @@ def _load_default_mainline_helpers():
         get_market_total_turnover_from_fact_db_runtime,
         get_turnover_rank_from_fact_db_runtime,
     )
+    from storage.database_service import DatabaseService
+
+    fact_db_path = Path(__file__).resolve().parents[2] / "data" / "cloudflare_free_daily.db"
+
+    def _query_new_high_feedback_series(end_date, window_days=25):
+        service = DatabaseService.sqlite_d1_compatible(fact_db_path)
+        return service.query_new_high_feedback_series(end_date, window_days=window_days)
 
     return {
+        "_use_default_query_new_high_feedback_series": True,
         "build_mainline_history_record": build_mainline_history_record,
         "load_recent_mainline_history": load_recent_mainline_history,
         "get_sector_turnover_snapshot_from_ths": get_sector_turnover_snapshot_from_ths,
@@ -35,11 +51,20 @@ def _load_default_mainline_helpers():
         "build_mainline_turnover_summary": build_mainline_turnover_summary,
         "fill_sector_snapshot_total_turnover": _fill_sector_snapshot_total_turnover,
         "has_resolved_mainline_turnover_summary": _has_resolved_mainline_turnover_summary,
+        "mainline_turnover_summary_conflicts_with_current_record": _mainline_turnover_summary_conflicts_with_current_record,
         "resolve_effective_total_turnover": _resolve_effective_total_turnover,
         "get_market_daily_total_from_fact_db": get_market_daily_total_from_fact_db_runtime,
         "get_market_total_turnover_from_fact_db": get_market_total_turnover_from_fact_db_runtime,
         "get_turnover_rank_from_fact_db": get_turnover_rank_from_fact_db_runtime,
         "get_wind_a_from_tushare": get_wind_a_from_tushare_first,
+        "get_new_high_feedback_from_tushare": lambda target_date=None, **kwargs: get_new_high_feedback_from_tushare_first(
+            target_date=target_date,
+            db_path=fact_db_path,
+            fetch_tushare_open_trade_dates_fn=fetch_tushare_open_trade_dates,
+            **kwargs,
+        ),
+        "query_new_high_feedback_series": _query_new_high_feedback_series,
+        "get_price_band_style_series_from_tushare": get_price_band_style_series_from_tushare_first,
     }
 
 
@@ -122,6 +147,26 @@ def _record_has_mainline(record):
     return bool(str(record.get("primary_mainline") or record.get("leading_line") or "").strip())
 
 
+def _date_text(record):
+    return str((record or {}).get("date") or (record or {}).get("trade_date") or "").strip()
+
+
+def _mainline_text(record):
+    return str((record or {}).get("primary_mainline") or (record or {}).get("leading_line") or "").strip()
+
+
+def _history_is_short(history, expected_count=25):
+    try:
+        count = max(int(expected_count or 0), 1)
+    except (TypeError, ValueError):
+        count = 25
+    return len([item for item in history or [] if isinstance(item, dict)]) < count
+
+
+def _daily_attack_text(record, fallback=""):
+    return str((record or {}).get("daily_attack_line") or (record or {}).get("attack_line") or fallback or "").strip()
+
+
 def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
     try:
         return loader(target_date, lookback_days=25, max_scan_days=60)
@@ -129,6 +174,297 @@ def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
         if "max_scan_days" not in str(exc):
             raise
         return loader(target_date, lookback_days=25)
+
+
+def _load_recent_turnover_by_daily_mainline(loader, recent_mainline_history, target_date):
+    records_by_sector = {}
+    record_by_date = {}
+    for record in recent_mainline_history or []:
+        record_date = _date_text(record)
+        mainline = _mainline_text(record)
+        if not record_date or not mainline:
+            continue
+        records_by_sector.setdefault(mainline, set()).add(record_date)
+        record_by_date[record_date] = record
+
+    rows_by_date = {}
+    for mainline, expected_dates in records_by_sector.items():
+        try:
+            rows = loader(target_date, mainline, lookback_days=25) or []
+        except TypeError:
+            rows = loader(target_date, mainline) or []
+        except Exception:
+            rows = []
+        for row in rows or []:
+            item = dict(row or {})
+            row_date = _date_text(item)
+            if row_date not in expected_dates:
+                continue
+            record = record_by_date.get(row_date) or {}
+            item["date"] = row_date
+            item["cycle_mainline"] = mainline
+            item["daily_attack_line"] = _daily_attack_text(record, mainline) or mainline
+            rows_by_date[row_date] = item
+    return [rows_by_date[date] for date in sorted(rows_by_date)]
+
+
+def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_history, recent_mainline_history):
+    rows_by_date = {
+        _date_text(row): dict(row or {})
+        for row in recent_sector_turnover_history or []
+        if _date_text(row)
+    }
+    completed = []
+    for record in recent_mainline_history or []:
+        record_date = _date_text(record)
+        mainline = _mainline_text(record)
+        if not record_date or not mainline:
+            continue
+        row = rows_by_date.get(record_date)
+        if row:
+            row.setdefault("date", record_date)
+            row.setdefault("cycle_mainline", mainline)
+            row.setdefault("daily_attack_line", _daily_attack_text(record, mainline) or mainline)
+            completed.append(row)
+            continue
+        completed.append(
+            {
+                "date": record_date,
+                "sector_name": mainline,
+                "cycle_mainline": mainline,
+                "daily_attack_line": _daily_attack_text(record, mainline) or mainline,
+                "sector_turnover": 0.0,
+                "total_turnover": 0.0,
+                "turnover_share_pct": 0.0,
+                "source_status": "history_missing",
+            }
+        )
+    return completed[-25:]
+
+
+def _trend_row_date(row):
+    return str((row or {}).get("date") or (row or {}).get("trade_date") or "").strip()
+
+
+def _new_high_feedback_needs_refresh(feedback, target_date):
+    if not isinstance(feedback, dict):
+        return True
+    rows = [row for row in feedback.get("trend_rows") or [] if isinstance(row, dict)]
+    if len(rows) < 25:
+        return True
+    target = str(target_date or "").strip()
+    if target and not any(_trend_row_date(row) == target for row in rows):
+        return True
+    return False
+
+
+def _same_day_new_high_fact_differs(feedback, target_date, helpers=None):
+    helpers = helpers or {}
+    if helpers.get("_use_default_query_new_high_feedback_series") and not helpers.get("_allow_default_new_high_fact_diff_check"):
+        return False
+    query = helpers.get("query_new_high_feedback_series")
+    if not callable(query):
+        return False
+    try:
+        rows = query(target_date, window_days=1) or []
+    except Exception:
+        return False
+    target = str(target_date or "").strip()
+    for row in rows:
+        row_date = str((row or {}).get("trade_date") or (row or {}).get("date") or "").strip()
+        if row_date != target:
+            continue
+        fact_count = row.get("new_high_count")
+        fact_pct = row.get("all_a_share_pct")
+        return (
+            int(_safe_float(fact_count, -1)) != int(_safe_float(feedback.get("new_high_count"), -1))
+            or round(_safe_float(fact_pct, -1), 2) != round(_safe_float(feedback.get("all_a_share_pct"), -1), 2)
+        )
+    return False
+
+
+def _replay_new_high_feedback_candidate(target_date, helpers=None):
+    helpers = helpers or {}
+    loader = helpers.get("load_replay_snapshot_data")
+    if not callable(loader):
+        try:
+            from domains.market_state.daily_metric_history_index import _load_replay_snapshot_data as loader
+        except Exception:  # pragma: no cover - optional local replay snapshot
+            loader = None
+    if not callable(loader):
+        return {}
+    try:
+        replay_data = loader(target_date)
+    except Exception:
+        return {}
+    if not isinstance(replay_data, dict):
+        return {}
+    feedback = replay_data.get("new_high_feedback")
+    if isinstance(feedback, dict):
+        return feedback
+    nested = replay_data.get("data")
+    if isinstance(nested, dict) and isinstance(nested.get("new_high_feedback"), dict):
+        return nested.get("new_high_feedback")
+    return {}
+
+
+def _load_replay_snapshot_candidate(target_date, helpers=None):
+    helpers = helpers or {}
+    loader = helpers.get("load_replay_snapshot_data")
+    if not callable(loader):
+        try:
+            from domains.market_state.daily_metric_history_index import _load_replay_snapshot_data as loader
+        except Exception:  # pragma: no cover - optional local replay snapshot
+            loader = None
+    if not callable(loader):
+        return {}
+    try:
+        replay_data = loader(target_date)
+    except Exception:
+        return {}
+    return replay_data if isinstance(replay_data, dict) else {}
+
+
+def _use_replay_new_high_feedback_if_complete(snapshot_data, target_date, safe_float, helpers=None):
+    feedback = _replay_new_high_feedback_candidate(target_date, helpers=helpers)
+    if not isinstance(feedback, dict) or _new_high_feedback_needs_refresh(feedback, target_date):
+        return False
+    if _same_day_new_high_fact_differs(feedback, target_date, helpers=helpers):
+        return False
+    snapshot_data["new_high_feedback"] = feedback
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["创新高趋势反馈"] = bool(feedback.get("available", True))
+    step_status["创新高趋势反馈获取"] = bool(feedback.get("available", True))
+    _mark_replayed_step_success(snapshot_data, "创新高趋势反馈获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.new_high_feedback",
+        status="success",
+        message="已复用本地 replay 阶段新高趋势反馈",
+        provider=feedback.get("source") or "replay.new_high_feedback",
+        target_keys=["new_high_feedback"],
+        new_high_count=feedback.get("new_high_count", 0),
+        trend_row_count=len(feedback.get("trend_rows") or []),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return True
+
+
+def _ensure_replay_new_high_feedback(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    if "new_high_feedback" not in snapshot_data:
+        return snapshot_data
+    helpers = helpers or {}
+    if (
+        not _new_high_feedback_needs_refresh(snapshot_data.get("new_high_feedback"), target_date)
+        and not _same_day_new_high_fact_differs(snapshot_data.get("new_high_feedback"), target_date, helpers=helpers)
+    ):
+        return snapshot_data
+    if _use_replay_new_high_feedback_if_complete(snapshot_data, target_date, safe_float, helpers=helpers):
+        return snapshot_data
+    fetcher = helpers.get("get_new_high_feedback_from_tushare")
+    if not callable(fetcher):
+        return snapshot_data
+    try:
+        feedback = fetcher(target_date=target_date) or {}
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        feedback = fetcher(target_date) or {}
+    except Exception as error:
+        data_status = snapshot_data.setdefault("data_status", {})
+        step_status = snapshot_data.setdefault("step_status", {})
+        data_status["创新高趋势反馈"] = False
+        step_status["创新高趋势反馈获取"] = False
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.new_high_feedback",
+            status="degraded",
+            message="阶段新高趋势反馈刷新失败，保留快照内已有数据",
+            provider="tushare.stk_factor_pro.topdays",
+            target_keys=["new_high_feedback"],
+            error=str(error),
+        )
+        _refresh_request_diagnostics(snapshot_data)
+        return snapshot_data
+    if not isinstance(feedback, dict) or not feedback.get("trend_rows"):
+        return snapshot_data
+    if _new_high_feedback_needs_refresh(feedback, target_date):
+        return snapshot_data
+
+    snapshot_data["new_high_feedback"] = feedback
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["创新高趋势反馈"] = bool(feedback.get("available", True))
+    step_status["创新高趋势反馈获取"] = bool(feedback.get("available", True))
+    _mark_replayed_step_success(snapshot_data, "创新高趋势反馈获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.new_high_feedback",
+        status="success",
+        message="已刷新阶段新高趋势反馈",
+        provider=feedback.get("source") or "tushare.stk_factor_pro.topdays",
+        target_keys=["new_high_feedback"],
+        new_high_count=feedback.get("new_high_count", 0),
+        trend_row_count=len(feedback.get("trend_rows") or []),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
+def _price_band_style_series_needs_refresh(series, target_date):
+    if not isinstance(series, dict):
+        return True
+    rows = [row for row in series.get("rows") or [] if isinstance(row, dict)]
+    if len(rows) < 25:
+        return True
+    target = str(target_date or "").strip()
+    if target and not any(_trend_row_date(row) == target for row in rows):
+        return True
+    return False
+
+
+def _ensure_replay_price_band_style_series(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    if not _price_band_style_series_needs_refresh(snapshot_data.get("price_band_style_series"), target_date):
+        return snapshot_data
+    helpers = helpers or {}
+    fetcher = helpers.get("get_price_band_style_series_from_tushare")
+    if not callable(fetcher):
+        return snapshot_data
+    try:
+        series = fetcher(target_date=target_date) or {}
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        series = fetcher(target_date) or {}
+    if not isinstance(series, dict) or not series.get("rows"):
+        return snapshot_data
+
+    snapshot_data["price_band_style_series"] = series
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["价格带风格趋势"] = bool(series.get("available", True))
+    step_status["价格带风格趋势获取"] = bool(series.get("available", True))
+    _mark_replayed_step_success(snapshot_data, "价格带风格趋势获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="input.runtime",
+        step="request.price_band_style_series",
+        status="success",
+        message="已刷新价格带风格趋势",
+        provider=series.get("source") or "storage.price_band_style_daily",
+        target_keys=["price_band_style_series"],
+        row_count=len(series.get("rows") or []),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
 
 
 def _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot=None):
@@ -156,6 +492,59 @@ def _summary_has_attack_evidence(summary):
     return isinstance(attack_summary, dict) and bool(str(attack_summary.get("attack_state") or "").strip())
 
 
+def _expected_mainline_by_date(recent_mainline_history, current_record, target_date):
+    expected = {}
+    for record in recent_mainline_history or []:
+        record_date = _date_text(record)
+        mainline = _mainline_text(record)
+        if record_date and mainline:
+            expected[record_date] = mainline
+    current_mainline = _mainline_text(current_record)
+    if target_date and current_mainline:
+        expected[str(target_date)] = current_mainline
+    return expected
+
+
+def _summary_trend_rows_misaligned(summary, expected_by_date):
+    if not isinstance(summary, dict):
+        return True
+    rows = [row for row in summary.get("turnover_share_trend_rows") or [] if isinstance(row, dict)]
+    if not rows:
+        return True
+    rows_by_date = {_date_text(row): row for row in rows if _date_text(row)}
+    for row_date, expected_mainline in (expected_by_date or {}).items():
+        if row_date not in rows_by_date:
+            return True
+        row = rows_by_date[row_date]
+        cycle_mainline = str(row.get("cycle_mainline") or row.get("primary_mainline") or row.get("sector_name") or "").strip()
+        daily_attack_line = str(row.get("daily_attack_line") or row.get("attack_line") or cycle_mainline or "").strip()
+        if cycle_mainline and cycle_mainline != expected_mainline:
+            return True
+        if daily_attack_line and daily_attack_line != expected_mainline:
+            return True
+    return False
+
+
+def _sector_history_misaligned(recent_sector_turnover_history, expected_by_date):
+    rows_by_date = {_date_text(row): row for row in recent_sector_turnover_history or [] if _date_text(row)}
+    if not expected_by_date:
+        return False
+    for row_date, expected_mainline in expected_by_date.items():
+        row = rows_by_date.get(row_date)
+        if not row:
+            return True
+        row_mainline = str(
+            row.get("cycle_mainline")
+            or row.get("primary_mainline")
+            or row.get("sector_name")
+            or row.get("turnover_scope_label")
+            or ""
+        ).strip()
+        if row_mainline and row_mainline != expected_mainline:
+            return True
+    return False
+
+
 def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
@@ -179,7 +568,13 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
         or ""
     ).strip()
 
-    if not snapshot_data.get("recent_mainline_history") and callable(helpers.get("load_recent_mainline_history")):
+    if (
+        (
+            not snapshot_data.get("recent_mainline_history")
+            or _history_is_short(snapshot_data.get("recent_mainline_history"), 24)
+        )
+        and callable(helpers.get("load_recent_mainline_history"))
+    ):
         snapshot_data["recent_mainline_history"] = _load_recent_mainline_history_for_cycle_calendar(
             helpers["load_recent_mainline_history"],
             target_date,
@@ -217,15 +612,43 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
             total_turnover=total_turnover,
         )
 
-    if (
-        not snapshot_data.get("recent_sector_turnover_history")
-        and current_mainline_name
-        and callable(helpers.get("load_recent_sector_turnover_history"))
-    ):
-        snapshot_data["recent_sector_turnover_history"] = helpers["load_recent_sector_turnover_history"](
-            target_date,
-            current_mainline_name,
-            lookback_days=5,
+    recent_mainline_history = snapshot_data.get("recent_mainline_history") or []
+    expected_by_date = _expected_mainline_by_date(
+        recent_mainline_history,
+        current_record,
+        target_date,
+    )
+    expected_history_by_date = {
+        date: mainline
+        for date, mainline in expected_by_date.items()
+        if str(date) < str(target_date)
+    }
+    recent_sector_turnover_history = snapshot_data.get("recent_sector_turnover_history") or []
+    if current_mainline_name and callable(helpers.get("load_recent_sector_turnover_history")):
+        should_reload_sector_history = (
+            not recent_sector_turnover_history
+            or _sector_history_misaligned(recent_sector_turnover_history, expected_history_by_date)
+        )
+        if should_reload_sector_history:
+            daily_history = _load_recent_turnover_by_daily_mainline(
+                helpers["load_recent_sector_turnover_history"],
+                recent_mainline_history,
+                target_date,
+            )
+            if daily_history:
+                snapshot_data["recent_sector_turnover_history"] = daily_history
+                recent_sector_turnover_history = daily_history
+            elif not recent_sector_turnover_history:
+                snapshot_data["recent_sector_turnover_history"] = helpers["load_recent_sector_turnover_history"](
+                    target_date,
+                    current_mainline_name,
+                    lookback_days=25,
+                )
+                recent_sector_turnover_history = snapshot_data.get("recent_sector_turnover_history") or []
+    if recent_mainline_history:
+        snapshot_data["recent_sector_turnover_history"] = _fill_turnover_placeholders_for_mainline_history(
+            recent_sector_turnover_history,
+            recent_mainline_history,
         )
 
     summary_resolved = True
@@ -233,14 +656,29 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
         summary_resolved = helpers["has_resolved_mainline_turnover_summary"](
             snapshot_data.get("mainline_turnover_summary")
         )
+    should_rebuild_for_history_alignment = _summary_trend_rows_misaligned(
+        snapshot_data.get("mainline_turnover_summary"),
+        expected_by_date,
+    )
 
     sector_attack_evidence_rows = _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot)
     should_rebuild_for_attack_evidence = bool(
         sector_attack_evidence_rows
         and not _summary_has_attack_evidence(snapshot_data.get("mainline_turnover_summary"))
     )
+    should_rebuild_for_current_record_conflict = False
+    if callable(helpers.get("mainline_turnover_summary_conflicts_with_current_record")):
+        should_rebuild_for_current_record_conflict = helpers["mainline_turnover_summary_conflicts_with_current_record"](
+            snapshot_data.get("mainline_turnover_summary"),
+            snapshot_data.get("current_mainline_history_record") or {},
+        )
 
-    if (not summary_resolved or should_rebuild_for_attack_evidence) and callable(helpers.get("build_mainline_turnover_summary")):
+    if (
+        not summary_resolved
+        or should_rebuild_for_attack_evidence
+        or should_rebuild_for_history_alignment
+        or should_rebuild_for_current_record_conflict
+    ) and callable(helpers.get("build_mainline_turnover_summary")):
         build_kwargs = {
             "target_date": target_date,
             "current_mainline_history_record": snapshot_data.get("current_mainline_history_record") or {},
@@ -668,6 +1106,100 @@ def _fetch_replay_lhb_snapshot(target_date, helpers):
     from input.tushare_runtime import get_lhb_snapshot_from_tushare_first
 
     return get_lhb_snapshot_from_tushare_first(target_date) or {}
+
+
+def _fetch_replay_concept_fund_flow(target_date, snapshot_data, helpers):
+    fetcher = (helpers or {}).get("get_hot_concept_fund_flow_from_tushare")
+    if not callable(fetcher):
+        from input.tushare_runtime import get_hot_concept_fund_flow_from_tushare_first as fetcher
+
+    hot_plates = list((snapshot_data or {}).get("hot_plates") or [])
+    try:
+        return fetcher(target_date=target_date, hot_plates=hot_plates, limit=20) or {}
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        return fetcher(target_date, hot_plates=hot_plates, limit=20) or {}
+
+
+def _is_replay_concept_hot_plate(row):
+    if not isinstance(row, dict):
+        return False
+    code = str(row.get("code") or row.get("ts_code") or row.get("指数代码") or "").strip()
+    code_digits = "".join(ch for ch in code if ch.isdigit())
+    if len(code_digits) >= 6 and code_digits[:3] in {"884", "885", "886"}:
+        return True
+    if code.endswith(".TI") and len(code_digits) >= 6 and code_digits[:3] in {"884", "885", "886"}:
+        return True
+    marker_text = " ".join(
+        str(row.get(key) or "")
+        for key in ("type", "market", "tag", "category", "板块类型")
+    )
+    return "概念" in marker_text
+
+
+def _replay_concept_fund_flow_tracked(snapshot_data):
+    if not isinstance(snapshot_data, dict):
+        return False
+    if "concept_fund_flow" in snapshot_data:
+        return True
+    if "概念资金流向" in (snapshot_data.get("data_status") or {}):
+        return True
+    if "概念资金流向获取" in (snapshot_data.get("step_status") or {}):
+        return True
+    if any(
+        isinstance(item, dict) and item.get("step") == "request.concept_fund_flow"
+        for item in snapshot_data.get("module_logs") or []
+    ):
+        return True
+    return any(_is_replay_concept_hot_plate(row) for row in snapshot_data.get("hot_plates") or [])
+
+
+def _replay_concept_fund_flow_candidate(target_date, helpers=None):
+    replay_data = _load_replay_snapshot_candidate(target_date, helpers=helpers)
+    if not isinstance(replay_data, dict):
+        return {}
+    concept_flow = replay_data.get("concept_fund_flow")
+    if isinstance(concept_flow, dict) and _has_rows(concept_flow.get("rows") or []):
+        return concept_flow
+    nested = replay_data.get("data")
+    if isinstance(nested, dict):
+        concept_flow = nested.get("concept_fund_flow")
+        if isinstance(concept_flow, dict) and _has_rows(concept_flow.get("rows") or []):
+            return concept_flow
+    return {}
+
+
+def _use_replay_concept_fund_flow_if_complete(snapshot_data, target_date, safe_float, helpers=None):
+    concept_flow = _replay_concept_fund_flow_candidate(target_date, helpers=helpers)
+    rows = list((concept_flow or {}).get("rows") or [])
+    if not rows:
+        return False
+    snapshot_data["concept_fund_flow"] = {
+        "rows": rows,
+        "inflow": list((concept_flow or {}).get("inflow") or rows),
+        "outflow": list((concept_flow or {}).get("outflow") or []),
+        "provider": (concept_flow or {}).get("provider", "replay.concept_fund_flow"),
+    }
+    _sync_replay_source_status(
+        snapshot_data,
+        data_label="概念资金流向",
+        step_label="概念资金流向获取",
+        timer_label="概念资金流向获取",
+        safe_float=safe_float,
+    )
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.concept_fund_flow",
+        status="success",
+        message="已复用本地 replay 阶段概念资金流",
+        provider="replay.concept_fund_flow",
+        target_keys=["concept_fund_flow"],
+        row_count=len(rows),
+        fallback_used=True,
+    )
+    return True
 
 
 def _build_sector_bucket(records, *, include_zt_type=False):
@@ -1289,6 +1821,61 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
             )
             changed = True
 
+    concept_flow = snapshot_data.get("concept_fund_flow") or {}
+    if _replay_concept_fund_flow_tracked(snapshot_data) and (
+        snapshot_data.get("data_status", {}).get("概念资金流向") is False
+        or snapshot_data.get("step_status", {}).get("概念资金流向获取") is False
+        or not (isinstance(concept_flow, dict) and _has_rows(concept_flow.get("rows") or []))
+    ):
+        try:
+            refreshed_concept_flow = _fetch_replay_concept_fund_flow(target_date, snapshot_data, helpers)
+        except Exception:
+            refreshed_concept_flow = {}
+        rows = list((refreshed_concept_flow or {}).get("rows") or [])
+        if rows:
+            snapshot_data["concept_fund_flow"] = {
+                "rows": rows,
+                "inflow": list((refreshed_concept_flow or {}).get("inflow") or rows),
+                "outflow": list((refreshed_concept_flow or {}).get("outflow") or []),
+                "provider": (refreshed_concept_flow or {}).get("provider", "tushare.ths_member+tushare.moneyflow"),
+            }
+            _sync_replay_source_status(
+                snapshot_data,
+                data_label="概念资金流向",
+                step_label="概念资金流向获取",
+                timer_label="概念资金流向获取",
+                safe_float=safe_float,
+            )
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.request",
+                step="request.concept_fund_flow",
+                status="success",
+                message="已回补概念板块资金流",
+                provider=(refreshed_concept_flow or {}).get("provider", "tushare.ths_member+tushare.moneyflow"),
+                target_keys=["concept_fund_flow"],
+                row_count=len(rows),
+                fallback_used=bool((refreshed_concept_flow or {}).get("fallback_used")),
+            )
+            changed = True
+        elif _use_replay_concept_fund_flow_if_complete(snapshot_data, target_date, safe_float, helpers=helpers):
+            changed = True
+        else:
+            snapshot_data.setdefault("data_status", {})["概念资金流向"] = False
+            snapshot_data.setdefault("step_status", {})["概念资金流向获取"] = False
+            _replace_request_module_log(
+                snapshot_data,
+                module="domains.market_activity.request",
+                step="request.concept_fund_flow",
+                status="degraded",
+                message="概念板块资金流回补仍为空",
+                provider=(refreshed_concept_flow or {}).get("provider", "tushare.ths_member+tushare.moneyflow"),
+                target_keys=["concept_fund_flow"],
+                row_count=0,
+                fallback_used=bool((refreshed_concept_flow or {}).get("fallback_used")),
+            )
+            changed = True
+
     if _ensure_replay_advanced_activity(snapshot_data):
         changed = True
 
@@ -1347,8 +1934,23 @@ def build_replay_snapshot_contract(
 
     _append_log(logs, "load.snapshot", "success", "已加载官方快照", refresh_sources=refresh_sources)
     snapshot_data = _hoist_report_analysis_atoms(snapshot_data)
-    runtime_helpers = {**_load_default_mainline_helpers(), **(helpers or {})}
+    explicit_helpers = helpers or {}
+    runtime_helpers = {**_load_default_mainline_helpers(), **explicit_helpers}
+    if "query_new_high_feedback_series" in explicit_helpers:
+        runtime_helpers["_use_default_query_new_high_feedback_series"] = False
     snapshot_data = _ensure_replay_critical_tushare_facts(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_replay_new_high_feedback(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_replay_price_band_style_series(
         snapshot_data,
         target_date,
         safe_float,

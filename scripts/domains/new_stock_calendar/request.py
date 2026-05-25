@@ -208,23 +208,24 @@ def collect_new_stock_calendar_request_bundle(target_date, *, fetch_pages, timer
                 )
 
         results["new_stock_calendar"] = records
-        data_status["新股上市日历"] = bool(records)
-        step_status["新股上市日历获取"] = bool(records)
+        data_status["新股上市日历"] = True
+        step_status["新股上市日历获取"] = True
         label = "新股上市日历获取" if records else "新股上市日历获取(空)"
         elapsed, _ = timer.record(label, 11)
         if records:
             emit(f"   ✅ 新股上市日历成功: {len(records)} 条 [⏱ {elapsed:.2f}s]")
         else:
-            emit(f"   ⚠️ 新股上市日历返回空 [⏱ {elapsed:.2f}s]")
+            emit(f"   ✅ 新股上市日历正常返回空: 无新股上市记录 [⏱ {elapsed:.2f}s]")
         _append_log(
             module_logs,
             "request.new_stock_calendar",
-            "success" if records else "degraded",
+            "success",
             "已处理新股上市日历请求",
             provider="tushare.new_share" if callable(calendar_fetcher) else "sina_new_stock_calendar",
             target_keys=["new_stock_calendar"],
             page_count=len(pages or []),
             calendar_count=len(records),
+            diagnostic_note="无新股上市记录，空结果不等于接口失败" if not records else "",
         )
     except Exception as error:
         elapsed, _ = timer.record("新股上市日历获取(失败)", 11)

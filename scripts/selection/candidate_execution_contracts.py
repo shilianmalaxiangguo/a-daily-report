@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from selection.advantage_dedup_runtime import build_grouped_advantage_score
 
 DEFENSIVE_EXIT_RULE_TEXT = "错了就跑：30分钟结构失守立即卖，最晚不超过单笔-5%"
 PROFIT_EXIT_RULE_TEXT = "赚了主动卖：3~5日窗口内出现放量大阳优先兑现，最晚第5日收盘评估"
@@ -178,6 +179,37 @@ def _first_number(candidate, *keys, default=None):
     return default
 
 
+def _strength_already_contains_lianban_bonus(candidate, *, tomorrow_strength=0, lianban=0):
+    if int(lianban or 0) < 2:
+        return False
+    base_strength = _first_number(candidate, "base_strength_score", default=None)
+    if base_strength is None:
+        return False
+    return _safe_float(tomorrow_strength, 0) - base_strength >= 8
+
+
+def _append_suppressed_advantage_points(advantage_dedup, points):
+    if not points:
+        return advantage_dedup
+    updated = dict(advantage_dedup or {})
+    suppressed_points = list(updated.get("suppressed_points") or [])
+    for point in points:
+        point = dict(point or {})
+        score = _safe_float(point.get("score", 0), 0)
+        suppressed_points.append(
+            {
+                "group": str(point.get("group") or "misc"),
+                "label": str(point.get("label") or point.get("group") or "misc"),
+                "score": score,
+                "raw_score": _safe_float(point.get("raw_score", score), score),
+                "source": str(point.get("source") or ""),
+            }
+        )
+    updated["suppressed_points"] = suppressed_points
+    updated["repeated_advantage_count"] = len(suppressed_points)
+    return updated
+
+
 def build_limit_up_inertia_profile(candidate=None):
     candidate = candidate or {}
     pattern = str(candidate.get("pattern", "") or "")
@@ -201,13 +233,25 @@ def build_limit_up_inertia_profile(candidate=None):
         score = 78 + min(lianban, 4) * 7
         if "主线" in combined or "锚定龙" in combined or "龙一" in combined:
             score += 8
+        inertia_points = []
+        suppressed_inertia_points = []
         if tomorrow_strength >= 90:
-            score += 5
+            strength_point = {"group": "front_recognition", "label": "强度已到前排", "score": 5}
+            if _strength_already_contains_lianban_bonus(candidate, tomorrow_strength=tomorrow_strength, lianban=lianban):
+                suppressed_inertia_points.append({"group": "front_recognition", "label": f"{lianban}连板已体现在强度", "score": 5})
+            else:
+                inertia_points.append(strength_point)
+        inertia_dedup = _append_suppressed_advantage_points(
+            build_grouped_advantage_score(inertia_points),
+            suppressed_inertia_points,
+        )
+        score += inertia_dedup["total_score"]
         return {
             "limit_up_inertia_level": "高惯性",
             "limit_up_inertia_score": min(score, 100),
             "next_day_limit_probability_band": "高于普通上涨样本",
             "limit_up_inertia_reason": "昨日涨停/连板/T字板已经被资金选择，次日冲高或再涨停概率高于普通上涨样本；只在竞价、回封或10点承接成立时参与",
+            "limit_up_inertia_dedup": inertia_dedup,
         }
 
     if change_pct >= 5 or tomorrow_strength >= 80 or "强实体" in combined:
@@ -259,7 +303,7 @@ def build_risk_reward_plan(candidate=None, *, min_ratio=2.0):
         "risk_reward_min_ratio": float(min_ratio),
         "risk_reward_ratio": None,
         "risk_reward_state": "待计算",
-        "risk_reward_plan": f"默认要求盈亏比不低于{min_ratio:g}:1；缺少买点、作废线或上方空间时，不能把均线回归当买点，只观察等价格事实补齐",
+        "risk_reward_plan": f"默认要求盈亏比不低于{min_ratio:g}:1；缺少观察位、作废线或上方空间时，不能把均线回归当观察位，只观察等价格事实补齐",
     }
     if entry is None or stop is None or target is None or entry <= 0 or stop <= 0 or target <= 0:
         return base
@@ -271,7 +315,7 @@ def build_risk_reward_plan(candidate=None, *, min_ratio=2.0):
             {
                 "risk_reward_state": "不合格",
                 "risk_reward_ratio": 0.0,
-                "risk_reward_plan": "买点、作废线和上方空间不构成正向盈亏比；只观察，不做均线试错",
+                "risk_reward_plan": "观察位、作废线和上方空间不构成正向盈亏比；只观察，不做均线试错",
             }
         )
         return base
@@ -580,8 +624,8 @@ def build_entry_timing_policy(*, source_tier="extreme_conviction", participation
         return {
             "source_tier": source_tier,
             "entry_timing": "tail_exception",
-            "buy_window": "14:30-15:00",
-            "entry_timing_reason": "尾盘只作为例外确认窗口，用于避开盘中分歧消耗",
+            "buy_window": "14:30-14:55",
+            "entry_timing_reason": "尾盘只作为买卖窗口期的例外确认窗口，用于避开盘中分歧消耗",
         }
 
     if window_type in ("auction_reseal", "board_or_miss") or any(

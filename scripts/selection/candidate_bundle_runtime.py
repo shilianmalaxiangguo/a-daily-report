@@ -166,6 +166,23 @@ def _enrich_candidate_with_stock_risk(item, code, stock_risk_map):
         item["risk_events"] = list(item.get("risk_events") or []) + risk_events
 
 
+def _enrich_candidate_with_recent_bars(item, code, target_date, fetch_recent_price_bars=None):
+    if item.get("recent_bars") or item.get("stock_klines"):
+        return
+    if not code or not target_date:
+        return
+    if not callable(fetch_recent_price_bars):
+        return
+    try:
+        bars = fetch_recent_price_bars(code, target_date, lookback_days=120, fast_fail=False)
+    except TypeError:
+        bars = fetch_recent_price_bars(code, target_date, lookback_days=120)
+    except Exception:
+        bars = []
+    if bars:
+        item["recent_bars"] = list(bars)[-120:]
+
+
 def _normalize_candidate_sector(item):
     sector = str(item.get("sector") or "").strip()
     if _is_valid_sector_label(sector):
@@ -173,6 +190,226 @@ def _normalize_candidate_sector(item):
     replacement = _first_valid_stock_plate(item)
     if replacement:
         item["sector"] = replacement
+
+
+def _candidate_code(item, normalize_stock_code):
+    if not isinstance(item, dict):
+        return ""
+    for key in ("code", "stock_code", "代码", "ts_code", "symbol"):
+        value = item.get(key)
+        if value:
+            return normalize_stock_code(value)
+    return ""
+
+
+def _build_recent_extreme_mention_candidates(data, normalize_stock_code):
+    result = []
+    for row in (data or {}).get("recent_extreme_conviction_mentions") or []:
+        if not isinstance(row, dict):
+            continue
+        code = _candidate_code(row, normalize_stock_code)
+        if not code:
+            continue
+        name = str(row.get("name") or row.get("stock_name") or "").strip()
+        sector = str(row.get("sector") or row.get("sector_candidate") or "").strip()
+        reason = str(row.get("reason") or row.get("next_action") or "").strip()
+        planned_window = str(row.get("planned_window") or row.get("buy_window") or "").strip()
+        result.append(
+            {
+                "name": name,
+                "code": code,
+                "sector": sector,
+                "score": row.get("score", 50),
+                "source": "recent_extreme_conviction_mention",
+                "source_tier": "extreme_conviction",
+                "reason": reason or "历史重点观察样本待复核",
+                "pattern": str(row.get("pattern") or reason or "历史好形态").strip(),
+                "conviction_reason": reason,
+                "participation_window": planned_window,
+                "recent_extreme_mention": dict(row),
+            }
+        )
+    return result
+
+
+def _historical_review_text(item):
+    if not isinstance(item, dict):
+        return str(item or "")
+    parts = []
+    for key in (
+        "review_status",
+        "next_action",
+        "invalidation",
+        "reason",
+        "source_section",
+        "payload",
+    ):
+        value = item.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return " / ".join(parts)
+
+
+def _is_eliminated_historical_extreme(row):
+    if not isinstance(row, dict):
+        return False
+    if bool(row.get("is_a_kill_eliminated")):
+        return True
+    payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+    if bool(payload.get("is_a_kill_eliminated") or payload.get("a_kill_eliminated")):
+        return True
+    texts = [
+        row.get("review_status"),
+        row.get("next_action"),
+        payload.get("review_status"),
+        payload.get("next_action"),
+    ]
+    elimination_markers = ("A杀淘汰", "A杀冷却", "A杀出清", "取关淘汰", "禁买")
+    return any(
+        any(marker in str(text or "") for marker in elimination_markers)
+        or str(text or "").strip().lower() in {"a_kill", "a-kill"}
+        for text in texts
+    )
+
+
+def _historical_extreme_rank(row):
+    for key in ("rank_no", "rank"):
+        try:
+            value = int(float(str((row or {}).get(key) or "").strip()))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    payload = row.get("payload") if isinstance((row or {}).get("payload"), dict) else {}
+    for key in ("rank_no", "rank"):
+        try:
+            value = int(float(str(payload.get(key) or "").strip()))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return 9999
+
+
+def _is_dragon_rebound_historical_extreme(row):
+    if not isinstance(row, dict):
+        return False
+    if not _is_eliminated_historical_extreme(row):
+        return False
+    rank = _historical_extreme_rank(row)
+    if rank > 2:
+        return False
+    text = _historical_review_text(row)
+    return any(marker in text for marker in ("板块锚定龙", "首板", "龙头", "龙一", "核心传导"))
+
+
+def _review_reasons_from_stock(stock):
+    review = (stock or {}).get("trend_aesthetic_review") or {}
+    if not isinstance(review, dict):
+        return ""
+    reasons = [str(reason).strip() for reason in review.get("reasons") or [] if str(reason).strip()]
+    return " / ".join(reasons)
+
+
+def _build_historical_extreme_review(
+    data,
+    evaluated_stocks,
+    extreme_conviction_list,
+    shape_repair_pool,
+    normalize_stock_code,
+    dragon_rebound_watch_pool=None,
+):
+    review_rows = (
+        (data or {}).get("recent_extreme_conviction_mentions_for_review")
+        or (data or {}).get("recent_extreme_conviction_mentions")
+        or []
+    )
+    if not review_rows:
+        return []
+    formal_by_code = {
+        normalize_stock_code(item.get("code") or item.get("stock_code")): item
+        for item in extreme_conviction_list or []
+        if isinstance(item, dict)
+    }
+    repair_by_code = {
+        normalize_stock_code(item.get("code") or item.get("stock_code")): item
+        for item in shape_repair_pool or []
+        if isinstance(item, dict)
+    }
+    dragon_rebound_by_code = {
+        normalize_stock_code(item.get("code") or item.get("stock_code")): item
+        for item in dragon_rebound_watch_pool or []
+        if isinstance(item, dict)
+    }
+    evaluated_by_code = {
+        normalize_stock_code(item.get("code") or item.get("stock_code")): item
+        for item in evaluated_stocks or []
+        if isinstance(item, dict)
+    }
+    result = []
+    for row in review_rows:
+        if not isinstance(row, dict):
+            continue
+        code = _candidate_code(row, normalize_stock_code)
+        if not code:
+            continue
+        enriched = evaluated_by_code.get(code, {})
+        name = str(row.get("name") or row.get("stock_name") or enriched.get("name") or "").strip()
+        sector = str(row.get("sector") or row.get("sector_candidate") or enriched.get("sector") or "").strip()
+        source_section = str(row.get("source_section") or "极度看好名单").strip()
+        mention_date = str(row.get("mention_trade_date") or row.get("trade_date") or "").strip()
+        if code in formal_by_code:
+            destination = "正式重点观察名单"
+            review_status = "当前合格"
+            review_basis = "进入正式重点观察名单"
+            next_action = "按最终仓位结论统一收口"
+        elif code in repair_by_code:
+            repair = repair_by_code[code]
+            destination = "形态待修复池"
+            review_status = str(repair.get("repair_status") or "待修复").strip()
+            review_basis = _review_reasons_from_stock(repair) or "历史好形态但当前承接转弱"
+            next_action = str(
+                repair.get("next_action")
+                or "保留跟踪，重新站回短中线承接后再评估；继续走坏再取关淘汰"
+            ).strip()
+        elif code in dragon_rebound_by_code:
+            rebound = dragon_rebound_by_code[code]
+            destination = "龙回头观察池"
+            review_status = str(rebound.get("repair_status") or "龙回头观察").strip()
+            review_basis = _review_reasons_from_stock(rebound) or "龙回头样本，A杀未修复"
+            next_action = str(
+                rebound.get("next_action")
+                or "单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰"
+            ).strip()
+        elif _is_dragon_rebound_historical_extreme(row):
+            destination = "龙回头观察池"
+            review_status = "龙回头观察"
+            review_basis = str(row.get("reason") or "排名靠前锚定龙，A杀未修复").strip()
+            next_action = "单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰"
+        elif _is_eliminated_historical_extreme(row):
+            destination = "取关淘汰"
+            review_status = "A杀/结构破坏"
+            review_basis = "A杀或继续走坏"
+            next_action = "不进明日比较，后续重新站回短中线承接后再重建样本"
+        else:
+            destination = "历史观察"
+            review_status = str(row.get("review_status") or "历史复核").strip()
+            review_basis = str(row.get("reason") or row.get("next_action") or row.get("invalidation") or "未进入正式名单或形态待修复池").strip()
+            next_action = "继续按历史复盘观察，不写成明日新增参与"
+        result.append(
+            {
+                "mention_trade_date": mention_date,
+                "name": name,
+                "code": code,
+                "sector": sector,
+                "source_section": source_section,
+                "destination": destination,
+                "review_status": review_status,
+                "review_basis": review_basis,
+                "next_action": next_action,
+            }
+        )
+    return result
 
 
 def build_candidate_bundle_contract(
@@ -191,7 +428,9 @@ def build_candidate_bundle_contract(
     split_candidates_by_mainline,
     build_gem_observation_pool,
     build_sector_trend_snapshot,
-    build_extreme_conviction_list,
+    build_extreme_conviction_list=None,
+    build_extreme_conviction_groups=None,
+    fetch_recent_price_bars=None,
 ):
     zt_pool_by_sector = zt_pool_by_sector or {}
     gem_breathing_candidates = gem_breathing_candidates or []
@@ -224,14 +463,23 @@ def build_candidate_bundle_contract(
                 "plates": list(lb_stock.get("plates") or []),
             }
 
+    watchlist_codes = {_candidate_code(stock, normalize_stock_code) for stock in watchlist or []}
+    mention_candidates = [
+        item
+        for item in _build_recent_extreme_mention_candidates(data, normalize_stock_code)
+        if item.get("code") not in watchlist_codes
+    ]
+    evaluation_source_stocks = list(watchlist or []) + mention_candidates
+
     evaluated_stocks = []
-    for stock in watchlist:
+    for stock in evaluation_source_stocks:
         item = dict(stock)
         code = item.get("code", "")
         normalized_code = normalize_stock_code(code)
         _enrich_candidate_item(item, normalized_code, stock_info_map, volume_anomaly_map)
         _enrich_candidate_with_xuangubao_reason(item, normalized_code, xuangubao_reason_map)
         _enrich_candidate_with_stock_risk(item, normalized_code, stock_risk_map)
+        _enrich_candidate_with_recent_bars(item, normalized_code, target_date, fetch_recent_price_bars=fetch_recent_price_bars)
         _normalize_candidate_sector(item)
         base_score = item.get("score", 0)
         abnormal_item = abnormal_watch_map.get(code, {}) or abnormal_watch_map.get(normalized_code, {})
@@ -285,6 +533,7 @@ def build_candidate_bundle_contract(
                 tmr_forecast = f"{tmr_forecast}；异动刚出现，先看次日承接"
 
         item["tomorrow_strength"] = tomorrow_strength
+        item["base_strength_score"] = base_score
         item["core_level"] = core_level
         item["tmr_forecast"] = tmr_forecast
         item["连板数"] = lb_count
@@ -302,8 +551,7 @@ def build_candidate_bundle_contract(
     evaluated_stocks.sort(
         key=lambda item: (
             item.get("tomorrow_strength", 0),
-            item.get("abnormal_bonus", 0),
-            item.get("score", 0),
+            item.get("base_strength_score", item.get("score", 0)),
         ),
         reverse=True,
     )
@@ -339,11 +587,61 @@ def build_candidate_bundle_contract(
         zt_pool_by_sector=zt_pool_by_sector,
         top_n=5,
     )
-    extreme_conviction_list = build_extreme_conviction_list(
+    risk_context = {
+        "systemic_risk_warnings": list(data.get("systemic_risk_warnings") or []),
+        "risk_theme_impacts": list(data.get("risk_theme_impacts") or []),
+        "risk_sectors": list(data.get("risk_sectors") or []),
+    }
+    shape_repair_pool = []
+    dragon_rebound_watch_pool = []
+    if build_extreme_conviction_groups:
+        try:
+            conviction_groups = build_extreme_conviction_groups(
+                evaluated_stocks,
+                exit_analysis.get("sector_name", ""),
+                sector_snapshot=sector_trend_snapshot,
+                top_n=3,
+                risk_context=risk_context,
+            )
+        except TypeError as error:
+            if "risk_context" not in str(error):
+                raise
+            conviction_groups = build_extreme_conviction_groups(
+                evaluated_stocks,
+                exit_analysis.get("sector_name", ""),
+                sector_snapshot=sector_trend_snapshot,
+                top_n=3,
+            )
+        extreme_conviction_list = list((conviction_groups or {}).get("extreme_conviction_list") or [])
+        shape_repair_pool = list((conviction_groups or {}).get("shape_repair_pool") or [])
+        dragon_rebound_watch_pool = list((conviction_groups or {}).get("dragon_rebound_watch_pool") or [])
+    elif callable(build_extreme_conviction_list):
+        try:
+            extreme_conviction_list = build_extreme_conviction_list(
+                evaluated_stocks,
+                exit_analysis.get("sector_name", ""),
+                sector_snapshot=sector_trend_snapshot,
+                top_n=3,
+                risk_context=risk_context,
+            )
+        except TypeError as error:
+            if "risk_context" not in str(error):
+                raise
+            extreme_conviction_list = build_extreme_conviction_list(
+                evaluated_stocks,
+                exit_analysis.get("sector_name", ""),
+                sector_snapshot=sector_trend_snapshot,
+                top_n=3,
+            )
+    else:
+        extreme_conviction_list = []
+    historical_extreme_review = _build_historical_extreme_review(
+        data,
         evaluated_stocks,
-        exit_analysis.get("sector_name", ""),
-        sector_snapshot=sector_trend_snapshot,
-        top_n=3,
+        extreme_conviction_list,
+        shape_repair_pool,
+        normalize_stock_code,
+        dragon_rebound_watch_pool,
     )
     _append_log(logs, "candidate_grouping", "success", "已完成主线/跨线/创业板分组", mainline_name=primary_mainline)
 
@@ -362,6 +660,9 @@ def build_candidate_bundle_contract(
         "crossline_ignored_stocks": crossline_ignored_stocks,
         "sector_trend_snapshot": sector_trend_snapshot,
         "extreme_conviction_list": extreme_conviction_list,
+        "shape_repair_pool": shape_repair_pool,
+        "dragon_rebound_watch_pool": dragon_rebound_watch_pool,
+        "historical_extreme_review": historical_extreme_review,
         "module_logs": logs,
     }
 
@@ -396,4 +697,6 @@ def build_step2_candidate_bundle(
         build_gem_observation_pool=helpers["build_gem_observation_pool"],
         build_sector_trend_snapshot=helpers["build_sector_trend_snapshot"],
         build_extreme_conviction_list=helpers["build_extreme_conviction_list"],
+        build_extreme_conviction_groups=helpers.get("build_extreme_conviction_groups"),
+        fetch_recent_price_bars=helpers.get("fetch_recent_price_bars"),
     )

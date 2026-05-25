@@ -195,6 +195,21 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertEqual(ordinary_policy["next_day_limit_probability_band"], "接近普通上涨样本")
         self.assertIn("只观察", ordinary_policy["risk_reward_plan"])
 
+    def test_limit_up_inertia_does_not_add_strength_threshold_again_when_lianban_already_in_strength(self):
+        profile = build_limit_up_inertia_profile(
+            {
+                "name": "连板样本",
+                "pattern": "涨停",
+                "连板数": 2,
+                "base_strength_score": 72,
+                "tomorrow_strength": 92,
+            }
+        )
+
+        self.assertEqual(profile["limit_up_inertia_level"], "高惯性")
+        self.assertEqual(profile["limit_up_inertia_score"], 92)
+        self.assertIn("2连板", profile["limit_up_inertia_dedup"]["suppressed_points"][0]["label"])
+
     def test_risk_reward_plan_requires_two_to_one_before_ma_reversion_probe(self):
         qualified = build_risk_reward_plan(
             {
@@ -218,6 +233,20 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertEqual(unqualified["risk_reward_state"], "不合格")
         self.assertLess(unqualified["risk_reward_ratio"], 2.0)
         self.assertEqual(profile["limit_up_inertia_level"], "高惯性")
+
+        missing_price = build_risk_reward_plan({})
+        self.assertIn("缺少观察位", missing_price["risk_reward_plan"])
+        self.assertNotIn("缺少买点", missing_price["risk_reward_plan"])
+        self.assertNotIn("当买点", missing_price["risk_reward_plan"])
+        invalid_shape = build_risk_reward_plan(
+            {
+                "ma5": 10.0,
+                "ma20": 10.5,
+                "limit_up_price": 11.0,
+            }
+        )
+        self.assertIn("观察位、作废线和上方空间", invalid_shape["risk_reward_plan"])
+        self.assertNotIn("买点", invalid_shape["risk_reward_plan"])
 
     def test_participation_window_from_candidate_uses_fast_path_for_core_markers(self):
         self.assertEqual(
@@ -262,7 +291,7 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertEqual(ten_confirm["entry_timing"], "ten_confirm")
         self.assertEqual(ten_confirm["buy_window"], "09:50-10:10")
         self.assertEqual(tail_exception["entry_timing"], "tail_exception")
-        self.assertEqual(tail_exception["buy_window"], "14:30-15:00")
+        self.assertEqual(tail_exception["buy_window"], "14:30-14:55")
         self.assertEqual(no_trade["source_tier"], "crossline_watch")
         self.assertEqual(no_trade["entry_timing"], "no_trade")
         self.assertEqual(no_trade["buy_window"], "none")

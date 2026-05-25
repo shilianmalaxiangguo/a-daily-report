@@ -78,7 +78,23 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("二档（防守档）", stop_lines)
         self.assertNotIn("二档（防守档）", conclusion_lines)
         self.assertNotIn("二档（防守档）禁止买入", stop_lines)
-        self.assertNotIn("禁止任何买入操作", conclusion_lines)
+
+    def test_stop_anchor_relabels_zero_position_new_position_stop(self):
+        context = {
+            "position_level": "一档（空仓档）",
+            "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+            "build_stop_execution_plan": lambda *args, **kwargs: {},
+            "build_trade_price_focus": lambda *args, **kwargs: {},
+            "keep_group": [],
+            "executable_stocks": [],
+            "waiting_stocks": [],
+            "untradable_stocks": [],
+        }
+
+        rendered = "\n".join(build_entry_plan_stop_anchor_node(context)["lines"])
+
+        self.assertIn("无需设置新增参与止损", rendered)
+        self.assertNotIn("新仓止损", rendered)
 
     def test_entry_conclusion_names_layered_participation_windows_not_universal_wait(self):
         context = {

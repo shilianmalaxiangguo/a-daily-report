@@ -91,6 +91,23 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         self.assertIn("9/20", rendered)
         self.assertNotIn("最近确认中枢", rendered)
 
+    def test_intraday_note_does_not_show_participation_when_final_action_is_zero(self):
+        lines = render_positioning_section(
+            {
+                "enabled_node_keys": ["execution_framework", "intraday_note"],
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                "candidate_snapshot": {"front_page": {"unique_object": "暂无"}},
+                "get_execution_framework_text": lambda: "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**怎么执行**：最终0%时不按参与窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
+        self.assertIn("不新增参与", rendered)
+        self.assertIn("只观察指数图形、主攻线承接和唯一对象是否重新成立", rendered)
+        self.assertNotIn("强核心走竞价表态", rendered)
+        self.assertNotIn("分层参与，买入后", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

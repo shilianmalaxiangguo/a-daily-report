@@ -59,18 +59,82 @@ def _build_execution_section(contract_label, permission, action_plan, knowledge)
     ))
 
 
-def _build_review_section(knowledge, llm_wiki=None):
+def _has_ai_friction_update(request):
+    updates = request.get("knowledge_updates") or []
+    for update in updates:
+        if not isinstance(update, dict):
+            continue
+        topic = str(update.get("topic", "") or "")
+        source_path = str(update.get("source_path", "") or "")
+        if "AI摩擦与知识复利" in topic or "AI摩擦与知识复利" in source_path:
+            return True
+    return False
+
+
+def build_ai_friction_knowledge_note(request):
+    if not _has_ai_friction_update(request or {}):
+        return []
+    return [
+        "## 知识复利提示",
+        "- 复利方向：用反馈机制校准新知识，避免只堆积结论。",
+        "- 必要认知摩擦：复述、重写、对比或沉淀成知识节点。",
+        "- 日报落点：只记录字段化结论，不把文章长文带入交易主链。",
+    ]
+
+
+def _format_knowledge_compounding_candidate(candidate):
+    if not isinstance(candidate, dict):
+        return ""
+    related_nodes = [
+        str(node or "").strip()
+        for node in candidate.get("related_nodes") or []
+        if str(node or "").strip()
+    ]
+    node_text = " + ".join(related_nodes)
+    status = str(candidate.get("status") or "待确认").strip() or "待确认"
+    insight = str(candidate.get("new_insight") or "").strip()
+    action = str(candidate.get("action") or "").strip()
+    parts = [f"{node_text}：{status}" if node_text else status]
+    if insight:
+        parts.append(insight)
+    if action:
+        parts.append(action)
+    return "- " + "；".join(parts)
+
+
+def build_knowledge_compounding_candidate_note(llm_wiki):
+    candidates = (llm_wiki or {}).get("knowledge_compounding_candidates") or []
+    lines = [
+        _format_knowledge_compounding_candidate(candidate)
+        for candidate in candidates
+    ]
+    lines = [line for line in lines if line]
+    if not lines:
+        return []
+    return ["## 知识复利候选", *lines]
+
+
+def _build_review_section(knowledge, llm_wiki=None, request=None):
     wiki = llm_wiki or {}
-    return "\n".join(
-        [
-            "## 知识模块",
-            f"- 交易思想版本：{knowledge.get('version', 'unknown')}",
-            f"- 来源：{knowledge.get('source', 'unknown')}",
-            f"- 源文件：{knowledge.get('source_path', '')}",
-            f"- LLM Wiki版本：{wiki.get('version', 'unknown')}",
-            f"- Wiki来源：{wiki.get('source', 'unknown')}",
-        ]
-    )
+    request = request or {}
+    lines = [
+        "## 知识模块",
+        f"- 交易思想版本：{knowledge.get('version', 'unknown')}",
+        f"- 来源：{knowledge.get('source', 'unknown')}",
+        f"- 源文件：{knowledge.get('source_path', '')}",
+        f"- LLM Wiki版本：{wiki.get('version', 'unknown')}",
+        f"- Wiki来源：{wiki.get('source', 'unknown')}",
+    ]
+    note_lines = build_ai_friction_knowledge_note(request)
+    if note_lines:
+        lines.extend(["", note_lines[0].replace("## ", "### ", 1), *note_lines[1:]])
+    candidate_lines = build_knowledge_compounding_candidate_note(wiki)
+    if candidate_lines:
+        lines.extend(["", candidate_lines[0].replace("## ", "### ", 1), *candidate_lines[1:]])
+    process_flows = wiki.get("process_flows") or []
+    if process_flows:
+        lines.extend(["", "```text", str(process_flows[0]).strip(), "```"])
+    return "\n".join(lines)
 
 
 def _build_summary_section(phase, primary_line, contract_label, permission, knowledge):
@@ -126,7 +190,7 @@ def run(ctx):
         "environment": _build_environment_section(phase, primary_line, knowledge),
         "observation": _build_observation_section(primary_line, strategy_contract, knowledge, report_stages),
         "execution": _build_execution_section(contract_label, permission, action_plan, knowledge),
-        "review": _build_review_section(knowledge, llm_wiki),
+        "review": _build_review_section(knowledge, llm_wiki, request),
         "summary": _build_summary_section_with_stages(phase, primary_line, contract_label, permission, knowledge, report_stages),
     })
 

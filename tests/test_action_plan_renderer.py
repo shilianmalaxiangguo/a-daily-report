@@ -6,6 +6,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.action_plan_renderer import render_action_plan_section
+from selection.candidate_quality_contracts import (
+    build_daily_quality_decision_panel,
+    evaluate_candidate_quality_sample_contract,
+)
 
 
 class ActionPlanRendererTest(unittest.TestCase):
@@ -65,7 +69,8 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("| 👀 明天先盯哪只 | 军工观察 | 000002 |", rendered)
         self.assertIn("**明天仓位怎么放**:", rendered)
         self.assertIn("**盘前准备（08:30-09:15）**:", rendered)
-        self.assertIn("**竞价表态与开盘前几分钟（09:20-09:35）**:", rendered)
+        self.assertIn("**竞价表态与开盘买卖窗口（09:20-09:35，买卖只在09:30-09:35）**:", rendered)
+        self.assertIn("**尾盘买卖窗口（14:30-14:55）**:", rendered)
         self.assertIn("**⚠️ 异动预警**:", rendered)
         self.assertIn("| 军工观察(000002) | 2天 | +3.00% | - | 待观察 |", rendered)
         self.assertNotIn("为什么这样排", rendered)
@@ -94,10 +99,133 @@ class ActionPlanRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("#### 明日操作计划", rendered)
-        self.assertIn("**最终动作表**（只展示真正可执行对象）:", rendered)
+        self.assertIn("**最终动作表**（只展示真正具备参与资格的对象）:", rendered)
+        self.assertNotIn("只展示真正可执行对象", rendered)
         self.assertIn("**明天仓位怎么放**:", rendered)
         self.assertNotIn("**明日执行时间表**:", rendered)
         self.assertNotIn("**⚠️ 异动预警**:", rendered)
+
+    def test_render_action_plan_section_can_enable_candidate_quality_node(self):
+        panel = build_daily_quality_decision_panel(
+            market_emotion_label="分歧轮动",
+            account_attention_load="高",
+            holding_priority_action="先处理汇源通信风险仓",
+            daily_new_entry_limit=0,
+            backup_candidate={"name": "晶方科技", "code": "603005"},
+        )
+        candidate_contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "汇源通信",
+                    "code": "000586",
+                    "selection_quality": "低",
+                    "entry_cost_state": "低成本",
+                    "risk_flags": ["风险信息缺失"],
+                    "cost_flags": ["靠近VWAP"],
+                    "current_position_shares": 500,
+                    "sellable_shares": 100,
+                    "locked_shares": 400,
+                }
+            )
+        ]
+
+        disabled_lines = render_action_plan_section(
+            {
+                "candidate_quality_panel": panel,
+                "candidate_quality_contracts": candidate_contracts,
+                "enabled_node_keys": ["overview"],
+            }
+        )
+        enabled_lines = render_action_plan_section(
+            {
+                "candidate_quality_panel": panel,
+                "candidate_quality_contracts": candidate_contracts,
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        self.assertNotIn("候选质量与动作分层", "\n".join(disabled_lines))
+        rendered = "\n".join(enabled_lines)
+        self.assertIn("##### 候选质量与动作分层", rendered)
+        self.assertNotIn("\n## 候选质量与动作分层", rendered)
+        self.assertIn("| 候选 | 账户状态 | 计划仓位档 | 实际仓位 | 当前持仓 | 可卖数量 | 选股质量 | 买点质量 | 动作上限 | 新开仓动作 |", rendered)
+        self.assertNotIn("| 不可卖数量 |", rendered)
+        self.assertIn("| 市场情绪状态 | 分歧轮动 |", rendered)
+        self.assertIn("| 汇源通信(000586) | 实际可买 |  |  | 500 | 100 | 低 | 看似便宜 | 不参与 |", rendered)
+        self.assertIn("- 持仓动作：已有仓按失效线处理，可卖100，不可卖400", rendered)
+        self.assertIn("| 汇源通信(000586) | 实际可买 |  |  | 500 | 100 | 低 | 看似便宜 | 不参与 |", rendered)
+
+    def test_candidate_quality_node_can_materialize_from_daily_context_samples(self):
+        lines = render_action_plan_section(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "退潮修复",
+                    "account_attention_load": "中",
+                    "holding_priority_action": "先处理旧仓，再看新增",
+                    "daily_new_entry_limit": 1,
+                    "primary_buy_candidate": {"name": "晶方科技", "code": "603005"},
+                    "backup_candidate": {"name": "上峰水泥", "code": "000672"},
+                    "forbidden_actions": ["计划外追高"],
+                    "ignored_noise_items": ["外盘大涨但A股未确认"],
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "selection_quality": "高",
+                        "entry_cost_state": "高成本",
+                        "is_core": True,
+                        "cost_flags": ["远离MA/VWAP"],
+                    },
+                    {
+                        "name": "上峰水泥",
+                        "code": "000672",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                        "current_position_shares": 400,
+                        "sellable_shares": 300,
+                        "locked_shares": 100,
+                        "trend_context": "冲高后回踩MA/VWAP",
+                    },
+                ],
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("##### 候选质量与动作分层", rendered)
+        self.assertIn("| 今日新增上限 | 1 |", rendered)
+        self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
+        self.assertIn("| 补位对象 | 上峰水泥(000672) |", rendered)
+        self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 不舒服 | 核心观察 |", rendered)
+        self.assertIn("- 成本项：远离MA/VWAP", rendered)
+        self.assertIn("| 上峰水泥(000672) | 实际可买 |  |  | 400 | 300 | 中 | 等确认 | 修复观察 |", rendered)
+        self.assertIn("- 持仓动作：已有仓按失效线处理，可卖300，不可卖100", rendered)
+        self.assertIn("| 上峰水泥(000672) | 实际可买 |  |  | 400 | 300 | 中 | 等确认 | 修复观察 |", rendered)
+
+    def test_candidate_quality_node_uses_normal_heading_when_rendered_without_overview(self):
+        lines = render_action_plan_section(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "退潮修复",
+                    "daily_new_entry_limit": 0,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "selection_quality": "高",
+                        "entry_cost_state": "确认中",
+                        "quality_role": "主买对象",
+                    }
+                ],
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("## 候选质量与动作分层", rendered)
+        self.assertNotIn("##### 候选质量与动作分层", rendered)
 
 
 if __name__ == "__main__":

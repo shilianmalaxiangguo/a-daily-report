@@ -58,6 +58,9 @@ def run(ctx):
         "entry_cycle_calibration": inputs.get("entry_cycle_calibration", {}) or {},
         "new_stock_research_pool": inputs.get("new_stock_research_pool", []) or [],
         "new_stock_candidate_upgrades": inputs.get("new_stock_candidate_upgrades", []) or [],
+        "margin_pressure": inputs.get("margin_pressure", {}) or {},
+        "extreme_conviction_list": inputs.get("extreme_conviction_list", []) or [],
+        "dragon_rebound_watch_pool": inputs.get("dragon_rebound_watch_pool", []) or [],
     }
     lines = render_execution_appendix(render_context) if callable(render_execution_appendix) else []
     _append_log(
@@ -79,6 +82,9 @@ def run(ctx):
         "new_stock_research_pool": render_context["new_stock_research_pool"],
         "new_stock_candidate_upgrades": render_context["new_stock_candidate_upgrades"],
         "request_diagnostics": render_context["request_diagnostics"],
+        "margin_pressure": render_context["margin_pressure"],
+        "extreme_conviction_list": render_context["extreme_conviction_list"],
+        "dragon_rebound_watch_pool": render_context["dragon_rebound_watch_pool"],
     }
     return {
         "value": {

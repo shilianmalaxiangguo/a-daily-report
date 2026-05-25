@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 TUSHARE_TOKEN = "0490fd7723b48c5f0cf35cab1842ecfb4f95e6a7ebea7cc827397f91"
-TUSHARE_HTTP_URL = "http://118.89.66.41:8010/"
+TUSHARE_HTTP_URL = "http://121.40.135.59:8010/"
 TUSHARE_TIMEOUT_SECONDS = 8
 
 __all__ = [

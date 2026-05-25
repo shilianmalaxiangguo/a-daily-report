@@ -143,6 +143,63 @@ class UseReportTailSummaryTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["hook_name"], "report.tail_summary")
         self.assertTrue(payload["module_logs"])
 
+    def test_tail_summary_hook_passes_tag_pool_to_market_insight_renderer(self):
+        captured = {}
+        tag_snapshot = {
+            "groups": [
+                {
+                    "采用名称": "国产芯片替代",
+                    "关系判断": "父子",
+                    "表层行业名": ["元件", "元器件"],
+                }
+            ]
+        }
+
+        def _capture_context(context):
+            captured["context"] = context
+            return []
+
+        result = run(
+            {
+                "inputs": {
+                    "display_mvp_mode": False,
+                    "final_gate": {},
+                    "mainline_name": "",
+                    "market_research_snapshot": {
+                        "realtime_tag_evidence_snapshot": tag_snapshot,
+                    },
+                    "watchlist": [],
+                    "core_stocks": [],
+                    "secondary_stocks": [],
+                    "step2_bundle": {},
+                    "abnormal_watch_pool": [],
+                    "abnormal_probe_group": {},
+                    "exit_analysis": {"sector_name": "元件"},
+                    "main_sectors_info": [{"name": "元件"}],
+                    "risk_sectors": [],
+                    "market_trend": "小幅上涨",
+                    "market_state_snapshot": {
+                        "energy_state": "收缩防守",
+                        "flow_direction": "风险释放优先；趋势密度最强的是元器件",
+                    },
+                    "mainline_turnover_summary": {
+                        "current_mainline": "国产芯片替代",
+                        "mainline_attack_evidence_summary": {
+                            "attack_state": "confirmed_attack",
+                            "primary_line": "国产芯片替代",
+                        },
+                    },
+                },
+                "helpers": {
+                    "build_front_mainline_label": lambda market_research_snapshot, fallback_mainline="": fallback_mainline,
+                    "render_context_tail_sections": _capture_context,
+                },
+            }
+        )
+
+        self.assertEqual(result["value"]["exports"]["mainline_text"], "元件")
+        self.assertEqual(captured["context"]["market_insight"]["realtime_tag_evidence_snapshot"], tag_snapshot)
+
     def test_tail_summary_hook_passes_tracking_memory_status_into_final_conclusion(self):
         captured = {}
 
@@ -237,6 +294,56 @@ class UseReportTailSummaryTest(unittest.TestCase):
         )
 
         self.assertEqual(captured["context"]["core_stocks"][0]["code"], "300613")
+
+    def test_tail_summary_hook_passes_selected_target_into_final_conclusion(self):
+        captured = {}
+
+        def _capture_context(context):
+            captured["context"] = context
+            return []
+
+        run(
+            {
+                "inputs": {
+                    "display_mvp_mode": False,
+                    "step0_prediction": "NEUTRAL",
+                    "step0_prediction_cn": "🟡 中性",
+                    "step0_action": "先观察后确认",
+                    "final_gate": {
+                        "can_new_entry": False,
+                        "allow_attack_50_ready": True,
+                        "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信",
+                    },
+                    "mainline_name": "半导体",
+                    "market_research_snapshot": {},
+                    "watchlist": [{"name": "汇源通信", "code": "000586"}],
+                    "core_stocks": [{"name": "景兴纸业", "code": "002067"}],
+                    "secondary_stocks": [],
+                    "step2_bundle": {},
+                    "abnormal_watch_pool": [],
+                    "front_structure_layer_text": "只看唯一目标",
+                    "trade_gate_open": False,
+                    "best_stock": None,
+                    "watch_anchor": None,
+                    "watch_anchor_type": "",
+                    "selected_position_candidate": {"name": "汇源通信", "code": "000586", "sector": "通信设备"},
+                    "position_decision": {"target_position_pct": 50, "participation_mode": "attack_50_preview"},
+                    "front_follow_action_text": "只看汇源通信",
+                    "abnormal_probe_group": {},
+                    "exit_analysis": {"sector_name": "半导体"},
+                    "main_sectors_info": [{"name": "半导体"}],
+                    "risk_sectors": [],
+                    "market_state_snapshot": {},
+                },
+                "helpers": {
+                    "build_front_mainline_label": lambda market_research_snapshot, fallback_mainline="": fallback_mainline,
+                    "build_legacy_final_conclusion_lines": _capture_context,
+                },
+            }
+        )
+
+        self.assertEqual(captured["context"]["selected_position_candidate"]["code"], "000586")
+        self.assertEqual(captured["context"]["position_decision"]["target_position_pct"], 50)
 
     def test_tail_summary_hook_passes_style_switch_into_final_conclusion(self):
         captured = {}

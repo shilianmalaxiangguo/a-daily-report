@@ -1,6 +1,19 @@
 from report.execution_chain_overview_node_registry import build_execution_chain_overview_node_specs
 from report.execution_chain_overview_node_runtime import run_execution_chain_overview_nodes
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    resolve_display_mainline_name,
+    resolve_mainline_attack_evidence_summary,
+)
+
+
+def _looks_like_broad_selloff(market_trend, csci_change):
+    text = str(market_trend or "")
+    if any(marker in text for marker in ("大幅下跌", "放量下跌", "放量杀跌", "全面崩盘")):
+        return True
+    try:
+        return float(csci_change or 0) <= -1.5
+    except (TypeError, ValueError):
+        return False
 
 
 def build_execution_chain_header_node(context, node_meta=None, node_lookup=None):
@@ -9,13 +22,26 @@ def build_execution_chain_header_node(context, node_meta=None, node_lookup=None)
 
 def build_execution_chain_market_summary_node(context, node_meta=None, node_lookup=None):
     primary_mainline = str(context.get("primary_mainline") or "").strip()
+    display_primary_mainline = resolve_display_mainline_name(context, fallback=primary_mainline)
     market_trend = context.get("market_trend", "")
+    turnover_summary = context.get("mainline_turnover_summary") or {}
     attack_summary = resolve_mainline_attack_evidence_summary(context)
-    lines = [f"- **基准指数**: 中证全指涨跌幅{float(context.get('csci_change', 0) or 0):+.2f}%"]
-    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+    csci_change = float(context.get("csci_change", 0) or 0)
+    lines = [f"- **基准指数**: 中证全指涨跌幅{csci_change:+.2f}%"]
+    if str(turnover_summary.get("share_trend_label") or "").strip() == "逆势试攻" or (
+        _looks_like_broad_selloff(market_trend, csci_change)
+        and attack_summary
+        and attack_summary.get("attack_state") == "confirmed_attack"
+    ):
+        attack_line = resolve_display_mainline_name(
+            context,
+            fallback=attack_summary.get("primary_line") or turnover_summary.get("current_mainline") or "局部方向",
+        )
+        lines.append(f"- **市场特征**: {market_trend}，放量杀跌里只有{attack_line}局部逆势活跃，先防踩踏")
+    elif attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
         lines.append(f"- **市场特征**: {market_trend}，{attack_summary.get('confirmation_evidence') or '主线攻击证据不足'}")
-    elif primary_mainline:
-        lines.append(f"- **市场特征**: {market_trend}，主攻线{primary_mainline}领涨")
+    elif display_primary_mainline:
+        lines.append(f"- **市场特征**: {market_trend}，主攻线{display_primary_mainline}领涨")
     else:
         lines.append(f"- **市场特征**: {market_trend}，板块轮动快速")
     lines.append("")

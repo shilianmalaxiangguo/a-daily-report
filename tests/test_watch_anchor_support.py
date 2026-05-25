@@ -267,6 +267,149 @@ assert selected == ({"code": "300001"}, "创业板20cm预启动先看谁")
         self.assertIn("假弱非真弱", ranked[0]["watch_anchor_note"])
         self.assertEqual(ranked[1]["code"], "000002")
 
+    def test_watch_anchor_support_deduplicates_same_source_shape_advantages(self):
+        support = self._load_module()
+        ranked = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "重复优势样本",
+                    "code": "000001",
+                    "sector": "军工",
+                    "watch_source": "abnormal_probe",
+                    "abnormal_light": "🟢 绿灯",
+                    "risk_level": "🟡 中风险",
+                    "raw_risk_score": 18,
+                    "repair_buffers": ["五日线"],
+                    "risk_score": 2,
+                    "setup_signal_id": "burst_hold",
+                    "follow_state": "跌不下去",
+                    "decision_stack": {
+                        "setup_priority_score": 92,
+                        "mainline_score": 100,
+                        "memory_score": 88,
+                        "trigger_score": 102,
+                        "tradability_score": 75,
+                        "has_formal_abnormal_setup": True,
+                        "is_resilient_abnormal": True,
+                    },
+                    "weak_to_strong_context": {"active": True, "score_bonus": 160},
+                }
+            ],
+            mainline_name="军工",
+            state_machine_snapshot={"energy_state": "扩张确认", "pulse_stage": "进攻"},
+            helpers={
+                "_build_weak_to_strong_context": lambda *args, **kwargs: {
+                    "active": True,
+                    "score_bonus": 160,
+                    "note_text": "假弱非真弱",
+                },
+                "_is_bridge_priority_setup": lambda *args, **kwargs: True,
+            },
+        )
+
+        anchor = ranked[0]
+        self.assertGreaterEqual(anchor["watch_advantage_dedup"]["repeated_advantage_count"], 4)
+        self.assertEqual(anchor["watch_advantage_dedup"]["group_scores"]["shape_confirmation"], 180)
+        self.assertEqual(anchor["watch_advantage_dedup"]["group_scores"]["market_selection"], 100)
+
+    def test_watch_anchor_support_does_not_promote_weak_setup_to_full_shape_credit(self):
+        support = self._load_module()
+        ranked = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "弱形态样本",
+                    "code": "000003",
+                    "sector": "军工",
+                    "watch_source": "waiting_layer",
+                    "risk_level": "🟡 中风险",
+                    "risk_score": 0,
+                    "decision_stack": {
+                        "setup_priority_score": 18,
+                        "trigger_score": 18,
+                    },
+                }
+            ],
+            mainline_name="军工",
+        )
+
+        self.assertLess(ranked[0]["watch_advantage_dedup"]["group_scores"]["shape_confirmation"], 180)
+
+    def test_watch_anchor_support_keeps_negative_weak_to_strong_feedback(self):
+        support = self._load_module()
+        positive = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "正反馈样本",
+                    "code": "000001",
+                    "sector": "军工",
+                    "watch_source": "abnormal_probe",
+                    "risk_level": "🟡 中风险",
+                    "risk_score": 0,
+                    "decision_stack": {"setup_priority_score": 92, "trigger_score": 92},
+                }
+            ],
+            mainline_name="军工",
+            helpers={"_build_weak_to_strong_context": lambda *args, **kwargs: {"score_bonus": 0}},
+        )[0]
+        negative = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "负反馈样本",
+                    "code": "000002",
+                    "sector": "军工",
+                    "watch_source": "abnormal_probe",
+                    "risk_level": "🟡 中风险",
+                    "risk_score": 0,
+                    "decision_stack": {"setup_priority_score": 92, "trigger_score": 92},
+                }
+            ],
+            mainline_name="军工",
+            helpers={"_build_weak_to_strong_context": lambda *args, **kwargs: {"score_bonus": -120}},
+        )[0]
+
+        self.assertLess(negative["watch_priority_score"], positive["watch_priority_score"])
+        self.assertEqual(negative["watch_advantage_dedup"]["group_scores"]["shape_penalty"], -120)
+
+    def test_watch_anchor_support_tie_break_does_not_reuse_split_source_scores(self):
+        support = self._load_module()
+        ranked = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "重复标签样本",
+                    "code": "000001",
+                    "sector": "军工",
+                    "watch_source": "waiting_layer",
+                    "risk_score": 0,
+                    "decision_stack": {
+                        "setup_priority_score": 92,
+                        "mainline_score": 100,
+                        "memory_score": 100,
+                        "trigger_score": 92,
+                        "tradability_score": 50,
+                    },
+                },
+                {
+                    "name": "基础更强样本",
+                    "code": "000002",
+                    "sector": "军工",
+                    "watch_source": "waiting_layer",
+                    "risk_score": 0,
+                    "decision_stack": {
+                        "setup_priority_score": 92,
+                        "mainline_score": 80,
+                        "memory_score": 80,
+                        "trigger_score": 80,
+                        "tradability_score": 50,
+                    },
+                    "composite_score": 0.02,
+                },
+            ],
+            mainline_name="军工",
+            helpers={"_build_weak_to_strong_context": lambda *args, **kwargs: {"score_bonus": 0}},
+        )
+
+        self.assertEqual(ranked[0]["code"], "000002")
+
     def test_watch_anchor_support_selects_abnormal_or_gem_anchor_by_trade_gate(self):
         support = self._load_module()
 

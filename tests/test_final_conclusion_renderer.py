@@ -8,9 +8,29 @@ sys.path.insert(0, str(ROOT / "scripts"))
 ACTION_TEXT = "只买军工一号，参与窗口确认后执行"
 
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
+from report.conclusion_support import (
+    build_candidate_trade_directive,
+    build_focus_recap_text,
+    derive_risk_guard_text,
+    derive_trade_style,
+    selected_target_is_attack_ready,
+)
 
 
 class FinalConclusionRendererTest(unittest.TestCase):
+    def test_candidate_trade_directive_uses_observation_language_when_no_target(self):
+        empty_directive = build_candidate_trade_directive(
+            {"core_count": 0, "secondary_count": 0, "crossline_count": 0}
+        )
+        core_directive = build_candidate_trade_directive(
+            {"core_count": 1, "secondary_count": 0, "crossline_count": 1}
+        )
+
+        self.assertIn("当前还没缩出具备参与资格的对象", empty_directive)
+        self.assertIn("不把跨线对象直接当观察位", core_directive)
+        self.assertNotIn("可执行对象", empty_directive)
+        self.assertNotIn("当买点", core_directive)
+
     def test_full_mode_uses_dynamic_stage_rows_and_strategy_summary(self):
         lines = build_legacy_final_conclusion_lines(
             {
@@ -129,6 +149,126 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 今日关注标的 | 富瀚微(300613)：主线核心候选，优先观察 |", rendered)
         self.assertNotIn("中嘉博创(000889)：新异动待观察", rendered)
+
+    def test_final_conclusion_prefers_selected_target_over_core_candidate(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": False,
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "🟡 中性",
+                "step0_action": "先观察后确认",
+                "final_gate": {
+                    "can_new_entry": False,
+                    "allow_attack_50_ready": True,
+                    "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信",
+                },
+                "trade_gate_open": False,
+                "watchlist_count": 15,
+                "core_stocks": [{"name": "景兴纸业", "code": "002067"}],
+                "selected_position_candidate": {
+                    "name": "汇源通信",
+                    "code": "000586",
+                    "sector": "通信设备",
+                },
+                "position_decision": {
+                    "target_position_pct": 50,
+                    "participation_mode": "attack_50_preview",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 今日关注标的 | 汇源通信(000586)：明日目标标的，参与窗口确认才执行 |", rendered)
+        self.assertNotIn("景兴纸业(002067)：主线核心候选", rendered)
+
+    def test_selected_target_stays_observation_when_position_decision_is_zero(self):
+        context = {
+            "final_gate": {
+                "can_new_entry": False,
+                "allow_attack_50_ready": True,
+            },
+            "selected_position_candidate": {
+                "name": "汇源通信",
+                "code": "000586",
+            },
+            "position_decision": {
+                "target_position_pct": 0,
+                "participation_mode": "observe_0",
+            },
+        }
+
+        self.assertFalse(selected_target_is_attack_ready(context))
+        self.assertEqual(build_focus_recap_text(context), "汇源通信(000586)：明日目标标的，先观察强弱与承接")
+        self.assertEqual(derive_trade_style(context), "空仓")
+        self.assertIn("当前先守住回撤", derive_risk_guard_text(context))
+
+    def test_candidate_trade_directive_keeps_zero_position_target_observational(self):
+        directive = build_candidate_trade_directive(
+            {
+                "core_count": 3,
+                "secondary_count": 1,
+                "crossline_count": 0,
+                "final_gate": {
+                    "can_new_entry": False,
+                    "allow_attack_50_ready": True,
+                },
+                "selected_position_candidate": {
+                    "name": "汇源通信",
+                    "code": "000586",
+                },
+                "position_decision": {
+                    "target_position_pct": 0,
+                    "participation_mode": "observe_0",
+                },
+            }
+        )
+
+        self.assertIn("已缩到明日目标标的汇源通信(000586)，先观察强弱与承接", directive)
+        self.assertNotIn("只看参与窗口是否成立", directive)
+
+    def test_final_conclusion_rebuilds_stale_stage_rows_when_selected_target_is_ready(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": False,
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "🟡 中性",
+                "step0_action": "旧动作：空仓观察，禁止新开仓",
+                "final_gate": {
+                    "can_new_entry": False,
+                    "allow_attack_50_ready": True,
+                    "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信，参与窗口确认才执行，不满足回到0%",
+                },
+                "trade_gate_open": False,
+                "watchlist_count": 15,
+                "core_count": 3,
+                "secondary_count": 3,
+                "crossline_count": 0,
+                "front_structure_layer_text": "0%，旧风险摘要：继续观察",
+                "report_stages": [
+                    {"stage_key": "environment_follow", "title": "明日环境与跟随裁决", "summary": "旧结论：空仓等待，禁止新开仓"},
+                    {"stage_key": "risk_review", "title": "明日风险预判", "summary": "旧风险：0%，继续观察"},
+                    {"stage_key": "entry_plan", "title": "明日买点预计算", "summary": "旧买点：不开新仓"},
+                ],
+                "selected_position_candidate": {
+                    "name": "汇源通信",
+                    "code": "000586",
+                    "sector": "通信设备",
+                },
+                "position_decision": {
+                    "target_position_pct": 50,
+                    "participation_mode": "attack_50_preview",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("明日目标标的保留条件50%预演：只看000586 汇源通信", rendered)
+        self.assertIn("| 明日风险预判 | 参与窗口失败回到0%，只接受小亏试错，不接受大亏硬扛 |", rendered)
+        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的自己走出参与窗口 |", rendered)
+        self.assertNotIn("旧结论：空仓等待", rendered)
+        self.assertNotIn("旧风险：0%", rendered)
+        self.assertNotIn("旧买点：不开新仓", rendered)
+        self.assertNotIn("0%，旧风险摘要", rendered)
 
     def test_full_mode_prefers_provided_report_stage_order_and_titles(self):
         lines = build_legacy_final_conclusion_lines(

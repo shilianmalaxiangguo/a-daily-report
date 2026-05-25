@@ -81,6 +81,11 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |
 
 ## 八、详细附录
+**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:
+| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |
+|--------|------|------|------|----------|----------|----------|------------|--------|--------|
+| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |
+
 ### 附录B：历史主线池
 """
 
@@ -96,6 +101,38 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         ]
         self.assertTrue(matching_findings, result["findings"])
         self.assertFalse(result["passed"])
+
+    def zero_position_report(self):
+        return (
+            GOOD_MARKDOWN.replace(
+                "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+                "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+            )
+            .replace(
+                "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |",
+                "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
+            )
+            .replace(
+                "| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |",
+                "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+            )
+            .replace(
+                "| 进攻仓位三态 | 50% |",
+                "| 进攻仓位三态 | 0% |",
+            )
+            .replace(
+                "| 明日最大仓位 | 50% |",
+                "| 明日最大仓位 | 0% |",
+            )
+            .replace(
+                "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
+                "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+            )
+            .replace(
+                "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+            )
+        )
 
     def test_audit_accepts_valid_front_page_contract(self):
         result = audit_report_markdown(GOOD_MARKDOWN)
@@ -151,6 +188,56 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("legacy_position_style", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_market_fit_row_outside_status_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 二、市场基底\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 市场状态 | 收缩防守 |\n",
+            "## 二、市场基底\n"
+            "### 2. 市场状态结论\n"
+            "| 市场贴合度 | 主线偏差 |\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 市场状态 | 收缩防守 |\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("market_fit_row_outside_status_table", codes)
+        self.assertIn("market_status_table_basis_missing", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_front_margin_pressure_pending_when_appendix_has_rows(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 二、市场基底\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 市场状态 | 收缩防守 |\n",
+            "## 二、市场基底\n"
+            "### 2. 市场状态结论\n"
+            "| 项目 | 结论 | 依据 |\n"
+            "|------|------|------|\n"
+            "| 市场情绪总状态 | 震荡 | 看盘面亏钱效应 |\n"
+            "| 融资承接压力 | 待累计 | 待累计 |\n",
+        ).replace(
+            "### 附录B：历史主线池\n",
+            "#### 附录A：融资承接压力完整25日表\n"
+            "| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 压力差 | 状态 | 较前日 |\n"
+            "|------|----------|------------|------------|--------|------|--------|\n"
+            + "\n".join(
+                f"| 2026-05-{day:02d} | 28000.00亿 | 30000.00亿 | 93.00% | -7.00% | 中性 | +0.10pct |"
+                for day in range(1, 26)
+            )
+            + "\n\n### 附录B：历史主线池\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("market_status_margin_pressure_stale", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_missing_monthly_rhythm_section(self):
@@ -296,6 +383,248 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("degraded_fake_zero_percent", {finding["code"] for finding in result["findings"]})
 
+    def test_audit_flags_top50_table_not_reaching_report_target_date(self):
+        rows = "\n".join(
+            f"| 2026-05-{day:02d} | 19.00% | 震荡 | 待累计 | 5000.00亿 | 26000.00亿 |"
+            for day in range(13, 20)
+        )
+        bad = GOOD_MARKDOWN.replace(
+            "| 市场状态 | 收缩防守 |",
+            "| 市场状态 | 收缩防守 |\n\n"
+            "| 日期 | Top50占比 | 状态 | 较前日 | Top50成交额 | 两市成交额 |\n"
+            "|------|-----------|------|--------|-------------|------------|\n"
+            f"{rows}",
+        ).replace("# 2026-04-24 a股市场分析", "# 2026-05-20 a股市场分析")
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("top50_target_date_missing", codes)
+        self.assertIn("top50_recent_window_incomplete", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_mainline_turnover_table_not_reaching_report_target_date(self):
+        rows = "\n".join(
+            f"| 2026-05-{day:02d} | 半导体 | 半导体 | 4000.00亿 | 30000.00亿 | 13.3% | 待累计 | 继续观察 |"
+            for day in range(13, 20)
+        )
+        bad = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 半导体 | 半导体 | 待累计 | 26414.92亿 | 待累计 | 待累计 | 数据不足 |",
+            rows,
+        ).replace("# 2026-04-24 a股市场分析", "# 2026-05-20 a股市场分析")
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("mainline_turnover_target_date_missing", codes)
+        self.assertIn("mainline_turnover_recent_window_incomplete", codes)
+        self.assertIn("mainline_turnover_trend_summary_missing", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_incomplete_appendix_mainline_turnover_table(self):
+        complete_rows = "\n".join(
+            [
+                f"| 2026-04-{day:02d} | 半导体 | 半导体 | 3000.00亿 | 30000.00亿 | 10.0% | 待累计 | 继续观察 |"
+                for day in range(1, 25)
+            ]
+            + [
+                "| 2026-05-20 | 半导体 | 半导体 | 4050.00亿 | 29764.59亿 | 13.6% | +1.8pct | 继续观察 |"
+            ]
+        )
+        complete_table = (
+            "> 近25个交易日主线成交额占比趋势：当前13.6%，区间10.0%-13.6%，主线成交占比抬升，资金聚焦度走强。\n\n"
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |\n"
+            "|------|----------|------------|------------|------------|------|----------|------|\n"
+            f"{complete_rows}"
+        )
+        appendix_table = (
+            "##### 附录：主线成交额占比趋势\n"
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |\n"
+            "|------|----------|------------|------------|------------|------|----------|------|\n"
+            "| 2026-05-20 | 半导体 | 半导体 | 4050.00亿 | 29764.59亿 | 13.6% | 待累计 | 继续观察 |"
+        )
+        bad = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 半导体 | 半导体 | 待累计 | 26414.92亿 | 待累计 | 待累计 | 数据不足 |",
+            complete_table,
+        ).replace("## 四、资金意图", f"{appendix_table}\n\n## 四、资金意图").replace(
+            "# 2026-04-24 a股市场分析",
+            "# 2026-05-20 a股市场分析",
+        )
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("mainline_turnover_recent_window_incomplete", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_unconfirmed_mainline_turnover_rows_with_real_amounts_in_any_duplicate_table(self):
+        complete_rows = "\n".join(
+            [
+                f"| 2026-04-{day:02d} | 半导体 | 半导体 | 3000.00亿 | 30000.00亿 | 10.0% | 待累计 | 继续观察 |"
+                for day in range(1, 25)
+            ]
+            + [
+                "| 2026-05-20 | 半导体 | 半导体 | 4050.00亿 | 29764.59亿 | 13.6% | +1.8pct | 继续观察 |"
+            ]
+        )
+        complete_table = (
+            "> 近25个交易日主线成交额占比趋势：当前13.6%，区间10.0%-13.6%，主线成交占比抬升，资金聚焦度走强。\n\n"
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |\n"
+            "|------|----------|------------|------------|------------|------|----------|------|\n"
+            f"{complete_rows}"
+        )
+        bad_t52_rows = "\n".join(
+            [
+                f"| 2026-04-{day:02d} | 半导体 | 半导体 | 3000.00亿 | 30000.00亿 | 10.0% | 待累计 | 继续观察 |"
+                for day in range(1, 25)
+            ]
+            + [
+                "| 2026-05-20 | 暂无确认主线 | 暂无确认主攻线 | 4050.00亿 | 29764.59亿 | 13.6% | +1.8pct | 候选方向成交额占比可记录，但未确认主攻线 |"
+            ]
+        )
+        appendix_table = (
+            "##### 附录：主线成交额占比趋势\n"
+            "> 近25个交易日主线成交额占比趋势：当前13.6%，区间10.0%-13.6%，主线成交占比抬升，资金聚焦度走强。\n\n"
+            "**T-052**\n"
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |\n"
+            "|------|----------|------------|------------|------------|------|----------|------|\n"
+            f"{bad_t52_rows}"
+        )
+        bad = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 半导体 | 半导体 | 待累计 | 26414.92亿 | 待累计 | 待累计 | 数据不足 |",
+            complete_table,
+        ).replace("## 四、资金意图", f"{appendix_table}\n\n## 四、资金意图").replace(
+            "# 2026-04-24 a股市场分析",
+            "# 2026-05-20 a股市场分析",
+        )
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("mainline_turnover_unconfirmed_label_with_real_amount", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_new_high_feedback_using_previous_factor_date(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 市场状态 | 收缩防守 |",
+            "| 市场状态 | 收缩防守 |\n\n"
+            "### 3. 创新高趋势反馈\n"
+            "> 最近可用因子日 2026-05-19：该日非ST非新股非次新阶段新高 164 只。\n\n"
+            "| 日期 | 新高数 | 全A占比 | 较前日 | 主导板块 |\n"
+            "|------|--------|---------|--------|----------|\n"
+            "| 2026-05-19 | 164 | 3.28% | 待累计 | 半导体 |\n",
+        ).replace("# 2026-04-24 a股市场分析", "# 2026-05-20 a股市场分析")
+
+        result = audit_report_markdown(bad)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("new_high_previous_factor_date_substitute", codes)
+        self.assertIn("new_high_target_date_missing", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_missing_extreme_conviction_recent_tracking_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:\n"
+            "| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |\n"
+            "|--------|------|------|------|----------|----------|----------|------------|--------|--------|\n"
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |\n\n",
+            "",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("extreme_conviction_tracking_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_a_kill_sample_inside_extreme_conviction_recent_tracking_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |",
+            "| 2026-04-24 | 冷却股 | 000003 | 1 | 军工 | 09:50-10:10 | A杀淘汰 | 不参与 | A杀冷却 | 2026-04-24:000003 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("extreme_conviction_tracking_contains_a_kill", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_non_historical_action_wording_inside_extreme_tracking_table(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |",
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 预演命中 | 若已买入，次日先看是否继续强于市场 | 按原计划作废条件处理 | 2026-04-24:300613 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn(
+            "extreme_conviction_tracking_action_wording_not_historical",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_appendix_action_wording(self):
+        bad = (
+            GOOD_MARKDOWN.replace(
+                "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 收缩防守 | 暂无 | 0% / 不参与 | 0%：没有合格标的就不参与 |",
+            )
+            + "\n| ST洲际(600759) | 2026-05-14 | 热榜第11+涨幅0.0%，明日可能反包 |\n"
+            + "| 2026-05-22 | 产业链供需改善 | ⭐⭐ | 半导体 | 📈利好 | 关注埋伏 |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn(
+            "zero_position_legacy_tomorrow_wording",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_legacy_buy_action_wording(self):
+        bad = (
+            GOOD_MARKDOWN.replace(
+                "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 收缩防守 | 暂无 | 0% / 不参与 | 0%：没有合格标的就不参与 |",
+            )
+            + "\n##### 附录：Step 4 - 明日买点预计算\n"
+            + "| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 买入窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |\n"
+            + "**最终动作表**（只展示真正可执行对象）:\n"
+            + "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘开新仓 | 例外，不是常规 |\n"
+            + "| 板块 | 龙虎榜净买入 | 结论 |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn(
+            "zero_position_legacy_tomorrow_wording",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_backtest_hit_board_wording(self):
+        bad = (
+            GOOD_MARKDOWN.replace(
+                "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 收缩防守 | 暂无 | 0% / 不参与 | 0%：没有合格标的就不参与 |",
+            )
+            .replace(
+                "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |",
+                "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
+            )
+            .replace(
+                "| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |",
+                "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+            )
+            + "\n| 竞价表态 + 回封观察 | 0%观察 | 交易逻辑确认 / 竞价表态 / 回封/打板 |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn(
+            "zero_position_legacy_tomorrow_wording",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_unique_focus_mismatch_between_plan_and_final_summary(self):
         bad = GOOD_MARKDOWN.replace(
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
@@ -315,6 +644,30 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(report)
 
         self.assertNotIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_allows_zero_position_conditional_observation_target(self):
+        report = (
+            self.zero_position_report()
+            .replace(
+                "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|--------------|\n"
+                "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+                "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|------|--------------|\n"
+                "| 只看条件观察对象 | 300613 富瀚微（半导体） | 09:50-10:10 | 主线确认 + 承接 + 观察窗口同时成立 | 不满足继续0% |",
+            )
+            .replace(
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 0%：条件不满足，即使有观察对象也不新增 |",
+            )
+        )
+
+        result = audit_report_markdown(report)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertNotIn("unique_focus_mismatch", codes)
+        self.assertNotIn("execution_condition_missing", codes)
         self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_concrete_unique_focus_without_required_decision_evidence(self):
@@ -358,6 +711,117 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("unique_focus_contradiction", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_final_zero_position_with_tomorrow_participation_action(self):
+        bad = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 明日主买对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 新增参与 |",
+        ).replace(
+            "| 进攻仓位三态 | 50% |",
+            "| 进攻仓位三态 | 0% |",
+        ).replace(
+            "| 明日最大仓位 | 50% |",
+            "| 明日最大仓位 | 0% |",
+        ).replace(
+            "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
+            "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+        ).replace(
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("zero_position_tomorrow_action_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_with_current_backup_candidate_named_in_appendix(self):
+        bad = self.zero_position_report() + (
+            "\n##### 附录：# 今日总决策面板\n"
+            "| 字段 | 内容 |\n"
+            "|------|------|\n"
+            "| 今日新增上限 | 0 |\n"
+            "| 主买对象 | 暂无 |\n"
+            "| 补位对象 | 风华高科(000636) |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("zero_position_tomorrow_action_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_zero_position_plan_without_new_position_stop(self):
+        report = GOOD_MARKDOWN.replace(
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+        ).replace(
+            "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |",
+            "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
+        ).replace(
+            "| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |",
+            "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+        ).replace(
+            "| 进攻仓位三态 | 50% |",
+            "| 进攻仓位三态 | 0% |",
+        ).replace(
+            "| 明日最大仓位 | 50% |",
+            "| 明日最大仓位 | 0% |",
+        ).replace(
+            "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
+            "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+        ).replace(
+            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertNotIn("execution_window_missing", {finding["code"] for finding in result["findings"]})
+        self.assertNotIn("execution_condition_missing", {finding["code"] for finding in result["findings"]})
+        self.assertNotIn("zero_position_tomorrow_action_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_chanlun_html_zero_position_mismatch(self):
+        report = self.zero_position_report()
+        html = """
+        <h2>明日抉择</h2>
+        <table>
+          <tr><td>最终执行条件</td><td>可以参与</td></tr>
+          <tr><td>明日最大仓位</td><td>50%</td></tr>
+          <tr><td>新增参与</td><td>参与</td></tr>
+        </table>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn("chanlun_tomorrow_decision_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_chanlun_html_matching_zero_position(self):
+        report = self.zero_position_report()
+        html = """
+        <h2>明日抉择</h2>
+        <table>
+          <tr><td>最终执行条件</td><td>空仓等待，禁止参与；若你有仓位，只做退出不做幻想</td></tr>
+          <tr><td>操作状态</td><td>撤退态</td></tr>
+          <tr><td>明日最大仓位</td><td>0%</td></tr>
+          <tr><td>新增参与</td><td>不参与</td></tr>
+        </table>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertNotIn("chanlun_tomorrow_decision_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_missing_chanlun_tomorrow_decision_when_html_provided_for_zero_position(self):
+        report = self.zero_position_report()
+        html = "<h2>核心核对</h2><table><tr><td>指数</td><td>上证指数</td></tr></table>"
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_missing_execution_windows(self):

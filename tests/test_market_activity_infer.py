@@ -11,6 +11,8 @@ _infer_module = importlib.import_module("domains.market_activity.infer")
 build_market_activity_sector_analysis_bundle = _infer_module.build_market_activity_sector_analysis_bundle
 get_standardized_sector = _infer_module.get_standardized_sector
 
+_quantitative_analyzer = importlib.import_module("quantitative_analyzer")
+
 
 class _TimerStub:
     def __init__(self):
@@ -50,6 +52,55 @@ class MarketActivityInferTest(unittest.TestCase):
         self.assertEqual(sector_ai_analysis["sector_count"], 6)
         self.assertTrue(any("标准化板块" in line for line in emitted))
         self.assertEqual(timer.records[0], ("全局板块AI分析", 16))
+
+    def test_build_market_activity_sector_analysis_bundle_maps_auto_parts_to_robot_in_robot_context(self):
+        timer = _TimerStub()
+        result = build_market_activity_sector_analysis_bundle(
+            {
+                "sector_fund_flow": {
+                    "inflow": [{"name": "汽车零部件"}, {"name": "电机"}],
+                    "outflow": [],
+                },
+                "hot_plates": [{"name": "人形机器人"}],
+            },
+            timer=timer,
+            emit=lambda *_args, **_kwargs: None,
+        )
+
+        sector_ai_analysis = result["results"]["sector_ai_analysis"]
+        self.assertEqual(sector_ai_analysis["mapping"]["汽车零部件"], "人形机器人")
+        self.assertEqual(sector_ai_analysis["mapping"]["电机"], "人形机器人")
+        self.assertIn("汽车零部件", sector_ai_analysis["sector_tree"]["人形机器人"]["all_sectors"])
+
+    def test_build_market_activity_sector_analysis_bundle_exports_realtime_tag_snapshot(self):
+        timer = _TimerStub()
+        result = build_market_activity_sector_analysis_bundle(
+            {
+                "sector_fund_flow": {
+                    "inflow": [{"name": "元器件", "zljlr": 42.0}],
+                    "outflow": [],
+                },
+                "concept_fund_flow": {
+                    "inflow": [
+                        {"name": "PCB", "zljlr": 21.0},
+                        {"name": "国产芯片替代", "zljlr": 18.0},
+                    ]
+                },
+                "hot_rank_top30": [{"name": "样本A", "concepts": ["芯片", "PCB"]}],
+                "xueqiu_hot_stock_arguments": [
+                    {"stock_name": "样本A", "argument": "国产芯片替代和PCB订单预期"}
+                ],
+            },
+            timer=timer,
+            emit=lambda *_args, **_kwargs: None,
+        )
+
+        snapshot = result["results"]["realtime_tag_evidence_snapshot"]
+        sector_ai_analysis = result["results"]["sector_ai_analysis"]
+        self.assertEqual(snapshot["groups"][0]["采用名称"], "国产芯片替代")
+        self.assertIn("元器件", snapshot["groups"][0]["表层行业名"])
+        self.assertIn("国产芯片替代", sector_ai_analysis["standard_sectors"])
+        self.assertEqual(sector_ai_analysis["mapping"]["元器件"], "国产芯片替代")
 
     def test_get_standardized_sector_returns_original_when_mapping_missing(self):
         self.assertEqual(get_standardized_sector("军工", {"mapping": {"高铁": "轨道交通"}}), "军工")
@@ -129,6 +180,25 @@ class MarketActivityInferTest(unittest.TestCase):
         self.assertEqual(timer.records[-1], ("AI多维量化分析", 17))
         self.assertTrue(any("放量异常" in line for line in emitted))
         self.assertTrue(any(log["step"] == "infer.quant_signals" for log in result["module_logs"]))
+
+    def test_calculate_resonance_scores_fund_flow_and_limit_up_strength_without_legacy_module(self):
+        scores = _quantitative_analyzer.calculate_resonance(
+            {
+                "半导体": {
+                    "fund_flow": {"name": "半导体", "zljlr": 68.0, "zdf": 4.2},
+                    "zt_stocks": [{"code": "688001"}, {"code": "688002"}, {"code": "688003"}],
+                    "lhb_data": [],
+                    "hot_rank_count": 2,
+                    "volume_change": 0,
+                    "price_change": 4.2,
+                }
+            }
+        )
+
+        self.assertIn("半导体", scores)
+        self.assertGreaterEqual(scores["半导体"]["total_score"], 5)
+        self.assertIn("fund_flow", scores["半导体"]["strength_dimensions"])
+        self.assertIn("limit_up", scores["半导体"]["strength_dimensions"])
 
     def test_build_market_activity_quant_signal_bundle_backfills_price_change_from_candidate_history(self):
         bundle = getattr(_infer_module, "build_market_activity_quant_signal_bundle", None)
@@ -218,6 +288,64 @@ class MarketActivityInferTest(unittest.TestCase):
         )
 
         self.assertEqual(result["results"]["volume_anomalies"][0]["price_change"], 7.8)
+
+    def test_build_market_activity_quant_signal_bundle_derives_volume_anomalies_when_legacy_detector_missing(self):
+        bundle = getattr(_infer_module, "build_market_activity_quant_signal_bundle", None)
+        self.assertIsNotNone(bundle, "build_market_activity_quant_signal_bundle should be defined")
+
+        timer = _TimerStub()
+        emitted = []
+
+        result = bundle(
+            {
+                "stocks_with_history": [
+                    {
+                        "code": "688126",
+                        "name": "沪硅产业",
+                        "turnover": 70.172046,
+                        "change_pct": 20.0,
+                        "sector": "半导体",
+                        "hist_turnover": [46.092581, 35.479145, 33.485989, 37.738739, 32.228053, 70.172046],
+                    },
+                    {
+                        "code": "000988",
+                        "name": "华工科技",
+                        "turnover": 218.06296,
+                        "change_pct": 7.48,
+                        "sector": "专用机械",
+                        "hist_turnover": [153.016973, 144.643248, 136.395839, 128.728654, 120.784222, 218.06296],
+                    },
+                    {
+                        "code": "300308",
+                        "name": "中际旭创",
+                        "turnover": 275.280089,
+                        "change_pct": -1.44,
+                        "sector": "通信设备",
+                        "hist_turnover": [264.679451, 318.352591, 292.753229, 255.463225, 275.280089],
+                    },
+                ],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "sector_ai_analysis": {"mapping": {}},
+                "zt_pool_by_sector": {},
+                "sector_fund_flow": {"inflow": []},
+                "zt_pool": [],
+                "calendar": [],
+            },
+            analyze_volume_anomaly=lambda stocks, _context: [],
+            analyze_lhb=lambda rows, _context: [],
+            calculate_resonance=lambda sectors_data: {},
+            generate_trade_signals=lambda payload: [],
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        rows = result["results"]["volume_anomalies"]
+        self.assertEqual([row["stock_code"] for row in rows], ["688126", "000988"])
+        self.assertEqual(rows[0]["anomaly_type"], "温和放量")
+        self.assertIn("近5日均值", rows[0]["reason"])
+        self.assertGreater(rows[0]["volume_ratio"], 1.5)
+        self.assertTrue(any("历史成交额派生" in line for line in emitted))
 
 
 if __name__ == "__main__":

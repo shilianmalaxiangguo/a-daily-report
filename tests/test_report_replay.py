@@ -342,6 +342,138 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertIn("顽主杯热门前十获取", [row[0] for row in data["timer_summary"]["steps"]])
         self.assertEqual(xgb_calls, ["2026-05-18"])
 
+    def test_build_replay_snapshot_contract_backfills_concept_fund_flow_from_hot_plates(self):
+        snapshot = {
+            "hot_plates": [
+                {"name": "半导体设备", "code": "884229", "rank": 1},
+                {"name": "汽车零部件", "code": "881126", "rank": 2},
+            ],
+            "concept_fund_flow": {"rows": [], "inflow": [], "outflow": []},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"概念资金流向": False, "主要指数": True},
+            "step_status": {"概念资金流向获取": False, "主要指数获取": True},
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.concept_fund_flow",
+                    "status": "degraded",
+                    "message": "概念板块资金流为空",
+                    "details": {"provider": "tushare.ths_member+tushare.moneyflow", "row_count": 0},
+                }
+            ],
+            "timer_summary": {"steps": [["步骤7.5: 概念资金流向获取(空)", 1.0, 1.0]]},
+        }
+        concept_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-05-21",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_hot_concept_fund_flow_from_tushare": lambda target_date=None, hot_plates=None, limit=20: concept_calls.append(
+                    (target_date, tuple(item.get("code") for item in hot_plates or []), limit)
+                )
+                or {
+                    "provider": "tushare.ths_member+tushare.moneyflow",
+                    "rows": [
+                        {
+                            "name": "半导体设备",
+                            "code": "884229.TI",
+                            "net_inflow": -14.25,
+                            "data_source": "tushare.ths_member+tushare.moneyflow",
+                        }
+                    ],
+                    "inflow": [
+                        {
+                            "name": "半导体设备",
+                            "code": "884229.TI",
+                            "net_inflow": -14.25,
+                        }
+                    ],
+                    "outflow": [
+                        {
+                            "name": "半导体设备",
+                            "code": "884229.TI",
+                            "net_inflow": -14.25,
+                        }
+                    ],
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(concept_calls, [("2026-05-21", ("884229", "881126"), 20)])
+        self.assertTrue(data["data_status"]["概念资金流向"])
+        self.assertTrue(data["step_status"]["概念资金流向获取"])
+        self.assertEqual(data["concept_fund_flow"]["rows"][0]["code"], "884229.TI")
+        by_step = {item["step"]: item for item in data["module_logs"]}
+        self.assertEqual(by_step["request.concept_fund_flow"]["status"], "success")
+        self.assertEqual(by_step["request.concept_fund_flow"]["details"]["row_count"], 1)
+        self.assertIn("概念资金流向获取", [row[0] for row in data["timer_summary"]["steps"]])
+
+    def test_build_replay_snapshot_contract_uses_existing_replay_concept_fund_flow_when_official_is_empty(self):
+        official_snapshot = {
+            "concept_fund_flow": {"rows": [], "inflow": [], "outflow": []},
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"概念资金流向": False, "主要指数": True},
+            "step_status": {"概念资金流向获取": False, "主要指数获取": True},
+            "module_logs": [
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.concept_fund_flow",
+                    "status": "degraded",
+                    "message": "概念板块资金流为空",
+                    "details": {"provider": "tushare.ths_member+tushare.moneyflow", "row_count": 0},
+                }
+            ],
+            "timer_summary": {"steps": [["步骤7.5: 概念资金流向获取(空)", 1.0, 1.0]]},
+        }
+        replay_snapshot = {
+            "concept_fund_flow": {
+                "provider": "tushare.ths_member+tushare.moneyflow",
+                "rows": [
+                    {
+                        "name": "半导体设备",
+                        "code": "884229.TI",
+                        "net_inflow": -14.25,
+                    }
+                ],
+                "inflow": [{"name": "半导体设备", "code": "884229.TI", "net_inflow": -14.25}],
+                "outflow": [],
+            },
+            "data_status": {"概念资金流向": True},
+            "step_status": {"概念资金流向获取": True},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-21",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (official_snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_replay_snapshot_data": lambda target_date: replay_snapshot,
+                "get_hot_concept_fund_flow_from_tushare": lambda **kwargs: self.fail(
+                    "existing replay concept fund flow should be used before live refresh"
+                ),
+            },
+        )
+
+        data = result["data"]
+        self.assertTrue(data["data_status"]["概念资金流向"])
+        self.assertTrue(data["step_status"]["概念资金流向获取"])
+        self.assertEqual(data["concept_fund_flow"]["rows"][0]["code"], "884229.TI")
+        by_step = {item["step"]: item for item in data["module_logs"]}
+        self.assertEqual(by_step["request.concept_fund_flow"]["status"], "success")
+        self.assertEqual(by_step["request.concept_fund_flow"]["details"]["provider"], "replay.concept_fund_flow")
+        self.assertEqual(by_step["request.concept_fund_flow"]["details"]["row_count"], 1)
+
     def test_build_replay_snapshot_contract_refreshes_xuangubao_when_newsflash_empty(self):
         snapshot = {
             "hot_rank_top30": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
@@ -522,6 +654,7 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 2.7)
 
     def test_build_replay_snapshot_contract_builds_missing_mainline_atoms_for_report_reuse(self):
+        sector_turnover_calls = []
         snapshot = {
             "market_research_snapshot": {
                 "state_machine": {"leading_line": "半导体"},
@@ -558,7 +691,10 @@ def _replay_probe(target_date, refresh_sources=None):
                     "total_turnover": total_turnover,
                     "turnover_share_pct": 18.1,
                 },
-                "load_recent_sector_turnover_history": lambda target_date, current_mainline_name, lookback_days=5: [
+                "load_recent_sector_turnover_history": lambda target_date, current_mainline_name, lookback_days=5: sector_turnover_calls.append(
+                    (target_date, current_mainline_name, lookback_days)
+                )
+                or [
                     {"date": "2026-04-23", "sector_name": current_mainline_name, "turnover_share_pct": 15.8},
                 ],
                 "build_mainline_turnover_summary": lambda **kwargs: {
@@ -588,8 +724,13 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["data"]["current_mainline_history_record"]["primary_mainline"], "半导体")
         self.assertEqual(result["data"]["recent_mainline_history"][0]["primary_mainline"], "电力")
         self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 18.1)
-        self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 15.8)
+        self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 0.0)
+        self.assertEqual(result["data"]["recent_sector_turnover_history"][1]["turnover_share_pct"], 15.8)
         self.assertEqual(result["data"]["mainline_turnover_summary"]["current_mainline"], "半导体")
+        self.assertEqual(
+            sector_turnover_calls,
+            [("2026-04-24", "电力", 25), ("2026-04-24", "半导体", 25)],
+        )
 
     def test_build_replay_snapshot_contract_rederives_capital_intent_from_top_level_attack_facts(self):
         snapshot = {
@@ -750,6 +891,125 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(research_summary["mainline_attack_evidence_summary"]["attack_state"], "chaotic_rotation")
         self.assertEqual(research_summary["current_mainline"], "")
 
+    def test_build_replay_snapshot_contract_rebuilds_switch_summary_when_current_record_is_countertrend_attack(self):
+        snapshot = {
+            "market_research_snapshot": {
+                "state_machine": {"leading_line": "半导体"},
+                "observation": {"turnover": 35072.8},
+                "mainline_turnover_summary": {
+                    "current_mainline": "人形机器人",
+                    "previous_mainline": "半导体",
+                    "share_trend_label": "切换",
+                    "conclusion": "主线切换为人形机器人，旧主线半导体退出中心",
+                    "data_text": "最近3日主线 电力 -> 半导体 -> 人形机器人；成交额占比 2.3% -> 13.6% -> 2.5%，节奏偏切换",
+                    "action_text": "只围绕新主线人形机器人重新收缩，不对旧主线做回流预判",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "人形机器人",
+                        "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                    },
+                    "turnover_share_trend_rows": [
+                        {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                        {"date": "2026-05-21", "cycle_mainline": "人形机器人", "daily_attack_line": "人形机器人"},
+                    ],
+                },
+            },
+            "current_mainline_history_record": {
+                "date": "2026-05-21",
+                "primary_mainline": "人形机器人",
+                "leading_line": "人形机器人",
+                "rotation_label": "逆势攻击",
+                "rotation_summary": "人形机器人资金净流入靠前，涨停更集中",
+            },
+            "recent_mainline_history": [
+                {"date": "2026-05-20", "primary_mainline": "半导体", "daily_attack_line": "半导体"},
+            ],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-21",
+                "sector_name": "人形机器人",
+                "sector_turnover": 880.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 2.51,
+            },
+            "recent_sector_turnover_history": [
+                {
+                    "date": "2026-05-20",
+                    "sector_name": "半导体",
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "半导体",
+                    "sector_turnover": 4050.0,
+                    "total_turnover": 29764.59,
+                    "turnover_share_pct": 13.61,
+                }
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "人形机器人",
+                "previous_mainline": "半导体",
+                "share_trend_label": "切换",
+                "conclusion": "主线切换为人形机器人，旧主线半导体退出中心",
+                "data_text": "最近3日主线 电力 -> 半导体 -> 人形机器人；成交额占比 2.3% -> 13.6% -> 2.5%，节奏偏切换",
+                "action_text": "只围绕新主线人形机器人重新收缩，不对旧主线做回流预判",
+                "mainline_attack_evidence_summary": {
+                    "attack_state": "confirmed_attack",
+                    "primary_line": "人形机器人",
+                    "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+                },
+                "turnover_share_trend_rows": [
+                    {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                    {"date": "2026-05-21", "cycle_mainline": "人形机器人", "daily_attack_line": "人形机器人"},
+                ],
+            },
+            "sector_fund_flow": {
+                "inflow": [
+                    {"name": "汽车零部件", "zljlr": 30.0, "turnover_yi": 778.0},
+                    {"name": "电机", "zljlr": 9.0, "turnover_yi": 102.0},
+                ],
+                "outflow": [],
+            },
+            "zt_pool_by_sector": {
+                "汽车零部件": [
+                    {"name": "三花智控", "zt_type": "1/1"},
+                    {"name": "拓普集团", "zt_type": "1/1"},
+                    {"name": "五洲新春", "zt_type": "1/1"},
+                ],
+                "电机": [
+                    {"name": "鸣志电器", "zt_type": "1/1"},
+                    {"name": "昊志机电", "zt_type": "1/1"},
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 35072.8,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-21",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                "mainline_turnover_summary_conflicts_with_current_record": lambda summary, current_record: (
+                    "逆势攻击" in str((current_record or {}).get("rotation_label") or "")
+                    and "主线切换" in str((summary or {}).get("conclusion") or "")
+                ),
+            },
+        )
+
+        top_summary = result["data"]["mainline_turnover_summary"]
+        research_summary = result["data"]["market_research_snapshot"]["mainline_turnover_summary"]
+        self.assertEqual(top_summary["share_trend_label"], "逆势试攻")
+        self.assertIn("观察主攻线", top_summary["conclusion"])
+        self.assertNotIn("主线切换为人形机器人", top_summary["conclusion"])
+        self.assertEqual(top_summary["double_mainline_summary"]["cycle_mainline"], "半导体")
+        self.assertEqual(top_summary["double_mainline_summary"]["daily_attack_line"], "人形机器人")
+        self.assertEqual(research_summary["share_trend_label"], "逆势试攻")
+        self.assertNotIn("主线切换为人形机器人", research_summary["conclusion"])
+
     def test_build_replay_snapshot_contract_refills_zero_total_turnover_from_fact_db(self):
         snapshot = {
             "current_mainline_history_record": {"date": "2026-05-13", "primary_mainline": "电力"},
@@ -801,6 +1061,541 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertAlmostEqual(current["turnover_share_pct"], 3.05)
         self.assertEqual(row["market_turnover"], "32642.12亿")
         self.assertEqual(row["share"], "3.0%")
+
+    def test_build_replay_snapshot_contract_refreshes_stale_new_high_trend_rows(self):
+        snapshot = {
+            "new_high_feedback": {
+                "available": True,
+                "new_high_count": 169,
+                "all_a_share_pct": 3.38,
+                "trend_rows": [
+                    {
+                        "trade_date": "2026-05-20",
+                        "new_high_count": 169,
+                        "all_a_share_pct": 3.38,
+                        "change_text": "待累计",
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    }
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        refreshed_rows = [
+            {
+                "trade_date": f"2026-04-{day:02d}",
+                "new_high_count": 80 + index,
+                "all_a_share_pct": 1.6 + index * 0.02,
+                "change_text": "+1",
+                "leading_sectors": "电力",
+            }
+            for index, day in enumerate(range(13, 31))
+        ] + [
+            {
+                "trade_date": f"2026-05-{day:02d}",
+                "new_high_count": 120 + index,
+                "all_a_share_pct": 2.4 + index * 0.03,
+                "change_text": "+2",
+                "leading_sectors": "半导体",
+            }
+            for index, day in enumerate(range(1, 7))
+        ] + [
+            {
+                "trade_date": "2026-05-20",
+                "new_high_count": 169,
+                "all_a_share_pct": 3.38,
+                "change_text": "+5",
+                "leading_sectors": "半导体、元器件、专用机械",
+            }
+        ]
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_new_high_feedback_from_tushare": lambda target_date: {
+                    "available": True,
+                    "new_high_count": 169,
+                    "all_a_share_pct": 3.38,
+                    "trend_rows": refreshed_rows,
+                },
+            },
+        )
+
+        feedback = result["data"]["new_high_feedback"]
+        self.assertEqual(len(feedback["trend_rows"]), 25)
+        self.assertEqual(feedback["trend_rows"][0]["trade_date"], "2026-04-13")
+        self.assertEqual(feedback["trend_rows"][-1]["trade_date"], "2026-05-20")
+        self.assertTrue(result["data"]["data_status"]["创新高趋势反馈"])
+        self.assertTrue(result["data"]["step_status"]["创新高趋势反馈获取"])
+
+    def test_build_replay_snapshot_contract_keeps_snapshot_when_new_high_refresh_fails(self):
+        snapshot = {
+            "new_high_feedback": {
+                "available": True,
+                "new_high_count": 169,
+                "all_a_share_pct": 3.38,
+                "trend_rows": [
+                    {
+                        "trade_date": "2026-05-20",
+                        "new_high_count": 169,
+                        "all_a_share_pct": 3.38,
+                        "change_text": "待累计",
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    }
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "module_logs": [],
+        }
+
+        def _raise_timeout(target_date=None):
+            raise TimeoutError("proxy timeout")
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_replay_snapshot_data": lambda target_date: None,
+                "get_new_high_feedback_from_tushare": _raise_timeout,
+            },
+        )
+
+        feedback = result["data"]["new_high_feedback"]
+        self.assertEqual(feedback["new_high_count"], 169)
+        self.assertEqual(feedback["trend_rows"][0]["trade_date"], "2026-05-20")
+        self.assertFalse(result["data"]["step_status"]["创新高趋势反馈获取"])
+        self.assertEqual(
+            [
+                item["status"]
+                for item in result["data"]["module_logs"]
+                if item.get("step") == "request.new_high_feedback"
+            ],
+            ["degraded"],
+        )
+
+    def test_build_replay_snapshot_contract_uses_existing_replay_new_high_when_official_is_short(self):
+        official_snapshot = {
+            "new_high_feedback": {
+                "available": True,
+                "new_high_count": 169,
+                "all_a_share_pct": 3.38,
+                "trend_rows": [
+                    {
+                        "trade_date": "2026-05-20",
+                        "new_high_count": 169,
+                        "all_a_share_pct": 3.38,
+                        "change_text": "待累计",
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    }
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        replay_rows = [
+            {
+                "trade_date": f"2026-05-{day:02d}",
+                "new_high_count": 120 + day,
+                "all_a_share_pct": 2.4 + day / 100,
+                "change_text": "+1",
+                "leading_sectors": "半导体",
+            }
+            for day in range(1, 26)
+        ]
+        replay_rows[-1]["trade_date"] = "2026-05-20"
+        replay_snapshot = {
+            "new_high_feedback": {
+                "available": True,
+                "new_high_count": 169,
+                "all_a_share_pct": 3.38,
+                "trend_rows": replay_rows,
+            }
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (official_snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_replay_snapshot_data": lambda target_date: replay_snapshot,
+                "get_new_high_feedback_from_tushare": lambda target_date: (_ for _ in ()).throw(TimeoutError("proxy timeout")),
+            },
+        )
+
+        feedback = result["data"]["new_high_feedback"]
+        self.assertEqual(len(feedback["trend_rows"]), 25)
+        self.assertEqual(feedback["trend_rows"][-1]["trade_date"], "2026-05-20")
+        self.assertTrue(result["data"]["data_status"]["创新高趋势反馈"])
+        self.assertTrue(result["data"]["step_status"]["创新高趋势反馈获取"])
+
+    def test_build_replay_snapshot_contract_refreshes_new_high_when_fact_row_differs(self):
+        stale_rows = [
+            {
+                "trade_date": f"2026-05-{day:02d}",
+                "new_high_count": 100 + day,
+                "all_a_share_pct": 2.0,
+                "change_text": "+1",
+                "leading_sectors": "半导体",
+            }
+            for day in range(1, 26)
+        ]
+        stale_rows[-1] = {
+            "trade_date": "2026-05-21",
+            "new_high_count": 629,
+            "all_a_share_pct": 11.43,
+            "change_text": "+460",
+            "leading_sectors": "元器件、半导体、专用机械",
+        }
+        official_snapshot = {
+            "new_high_feedback": {
+                "available": True,
+                "new_high_count": 629,
+                "all_a_share_pct": 11.43,
+                "trend_rows": stale_rows,
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        fresh_rows = list(stale_rows)
+        fresh_rows[-1] = {
+            "trade_date": "2026-05-21",
+            "new_high_count": 267,
+            "all_a_share_pct": 4.85,
+            "change_text": "+98",
+            "leading_sectors": "半导体、元器件、专用机械",
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-21",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (official_snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "query_new_high_feedback_series": lambda end_date, window_days=25: [
+                    {
+                        "trade_date": "2026-05-21",
+                        "new_high_count": 267,
+                        "all_a_share_pct": 4.85,
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    }
+                ],
+                "get_new_high_feedback_from_tushare": lambda target_date: {
+                    "available": True,
+                    "new_high_count": 267,
+                    "all_a_share_pct": 4.85,
+                    "leading_sectors": "半导体、元器件、专用机械",
+                    "trend_rows": fresh_rows,
+                },
+            },
+        )
+
+        feedback = result["data"]["new_high_feedback"]
+        self.assertEqual(feedback["new_high_count"], 267)
+        self.assertEqual(feedback["all_a_share_pct"], 4.85)
+        self.assertEqual(feedback["trend_rows"][-1]["new_high_count"], 267)
+
+    def test_build_replay_snapshot_contract_backfills_missing_price_band_style_series(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "module_logs": [],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_price_band_style_series_from_tushare": lambda target_date: {
+                    "available": True,
+                    "source": "storage.price_band_style_daily",
+                    "rows": [
+                        {"trade_date": "2026-05-19", "high_price_pct": 0.5, "low_price_pct": 0.1},
+                        {"trade_date": "2026-05-20", "high_price_pct": 1.2, "low_price_pct": -0.4},
+                    ],
+                },
+                "get_wind_a_from_tushare": lambda target_date: {},
+            },
+        )
+
+        self.assertEqual(result["data"]["price_band_style_series"]["rows"][-1]["trade_date"], "2026-05-20")
+        self.assertTrue(result["data"]["data_status"]["价格带风格趋势"])
+        self.assertTrue(result["data"]["step_status"]["价格带风格趋势获取"])
+        by_step = {item.get("step"): item for item in result["data"].get("module_logs", [])}
+        self.assertEqual(by_step["request.price_band_style_series"]["details"]["provider"], "storage.price_band_style_daily")
+
+    def test_build_replay_snapshot_contract_rebuilds_mainline_turnover_when_history_labels_drift(self):
+        snapshot = {
+            "current_mainline_history_record": {"date": "2026-05-20", "primary_mainline": "半导体"},
+            "recent_mainline_history": [
+                {"date": "2026-05-18", "primary_mainline": "电力", "daily_attack_line": "电力"},
+                {"date": "2026-05-19", "primary_mainline": "电力", "daily_attack_line": "电力"},
+            ],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-20",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            "recent_sector_turnover_history": [
+                {"date": "2026-05-18", "sector_name": "半导体", "turnover_share_pct": 11.8},
+                {"date": "2026-05-19", "sector_name": "半导体", "turnover_share_pct": 11.8},
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "turnover_share_trend_rows": [
+                    {"date": "2026-05-18", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                    {"date": "2026-05-19", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                    {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                ],
+            },
+            "market_research_snapshot": {
+                "observation": {},
+                "mainline_turnover_summary": {
+                    "current_mainline": "半导体",
+                    "turnover_share_trend_rows": [
+                        {"date": "2026-05-18", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                    ],
+                },
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 29764.59,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: {
+                    "电力": [
+                        {
+                            "date": "2026-05-18",
+                            "sector_name": "电力",
+                            "sector_turnover": 2800.0,
+                            "total_turnover": 29170.74,
+                            "turnover_share_pct": 9.6,
+                        },
+                        {
+                            "date": "2026-05-19",
+                            "sector_name": "电力",
+                            "sector_turnover": 2700.0,
+                            "total_turnover": 29089.77,
+                            "turnover_share_pct": 9.3,
+                        },
+                    ],
+                    "半导体": [
+                        {
+                            "date": "2026-05-20",
+                            "sector_name": "半导体",
+                            "sector_turnover": 4050.0,
+                            "total_turnover": 29764.59,
+                            "turnover_share_pct": 13.61,
+                        }
+                    ],
+                }.get(sector_name, []),
+            },
+        )
+
+        rows = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        by_date = {row["date"]: row for row in rows}
+        self.assertEqual(by_date["2026-05-18"]["cycle_mainline"], "电力")
+        self.assertEqual(by_date["2026-05-19"]["cycle_mainline"], "电力")
+        self.assertEqual(by_date["2026-05-20"]["cycle_mainline"], "半导体")
+        research_rows = result["data"]["market_research_snapshot"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        self.assertEqual({row["date"]: row for row in research_rows}["2026-05-18"]["cycle_mainline"], "电力")
+
+    def test_build_replay_snapshot_contract_keeps_25_mainline_turnover_rows_with_placeholders(self):
+        recent_mainline_history = [
+            {"date": f"2026-04-{day:02d}", "primary_mainline": "电力", "daily_attack_line": "电力"}
+            for day in range(1, 25)
+        ]
+        snapshot = {
+            "current_mainline_history_record": {"date": "2026-05-20", "primary_mainline": "半导体"},
+            "recent_mainline_history": recent_mainline_history,
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-20",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            "recent_sector_turnover_history": [
+                {
+                    "date": "2026-04-01",
+                    "sector_name": "电力",
+                    "cycle_mainline": "电力",
+                    "daily_attack_line": "电力",
+                    "sector_turnover": 1000.0,
+                    "total_turnover": 20000.0,
+                    "turnover_share_pct": 5.0,
+                }
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "turnover_share_trend_rows": [
+                    {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 29764.59,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+            },
+        )
+
+        rows = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(rows[0]["date"], "2026-04-01")
+        self.assertEqual(rows[-1]["date"], "2026-05-20")
+        self.assertEqual(rows[1]["cycle_mainline"], "电力")
+        self.assertEqual(rows[1]["mainline_turnover"], "数据暂缺")
+        self.assertIn("近25个交易日主线成交额占比趋势", result["data"]["mainline_turnover_summary"]["turnover_share_trend_summary"])
+
+    def test_build_replay_snapshot_contract_rebuilds_short_mainline_turnover_summary(self):
+        recent_mainline_history = [
+            {"date": f"2026-04-{day:02d}", "primary_mainline": "电力", "daily_attack_line": "电力"}
+            for day in range(1, 25)
+        ]
+        snapshot = {
+            "current_mainline_history_record": {"date": "2026-05-20", "primary_mainline": "半导体"},
+            "recent_mainline_history": recent_mainline_history,
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-20",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "turnover_share_trend_rows": [
+                    {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 29764.59,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+            },
+        )
+
+        rows = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(rows[0]["date"], "2026-04-01")
+        self.assertEqual(rows[-1]["date"], "2026-05-20")
+
+    def test_build_replay_snapshot_contract_reloads_short_recent_mainline_history(self):
+        short_history = [
+            {"date": "2026-05-18", "primary_mainline": "电力", "daily_attack_line": "电力"},
+            {"date": "2026-05-19", "primary_mainline": "电力", "daily_attack_line": "电力"},
+        ]
+        full_history = [
+            {"date": f"2026-04-{day:02d}", "primary_mainline": "电力", "daily_attack_line": "电力"}
+            for day in range(1, 25)
+        ]
+        snapshot = {
+            "current_mainline_history_record": {"date": "2026-05-20", "primary_mainline": "半导体"},
+            "recent_mainline_history": short_history,
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-20",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29764.59,
+                "turnover_share_pct": 13.61,
+            },
+            "mainline_turnover_summary": {
+                "current_mainline": "半导体",
+                "turnover_share_trend_rows": [
+                    {"date": "2026-05-18", "cycle_mainline": "电力", "daily_attack_line": "电力"},
+                    {"date": "2026-05-19", "cycle_mainline": "电力", "daily_attack_line": "电力"},
+                    {"date": "2026-05-20", "cycle_mainline": "半导体", "daily_attack_line": "半导体"},
+                ],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 29764.59,
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-20",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: full_history,
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                "fetch_stock_batch_quote_info": lambda codes, target_date=None: {},
+            },
+        )
+
+        self.assertEqual(len(result["data"]["recent_mainline_history"]), 24)
+        rows = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(rows[0]["date"], "2026-04-01")
 
     def test_build_replay_snapshot_contract_restores_critical_tushare_facts_from_fact_db(self):
         snapshot = {

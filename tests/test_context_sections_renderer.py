@@ -106,6 +106,44 @@ class ContextSectionsRendererTest(unittest.TestCase):
         self.assertIn("- **关注重点**: 多方向局部活跃但资金未明显胜出", rendered)
         self.assertNotIn("- **资金主线**: 半导体", rendered)
 
+    def test_render_ai_market_insight_section_uses_adopted_mainline_label(self):
+        lines = render_ai_market_insight_section(
+            {
+                "market_trend": "小幅上涨",
+                "zt_count": 136,
+                "dt_count": 18,
+                "energy_state": "收缩防守",
+                "flow_direction": "风险释放优先；趋势密度最强的是元器件",
+                "mainline_text": "元件",
+                "risk_text": "高低切换",
+                "focus_text": "元件持续性，量能变化，板块轮动",
+                "realtime_tag_evidence_snapshot": {
+                    "groups": [
+                        {
+                            "采用名称": "国产芯片替代",
+                            "关系判断": "父子",
+                            "表层行业名": ["元件", "元器件"],
+                        }
+                    ]
+                },
+                "mainline_turnover_summary": {
+                    "current_mainline": "国产芯片替代",
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "国产芯片替代",
+                        "confirmation_evidence": "国产芯片替代资金净流入靠前，涨停和高标更集中",
+                    }
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **资金主线**: 国产芯片替代", rendered)
+        self.assertIn("- **关注重点**: 国产芯片替代持续性，量能变化，板块轮动", rendered)
+        self.assertIn("趋势密度最强的是国产芯片替代", rendered)
+        self.assertNotIn("- **资金主线**: 元件", rendered)
+        self.assertNotIn("趋势密度最强的是元器件", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ from domains.execution_chain.candidate_selection_nodes.quadrant_analysis import 
 from domains.execution_chain.candidate_selection_nodes.secondary_candidates import build_candidate_selection_secondary_candidates_node
 from domains.execution_chain.candidate_selection_nodes.trend_density_review import build_candidate_selection_trend_density_review_node
 from domains.execution_chain.stage_runtime import get_execution_stage_label
+from report.mainline_turnover_summary_support import resolve_display_mainline_name
 
 
 def _append_log(logs, step, status, message, **details):
@@ -82,11 +83,22 @@ def build_candidate_selection_runtime(stage_context, stage_meta, stage_lookup=No
     gem_observation_stocks = step2_bundle.get("gem_observation_stocks", [])
     sector_trend_snapshot = step2_bundle.get("sector_trend_snapshot", [])
     extreme_conviction_list = step2_bundle.get("extreme_conviction_list", [])
+    shape_repair_pool = step2_bundle.get("shape_repair_pool", [])
+    dragon_rebound_watch_pool = step2_bundle.get("dragon_rebound_watch_pool", [])
+    historical_extreme_review = step2_bundle.get("historical_extreme_review", [])
     primary_mainline = (
         step2_bundle.get("mainline_name", "")
         or exit_analysis.get("sector_name", "")
         or (main_sectors[0] if main_sectors else "")
     )
+    primary_mainline = resolve_display_mainline_name(
+        {
+            "mainline_turnover_summary": stage_context.get("mainline_turnover_summary", {}) or {},
+            "realtime_tag_evidence_snapshot": data.get("realtime_tag_evidence_snapshot") or {},
+            "sector_ai_analysis": data.get("sector_ai_analysis") or {},
+        },
+        fallback=primary_mainline,
+    ) or primary_mainline
 
     node_context = {
         "stage_label": stage_label,
@@ -113,6 +125,9 @@ def build_candidate_selection_runtime(stage_context, stage_meta, stage_lookup=No
         "gem_observation_stocks": gem_observation_stocks,
         "sector_trend_snapshot": sector_trend_snapshot,
         "extreme_conviction_list": extreme_conviction_list,
+        "shape_repair_pool": shape_repair_pool,
+        "dragon_rebound_watch_pool": dragon_rebound_watch_pool,
+        "historical_extreme_review": historical_extreme_review,
     }
     node_specs = build_candidate_selection_node_specs(CANDIDATE_SELECTION_NODE_BUILDERS, enabled_node_keys=enabled_node_keys)
     runtime_result = run_candidate_selection_nodes(node_specs, node_context)
@@ -127,6 +142,9 @@ def build_candidate_selection_runtime(stage_context, stage_meta, stage_lookup=No
         "gem_observation_stocks": gem_observation_stocks,
         "sector_trend_snapshot": sector_trend_snapshot,
         "extreme_conviction_list": extreme_conviction_list,
+        "shape_repair_pool": shape_repair_pool,
+        "dragon_rebound_watch_pool": dragon_rebound_watch_pool,
+        "historical_extreme_review": historical_extreme_review,
         "mainline_name": primary_mainline,
         "mainline_in_quadrant": runtime_result["context"].get("mainline_in_quadrant"),
         "mainline_score": runtime_result["context"].get("mainline_score", 0),

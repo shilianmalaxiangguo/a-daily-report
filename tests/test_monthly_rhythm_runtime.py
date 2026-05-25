@@ -9,6 +9,17 @@ from selection.monthly_rhythm_runtime import build_monthly_rhythm_decision
 
 
 class MonthlyRhythmRuntimeTest(unittest.TestCase):
+    def test_missing_month_return_is_not_converted_to_zero(self):
+        result = build_monthly_rhythm_decision(
+            target_date="2026-05-20",
+            monthly_context={"month_mode": "ordinary_attack"},
+            state_machine_snapshot={"execution_bias": "prep_only", "energy_state": "收缩防守"},
+        )
+
+        self.assertIsNone(result["month_return_pct"])
+        self.assertFalse(result["profit_cushion"])
+        self.assertEqual(result["month_return_source"], "missing")
+
     def test_earnings_month_defaults_to_defense_and_blocks_full_attack(self):
         result = build_monthly_rhythm_decision(
             target_date="2026-04-22",

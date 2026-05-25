@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from pipelines.cloudflare_free_turnover_pipeline import run_turnover_pipeline
+from report.decision_ledger import build_decision_ledger_index
 
 __all__ = [
     "PublishTaskRecorder",
@@ -20,6 +21,7 @@ TASKS = [
     ("resolve_target_date", "Resolve target date"),
     ("fetch_tushare_turnover", "Fetch Tushare turnover data"),
     ("build_artifacts", "Build D1/R2 artifacts"),
+    ("normalize_decision_ledger", "Normalize decision ledger index"),
     ("export_static_data", "Export snap-ui static data"),
     ("contract_check", "Run local data contract check"),
     ("write_manifest", "Write publish manifest"),
@@ -91,17 +93,59 @@ def _write_tasks(path, recorder):
     return path
 
 
+def _read_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _normalize_decision_ledger_index(root):
+    ledger_dir = Path(root) / "data" / "decision-ledger"
+    if not ledger_dir.exists():
+        return {"status": "skipped", "snapshot_count": 0}
+
+    snapshots = []
+    for path in sorted(ledger_dir.glob("*.json")):
+        if path.name == "index.json":
+            continue
+        payload = _read_json(path)
+        if not isinstance(payload, dict):
+            continue
+        trade_date = str(payload.get("trade_date") or "").strip()
+        if not trade_date or not isinstance(payload.get("cases"), list):
+            continue
+        snapshots.append((trade_date, payload))
+
+    if not snapshots:
+        return {"status": "skipped", "snapshot_count": 0}
+
+    index = {}
+    for _, snapshot in sorted(snapshots, key=lambda item: item[0]):
+        index = build_decision_ledger_index(snapshot, previous_index=index)
+
+    index_path = ledger_dir / "index.json"
+    _write_json(index_path, index)
+    return {
+        "status": "normalized",
+        "snapshot_count": len(snapshots),
+        "index_path": str(index_path),
+    }
+
+
 def _resolve_public_latest_date(snap_ui_dir, fallback_date):
     index_path = Path(snap_ui_dir) / "public" / "data" / "daily-reports" / "index.json"
+    fallback_date = str(fallback_date)
     try:
         payload = json.loads(index_path.read_text(encoding="utf-8"))
     except Exception:
-        return str(fallback_date)
+        return fallback_date
     reports = payload.get("reports") if isinstance(payload, dict) else []
     if not isinstance(reports, list) or not reports:
-        return str(fallback_date)
+        return fallback_date
     latest = reports[0].get("date") if isinstance(reports[0], dict) else ""
-    return str(latest or fallback_date)
+    candidates = [date for date in (str(latest or ""), fallback_date) if date]
+    return max(candidates) if candidates else fallback_date
 
 
 def _default_static_export_runner(root, snap_ui_dir):
@@ -223,9 +267,13 @@ def publish_snap_ui_public_data(
         recorder.mark_done("fetch_tushare_turnover")
         recorder.mark_done("build_artifacts")
 
+        _normalize_decision_ledger_index(root)
+        recorder.mark_done("normalize_decision_ledger")
+
         static_export_result = static_export_runner(root, snap_ui_dir)
         recorder.mark_done("export_static_data")
 
+        public_latest_date = _resolve_public_latest_date(snap_ui_dir, public_latest_date)
         contract_check_result = contract_check_runner(
             root,
             snap_ui_dir,

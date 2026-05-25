@@ -96,6 +96,8 @@ class RuntimeContractsTest(unittest.TestCase):
         self.assertIn("环境关闭", reason)
         self.assertIn("收缩防守", reason)
         self.assertNotIn("积极做多", reason)
+        self.assertNotIn("状态机", reason)
+        self.assertIn("顶层环境以执行条件为准", reason)
 
 
 if __name__ == "__main__":

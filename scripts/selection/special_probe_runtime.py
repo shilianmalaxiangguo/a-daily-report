@@ -20,6 +20,7 @@ from selection.candidate_execution_contracts import (
     infer_risk_level_from_abnormal_follow_state as _default_infer_risk_level_from_abnormal_follow_state,
     map_setup_id_to_signal_type as _default_map_setup_id_to_signal_type,
 )
+from selection.advantage_dedup_runtime import build_grouped_advantage_score
 from selection.watch_anchor_support import (
     derive_watch_anchor_note as _default_derive_watch_anchor_note,
     requires_crossline_second_confirmation as _default_requires_crossline_second_confirmation,
@@ -303,10 +304,24 @@ def _score_candidate_decision_stack_legacy_body(
     else:
         environment_score = 100 if final_gate and final_gate.get("can_new_entry") else 35 if final_gate else 50
     mainline_score = 100 if is_mainline else 55 if not mainline_name else 20
-    memory_score = 100 if is_conviction else 82 if is_memory else 62 if is_mainline else 25
-    trigger_score = _get_setup_priority_score(setup_id, abnormal_state)
+    market_selection_points = []
+    if is_conviction:
+        market_selection_points.append({"group": "market_selection", "label": "极度看好样本", "score": 100})
+    if is_memory:
+        market_selection_points.append({"group": "market_selection", "label": "历史强记忆", "score": 82})
+    if is_mainline:
+        market_selection_points.append({"group": "market_selection", "label": "主攻线同向", "score": 62})
+    if not market_selection_points:
+        market_selection_points.append({"group": "market_selection", "label": "普通样本", "score": 25})
+    market_selection_dedup = build_grouped_advantage_score(market_selection_points)
+    memory_score = market_selection_dedup["group_scores"].get("market_selection", 25)
+
+    base_setup_priority_score = _get_setup_priority_score(setup_id, abnormal_state)
+    trigger_score = base_setup_priority_score
     if not setup_id and not abnormal_state:
         trigger_score = 18
+        base_setup_priority_score = 18
+    confirmation_points = []
 
     washout_reclaim_chain = _build_washout_reclaim_context(
         scored,
@@ -317,13 +332,20 @@ def _score_candidate_decision_stack_legacy_body(
     )
     if washout_reclaim_chain.get("active"):
         if washout_reclaim_chain.get("recognition_ok"):
-            memory_score = max(memory_score, 82 if not is_conviction else 100)
+            market_selection_points.append(
+                {
+                    "group": "market_selection",
+                    "label": "洗盘后辨识度",
+                    "score": 82 if not is_conviction else 100,
+                }
+            )
         if washout_reclaim_chain.get("recognition_ok") and washout_reclaim_chain.get("within_3d_window"):
-            trigger_score += 10
+            confirmation_points.append({"group": "price_acceptance_bonus", "label": "洗盘三日内修复", "score": 10})
         elif washout_reclaim_chain.get("recognition_ok"):
-            trigger_score += 2
+            confirmation_points.append({"group": "price_acceptance_bonus", "label": "洗盘修复", "score": 2})
         else:
             trigger_score = max(trigger_score - 10, 12)
+            base_setup_priority_score = min(base_setup_priority_score, trigger_score)
 
     trend_continuation_chain = _build_trend_continuation_context(
         scored,
@@ -333,10 +355,21 @@ def _score_candidate_decision_stack_legacy_body(
         target_date=target_date,
     )
     if trend_continuation_chain.get("active"):
-        memory_score = max(memory_score, 88 if not is_conviction else 100)
-        trigger_score += 8
+        market_selection_points.append(
+            {
+                "group": "market_selection",
+                "label": "趋势链延续",
+                "score": 88 if not is_conviction else 100,
+            }
+        )
+        confirmation_points.append({"group": "price_acceptance_bonus", "label": "趋势链延续", "score": 8})
     elif trend_continuation_chain.get("recognition_ok") and trend_continuation_chain.get("act_right"):
-        trigger_score += 3
+        confirmation_points.append({"group": "price_acceptance_bonus", "label": "趋势链右侧确认", "score": 3})
+
+    market_selection_dedup = build_grouped_advantage_score(market_selection_points)
+    confirmation_dedup = build_grouped_advantage_score(confirmation_points)
+    memory_score = market_selection_dedup["group_scores"].get("market_selection", memory_score)
+    trigger_score += confirmation_dedup["group_scores"].get("price_acceptance_bonus", 0)
 
     tradability_score = 0
     if tradability_guard and not tradability_guard.get("can_trade", True):
@@ -367,12 +400,25 @@ def _score_candidate_decision_stack_legacy_body(
         "trigger_score": trigger_score,
         "tradability_score": tradability_score,
         "ev_score": ev_score,
-        "setup_priority_score": trigger_score,
+        "setup_priority_score": base_setup_priority_score,
         "setup_id": setup_id,
         "has_formal_abnormal_setup": _candidate_has_formal_abnormal_setup(scored),
         "is_resilient_abnormal": _candidate_is_resilient_abnormal(scored),
         "washout_reclaim_chain": washout_reclaim_chain,
         "trend_continuation_chain": trend_continuation_chain,
+        "market_selection_score": memory_score,
+        "advantage_dedup": {
+            "market_selection": market_selection_dedup,
+            "price_acceptance_bonus": confirmation_dedup,
+            "repeated_advantage_count": (
+                market_selection_dedup["repeated_advantage_count"]
+                + confirmation_dedup["repeated_advantage_count"]
+            ),
+            "group_scores": {
+                **market_selection_dedup["group_scores"],
+                **confirmation_dedup["group_scores"],
+            },
+        },
         "order_text": DECISION_STACK_ORDER_TEXT,
     }
     return scored

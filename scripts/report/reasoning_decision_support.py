@@ -81,6 +81,10 @@ def build_reasoning_input_packet(
         "market_base": {
             "market_fit_calibration": _as_dict(snapshot.get("market_fit_calibration")),
             "state_machine": _as_dict(snapshot.get("state_machine")),
+            "market_performance_evidence": _as_dict(
+                snapshot.get("market_performance_evidence")
+                or _as_dict(snapshot.get("state_machine")).get("market_performance_evidence")
+            ),
         },
         "mainline_snapshot": {
             "current_mainline": mainline_summary.get("current_mainline") or "",

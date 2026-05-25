@@ -1,6 +1,10 @@
 from report.context_sections_node_registry import build_context_tail_node_specs
 from report.context_sections_node_runtime import run_context_tail_nodes
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    normalize_display_text_by_tag_pool,
+    resolve_display_mainline_name,
+    resolve_mainline_attack_evidence_summary,
+)
 from report.surface_wording import sanitize_user_visible_text
 
 
@@ -41,13 +45,20 @@ def render_ai_market_insight_section(context):
     attack_summary = resolve_mainline_attack_evidence_summary(context)
     mainline_text = context.get("mainline_text", "暂无明确主线")
     focus_text = context.get("focus_text", "市场整体持续性，量能变化，板块轮动")
+    flow_direction = normalize_display_text_by_tag_pool(context.get("flow_direction", "-"), context)
     if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
         mainline_text = "暂无确认主攻线"
         focus_text = attack_summary.get("confirmation_evidence") or "先看是否有单一方向胜出"
+    else:
+        display_mainline = resolve_display_mainline_name(context, fallback=mainline_text)
+        if display_mainline:
+            if mainline_text and mainline_text in focus_text:
+                focus_text = focus_text.replace(mainline_text, display_mainline)
+            mainline_text = display_mainline
     return [
         "## 十四、市场快照",
         f"- **核心特征**: {context.get('market_trend', '未知')}，涨停{int(context.get('zt_count', 0) or 0)}只，跌停{int(context.get('dt_count', 0) or 0)}只",
-        f"- **能量状态**: {context.get('energy_state', '未知')} - {context.get('flow_direction', '-')}",
+        f"- **能量状态**: {context.get('energy_state', '未知')} - {flow_direction}",
         f"- **资金主线**: {mainline_text}",
         f"- **风险点**: {context.get('risk_text', '暂无明确风险')}",
         f"- **关注重点**: {focus_text}",

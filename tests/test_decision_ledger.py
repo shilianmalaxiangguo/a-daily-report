@@ -165,6 +165,26 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(items[1]["sector"], "专用机械")
         self.assertEqual(items[1]["sniper_role"], "明日补位对象")
 
+    def test_markdown_parser_does_not_treat_body_text_as_focus_watch_heading(self):
+        markdown = """
+**候选观察名单**（最终0%时只作观察样本，不构成明日新增参与）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 观察分层 | 观察理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|----------|
+| 1 | 浙江世宝 | 002703 | 汽车配件 | 核心传导者 | 观察候选 | 趋势审美 | 未确认不参与 |
+
+**交易优先级纪律**:
+- **先后顺序怎么排**: 若重点观察名单全天都不给确认，其余标的宁可继续观察。
+
+**明日观察位预计算表**:
+| 股票 | 代码 | 观察资格 | 怎么观察 | 日线预设区间 | 60分钟确认点 | 价格怎么盯 | 明天具体怎么做 |
+|------|------|----------|----------|------------|--------------|----------|----------|
+| 华微电子 | 600360 | 龙头观察权 | 观察 | - | 12.07 | 观察失效位11.47 | 明日继续观察 |
+"""
+
+        items = parse_extreme_conviction_list_from_markdown(markdown)
+
+        self.assertEqual(items, [])
+
     def test_parses_quant_anchor_action_column_back_to_participation_script(self):
         markdown = """
 正文
@@ -1251,6 +1271,8 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertTrue(facts["cancellation_triggered"])
         self.assertIn("09:50-10:10继续走弱", facts["standard_answer_basis"])
         self.assertIn("0%不参与", facts["same_day_action"])
+        self.assertIn("不把日内反抽当观察位", facts["same_day_action"])
+        self.assertNotIn("当买点", facts["same_day_action"])
         self.assertEqual(review["status"], "预演作废")
 
     def test_builds_snapshot_with_planned_participation_review_when_review_facts_exist(self):
@@ -1431,7 +1453,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(record["participation_review"]["participation_window_type"], "auction_reseal")
         self.assertIn("竞价表态", record["participation_review"]["matched_steps"])
         self.assertEqual(index["extreme_conviction_backtest_rows"][0]["stock_code"], "601991")
-        self.assertEqual(index["extreme_conviction_backtest_rows"][0]["buy_point_quality"], "买点成立")
+        self.assertEqual(index["extreme_conviction_backtest_rows"][0]["buy_point_quality"], "观察位成立")
         self.assertEqual(index["extreme_conviction_backtest_rows"][0]["review_status"], "预演命中")
 
     def test_renders_extreme_conviction_25_day_tracking_table_from_index(self):
@@ -1483,8 +1505,10 @@ class DecisionLedgerTest(unittest.TestCase):
         rendered = "\n".join(lines)
 
         self.assertIn("**重点观察25日跟踪表**", rendered)
-        self.assertIn("| 股票 | 代码 | 周期日 | 首次入选 | 最近复盘 | 计划窗口 | 买入窗口 | 预演复盘 | 下一步动作 | 作废线 |", rendered)
-        self.assertIn("| 京能电力 | 600578 | D2/25 | 2026-05-14 | 2026-05-15 | 竞价表态 + 回封参与 | 09:30-09:35 | 预演命中 | 若已买入，次日先看是否继续强于市场 | 有效跌破日K MA20取消幻想 |", rendered)
+        self.assertIn("| 股票 | 代码 | 周期日 | 首次入选 | 最近复盘 | 计划窗口 | 观察位窗口 | 预演复盘 | 历史复盘动作 | 作废线 |", rendered)
+        self.assertNotIn("买入窗口", rendered)
+        self.assertIn("| 京能电力 | 600578 | D2/25 | 2026-05-14 | 2026-05-15 | 竞价表态 + 回封参与 | 09:30-09:35 | 预演命中 | 历史复盘：次日先看是否继续强于市场 | 有效跌破日K MA20取消幻想 |", rendered)
+        self.assertNotIn("若已买入", rendered)
         self.assertNotIn("普通观察", rendered)
 
     def test_builds_extreme_conviction_backtest_rows_from_index(self):
@@ -1572,7 +1596,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual([row["stock_name"] for row in rows], ["京能电力", "花王股份"])
         self.assertEqual(rows[0]["selection_quality"], "高惯性 / 高于普通上涨样本")
         self.assertEqual(rows[0]["risk_reward"], "合格 2.5:1")
-        self.assertEqual(rows[0]["buy_point_quality"], "买点成立")
+        self.assertEqual(rows[0]["buy_point_quality"], "观察位成立")
         self.assertEqual(rows[0]["review_status"], "预演命中")
         self.assertIn("开盘核心", rows[0]["standard_action"])
         self.assertEqual(rows[1]["buy_point_quality"], "主目标不可成交")
@@ -1648,6 +1672,53 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(old_day_codes, ["601991"])
         self.assertIn("601991", result["index"]["by_stock_code"])
         self.assertNotIn("002342", result["index"]["by_stock_code"])
+
+    def test_rebuilt_same_day_snapshot_replaces_extreme_mention_when_current_stock_is_observation(self):
+        stale_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            extreme_conviction_list=[
+                {
+                    "code": "002703",
+                    "name": "浙江世宝",
+                    "sector": "汽车配件",
+                    "conviction_reason": "旧的明日极度看好样本",
+                    "source_tier": "extreme_conviction",
+                }
+            ],
+            market_branch="旧结果",
+            sector_relationship_state="旧结果",
+        )
+        observation_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            extreme_conviction_list=[
+                {
+                    "code": "002703",
+                    "name": "浙江世宝",
+                    "sector": "汽车配件",
+                    "sniper_role": "候选观察",
+                    "source_tier": "ordinary_watch",
+                    "execution_eligibility": "observation_only",
+                }
+            ],
+            market_branch="空仓等待",
+            sector_relationship_state="只观察",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(stale_snapshot, root_dir=root)
+            result = write_decision_ledger_artifacts(observation_snapshot, root_dir=root)
+
+        rendered = "\n".join(
+            render_extreme_conviction_mention_tracking_lines(result["index"], end_date="2026-05-21")
+        )
+
+        self.assertIn("暂无近25个交易日内的明日极度看好样本", rendered)
+        self.assertNotIn("浙江世宝", rendered)
+        self.assertEqual(
+            result["index"]["by_stock_code"]["002703"][0]["planned_participation"]["source_tier"],
+            "ordinary_watch",
+        )
 
     def test_pruning_same_day_extreme_mentions_refreshes_cached_backtest_rows(self):
         index = {
@@ -1829,7 +1900,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows[1]["reason"], "板块锚定龙 / 首波先锋")
         self.assertEqual(rows[1]["buy_window"], "09:30-09:35")
         self.assertEqual(rows[1]["review_status"], "预演命中")
-        self.assertEqual(rows[1]["buy_point_quality"], "买点成立")
+        self.assertEqual(rows[1]["buy_point_quality"], "观察位成立")
 
     def test_mention_rows_keep_recent_25_trade_dates_and_skip_a_kill_samples(self):
         by_stock_code = {}
@@ -1922,8 +1993,73 @@ class DecisionLedgerTest(unittest.TestCase):
         rendered = "\n".join(render_extreme_conviction_mention_tracking_lines(index, end_date="2026-05-15"))
 
         self.assertIn("**明日极度看好近25日跟踪表**", rendered)
-        self.assertIn("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 买入窗口 | 复盘状态 | 下一步动作 | 作废线 | 记录ID |", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |", rendered)
+        self.assertNotIn("买入窗口", rendered)
         self.assertIn("| 2026-05-14 | 京能电力 | 600578 | 1 | 电力 | 09:30-09:35 | 预演命中 | 次日看是否继续强于市场 | 有效跌破日K MA20取消幻想 | 2026-05-14:600578 |", rendered)
+        self.assertNotIn("若已买入", rendered)
+
+    def test_zero_position_observation_mentions_do_not_enter_extreme_tracking_table(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-21",
+            extreme_conviction_list=[
+                {
+                    "code": "002703",
+                    "name": "浙江世宝",
+                    "sector": "汽车配件",
+                    "sniper_role": "候选观察",
+                    "source_tier": "ordinary_watch",
+                    "execution_eligibility": "observation_only",
+                }
+            ],
+            market_branch="空仓等待",
+            sector_relationship_state="只观察",
+        )
+        index = build_decision_ledger_index(snapshot)
+
+        rendered = "\n".join(render_extreme_conviction_mention_tracking_lines(index, end_date="2026-05-21"))
+
+        self.assertIn("暂无近25个交易日内的明日极度看好样本", rendered)
+        self.assertNotIn("浙江世宝", rendered)
+
+    def test_zero_position_extreme_observation_mentions_stay_in_tracking_rows(self):
+        from storage.database_service import DatabaseService
+
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-22",
+            extreme_conviction_list=[
+                {
+                    "code": "000636",
+                    "name": "风华高科",
+                    "sector": "元器件",
+                    "sniper_role": "候选观察",
+                    "source_tier": "extreme_conviction",
+                    "execution_eligibility": "observation_only",
+                    "attack_state": "0%观察",
+                    "participation_window": "09:50-10:10观察",
+                    "conviction_reason": "形态健康，但最终0%只观察承接",
+                }
+            ],
+            market_branch="空仓等待",
+            sector_relationship_state="只观察",
+        )
+        index = build_decision_ledger_index(snapshot)
+
+        rows = build_extreme_conviction_mention_rows(index, end_date="2026-05-22", window_days=25)
+        rendered = "\n".join(render_extreme_conviction_mention_tracking_lines(index, end_date="2026-05-22"))
+
+        self.assertEqual([row["stock_code"] for row in rows], ["000636"])
+        self.assertEqual(rows[0]["buy_window"], "09:50-10:10")
+        self.assertEqual(rows[0]["source_section"], "极度看好名单")
+        self.assertIn("| 2026-05-22 | 风华高科 | 000636 | 1 | 元器件 | 09:50-10:10 |", rendered)
+        self.assertNotIn("暂无近25个交易日内的明日极度看好样本", rendered)
+
+        with TemporaryDirectory() as tempdir:
+            write_decision_ledger_artifacts(snapshot, root_dir=Path(tempdir), review_market_facts_by_stock_code={})
+            service = DatabaseService.sqlite_d1_compatible(Path(tempdir) / "data" / "cloudflare_free_daily.db")
+            db_rows = service.query_extreme_conviction_mentions("2026-05-22", window_days=25)
+
+        self.assertEqual([row["stock_code"] for row in db_rows], ["000636"])
+        self.assertEqual(db_rows[0]["mention_trade_date"], "2026-05-22")
 
     def test_writer_syncs_recent_mention_rows_from_index_into_fact_db(self):
         from storage.database_service import DatabaseService
@@ -2051,7 +2187,7 @@ class DecisionLedgerTest(unittest.TestCase):
                         "participation_review": {
                             "status": "预演命中",
                             "entry_decision": "open_buy",
-                            "same_day_action": "按09:30-09:35开盘核心参与",
+                            "same_day_action": "按09:30-09:35开盘核心参与；只在竞价表态、开盘承接、回封/打板同时成立时买",
                         },
                         "mentions": [{"mention_trade_date": "2026-05-14", "source_section": "极度看好名单"}],
                     }
@@ -2063,8 +2199,15 @@ class DecisionLedgerTest(unittest.TestCase):
         rendered = "\n".join(lines)
 
         self.assertIn("**重点观察历史回测表**", rendered)
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 买点窗口 | 盈亏比 | 买点质量 | 执行复盘 | 标准动作 |", rendered)
-        self.assertIn("| 2026-05-14 | 京能电力 | 600578 | 高惯性 / 高于普通上涨样本 | 09:30-09:35 | 合格 2.5:1 | 买点成立 | 预演命中 | 按09:30-09:35开盘核心参与 |", rendered)
+        self.assertIn("历史回测表仅记录过去预演，不作为明日新增参与依据", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
+        self.assertIn("观察位成立", rendered)
+        self.assertNotIn("买点质量", rendered)
+        self.assertNotIn("买点成立", rendered)
+        self.assertIn("按09:30-09:35开盘核心观察", rendered)
+        self.assertIn("同时成立时记录为历史预演", rendered)
+        self.assertIn("不作为明日新增参与依据", rendered)
+        self.assertNotIn("同时成立时买", rendered)
 
     def test_writer_auto_reviews_previous_extreme_conviction_cases_from_market_facts(self):
         first = build_decision_ledger_snapshot(

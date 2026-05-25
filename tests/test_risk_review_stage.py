@@ -196,6 +196,65 @@ class RiskReviewStageTest(unittest.TestCase):
         self.assertNotIn("当前主线: '半导体'", rendered)
         self.assertNotIn("当前主线'半导体'", rendered)
 
+    def test_risk_review_sector_a_kill_uses_adopted_tag_label_for_current_mainline(self):
+        result = build_risk_review_runtime(
+            {
+                "data": {
+                    "realtime_tag_evidence_snapshot": {
+                        "groups": [
+                            {
+                                "采用名称": "国产芯片替代",
+                                "关系判断": "父子",
+                                "表层行业名": ["元件", "元器件"],
+                            }
+                        ]
+                    }
+                },
+                "target_date": "2026-05-22",
+                "mainline_name": "元件",
+                "core_stocks": [],
+                "secondary_stocks": [],
+                "step2_bundle": {"gem_observation_stocks": []},
+                "market_research_bundle": {"filtered_out_gem_breathing_candidates": []},
+                "zt_pool_by_sector": {},
+                "dt_pool_by_sector": {},
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "confirmed_attack",
+                        "primary_line": "国产芯片替代",
+                        "confirmation_evidence": "国产芯片替代资金净流入靠前，涨停更集中",
+                        "sector_evidence_rows": [
+                            {
+                                "sector_name": "国产芯片替代",
+                                "surface_sector_names": ["元件", "元器件"],
+                            }
+                        ],
+                    }
+                },
+                "build_step3_risk_bundle": lambda *args, **kwargs: {
+                    "stock_rows": [],
+                    "delete_group": [],
+                    "keep_group": [],
+                    "focus_group": [],
+                    "abnormal_green_count": 0,
+                    "abnormal_red_count": 0,
+                    "risk_sectors_from_dt": [],
+                    "mainline_a_kill": False,
+                    "mainline_dt_stocks": [],
+                    "structural_a_kill": False,
+                    "structural_reason": "",
+                    "a_kill_blacklist_updates": [],
+                    "module_logs": [],
+                },
+            },
+            {"label": "Step 3", "title": "明日风险预判"},
+            enabled_node_keys=["sector_a_kill"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("当前主线**: '国产芯片替代'无批量跌停", rendered)
+        self.assertNotIn("当前主线**: '元件'", rendered)
+
     def test_risk_review_runtime_can_render_only_enabled_nodes(self):
         result = build_risk_review_runtime(
             {

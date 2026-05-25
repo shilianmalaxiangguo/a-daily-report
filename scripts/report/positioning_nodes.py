@@ -63,13 +63,78 @@ def _environment_emoji(display_position_level):
     return "🟡"
 
 
+def _zero_or_empty_text(value):
+    text = str(value or "").strip()
+    return text in {"", "-", "暂无", "不做", "无", "无合格标的"}
+
+
+def _numeric_zero(value):
+    text = str(value if value is not None else "").strip().replace("%", "")
+    if text == "":
+        return False
+    try:
+        return float(text) <= 0
+    except ValueError:
+        return False
+
+
+def _has_zero_participation_result(context):
+    context = context or {}
+    position_decision = context.get("position_decision") or {}
+    if isinstance(position_decision, dict):
+        grade = str(position_decision.get("signal_grade") or "").strip()
+        if grade.startswith("0"):
+            return True
+        if "target_position_pct" in position_decision and _numeric_zero(position_decision.get("target_position_pct")):
+            return True
+
+    final_gate = context.get("final_gate") or {}
+    if isinstance(final_gate, dict):
+        for key in ("final_action", "action", "summary", "reason"):
+            text = str(final_gate.get(key) or "")
+            if "0%不参与" in text or "不新增参与" in text or "禁止新开仓" in text:
+                return True
+        if final_gate.get("can_new_entry") is False and str(final_gate.get("operation_state") or "") in {"撤退态", "观察态"}:
+            return True
+
+    display_text = " ".join(
+        str(context.get(key) or "")
+        for key in ("display_position_level", "display_operation_state", "position_level", "position_reason")
+    )
+    return "空仓" in display_text or "0%不参与" in display_text
+
+
+def _has_explicit_empty_unique_object(context):
+    context = context or {}
+    candidate_snapshot = context.get("candidate_snapshot") or {}
+    front_page = candidate_snapshot.get("front_page") if isinstance(candidate_snapshot, dict) else {}
+    if isinstance(front_page, dict) and "unique_object" in front_page:
+        return _zero_or_empty_text(front_page.get("unique_object"))
+
+    if "unique_action_target" in context:
+        target = context.get("unique_action_target") or {}
+        if not isinstance(target, dict):
+            return True
+        return not (target.get("name") or target.get("code") or target.get("stock_code"))
+    return False
+
+
+def _intraday_note_text(context):
+    if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
+        return "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接和唯一对象是否重新成立；未同时满足前继续0%。"
+    return "> **真到盘中怎么做**：日报这里只做盘前预案。明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买入后再用30分钟结构刷新止损。"
+
+
 def build_positioning_header_node(context, node_meta=None, node_lookup=None):
     return {"lines": ["## 📈 明天仓位怎么放（基于日线结构中枢）", ""], "exports": {}, "module_logs": []}
 
 
 def build_positioning_execution_framework_node(context, node_meta=None, node_lookup=None):
-    get_execution_framework_text = context.get("get_execution_framework_text")
-    framework_text = get_execution_framework_text() if callable(get_execution_framework_text) else "-"
+    if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
+        framework_text = "最终0%时不按参与窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
+    else:
+        get_execution_framework_text = context.get("get_execution_framework_text")
+        framework_text = get_execution_framework_text() if callable(get_execution_framework_text) else "-"
     return {"lines": [f"**怎么执行**：{framework_text}"], "exports": {}, "module_logs": []}
 
 
@@ -84,7 +149,7 @@ def build_positioning_structure_note_node(context, node_meta=None, node_lookup=N
 def build_positioning_intraday_note_node(context, node_meta=None, node_lookup=None):
     return {
         "lines": [
-            "> **真到盘中怎么做**：日报这里只做盘前预案。明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买入后再用30分钟结构刷新止损。",
+            _intraday_note_text(context),
             "",
         ],
         "exports": {},

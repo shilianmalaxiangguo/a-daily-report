@@ -472,6 +472,52 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertIn("封死不可成交", one_word["reason"])
         self.assertNotIn("大概率连板", one_word["reason"])
 
+    def test_build_market_research_context_bundle_uses_historical_hot_rank_wording(self):
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {},
+                "dt_pool_by_sector": {},
+                "zt_pool": [],
+                "hot_rank_top30": [{"code": "000003", "name": "热股一号", "sector": "军工", "change": 6.8}],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-05-18",
+            exit_analysis={"sector_name": "军工", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="一档",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda *args, **kwargs: [],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {},
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        hot_stock = result["watchlist"][0]
+        self.assertEqual(hot_stock["reason"], "热榜第1+涨幅6.8%，仅作热度观察")
+        self.assertEqual(hot_stock["tomorrow_expectation"], "热度观察")
+        self.assertNotIn("明日可能反包", hot_stock["reason"])
+        self.assertNotIn("反包预期", hot_stock["tomorrow_expectation"])
+
 
 if __name__ == "__main__":
     unittest.main()

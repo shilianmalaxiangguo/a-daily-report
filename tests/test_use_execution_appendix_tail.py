@@ -167,6 +167,32 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertEqual(render_context["new_stock_candidate_upgrades"], upgrades)
         self.assertEqual(result["value"]["exports"]["new_stock_research_pool"], research_pool)
 
+    def test_execution_appendix_tail_hook_passes_visible_candidate_lists(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["visible-candidate-lists"]
+
+        extreme_list = [{"name": "风华高科", "code": "000636"}]
+        dragon_pool = [{"name": "汇源通信", "code": "000586"}]
+
+        result = run(
+            {
+                "inputs": {
+                    "extreme_conviction_list": extreme_list,
+                    "dragon_rebound_watch_pool": dragon_pool,
+                },
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        render_context = captured["render_context"]
+        self.assertEqual(render_context["extreme_conviction_list"], extreme_list)
+        self.assertEqual(render_context["dragon_rebound_watch_pool"], dragon_pool)
+        self.assertEqual(result["value"]["exports"]["extreme_conviction_list"], extreme_list)
+        self.assertEqual(result["value"]["exports"]["dragon_rebound_watch_pool"], dragon_pool)
+
     def test_execution_appendix_tail_hook_passes_request_diagnostics_to_renderer(self):
         captured = {}
 
@@ -195,6 +221,28 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
 
         self.assertEqual(captured["render_context"]["request_diagnostics"], diagnostics)
         self.assertEqual(result["value"]["exports"]["request_diagnostics"], diagnostics)
+
+    def test_execution_appendix_tail_hook_passes_margin_pressure_to_renderer(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["margin-pressure-detail"]
+
+        margin_pressure = {
+            "available": True,
+            "rows": [{"trade_date": "2026-05-22", "margin_turnover_ratio_pct": 100.5}],
+        }
+
+        result = run(
+            {
+                "inputs": {"margin_pressure": margin_pressure},
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        self.assertEqual(captured["render_context"]["margin_pressure"], margin_pressure)
+        self.assertEqual(result["value"]["exports"]["margin_pressure"], margin_pressure)
 
     def test_execution_appendix_renderer_outputs_appendix_b_and_c_continuity_tables(self):
         lines = render_execution_appendix(
@@ -244,6 +292,51 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertIn("当前解读", rendered)
         self.assertIn("当前处理", rendered)
         self.assertIn("| 博杰股份(002975) | 2026-04-22 | 2026-04-22 | 3 | 2026-04-23:+3.20%；2026-04-24:+1.10% | 放量 | 4.33 | 趋势延续 | 继续跟踪 |", rendered)
+
+    def test_execution_appendix_renderer_outputs_fixed_visible_candidate_list_titles(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["visible_candidate_lists"],
+                "extreme_conviction_list": [
+                    {
+                        "name": "风华高科",
+                        "code": "000636",
+                        "sector": "元器件",
+                        "sniper_role": "候选观察",
+                        "conviction_reason": "板块锚定龙 / 首板",
+                        "conviction_rule": "只看竞价表态和回封质量",
+                    },
+                    {
+                        "name": "宏和科技",
+                        "code": "603256",
+                        "sector": "玻璃",
+                        "sniper_role": "候选观察补充",
+                        "conviction_reason": "板块锚定龙",
+                        "conviction_rule": "修复观察",
+                    },
+                ],
+                "dragon_rebound_watch_pool": [
+                    {
+                        "name": "汇源通信",
+                        "code": "000586",
+                        "sector": "通信设备",
+                        "repair_status": "龙回头观察",
+                        "trend_aesthetic_review": {
+                            "reasons": ["龙回头样本", "A杀未修复"],
+                            "action": "重新站回短中线承接后再评估",
+                        },
+                        "next_action": "A杀未修复前不进正式名单",
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 附录A：明日极度看好列表", rendered)
+        self.assertIn("| 1 | 风华高科 | 000636 | 元器件 | 候选观察 | 板块锚定龙 / 首板 | 只看竞价表态和回封质量 |", rendered)
+        self.assertIn("| 2 | 宏和科技 | 603256 | 玻璃 | 候选观察补充 | 板块锚定龙 | 修复观察 |", rendered)
+        self.assertIn("### 附录A：龙回头观察池", rendered)
+        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 龙回头观察 | 龙回头样本；A杀未修复 | 重新站回短中线承接后再评估 | A杀未修复前不进正式名单 |", rendered)
 
 
 if __name__ == "__main__":

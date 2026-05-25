@@ -3,6 +3,7 @@ from report.front_summary_node_runtime import run_front_summary_nodes
 from report.mainline_turnover_summary_support import (
     resolve_mainline_attack_evidence_rows,
     resolve_mainline_capacity_regime_summary,
+    resolve_turnover_share_trend_summary,
     resolve_turnover_share_trend_rows,
 )
 from report.surface_wording import sanitize_user_visible_text
@@ -10,6 +11,10 @@ from report.surface_wording import sanitize_user_visible_text
 
 def sanitize_front_page_text(value):
     return sanitize_user_visible_text(value)
+
+
+def _display_latest_first(rows):
+    return list(reversed(list(rows or [])))
 
 
 def _render_mainline_capacity_regime_table(context):
@@ -30,16 +35,25 @@ def _render_turnover_share_trend_table(context):
     rows = resolve_turnover_share_trend_rows(context)
     if not rows:
         return []
+    summary = resolve_turnover_share_trend_summary(context)
     lines = [
-        "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-        "|------|----------|------------|------------|------------|------|----------|------|",
     ]
-    for row in rows:
+    if summary:
+        lines.append(f"> {summary}")
+        lines.append("")
+    lines.extend(
+        [
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+            "|------|----------|------------|------------|------------|------|----------|------|",
+        ]
+    )
+    for row in _display_latest_first(rows):
         lines.append(
             "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
                 **row
             )
         )
+    lines.append("")
     return lines
 
 

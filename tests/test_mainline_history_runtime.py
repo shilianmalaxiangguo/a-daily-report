@@ -105,6 +105,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             "2026-04-24",
             lookback_days=2,
             helpers={
+                "DatabaseService": None,
                 "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
                 "get_previous_date_str": lambda value: {
                     "2026-04-24": "2026-04-23",
@@ -193,6 +194,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             "2026-04-24",
             lookback_days=2,
             helpers={
+                "DatabaseService": None,
                 "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
                 "get_previous_date_str": lambda value: {
                     "2026-04-24": "2026-04-23",
@@ -266,6 +268,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             lookback_days=4,
             max_scan_days=4,
             helpers={
+                "DatabaseService": None,
                 "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
                 "get_previous_date_str": lambda value: {
                     "2026-05-14": "2026-05-13",
@@ -280,6 +283,184 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
 
         self.assertEqual([item["date"] for item in result], ["2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13"])
         self.assertEqual([item["primary_mainline"] for item in result], ["机器人", "电力", "电力", "半导体"])
+
+    def test_load_recent_mainline_history_prefers_fact_db_before_snapshot_scan(self):
+        runtime = self._load_module()
+        calls = []
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                calls.append(("db", db_path))
+                return cls()
+
+            def query_mainline_daily_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [
+                    {
+                        "date": "2026-05-18",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "fact_db.mainline_daily",
+                    },
+                    {
+                        "date": "2026-05-19",
+                        "primary_mainline": "半导体",
+                        "leading_line": "半导体",
+                        "source": "fact_db.mainline_daily",
+                    },
+                ]
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-18", "2026-05-19"])
+        self.assertEqual([item["primary_mainline"] for item in result], ["电力", "半导体"])
+        self.assertEqual(calls, [("db", None), ("query", "2026-05-20", 2)])
+
+    def test_load_recent_mainline_history_rebuilds_fact_db_when_index_is_stale(self):
+        runtime = self._load_module()
+        calls = []
+
+        class FakeService:
+            rebuilt = False
+
+            def query_mainline_daily_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days, self.rebuilt))
+                if not self.rebuilt:
+                    return [
+                        {
+                            "date": "2026-05-11",
+                            "primary_mainline": "电力",
+                            "leading_line": "电力",
+                            "source": "fact_db.mainline_daily",
+                        }
+                    ]
+                return [
+                    {
+                        "date": "2026-05-18",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "fact_db.mainline_daily",
+                    },
+                    {
+                        "date": "2026-05-19",
+                        "primary_mainline": "半导体",
+                        "leading_line": "半导体",
+                        "source": "fact_db.mainline_daily",
+                    },
+                ]
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                calls.append(("db", db_path))
+                return service
+
+        def ensure_index(**kwargs):
+            calls.append(("ensure", kwargs["end_date"], kwargs["window_days"], kwargs["max_scan_days"], kwargs.get("db_path")))
+            service.rebuilt = True
+            return {"indexed_count": 2}
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            max_scan_days=60,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "ensure_daily_metric_history_index": ensure_index,
+                "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-18", "2026-05-19"])
+        self.assertEqual(
+            calls,
+            [
+                ("db", None),
+                ("query", "2026-05-20", 2, False),
+                ("ensure", "2026-05-20", 2, 60, None),
+                ("db", None),
+                ("query", "2026-05-20", 2, True),
+            ],
+        )
+
+    def test_load_recent_mainline_history_rebuilds_fact_db_when_index_is_short(self):
+        runtime = self._load_module()
+        calls = []
+
+        class FakeService:
+            rebuilt = False
+
+            def query_mainline_daily_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days, self.rebuilt))
+                if not self.rebuilt:
+                    return [
+                        {
+                            "date": "2026-05-19",
+                            "primary_mainline": "电力",
+                            "leading_line": "电力",
+                            "source": "fact_db.mainline_daily",
+                        }
+                    ]
+                return [
+                    {
+                        "date": "2026-05-18",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "fact_db.mainline_daily",
+                    },
+                    {
+                        "date": "2026-05-19",
+                        "primary_mainline": "半导体",
+                        "leading_line": "半导体",
+                        "source": "fact_db.mainline_daily",
+                    },
+                ]
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                calls.append(("db", db_path))
+                return service
+
+        def ensure_index(**kwargs):
+            calls.append(("ensure", kwargs["end_date"], kwargs["window_days"], kwargs["max_scan_days"], kwargs.get("db_path")))
+            service.rebuilt = True
+            return {"indexed_count": 2}
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            max_scan_days=60,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "ensure_daily_metric_history_index": ensure_index,
+                "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-18", "2026-05-19"])
+        self.assertEqual(
+            calls,
+            [
+                ("db", None),
+                ("query", "2026-05-20", 2, False),
+                ("ensure", "2026-05-20", 2, 60, None),
+                ("db", None),
+                ("query", "2026-05-20", 2, True),
+            ],
+        )
 
 
 if __name__ == "__main__":

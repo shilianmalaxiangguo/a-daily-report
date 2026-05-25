@@ -1,8 +1,11 @@
-from report.mainline_turnover_summary_support import resolve_mainline_attack_evidence_summary
+from report.mainline_turnover_summary_support import (
+    resolve_display_mainline_name,
+    resolve_mainline_attack_evidence_summary,
+)
 
 
 def build_risk_review_sector_a_kill_node(context, node_meta=None, node_lookup=None):
-    mainline_name = str(context.get("mainline_name", "") or "").strip()
+    mainline_name = resolve_display_mainline_name(context, fallback=context.get("mainline_name", ""))
     mainline_dt_stocks = context.get("mainline_dt_stocks", []) or []
     structural_a_kill = bool(context.get("structural_a_kill", False))
     structural_reason = str(context.get("structural_reason", "") or "").strip()

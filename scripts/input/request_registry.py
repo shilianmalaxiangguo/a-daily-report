@@ -11,11 +11,16 @@ DEFAULT_INPUT_REQUEST_KEYS = (
     "stock_hot_rank",
     "limit_pool_snapshot",
     "sector_hot_plates",
+    "concept_fund_flow",
     "sector_change_rank",
     "sector_fund_flow",
     "lhb_snapshot",
     "new_stock_calendar",
     "stock_risk_map",
+    "new_high_feedback",
+    "top50_turnover_share_series",
+    "price_band_style_series",
+    "margin_pressure",
 )
 
 _HELPER_NAME_BY_REQUEST_KEY = {
@@ -26,11 +31,16 @@ _HELPER_NAME_BY_REQUEST_KEY = {
     "stock_hot_rank": "get_stock_hot_rank_from_tushare_first",
     "limit_pool_snapshot": "get_limit_pool_snapshot_from_tushare_first",
     "sector_hot_plates": "get_sector_hot_plates_from_tushare_first",
+    "concept_fund_flow": "get_hot_concept_fund_flow_from_tushare_first",
     "sector_change_rank": "get_sector_change_rank_from_tushare_first",
     "sector_fund_flow": "get_sector_fund_flow_from_tushare_first",
     "lhb_snapshot": "get_lhb_snapshot_from_tushare_first",
     "new_stock_calendar": "get_new_stock_calendar_from_tushare_first",
     "stock_risk_map": "get_stock_risk_map_from_tushare_first",
+    "new_high_feedback": "get_new_high_feedback_from_tushare_first",
+    "top50_turnover_share_series": "get_top50_turnover_share_series_from_tushare_first",
+    "price_band_style_series": "get_price_band_style_series_from_tushare_first",
+    "margin_pressure": "get_margin_pressure_from_tushare_first",
 }
 
 _FALLBACK_KWARG_BY_REQUEST_KEY = {

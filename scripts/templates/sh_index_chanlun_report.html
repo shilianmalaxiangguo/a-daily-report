@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>$title</title>
+  $echarts_loader
+</head>
+<body>
+  <h1>$heading</h1>
+  <p>生成时间：$generated_at</p>
+
+  <h2>核心核对</h2>
+  $summary_table
+
+  $tomorrow_decision_section
+
+  <h2>K线结构图</h2>
+  <div id="chanlun-kline-chart" style="width: 100%; height: 680px;"></div>
+  <script id="chanlun-chart-data" type="application/json">$chart_data</script>
+  <script>
+    (function () {
+      var chartElement = document.getElementById('chanlun-kline-chart');
+      var dataElement = document.getElementById('chanlun-chart-data');
+      if (!chartElement || !dataElement || !window.echarts) {
+        if (chartElement) chartElement.textContent = 'ECharts 未加载，无法显示 K 线图';
+        return;
+      }
+
+      var chartData = JSON.parse(dataElement.textContent || '{}');
+      var dates = chartData.dates || [];
+      var candles = chartData.candles || [];
+      var volumes = chartData.volumes || [];
+      var segments = chartData.segments || [];
+      var ZONE_LABEL_WIDTH = 64;
+      var ZONE_TOP_LABEL_WIDTH = 82;
+
+      function isFiniteNumber(value) {
+        return typeof value === 'number' && Number.isFinite(value);
+      }
+
+      function formatKlineCount(value) {
+        if (!isFiniteNumber(value)) return '-';
+        return String(Math.round(value));
+      }
+
+      function compactDateLabel(date) {
+        var parts = String(date || '').split('-');
+        if (parts.length !== 3) return String(date || '');
+        return parts[0].slice(2) + '/' + parts[1] + '/' + parts[2];
+      }
+
+      function zoneRangeLabel(segment) {
+        if (segment.kind === 'candidate_platform') return '候选平台\n' + formatKlineCount(segment.klineCount) + '根K线';
+        var title = segment.isCurrent ? '当前中枢' : '中枢';
+        return title + '\n' + formatKlineCount(segment.klineCount) + '根K线';
+      }
+
+      function zoneTopLabel(segment) {
+        return compactDateLabel(segment.startDate) + '-' + compactDateLabel(segment.endDate) + '\n' + formatKlineCount(segment.klineCount) + '日';
+      }
+
+      var indexByDate = {};
+      dates.forEach(function (date, index) {
+        indexByDate[date] = index;
+      });
+
+      function firstIndexOnOrAfter(date) {
+        for (var index = 0; index < dates.length; index += 1) {
+          if (dates[index] >= date) return index;
+        }
+        return null;
+      }
+
+      function lastIndexOnOrBefore(date) {
+        for (var index = dates.length - 1; index >= 0; index -= 1) {
+          if (dates[index] <= date) return index;
+        }
+        return null;
+      }
+
+      function startIndexFor(date) {
+        return Object.prototype.hasOwnProperty.call(indexByDate, date) ? indexByDate[date] : firstIndexOnOrAfter(date);
+      }
+
+      function endIndexFor(date) {
+        return Object.prototype.hasOwnProperty.call(indexByDate, date) ? indexByDate[date] : lastIndexOnOrBefore(date);
+      }
+
+      function zoneAnchorPrice(segment, side) {
+        var close = side === 'start' ? segment.startClose : segment.endClose;
+        if (isFiniteNumber(close)) return close;
+        if (isFiniteNumber(segment.zg) && isFiniteNumber(segment.zd)) return (segment.zg + segment.zd) / 2;
+        if (isFiniteNumber(segment.high) && isFiniteNumber(segment.low)) return (segment.high + segment.low) / 2;
+        return null;
+      }
+
+      function buildZoneShapeData() {
+        return segments
+          .filter(function (segment) {
+            return segment.kind !== 'connector' && isFiniteNumber(segment.low) && isFiniteNumber(segment.high);
+          })
+          .map(function (segment) {
+            var startIndex = startIndexFor(segment.startDate);
+            var endIndex = endIndexFor(segment.endDate);
+            if (startIndex == null || endIndex == null) return null;
+            var left = Math.min(startIndex, endIndex);
+            var right = Math.max(startIndex, endIndex);
+            var low = Math.min(segment.low, segment.high);
+            var high = Math.max(segment.low, segment.high);
+            return {
+              value: [left, low, right, high],
+              label: zoneRangeLabel(segment),
+              topLabel: zoneTopLabel(segment),
+              showLabel: Boolean(segment.isCurrent),
+              showTopLabel: true,
+              fill: segment.isCurrent ? 'rgba(226, 189, 104, 0.14)' : 'rgba(226, 189, 104, 0.06)',
+              stroke: segment.isCurrent ? '#e2bd68' : 'rgba(226, 189, 104, 0.34)',
+              lineWidth: segment.isCurrent ? 1.6 : 1,
+              labelColor: segment.isCurrent ? '#e2bd68' : '#b99a55',
+              topLabelColor: '#22c55e'
+            };
+          })
+          .filter(Boolean);
+      }
+
+      function clampTextX(preferredX, width, params) {
+        var gridLeft = Number(params.coordSys && params.coordSys.x);
+        var gridRight = gridLeft + Number(params.coordSys && params.coordSys.width);
+        if (!Number.isFinite(gridLeft) || !Number.isFinite(gridRight) || gridRight <= gridLeft) {
+          return preferredX;
+        }
+        return Math.min(Math.max(preferredX, gridLeft + 4), Math.max(gridLeft + 4, gridRight - width - 2));
+      }
+
+      function buildZoneRenderItem(zoneShapeData) {
+        return function (params, api) {
+          var item = zoneShapeData[params.dataIndex];
+          if (!item) return { type: 'group', children: [] };
+          var startIndex = Number(api.value(0));
+          var low = Number(api.value(1));
+          var endIndex = Number(api.value(2));
+          var high = Number(api.value(3));
+          var lowCoord = api.coord([startIndex, low]);
+          var highCoord = api.coord([endIndex, high]);
+          var size = api.size ? api.size([1, 0]) : null;
+          var bandWidth = Array.isArray(size) && Number.isFinite(size[0]) ? size[0] : 0;
+          if (!lowCoord || !highCoord || !Number.isFinite(lowCoord[0]) || !Number.isFinite(lowCoord[1]) || !Number.isFinite(highCoord[0]) || !Number.isFinite(highCoord[1])) {
+            return { type: 'group', children: [] };
+          }
+          var x = Math.min(lowCoord[0], highCoord[0]) - bandWidth / 2;
+          var y = highCoord[1];
+          var width = Math.abs(highCoord[0] - lowCoord[0]) + bandWidth;
+          var height = lowCoord[1] - highCoord[1];
+          if (width <= 0 || height <= 0) return { type: 'group', children: [] };
+          var children = [
+            {
+              type: 'rect',
+              shape: { x: x, y: y, width: width, height: height },
+              style: { fill: item.fill, stroke: item.stroke, lineWidth: item.lineWidth },
+              silent: true
+            }
+          ];
+          if (item.showTopLabel) {
+            var gridTop = Number(params.coordSys && params.coordSys.y);
+            var topLabelY = Number.isFinite(gridTop) ? Math.max(gridTop + 2, y - 40) : y - 40;
+            children.push({
+              type: 'text',
+              style: {
+                text: item.topLabel,
+                x: clampTextX(x + 2, ZONE_TOP_LABEL_WIDTH, params),
+                y: topLabelY,
+                width: ZONE_TOP_LABEL_WIDTH,
+                overflow: 'break',
+                fill: item.topLabelColor,
+                textBorderColor: 'rgba(255, 255, 255, 0.92)',
+                textBorderWidth: 2,
+                font: '600 9px sans-serif',
+                lineHeight: 11,
+                textAlign: 'left',
+                textVerticalAlign: 'top'
+              },
+              silent: true
+            });
+          }
+          if (item.showLabel) {
+            var labelX = clampTextX(x + 6, ZONE_LABEL_WIDTH, params);
+            var labelMinY = Number.isFinite(gridTop) ? gridTop + 26 : y - 22;
+            var labelY = Math.max(labelMinY, y - 22);
+            children.push({
+              type: 'text',
+              style: {
+                text: item.label,
+                x: labelX,
+                y: labelY,
+                width: ZONE_LABEL_WIDTH,
+                overflow: 'break',
+                fill: item.labelColor,
+                backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                borderColor: 'rgba(226, 189, 104, 0.45)',
+                borderWidth: 1,
+                borderRadius: 3,
+                padding: [2, 4],
+                font: '600 10px sans-serif',
+                lineHeight: 12,
+                textAlign: 'left',
+                textVerticalAlign: 'top'
+              },
+              silent: true
+            });
+          }
+          return {
+            type: 'group',
+            children: children
+          };
+        };
+      }
+
+      function pushLinePoint(points, index, price, anchor) {
+        if (index == null || !isFiniteNumber(price)) return;
+        var normalizedAnchor = anchor || 'center';
+        var last = points[points.length - 1];
+        if (last && last.index === index && last.price === price && last.anchor === normalizedAnchor) return;
+        points.push({ index: index, price: price, anchor: normalizedAnchor });
+      }
+
+      function bridgeLineData(previousPlatform, connectors, nextPlatform) {
+        var points = [];
+        if (previousPlatform) {
+          pushLinePoint(points, endIndexFor(previousPlatform.endDate), zoneAnchorPrice(previousPlatform, 'end'), 'right');
+        } else if (connectors[0]) {
+          pushLinePoint(points, startIndexFor(connectors[0].startDate), zoneAnchorPrice(connectors[0], 'start'), 'center');
+        }
+
+        if (nextPlatform) {
+          pushLinePoint(points, startIndexFor(nextPlatform.startDate), zoneAnchorPrice(nextPlatform, 'start'), 'left');
+        } else if (connectors[connectors.length - 1]) {
+          var lastConnector = connectors[connectors.length - 1];
+          pushLinePoint(points, endIndexFor(lastConnector.endDate), zoneAnchorPrice(lastConnector, 'end'), 'center');
+        }
+        return points;
+      }
+
+      function buildBridgeLineSeries() {
+        var series = [];
+        var previousPlatform = null;
+        var pendingConnectors = [];
+        segments.forEach(function (segment) {
+          if (segment.kind === 'connector') {
+            pendingConnectors.push(segment);
+            return;
+          }
+          if (pendingConnectors.length > 0) {
+            var betweenData = bridgeLineData(previousPlatform, pendingConnectors, segment);
+            if (betweenData.length >= 2) series.push(buildBridgeSeriesItem(betweenData));
+            pendingConnectors = [];
+          }
+          previousPlatform = segment;
+        });
+        if (pendingConnectors.length > 0) {
+          var trailingData = bridgeLineData(previousPlatform, pendingConnectors, null);
+          if (trailingData.length >= 2) series.push(buildBridgeSeriesItem(trailingData));
+        }
+        return series;
+      }
+
+      function bridgePixelPoint(api, point) {
+        var coord = api.coord([point.index, point.price]);
+        if (!coord || !Number.isFinite(coord[0]) || !Number.isFinite(coord[1])) return null;
+        var size = api.size ? api.size([1, 0]) : null;
+        var bandWidth = Array.isArray(size) && Number.isFinite(size[0]) ? size[0] : 0;
+        var offset = point.anchor === 'left' ? -bandWidth / 2 : point.anchor === 'right' ? bandWidth / 2 : 0;
+        return [coord[0] + offset, coord[1]];
+      }
+
+      function buildBridgeSeriesItem(points) {
+        var data = [{ value: [0], points: points }];
+        return {
+          name: '平台桥接线',
+          type: 'custom',
+          xAxisIndex: 0,
+          yAxisIndex: 0,
+          data: data,
+          renderItem: function (params, api) {
+            var item = data[params.dataIndex] || data[0];
+            var pixelPoints = [];
+            (item.points || []).forEach(function (point) {
+              var pixelPoint = bridgePixelPoint(api, point);
+              if (pixelPoint) pixelPoints.push(pixelPoint);
+            });
+            if (pixelPoints.length < 2) return { type: 'group', children: [] };
+            var children = [
+              {
+                type: 'polyline',
+                shape: { points: pixelPoints },
+                style: { stroke: '#22c55e', lineWidth: 2.8, fill: null, lineJoin: 'round', lineCap: 'round' },
+                silent: true
+              }
+            ];
+            pixelPoints.forEach(function (point) {
+              children.push({
+                type: 'circle',
+                shape: { cx: point[0], cy: point[1], r: 3 },
+                style: { fill: '#fff', stroke: '#22c55e', lineWidth: 1.8 },
+                silent: true
+              });
+            });
+            return { type: 'group', children: children };
+          },
+          silent: true,
+          tooltip: { show: false },
+          emphasis: { disabled: true },
+          z: 5
+        };
+      }
+
+      var currentSegment = chartData.currentSegment || {};
+      var markLines = [];
+      if (isFiniteNumber(currentSegment.zg)) {
+        markLines.push({
+          name: 'ZG',
+          yAxis: currentSegment.zg,
+          lineStyle: { color: '#b45309', type: 'dashed' },
+          label: { show: false }
+        });
+      }
+      if (isFiniteNumber(currentSegment.zd)) {
+        markLines.push({
+          name: 'ZD',
+          yAxis: currentSegment.zd,
+          lineStyle: { color: '#b45309', type: 'dashed' },
+          label: { show: false }
+        });
+      }
+      if (isFiniteNumber(chartData.latestPrice)) {
+        markLines.push({
+          name: '最新收盘',
+          yAxis: chartData.latestPrice,
+          lineStyle: { color: '#666', type: 'dotted' },
+          label: { show: false }
+        });
+      }
+
+      var volumeItems = volumes.map(function (value, index) {
+        var candle = candles[index] || [];
+        var rising = Number(candle[1]) >= Number(candle[0]);
+        return { value: value, itemStyle: { color: rising ? '#d14a3b' : '#2f8f5b' } };
+      });
+
+      var chart = echarts.init(chartElement);
+      var zoneShapeData = buildZoneShapeData();
+      var bridgeLineSeries = buildBridgeLineSeries();
+      chart.setOption({
+        animation: false,
+        tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+        axisPointer: { link: [{ xAxisIndex: 'all' }] },
+        grid: [
+          { left: 70, right: 40, top: 40, height: 470 },
+          { left: 70, right: 40, top: 545, height: 80 }
+        ],
+        xAxis: [
+          { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false } },
+          { type: 'category', data: dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false }, axisLine: { onZero: false } }
+        ],
+        yAxis: [
+          { scale: true, splitArea: { show: true } },
+          { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false } }
+        ],
+        dataZoom: [
+          { type: 'inside', xAxisIndex: [0, 1], filterMode: 'none' },
+          { type: 'slider', xAxisIndex: [0, 1], filterMode: 'none', bottom: 12, height: 22 }
+        ],
+        series: [
+          {
+            name: '日K',
+            type: 'candlestick',
+            data: candles,
+            itemStyle: {
+              color: '#d14a3b',
+              color0: '#2f8f5b',
+              borderColor: '#d14a3b',
+              borderColor0: '#2f8f5b'
+            },
+            markLine: { symbol: 'none', data: markLines }
+          },
+          {
+            name: '成交量',
+            type: 'bar',
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: volumeItems
+          },
+          {
+            name: '中枢框',
+            type: 'custom',
+            xAxisIndex: 0,
+            yAxisIndex: 0,
+            renderItem: buildZoneRenderItem(zoneShapeData),
+            data: zoneShapeData,
+            silent: true,
+            tooltip: { show: false },
+            emphasis: { disabled: true },
+            z: 1
+          }
+        ].concat(bridgeLineSeries)
+      });
+      window.addEventListener('resize', function () {
+        chart.resize();
+      });
+    })();
+  </script>
+
+  <h2>当前结构</h2>
+  $current_table
+
+  <h2>结构分段明细</h2>
+  $segments_table
+
+  <h2>近日日K</h2>
+  $kline_table
+</body>
+</html>

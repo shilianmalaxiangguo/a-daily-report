@@ -51,12 +51,30 @@ class DailyReportRenderTest(unittest.TestCase):
         )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
 
-    def test_build_report_outputs_does_not_persist_decision_ledger_for_replay(self):
+    def test_build_report_outputs_persists_decision_ledger_before_replay_full_render(self):
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
             build_report_outputs({"foo": "bar"}, "2026-04-22", run_mode="replay", emit_preflight=False)
 
-        self.assertFalse(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
+        self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+
+    def test_build_report_outputs_keeps_private_position_report_out_of_daily_reports(self):
+        private_position_text = "\n## 持仓策略\n| 上峰水泥 | 100.0% | 私密动作 |\n"
+
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]):
+            outputs = build_report_outputs(
+                {"foo": "bar"},
+                "2026-05-19",
+                position_report_text=private_position_text,
+                emit_preflight=False,
+            )
+
+        self.assertNotIn("持仓策略", outputs[REPORT_VARIANT_FULL])
+        self.assertNotIn("上峰水泥", outputs[REPORT_VARIANT_FULL])
+        self.assertNotIn("100.0%", outputs[REPORT_VARIANT_FULL])
+        self.assertNotIn("持仓策略", outputs[REPORT_VARIANT_SUMMARY])
+        self.assertNotIn("上峰水泥", outputs[REPORT_VARIANT_SUMMARY])
+        self.assertNotIn("100.0%", outputs[REPORT_VARIANT_SUMMARY])
 
     def test_save_replay_outputs_rebuilds_decision_ledger_from_final_full_markdown(self):
         stale_snapshot = build_decision_ledger_snapshot(
@@ -100,6 +118,47 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertEqual(same_day_rows, {"000417", "300657", "001259"})
         self.assertNotIn("600850", index["by_stock_code"])
         self.assertNotIn("603082", index["by_stock_code"])
+
+    def test_save_replay_outputs_keeps_existing_decision_ledger_when_final_markdown_has_no_list(self):
+        from storage.database_service import DatabaseService
+
+        existing_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-22",
+            extreme_conviction_list=[
+                {
+                    "code": "000636",
+                    "name": "风华高科",
+                    "sector": "元器件",
+                    "source_tier": "extreme_conviction",
+                    "execution_eligibility": "observation_only",
+                    "attack_state": "0%观察",
+                    "conviction_reason": "形态健康，但最终0%只观察承接",
+                }
+            ],
+            market_branch="空仓等待",
+            sector_relationship_state="只观察",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(existing_snapshot, root_dir=root)
+
+            save_report_outputs(
+                {
+                    REPORT_VARIANT_FULL: "# 2026-05-22 A股市场分析\n\n正文没有候选表。",
+                    REPORT_VARIANT_SUMMARY: "# summary",
+                },
+                "2026-05-22",
+                mode=LEDGER_MODE_REPLAY,
+                output_dir=str(root),
+            )
+
+            snapshot = json.loads((root / "data" / "decision-ledger" / "2026-05-22.json").read_text(encoding="utf-8"))
+            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
+            rows = service.query_extreme_conviction_mentions("2026-05-22", window_days=25)
+
+        self.assertEqual([case["stock_code"] for case in snapshot["cases"]], ["000636"])
+        self.assertEqual([row["stock_code"] for row in rows], ["000636"])
 
     def test_render_report_with_display_mode_forwards_decision_ledger_config(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")
@@ -234,7 +293,7 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertNotIn("连板梯队", preflight["failures"])
 
-    def test_report_preflight_fails_when_xuangubao_newsflash_is_empty_even_with_other_payloads(self):
+    def test_report_preflight_accepts_xuangubao_plates_and_limit_up_reasons_when_newsflash_is_empty(self):
         data = {
             "data_status": {
                 "两市成交额": True,
@@ -286,7 +345,7 @@ class DailyReportRenderTest(unittest.TestCase):
 
         preflight = build_report_preflight(data, "2026-05-18")
 
-        self.assertIn("选股通盘中异动", preflight["failures"])
+        self.assertNotIn("选股通盘中异动", preflight["failures"])
 
     def test_report_preflight_ignores_stale_xuangubao_failure_log_when_payload_has_news(self):
         data = {
@@ -420,6 +479,386 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertEqual(preflight["status"], "success")
         self.assertEqual(preflight["failures"], [])
+
+    def test_report_preflight_fails_when_new_high_feedback_factor_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "创新高趋势反馈": False,
+            },
+            "step_status": {"创新高趋势反馈获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "new_high_feedback": {
+                "available": False,
+                "status": "upstream_empty",
+                "source": "tushare.stk_factor_pro.topdays",
+            },
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.new_high_feedback",
+                    "status": "degraded",
+                    "details": {"provider": "tushare.stk_factor_pro.topdays", "new_high_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("创新高趋势反馈", preflight["failures"])
+
+    def test_report_preflight_echoes_new_high_recent_trend_rows(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "创新高趋势反馈": True,
+            },
+            "step_status": {"创新高趋势反馈获取": True},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "new_high_feedback": {
+                "available": True,
+                "source": "tushare.stk_factor_pro.topdays",
+                "new_high_count": 169,
+                "trend_rows": [
+                    {
+                        "trade_date": "2026-05-18",
+                        "new_high_count": 132,
+                        "all_a_share_pct": 2.64,
+                        "change_text": "+19",
+                        "leading_sectors": "元器件、半导体、化工原料",
+                    },
+                    {
+                        "trade_date": "2026-05-19",
+                        "new_high_count": 164,
+                        "all_a_share_pct": 3.28,
+                        "change_text": "+32",
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    },
+                    {
+                        "trade_date": "2026-05-20",
+                        "new_high_count": 169,
+                        "all_a_share_pct": 3.38,
+                        "change_text": "+5",
+                        "leading_sectors": "半导体、元器件、专用机械",
+                    },
+                ],
+            },
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.new_high_feedback",
+                    "status": "success",
+                    "details": {
+                        "provider": "tushare.stk_factor_pro.topdays",
+                        "new_high_count": 169,
+                        "trend_row_count": 3,
+                    },
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-20")
+        lines = render_report_preflight_lines(preflight)
+        rendered = "\n".join(lines)
+
+        self.assertIn("创新高趋势反馈: success", rendered)
+        self.assertIn("row_count=3", rendered)
+        self.assertIn("创新高近25个交易日:", rendered)
+        self.assertIn("2026-05-18 132 2.64% +19 元器件、半导体、化工原料", rendered)
+        self.assertIn("2026-05-20 169 3.38% +5 半导体、元器件、专用机械", rendered)
+
+    def test_report_preflight_fails_when_top50_turnover_share_trend_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "Top50成交额占比趋势": False,
+            },
+            "step_status": {"Top50成交额占比趋势获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "top50_turnover_share_series": {"rows": []},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.top50_turnover_share_series",
+                    "status": "degraded",
+                    "details": {"provider": "storage.turnover_rank_daily", "row_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("Top50成交额占比趋势", preflight["failures"])
+
+    def test_report_preflight_fails_when_margin_pressure_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "融资承接压力": False,
+            },
+            "step_status": {"融资承接压力获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "margin_pressure": {"available": False, "rows": []},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.margin_pressure",
+                    "status": "degraded",
+                    "details": {"provider": "tushare.margin+tushare.index_daily.market_amount", "row_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("融资承接压力", preflight["failures"])
+
+    def test_report_preflight_fails_when_lhb_factor_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "step_status": {"龙虎榜数据获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "lhb_data_status": "upstream_empty",
+            "lhb_analysis": [],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.lhb_snapshot",
+                    "status": "degraded",
+                    "details": {"provider": "legacy.lhb_snapshot", "lhb_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("龙虎榜数据", preflight["failures"])
+
+    def test_report_preflight_fails_when_concept_fund_flow_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "概念资金流向": False,
+            },
+            "step_status": {"概念资金流向获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "concept_fund_flow": {"rows": [], "inflow": [], "outflow": []},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.concept_fund_flow",
+                    "status": "degraded",
+                    "details": {"provider": "tushare.ths_member+tushare.moneyflow", "row_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-21")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("概念资金流向", preflight["failures"])
+
+    def test_report_preflight_fails_when_xueqiu_hot_rank_factor_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "雪球A股24小时热榜": False,
+            },
+            "step_status": {"雪球A股24小时热榜获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "xueqiu_hot_rank_top100": [],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.xueqiu_hot_rank",
+                    "status": "error",
+                    "details": {
+                        "provider": "xueqiu.hot_stock.type22",
+                        "row_count": 0,
+                        "error": "雪球登录态失效或缺失，关键数据不完整，停止生成",
+                    },
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("雪球A股24小时热榜", preflight["failures"])
+
+    def test_report_preflight_fails_when_xueqiu_ai_argument_factor_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "雪球热榜AI解释": False,
+            },
+            "step_status": {"雪球热榜AI解释获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "xueqiu_hot_stock_arguments": [],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.xueqiu_hot_stock_arguments",
+                    "status": "error",
+                    "details": {
+                        "provider": "xueqiu.hot_stock.argument",
+                        "row_count": 0,
+                        "error": "雪球接口返回空，关键数据不完整，停止生成",
+                    },
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("雪球热榜AI解释", preflight["failures"])
+
+    def test_report_preflight_fails_when_any_registered_factor_status_failed(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "价格带风格趋势": False,
+            },
+            "step_status": {"价格带风格趋势获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "price_band_style_series": {"rows": []},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.price_band_style_series",
+                    "status": "degraded",
+                    "details": {"provider": "tushare.ths_daily.price_band_style", "row_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("价格带风格趋势", preflight["failures"])
+
+    def test_report_preflight_accepts_lhb_rank_rows_when_analysis_table_is_empty(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "step_status": {"龙虎榜数据获取": True},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "lhb_analysis": [],
+            "lhb_net_buy_top10": [{"code": "000001", "name": "军工一号"}],
+            "lhb_net_sell_top10": [],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.lhb_snapshot",
+                    "status": "success",
+                    "details": {"provider": "tushare.top_list", "lhb_count": 0, "buy_count": 1},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertNotIn("龙虎榜数据", preflight["failures"])
+
+    def test_report_preflight_fails_when_resonance_factor_not_computed(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "zt_pool": [{"code": "000001"}],
+            "sector_fund_flow": {"inflow": [{"name": "机器人"}]},
+            "stocks_with_history": [{"code": "000001", "turnover": 80.0}],
+            "resonance_scores": {},
+            "trade_signals": [],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "infer.quant_signals",
+                    "status": "success",
+                    "details": {"volume_anomaly_count": 2, "lhb_count": 0, "resonance_count": 0, "signal_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-19")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("板块共振结果", preflight["failures"])
 
     def test_build_report_outputs_emits_preflight_by_default_before_abort(self):
         data = {

@@ -84,6 +84,44 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _optional_market_float(value):
+    try:
+        if value in (None, ""):
+            return None
+        text = str(value).strip()
+        if ":" in text:
+            text = text.split(":", 1)[0]
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_heavy_turnover_selloff(observation, style_switch):
+    observation = observation or {}
+    style_switch = style_switch or {}
+    benchmark_change = _optional_market_float(
+        observation.get("benchmark_change_pct", observation.get("benchmark_change"))
+    )
+    dt_count = int(_safe_float(observation.get("dt_count", 0)))
+    rise_fall_ratio = _optional_market_float(observation.get("rise_fall_ratio"))
+    if rise_fall_ratio is None:
+        rise_fall_ratio = _optional_market_float(observation.get("rise_fall_ratio_text"))
+    turnover = _safe_float(observation.get("turnover", observation.get("total_turnover", 0.0)))
+    turnover_state = str(style_switch.get("turnover_state", "") or "").strip()
+    turnover_label = str(style_switch.get("turnover_label", "") or "").strip()
+    turnover_is_expanding = turnover_state in ("rising", "rebound") or any(
+        keyword in turnover_label for keyword in ("回升", "放大")
+    )
+    breadth_broken = dt_count >= 30 or (rise_fall_ratio is not None and rise_fall_ratio < 0.4)
+    return bool(
+        benchmark_change is not None
+        and benchmark_change <= -1.5
+        and turnover > 0
+        and turnover_is_expanding
+        and breadth_broken
+    )
+
+
 def sector_name_matches(sector_a, sector_b):
     return analysis_utils.sector_name_matches(sector_a, sector_b)
 
@@ -791,8 +829,19 @@ def _build_mainline_rotation_snapshot_legacy_body(
     turnover_label = str(style_switch.get("turnover_label", "") or "").strip()
     pulse_stage = str(state_machine.get("pulse_stage", "") or "").strip()
     state_code = str(state_machine.get("state_code", "") or "").strip()
+    heavy_turnover_selloff = _is_heavy_turnover_selloff(observation, style_switch)
 
-    if state_code == "expand":
+    if heavy_turnover_selloff:
+        rotation_label = "逆势攻击"
+        rotation_reason = (
+            f"{turnover_label or turnover_state or '成交额放大'}但盘面是放量杀跌，叠加指数大跌、跌停扩散和涨跌比失衡，"
+            f"{mainline_sector or '主攻线'}只是局部逆势攻击；量化动量和风控卖出互相强化时，不能按顺势爆发理解。"
+        )
+        rotation_action = (
+            f"先防踩踏，只观察{mainline_sector or '主攻线'}次日是否修复承接；"
+            "承接不足时不追一致，等市场买盘重新站出来。"
+        )
+    elif state_code == "expand":
         rotation_label = "爆发"
         rotation_reason = f"{turnover_label or turnover_state or '量能'}仍支持主线集中，{relay_sector_text}，趋势密度{trend_density}只，接力还在主线内部。"
         rotation_action = f"继续围着{mainline_sector or '主线'}做减法，只盯主攻线承接，不把支线当新中心。"
@@ -978,7 +1027,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "code": "avoid",
                 "label": "🚫 暂不跟随",
                 "reason": f"当前处于{energy_state}，新增买入资格未满足，先研究市场，不做新增参与。",
-                "action": "空仓观察，禁止新开仓",
+                "action": "保持空仓，只观察，不新增参与",
             }
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
             action_text = "只看主线核心是否命中参与窗口分层确认：强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认；命中后才评估50%标准进攻，未命中按0%不参与"
@@ -991,7 +1040,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "action": action_text,
             }
         if final_gate.get("should_reduce") or execution_bias == "reduce_only":
-            action_text = "若你有旧仓先去弱留强，禁止新开仓"
+            action_text = "若你有旧仓先去弱留强，不新增参与"
             if special_probe_action:
                 action_text = f"{special_probe_action}；{action_text}"
             return {
@@ -1000,7 +1049,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "reason": pulse_action_reason or f"当前处于{energy_state}，系统只保留旧仓处理资格，不给新增买入资格。",
                 "action": action_text,
             }
-        action_text = "先看环境；若你有持仓，只处理持仓，禁止新开仓"
+        action_text = "先看环境；若你有持仓，只处理持仓，不新增参与"
         if special_probe_action:
             action_text = f"{special_probe_action}；{action_text}"
         return {
@@ -1112,6 +1161,7 @@ def _render_market_research_snapshot_section_legacy_body(market_research_snapsho
             "capital_intent_breakdown": market_research_snapshot.get("capital_intent_breakdown", {}) or {},
             "lhb_capital_status": market_research_snapshot.get("lhb_capital_status", {}) or {},
             "capital_conclusion": market_research_snapshot.get("capital_conclusion", {}) or {},
+            "realtime_tag_evidence_snapshot": market_research_snapshot.get("realtime_tag_evidence_snapshot", {}) or {},
             "rotation_label": rotation_snapshot.get("rotation_label", "-"),
             "rotation_summary_text": rotation_snapshot.get("summary_text", rotation_snapshot.get("rotation_reason", "-")),
             "rotation_action": rotation_snapshot.get("rotation_action", "-"),
@@ -1146,6 +1196,13 @@ def _render_step0_follow_section_legacy_body(step0_plan, market_research_snapsho
             "step0_prediction_cn": step0_plan.get("step0_prediction_cn", "-"),
             "step0_reason": step0_plan.get("step0_reason", "-"),
             "step0_action": step0_plan.get("step0_action", "-"),
+            "final_gate": market_research_snapshot.get("front_page_final_gate")
+            or market_research_snapshot.get("final_gate")
+            or step0_plan.get("final_gate")
+            or {},
+            "position_decision": market_research_snapshot.get("position_decision")
+            or step0_plan.get("position_decision")
+            or {},
             "zt_count": observation.get("zt_count", 0),
             "dt_count": observation.get("dt_count", 0),
             "observation_summary": state_machine.get("observation_summary", "-"),
@@ -1153,6 +1210,8 @@ def _render_step0_follow_section_legacy_body(step0_plan, market_research_snapsho
             "style_reason": style_switch.get("style_reason", "-"),
             "densest_sector": observation.get("densest_sector", "暂无明确主线"),
             "densest_sector_trend_count": observation.get("densest_sector_trend_count", 0),
+            "mainline_turnover_summary": market_research_snapshot.get("mainline_turnover_summary", {}) or {},
+            "mainline_attack_evidence_summary": market_research_snapshot.get("mainline_attack_evidence_summary", {}) or {},
             "resilient_abnormal_count": observation.get("resilient_abnormal_count", 0),
             "failed_abnormal_count": observation.get("failed_abnormal_count", 0),
             "abnormal_projection_label": abnormal_projection.get("projection_label", "-"),

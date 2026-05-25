@@ -111,6 +111,11 @@ def run(ctx):
     display_mvp_mode = bool(inputs.get("display_mvp_mode"))
     mainline_name = str(inputs.get("mainline_name", "") or "").strip()
     market_research_snapshot = inputs.get("market_research_snapshot", {}) or {}
+    realtime_tag_evidence_snapshot = (
+        market_research_snapshot.get("realtime_tag_evidence_snapshot")
+        or inputs.get("realtime_tag_evidence_snapshot")
+        or {}
+    )
     current_mainline_history_record = inputs.get("current_mainline_history_record", {}) or {}
     recent_mainline_history = inputs.get("recent_mainline_history", []) or []
     current_sector_turnover_snapshot = inputs.get("current_sector_turnover_snapshot", {}) or {}
@@ -158,6 +163,8 @@ def run(ctx):
                     "best_stock": inputs.get("best_stock"),
                     "watch_anchor": inputs.get("watch_anchor"),
                     "watch_anchor_type": inputs.get("watch_anchor_type", ""),
+                    "selected_position_candidate": inputs.get("selected_position_candidate"),
+                    "position_decision": inputs.get("position_decision", {}) or {},
                     "style_switch": (market_research_snapshot.get("style_switch", {}) or {}),
                     "tracking_memory_status": inputs.get("tracking_memory_status", {}) or {},
                     "today_validated_items": inputs.get("today_validated_items"),
@@ -188,6 +195,7 @@ def run(ctx):
                 "flow_direction": market_state_snapshot.get("flow_direction", "-"),
                 "mainline_text": mainline_text,
                 "mainline_turnover_summary": mainline_turnover_summary,
+                "realtime_tag_evidence_snapshot": realtime_tag_evidence_snapshot,
                 "risk_text": risk_text,
                 "focus_text": f"{focus_subject}持续性，量能变化，板块轮动",
             },
