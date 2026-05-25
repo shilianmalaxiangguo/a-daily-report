@@ -511,6 +511,8 @@ def _build_dialectical_decision_snapshot_legacy_body(
     benchmark_change = _safe_float(observation.get("benchmark_change_pct", 0.0), 0.0)
     zt_count = int(_safe_float(observation.get("zt_count", 0)))
     dt_count = int(_safe_float(observation.get("dt_count", 0)))
+    up_count = int(_safe_float(observation.get("up_count", 0)))
+    down_count = int(_safe_float(observation.get("down_count", 0)))
     rise_fall_ratio = observation.get("rise_fall_ratio")
     trend_count = int(_safe_float(observation.get("densest_sector_trend_count", 0)))
     resilient_count = int(_safe_float(observation.get("resilient_abnormal_count", 0)))
@@ -553,7 +555,16 @@ def _build_dialectical_decision_snapshot_legacy_body(
         stage_reason = "风险释放仍优先，市场还没回到可以放大试错的状态。"
         stage_action = "先防守，不给新增买入资格。"
 
-    if benchmark_change <= -0.1 and profit_effect_strong:
+    breadth_divergence = benchmark_change >= 0.2 and down_count > up_count > 0
+
+    if breadth_divergence:
+        index_profit_relation = "指数强但赚钱效应背离"
+        index_profit_reason = (
+            f"指数上涨{benchmark_change:+.2f}%时，上涨{up_count}家、下跌{down_count}家，"
+            f"更像少数方向的窄池子进攻，不是普涨环境。"
+        )
+        index_profit_action = f"只看{densest_sector or '被资金持续选择的方向'}，没有站对板块路径时不因指数上涨提高参与资格。"
+    elif benchmark_change <= -0.1 and profit_effect_strong:
         index_profit_relation = "指数承压，但赚钱效应还在主线里"
         index_profit_reason = (
             f"上证{benchmark_change:+.2f}%时，热点没有一起塌；真正该盯的是{densest_sector or '当前最强方向'}内部承接有没有继续。"

@@ -315,6 +315,35 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["style_label"], "主线抱团")
         self.assertEqual(len(result["falsification_conditions"]), 4)
 
+    def test_build_dialectical_decision_snapshot_detects_index_breadth_divergence(self):
+        support = self._load_module()
+
+        result = support.build_dialectical_decision_snapshot(
+            {
+                "benchmark_change_pct": 0.96,
+                "zt_count": 128,
+                "dt_count": 24,
+                "up_count": 2181,
+                "down_count": 3225,
+                "densest_sector_trend_count": 3,
+                "resilient_abnormal_count": 2,
+                "failed_abnormal_count": 1,
+                "densest_sector": "光通信/CPO",
+                "rise_fall_ratio": 0.68,
+                "rise_fall_ratio_text": "2181:3225",
+            },
+            {"style_label": "主线抱团", "primary_action": "只做最强方向"},
+            {"state_code": "expand"},
+            {"code": "follow", "label": "🟢 跟随主线"},
+            {"can_new_entry": True},
+            helpers={"_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value)},
+        )
+
+        self.assertEqual(result["index_profit_relation"], "指数强但赚钱效应背离")
+        self.assertIn("上涨2181家、下跌3225家", result["index_profit_reason"])
+        self.assertIn("窄池子进攻", result["index_profit_reason"])
+        self.assertIn("光通信/CPO", result["index_profit_action"])
+
     def test_build_abnormal_projection_summary_support_summarizes_follow_state_mix(self):
         support = self._load_module()
 
