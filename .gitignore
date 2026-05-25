@@ -13,6 +13,8 @@
 /.generated/**
 /.worktrees/
 /.worktrees/**
+/.understand-anything/*
+!/.understand-anything/.understandignore
 
 # Independent local UI projects
 /snap-ui/
