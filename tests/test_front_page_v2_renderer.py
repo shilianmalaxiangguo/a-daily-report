@@ -501,6 +501,61 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("| 补位对象 | 风华高科", rendered)
         self.assertNotIn("| 只看唯一对象 | 暂无 |", rendered)
 
+    def test_front_page_t0_card_caps_20260526_style_candidates(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-26",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "selected_position_candidate": {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                    },
+                    "candidate_snapshot": {
+                        "front_page": {
+                            "backup_watch": [
+                                {"label": "步步高(002251)", "sector": "超市连锁"},
+                                {"label": "大众公用(600635)", "sector": "供气供热"},
+                                {"label": "红星发展(600367)", "sector": "化工原料"},
+                            ]
+                        },
+                        "extreme_conviction_list": [
+                            {
+                                "name": "步步高",
+                                "code": "002251",
+                                "sector": "超市连锁",
+                                "sniper_role": "旧主买说法",
+                            },
+                            {
+                                "name": "大众公用",
+                                "code": "600635",
+                                "sector": "供气供热",
+                                "sniper_role": "旧补位说法",
+                            },
+                        ],
+                    },
+                },
+            )
+        )
+
+        self.assertLess(rendered.index("## 明日账户建议"), rendered.index("## 一、交易纪律"))
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；无昨日持仓先看T0对象 |", account_section)
+        self.assertIn("| 明日动作 | 不新开，只做条件观察 |", account_section)
+        self.assertIn("| T0主对象 | 华天科技(002185)：条件观察 |", account_section)
+        self.assertIn("| T0备用 | 暂无 |", account_section)
+        self.assertIn("| 新开仓上限 | 0 |", account_section)
+        self.assertIn("| 今日不看 | T1/T2/T3只放附录观察，不同时盯多只，不为多个名单分散资金 |", account_section)
+        self.assertNotIn("步步高", account_section)
+        self.assertNotIn("大众公用", account_section)
+        self.assertNotIn("红星发展", account_section)
+
     def test_zero_participation_final_summary_prefers_position_trigger_text(self):
         rendered = "\n".join(
             render_front_page_v2(

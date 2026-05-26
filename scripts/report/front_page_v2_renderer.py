@@ -866,6 +866,106 @@ def _candidate_section_unique_object_label(
     return front_page.get("unique_object") or "暂无"
 
 
+def _existing_position_summary(snapshot):
+    summary = (snapshot or {}).get("existing_position_summary") or {}
+    if not isinstance(summary, dict):
+        return {}
+    text = str(summary.get("summary") or "").strip()
+    if not summary.get("has_position") and not text:
+        return {}
+    return {
+        "has_position": True,
+        "summary": text or "已有昨日持仓，先按持仓预案处理",
+    }
+
+
+def _account_capital_text(snapshot):
+    profile = (snapshot or {}).get("account_profile") or {}
+    if not isinstance(profile, dict):
+        profile = {}
+    return str(profile.get("capital_text") or "约1w账户").strip() or "约1w账户"
+
+
+def _t0_target_label(target):
+    target = target or {}
+    name = _text_value(target.get("name"), target.get("stock_name"))
+    code = _text_value(target.get("code"), target.get("stock_code"), target.get("id"))
+    if name and code:
+        return f"{name}({code})"
+    return name or code or "暂无"
+
+
+def _t0_selected_target(snapshot):
+    selected = (snapshot or {}).get("selected_position_candidate") or {}
+    if not isinstance(selected, dict) or not (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return {}
+    return {
+        "name": selected.get("name") or selected.get("stock_name"),
+        "code": selected.get("code") or selected.get("stock_code"),
+        "sector": selected.get("sector") or selected.get("sector_name"),
+        "direction": selected.get("direction") or selected.get("theme"),
+    }
+
+
+def _t0_main_target(snapshot, position_state):
+    snapshot = snapshot or {}
+    position_state = position_state or {}
+    if position_state.get("grade") == "0":
+        if _countertrend_defense_active(snapshot):
+            return {}, ""
+        target = _t0_selected_target(snapshot)
+        return (target, "条件观察") if target else ({}, "")
+
+    if "reasoning_decision" in snapshot:
+        target = derive_unique_action_target_from_reasoning_decision(snapshot)
+        if isinstance(target, dict) and (target.get("name") or target.get("code")):
+            return target, "参与窗口确认"
+    target = snapshot.get("unique_action_target") or {}
+    if isinstance(target, dict) and (target.get("name") or target.get("code")):
+        return target, "参与窗口确认"
+    target = _t0_selected_target(snapshot)
+    return (target, "参与窗口确认") if target else ({}, "")
+
+
+def _account_status_lines(snapshot=None):
+    snapshot = snapshot or {}
+    position_state = _position_state_contract(snapshot)
+    holding = _existing_position_summary(snapshot)
+    main_target, main_role = _t0_main_target(snapshot, position_state)
+    has_main_target = isinstance(main_target, dict) and bool(main_target.get("name") or main_target.get("code"))
+    capital_text = _account_capital_text(snapshot)
+
+    if holding:
+        account_constraint = f"{capital_text}；已有昨日持仓优先处理"
+        tomorrow_action = "先处理旧仓，不为新候选分散资金"
+        main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
+        backup_label = f"{_t0_target_label(main_target)}：仅作条件观察" if has_main_target else "暂无"
+        new_entry_limit = "0"
+    else:
+        account_constraint = f"{capital_text}；无昨日持仓先看T0对象"
+        if position_state.get("grade") == "0":
+            tomorrow_action = "不新开，只做条件观察" if has_main_target else "不参与，只观察"
+            new_entry_limit = "0"
+        else:
+            tomorrow_action = "只看T0对象，条件满足才新开一手"
+            new_entry_limit = "1"
+        main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
+        backup_label = "暂无"
+
+    return [
+        "## 明日账户建议",
+        "| 项目 | 结论 |",
+        "|------|------|",
+        f"| 账户约束 | {account_constraint} |",
+        f"| 明日动作 | {tomorrow_action} |",
+        f"| T0主对象 | {main_label} |",
+        f"| T0备用 | {backup_label} |",
+        f"| 新开仓上限 | {new_entry_limit} |",
+        "| 今日不看 | T1/T2/T3只放附录观察，不同时盯多只，不为多个名单分散资金 |",
+        "",
+    ]
+
+
 def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     snapshot = snapshot or {}
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
@@ -1105,6 +1205,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     report_lines = list(report_lines or [])
     snapshot = _with_derived_cycle_layer(market_research_snapshot or {})
     lines = [f"# {target_date} a股市场分析" if target_date else "# a股市场分析", ""]
+    lines.extend(_account_status_lines(snapshot))
     lines.extend(_discipline_table(final_gate=final_gate, position_level=position_level, snapshot=snapshot))
     lines.extend(_monthly_rhythm_lines(snapshot))
     market_base = _market_base_lines(report_lines, snapshot)
