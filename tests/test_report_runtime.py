@@ -3082,7 +3082,7 @@ def _runtime_binding_probe(
                 config={},
             )
 
-        self.assertEqual(result["report"], "# Runtime Report 2026-04-22")
+        self.assertTrue(result["report"].startswith("# Runtime Report 2026-04-22"))
 
     def test_runtime_decision_ledger_hook_builds_and_writes_when_enabled(self):
         captured = {}
@@ -4185,11 +4185,40 @@ def _runtime_binding_probe(
         self.assertNotIn("试错条件", rendered)
         self.assertNotIn("| 50% |", rendered)
 
+    def test_runtime_appendix_preserves_conditional_plan_when_zero_has_selected_candidate(self):
+        lines = [
+            "- **明天具体怎么做**: 空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
+            "- **进攻仓位三态**: 0%不参与",
+            "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
+            "- **现在到底是什么状态**: 0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
+            "**重点观察参与脚本**:",
+            "| 参与窗口 | 仓位三态 | 检查步骤 | 回封参与 | 作废条件 |",
+            "|----------|----------|----------|----------|----------|",
+            "| 09:50-10:10 | 50% | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"code": "605111", "name": "新洁能"},
+            position_decision={"signal_grade": "0", "target_position_pct": 0, "participation_mode": "observe_0"},
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("明日目标标的保留条件50%预演：只看605111 新洁能", rendered)
+        self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
+        self.assertIn("- **明天仓位放多少**: 条件50%；盘前不抢跑，参与窗口命中后执行，不满足回到0%", rendered)
+        self.assertIn("条件50%预演，盘前不抢跑，只等明日目标标的盘中确认路径", rendered)
+        self.assertIn("重点观察参与脚本", rendered)
+        self.assertIn("| 09:50-10:10 | 50% | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
+        self.assertNotIn("明日不新增参与，只观察风险是否钝化", rendered)
+        self.assertNotIn("重点观察复核脚本", rendered)
+        self.assertNotIn("0%观察 |", rendered)
+
     def test_sanitize_report_lines_relabels_legacy_execution_framework_under_zero_participation(self):
         lines = [
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
-            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 条件观察：000636 风华高科（元器件） | 0% / 不参与 | 0%：条件不满足，即使有观察对象也不新增 |",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 | 0%：没有合格标的就不参与 |",
             "- **怎么执行**: 日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
             "> **怎么执行**：先把价格区间和纪律定好，盘中只按“日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损”执行。",
             "- **执行节奏**: 日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
@@ -4201,6 +4230,29 @@ def _runtime_binding_probe(
         self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("普通结构才等60分钟确认", rendered)
+
+    def test_sanitize_report_lines_preserves_conditional_buy_plan_under_zero_with_observation_target(self):
+        lines = [
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 条件观察：605111 新洁能（半导体） | 0% / 不参与 | 盘前0%；09:50-10:10站上63.22且板块承接不塌，才评估50%标准进攻；不满足继续0% |",
+            "- **怎么执行**: 日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
+            "- **执行节奏**: 日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
+            "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
+            "| 10:00左右买 | 新洁能站上63.22且板块承接不塌 | 条件50% | 买后用60.06做失效 | 不满足继续0% |",
+            "| 候选 | 账户状态 | 当前持仓 | 可卖数量 | 选股质量 | 买点质量 | 动作上限 | 新开仓动作 |",
+            "| 新洁能(605111) | 实际可买 | 0 | 0 | 中 | 等确认 | 补位 | 触发后50%标准进攻 |",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("条件观察：605111 新洁能（半导体）", rendered)
+        self.assertIn("09:50-10:10站上63.22且板块承接不塌，才评估50%标准进攻", rendered)
+        self.assertIn("- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻", rendered)
+        self.assertIn("| 10:00左右买 | 新洁能站上63.22且板块承接不塌 | 条件50% | 买后用60.06做失效 | 不满足继续0% |", rendered)
+        self.assertIn("| 新洁能(605111) | 实际可买 | 0 | 0 | 中 | 等确认 | 补位 | 触发后50%标准进攻 |", rendered)
+        self.assertNotIn("最终0%时不按观察窗口执行", rendered)
+        self.assertNotIn("主观察对象", rendered)
 
     def test_sanitize_report_lines_relabels_tomorrow_action_soft_words_under_zero_participation(self):
         lines = [

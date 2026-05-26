@@ -1001,6 +1001,17 @@ def _final_summary_is_zero_position(lines):
     return False
 
 
+def _final_summary_has_conditional_zero_plan(lines):
+    style = _extract_final_execution_style(lines)
+    target = _extract_final_unique_target(lines)
+    if "0% / 不参与" not in style:
+        return False
+    if "条件观察：" not in str(target or ""):
+        return False
+    text = "\n".join(str(line or "") for line in list(lines or []))
+    return any(marker in text for marker in ("盘前0%", "不满足继续0%", "条件50%", "才评估50%标准进攻"))
+
+
 def _is_zero_position_conflict_line(cells):
     row_text = " ".join(cells)
     if "不新增参与" in row_text:
@@ -1016,6 +1027,7 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
     front = _front_page_lines(lines)
     if not _final_summary_is_zero_position(front):
         return []
+    has_conditional_zero_plan = _final_summary_has_conditional_zero_plan(front)
     findings = []
     for offset, line in enumerate(front, 1):
         cells = _split_md_row(line)
@@ -1030,32 +1042,33 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
                 line=offset,
             )
         )
-    for offset, line in enumerate(lines, 1):
-        cells = _split_md_row(line)
-        if not cells or _is_separator_cells(cells):
-            continue
-        if len(cells) < 2 or cells[0] not in ZERO_POSITION_CURRENT_DECISION_ACTION_LABELS:
-            continue
-        if _is_empty_target(cells[1]):
-            continue
-        findings.append(
-            _finding(
-                "zero_position_tomorrow_action_conflict",
-                "final summary is 0%不参与, but a current decision panel still names a main or backup participation object",
-                line=offset,
+    if not has_conditional_zero_plan:
+        for offset, line in enumerate(lines, 1):
+            cells = _split_md_row(line)
+            if not cells or _is_separator_cells(cells):
+                continue
+            if len(cells) < 2 or cells[0] not in ZERO_POSITION_CURRENT_DECISION_ACTION_LABELS:
+                continue
+            if _is_empty_target(cells[1]):
+                continue
+            findings.append(
+                _finding(
+                    "zero_position_tomorrow_action_conflict",
+                    "final summary is 0%不参与, but a current decision panel still names a main or backup participation object",
+                    line=offset,
+                )
             )
-        )
-    for offset, line in enumerate(lines, 1):
-        text = str(line or "")
-        if not any(marker in text for marker in ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS):
-            continue
-        findings.append(
-            _finding(
-                "zero_position_legacy_tomorrow_wording",
-                "final summary is 0%不参与, but report still contains old tomorrow-action wording",
-                line=offset,
+        for offset, line in enumerate(lines, 1):
+            text = str(line or "")
+            if not any(marker in text for marker in ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS):
+                continue
+            findings.append(
+                _finding(
+                    "zero_position_legacy_tomorrow_wording",
+                    "final summary is 0%不参与, but report still contains old tomorrow-action wording",
+                    line=offset,
+                )
             )
-        )
     return findings
 
 

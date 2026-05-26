@@ -659,8 +659,21 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             )
             .replace(
                 "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
-                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 0%：条件不满足，即使有观察对象也不新增 |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 盘前0%；09:50-10:10主线确认 + 承接 + 观察窗口同时成立，才评估50%标准进攻；不满足继续0% |",
             )
+            + "\n##### 附录：# 今日总决策面板\n"
+            + "| 字段 | 内容 |\n"
+            + "|------|------|\n"
+            + "| 今日新增上限 | 0 |\n"
+            + "| 主买对象 | 暂无 |\n"
+            + "| 补位对象 | 富瀚微(300613) |\n"
+            + "\n**最终动作表**（只展示真正具备参与资格的对象）:\n"
+            + "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
+            + "|----------|------|------|----------|-----------|\n"
+            + "| ⏳ 确认后执行预案 | 富瀚微 | 300613 | 09:50-10:10站上确认价，且板块承接不塌，参与窗口成立后才评估50%标准进攻 | 失效价 |\n"
+            + "\n**明天仓位怎么放**:\n"
+            + "- **进攻仓位三态**: 50%标准进攻预演\n"
+            + "- **明天仓位放多少**: 条件50%；盘前不抢跑，参与窗口命中后执行，不满足回到0%\n"
         )
 
         result = audit_report_markdown(report)
@@ -668,6 +681,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         codes = {finding["code"] for finding in result["findings"]}
         self.assertNotIn("unique_focus_mismatch", codes)
         self.assertNotIn("execution_condition_missing", codes)
+        self.assertNotIn("zero_position_tomorrow_action_conflict", codes)
+        self.assertNotIn("zero_position_legacy_tomorrow_wording", codes)
         self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_concrete_unique_focus_without_required_decision_evidence(self):

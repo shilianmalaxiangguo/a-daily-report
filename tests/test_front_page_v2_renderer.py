@@ -495,11 +495,42 @@ class FrontPageV2RendererTest(unittest.TestCase):
             rendered,
         )
         self.assertIn(
-            "| 0%不参与 | 不确定时不值得主动参与 | 元器件 | 元器件 | 先看市场基底 | 条件观察：000636 风华高科（元器件） | 0% / 不参与 | 0%：条件不满足，即使有观察对象也不新增 |",
+            "| 0%不参与 | 不确定时不值得主动参与 | 元器件 | 元器件 | 先看市场基底 | 条件观察：000636 风华高科（元器件） | 0% / 不参与 | 盘前0%；只看000636 风华高科（元器件），09:50-10:10站上37.62，且元器件/PCB链承接不塌成立才执行条件50%标准进攻；不满足继续0% |",
             rendered,
         )
         self.assertNotIn("| 补位对象 | 风华高科", rendered)
         self.assertNotIn("| 只看唯一对象 | 暂无 |", rendered)
+
+    def test_zero_participation_final_summary_prefers_position_trigger_text(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-25",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "selected_position_candidate": {
+                        "name": "新洁能",
+                        "code": "605111",
+                        "sector": "半导体",
+                        "condition": "当前主线处于退潮，环境已转撤退，先退出，等下一轮新脉冲。",
+                        "fallback_state": "不满足继续0%",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                        "trigger_text": "首个60分钟站上63.22且不破60.06",
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        self.assertIn(
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 条件观察：605111 新洁能（半导体） | 0% / 不参与 | 盘前0%；只看605111 新洁能（半导体），09:50-10:10首个60分钟站上63.22且不破60.06成立才执行条件50%标准进攻；不满足继续0% |",
+            rendered,
+        )
+        self.assertNotIn("环境已转撤退，先退出", rendered.split("## 七、最终结论", 1)[-1])
 
     def test_zero_participation_does_not_surface_sniper_rows_as_actionable(self):
         rendered = "\n".join(

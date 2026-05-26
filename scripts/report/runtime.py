@@ -193,6 +193,17 @@ def _number_report_tables(lines):
 _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
 
 
+def _has_conditional_observation_target_surface(lines):
+    text = "\n".join(str(line or "") for line in list(lines or []))
+    if "条件观察：" not in text:
+        return False
+    return "0%：条件不满足" in text or "不满足继续0%" in text or "条件50%" in text
+
+
+def _should_apply_pure_zero_participation_cleanup(lines):
+    return _has_final_zero_participation_surface(lines) and not _has_conditional_observation_target_surface(lines)
+
+
 def _has_final_zero_participation_surface(lines):
     lines = list(lines or [])
     for line in lines:
@@ -210,7 +221,7 @@ def _has_final_zero_participation_surface(lines):
 
 
 def _normalize_legacy_execution_framework_under_zero_participation(lines):
-    if not _has_final_zero_participation_surface(lines):
+    if not _should_apply_pure_zero_participation_cleanup(lines):
         return list(lines or [])
 
     normalized = []
@@ -238,7 +249,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
 
 
 def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
-    if not _has_final_zero_participation_surface(lines):
+    if not _should_apply_pure_zero_participation_cleanup(lines):
         return list(lines or [])
 
     normalized = []
@@ -1416,9 +1427,12 @@ def _normalize_zero_participation_appendix_line(line):
 
 
 def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candidate=None, position_decision=None):
-    if _has_zero_participation_context(position_decision):
+    has_selected_target = isinstance(selected_position_candidate, dict) and bool(
+        selected_position_candidate.get("name") or selected_position_candidate.get("code")
+    )
+    if _has_zero_participation_context(position_decision) and not has_selected_target:
         return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
-    if not selected_position_candidate or _front_page_target_pct(position_decision) < 50:
+    if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
 
     target_label = _target_candidate_label(selected_position_candidate)

@@ -759,6 +759,20 @@ def _unique_target_label(target):
     return label
 
 
+def _conditional_zero_action_text(target, position_decision=None):
+    label = _unique_target_label(target)
+    participation_window = _text_value(target.get("participation_window"), target.get("buy_window")) or "09:50-10:10"
+    position_decision = position_decision if isinstance(position_decision, dict) else {}
+    condition = (
+        _text_value(position_decision.get("trigger_text"))
+        or _text_value(target.get("condition"))
+        or "主线承接 + 个股强弱重新确认"
+    )
+    fallback = _text_value(target.get("fallback_state")) or "不满足继续0%"
+    condition_text = condition if participation_window in condition else f"{participation_window}{condition}"
+    return f"盘前0%；只看{label}，{condition_text}成立才执行条件50%标准进攻；{fallback}"
+
+
 def _resolve_sniper_candidates(snapshot, candidate_snapshot):
     snapshot = snapshot or {}
     sources = []
@@ -1071,7 +1085,11 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     target = observation_target if observation_target else _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         unique_target = f"条件观察：{_unique_target_label(target)}" if observation_target else _unique_target_label(target)
-        one_line_action = position_state["action_with_target"]
+        one_line_action = (
+            _conditional_zero_action_text(target, snapshot.get("position_decision"))
+            if observation_target
+            else position_state["action_with_target"]
+        )
     else:
         unique_target = "暂无"
         one_line_action = position_state["action_without_target"]
