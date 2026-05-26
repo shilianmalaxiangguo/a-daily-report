@@ -556,6 +556,37 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("大众公用", account_section)
         self.assertNotIn("红星发展", account_section)
 
+    def test_front_page_t0_card_prioritizes_existing_position(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-26",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "已有昨日持仓晶方科技(603005)，先按持仓预案处理",
+                    },
+                    "selected_position_candidate": {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                    },
+                },
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；已有昨日持仓优先处理 |", account_section)
+        self.assertIn("| 明日动作 | 先处理旧仓，不为新候选分散资金 |", account_section)
+        self.assertIn("| T0主对象 | 已有昨日持仓晶方科技(603005)，先按持仓预案处理 |", account_section)
+        self.assertIn("| T0备用 | 华天科技(002185)：仅作条件观察 |", account_section)
+        self.assertIn("| 新开仓上限 | 0 |", account_section)
+
     def test_zero_participation_final_summary_prefers_position_trigger_text(self):
         rendered = "\n".join(
             render_front_page_v2(
