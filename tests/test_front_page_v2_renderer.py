@@ -556,6 +556,24 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("大众公用", account_section)
         self.assertNotIn("红星发展", account_section)
 
+    def test_front_page_t0_card_uses_final_action_state_for_new_entry_target(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-26",
+                market_research_snapshot={
+                    "unique_action_target": {"name": "大唐发电", "code": "601991", "sector": "电力"},
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 明日动作 | 只看T0对象，条件满足才新开一手 |", account_section)
+        self.assertIn("| T0主对象 | 大唐发电(601991)：参与窗口确认 |", account_section)
+        self.assertIn("| 新开仓上限 | 1 |", account_section)
+        self.assertIn("| 50%标准进攻 |", rendered)
+
     def test_front_page_t0_card_prioritizes_existing_position(self):
         rendered = "\n".join(
             render_front_page_v2(

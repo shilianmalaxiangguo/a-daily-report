@@ -927,9 +927,9 @@ def _t0_main_target(snapshot, position_state):
     return (target, "参与窗口确认") if target else ({}, "")
 
 
-def _account_status_lines(snapshot=None):
+def _account_status_lines(snapshot=None, final_gate=None):
     snapshot = snapshot or {}
-    position_state = _position_state_contract(snapshot)
+    position_state = _position_state_contract(snapshot, final_gate=final_gate)
     holding = _existing_position_summary(snapshot)
     main_target, main_role = _t0_main_target(snapshot, position_state)
     has_main_target = isinstance(main_target, dict) and bool(main_target.get("name") or main_target.get("code"))
@@ -1205,7 +1205,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     report_lines = list(report_lines or [])
     snapshot = _with_derived_cycle_layer(market_research_snapshot or {})
     lines = [f"# {target_date} a股市场分析" if target_date else "# a股市场分析", ""]
-    lines.extend(_account_status_lines(snapshot))
+    lines.extend(_account_status_lines(snapshot, final_gate=final_gate))
     lines.extend(_discipline_table(final_gate=final_gate, position_level=position_level, snapshot=snapshot))
     lines.extend(_monthly_rhythm_lines(snapshot))
     market_base = _market_base_lines(report_lines, snapshot)
