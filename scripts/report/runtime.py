@@ -2320,7 +2320,9 @@ def _attach_market_structure_judgement(data):
     snapshot = data.get("market_research_snapshot")
     if not isinstance(snapshot, dict):
         snapshot = {}
-    judgement = build_market_structure_judgement(data=data, market_research_snapshot=snapshot)
+    judgement = data.get("market_structure_judgement")
+    if not isinstance(judgement, dict) or not judgement.get("summary_text"):
+        judgement = build_market_structure_judgement(data=data, market_research_snapshot=snapshot)
     if not judgement.get("summary_text"):
         return {}
     data["market_structure_judgement"] = judgement
@@ -3320,6 +3322,8 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot["final_gate"] = front_page_final_gate
         market_research_snapshot["front_page_final_gate"] = front_page_final_gate
         data["market_research_snapshot"] = market_research_snapshot
+        _attach_market_structure_judgement(data)
+        market_research_snapshot = data.get("market_research_snapshot") or market_research_snapshot
 
     front_page_market_research_snapshot = {
         **(market_research_snapshot or {}),

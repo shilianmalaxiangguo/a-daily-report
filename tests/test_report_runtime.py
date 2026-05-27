@@ -3110,6 +3110,46 @@ assert rendered == "# migrated"
         self.assertIn("## 知识复利提示", report)
         self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
 
+    def test_attach_market_structure_restores_existing_judgement_to_replaced_snapshot(self):
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                },
+                "mainline_turnover_summary": {"current_mainline": "科技"},
+            },
+        }
+
+        first_judgement = report_runtime._attach_market_structure_judgement(data)
+        data["market_research_snapshot"] = {
+            "mainline_turnover_summary": {"current_mainline": "科技"},
+            "position_decision": {"signal_grade": "50"},
+            "front_page_final_gate": {"final_action": "观察"},
+        }
+
+        restored_judgement = report_runtime._attach_market_structure_judgement(data)
+        rendered = "\n".join(
+            render_front_page_v2(
+                ["## 二、市场基底", "### 1. 指数与市场底色"],
+                target_date="2026-05-27",
+                market_research_snapshot=data["market_research_snapshot"],
+            )
+        )
+
+        self.assertIs(restored_judgement, first_judgement)
+        self.assertIs(data["market_research_snapshot"]["market_structure_judgement"], first_judgement)
+        self.assertIn("### 3. 市场结构判断", rendered)
+        self.assertIn("低频聚焦", rendered)
+        self.assertEqual(
+            [item["topic"] for item in data["knowledge_updates"] if isinstance(item, dict)],
+            ["市场结构判断"],
+        )
+
     def test_render_markdown_report_runtime_appends_knowledge_compounding_candidates(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
             result = report_runtime.render_markdown_report_runtime(
