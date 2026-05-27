@@ -3,6 +3,7 @@ from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
     evaluate_candidate_quality_sample_contract,
 )
+from selection.candidate_trace_contracts import build_eliminated_summary
 
 
 def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
@@ -33,14 +34,28 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
         ]
     if not panel:
         return {"lines": [], "exports": {}, "module_logs": []}
+    eliminated_summary = context.get("candidate_trace_eliminated_summary")
+    if eliminated_summary is None:
+        eliminated_summary = build_eliminated_summary(context.get("candidate_trace_eliminated_items") or [])
+    render_trace_tables = bool(context.get("render_candidate_trace_tables"))
+    traces = [
+        contract.get("trace")
+        for contract in contracts
+        if isinstance(contract, dict) and contract.get("trace")
+    ]
     return {
         "lines": render_candidate_quality_section(
             panel,
             contracts,
             heading_level=heading_level,
             table_fields=COMPACT_CANDIDATE_TABLE_FIELDS,
+            render_trace_tables=render_trace_tables,
+            eliminated_summary=eliminated_summary,
         ).splitlines(),
-        "exports": {},
+        "exports": {
+            "candidate_traces": traces,
+            "candidate_trace_eliminated_summary": eliminated_summary,
+        },
         "module_logs": [],
     }
 
