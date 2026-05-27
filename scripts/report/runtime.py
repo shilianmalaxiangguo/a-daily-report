@@ -31,10 +31,14 @@ from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
 from report.front_summary_renderer import sanitize_front_page_text
 from hooks.report.use_report_sections import (
-    build_ai_friction_knowledge_note,
     build_knowledge_compounding_candidate_note,
+    build_knowledge_update_note,
 )
 from report.front_page_v2_renderer import render_front_page_v2
+from report.market_structure_judgement import (
+    build_market_structure_judgement,
+    build_market_structure_knowledge_update,
+)
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
 from report.surface_wording import sanitize_user_visible_text
 from report.trading_time_window_contract import normalize_trading_time_text
@@ -2367,6 +2371,32 @@ def _get_or_build_market_research_bundle(
     return bundle
 
 
+def _attach_market_structure_judgement(data):
+    if not isinstance(data, dict):
+        return {}
+    snapshot = data.get("market_research_snapshot")
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    judgement = data.get("market_structure_judgement")
+    if not isinstance(judgement, dict) or not judgement.get("summary_text"):
+        judgement = build_market_structure_judgement(data=data, market_research_snapshot=snapshot)
+    if not judgement.get("summary_text"):
+        return {}
+    data["market_structure_judgement"] = judgement
+    snapshot["market_structure_judgement"] = judgement
+    data["market_research_snapshot"] = snapshot
+    update = build_market_structure_knowledge_update(judgement)
+    if update:
+        existing_updates = data.get("knowledge_updates")
+        updates = []
+        if isinstance(existing_updates, list):
+            updates = [item for item in existing_updates if isinstance(item, dict)]
+        data["knowledge_updates"] = updates
+        if not any(isinstance(item, dict) and item.get("topic") == update.get("topic") for item in updates):
+            updates.append(update)
+    return judgement
+
+
 def render_markdown_report_runtime(
     data,
     target_date,
@@ -2381,6 +2411,7 @@ def render_markdown_report_runtime(
     llm_wiki_context = build_llm_wiki_context()
     if isinstance(data, dict):
         data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
+    _attach_market_structure_judgement(data)
     bindings = {}
     bindings.update(helpers or {})
     bindings.update(config or {})
@@ -2396,7 +2427,7 @@ def render_markdown_report_runtime(
         )
     finally:
         _restore_runtime_bindings(previous)
-    knowledge_note_lines = build_ai_friction_knowledge_note(data if isinstance(data, dict) else {})
+    knowledge_note_lines = build_knowledge_update_note(data if isinstance(data, dict) else {})
     if knowledge_note_lines:
         report = "\n".join([report.rstrip(), "", *knowledge_note_lines]).strip()
     candidate_note_lines = build_knowledge_compounding_candidate_note(llm_wiki_context)
@@ -3354,6 +3385,8 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot["final_gate"] = front_page_final_gate
         market_research_snapshot["front_page_final_gate"] = front_page_final_gate
         data["market_research_snapshot"] = market_research_snapshot
+        _attach_market_structure_judgement(data)
+        market_research_snapshot = data.get("market_research_snapshot") or market_research_snapshot
 
     front_page_market_research_snapshot = {
         **(market_research_snapshot or {}),

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report import runtime as report_runtime
+from report.front_page_v2_renderer import render_front_page_v2
 
 
 def _run_legacy_entry_probe(script_body):
@@ -3042,6 +3043,115 @@ assert rendered == "# migrated"
         self.assertIn("日报落点：只记录字段化结论，不把文章长文带入交易主链。", report)
         self.assertNotIn("摩擦是资产不是成本", report)
         self.assertNotIn("认知投降", report)
+
+    def test_render_markdown_report_runtime_attaches_market_structure_and_knowledge_update(self):
+        def _legacy_body(data, target_date, **kwargs):
+            snapshot = data["market_research_snapshot"]
+            return "\n".join(
+                render_front_page_v2(
+                    ["## 二、市场基底", "### 1. 指数与市场底色"],
+                    target_date=target_date,
+                    market_research_snapshot=snapshot,
+                )
+            )
+
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                },
+                "mainline_turnover_summary": {"current_mainline": "科技"},
+            },
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", side_effect=_legacy_body):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-27",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        report = result["report"]
+        self.assertIn("### 3. 市场结构判断", report)
+        self.assertIn("低频聚焦", report)
+        self.assertIn("## 知识复利提示", report)
+        self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
+        self.assertEqual(data["market_structure_judgement"]["tomorrow_rhythm"], "低频聚焦")
+
+    def test_render_markdown_report_runtime_normalizes_non_list_knowledge_updates(self):
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "knowledge_updates": {"topic": "旧格式"},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                }
+            },
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-27",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        report = result["report"]
+        self.assertIsInstance(data["knowledge_updates"], list)
+        self.assertEqual(data["knowledge_updates"][0]["topic"], "市场结构判断")
+        self.assertIn("## 知识复利提示", report)
+        self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
+
+    def test_attach_market_structure_restores_existing_judgement_to_replaced_snapshot(self):
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                },
+                "mainline_turnover_summary": {"current_mainline": "科技"},
+            },
+        }
+
+        first_judgement = report_runtime._attach_market_structure_judgement(data)
+        data["market_research_snapshot"] = {
+            "mainline_turnover_summary": {"current_mainline": "科技"},
+            "position_decision": {"signal_grade": "50"},
+            "front_page_final_gate": {"final_action": "观察"},
+        }
+
+        restored_judgement = report_runtime._attach_market_structure_judgement(data)
+        rendered = "\n".join(
+            render_front_page_v2(
+                ["## 二、市场基底", "### 1. 指数与市场底色"],
+                target_date="2026-05-27",
+                market_research_snapshot=data["market_research_snapshot"],
+            )
+        )
+
+        self.assertIs(restored_judgement, first_judgement)
+        self.assertIs(data["market_research_snapshot"]["market_structure_judgement"], first_judgement)
+        self.assertIn("### 3. 市场结构判断", rendered)
+        self.assertIn("低频聚焦", rendered)
+        self.assertEqual(
+            [item["topic"] for item in data["knowledge_updates"] if isinstance(item, dict)],
+            ["市场结构判断"],
+        )
 
     def test_render_markdown_report_runtime_appends_knowledge_compounding_candidates(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):

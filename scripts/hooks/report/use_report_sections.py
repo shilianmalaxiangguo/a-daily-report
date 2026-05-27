@@ -82,6 +82,44 @@ def build_ai_friction_knowledge_note(request):
     ]
 
 
+def _format_structured_knowledge_update(update):
+    topic = str(update.get("topic", "") or "").strip()
+    if topic != "市场结构判断":
+        return []
+    new_insight = str(update.get("new_insight", "") or "").strip()
+    fact_basis = str(update.get("fact_basis", "") or "").strip()
+    suggested_nodes = [
+        str(node or "").strip()
+        for node in update.get("suggested_nodes") or []
+        if str(node or "").strip()
+    ]
+    next_effect = str(update.get("next_effect", "") or "").strip()
+    lines = []
+    if new_insight:
+        lines.append(f"- 新增判断：{new_insight}")
+    if fact_basis:
+        lines.append(f"- 事实来源：{fact_basis}")
+    if suggested_nodes:
+        lines.append(f"- 建议沉淀：{'；'.join(suggested_nodes)}")
+    if next_effect:
+        lines.append(f"- 下次影响：{next_effect}")
+    return lines
+
+
+def build_knowledge_update_note(request):
+    request = request or {}
+    lines = []
+    for update in request.get("knowledge_updates") or []:
+        if isinstance(update, dict):
+            lines.extend(_format_structured_knowledge_update(update))
+    ai_friction_lines = build_ai_friction_knowledge_note(request)
+    if ai_friction_lines:
+        lines.extend(ai_friction_lines[1:])
+    if lines:
+        return ["## 知识复利提示", *lines]
+    return []
+
+
 def _format_knowledge_compounding_candidate(candidate):
     if not isinstance(candidate, dict):
         return ""
@@ -125,7 +163,7 @@ def _build_review_section(knowledge, llm_wiki=None, request=None):
         f"- LLM Wiki版本：{wiki.get('version', 'unknown')}",
         f"- Wiki来源：{wiki.get('source', 'unknown')}",
     ]
-    note_lines = build_ai_friction_knowledge_note(request)
+    note_lines = build_knowledge_update_note(request)
     if note_lines:
         lines.extend(["", note_lines[0].replace("## ", "### ", 1), *note_lines[1:]])
     candidate_lines = build_knowledge_compounding_candidate_note(wiki)
