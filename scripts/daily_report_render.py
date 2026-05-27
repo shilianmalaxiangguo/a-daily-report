@@ -591,6 +591,8 @@ def _render_report_with_display_mode(
     persist_strategy_tracking: bool = True,
     persist_decision_ledger: bool = False,
     decision_ledger_root_dir: str | None = None,
+    persist_candidate_traces: bool = False,
+    candidate_trace_root_dir: str | None = None,
     emit_helper_diagnostics: bool = True,
     shared_runtime_cache: dict | None = None,
 ) -> str:
@@ -612,6 +614,8 @@ def _render_report_with_display_mode(
             persist_strategy_tracking=persist_strategy_tracking,
             persist_decision_ledger=persist_decision_ledger,
             decision_ledger_root_dir=decision_ledger_root_dir,
+            persist_candidate_traces=persist_candidate_traces,
+            candidate_trace_root_dir=candidate_trace_root_dir,
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
@@ -680,6 +684,8 @@ def generate_markdown_report(
     has_personal_positions: bool = False,
     run_mode: str = LEDGER_MODE_FROZEN,
     persist_strategy_tracking: bool = True,
+    persist_candidate_traces: bool = False,
+    candidate_trace_root_dir: str | None = None,
 ) -> str:
     """Render the default report text.
 
@@ -703,6 +709,8 @@ def generate_markdown_report(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=persist_strategy_tracking,
+        persist_candidate_traces=persist_candidate_traces,
+        candidate_trace_root_dir=candidate_trace_root_dir,
     )
 
 
@@ -731,6 +739,8 @@ def build_report_outputs(
         persist_strategy_tracking=False,
         persist_decision_ledger=True,
         decision_ledger_root_dir=str(_module_dir().parent),
+        persist_candidate_traces=True,
+        candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
     )
@@ -744,6 +754,8 @@ def build_report_outputs(
         persist_strategy_tracking=False,
         persist_decision_ledger=False,
         decision_ledger_root_dir=str(_module_dir().parent),
+        persist_candidate_traces=False,
+        candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=False,
         shared_runtime_cache=shared_runtime_cache,
     )

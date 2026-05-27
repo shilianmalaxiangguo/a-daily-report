@@ -25,10 +25,26 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "closing_lines": context.get("closing_lines", []),
         "alert_rows": context.get("alert_rows", []),
         "candidate_quality_panel_fields": context.get("candidate_quality_panel_fields"),
+        "candidate_quality_contracts": context.get("candidate_quality_contracts"),
         "candidate_quality_samples": context.get("candidate_quality_samples", []),
+        "render_candidate_trace_tables": context.get("render_candidate_trace_tables", True),
+        "candidate_trace_eliminated_items": context.get("candidate_trace_eliminated_items", []),
+        "candidate_trace_eliminated_summary": context.get("candidate_trace_eliminated_summary"),
         "enabled_node_keys": context.get("action_plan_enabled_node_keys"),
     }
     lines.extend(context["render_pk_decision_section"](pk_context))
-    lines.extend(context["render_action_plan_section"](action_context))
+    action_exports = {}
+    action_logs = []
+    render_action_plan_result = context.get("render_action_plan_result")
+    if render_action_plan_result:
+        action_result = render_action_plan_result(action_context) or {}
+        lines.extend(action_result.get("lines") or [])
+        action_result_context = dict(action_result.get("context") or {})
+        for export_key in ("candidate_traces", "candidate_trace_eliminated_summary"):
+            if export_key in action_result_context:
+                action_exports[export_key] = action_result_context.get(export_key)
+        action_logs.extend(action_result.get("module_logs") or [])
+    else:
+        lines.extend(context["render_action_plan_section"](action_context))
     lines.append("")
-    return {"lines": lines, "exports": {}, "module_logs": []}
+    return {"lines": lines, "exports": action_exports, "module_logs": action_logs}

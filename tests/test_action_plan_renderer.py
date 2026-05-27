@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.action_plan_renderer import render_action_plan_section
+from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.action_plan_nodes import build_action_plan_candidate_quality_node
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
@@ -264,6 +264,44 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("未进入分层原因统计", rendered)
         self.assertEqual(lines["exports"]["candidate_traces"][0]["stock_code"], "002185")
         self.assertEqual(lines["exports"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
+
+    def test_render_action_plan_result_exposes_candidate_trace_exports(self):
+        context = {
+            "candidate_quality_panel_fields": {
+                "market_emotion_label": "主线活跃",
+                "daily_new_entry_limit": 1,
+            },
+            "candidate_quality_samples": [
+                {
+                    "name": "华天科技",
+                    "code": "002185",
+                    "tier": "T0",
+                    "source_pools": ["主线核心候选"],
+                    "mainline": "半导体",
+                    "sector": "半导体",
+                    "market_fit": "部分满足",
+                    "mainline_fit": "满足",
+                    "stock_structure_fit": "部分满足",
+                    "latest_price": 13.2,
+                    "available_cash": 10000,
+                    "final_action": "09:50-10:10确认，不满足继续不参与",
+                }
+            ],
+            "candidate_trace_eliminated_items": [
+                {"name": "大众公用", "reason": "主线不匹配"},
+            ],
+            "render_candidate_trace_tables": True,
+            "enabled_node_keys": ["overview", "candidate_quality"],
+        }
+
+        result = render_action_plan_result(context)
+        legacy_lines = render_action_plan_section(context)
+
+        rendered = "\n".join(result["lines"])
+        self.assertEqual(legacy_lines, result["lines"])
+        self.assertIn("候选选股轨迹", rendered)
+        self.assertEqual(result["context"]["candidate_traces"][0]["stock_code"], "002185")
+        self.assertEqual(result["context"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
 
 
 if __name__ == "__main__":

@@ -362,7 +362,7 @@ from market_data.kline_dates import (
     parse_kline_date as _parse_kline_date,
     short_kline_date as _short_date,
 )
-from report.action_plan_renderer import render_action_plan_section
+from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.appendix_renderer import render_execution_appendix
 from report.context_sections_renderer import (
     render_ai_market_insight_section,
@@ -3578,6 +3578,8 @@ def generate_markdown_report(
     persist_strategy_tracking=True,
     persist_decision_ledger=False,
     decision_ledger_root_dir=None,
+    persist_candidate_traces=False,
+    candidate_trace_root_dir=None,
 ):
     runtime_result = render_markdown_report_runtime(
         data,
@@ -3594,6 +3596,8 @@ def generate_markdown_report(
         config={
             "persist_decision_ledger": persist_decision_ledger,
             "decision_ledger_root_dir": decision_ledger_root_dir or str(Path(__file__).resolve().parents[1]),
+            "persist_candidate_traces": persist_candidate_traces,
+            "candidate_trace_root_dir": candidate_trace_root_dir or str(Path(__file__).resolve().parents[1]),
             "ENABLE_REMOTE_CALENDAR_LLM": _resolve_remote_calendar_llm_enabled(),
         },
     )

@@ -3130,6 +3130,75 @@ def _runtime_binding_probe(
         self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "601991")
         self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
 
+    def test_runtime_candidate_trace_hook_writes_when_enabled(self):
+        captured = {}
+
+        def _fake_write_candidate_trace_artifact(**kwargs):
+            captured["write"] = kwargs
+            return {
+                "artifact_path": "data/candidate-traces/2026-05-12.json",
+                "trace_count": len(kwargs.get("traces") or []),
+            }
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_candidate_traces": True,
+                "candidate_trace_root_dir": "/tmp/candidate-trace-root",
+                "write_candidate_trace_artifact": _fake_write_candidate_trace_artifact,
+            }
+        )
+        try:
+            result = report_runtime._maybe_persist_candidate_traces(
+                data={"source_report": {"path": "reports/2026-05-12_A股日报_完整版.md", "variant": "full"}},
+                target_date="2026-05-12",
+                execution_stage_context={
+                    "candidate_traces": [{"stock_code": "002185", "tier": "T0"}],
+                    "candidate_trace_eliminated_summary": [
+                        {"reason": "主线不匹配", "count": 1, "representatives": ["大众公用"]}
+                    ],
+                },
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(result["artifact_path"], "data/candidate-traces/2026-05-12.json")
+        self.assertEqual(captured["write"]["trade_date"], "2026-05-12")
+        self.assertEqual(captured["write"]["traces"][0]["stock_code"], "002185")
+        self.assertEqual(captured["write"]["eliminated_summary"][0]["reason"], "主线不匹配")
+        self.assertEqual(captured["write"]["root_dir"], "/tmp/candidate-trace-root")
+
+    def test_runtime_candidate_trace_hook_builds_default_source_report(self):
+        captured = {}
+
+        def _fake_write_candidate_trace_artifact(**kwargs):
+            captured["write"] = kwargs
+            return {"artifact_path": "data/candidate-traces/2026-05-12.json"}
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_candidate_traces": True,
+                "candidate_trace_root_dir": "/tmp/candidate-trace-root",
+                "write_candidate_trace_artifact": _fake_write_candidate_trace_artifact,
+            }
+        )
+        try:
+            report_runtime._maybe_persist_candidate_traces(
+                data={},
+                target_date="2026-05-12",
+                execution_stage_context={
+                    "candidate_traces": [{"stock_code": "002185", "tier": "T0"}],
+                    "candidate_trace_eliminated_summary": [],
+                },
+                run_mode="replay",
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(
+            captured["write"]["source_report"],
+            {"path": "reports/replay/2026-05-12_A股日报_完整版_replay.md", "variant": "full"},
+        )
+
     def test_runtime_loads_recent_extreme_mentions_before_candidate_selection(self):
         captured = {}
 
