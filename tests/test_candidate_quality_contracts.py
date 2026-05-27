@@ -122,6 +122,55 @@ class CandidateQualityContractsTest(unittest.TestCase):
         self.assertEqual(contract["single_stock_fields"]["触发条件"], "跌破VWAP且无法收回")
         self.assertEqual(contract["single_stock_fields"]["应对动作"], "不新增参与")
 
+    def test_candidate_quality_contract_includes_trace(self):
+        contract = build_candidate_quality_contract(
+            {
+                "name": "华天科技",
+                "code": "002185",
+                "tier": "T0",
+                "source_pools": ["主线核心候选"],
+                "mainline": "半导体",
+                "sector": "半导体",
+                "market_fit": "部分满足",
+                "mainline_fit": "满足",
+                "stock_structure_fit": "部分满足",
+                "latest_price": 13.2,
+                "available_cash": 10000,
+                "trigger_condition": "主线承接 + 个股突破或回踩确认",
+                "failure_condition": "主线回落或放量不承接",
+            },
+            action_ceiling="核心观察",
+            new_entry_action="09:50-10:10确认，不满足继续不参与",
+        )
+
+        trace = contract["trace"]
+        self.assertEqual(trace["stock_code"], "002185")
+        self.assertEqual(trace["stock_name"], "华天科技")
+        self.assertEqual(trace["tier"], "T0")
+        self.assertEqual(trace["final_action"], "09:50-10:10确认，不满足继续不参与")
+        self.assertEqual(contract["data"]["trace"]["stock_code"], "002185")
+
+    def test_candidate_quality_contract_trace_uses_action_when_candidate_has_no_final_action(self):
+        contract = evaluate_candidate_quality_sample_contract(
+            {
+                "name": "宏和科技",
+                "code": "603256",
+                "tier": "T1",
+                "source_pools": ["主线核心候选"],
+                "mainline": "玻璃基板",
+                "sector": "玻璃基板",
+                "market_fit": "满足",
+                "mainline_fit": "满足",
+                "stock_structure_fit": "部分满足",
+                "quality_role": "核心观察",
+                "latest_price": 172.87,
+                "available_cash": 10000,
+            }
+        )
+
+        self.assertEqual(contract["trace"]["final_action"], "账户条件不适配，只观察强度，不参与")
+        self.assertIn("账户不适配，不能进入 T0 新开仓", contract["trace"]["branch_path"])
+
     def test_candidate_contract_keeps_explicit_position_nature_when_present(self):
         contract = build_candidate_quality_contract(
             {
