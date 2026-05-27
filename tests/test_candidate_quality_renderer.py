@@ -179,6 +179,67 @@ class CandidateQualityRendererTest(unittest.TestCase):
         self.assertIn("- 账户状态：实际不可买", markdown)
         self.assertIn("- 新开仓动作：账户条件不适配，只观察强度，不参与", markdown)
 
+    def test_renderer_outputs_candidate_trace_tables(self):
+        panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")
+        contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "华天科技",
+                    "code": "002185",
+                    "tier": "T0",
+                    "source_pools": ["主线核心候选"],
+                    "mainline": "半导体",
+                    "sector": "半导体",
+                    "market_fit": "部分满足",
+                    "mainline_fit": "满足",
+                    "stock_structure_fit": "部分满足",
+                    "latest_price": 13.2,
+                    "available_cash": 10000,
+                    "final_action": "09:50-10:10确认，不满足继续不参与",
+                    "failure_condition": "主线回落或放量不承接",
+                }
+            ),
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "步步高",
+                    "code": "002251",
+                    "tier": "T3",
+                    "source_pools": ["异动线索"],
+                    "mainline": "消费",
+                    "sector": "消费",
+                    "market_fit": "未满足",
+                    "mainline_fit": "未满足",
+                    "stock_structure_fit": "部分满足",
+                    "final_action": "不参与，只记录观察线索",
+                }
+            ),
+        ]
+
+        markdown = render_candidate_quality_section(panel, contracts, render_trace_tables=True)
+
+        self.assertIn("### 候选选股轨迹", markdown)
+        self.assertIn("| 层级 | 候选 | 主线/板块 | 为什么进入这一层 | 卡点 | 明日动作 |", markdown)
+        self.assertIn("| T0 | 华天科技(002185) | 半导体 |", markdown)
+        self.assertNotIn("| T3 | 步步高(002251) | 消费 | 为什么进入这一层 |", markdown)
+        self.assertIn("### 候选选股轨迹明细", markdown)
+        self.assertIn("| 层级 | 候选 | 来源池 | 主线/板块 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |", markdown)
+        self.assertIn("| T3 | 步步高(002251) | 异动线索 | 消费 |", markdown)
+
+    def test_renderer_outputs_eliminated_summary(self):
+        panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")
+
+        markdown = render_candidate_quality_section(
+            panel,
+            [],
+            eliminated_summary=[
+                {"reason": "主线不匹配", "count": 2, "representatives": ["大众公用", "红星发展"], "treatment": "保留观察，不进入动作分层"}
+            ],
+            render_trace_tables=True,
+        )
+
+        self.assertIn("### 未进入分层原因统计", markdown)
+        self.assertIn("| 主线不匹配 | 2 | 大众公用、红星发展 | 保留观察，不进入动作分层 |", markdown)
+
 
 if __name__ == "__main__":
     unittest.main()
