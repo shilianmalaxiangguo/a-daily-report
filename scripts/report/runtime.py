@@ -37,6 +37,7 @@ from hooks.report.use_report_sections import (
 from report.front_page_v2_renderer import render_front_page_v2
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
 from report.surface_wording import sanitize_user_visible_text
+from report.trading_time_window_contract import normalize_trading_time_text
 from domains.market_state.mainline_turnover_summary_runtime import (
     build_mainline_turnover_summary as _default_build_mainline_turnover_summary,
 )
@@ -191,6 +192,7 @@ def _number_report_tables(lines):
 
 
 _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
+_LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%标准进攻"
 
 
 def _has_conditional_observation_target_surface(lines):
@@ -202,6 +204,22 @@ def _has_conditional_observation_target_surface(lines):
 
 def _should_apply_pure_zero_participation_cleanup(lines):
     return _has_final_zero_participation_surface(lines) and not _has_conditional_observation_target_surface(lines)
+
+
+def _has_existing_position_zero_new_entry_surface(lines):
+    text = "\n".join(str(line or "") for line in list(lines or []))
+    has_existing_position = "已有昨日持仓优先处理" in text or "先处理旧仓，不为新候选分散资金" in text
+    has_zero_new_entry = (
+        "| 新开仓上限 | 0 |" in text
+        or "| 新增参与上限 | 0 |" in text
+        or "新开仓0手" in text
+        or "新开仓0" in text
+    )
+    return has_existing_position and has_zero_new_entry
+
+
+def _should_apply_zero_style_language_cleanup(lines):
+    return _should_apply_pure_zero_participation_cleanup(lines) or _has_existing_position_zero_new_entry_surface(lines)
 
 
 def _has_final_zero_participation_surface(lines):
@@ -221,14 +239,14 @@ def _has_final_zero_participation_surface(lines):
 
 
 def _normalize_legacy_execution_framework_under_zero_participation(lines):
-    if not _should_apply_pure_zero_participation_cleanup(lines):
+    if not _should_apply_zero_style_language_cleanup(lines):
         return list(lines or [])
 
     normalized = []
     legacy_markers = (
         "强核心走竞价表态",
-        "普通结构才等60分钟确认",
-        "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
+        "普通结构只看09:50-10:10窗口",
+        "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，30分钟定止损",
     )
     for line in list(lines or []):
         text = str(line or "")
@@ -241,7 +259,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
                 text = f"> **怎么执行**：{_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK}"
             else:
                 text = text.replace(
-                    "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认，30分钟定止损",
+                    "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，30分钟定止损",
                     _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK,
                 )
         normalized.append(text)
@@ -249,7 +267,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
 
 
 def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
-    if not _should_apply_pure_zero_participation_cleanup(lines):
+    if not _should_apply_zero_style_language_cleanup(lines):
         return list(lines or [])
 
     normalized = []
@@ -259,7 +277,6 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("买入窗口", "观察位窗口"),
         ("明日买点预计算", "明日观察位预计算"),
         ("预计算买点", "预计算观察位"),
-        ("10:00左右买", "10:00左右观察"),
         ("筛到可买股", "继续观察复核"),
         ("可买标的", "合格参与对象"),
         ("可买对象", "合格参与对象"),
@@ -278,6 +295,8 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("提前硬上", "提前参与"),
         ("无新仓止损", "无新增参与止损"),
         ("新仓止损", "新增参与止损"),
+        ("非电风扇不" + "尾盘" + "新增参与", "非电风扇不在14:30-14:55新增参与"),
+        ("非电风扇不" + "尾盘" + "开新仓", "非电风扇不在14:30-14:55新增参与"),
         ("不开新仓", "不新增参与"),
         ("开新仓", "新增参与"),
         ("新开仓", "新增参与"),
@@ -290,6 +309,11 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("筛出明天唯一能买的那只", "筛出明天唯一观察对象"),
         ("明天唯一能买的那只", "明天唯一观察对象"),
         ("核心可买 > 龙头回看 > 主线盯盘 > 普通观察", "核心观察 > 龙头回看 > 主线盯盘 > 普通观察"),
+        ("只保留重点观察谁", "只保留候选观察样本"),
+        ("重点观察优先锚点", "候选观察锚点"),
+        ("重点观察优先", "候选观察样本"),
+        ("重点观察名单全天都不给确认", "候选观察样本全天都不给确认"),
+        ("首波先锋，优先做重点观察谁", "首波先锋，仅作承接观察"),
         ("没有买入资格，买点到了也只能看", "没有观察资格，价格到了也只能看"),
         ("买入资格", "观察资格"),
         ("怎么买", "怎么观察"),
@@ -312,28 +336,28 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("✓ 溢价候选", "观察样本"),
         ("溢价候选", "观察样本"),
         ("MVP快照回退：先看次日是否继续强于市场，再按预演观察窗口确认。", "观察样本：先看是否强于市场，不预设参与。"),
-        ("MVP快照回退：先看次日是否继续强于市场，再按预演参与窗口确认。", "观察样本：先看是否强于市场，不预设参与。"),
+        ("MVP快照回退：先看次日是否继续强于市场，再按固定交易窗口条件确认。", "观察样本：先看是否强于市场，不预设参与。"),
     )
     for line in list(lines or []):
-        text = str(line or "")
+        text = normalize_trading_time_text(str(line or ""))
         for source, target in replacements:
             text = text.replace(source, target)
         if "允许进入" in text and "继续观察复核" in text:
             text = text.replace("允许进入", "只进入")
         text = text.replace("继续继续观察复核", "继续观察复核")
+        text = text.replace("新增参与0手", "新开仓0手")
         normalized.append(text)
     return normalized
 
 
 def _sanitize_report_lines(lines):
     return _number_report_tables(
-        sanitize_front_page_text(
-            _normalize_legacy_execution_framework_under_zero_participation(
-                _normalize_tomorrow_action_soft_words_under_zero_participation(
-                    _dedupe_repeated_no_trade_lines(lines)
-                )
+        [
+            sanitize_front_page_text(line)
+            for line in _normalize_legacy_execution_framework_under_zero_participation(
+                _normalize_tomorrow_action_soft_words_under_zero_participation(_dedupe_repeated_no_trade_lines(lines))
             )
-        )
+        ]
     )
 
 
@@ -1003,7 +1027,7 @@ def _force_observation_for_missing_execution_evidence(position_decision):
             "target_position_pct": 0,
             "signal_grade": "0",
             "candidate_feedback_ready": False,
-            "sizing_reason": "重点观察对象只保留参与窗口预演；缺少独立参与证据，不把偏好名单自动抬成仓位结论。",
+            "sizing_reason": "重点观察对象只保留固定交易窗口预案；缺少独立参与证据，不把偏好名单自动抬成仓位结论。",
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "observe",
@@ -1194,7 +1218,7 @@ def _repair_confirmed_front_page_position_decision(position_decision, *, selecte
     if selected_position_candidate:
         updated.setdefault("single_focus_constraint", {
             "status": "clear",
-            "reason": "仓位结论已给出唯一对象，等待参与窗口确认。",
+            "reason": "仓位结论已给出唯一对象，等待固定交易窗口内条件成立。",
         })
     return _repair_extreme_candidate_full_attack_check(updated)
 
@@ -1312,11 +1336,11 @@ def _build_front_page_position_decision(
             "target_position_pct": min(candidate_target_pct, 100),
             "signal_grade": "50",
             "candidate_feedback_ready": True,
-            "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，参与窗口失败回到0%。",
+            "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。",
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "clear",
-                "reason": "已缩到明日极度看好目标，等待参与窗口确认。",
+                "reason": "已缩到明日极度看好目标，等待固定交易窗口内条件成立。",
             },
         }
     )
@@ -1349,7 +1373,7 @@ def _build_effective_front_page_final_gate(final_gate=None, *, selected_position
             "should_reduce": False,
             "allow_attack_50_ready": True,
             "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), 50),
-            "final_action": f"明日目标标的保留条件50%预演：只看{target_label}，参与窗口确认才执行，不满足回到0%",
+            "final_action": f"明日目标标的保留条件50%预演：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
             "final_participation": "有明日极度看好目标时，防守态只缩小容器，不取消推荐属性。",
             "gate_reason": "普通防守态不等于每天推荐空仓；先定明日目标标的，再用大盘、板块和分时确认决定是否接雨。",
         }
@@ -1413,9 +1437,14 @@ def _normalize_zero_participation_appendix_line(line):
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
             "明日不新增参与，只观察风险是否钝化、主攻线承接和唯一对象是否重新成立",
         )
-    if "盘前0%；参与窗口命中后才评估50%标准进攻" in text:
+    if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
         text = text.replace(
-            "盘前0%；参与窗口命中后才评估50%标准进攻",
+            "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
+            "盘前0%；暂无新增参与资格，只观察风险是否钝化",
+        )
+    if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
+        text = text.replace(
+            _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
             "盘前0%；暂无新增参与资格，只观察风险是否钝化",
         )
     if "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
@@ -1426,36 +1455,64 @@ def _normalize_zero_participation_appendix_line(line):
     return text
 
 
+def _should_keep_zero_appendix_for_selected_target(position_decision=None):
+    if not _has_zero_participation_context(position_decision):
+        return False
+    if not isinstance(position_decision, dict):
+        return False
+    if position_decision.get("candidate_feedback_ready") is False:
+        return True
+    single_focus = position_decision.get("single_focus_constraint") or {}
+    if isinstance(single_focus, dict) and single_focus.get("status") == "observe":
+        reason = str(single_focus.get("reason") or "")
+        if "不给新增参与资格" in reason or "缺少独立参与证据" in reason:
+            return True
+    sizing_reason = str(position_decision.get("sizing_reason") or "")
+    return "不把局部强势当成参与资格" in sizing_reason or "缺少独立参与证据" in sizing_reason
+
+
 def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candidate=None, position_decision=None):
     has_selected_target = isinstance(selected_position_candidate, dict) and bool(
         selected_position_candidate.get("name") or selected_position_candidate.get("code")
     )
+    if has_selected_target and _should_keep_zero_appendix_for_selected_target(position_decision):
+        return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
     if _has_zero_participation_context(position_decision) and not has_selected_target:
         return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
     if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
 
     target_label = _target_candidate_label(selected_position_candidate)
+    target_pct = _front_page_target_pct(position_decision)
     normalized = []
     for line in list(lines or []):
         text = str(line or "")
         if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
             text = text.replace(
                 "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-                f"明日目标标的保留条件50%预演：只看{target_label}，参与窗口确认才执行，不满足回到0%",
+                f"明日目标标的保留条件50%预演：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
             )
         if text == "- **进攻仓位三态**: 0%不参与":
             text = "- **进攻仓位三态**: 50%标准进攻预演"
-        if "盘前0%；参与窗口命中后才评估50%标准进攻" in text:
+        if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
             text = text.replace(
-                "盘前0%；参与窗口命中后才评估50%标准进攻",
-                "条件50%；盘前不抢跑，参与窗口命中后执行，不满足回到0%",
+                "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
+                "条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
+            )
+        if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
+            text = text.replace(
+                _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
+                "条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
             )
         if "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
             text = text.replace(
                 "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
                 "条件50%预演，盘前不抢跑，只等明日目标标的盘中确认路径",
             )
+        text = normalize_trading_time_text(text)
+        text = text.replace("重点观察参与脚本", "重点观察复核脚本")
+        text = text.replace("参与窗口", "固定交易窗口")
+        text = text.replace("回封参与", "回封观察")
         normalized.append(text)
     return normalized
 
@@ -1611,7 +1668,7 @@ def _appendix_market_zhongshu_pivot_row(market_zhongshu, *, current_mainline_his
         "mainline_degree": current_mainline_history_record.get("mainline_degree") or "观察主线",
         "evolution": structure_state,
         "replacement": "待确认",
-        "interpretation": f"日K结构候选尚未确认为日线中枢；60分钟缠论确认：{structure_state}。",
+        "interpretation": f"日K结构候选尚未确认为日线中枢；结构证据：{structure_state}。",
     }
 
 
@@ -3238,6 +3295,7 @@ def _render_markdown_report_legacy_body(
                 "new_stock_research_pool": data.get("new_stock_research_pool", []) or [],
                 "new_stock_candidate_upgrades": data.get("new_stock_candidate_upgrades", []) or [],
                 "margin_pressure": data.get("margin_pressure", {}) or {},
+                "etf_turnover_series": data.get("etf_turnover_series", {}) or {},
                 "extreme_conviction_list": extreme_conviction_list,
                 "dragon_rebound_watch_pool": execution_stage_context.get("dragon_rebound_watch_pool", []) or [],
             },
@@ -3279,6 +3337,11 @@ def _render_markdown_report_legacy_body(
     if isinstance(market_research_snapshot, dict):
         if "raw_final_gate" not in market_research_snapshot:
             market_research_snapshot["raw_final_gate"] = dict(market_research_snapshot.get("final_gate") or final_gate or {})
+        personal_position_context = data.get("personal_position_context") if isinstance(data, dict) else {}
+        if isinstance(personal_position_context, dict):
+            for key in ("account_profile", "existing_position_summary"):
+                if isinstance(personal_position_context.get(key), dict):
+                    market_research_snapshot[key] = dict(personal_position_context.get(key) or {})
         if extreme_conviction_list:
             market_research_snapshot["extreme_conviction_list"] = extreme_conviction_list
             candidate_snapshot = market_research_snapshot.get("candidate_snapshot")

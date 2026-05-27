@@ -230,6 +230,7 @@ def _build_runtime_execution_test_helpers(run_registered_execution_stages, **ove
         "run_report_tail_summary": lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
         "run_strategy_performance_tail": lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
         "run_execution_appendix_tail": lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+        "_default_build_entry_cycle_calibrations": lambda as_of_date="": {},
     }
     helpers.update(overrides)
     return helpers
@@ -1881,6 +1882,7 @@ class ReportRuntimeTest(unittest.TestCase):
             _normalize_report_timer_steps=lambda *args, **kwargs: [],
             render_execution_appendix=lambda *args, **kwargs: [],
             run_execution_appendix_tail=_capture_execution_appendix,
+            _default_build_entry_cycle_calibrations=lambda as_of_date="": {},
         )
 
         data = {
@@ -3009,7 +3011,8 @@ assert rendered == "# migrated"
         self.assertTrue(result["report"].startswith("# runtime report"))
         self.assertIn("## 知识复利候选", result["report"])
         self.assertEqual(data["knowledge"]["llm_wiki"]["source"], "llm_wiki")
-        self.assertIn("60分钟确认", data["knowledge"]["llm_wiki"]["report_digest_text"])
+        self.assertIn("固定交易窗口条件", data["knowledge"]["llm_wiki"]["report_digest_text"])
+        self.assertIn("09:50-10:10窗口", data["knowledge"]["llm_wiki"]["report_digest_text"])
         self.assertIn("process_flows", data["knowledge"]["llm_wiki"])
         self.assertIn("选股形态审美 ASCII 流程图", "\n".join(data["knowledge"]["llm_wiki"]["process_flows"]))
         self.assertIn("knowledge_compounding_candidates", data["knowledge"]["llm_wiki"])
@@ -4019,7 +4022,7 @@ def _runtime_binding_probe(
                     "**主线内可执行候选**:",
                     "| 排名 | 股票 | 代码 | 所属方向 | 角色 | 明日资格 | 身份 | 明日原则 |",
                     "|------|------|------|----------|------|----------|------|----------|",
-                    "| 1 | 汇源通信 | 000586 | 通信设备 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10承接确认，未确认不参与 |",
+                    "| 1 | 汇源通信 | 000586 | 通信设备 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10窗口，未确认不参与 |",
                 ],
                 "module_logs": [],
                 "context": {
@@ -4145,7 +4148,7 @@ def _runtime_binding_probe(
             "**主线内可执行候选**:",
             "| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |",
             "|--------|------|------|----------|----------|----------|----------|----------|",
-            "| 1 | 豫能控股 | 001896 | 火力发电 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10承接确认，未确认不参与 |",
+            "| 1 | 豫能控股 | 001896 | 火力发电 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10窗口，未确认不参与 |",
             "",
             "**重点观察参与脚本**:",
             "| 参与窗口 | 仓位三态 | 检查步骤 | 回封参与 | 作废条件 |",
@@ -4206,12 +4209,13 @@ def _runtime_binding_probe(
 
         self.assertIn("明日目标标的保留条件50%预演：只看605111 新洁能", rendered)
         self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
-        self.assertIn("- **明天仓位放多少**: 条件50%；盘前不抢跑，参与窗口命中后执行，不满足回到0%", rendered)
+        self.assertIn("- **明天仓位放多少**: 条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%", rendered)
         self.assertIn("条件50%预演，盘前不抢跑，只等明日目标标的盘中确认路径", rendered)
-        self.assertIn("重点观察参与脚本", rendered)
+        self.assertIn("重点观察复核脚本", rendered)
+        self.assertIn("| 固定交易窗口条件 | 仓位三态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
         self.assertIn("| 09:50-10:10 | 50% | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
         self.assertNotIn("明日不新增参与，只观察风险是否钝化", rendered)
-        self.assertNotIn("重点观察复核脚本", rendered)
+        self.assertNotIn("重点观察参与脚本", rendered)
         self.assertNotIn("0%观察 |", rendered)
 
     def test_sanitize_report_lines_relabels_legacy_execution_framework_under_zero_participation(self):
@@ -4248,8 +4252,9 @@ def _runtime_binding_probe(
 
         self.assertIn("条件观察：605111 新洁能（半导体）", rendered)
         self.assertIn("09:50-10:10站上63.22且板块承接不塌，才评估50%标准进攻", rendered)
-        self.assertIn("- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻", rendered)
-        self.assertIn("| 10:00左右买 | 新洁能站上63.22且板块承接不塌 | 条件50% | 买后用60.06做失效 | 不满足继续0% |", rendered)
+        self.assertIn("- **明天仓位放多少**: 盘前0%；固定交易窗口条件满足后才评估50%标准进攻", rendered)
+        self.assertNotIn("参与窗口命中", rendered)
+        self.assertIn("| 09:50-10:10 | 新洁能站上63.22且板块承接不塌 | 条件50% | 买后用60.06做失效 | 不满足继续0% |", rendered)
         self.assertIn("| 新洁能(605111) | 实际可买 | 0 | 0 | 中 | 等确认 | 补位 | 触发后50%标准进攻 |", rendered)
         self.assertNotIn("最终0%时不按观察窗口执行", rendered)
         self.assertNotIn("主观察对象", rendered)
@@ -4304,7 +4309,7 @@ def _runtime_binding_probe(
         self.assertIn("- **接着做什么**: 进入Step 4，为候选组预计算观察位并筛出明天唯一观察对象", rendered)
         self.assertIn("##### 附录：Step 4 - 明日观察位预计算", rendered)
         self.assertIn("核心观察 > 龙头回看 > 主线盯盘 > 普通观察", rendered)
-        self.assertIn("| 股票 | 代码 | 观察资格 | 怎么观察 | 日线预设区间 | 60分钟确认点 | 价格怎么盯 | 明天具体怎么做 |", rendered)
+        self.assertIn("| 股票 | 代码 | 观察资格 | 怎么观察 | 日线预设区间 | 09:50-10:10窗口点 | 价格怎么盯 | 明天具体怎么做 |", rendered)
         self.assertIn("不代表已经有合格参与对象；真正是否参与，要看后文有没有缩到唯一合格对象", rendered)
         self.assertIn("- **明天没有合格参与对象**: 明日不产生新增参与动作", rendered)
         self.assertIn("| ❌ 明天没有合格参与对象 | - | - | 保持空仓，不新增参与 | - |", rendered)
@@ -4315,14 +4320,14 @@ def _runtime_binding_probe(
         self.assertIn("不参与任何方向：无论题材多热，都先等环境重新打开", rendered)
         self.assertIn("当前条件不允许新增参与", rendered)
         self.assertIn("无新增参与止损", rendered)
-        self.assertIn("非电风扇不尾盘新增参与", rendered)
-        self.assertIn("| 明日观察位预计算 | 不新增参与，只保留重点观察谁 |", rendered)
+        self.assertIn("非电风扇不在14:30-14:55新增参与", rendered)
+        self.assertIn("| 明日观察位预计算 | 不新增参与，只保留候选观察样本 |", rendered)
         self.assertIn("真允许参与时，只保留唯一动作；不允许时，只保留观察。", rendered)
         self.assertIn("当前先不新增参与", rendered)
         self.assertIn("本轮不做PK参与结论", rendered)
         self.assertIn("大盘环境没有给到参与条件", rendered)
         self.assertIn("降低明日主动参与预期", rendered)
-        self.assertIn("| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |", rendered)
+        self.assertIn("| 09:50-10:10 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |", rendered)
         self.assertIn("不把局部强势当成参与资格", rendered)
         self.assertIn("**最终动作表**（只展示真正具备参与资格的对象）:", rendered)
         self.assertIn("无需设置新增参与止损", rendered)
@@ -4365,6 +4370,45 @@ def _runtime_binding_probe(
         self.assertNotIn("补位对象", rendered)
         self.assertNotIn("实际可买", rendered)
         self.assertNotIn("动作上限", rendered)
+
+    def test_sanitize_report_lines_relabels_new_candidate_table_when_old_position_has_zero_new_entry(self):
+        lines = [
+            "## 明日账户建议",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 账户约束 | 1w本金；已有昨日持仓优先处理 |",
+            "| 明日动作 | 先处理旧仓，不为新候选分散资金 |",
+            "| T0主对象 | 持有晶方科技(603005)，100股，成本44.256；新开仓0手 |",
+            "| T0备用 | 华天科技(002185)：仅作条件观察 |",
+            "| 新开仓上限 | 0 |",
+            "| 字段 | 内容 |",
+            "| 主买对象 | 暂无 |",
+            "| 补位对象 | 华天科技(002185) |",
+            "| 候选 | 账户状态 | 当前持仓 | 可卖数量 | 选股质量 | 买点质量 | 动作上限 | 新开仓动作 |",
+            "| 华天科技(002185) | 实际可买 | 0 | 0 | 中 | 等确认 | 补位 | 等触发条件成立 |",
+            "- **重点观察优先**: 步步高(002251), 大众公用(600635), 红星发展(600367)",
+            "- **先后顺序怎么排**: 先做主线锚定龙，再看普通候选；若重点观察名单全天都不给确认，其余标的宁可继续观察。",
+            "| 超市连锁 | 2只 | 1只 | 2只 | 步步高(002251) | 首波先锋，优先做重点观察谁 |",
+            "| 明日观察位预计算 | 不新增参与，只保留重点观察谁 |",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("| 主观察对象 | 暂无 |", rendered)
+        self.assertIn("新开仓0手", rendered)
+        self.assertIn("| 观察对象 | 华天科技(002185) |", rendered)
+        self.assertIn("| 候选 | 账户状态 | 当前持仓 | 可卖数量 | 选股质量 | 观察位质量 | 观察上限 | 新增参与动作 |", rendered)
+        self.assertIn("| 华天科技(002185) | 仅观察 | 0 | 0 | 中 | 等确认 | 观察 | 等触发条件成立 |", rendered)
+        self.assertIn("- **候选观察样本**: 步步高(002251), 大众公用(600635), 红星发展(600367)", rendered)
+        self.assertIn("若候选观察样本全天都不给确认，其余标的宁可继续观察", rendered)
+        self.assertIn("首波先锋，仅作承接观察", rendered)
+        self.assertIn("| 明日观察位预计算 | 不新增参与，只保留候选观察样本 |", rendered)
+        self.assertNotIn("补位对象", rendered)
+        self.assertNotIn("实际可买", rendered)
+        self.assertNotIn("新开仓动作", rendered)
+        self.assertNotIn("新增参与0手", rendered)
+        self.assertNotIn("重点观察优先", rendered)
+        self.assertNotIn("优先做重点观察谁", rendered)
 
     def test_sanitize_report_lines_relabels_premium_expectation_under_zero_participation(self):
         lines = [
@@ -4534,7 +4578,7 @@ def _runtime_binding_probe(
         self.assertIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("| 明日最大仓位 | 0% |", rendered)
         self.assertIn("| 0%不参与 |", rendered)
-        self.assertIn("- **进攻仓位三态**: 0%不参与", rendered)
+        self.assertIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("放量杀跌里的局部逆势活跃", rendered)
         self.assertNotIn("| 50%标准进攻，只做预演命中的合格对象 |", rendered)
         self.assertNotIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
