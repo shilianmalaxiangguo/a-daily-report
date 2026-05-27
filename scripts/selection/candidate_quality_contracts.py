@@ -357,14 +357,14 @@ def build_candidate_quality_contract(
     trace_candidate = {
         **candidate,
         "action_ceiling": action_ceiling,
+        "account_trade_status": account_trade_status,
+        "account_trade_reason": account_trade_reason,
         "new_entry_action": new_entry_action,
         "final_action": candidate.get("final_action") or new_entry_action,
         "trigger_condition": candidate.get("trigger_condition") or worst_case_plan.get("触发条件", ""),
         "failure_condition": candidate.get("failure_condition") or visible_row["取关条件"],
     }
     trace = build_candidate_trace(trace_candidate)
-    if account_trade_status == "实际不可买":
-        trace["branch_path"].append("账户不适配，不能进入 T0 新开仓")
 
     return {
         "visible_row": visible_row,

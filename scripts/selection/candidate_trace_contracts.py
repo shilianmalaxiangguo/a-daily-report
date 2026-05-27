@@ -131,7 +131,7 @@ def _terminal_step(tier, missing_data, account_status, checks):
     if missing_data:
         return "关键数据不完整，停止生成动作"
     if account_status == "实际不可买":
-        return "账户条件不满足，不参与"
+        return "账户不适配，不能新增参与"
     if any(check["result"] == "未满足" for check in checks):
         return "条件未满足，继续不参与"
     return f"进入 {tier or '候选'} 条件观察"

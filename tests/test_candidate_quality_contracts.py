@@ -169,7 +169,21 @@ class CandidateQualityContractsTest(unittest.TestCase):
         )
 
         self.assertEqual(contract["trace"]["final_action"], "账户条件不适配，只观察强度，不参与")
-        self.assertIn("账户不适配，不能进入 T0 新开仓", contract["trace"]["branch_path"])
+        self.assertIn("账户不适配，不能新增参与", contract["trace"]["branch_path"])
+
+    def test_candidate_quality_contract_trace_uses_resolved_account_status(self):
+        contract = build_candidate_quality_contract(
+            {"name": "无价格样本", "code": "000001"},
+            action_ceiling="不参与",
+        )
+
+        account_inputs = [
+            item for item in contract["trace"]["key_inputs"]
+            if item.get("field") == "账户适配"
+        ]
+        self.assertEqual(contract["visible_row"]["账户状态"], "实际可买")
+        self.assertEqual(account_inputs, [{"field": "账户适配", "value": "实际可买", "source": "account_context"}])
+        self.assertNotIn("account_context", contract["trace"]["missing_data"])
 
     def test_candidate_contract_keeps_explicit_position_nature_when_present(self):
         contract = build_candidate_quality_contract(
