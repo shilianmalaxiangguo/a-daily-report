@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from selection.candidate_trace_contracts import build_candidate_trace
+
 
 ACTION_CEILINGS = ("主买", "补位", "核心观察", "修复观察", "不参与")
 _ACTION_RANK = {name: index for index, name in enumerate(ACTION_CEILINGS)}
@@ -352,9 +354,22 @@ def build_candidate_quality_contract(
         "应对动作": worst_case_plan.get("应对动作", ""),
         "一句话纪律": one_sentence_discipline,
     }
+    trace_candidate = {
+        **candidate,
+        "action_ceiling": action_ceiling,
+        "account_trade_status": account_trade_status,
+        "account_trade_reason": account_trade_reason,
+        "new_entry_action": new_entry_action,
+        "final_action": candidate.get("final_action") or new_entry_action,
+        "trigger_condition": candidate.get("trigger_condition") or worst_case_plan.get("触发条件", ""),
+        "failure_condition": candidate.get("failure_condition") or visible_row["取关条件"],
+    }
+    trace = build_candidate_trace(trace_candidate)
+
     return {
         "visible_row": visible_row,
         "single_stock_fields": single_stock_fields,
+        "trace": trace,
         "data": {
             "candidate": dict(candidate),
             "selection_quality_label": selection_quality_label,
@@ -373,6 +388,7 @@ def build_candidate_quality_contract(
             "target_position_pct": target_position_pct,
             "actual_position_pct": actual_position_pct,
             "position_deviation": position_deviation,
+            "trace": trace,
         },
     }
 

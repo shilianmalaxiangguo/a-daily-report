@@ -22,11 +22,15 @@ ACTION_PLAN_NODE_BUILDERS = {
 }
 
 
-def render_action_plan_section(context):
+def render_action_plan_result(context):
     context = context or {}
     node_specs = build_action_plan_node_specs(
         ACTION_PLAN_NODE_BUILDERS,
         enabled_node_keys=context.get("enabled_node_keys"),
     )
-    result = run_action_plan_nodes(node_specs, context)
+    return run_action_plan_nodes(node_specs, context)
+
+
+def render_action_plan_section(context):
+    result = render_action_plan_result(context)
     return result["lines"]

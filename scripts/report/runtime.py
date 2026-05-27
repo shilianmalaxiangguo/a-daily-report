@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import time
 
-from daily_report_snapshot_io import LEDGER_MODE_FROZEN
+from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
 from diagnostics.helper_diagnostics_runtime import (
     build_helper_diagnostics as _build_helper_diagnostics,
     clear_helper_logs as _clear_helper_logs,
@@ -26,6 +26,7 @@ from report.decision_ledger import (
     render_extreme_conviction_tracking_lines as _default_render_extreme_conviction_tracking_lines,
     write_decision_ledger_artifacts as _default_write_decision_ledger_artifacts,
 )
+from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
@@ -692,6 +693,41 @@ def _maybe_persist_decision_ledger(
         result["tracking_lines"] = tracking_lines
     if isinstance(data, dict):
         data["decision_ledger_artifacts"] = result
+    return result
+
+
+def _build_default_candidate_trace_source_report(target_date, run_mode=None):
+    mode = str(run_mode if run_mode is not None else globals().get("run_mode", "") or "").strip()
+    if mode == LEDGER_MODE_REPLAY:
+        path = f"reports/replay/{target_date}_A股日报_完整版_replay.md"
+    else:
+        path = f"reports/{target_date}_A股日报_完整版.md"
+    return {"path": path, "variant": "full"}
+
+
+def _maybe_persist_candidate_traces(
+    *,
+    data,
+    target_date,
+    execution_stage_context,
+    run_mode=None,
+):
+    if not globals().get("persist_candidate_traces", False):
+        return None
+    execution_stage_context = execution_stage_context or {}
+    traces = execution_stage_context.get("candidate_traces", []) or []
+    if not traces:
+        return None
+    write_artifact = globals().get("write_candidate_trace_artifact") or _default_write_candidate_trace_artifact
+    result = write_artifact(
+        trade_date=target_date,
+        traces=traces,
+        eliminated_summary=execution_stage_context.get("candidate_trace_eliminated_summary", []) or [],
+        root_dir=globals().get("candidate_trace_root_dir", "."),
+        source_report=(data or {}).get("source_report") or _build_default_candidate_trace_source_report(target_date, run_mode),
+    )
+    if isinstance(data, dict):
+        data["candidate_trace_artifact"] = result
     return result
 
 
@@ -2908,6 +2944,7 @@ def _render_markdown_report_legacy_body(
             "build_candidate_exit_rules": _build_candidate_exit_rules,
             "format_holding_window_text": _format_holding_window_text,
             "render_pk_decision_section": render_pk_decision_section,
+            "render_action_plan_result": render_action_plan_result,
             "render_action_plan_section": render_action_plan_section,
             "decision_stack_order_text": DECISION_STACK_ORDER_TEXT,
             "today_predictions": today_predictions,
@@ -2979,6 +3016,14 @@ def _render_markdown_report_legacy_body(
     )
     if isinstance(decision_ledger_result, dict):
         data["decision_ledger_artifacts"] = decision_ledger_result
+    candidate_trace_result = _maybe_persist_candidate_traces(
+        data=data,
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+        run_mode=run_mode,
+    )
+    if isinstance(candidate_trace_result, dict):
+        data["candidate_trace_artifact"] = candidate_trace_result
     decision_ledger_tracking_lines = list(
         (decision_ledger_result or {}).get("tracking_lines")
         or _build_decision_ledger_tracking_lines(decision_ledger_result)

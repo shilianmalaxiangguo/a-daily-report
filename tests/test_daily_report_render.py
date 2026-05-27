@@ -45,8 +45,14 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_strategy_tracking"])
         self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+        self.assertTrue(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
+        self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
         self.assertEqual(
             Path(render_mock.call_args_list[0].kwargs["decision_ledger_root_dir"]).resolve(),
+            ROOT.resolve(),
+        )
+        self.assertEqual(
+            Path(render_mock.call_args_list[0].kwargs["candidate_trace_root_dir"]).resolve(),
             ROOT.resolve(),
         )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
@@ -57,6 +63,8 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+        self.assertTrue(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
+        self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
 
     def test_build_report_outputs_keeps_private_position_report_out_of_daily_reports(self):
         private_position_text = "\n## 持仓策略\n| 上峰水泥 | 100.0% | 私密动作 |\n"
@@ -180,11 +188,15 @@ class DailyReportRenderTest(unittest.TestCase):
                 "2026-05-14",
                 persist_decision_ledger=True,
                 decision_ledger_root_dir="/tmp/decision-ledger-root",
+                persist_candidate_traces=True,
+                candidate_trace_root_dir="/tmp/candidate-trace-root",
             )
 
         self.assertEqual(rendered, "# report")
         self.assertTrue(captured["persist_decision_ledger"])
         self.assertEqual(captured["decision_ledger_root_dir"], "/tmp/decision-ledger-root")
+        self.assertTrue(captured["persist_candidate_traces"])
+        self.assertEqual(captured["candidate_trace_root_dir"], "/tmp/candidate-trace-root")
 
     def test_build_report_outputs_can_suppress_preflight_output(self):
         data = {
@@ -1002,6 +1014,28 @@ class DailyReportRenderTest(unittest.TestCase):
             rendered = generate_markdown_report({"foo": "bar"}, "2026-04-21")
 
         self.assertEqual(rendered, "legacy report")
+
+    def test_generate_markdown_report_forwards_candidate_trace_config(self):
+        fake_demo = types.ModuleType("daily_report_entry_demo")
+        captured = {}
+
+        def _fake_generate_markdown_report(*args, **kwargs):
+            captured.update(kwargs)
+            return "legacy report"
+
+        fake_demo.generate_markdown_report = _fake_generate_markdown_report
+
+        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}):
+            rendered = generate_markdown_report(
+                {"foo": "bar"},
+                "2026-04-21",
+                persist_candidate_traces=True,
+                candidate_trace_root_dir="/tmp/candidate-trace-root",
+            )
+
+        self.assertEqual(rendered, "legacy report")
+        self.assertTrue(captured["persist_candidate_traces"])
+        self.assertEqual(captured["candidate_trace_root_dir"], "/tmp/candidate-trace-root")
 
     def test_generate_markdown_report_prefers_sections_path_when_sections_exist(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")

@@ -20,7 +20,7 @@ from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_
 from domains.execution_chain.pk_decision_nodes.pk_context import build_pk_decision_pk_context_node
 from domains.execution_chain.pk_decision_nodes.watch_anchor import build_pk_decision_watch_anchor_node
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
-from report.action_plan_renderer import render_action_plan_section
+from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 
 
 class PkDecisionStageTest(unittest.TestCase):
@@ -783,6 +783,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["lines"], ["pk", "action", ""])
         self.assertIn("candidate_quality_panel_fields", captured)
         self.assertIn("candidate_quality_samples", captured)
+        self.assertEqual(captured["render_candidate_trace_tables"], True)
 
     def test_render_sections_passes_action_plan_enabled_nodes_for_candidate_quality(self):
         captured = {}
@@ -838,6 +839,47 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
         self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 不舒服 | 核心观察 |", rendered)
         self.assertIn("- 成本项：远离MA/VWAP", rendered)
+
+    def test_runtime_renders_and_exports_candidate_selection_traces(self):
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_result": render_action_plan_result,
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线活跃",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "tier": "T0",
+                        "source_pools": ["主线核心候选"],
+                        "mainline": "半导体",
+                        "sector": "半导体",
+                        "market_fit": "部分满足",
+                        "mainline_fit": "满足",
+                        "stock_structure_fit": "部分满足",
+                        "latest_price": 13.2,
+                        "available_cash": 10000,
+                        "final_action": "09:50-10:10确认，不满足继续不参与",
+                    }
+                ],
+                "candidate_trace_eliminated_items": [
+                    {"name": "大众公用", "reason": "主线不匹配"},
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections", "export_stage_state"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("候选选股轨迹", rendered)
+        self.assertIn("未进入分层原因统计", rendered)
+        self.assertEqual(result["exports"]["candidate_traces"][0]["stock_code"], "002185")
+        self.assertEqual(result["exports"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
 
     def test_runtime_does_not_render_primary_buy_when_daily_new_entry_limit_is_zero(self):
         result = build_pk_decision_runtime(
