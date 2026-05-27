@@ -181,6 +181,50 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertNotIn("摩擦是资产不是成本", review)
         self.assertNotIn("认知投降", review)
 
+    def test_report_sections_surface_market_structure_knowledge_update(self):
+        ctx = build_empty_context(
+            {
+                "target_date": "2026-05-27",
+                "knowledge_updates": [
+                    {
+                        "topic": "市场结构判断",
+                        "new_insight": "指数新高不等于真实赚钱效应改善；上涨家数弱、成交集中、对立方向反弹时，日报应优先进入低频聚焦。",
+                        "fact_basis": "指数强势；上涨家数偏弱；成交额高位；消费白酒反弹；科技老主线疲态。",
+                        "suggested_nodes": [
+                            "wiki/板块补充/板块中枢与主线延续.md",
+                            "wiki/交易思想/价格行为与能量框架.md",
+                        ],
+                        "next_effect": "市场结构判断、候选数量、主线核心筛选、明日节奏",
+                    }
+                ],
+            }
+        )
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                        "source_path": "/tmp/source.md",
+                    },
+                    "llm_wiki": {
+                        "version": "2026-05-26",
+                        "source": "llm_wiki",
+                    },
+                },
+            },
+        )
+
+        result = run(ctx)
+
+        review = result["patches"]["sections"]["review"]
+        self.assertIn("知识复利提示", review)
+        self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", review)
+        self.assertIn("事实来源：指数强势；上涨家数偏弱", review)
+        self.assertIn("建议沉淀：wiki/板块补充/板块中枢与主线延续.md；wiki/交易思想/价格行为与能量框架.md", review)
+        self.assertIn("下次影响：市场结构判断、候选数量、主线核心筛选、明日节奏", review)
+
 
 if __name__ == "__main__":
     unittest.main()
