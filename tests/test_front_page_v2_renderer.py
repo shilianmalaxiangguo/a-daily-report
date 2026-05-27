@@ -1487,6 +1487,42 @@ class FrontPageV2RendererTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, rendered)
 
+    def test_front_page_renders_market_structure_before_cycle_section(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [
+                    "## 二、市场基底",
+                    "### 1. 指数与市场底色",
+                    "| 指标 | 数值 | 涨跌幅 | 解读 |",
+                    "| 创业板指 | 3914.88 | +1.20% | 强势上涨 |",
+                    "### 2. 市场状态结论",
+                    "| 项目 | 结论 | 依据 |",
+                    "|------|------|------|",
+                    "| 市场情绪总状态 | 局部强 | 指数强但涨跌家数偏弱 |",
+                ],
+                target_date="2026-05-27",
+                market_research_snapshot={
+                    "market_structure_judgement": {
+                        "index_profit_relation": "指数强但真实赚钱效应弱，指数不能代表多数股票体感",
+                        "turnover_distribution": "成交额高位但结构集中，不能按普涨支撑处理",
+                        "rotation_nature": "消费、白酒更像对立反弹，尚未证明主线切换",
+                        "old_mainline_fatigue": "科技仍活跃但短线疲态上升，只保留核心观察",
+                        "tomorrow_rhythm": "低频聚焦",
+                        "candidate_policy": "只保留主线核心；题材荒时不从旧方向强行扩散候选",
+                        "summary_text": "指数强但真实赚钱效应弱；成交额高位但结构集中；明日节奏：低频聚焦",
+                        "action_reason_text": "低频聚焦。原因是指数强但真实赚钱效应弱，成交额高位但结构集中。",
+                    },
+                    "mainline_turnover_summary": {"current_mainline": "科技"},
+                },
+            )
+        )
+
+        self.assertIn("### 3. 市场结构判断", rendered)
+        self.assertLess(rendered.index("### 3. 市场结构判断"), rendered.index("## 三、周期与主线"))
+        self.assertIn("| 明日节奏 | 低频聚焦；只保留主线核心；题材荒时不从旧方向强行扩散候选 |", rendered)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 科技 | 科技 | 低频聚焦 |", rendered)
+        self.assertIn("低频聚焦。原因是指数强但真实赚钱效应弱，成交额高位但结构集中。", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

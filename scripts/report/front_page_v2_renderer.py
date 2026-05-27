@@ -18,6 +18,10 @@ from report.mainline_turnover_summary_support import (
     resolve_mainline_capacity_regime_summary,
     resolve_turnover_share_trend_rows,
 )
+from report.market_structure_judgement import (
+    build_market_structure_judgement,
+    render_market_structure_section,
+)
 
 
 FORBIDDEN_FRONT_PAGE_MARKERS = ("### 🔬 市场研究快照", "Step 0")
@@ -215,6 +219,14 @@ def _market_base_lines(report_lines, snapshot=None):
             return injected
     injected.insert(index + 1, fit_row_2col)
     return injected
+
+
+def _market_structure_judgement(snapshot):
+    snapshot = snapshot or {}
+    judgement = snapshot.get("market_structure_judgement")
+    if isinstance(judgement, dict) and judgement.get("summary_text"):
+        return judgement
+    return build_market_structure_judgement(data={}, market_research_snapshot=snapshot)
 
 
 def _discipline_table(final_gate=None, position_level="", snapshot=None):
@@ -1193,11 +1205,16 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     else:
         unique_target = "暂无"
         one_line_action = position_state["action_without_target"]
+    structure_judgement = _market_structure_judgement(snapshot)
+    market_background = structure_judgement.get("tomorrow_rhythm") or "先看市场基底"
+    action_reason_text = str(structure_judgement.get("action_reason_text") or "").strip()
+    if action_reason_text and action_reason_text not in one_line_action:
+        one_line_action = f"{one_line_action}；{action_reason_text}"
     return [
         "## 七、最终结论",
         "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
         "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
-        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | 先看市场基底 | {unique_target} | {position_state['execution_style']} | {one_line_action} |",
+        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | {market_background} | {unique_target} | {position_state['execution_style']} | {one_line_action} |",
     ]
 
 
@@ -1210,6 +1227,11 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     lines.extend(_monthly_rhythm_lines(snapshot))
     market_base = _market_base_lines(report_lines, snapshot)
     lines.extend(market_base or ["## 二、市场基底", "| 项目 | 结论 |", "|------|------|", "| 市场状态 | 待确认 |", ""])
+    structure_lines = render_market_structure_section(_market_structure_judgement(snapshot))
+    if structure_lines:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.extend(structure_lines)
     if lines and lines[-1] != "":
         lines.append("")
 
