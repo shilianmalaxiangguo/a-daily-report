@@ -20,8 +20,14 @@ def _text(value, default=""):
     return text or default
 
 
+def _market_structure_inputs(data, market_research_snapshot):
+    data_inputs = (data or {}).get("market_structure_inputs") or {}
+    snapshot_inputs = (market_research_snapshot or {}).get("market_structure_inputs") or {}
+    return {**data_inputs, **snapshot_inputs}
+
+
 def _first_index_change(data, market_research_snapshot):
-    explicit = (market_research_snapshot or {}).get("market_structure_inputs") or {}
+    explicit = _market_structure_inputs(data, market_research_snapshot)
     if explicit.get("index_change_pct") not in (None, ""):
         return _safe_float(explicit.get("index_change_pct"))
     indices = (data or {}).get("indices") or {}
@@ -36,7 +42,7 @@ def _first_index_change(data, market_research_snapshot):
 
 
 def _market_counts(data, market_research_snapshot):
-    explicit = (market_research_snapshot or {}).get("market_structure_inputs") or {}
+    explicit = _market_structure_inputs(data, market_research_snapshot)
     market_stats = (data or {}).get("market_stats") or {}
     return {
         "up_count": _safe_int(explicit.get("up_count"), market_stats.get("up_count"), (data or {}).get("up_count")),
@@ -45,7 +51,7 @@ def _market_counts(data, market_research_snapshot):
 
 
 def _turnover(data, market_research_snapshot):
-    explicit = (market_research_snapshot or {}).get("market_structure_inputs") or {}
+    explicit = _market_structure_inputs(data, market_research_snapshot)
     return _safe_float(explicit.get("total_turnover"), (data or {}).get("total_turnover"))
 
 
@@ -119,7 +125,7 @@ def _candidate_policy(tomorrow_rhythm):
 def build_market_structure_judgement(data=None, market_research_snapshot=None):
     data = data or {}
     market_research_snapshot = market_research_snapshot or {}
-    explicit = market_research_snapshot.get("market_structure_inputs") or data.get("market_structure_inputs") or {}
+    explicit = _market_structure_inputs(data, market_research_snapshot)
     counts = _market_counts(data, market_research_snapshot)
     turnover = _turnover(data, market_research_snapshot)
     index_change_pct = _first_index_change(data, market_research_snapshot)

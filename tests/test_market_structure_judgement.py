@@ -89,6 +89,31 @@ class MarketStructureJudgementTest(unittest.TestCase):
         self.assertIn("wiki/板块补充/板块中枢与主线延续.md", update["suggested_nodes"])
         self.assertIn("明日节奏", update["next_effect"])
 
+    def test_reads_market_structure_inputs_from_data(self):
+        judgement = build_market_structure_judgement(
+            data={
+                "market_structure_inputs": {
+                    "index_change_pct": 1.2,
+                    "up_count": 947,
+                    "down_count": 4300,
+                    "total_turnover": 32600.0,
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                }
+            },
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(judgement["tomorrow_rhythm"], "低频聚焦")
+        self.assertIn("指数强但真实赚钱效应弱", judgement["index_profit_relation"])
+        self.assertIn("成交额高位但结构集中", judgement["turnover_distribution"])
+        self.assertIn("对立反弹", judgement["rotation_nature"])
+        self.assertIn("科技仍活跃但短线疲态上升", judgement["old_mainline_fatigue"])
+        self.assertTrue(any("1.20%" in item for item in judgement["fact_basis"]))
+        self.assertTrue(any("上涨家数偏弱" in item for item in judgement["fact_basis"]))
+        self.assertTrue(any("32600.00亿" in item for item in judgement["fact_basis"]))
+
     def test_no_section_when_inputs_are_empty(self):
         judgement = build_market_structure_judgement(data={}, market_research_snapshot={})
 
