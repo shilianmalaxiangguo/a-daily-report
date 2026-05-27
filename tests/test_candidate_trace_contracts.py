@@ -132,14 +132,20 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertIn({"field": "账户适配", "value": "实际不可买", "source": "account_context"}, trace["key_inputs"])
         self.assertNotIn("account_context", trace["missing_data"])
 
-    def test_account_status_price_or_cash_present_is_buyable(self):
+    def test_account_status_price_or_cash_only_is_missing_data(self):
         price_trace = build_candidate_trace({"name": "有价样本", "code": "000001", "latest_price": 10})
         cash_trace = build_candidate_trace({"name": "有钱样本", "code": "000002", "available_cash": 10000})
 
-        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, price_trace["key_inputs"])
-        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, cash_trace["key_inputs"])
-        self.assertNotIn("account_context", price_trace["missing_data"])
-        self.assertNotIn("account_context", cash_trace["missing_data"])
+        self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, price_trace["key_inputs"])
+        self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, cash_trace["key_inputs"])
+        self.assertIn("account_context", price_trace["missing_data"])
+        self.assertIn("account_context", cash_trace["missing_data"])
+
+    def test_account_status_price_and_cash_affordable_is_buyable(self):
+        trace = build_candidate_trace({"name": "可买样本", "code": "000001", "latest_price": 10, "available_cash": 10000})
+
+        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, trace["key_inputs"])
+        self.assertNotIn("account_context", trace["missing_data"])
 
     def test_account_status_missing_price_and_cash_is_missing_data(self):
         trace = build_candidate_trace({"name": "缺账户样本", "code": "000001"})
@@ -182,6 +188,30 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertEqual(by_reason["主线不匹配"]["representatives"], ["大众公用", "红星发展", "步步高"])
         self.assertEqual(by_reason["账户不适配"]["count"], 1)
         self.assertEqual(by_reason["数据缺失"]["treatment"], "关键数据不完整，停止生成动作")
+
+    def test_build_candidate_trace_tolerates_non_dict_input(self):
+        trace = build_candidate_trace("x")
+
+        self.assertEqual(trace["stock_code"], "")
+        self.assertEqual(trace["stock_name"], "")
+        self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, trace["key_inputs"])
+        self.assertIn("account_context", trace["missing_data"])
+        self.assertIn("关键数据不完整", trace["final_action"])
+
+    def test_build_eliminated_summary_tolerates_non_dict_items(self):
+        summary = build_eliminated_summary(["x"])
+
+        self.assertEqual(
+            summary,
+            [
+                {
+                    "reason": "数据缺失",
+                    "count": 1,
+                    "representatives": ["观察对象"],
+                    "treatment": "关键数据不完整，停止生成动作",
+                }
+            ],
+        )
 
     def test_build_candidate_trace_artifact_payload(self):
         trace = build_candidate_trace({"name": "华天科技", "code": "002185", "tier": "T0"})

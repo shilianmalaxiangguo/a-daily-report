@@ -71,6 +71,10 @@ def _truthy(value):
     return bool(value)
 
 
+def _as_candidate_dict(candidate):
+    return dict(candidate) if isinstance(candidate, dict) else {}
+
+
 def _resolve_account_status(candidate):
     explicit = _clean_text(candidate.get("account_trade_status") or candidate.get("账户状态"))
     if explicit in ("实际可买", "实际不可买"):
@@ -94,7 +98,7 @@ def _resolve_account_status(candidate):
     if not has_price and not has_cash:
         return "数据缺失", "", True
     if not has_price or not has_cash:
-        return "实际可买", "账户条件适配", False
+        return "数据缺失", "", True
     if latest_price <= 0 or available_cash <= 0:
         return "数据缺失", "", True
 
@@ -134,7 +138,7 @@ def _terminal_step(tier, missing_data, account_status, checks):
 
 
 def build_candidate_trace(candidate):
-    candidate = dict(candidate or {})
+    candidate = _as_candidate_dict(candidate)
     code = _stock_code(candidate)
     name = _stock_name(candidate)
     tier = _tier(candidate)
@@ -198,9 +202,12 @@ def build_candidate_trace(candidate):
 def build_eliminated_summary(items):
     grouped = {}
     for item in items or []:
-        item = item or {}
-        reason = _clean_text(item.get("reason") or item.get("原因")) or "数据缺失"
-        name = _clean_text(item.get("name") or item.get("名称"))
+        if isinstance(item, dict):
+            reason = _clean_text(item.get("reason") or item.get("原因")) or "数据缺失"
+            name = _clean_text(item.get("name") or item.get("名称"))
+        else:
+            reason = "数据缺失"
+            name = "观察对象"
         if reason not in grouped:
             grouped[reason] = {
                 "reason": reason,
