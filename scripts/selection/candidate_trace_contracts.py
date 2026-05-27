@@ -93,7 +93,9 @@ def _resolve_account_status(candidate):
 
     if not has_price and not has_cash:
         return "数据缺失", "", True
-    if not has_price or not has_cash or latest_price <= 0 or available_cash <= 0:
+    if not has_price or not has_cash:
+        return "实际可买", "账户条件适配", False
+    if latest_price <= 0 or available_cash <= 0:
         return "数据缺失", "", True
 
     lot_amount = latest_price * 100

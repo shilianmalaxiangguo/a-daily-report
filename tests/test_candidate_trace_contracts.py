@@ -7,7 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from selection.candidate_trace_contracts import (
+    ARTIFACT_VERSION,
     CHECK_RESULTS,
+    VALID_TIERS,
+    VISIBLE_SCOPE,
+    __all__ as TRACE_CONTRACT_EXPORTS,
     build_candidate_trace,
     build_candidate_trace_artifact_payload,
     build_eliminated_summary,
@@ -94,6 +98,72 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertEqual(trace["checks"][0]["result"], "数据缺失")
         self.assertEqual(trace["checks"][1]["result"], "满足")
         self.assertEqual(trace["checks"][2]["result"], "未满足")
+
+    def test_account_status_respects_explicit_values(self):
+        buy_trace = build_candidate_trace(
+            {
+                "name": "显式可买",
+                "code": "000001",
+                "account_trade_status": "实际可买",
+            }
+        )
+        no_buy_trace = build_candidate_trace(
+            {
+                "name": "显式不可买",
+                "code": "000002",
+                "账户状态": "实际不可买",
+            }
+        )
+
+        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, buy_trace["key_inputs"])
+        self.assertIn({"field": "账户适配", "value": "实际不可买", "source": "account_context"}, no_buy_trace["key_inputs"])
+        self.assertNotIn("account_context", buy_trace["missing_data"])
+        self.assertNotIn("account_context", no_buy_trace["missing_data"])
+
+    def test_account_status_688_without_star_market_is_not_buyable(self):
+        trace = build_candidate_trace({"name": "科创样本", "code": "688001", "latest_price": 10, "available_cash": 10000})
+
+        self.assertIn({"field": "账户适配", "value": "实际不可买", "source": "account_context"}, trace["key_inputs"])
+        self.assertNotIn("account_context", trace["missing_data"])
+
+    def test_account_status_one_lot_over_cash_is_not_buyable(self):
+        trace = build_candidate_trace({"name": "高价样本", "code": "000001", "latest_price": 101, "available_cash": 10000})
+
+        self.assertIn({"field": "账户适配", "value": "实际不可买", "source": "account_context"}, trace["key_inputs"])
+        self.assertNotIn("account_context", trace["missing_data"])
+
+    def test_account_status_price_or_cash_present_is_buyable(self):
+        price_trace = build_candidate_trace({"name": "有价样本", "code": "000001", "latest_price": 10})
+        cash_trace = build_candidate_trace({"name": "有钱样本", "code": "000002", "available_cash": 10000})
+
+        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, price_trace["key_inputs"])
+        self.assertIn({"field": "账户适配", "value": "实际可买", "source": "account_context"}, cash_trace["key_inputs"])
+        self.assertNotIn("account_context", price_trace["missing_data"])
+        self.assertNotIn("account_context", cash_trace["missing_data"])
+
+    def test_account_status_missing_price_and_cash_is_missing_data(self):
+        trace = build_candidate_trace({"name": "缺账户样本", "code": "000001"})
+
+        self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, trace["key_inputs"])
+        self.assertIn("account_context", trace["missing_data"])
+
+    def test_exported_constants_and_all_are_contractual(self):
+        self.assertEqual(ARTIFACT_VERSION, 1)
+        self.assertEqual(VISIBLE_SCOPE, "T0_T1_T2_T3")
+        self.assertEqual(VALID_TIERS, ("T0", "T1", "T2", "T3"))
+        self.assertEqual(CHECK_RESULTS, ("满足", "部分满足", "未满足", "数据缺失"))
+        self.assertEqual(
+            set(TRACE_CONTRACT_EXPORTS),
+            {
+                "ARTIFACT_VERSION",
+                "VISIBLE_SCOPE",
+                "CHECK_RESULTS",
+                "VALID_TIERS",
+                "build_candidate_trace",
+                "build_eliminated_summary",
+                "build_candidate_trace_artifact_payload",
+            },
+        )
 
     def test_build_eliminated_summary_groups_reasons_and_caps_representatives(self):
         summary = build_eliminated_summary(
