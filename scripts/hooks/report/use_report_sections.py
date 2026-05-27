@@ -112,9 +112,12 @@ def build_knowledge_update_note(request):
     for update in request.get("knowledge_updates") or []:
         if isinstance(update, dict):
             lines.extend(_format_structured_knowledge_update(update))
+    ai_friction_lines = build_ai_friction_knowledge_note(request)
+    if ai_friction_lines:
+        lines.extend(ai_friction_lines[1:])
     if lines:
         return ["## 知识复利提示", *lines]
-    return build_ai_friction_knowledge_note(request)
+    return []
 
 
 def _format_knowledge_compounding_candidate(candidate):

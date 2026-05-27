@@ -225,6 +225,56 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertIn("建议沉淀：wiki/板块补充/板块中枢与主线延续.md；wiki/交易思想/价格行为与能量框架.md", review)
         self.assertIn("下次影响：市场结构判断、候选数量、主线核心筛选、明日节奏", review)
 
+    def test_report_sections_combine_market_structure_and_ai_friction_knowledge_updates(self):
+        ctx = build_empty_context(
+            {
+                "target_date": "2026-05-27",
+                "knowledge_updates": [
+                    {
+                        "topic": "市场结构判断",
+                        "new_insight": "指数新高不等于真实赚钱效应改善；上涨家数弱时，日报应优先进入低频聚焦。",
+                        "fact_basis": "指数强势；上涨家数偏弱；成交额高位。",
+                        "suggested_nodes": [
+                            "wiki/板块补充/板块中枢与主线延续.md",
+                        ],
+                        "next_effect": "市场结构判断、候选数量、主线核心筛选、明日节奏",
+                    },
+                    {
+                        "topic": "AI摩擦与知识复利",
+                        "source_path": "wiki/交易思想/AI摩擦与知识复利.md",
+                    },
+                ],
+            }
+        )
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                        "source_path": "/tmp/source.md",
+                    },
+                    "llm_wiki": {
+                        "version": "2026-05-26",
+                        "source": "llm_wiki",
+                    },
+                },
+            },
+        )
+
+        result = run(ctx)
+
+        review = result["patches"]["sections"]["review"]
+        self.assertEqual(review.count("知识复利提示"), 1)
+        self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", review)
+        self.assertIn("事实来源：指数强势；上涨家数偏弱", review)
+        self.assertIn("建议沉淀：wiki/板块补充/板块中枢与主线延续.md", review)
+        self.assertIn("下次影响：市场结构判断、候选数量、主线核心筛选、明日节奏", review)
+        self.assertIn("复利方向：用反馈机制校准新知识，避免只堆积结论。", review)
+        self.assertIn("必要认知摩擦：复述、重写、对比或沉淀成知识节点。", review)
+        self.assertIn("日报落点：只记录字段化结论，不把文章长文带入交易主链。", review)
+
 
 if __name__ == "__main__":
     unittest.main()
