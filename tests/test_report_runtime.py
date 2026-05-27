@@ -3081,6 +3081,35 @@ assert rendered == "# migrated"
         self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
         self.assertEqual(data["market_structure_judgement"]["tomorrow_rhythm"], "低频聚焦")
 
+    def test_render_markdown_report_runtime_normalizes_non_list_knowledge_updates(self):
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "knowledge_updates": {"topic": "旧格式"},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                }
+            },
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-27",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        report = result["report"]
+        self.assertIsInstance(data["knowledge_updates"], list)
+        self.assertEqual(data["knowledge_updates"][0]["topic"], "市场结构判断")
+        self.assertIn("## 知识复利提示", report)
+        self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
+
     def test_render_markdown_report_runtime_appends_knowledge_compounding_candidates(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
             result = report_runtime.render_markdown_report_runtime(

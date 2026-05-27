@@ -2328,7 +2328,11 @@ def _attach_market_structure_judgement(data):
     data["market_research_snapshot"] = snapshot
     update = build_market_structure_knowledge_update(judgement)
     if update:
-        updates = data.setdefault("knowledge_updates", [])
+        existing_updates = data.get("knowledge_updates")
+        updates = []
+        if isinstance(existing_updates, list):
+            updates = [item for item in existing_updates if isinstance(item, dict)]
+        data["knowledge_updates"] = updates
         if not any(isinstance(item, dict) and item.get("topic") == update.get("topic") for item in updates):
             updates.append(update)
     return judgement
