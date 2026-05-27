@@ -157,6 +157,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("科技支线容量条件 -> 容量参考线随当前成交额分布校准，还要看科技成交、扩散和核心承接", context["field_mappings"])
         self.assertIn("注意力发酵节点 -> 产业逻辑被集中讨论且走势仍在初期，才按支线波段观察", context["field_mappings"])
         self.assertIn("紧缺叙事 -> 支线催化优先看主线环节供需紧张，但不能替代价格承接", context["field_mappings"])
+        self.assertIn("市场结构判断 -> 指数与真实赚钱效应、成交扩散、轮动性质、老主线疲态和题材新鲜度共同决定明日节奏", context["field_mappings"])
+        self.assertIn("低频聚焦 -> 指数强但上涨家数弱、成交集中、对立方向反弹或老主线疲态时，只保留主线核心，不从旧方向强行扩散候选", context["field_mappings"])
         self.assertIn("稳定知识写入 LLM Wiki", context["write_boundaries"])
         self.assertIn("原文不直接进入日报主链", context["report_boundaries"])
         self.assertIn("MACD只能作为辅助", context["report_boundaries"])
