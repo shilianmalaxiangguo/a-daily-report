@@ -18,9 +18,11 @@ NEW_STOCK_REFERENCE_NODE_BUILDERS = {
 
 def build_new_stock_reference_node_specs(builder_map=None, enabled_node_keys=None):
     builder_map = builder_map or NEW_STOCK_REFERENCE_NODE_BUILDERS
-    enabled = list(enabled_node_keys or builder_map.keys())
+    enabled = set(enabled_node_keys or builder_map.keys())
     specs = []
-    for node_key in enabled:
+    for node_key in builder_map:
+        if node_key not in enabled:
+            continue
         builder = builder_map.get(node_key)
         if builder is None:
             continue

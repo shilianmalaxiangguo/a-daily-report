@@ -10,6 +10,13 @@ from domains.new_stock_reference.node_runtime import run_new_stock_reference_nod
 
 
 class NewStockReferenceNodeRuntimeTest(unittest.TestCase):
+    def test_node_specs_preserve_dependency_order_when_filtered(self):
+        node_specs = build_new_stock_reference_node_specs(
+            enabled_node_keys=["render", "unknown", "score"]
+        )
+
+        self.assertEqual([spec["node_key"] for spec in node_specs], ["score", "render"])
+
     def test_runtime_can_execute_only_selected_score_node(self):
         node_specs = build_new_stock_reference_node_specs(enabled_node_keys=["score"])
         context = {
