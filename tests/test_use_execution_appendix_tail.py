@@ -167,6 +167,33 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertEqual(render_context["new_stock_candidate_upgrades"], upgrades)
         self.assertEqual(result["value"]["exports"]["new_stock_research_pool"], research_pool)
 
+    def test_execution_appendix_renderer_outputs_new_stock_research_absence_reason(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["new_stock_cycle_review"],
+                "new_stock_research_pool": [
+                    {
+                        "stock_name": "理奇智能",
+                        "stock_code": "301599",
+                        "listing_window": "outside_window",
+                        "new_stock_cycle_state": "single_stock_watch",
+                        "c_stage_acceptance": "未验证",
+                        "emotion_outlet_status": "未形成",
+                        "new_stock_recognition_status": "待确认",
+                        "upgrade_eligible": False,
+                        "candidate_upgrade_reason": "新股周期证明不足",
+                    }
+                ],
+                "new_stock_candidate_upgrades": [],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 附录A：新股周期判定", rendered)
+        self.assertIn("理奇智能", rendered)
+        self.assertIn("今日未形成买入资格", rendered)
+        self.assertIn("新股周期证明不足", rendered)
+
     def test_execution_appendix_tail_hook_passes_visible_candidate_lists(self):
         captured = {}
 
