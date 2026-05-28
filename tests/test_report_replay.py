@@ -165,6 +165,30 @@ def _replay_probe(target_date, refresh_sources=None):
 
         self.assertEqual(result, ("2026-04-22", ["calendar_events"], {"snapshot": "x"}, tencent_factory, major_indices_fetcher, 1.25))
 
+    def test_replay_runtime_forwards_etf_refresh_helper_to_snapshot_contract(self):
+        replay_runtime = self._load_module()
+        etf_fetcher = lambda **kwargs: {}
+
+        with patch(
+            "replay.report_replay.build_replay_snapshot_contract",
+            return_value={"found": True, "data": {"ok": True}, "target_date": "2026-05-25"},
+        ) as contract_mock:
+            replay_runtime.replay_from_snapshot(
+                "2026-05-25",
+                helpers={
+                    "load_data_snapshot": lambda target_date: ({"snapshot": target_date}, ""),
+                    "TencentFinanceData": lambda: _FakeTencentFinanceData([]),
+                    "get_major_indices_from_iwencai": lambda target_date="": [],
+                    "safe_float": lambda value: float(value or 0),
+                    "get_etf_turnover_series_from_sina": etf_fetcher,
+                },
+            )
+
+        self.assertIs(
+            contract_mock.call_args.kwargs["helpers"]["get_etf_turnover_series_from_sina"],
+            etf_fetcher,
+        )
+
     def test_build_replay_snapshot_contract_refreshes_calendar_and_indices(self):
         snapshot = {
             "calendar_events": [{"title": "old"}],
@@ -231,6 +255,63 @@ def _replay_probe(target_date, refresh_sources=None):
                 for log in result["module_logs"]
             )
         )
+
+    def test_build_replay_snapshot_contract_backfills_etf_turnover_series_when_missing(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "timer_summary": {"steps": [["旧步骤", 1.0, 1.0]]},
+            "module_logs": [
+                {
+                    "module": "input.runtime",
+                    "step": "request.etf_turnover_series",
+                    "status": "degraded",
+                    "message": "ETF两市成交额趋势缺失",
+                    "details": {"provider": "snapshot.missing", "row_count": 0},
+                }
+            ],
+        }
+        etf_calls = []
+
+        result = build_replay_snapshot_contract(
+            "2026-05-25",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_etf_turnover_series_from_sina": lambda *, target_date, window_days=25: etf_calls.append(
+                    (target_date, window_days)
+                )
+                or {
+                    "source": "sina.etf.daily_amount",
+                    "rows": [
+                        {
+                            "trade_date": f"2026-05-{day:02d}",
+                            "etf_turnover_yi": 4400 + day,
+                            "covered_etf_count": 1500 + day,
+                        }
+                        for day in range(1, 26)
+                    ],
+                    "usable_etf_count": 1530,
+                    "empty_etf_count": 3,
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(etf_calls, [("2026-05-25", 25)])
+        self.assertEqual(data["etf_turnover_series"]["rows"][-1]["etf_turnover_yi"], 4425)
+        self.assertTrue(data["data_status"]["ETF两市成交额趋势"])
+        self.assertTrue(data["step_status"]["ETF两市成交额趋势获取"])
+        by_step = {item["step"]: item for item in data["module_logs"]}
+        self.assertEqual(by_step["request.etf_turnover_series"]["status"], "success")
+        self.assertEqual(by_step["request.etf_turnover_series"]["details"]["provider"], "sina.etf.daily_amount")
+        self.assertEqual(by_step["request.etf_turnover_series"]["details"]["row_count"], 25)
+        self.assertIn("ETF两市成交额趋势获取", [row[0] for row in data["timer_summary"]["steps"]])
 
     def test_build_replay_snapshot_contract_backfills_decision_sources_from_stale_snapshot(self):
         snapshot = {

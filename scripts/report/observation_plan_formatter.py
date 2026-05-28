@@ -85,7 +85,7 @@ def _build_abnormal_follow_rule_legacy_body(abnormal_type, follow_state, anchor_
 
     if abnormal_type == "恐怖阴线异动":
         if follow_state == "跌不下去":
-            return f"只看首个60分钟能否收回阴线实体一半（约{body_mid_text}）"
+            return f"只看09:50-10:10能否收回阴线实体一半（约{body_mid_text}）"
         if follow_state == "缩量消化":
             return f"只做缩量后再转强，锚点不破{anchor_text}"
         if follow_state == "新异动待观察":
@@ -94,7 +94,7 @@ def _build_abnormal_follow_rule_legacy_body(abnormal_type, follow_state, anchor_
 
     if abnormal_type == "长上影异动":
         if follow_state == "跌不下去":
-            return f"只看60分钟能否重新站回实体区（约{body_mid_text}以上）"
+            return f"只看09:50-10:10窗口内能否重新站回实体区（约{body_mid_text}以上）"
         if follow_state == "缩量消化":
             return f"等缩量后再收复实体，不破{anchor_text}才有资格继续看"
         if follow_state == "新异动待观察":
@@ -102,7 +102,7 @@ def _build_abnormal_follow_rule_legacy_body(abnormal_type, follow_state, anchor_
         return f"承接已经走弱，跌回{anchor_text}附近以下就先放弃"
 
     if follow_state == "跌不下去":
-        return f"只看回踩不破{anchor_text}后的60分钟再转强"
+        return f"只看回踩不破{anchor_text}后，09:50-10:10窗口内能否再转强"
     if follow_state == "缩量消化":
         return f"缩量消化后再看结构确认，锚点{anchor_text}"
     if follow_state == "新异动待观察":

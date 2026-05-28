@@ -10,7 +10,7 @@ MARKET_SCENARIOS = [
     {
         "heading": "上证单边上升",
         "holding_action": "强于板块锚点的持仓继续持有；上升趋势：站上MA3并守MA7才允许持有或加仓；冲高后二次不过高、跌回均价线或先于指数翻绿时减仓。",
-        "new_action": "只允许对大盘、板块、锚点、个股同时确认的极度看好目标按参与窗口试错。",
+        "new_action": "只允许对大盘、板块、锚点、个股同时确认的极度看好目标按固定交易窗口条件试错。",
         "forbidden": "不因指数上涨扩大随机仓位，不把旧仓反弹当新机会买点。",
     },
     {
@@ -79,7 +79,24 @@ def _parse_candidates_from_markdown(markdown_text):
     return list(parse_extreme_conviction_list_from_markdown(text) or [])
 
 
+def _source_report_allows_new_position(markdown_text):
+    text = str(markdown_text or "")
+    if not text.strip():
+        return True
+    no_new_markers = (
+        "新开仓上限 | 0",
+        "新开仓0手",
+        "明日不新增参与",
+        "不构成明日新增参与",
+        "最终0%时只作观察样本",
+        "先处理旧仓，不为新候选分散资金",
+    )
+    return not any(marker in text for marker in no_new_markers)
+
+
 def _extract_extreme_conviction_list(data, source_report_markdown=""):
+    if source_report_markdown and not _source_report_allows_new_position(source_report_markdown):
+        return []
     markdown_candidates = _parse_candidates_from_markdown(source_report_markdown)
     if markdown_candidates:
         return markdown_candidates
@@ -344,7 +361,7 @@ def _format_candidate_execution_path(plan):
     parts.append("09:50-10:10 筹码交换/分时黄线或0轴确认入口")
     intraday_cross = _clean_text(
         plan.get("intraday_average_line_cross_probe"),
-        "10点前后价格与分时黄色均价线交叉并形成金叉，且上穿后不快速跌回黄线下方",
+        "09:50-10:10价格与分时黄色均价线交叉并形成金叉，且上穿后不快速跌回黄线下方",
     )
     zero_axis = _clean_text(
         plan.get("zero_axis_reclaim_probe"),
@@ -357,7 +374,7 @@ def _format_candidate_execution_path(plan):
     parts.append(intraday_cross)
     parts.append(zero_axis)
     parts.append(daily_ma)
-    parts.append("可分两笔：10点确认先试，站回黄线/0轴或关键日K均线角色确认后再加")
+    parts.append("可分两笔：09:50-10:10窗口内先试，站回黄线/0轴或关键日K均线角色确认后再加")
     return "；".join(parts)
 
 

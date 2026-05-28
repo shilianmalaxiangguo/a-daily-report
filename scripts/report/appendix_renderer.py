@@ -250,6 +250,27 @@ def _build_margin_pressure_detail_node(context, node_meta=None, node_lookup=None
     return {"lines": lines, "exports": {"margin_pressure": snapshot}}
 
 
+def _build_etf_turnover_detail_node(context, node_meta=None, node_lookup=None):
+    snapshot = _context_value(context, "etf_turnover_series", {}) or {}
+    rows = list((snapshot or {}).get("rows") or [])
+    if not rows:
+        return {"lines": [], "exports": {"etf_turnover_series": snapshot}}
+    lines = [
+        "### 附录A：ETF两市成交额完整25日表",
+        "",
+        "| 日期 | ETF两市成交额 | 较前日 | 有成交ETF数 |",
+        "|------|----------------|--------|------------|",
+    ]
+    for row in _display_latest_first(rows[-25:]):
+        change_pct = row.get("change_pct", "待累计")
+        lines.append(
+            f"| {row.get('trade_date', '')} | {_format_amount_yi(row.get('etf_turnover_yi'))} | "
+            f"{_format_pct(change_pct)} | {row.get('covered_etf_count', '-')} |"
+        )
+    lines.append("")
+    return {"lines": lines, "exports": {"etf_turnover_series": snapshot}}
+
+
 def _build_appendix_metadata_node(context, node_meta=None, node_lookup=None):
     return {
         "lines": [
@@ -524,6 +545,7 @@ APPENDIX_NODE_BUILDERS = {
     "summary_stats": _build_appendix_summary_stats_node,
     "data_source_audit": _build_data_source_audit_node,
     "margin_pressure_detail": _build_margin_pressure_detail_node,
+    "etf_turnover_detail": _build_etf_turnover_detail_node,
     "metadata": _build_appendix_metadata_node,
     "timer_stats": _build_appendix_timer_stats_node,
     "mainline_continuity": _build_mainline_continuity_node,

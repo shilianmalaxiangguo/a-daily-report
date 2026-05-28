@@ -536,7 +536,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     if state_code == "expand":
         stage_label = "扩张确认"
         stage_reason = "热点、趋势密度和异常承接已经同向共振，市场不再只是局部修复。"
-        stage_action = "可以顺着最强方向做减法，但真正出手要落到竞价表态、开盘承接、回封或60分钟结构确认。"
+        stage_action = "可以顺着最强方向做减法，但真正出手只落到09:30-09:35、09:50-10:10或14:30-14:55三段窗口。"
     elif state_code == "migrate":
         stage_label = "分歧迁移"
         stage_reason = "市场不是全面转弱，而是在主攻线和竞争线之间重新分配权重。"
@@ -612,7 +612,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
     else:
         falsification_conditions.append("热点没有继续聚焦，赚钱效应重新变散。")
     falsification_conditions.append("异常对象次日明显转弱，原先“跌不下去”的信号没有继续保住。")
-    falsification_conditions.append("竞价表态、开盘承接、回封或60分钟结构确认都不成立，或者买点只剩情绪顶点可以追。")
+    falsification_conditions.append("三段固定交易窗口内条件都不成立，或者买点只剩情绪顶点可以追。")
     if rise_fall_ratio is not None and _safe_float(rise_fall_ratio, 0.0) > 0:
         falsification_conditions.append(
             f"涨跌比重新恶化到{observation.get('rise_fall_ratio_text', '明显转弱')}附近，且跌停继续增加。"
@@ -663,7 +663,7 @@ def _build_abnormal_projection_summary_legacy_body(abnormal_watch_pool=None):
     if resilient_count >= 2 and failed_count == 0:
         projection_label = "异常承接强化"
         projection_reason = "多个异常信号在后续没有继续塌陷，说明高维主线状态仍在强化。"
-        action = "优先盯“跌不下去/缩量消化”的对象，再看竞价表态、开盘承接、回封或60分钟结构确认。"
+        action = "优先盯“跌不下去/缩量消化”的对象，再看三段固定交易窗口内条件是否成立。"
     elif failed_count >= max(2, resilient_count + 1):
         projection_label = "异常失败转弱"
         projection_reason = "异常信号大面积转弱，说明高维状态更像衰减或切换，而不是继续强化。"
@@ -1034,7 +1034,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "code": "bridge_prep",
                 "label": "🟡 条件执行预备态",
                 "reason": pulse_action_reason or state_machine_snapshot.get("transition_reason") or f"当前处于{energy_state}，但主攻线优势已经开始拉开。",
-                "action": "先不开新仓，只为最强对象保留条件执行预备态；若次日完成60分钟确认，再升级唯一执行候选",
+                "action": "先不开新仓，只为最强对象保留条件执行预备态；若次日09:50-10:10窗口满足条件，再升级唯一执行候选",
             }
         if position_level == "一档（空仓档）" or final_gate.get("operation_state") == "撤退态":
             return {
@@ -1044,7 +1044,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "action": "保持空仓，只观察，不新增参与",
             }
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
-            action_text = "只看主线核心是否命中参与窗口分层确认：强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认；命中后才评估50%标准进攻，未命中按0%不参与"
+            action_text = "只看主线核心是否在固定交易窗口内满足条件：强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口；条件成立后才评估50%标准进攻，否则按0%不参与"
             if special_probe_action:
                 action_text = f"{special_probe_action}；{action_text}"
             return {
@@ -1104,7 +1104,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             "code": "pullback_only",
             "label": "🟡 只做分歧承接",
             "reason": pulse_action_reason or f"{leading_line or '主线'}仍在，但当前处于{pulse_stage or '高位分歧'}，只能等分歧承接，不能追一致加速。",
-            "action": "只做主线分歧承接后的预演参与窗口，不追一致加速",
+            "action": "只做主线分歧承接后的固定交易窗口预案，不追一致加速",
         }
 
     if state_code == "expand":
@@ -1112,27 +1112,27 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             "code": "follow",
             "label": "🟢 跟随主线",
             "reason": "热点、趋势密度和异常承接正在同向共振，可以跟，但只能跟最强方向。",
-            "action": "只在主线和异常承接对象里按竞价表态、开盘承接、回封或60分钟结构确认分层参与",
+            "action": "只在主线和异常承接对象里按三段固定交易窗口分层参与",
         }
     if state_code == "migrate":
         return {
             "code": "single_line_follow",
             "label": "🟡 只跟唯一胜出方向",
             "reason": "热点和趋势还在重排，先研究胜负，不能同时押主线和竞争线。",
-            "action": "先看主线与竞争线谁胜出，预演参与窗口未命中前不分散出手",
+            "action": "先看主线与竞争线谁胜出，固定交易窗口内条件未成立前不分散出手",
         }
     if state_code == "probe":
         return {
             "code": "conditional_follow",
             "label": "🟡 条件跟随",
             "reason": "市场还在试探修复，只有异常继续跌不下去，才允许从研究切到跟随。",
-            "action": "轻跟随也必须命中预演参与窗口，不追一致高潮",
+            "action": "轻跟随也必须等固定交易窗口内条件成立，不追一致高潮",
         }
     return {
         "code": "observe",
         "label": "⚠️ 先看环境",
         "reason": f"当前处于{energy_state}，先确认市场没有继续恶化，再谈跟随。",
-        "action": "先看竞价表态与开盘承接，未命中预演参与窗口就保持0%",
+        "action": "先看竞价表态与开盘承接，固定交易窗口内条件未成立就保持0%",
     }
 
 

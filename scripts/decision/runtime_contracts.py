@@ -67,7 +67,7 @@ def get_trade_permission_contract(
         }
 
     if watch_source == "gem_breathing_20cm":
-        gem_reason = "先看创业板20cm预启动能否走成右侧确认和参与窗口分层确认，确认后才评估50%标准进攻；普通结构才等60分钟确认，不满足继续0%观察。"
+        gem_reason = "先看创业板20cm预启动能否走成右侧确认，并只在固定交易窗口内评估50%标准进攻；普通结构只看09:50-10:10窗口，不满足继续0%观察。"
         if pulse_action_reason:
             gem_reason = f"{pulse_action_reason}；{gem_reason}"
         if not is_mainline and mainline_name:
@@ -79,7 +79,7 @@ def get_trade_permission_contract(
         )
 
     if weak_to_strong_context.get("active") and execution_bias in ("watch_only", "prep_only", "divergence_only"):
-        weak_reason = "主线弱转强样本：第一波强势基础仍在，当前是假弱非真弱；先保留参与窗口预演，按竞价表态、开盘承接、回封或60分钟结构确认评估50%标准进攻。"
+        weak_reason = "主线弱转强样本：第一波强势基础仍在，当前是假弱非真弱；先保留固定交易窗口预案，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口评估50%标准进攻。"
         if execution_bias == "divergence_only":
             weak_reason = f"{weak_reason}当前只做分歧承接，不直接追一致加速。"
         if pulse_action_reason:
@@ -103,9 +103,9 @@ def get_trade_permission_contract(
 
     if execution_bias == "prep_only" and abnormal_state in ("跌不下去", "缩量消化") and (is_mainline or is_memory or is_conviction):
         prep_prefix = "重点观察" if is_conviction else "龙头" if is_memory and not is_mainline else "主线"
-        prep_reason = pulse_action_reason or "环境未开，但主线已经进入可跟踪分歧段；只有次日预演参与窗口命中后才可升级为唯一执行候选。"
-        if "参与窗口" not in prep_reason:
-            prep_reason = f"{prep_reason}；只有次日预演参与窗口命中后才可升级为唯一执行候选。"
+        prep_reason = pulse_action_reason or "环境未开，但主线已经进入可跟踪分歧段；只有次日固定交易窗口内条件成立后才可升级为唯一执行候选。"
+        if "固定交易窗口" not in prep_reason:
+            prep_reason = f"{prep_reason}；只有次日固定交易窗口内条件成立后才可升级为唯一执行候选。"
         return {
             "can_execute": False,
             "permission_label": f"{prep_prefix}条件执行预备态",
@@ -132,7 +132,7 @@ def get_trade_permission_contract(
         if abnormal_state == "跌不下去":
             reason = "重点观察名单 + 异动后跌不下去，允许进入执行层"
         elif abnormal_state == "缩量消化":
-            reason = "重点观察名单 + 缩量消化，允许按分层参与窗口确认"
+            reason = "重点观察名单 + 缩量消化，允许按固定交易窗口确认"
         if execution_bias == "divergence_only":
             reason = f"{reason}；但当前只做分歧承接，不追一致加速"
         return {

@@ -433,18 +433,18 @@ def _build_strategy_plan_context_legacy_body(
         confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
         if target_position_pct == 30:
             if confirm_price:
-                trigger_text = f"50%标准进攻预演：首个60分钟站上{confirm_price:.2f}并形成参与窗口后再执行"
+                trigger_text = f"50%标准进攻预演：09:50-10:10窗口内站上{confirm_price:.2f}且条件成立后再执行"
             else:
-                trigger_text = "50%标准进攻预演：先命中参与窗口分层确认后再执行，普通结构才等60分钟确认"
+                trigger_text = "50%标准进攻预演：固定交易窗口内条件成立后再执行，普通结构只看09:50-10:10窗口"
         elif confirm_price:
-            trigger_text = f"首个60分钟站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
+            trigger_text = f"09:50-10:10站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
         elif entry_low is not None and entry_high is not None:
-            trigger_text = f"触及{entry_low:.2f}-{entry_high:.2f}并完成60分钟确认"
+            trigger_text = f"触及{entry_low:.2f}-{entry_high:.2f}并09:50-10:10窗口满足条件"
     elif plan_stock:
         if final_gate.get('can_new_entry') and '候选' in anchor_type:
             confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
             if confirm_price:
-                trigger_text = f"{anchor_type}，先看首个60分钟站上{confirm_price:.2f}，再判断能否走成明天唯一能买的那只"
+                trigger_text = f"{anchor_type}，先看09:50-10:10站上{confirm_price:.2f}，再判断能否走成明天唯一能买的那只"
             else:
                 trigger_text = f"{anchor_type}，先看盘中承接，再判断能否走成明天唯一能买的那只"
         else:

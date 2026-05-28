@@ -33,7 +33,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
 
     if quant_system_available and focus_group:
         lines.append("**明日买点预计算表**:")
-        lines.append("| 股票 | 代码 | 买入资格 | 怎么买 | 日线预设区间 | 60分钟确认点 | 价格怎么盯 | 明天具体怎么做 |")
+        lines.append("| 股票 | 代码 | 买入资格 | 怎么买 | 日线预设区间 | 09:50-10:10观察价 | 价格怎么盯 | 明天具体怎么做 |")
         lines.append("|------|------|----------|----------|------------|--------------|----------|----------|")
 
         for stock in focus_group:
@@ -136,7 +136,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 price_focus = build_trade_price_focus(minute_plan, stop_plan)
                 confirm_price = minute_plan.get("confirm_price_60m")
                 confirm_text = f"{confirm_price:.2f}" if confirm_price else "-"
-                action_text = "按预演参与窗口买入" if final_gate.get("can_new_entry", False) else "仅保留执行预案（禁买）"
+                action_text = "按固定交易窗口条件买入" if final_gate.get("can_new_entry", False) else "仅保留执行预案（禁买）"
                 price_focus_text = (
                     price_focus.get("compact_text", "-")
                     if final_gate.get("can_new_entry", False)
@@ -181,7 +181,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 )
     else:
         lines.append("**买点判断** (量化系统不可用，使用基础判断):")
-        lines.append("| 股票 | 代码 | 买入资格 | 今日涨幅 | 判断 | 60分钟确认点 | 价格怎么盯 | 动作 |")
+        lines.append("| 股票 | 代码 | 买入资格 | 今日涨幅 | 判断 | 09:50-10:10观察价 | 价格怎么盯 | 动作 |")
         lines.append("|------|------|----------|----------|------|--------------|----------|------|")
 
         for stock in focus_group:

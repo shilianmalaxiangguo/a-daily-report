@@ -252,7 +252,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
     legacy_markers = (
         "强核心走竞价表态",
         "普通结构只看09:50-10:10窗口",
-        "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，30分钟定止损",
+        "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，按失效价和单笔-5%底线处理风险",
     )
     for line in list(lines or []):
         text = str(line or "")
@@ -265,7 +265,7 @@ def _normalize_legacy_execution_framework_under_zero_participation(lines):
                 text = f"> **怎么执行**：{_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK}"
             else:
                 text = text.replace(
-                    "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，30分钟定止损",
+                    "日线结构中枢定环境，强核心走竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口，按失效价和单笔-5%底线处理风险",
                     _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK,
                 )
         normalized.append(text)

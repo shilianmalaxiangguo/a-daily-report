@@ -59,7 +59,7 @@ class PositionSizingRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["participation_mode"], "execute_50")
         self.assertEqual(result["target_position_pct"], 50)
-        self.assertEqual(result["trigger_text"], "首个60分钟站上12.34且不破11.80")
+        self.assertEqual(result["trigger_text"], "09:50-10:10站上12.34且不破11.80")
         self.assertTrue(result["candidate_feedback_ready"])
         self.assertEqual(result["candidate_feedback_score"], 88)
         self.assertEqual(result["single_focus_constraint"]["status"], "clear")
@@ -304,7 +304,7 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertEqual(result["participation_mode"], "execute_50")
         self.assertEqual(result["target_position_pct"], 50)
         self.assertFalse(result["full_attack_ready"])
-        self.assertIn("参与窗口", result["full_attack_check"]["missing"])
+        self.assertIn("固定交易窗口条件", result["full_attack_check"]["missing"])
 
     def test_full_attack_does_not_treat_mainline_sector_and_follow_state_as_independent_100_qualification(self):
         result = build_position_sizing_decision(

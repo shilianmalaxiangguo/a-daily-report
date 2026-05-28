@@ -553,7 +553,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |", rendered)
         self.assertIn("| 明日主买对象 | 大唐发电(601991) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，站回VWAP | 通过 |", rendered)
         self.assertNotIn("极看理由", rendered)
-        self.assertIn("| 参与窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |", rendered)
+        self.assertIn("| 固定交易窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归观察 | 封板策略 | 回封观察 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |", rendered)
         self.assertIn("高惯性；高于普通上涨样本", rendered)
         self.assertIn("默认要求盈亏比不低于2:1", rendered)
         self.assertIn("交易逻辑确认 / 竞价表态 / 开盘前几分钟承接 / MA执行锚点 / 回封/打板", rendered)
@@ -780,7 +780,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 10点看承接 | 溢价候选 | 仅观察，条件未满足 |", rendered)
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 09:50-10:10看承接 | 溢价候选 | 仅观察，条件未满足 |", rendered)
         self.assertNotIn("有条件执行", rendered)
         self.assertNotIn(_m("闸", "门"), rendered)
 
@@ -824,7 +824,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 10点看承接 | 溢价候选 | 观察，等10点确认 |", rendered)
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | - | - | 09:50-10:10看承接 | 溢价候选 | 观察，等09:50-10:10窗口 |", rendered)
         self.assertNotIn("有条件执行", rendered)
 
     def test_candidate_selection_infers_volume_t_board_signature_from_price_shape(self):
@@ -879,7 +879,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量T字板 | - | 明日可能高开溢价 | 溢价候选 | 观察，等10点确认 |", rendered)
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量T字板 | - | 明日可能高开溢价 | 溢价候选 | 观察，等09:50-10:10窗口 |", rendered)
 
     def test_candidate_selection_core_candidates_render_market_fit_fields_without_standalone_drawing_table(self):
         result = build_candidate_selection_runtime(
@@ -931,7 +931,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", rendered)
-        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量涨停 | 未完全爆发 | 明日验证承接 | 主线资金主动进攻 | 观察，等10点确认 |", rendered)
+        self.assertIn("| 富瀚微 | 300613 | 半导体 | 放量涨停 | 未完全爆发 | 明日验证承接 | 主线资金主动进攻 | 观察，等09:50-10:10窗口 |", rendered)
         self.assertNotIn("主力画图", rendered)
         self.assertNotIn(_m("执行", "权"), rendered)
 

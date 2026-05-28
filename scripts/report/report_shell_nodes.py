@@ -115,12 +115,12 @@ def _build_prohibition_payload(
         payload["prohibition_items"].append("- ✅ 禁止做T：次日不做日内回转")
         payload["prohibition_items"].append("- ✅ 禁止模式外交易：不在主线里的票不碰")
     elif display_position_level == "二档（防守档）":
-        headline = environment_headline or "先看特殊标的是否继续抗跌，只保留观察与参与窗口预演"
+        headline = environment_headline or "先看特殊标的是否继续抗跌，只保留观察与固定交易窗口预案"
         payload["environment_line"] = f"**次日市场环境**: 0%观察 / {display_operation_state} - {headline}"
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
             payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%观察；{PARTICIPATION_WINDOW_LAYER_TEXT}，命中预演情境才评估50%标准进攻")
         else:
-            payload["prohibition_items"].append("- ✅ 不新增参与：当前按0%不参与，未形成参与窗口前只观察")
+            payload["prohibition_items"].append("- ✅ 不新增参与：当前按0%不参与，固定交易窗口内条件未成立前只观察")
         if final_gate.get("should_reduce"):
             if has_personal_positions:
                 payload["prohibition_items"].append("- ✅ 禁止抱弱留弱：你的旧仓里，不在最强趋势的票要优先处理")
@@ -148,12 +148,12 @@ def _build_prohibition_payload(
                 payload["allowed_items"].append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 参与窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，命中预演情境才评估50%标准进攻")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%标准进攻")
             else:
                 payload["allowed_items"].append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 参与窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，命中预演情境才评估50%标准进攻")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%标准进攻")
     else:
         headline = environment_headline or "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"

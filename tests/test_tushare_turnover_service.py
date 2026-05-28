@@ -61,7 +61,18 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         fake_pro = _FakePro()
         rows = fetch_stock_daily_turnover_records("2026-05-12", pro=fake_pro)
 
-        self.assertEqual(fake_pro.daily_calls, [{"trade_date": "20260512"}])
+        self.assertEqual(
+            fake_pro.daily_calls,
+            [
+                {
+                    "trade_date": "20260512",
+                    "fields": (
+                        "ts_code,trade_date,open,high,low,close,pre_close,"
+                        "change,pct_chg,vol,amount"
+                    ),
+                }
+            ],
+        )
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["trade_date"], "2026-05-12")
         self.assertEqual(rows[0]["ts_code"], "000001.SZ")

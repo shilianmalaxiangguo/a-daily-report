@@ -155,7 +155,7 @@ def _follow_rule_probe(abnormal_type, follow_state, anchor_price, abnormal_info)
             helpers={"_safe_float": lambda value, default=0: float(value or default)},
         )
 
-        self.assertEqual(result, "只看首个60分钟能否收回阴线实体一半（约10.55）")
+        self.assertEqual(result, "只看09:50-10:10能否收回阴线实体一半（约10.55）")
 
     def test_refine_and_format_frozen_plan_columns_use_dynamic_guards(self):
         module = self._load_module()

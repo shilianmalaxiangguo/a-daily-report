@@ -25,7 +25,7 @@ def run(ctx):
     if permission_label == "attack_50_ready":
         action_label = "execute_50"
         headline = f"沿{primary_line}进入50%标准进攻"
-        trigger = f"次日按参与窗口分层确认：{PARTICIPATION_WINDOW_LAYER_TEXT}"
+        trigger = f"次日按固定交易窗口条件执行：{PARTICIPATION_WINDOW_LAYER_TEXT}"
         rationale = contract_rationale or f"{primary_line}仍在趋势比价链内，满足后按50%标准进攻；不满足转为0%不参与"
         permission_label = "execute_50"
     elif contract_label == "defense_observe" or phase == "defend":
@@ -36,7 +36,7 @@ def run(ctx):
     else:
         action_label = "watch_only"
         headline = "先观察，不授予执行资格"
-        trigger = "等待主线更清晰并完成60分钟确认"
+        trigger = "等待主线更清晰并09:50-10:10窗口满足条件"
         rationale = contract_rationale or "当前只保留观察权"
 
     payload = sanitize_user_visible_text({

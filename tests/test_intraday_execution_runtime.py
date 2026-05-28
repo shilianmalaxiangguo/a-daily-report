@@ -155,7 +155,7 @@ assert waiting == waiting_payload
         self.assertEqual(plan["confirm_inputs_60m"]["recent_high"], 10.8)
         self.assertEqual(plan["confirm_support_60m"], 9.7)
         self.assertEqual(plan["structure_stop_30m"], 9.45)
-        self.assertIn("首个60分钟放量站上10.80", plan["confirm_rule_60m"])
+        self.assertIn("09:50-10:10放量站上10.80", plan["confirm_rule_60m"])
         self.assertEqual(plan["volume_ratio_60m"], 1.64)
         self.assertEqual(plan["stop_plan"]["effective_stop"], 9.45)
 

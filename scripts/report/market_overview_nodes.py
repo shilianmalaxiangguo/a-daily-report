@@ -58,6 +58,58 @@ def _top50_share_interpretation(share_pct):
     return "Top50成交额占比处在18%到20%，市场仍以震荡结构看待。"
 
 
+def _top20_capacity_regime(near_150_count, rank20_amount):
+    near_150_count = int(near_150_count or 0)
+    rank20_amount = _safe_float(rank20_amount)
+    if near_150_count >= 18 or rank20_amount >= 145:
+        return "高容量聚焦"
+    if near_150_count >= 10 or rank20_amount >= 120:
+        return "容量活跃"
+    return "常规容量"
+
+
+def resolve_top20_turnover_capacity(data):
+    data = data or {}
+    rank_rows = list(data.get("turnover_rank") or [])
+    top20_rows = rank_rows[:20]
+    if len(top20_rows) < 20:
+        return {
+            "available": False,
+            "label": "待累计",
+            "regime": "待累计",
+            "interpretation": "缺少成交额前20明细，暂不判断Top20成交容量。",
+        }
+
+    amounts = [_turnover_rank_amount(row) for row in top20_rows]
+    if any(amount <= 0 for amount in amounts):
+        return {
+            "available": False,
+            "label": "待累计",
+            "regime": "待累计",
+            "interpretation": "成交额前20明细不完整，暂不判断Top20成交容量。",
+        }
+
+    near_150_count = sum(1 for amount in amounts if amount >= 150)
+    rank20_amount = amounts[19]
+    top20_amount = sum(amounts)
+    total_turnover = _safe_float(data.get("total_turnover"))
+    share_text = ""
+    if total_turnover > 0:
+        share_text = f"，Top20合计{top20_amount:.2f}亿，占两市{top20_amount / total_turnover * 100:.2f}%"
+    return {
+        "available": True,
+        "label": f"{near_150_count}/20只150亿级",
+        "regime": _top20_capacity_regime(near_150_count, rank20_amount),
+        "rank20_amount": rank20_amount,
+        "top20_amount": top20_amount,
+        "near_150_count": near_150_count,
+        "interpretation": (
+            f"Top20第20名{rank20_amount:.2f}亿{share_text}；"
+            "资金集中在大成交趋势核心，作为Top50后的补充观察，只说明资金选择方向，不单独给参与资格。"
+        ),
+    }
+
+
 def resolve_top50_turnover_share(data):
     data = data or {}
     total_turnover = _safe_float(data.get("total_turnover"))
@@ -205,6 +257,117 @@ def _format_signed_pct(value):
 
 def _format_amount_yi(value):
     return f"{_safe_float(value):.2f}亿"
+
+
+def _etf_turnover_rows(data):
+    snapshot = (data or {}).get("etf_turnover_series") or {}
+    if isinstance(snapshot, dict):
+        source_rows = snapshot.get("rows") or snapshot.get("trend_rows") or []
+    else:
+        source_rows = snapshot
+
+    rows = []
+    previous_amount = None
+    for item in source_rows or []:
+        row = dict(item or {})
+        trade_date = str(row.get("trade_date") or row.get("date") or "").strip()
+        amount = _safe_float(
+            row.get(
+                "etf_turnover_yi",
+                row.get("amount_yi", row.get("turnover_yi", row.get("amount"))),
+            )
+        )
+        if not trade_date or amount <= 0:
+            continue
+        change_pct = row.get("change_pct", row.get("pct_change"))
+        if change_pct in (None, "") and previous_amount:
+            change_pct = _pct_change_between(amount, previous_amount)
+        rows.append(
+            {
+                **row,
+                "trade_date": trade_date,
+                "etf_turnover_yi": amount,
+                "change_pct": "待累计" if change_pct in (None, "") else change_pct,
+                "covered_etf_count": row.get("covered_etf_count", row.get("etf_count", row.get("count", ""))),
+            }
+        )
+        previous_amount = amount
+    return rows[-25:]
+
+
+def _etf_capacity_signal(data):
+    rows = _etf_turnover_rows(data)
+    if not rows:
+        return {
+            "available": False,
+            "current_amount_yi": 0.0,
+            "label": "待累计",
+            "basis": "ETF两市成交额待累计。",
+            "rows": [],
+        }
+
+    current = rows[-1]
+    current_amount = _safe_float(current.get("etf_turnover_yi"))
+    recent_rows = rows[-5:] if len(rows) >= 5 else rows
+    recent_amounts = [_safe_float(row.get("etf_turnover_yi")) for row in recent_rows]
+    recent_change = _pct_change_between(current_amount, recent_amounts[0]) if recent_amounts else None
+    recent_avg = sum(recent_amounts) / len(recent_amounts) if recent_amounts else 0.0
+    all_amounts = [_safe_float(row.get("etf_turnover_yi")) for row in rows]
+    all_avg = sum(all_amounts) / len(all_amounts) if all_amounts else 0.0
+
+    if recent_change is not None and recent_change >= 5 and current_amount >= recent_avg:
+        label = "机构容量放大"
+        direction = "机构容量流量明显放大。"
+    elif recent_change is not None and (recent_change <= -3 or current_amount < recent_avg or current_amount < all_avg):
+        label = "机构容量中性偏收缩"
+        direction = "机构容量流量未明显放大。"
+    else:
+        label = "机构容量中性"
+        direction = "机构容量流量变化不大。"
+
+    if len(recent_amounts) >= 2:
+        basis = (
+            f"近{len(recent_amounts)}日{_format_change_pct(recent_change)}，"
+            f"区间{min(recent_amounts):.2f}亿-{max(recent_amounts):.2f}亿，"
+            f"{direction}"
+        )
+    else:
+        basis = f"当前{_format_amount_yi(current_amount)}，{direction}"
+
+    return {
+        "available": True,
+        "current_amount_yi": current_amount,
+        "label": label,
+        "basis": basis,
+        "rows": rows,
+    }
+
+
+def _etf_capacity_combo_judgment(etf_capacity, top50_share, new_high_regime, margin_pressure):
+    if not (etf_capacity or {}).get("available"):
+        return {
+            "state": "待累计",
+            "basis": "ETF容量数据待累计，暂不判断与其他市场指标的配合。",
+        }
+
+    etf_label = str((etf_capacity or {}).get("label") or "")
+    etf_hot = etf_label == "机构容量放大"
+    top50_hot = (top50_share or {}).get("regime") == "资金活跃期"
+    new_high_hot = new_high_regime == "高潮"
+    margin_label = str((margin_pressure or {}).get("latest_pressure_label") or "").strip()
+    margin_ok = margin_label in ("舒缓", "中性")
+
+    if etf_hot and top50_hot and new_high_hot and margin_ok:
+        return {
+            "state": "同向强化",
+            "basis": "ETF容量、Top50集中度、创新高扩散、融资承接四项同向走强，市场热度需要按偏热处理。",
+        }
+
+    state = "中性偏收缩" if "收缩" in etf_label else "中性"
+    return {
+        "state": state,
+        "basis": "ETF容量、Top50集中度、创新高扩散、融资承接四项未形成同向强化，市场仍按震荡处理。",
+    }
 
 
 def _append_sentence(text, addition):
@@ -569,10 +732,14 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     up_count = data.get("market_stats", {}).get("up_count", 0)
     down_count = data.get("market_stats", {}).get("down_count", 0)
     top50_share = resolve_top50_turnover_share(data)
+    top20_capacity = resolve_top20_turnover_capacity(data)
+    etf_capacity = _etf_capacity_signal(data)
     turnover_basis = str(turnover_comparison.get("condition_text") or "").strip()
     turnover_label = str(turnover_comparison.get("label") or "").strip()
     if turnover_label and turnover_label != "量能历史不足":
         turnover_basis = f"{turnover_label}；{turnover_basis}" if turnover_basis else turnover_label
+    if not turnover_basis:
+        turnover_basis = describe_market_turnover_condition(data)
     lines.append(
         f"| 两市成交额 | {turnover:.2f}亿 | "
         f"{_format_turnover_change_pct(turnover_comparison.get('previous_change_pct'))} | {turnover_basis} |"
@@ -580,6 +747,14 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     lines.append(
         f"| Top50成交额占比 | {_format_top50_share_pct(top50_share)} | {top50_share['regime']} | {top50_share['interpretation']} |"
     )
+    lines.append(
+        f"| Top20成交容量 | {top20_capacity['label']} | {top20_capacity['regime']} | {top20_capacity['interpretation']} |"
+    )
+    if etf_capacity.get("available"):
+        lines.append(
+            f"| ETF两市成交额 | {_format_amount_yi(etf_capacity.get('current_amount_yi'))} | "
+            f"{etf_capacity['label']} | {etf_capacity['basis']} |"
+        )
     lines.append(
         f"| 融资承接压力 | {_margin_pressure_summary(margin_pressure)} | - | "
         f"{_append_sentence(_margin_pressure_basis(margin_pressure, target_date), _margin_pressure_usage_note(margin_pressure, target_date))} |"
@@ -618,8 +793,13 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
     target_date = _target_date(context)
     daily_fact_db_path = _daily_fact_db_path(context)
     top50_share = resolve_top50_turnover_share(data)
+    top20_capacity = resolve_top20_turnover_capacity(data)
+    etf_capacity = _etf_capacity_signal(data)
+    new_high = data.get("new_high_feedback") or {}
+    new_high_regime = _new_high_regime(new_high.get("all_a_share_pct")) if new_high.get("available") else "待累计"
     margin_pressure = _margin_pressure_snapshot(data, target_date, db_path=daily_fact_db_path)
     unified = resolve_unified_market_sentiment(data, target_date, db_path=daily_fact_db_path)
+    etf_combo = _etf_capacity_combo_judgment(etf_capacity, top50_share, new_high_regime, margin_pressure)
 
     return {
         "lines": [
@@ -630,6 +810,8 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
             "|------|------|------|",
             f"| 市场情绪总状态 | {unified['state']} | 先看指数、涨跌家数、跌停扩散，再看局部热度。 |",
             f"| 头部成交状态 | {top50_share['regime']} | {top50_share['interpretation']} |",
+            f"| Top20成交容量 | {top20_capacity['regime']} | {top20_capacity['interpretation']} |",
+            f"| ETF容量协同 | {etf_combo['state']} | {etf_combo['basis']} |",
             f"| 融资承接压力 | {_margin_pressure_label(margin_pressure)} | {_margin_pressure_basis(margin_pressure, target_date)} |",
             f"| 局部热度处理 | {unified['local_heat']} | 单项热度不能替代整体盘面。 |",
             f"| 当前盈亏比 | {unified['rr_text']} | 参与只看主线、承接和个股结构同时成立。 |",
@@ -637,7 +819,13 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
             f"| 明日总体含义 | {unified['meaning']} | 先等方向确认，再决定是否参与。 |",
             "",
         ],
-        "exports": {"market_overview_turnover": data.get("total_turnover", 0), "top50_turnover_share": top50_share, "market_sentiment": unified},
+        "exports": {
+            "market_overview_turnover": data.get("total_turnover", 0),
+            "top50_turnover_share": top50_share,
+            "top20_turnover_capacity": top20_capacity,
+            "etf_capacity": etf_capacity,
+            "market_sentiment": unified,
+        },
         "module_logs": [],
     }
 

@@ -63,7 +63,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
         if display_pending_candidates:
             if len(display_pending_candidates) >= 2:
                 pending_lines.append(f"**重点盯盘股排序**（{len(display_pending_candidates)}只，先看谁最可能走成明天唯一能买的那只）:")
-                pending_lines.append("| 股票 | 来源 | 60分钟确认点 | 候选顺位 | 说明 |")
+                pending_lines.append("| 股票 | 来源 | 09:50-10:10观察价 | 候选顺位 | 说明 |")
                 pending_lines.append("|------|------|--------------|----------|------|")
                 for idx, candidate in enumerate(display_pending_candidates[:5], 1):
                     minute_plan = candidate.get("minute_plan") or {}
@@ -86,12 +86,12 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 f"- **原因**: {top_pending.get('permission_reason', top_pending.get('reason', '当前先看它能否继续证明自己'))}"
             )
             if top_confirm_price:
-                pending_lines.append(f"- **60分钟确认点**: {top_confirm_price:.2f}")
+                pending_lines.append(f"- **09:50-10:10观察价**: {top_confirm_price:.2f}")
             if top_price_focus_text and top_price_focus_text != "-":
                 pending_lines.append(f"- **价格怎么盯**: {top_price_focus_text}")
             if should_surface_price_note(top_price_focus):
                 pending_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(top_price_focus)}")
-            pending_lines.append("- **升级条件**: 明日先完成60分钟确认，再走成明天唯一能买的那只，不能直接追价")
+            pending_lines.append("- **升级条件**: 明日先09:50-10:10窗口满足条件，再走成明天唯一能买的那只，不能直接追价")
             pending_lines.append("")
         else:
             pending_lines.extend(["**当前没有能下手的票**: 无需PK", ""])
@@ -101,7 +101,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
         if display_observation_candidates:
             if len(display_observation_candidates) >= 2:
                 observation_lines.append(f"**先看谁排第几**（{len(display_observation_candidates)}只，优先盯强分歧但没坏的对象）:")
-                observation_lines.append("| 股票 | 来源 | 买点 | 60分钟确认点 | 先看顺序 | 说明 |")
+                observation_lines.append("| 股票 | 来源 | 买点 | 09:50-10:10观察价 | 先看顺序 | 说明 |")
                 observation_lines.append("|------|------|------|--------------|------------|------|")
                 source_label_map = {
                     "execute_layer": "执行层",
@@ -140,7 +140,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 observation_price_focus_text = build_observation_price_focus_text(price_focus)
                 observation_lines.append(f"- **跟踪区间**: {entry_range[0]:.2f}-{entry_range[1]:.2f}")
                 if confirm_price:
-                    observation_lines.append(f"- **60分钟确认点**: {confirm_price:.2f}")
+                    observation_lines.append(f"- **09:50-10:10观察价**: {confirm_price:.2f}")
                 if observation_price_focus_text and observation_price_focus_text != "-":
                     observation_lines.append(f"- **价格怎么盯**: {observation_price_focus_text}")
                 if should_surface_price_note(price_focus):
@@ -176,15 +176,15 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             price_focus = build_trade_price_focus(minute_plan, stop_plan)
             confirm_price = minute_plan.get("confirm_price_60m")
             if confirm_price:
-                conclusion_lines.append(f"- **60分钟确认点**: {confirm_price:.2f}")
+                conclusion_lines.append(f"- **09:50-10:10观察价**: {confirm_price:.2f}")
             conclusion_lines.append(f"- **价格怎么盯**: {price_focus.get('compact_text', '-')}")
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
             conclusion_lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-            conclusion_lines.append("- **出手时怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买后用30分钟结构止损，最晚不超过单笔-5%；其他标的无论多诱人都**禁止操作**")
+            conclusion_lines.append("- **出手时怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口分层参与，买后用失效价和单笔-5%底线处理风险；其他标的无论多诱人都**禁止操作**")
         else:
             conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
-            conclusion_lines.append("- **出手时怎么做**: 明日按预演参与窗口触发，买后用30分钟结构止损，其他标的禁止操作")
+            conclusion_lines.append("- **出手时怎么做**: 明日按固定交易窗口条件触发，买后用失效价和单笔-5%底线处理风险，其他标的禁止操作")
     else:
         if ten_confirm_upgrade_candidate:
             conclusion_lines.append(
@@ -215,9 +215,9 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             if trade_gate_open:
                 conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
             elif ten_confirm_upgrade_candidate:
-                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10参与窗口命中后，再评估50%标准进攻")
+                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻")
             elif final_gate.get("allow_attack_50_ready"):
-                conclusion_lines.append("- **当前先不抢**: 0%观察，只做参与窗口分层确认；强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认")
+                conclusion_lines.append("- **当前先不抢**: 0%观察，只做固定交易窗口条件确认；强核心看竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口")
             else:
                 conclusion_lines.append(f"- **当前只观察**: {position_level}，不新增参与")
         else:

@@ -116,7 +116,7 @@ def render_gem_breathing_step2_section(context):
         lines.append(
             f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
             f"{item.get('tier', '-') or '-'} | {sanitize_user_visible_text(item.get('abnormal_summary', item.get('note', '-')) or '-')} | "
-            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和60分钟确认，不满足继续观察 |"
+            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和09:50-10:10窗口，不满足继续观察 |"
         )
     lines.append("")
     return lines

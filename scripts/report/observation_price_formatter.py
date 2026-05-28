@@ -400,7 +400,7 @@ def _append_observation_price_focus_note_legacy_body(lines, price_focus, prefix=
 
 
 def _compose_observation_focus_text_legacy_body(confirm_text, price_focus_text=""):
-    parts = [f"60分钟确认点{confirm_text}"]
+    parts = [f"09:50-10:10观察价{confirm_text}"]
     price_focus_text = str(price_focus_text or "").strip()
     if price_focus_text and price_focus_text != "-":
         parts.append(price_focus_text)

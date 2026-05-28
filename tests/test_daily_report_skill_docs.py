@@ -377,9 +377,41 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "盘面亏钱效应",
             "局部过热",
             "整体高潮",
+            "低位缩量横盘与试龙头",
+            "突放巨量",
+            "二次启动",
+            "无公开题材异动",
+            "龙头日内强弱脚本",
+            "收复0轴",
+            "龙头特殊节点与持仓纪律",
+            "特殊节点隔日确认",
+            "龙头分歧日",
+            "首阴日",
+            "龙回头支撑日",
+            "市场总龙节点纪律",
+            "周五风险",
+            "异动监管验证",
+            "老龙未死不做新龙",
+            "龙头急跌后急拉",
+            "加速风险",
+            "核买核卖博弈",
+            "龙头心态纪律",
+            "龙头恐惧处理",
+            "畏高和大亏",
+            "低仓位试错",
+            "利润壁垒",
+            "看不懂就离场",
+            "不因利润垫硬格局",
+            "接受龙头结束时亏一笔",
+            "中军持续性与名字辨识度",
+            "次日继续放量上涨",
+            "名字辨识度",
+            "板块高标反馈与抱团环境",
+            "板块高标反馈",
+            "抱团环境",
             "给出当前解读",
             "状态列",
-            "60分钟确认",
+            "09:50-10:10",
             "30分钟止损",
             "市场环境优先，个股结构执行",
             "MACD只能作为辅助",
@@ -425,6 +457,21 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             ".cleanup-archive/a-daily-report-2026-05-07/chanlun",
         ]:
             self.assertIn(required, combined)
+
+    def test_price_action_wiki_records_high_position_no_chase_shapes(self):
+        price_action = self._read("wiki/交易思想/价格行为与能量框架.md")
+
+        for required in [
+            "高位后手不追形态",
+            "烂板不追",
+            "停顿不追",
+            "空中加油不追",
+            "分歧后的重新承接",
+            "已有仓",
+            "新仓",
+            "不新增独立选股逻辑",
+        ]:
+            self.assertIn(required, price_action)
 
     def test_llm_wiki_documents_realtime_tag_pool_maintenance_and_use(self):
         wiki_readme = self._read("wiki/README.md")
@@ -540,6 +587,21 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
+    def test_llm_wiki_records_new_stock_year_profile(self):
+        new_stock = self._read("wiki/交易思想/新股周期与市场情绪.md")
+
+        for required in [
+            "新股年景推演",
+            "2015-2025 年景复盘",
+            "没有连续两年小年",
+            "大年至少持续两年",
+            "2026-04-13",
+            "先按年底前持续活跃观察",
+            "日历推演不能替代单票承接验证",
+            "条件未满足，停止升级",
+        ]:
+            self.assertIn(required, new_stock)
+
     def test_llm_wiki_contains_tushare_first_data_source_contract(self):
         skill = self._read("SKILL.md")
         wiki_readme = self._read("wiki/README.md")
@@ -587,7 +649,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "do not silently fall back to 3.11",
             "Tushare gateway",
             "TUSHARE_HTTP_URL",
-            "http://121.40.135.59:8010/",
+            "http://a.sszhixia.cn/",
             "create_tushare_pro_api",
         ]:
             self.assertIn(required, combined)

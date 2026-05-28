@@ -559,7 +559,7 @@ assert bundle == {"core_stocks": []}
                         "source_section": "极度看好名单",
                         "review_status": "预演作废",
                         "invalidation": "有效跌破日K MA20或跌破后9:50-10:10不能收回，取消幻想，按A杀风险处理",
-                        "next_action": "若已买入，次日先看是否继续强于市场；30分钟结构失守立即卖，不能把短线拿成长线",
+                        "next_action": "若已买入，次日先看是否继续强于市场；失效价失守立即卖，不能把短线拿成长线",
                         "payload": {"is_a_kill_eliminated": False},
                     },
                 ],

@@ -451,7 +451,7 @@ assert "helpers" not in verdict_mock.call_args.kwargs
         self.assertEqual(verdict["code"], "crossline_probe_upgrade_ready")
         self.assertTrue(verdict["allows_attack_50_ready"])
         self.assertIn("50%标准进攻", focus_text)
-        self.assertIn("参与窗口", focus_text)
+        self.assertIn("固定交易窗口", focus_text)
         self.assertNotIn(_m("30%", "条件试错"), focus_text)
         self.assertIn("跨线探针(300001)", focus_text)
 

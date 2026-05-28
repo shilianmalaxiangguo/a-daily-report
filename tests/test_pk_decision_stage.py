@@ -109,7 +109,7 @@ class PkDecisionStageTest(unittest.TestCase):
     def test_conditional_defense_gate_formats_as_participation_window_not_absolute_ban(self):
         self.assertEqual(
             format_closed_gate_buy_limit_text("二档（防守档）", {"allow_attack_50_ready": True}),
-            "等参与窗口确认；未确认按0%不参与",
+            "等固定交易窗口内条件成立；未确认按0%不参与",
         )
         self.assertEqual(
             format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_attack_50_ready": False}),
@@ -514,7 +514,7 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(exports["position_section_lines"] + exports["first_hour_lines"] + exports["intraday_lines"])
         self.assertIn("0%观察", rendered)
         self.assertIn("50%标准进攻", rendered)
-        self.assertIn("参与窗口", rendered)
+        self.assertIn("固定交易窗口条件", rendered)
         self.assertNotIn("禁止新开仓", rendered)
         self.assertNotIn(_m("最多", "30%"), rendered)
         self.assertNotIn(_m("30%", "条件试错"), rendered)
@@ -587,8 +587,8 @@ class PkDecisionStageTest(unittest.TestCase):
             + exports["intraday_lines"]
         )
         self.assertIn("极度看好", rendered)
-        self.assertIn("10点确认价60.50", rendered)
-        self.assertIn("参与窗口成立后才评估50%标准进攻", rendered)
+        self.assertIn("09:50-10:10观察价60.50", rendered)
+        self.assertIn("固定交易窗口内条件成立后才评估50%标准进攻", rendered)
         self.assertIn("命中后才评估50%标准进攻", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)

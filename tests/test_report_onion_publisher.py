@@ -203,7 +203,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
             "大唐发电(601991)",
             "竞价/开盘承接/回封/结构确认分层窗口",
             "止损线是-5%",
-            "09:50-10:10确认窗口",
+            "09:50-10:10窗口",
             "PK决胜候选",
             "北交所标的830799",
             "北交所标的920118",
@@ -300,7 +300,7 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
             public_dir = root / "snap-ui" / ".generated" / "daily-reports" / "public"
             private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
             self._write(root, "reports/2026-05-08_A股日报_完整版.md", "# 2026-05-08 日报\n\n大唐发电(601991)")
-            self._write(root, "reports/2026-05-08_A股日报_执行摘要.md", "# 2026-05-08 执行摘要\n\n09:50-10:10确认")
+            self._write(root, "reports/2026-05-08_A股日报_执行摘要.md", "# 2026-05-08 执行摘要\n\n09:50-10:10窗口")
             self._write_json(root, "snapshots/2026-05-08.json", {"data": {}})
 
             publish_report_onion(root=root, public_output_dir=public_dir, private_output_dir=private_dir)

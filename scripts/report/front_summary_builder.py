@@ -415,13 +415,13 @@ def render_mvp_focus_summary_contract(
     watch_target_text = ""
     no_trade_text = ""
     if final_gate.get("can_new_entry") and best_stock:
-        buy_target_text = f"{best_stock.get('name', '-')}({best_stock.get('code', '-')})，只按竞价表态、开盘承接、回封或60分钟结构确认参与，不追盘中情绪顶点"
+        buy_target_text = f"{best_stock.get('name', '-')}({best_stock.get('code', '-')})，只按09:30-09:35竞价表态/开盘承接/回封或09:50-10:10窗口参与，不追盘中情绪顶点"
     elif watch_anchor:
         watch_anchor_note = str(watch_anchor.get("watch_anchor_note", "") or "").strip()
         if final_gate.get("can_new_entry"):
             watch_target_text = (
                 f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')})，"
-                "先看预演参与窗口，只有走成明天唯一能买的那只才参与"
+                "先看固定交易窗口内条件，只有走成明天唯一能买的那只才参与"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
             )
         else:
@@ -433,7 +433,7 @@ def render_mvp_focus_summary_contract(
             )
     else:
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("can_new_entry") and not final_gate.get("should_reduce"):
-            no_trade_text = "没有唯一对象就按0%不参与；只保留参与窗口预演，强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认"
+            no_trade_text = "没有唯一对象就按0%不参与；只保留固定交易窗口预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口"
         else:
             no_trade_text = "当前无新增执行对象，只保留市场研究与观察权"
 

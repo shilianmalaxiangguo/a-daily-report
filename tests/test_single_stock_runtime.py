@@ -13,6 +13,8 @@ PERMISSION_LABEL = "参与资格"
 from diagnostics.single_stock_runtime import (
     build_single_stock_diagnostic_contract,
     compose_single_stock_final_verdict_contract,
+    generate_single_stock_diagnostic_markdown,
+    resolve_single_stock_snapshot,
     resolve_single_stock_snapshot_contract,
 )
 
@@ -169,6 +171,137 @@ def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', r
 
         self.assertEqual(result, ("2026-04-22", "军工一号", "000001", "replay"))
 
+    def test_generate_single_stock_diagnostic_markdown_has_default_safe_float(self):
+        captured = {}
+
+        def fake_contract(*args, **kwargs):
+            captured["safe_float"] = kwargs["safe_float"]
+            return {"markdown": str(kwargs["safe_float"]("3.5"))}
+
+        with patch("diagnostics.single_stock_runtime.build_single_stock_diagnostic_contract", fake_contract):
+            result = generate_single_stock_diagnostic_markdown(
+                {"target_date": "2026-05-27"},
+                "2026-05-27",
+                "603005",
+                stock_name="晶方科技",
+                helpers={
+                    "build_market_phase_context": lambda *args, **kwargs: {},
+                    "build_market_research_context_bundle": lambda *args, **kwargs: {},
+                    "build_step2_candidate_bundle": lambda *args, **kwargs: {},
+                    "build_step3_risk_bundle": lambda *args, **kwargs: {},
+                    "resolve_single_stock_snapshot": lambda *args, **kwargs: {},
+                    "normalize_stock_code": lambda code: code,
+                    "get_trade_permission": lambda *args, **kwargs: {},
+                    "fetch_recent_price_bars": lambda *args, **kwargs: [],
+                    "evaluate_live_tradability": lambda *args, **kwargs: {},
+                    "get_abnormal_follow_risk_signal": lambda *args, **kwargs: {},
+                    "analyze_buy_signal": lambda *args, **kwargs: None,
+                    "quant_system_available": False,
+                    "build_intraday_execution_plan": lambda *args, **kwargs: {},
+                    "build_stop_execution_plan": lambda *args, **kwargs: {},
+                    "enrich_stop_plan_with_reference_anchors": lambda *args, **kwargs: {},
+                    "stop_prior_low_trading_days": 5,
+                    "score_candidate_decision_stack": lambda *args, **kwargs: {},
+                    "score_execution_candidate": lambda *args, **kwargs: {},
+                    "build_strategy_ev_calibration": lambda *args, **kwargs: {},
+                    "build_trade_price_focus": lambda *args, **kwargs: {},
+                    "render_single_stock_diagnostic_markdown": lambda *args, **kwargs: "",
+                },
+            )
+
+        self.assertEqual(result, "3.5")
+        self.assertEqual(captured["safe_float"]("", 2.0), 2.0)
+
+    def test_generate_single_stock_diagnostic_markdown_has_default_quant_system_unavailable(self):
+        captured = {}
+
+        def fake_contract(*args, **kwargs):
+            captured["quant_system_available"] = kwargs["quant_system_available"]
+            return {"markdown": "quant unavailable"}
+
+        with patch("diagnostics.single_stock_runtime.build_single_stock_diagnostic_contract", fake_contract):
+            result = generate_single_stock_diagnostic_markdown(
+                {"target_date": "2026-05-27"},
+                "2026-05-27",
+                "603005",
+                stock_name="晶方科技",
+                helpers={
+                    "build_market_phase_context": lambda *args, **kwargs: {},
+                    "build_market_research_context_bundle": lambda *args, **kwargs: {},
+                    "build_step2_candidate_bundle": lambda *args, **kwargs: {},
+                    "build_step3_risk_bundle": lambda *args, **kwargs: {},
+                    "resolve_single_stock_snapshot": lambda *args, **kwargs: {},
+                    "normalize_stock_code": lambda code: code,
+                    "get_trade_permission": lambda *args, **kwargs: {},
+                    "fetch_recent_price_bars": lambda *args, **kwargs: [],
+                    "evaluate_live_tradability": lambda *args, **kwargs: {},
+                    "get_abnormal_follow_risk_signal": lambda *args, **kwargs: {},
+                    "analyze_buy_signal": lambda *args, **kwargs: None,
+                    "build_intraday_execution_plan": lambda *args, **kwargs: {},
+                    "build_stop_execution_plan": lambda *args, **kwargs: {},
+                    "enrich_stop_plan_with_reference_anchors": lambda *args, **kwargs: {},
+                    "stop_prior_low_trading_days": 5,
+                    "score_candidate_decision_stack": lambda *args, **kwargs: {},
+                    "score_execution_candidate": lambda *args, **kwargs: {},
+                    "build_strategy_ev_calibration": lambda *args, **kwargs: {},
+                    "build_trade_price_focus": lambda *args, **kwargs: {},
+                    "render_single_stock_diagnostic_markdown": lambda *args, **kwargs: "",
+                },
+            )
+
+        self.assertEqual(result, "quant unavailable")
+        self.assertFalse(captured["quant_system_available"])
+
+    def test_generate_single_stock_diagnostic_markdown_resolves_single_stock_helper_aliases(self):
+        captured = {}
+
+        def fake_contract(*args, **kwargs):
+            captured["enriched"] = kwargs["enrich_stop_plan_with_reference_anchors"]({"effective_stop": 1})
+            captured["stop_days"] = kwargs["stop_prior_low_trading_days"]
+            captured["price_focus"] = kwargs["build_trade_price_focus"]()
+            return {"markdown": "aliases resolved"}
+
+        def enrich_alias(stop_plan, *args, **kwargs):
+            return {"from_alias": True, **(stop_plan or {})}
+
+        def price_focus_alias(*args, **kwargs):
+            return {"key_zone_display": "alias"}
+
+        with patch("diagnostics.single_stock_runtime.build_single_stock_diagnostic_contract", fake_contract):
+            result = generate_single_stock_diagnostic_markdown(
+                {"target_date": "2026-05-27"},
+                "2026-05-27",
+                "603005",
+                stock_name="晶方科技",
+                helpers={
+                    "build_market_phase_context": lambda *args, **kwargs: {},
+                    "build_market_research_context_bundle": lambda *args, **kwargs: {},
+                    "build_step2_candidate_bundle": lambda *args, **kwargs: {},
+                    "build_step3_risk_bundle": lambda *args, **kwargs: {},
+                    "resolve_single_stock_snapshot": lambda *args, **kwargs: {},
+                    "normalize_stock_code": lambda code: code,
+                    "get_trade_permission": lambda *args, **kwargs: {},
+                    "fetch_recent_price_bars": lambda *args, **kwargs: [],
+                    "evaluate_live_tradability": lambda *args, **kwargs: {},
+                    "get_abnormal_follow_risk_signal": lambda *args, **kwargs: {},
+                    "analyze_buy_signal": lambda *args, **kwargs: None,
+                    "build_intraday_execution_plan": lambda *args, **kwargs: {},
+                    "build_stop_execution_plan": lambda *args, **kwargs: {},
+                    "_enrich_stop_plan_with_reference_anchors": enrich_alias,
+                    "STOP_PRIOR_LOW_TRADING_DAYS": 5,
+                    "score_candidate_decision_stack": lambda *args, **kwargs: {},
+                    "score_execution_candidate": lambda *args, **kwargs: {},
+                    "build_strategy_ev_calibration": lambda *args, **kwargs: {},
+                    "_build_trade_price_focus": price_focus_alias,
+                    "render_single_stock_diagnostic_markdown": lambda *args, **kwargs: "",
+                },
+            )
+
+        self.assertEqual(result, "aliases resolved")
+        self.assertEqual(captured["enriched"]["from_alias"], True)
+        self.assertEqual(captured["stop_days"], 5)
+        self.assertEqual(captured["price_focus"]["key_zone_display"], "alias")
+
     def test_resolve_single_stock_snapshot_contract_merges_watchlist_hit(self):
         result = resolve_single_stock_snapshot_contract(
             data={
@@ -203,6 +336,44 @@ def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', r
         self.assertEqual(result["stock"]["sector"], "军工")
         self.assertIn("step1_watchlist", result["stock"]["source_tags"])
         self.assertTrue(any(log["step"] == "resolve.snapshot" for log in result["module_logs"]))
+
+    def test_resolve_single_stock_snapshot_uses_compute_bar_change_pct_alias(self):
+        result = resolve_single_stock_snapshot(
+            {
+                "target_date": "2026-05-27",
+                "zt_pool": [],
+                "turnover_rank": [],
+                "stocks_with_history": [],
+                "hot_rank_top30": [],
+                "zt_pool_by_sector": {},
+                "lianban_data": {"stocks": []},
+                "lhb_details": [],
+                "sector_fund_flow": [],
+                "dt_pool": [],
+            },
+            "603005",
+            stock_name="晶方科技",
+            market_research_bundle={
+                "watchlist": [],
+                "abnormal_watch_pool_all": [],
+                "leader_memory_bank": [],
+                "hot_stocks": [],
+            },
+            step2_bundle={"evaluated_stocks": []},
+            helpers={
+                "normalize_stock_code": lambda code: str(code).zfill(6) if code else "",
+                "get_stock_sector": lambda *args, **kwargs: "半导体",
+                "fetch_recent_price_bars": lambda *args, **kwargs: [
+                    {"open": 20.0, "high": 20.8, "low": 19.8, "close": 20.0, "amount": 100000},
+                    {"open": 20.2, "high": 21.8, "low": 20.1, "close": 21.0, "amount": 120000},
+                ],
+                "_compute_bar_change_pct": lambda latest_bar, prev_bar=None: 5.0,
+            },
+        )
+
+        self.assertEqual(result["code"], "603005")
+        self.assertEqual(result["change"], 5.0)
+        self.assertEqual(result["sector"], "半导体")
 
     def test_build_single_stock_diagnostic_contract_outputs_markdown_payload(self):
         result = build_single_stock_diagnostic_contract(

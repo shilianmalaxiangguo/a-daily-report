@@ -461,7 +461,7 @@ def _get_abnormal_follow_risk_signal_legacy_body(stock):
             "light": "🟡 黄灯",
             "delta": -4,
             "reason": "创业板20cm预启动仍在收拢观察期，先确认它有没有走成右侧确认",
-            "forecast": "先看右侧确认和参与窗口分层确认，再决定是否进入50%标准进攻预演；普通结构才等60分钟确认",
+            "forecast": "先看右侧确认和固定交易窗口内条件，再决定是否进入50%标准进攻预演；普通结构只看09:50-10:10窗口",
         }
 
     if not state:
@@ -907,7 +907,7 @@ def _build_mainline_upgrade_probe_context_legacy_body(candidate=None, mainline_n
     if upgrade_ready:
         probe_state = "probe_mainline_upgrade_ready"
         note = "主线探针已具备升级条件：承接未坏、确认链完整，且已出现连续反馈/主线修复证据。"
-        action = "保留主线可升级探针；若次日继续走势符合强势标准并形成参与窗口，可进入50%标准进攻预演。"
+        action = "保留主线可升级探针；若次日继续走势符合强势标准且固定交易窗口内条件成立，可进入50%标准进攻预演。"
     elif active:
         probe_state = "probe_resilient_hold"
         note = "主线探针仍在观察阶段：承接未坏，但升级证据还不够。"
@@ -1001,7 +1001,7 @@ def _build_special_probe_verdict_legacy_body(
                 "code": "crossline_probe_upgrade_ready",
                 "label": "跨线可升级探针",
                 "summary_text": f"{name}({code}) 虽然仍属跨线对象，但已经先走势符合强势标准：承接未坏、确认链完整，且连续反馈已出现；只进入50%标准进攻预演，不直接当成主攻线切换。",
-                "action": "先按跨线可升级探针对待；若继续走势符合强势标准并形成参与窗口，才评估50%标准进攻。",
+                "action": "先按跨线可升级探针对待；若继续走势符合强势标准且固定交易窗口内条件成立，才评估50%标准进攻。",
                 "probe_candidate": crossline_probe,
                 "probe_state": "probe_crossline_upgrade_ready",
                 "allows_attack_50_ready": True,
@@ -1031,7 +1031,7 @@ def _build_special_probe_verdict_legacy_body(
             return {
                 "code": "mainline_probe_upgrade_ready",
                 "label": "主线可升级探针",
-                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据，若次日继续走势符合强势标准并形成参与窗口，才评估50%标准进攻。",
+                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据，若次日继续走势符合强势标准且固定交易窗口内条件成立，才评估50%标准进攻。",
                 "action": "先盯主线可升级探针是否继续证明自己；若次日继续走势符合强势标准，再评估50%标准进攻。",
                 "probe_candidate": mainline_probe,
                 "probe_state": upgrade_probe_context.get("probe_state"),
@@ -1115,7 +1115,7 @@ def _build_special_probe_focus_text_legacy_body(
         probe_candidate = special_probe_verdict.get("probe_candidate") or {}
         name = probe_candidate.get("name", "-")
         code = probe_candidate.get("code", "-")
-        return f"{name}({code})，跨线可升级探针：已经先走势符合强势标准，只进入50%标准进攻预演；参与窗口不成立就继续0%观察"
+        return f"{name}({code})，跨线可升级探针：已经先走势符合强势标准，只进入50%标准进攻预演；固定交易窗口内条件不成立就继续0%观察"
 
     probe_specs = [
         ("mainline_abnormal_probe", "主线异动里先看谁"),

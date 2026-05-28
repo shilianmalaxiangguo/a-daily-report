@@ -71,8 +71,9 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
         self.assertNotIn(_m("执行", "权"), markdown)
         self.assertNotIn(_m("放", "行"), markdown)
         self.assertNotIn(_m("门", "控"), markdown)
+        self.assertNotIn(_m("状态", "机"), markdown)
         self.assertIn("## 三、执行层", markdown)
-        self.assertIn("- **60分钟确认点**: 12.34", markdown)
+        self.assertIn("- **09:50-10:10观察价**: 12.34", markdown)
         self.assertIn("## 四、结论", markdown)
         self.assertIn("- **命中来源**: watchlist / abnormal_watch", markdown)
 

@@ -12,7 +12,7 @@ from report.conclusion_support import (
 )
 
 
-LAYERED_PARTICIPATION_TEXT = "竞价/开盘前几分钟/回封/60分钟分层参与窗口"
+LAYERED_PARTICIPATION_TEXT = "09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口"
 
 
 def _build_report_stages_from_context(context):
@@ -95,7 +95,7 @@ def _build_full_mode_strategy_row(context):
         return (
             "明日策略",
             f"明日目标标的条件触发：只操作{selected.get('name') or selected.get('code') or selected.get('stock_code')}，"
-            "按竞价表态/开盘前几分钟/回封/60分钟确认分层处理，不满足回到0%",
+            "按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理，不满足回到0%",
         )
 
     if not final_gate.get("can_new_entry"):
@@ -108,13 +108,13 @@ def _build_full_mode_strategy_row(context):
 
     if best_stock:
         if step0_prediction == "CLEAR":
-            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，按竞价表态/开盘前几分钟/回封/60分钟确认分层处理，买后用30分钟结构止损，其他标的禁止")
-        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，满足预演参与窗口才执行，其他标的无论多诱人都禁止")
+            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理，买后用失效价和单笔-5%底线处理风险，其他标的禁止")
+        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，固定交易窗口内条件成立才执行，其他标的无论多诱人都禁止")
 
     if watch_anchor:
         if trade_gate_open:
             guidance = (
-                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先看预演参与窗口，"
+                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先看固定交易窗口内条件，"
                 "只有走成明天唯一能买的那只才参与"
             )
             if watch_anchor_note:
@@ -209,7 +209,7 @@ def build_final_conclusion_mvp_discipline_node(context, node_meta=None, node_loo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 竞价表态/开盘前几分钟/回封/60分钟确认分层处理；不满足预演情境就回到0%；买后用30分钟结构止损，最晚单笔-5% |"
+            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足预演情境就回到0%；买后用失效价和单笔-5%底线处理风险 |"
         ],
         "exports": {},
         "module_logs": [],
@@ -267,7 +267,7 @@ def build_final_conclusion_full_discipline_node(context, node_meta=None, node_lo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 竞价表态/开盘前几分钟/回封/60分钟确认分层处理；不满足预演情境就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
+            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足预演情境就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
         ],
         "exports": {},
         "module_logs": [],

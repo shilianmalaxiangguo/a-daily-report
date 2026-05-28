@@ -226,7 +226,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: {
                     "target_position_pct": 50,
-                    "trigger_text": "首个60分钟站上12.34且不破11.80",
+                    "trigger_text": "09:50-10:10站上12.34且不破11.80",
                 },
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "不为新故事切掉旧事实",
@@ -234,14 +234,14 @@ assert "helpers" not in structure_mock.call_args.kwargs
             },
         )
 
-        self.assertEqual(result, "只做唯一对象，首个60分钟站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
+        self.assertEqual(result, "只做唯一对象，09:50-10:10站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
 
     def test_build_front_follow_action_text_support_uses_runtime_default_dependencies(self):
         support = self._load_module()
 
         with patch.object(support, "_default_build_position_sizing_decision", return_value={
             "target_position_pct": 50,
-            "trigger_text": "首个60分钟站上12.34且不破11.80",
+            "trigger_text": "09:50-10:10站上12.34且不破11.80",
         }), \
             patch.object(support, "_default_build_philosophy_constraint_text", return_value="不为新故事切掉旧事实"):
             result = support.build_front_follow_action_text(
@@ -256,7 +256,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 },
             )
 
-        self.assertEqual(result, "只做唯一对象，首个60分钟站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
+        self.assertEqual(result, "只做唯一对象，09:50-10:10站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
 
     def test_build_front_structure_layer_text_support_returns_execute_50_message(self):
         support = self._load_module()
@@ -273,7 +273,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: {
                     "target_position_pct": 50,
-                    "trigger_text": "首个60分钟站上12.34且不破11.80",
+                    "trigger_text": "09:50-10:10站上12.34且不破11.80",
                 },
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "不为新故事切掉旧事实",
@@ -282,7 +282,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             },
         )
 
-        self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%执行仓，首个60分钟站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
+        self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%执行仓，09:50-10:10站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
 
     def test_front_follow_action_text_passes_focus_keep_counts_to_position_sizing(self):
         support = self._load_module()
@@ -302,7 +302,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: (
                     captured_final_gate.update(kwargs.get("final_gate") or {})
-                    or {"target_position_pct": 50, "trigger_text": "完成60分钟确认"}
+                    or {"target_position_pct": 50, "trigger_text": "固定交易窗口内条件成立"}
                 ),
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
@@ -331,7 +331,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
             helpers={
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
-                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "完成60分钟确认"},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "固定交易窗口内条件成立"},
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
@@ -350,7 +350,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
             helpers={
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
-                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "完成60分钟确认"},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "固定交易窗口内条件成立"},
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
@@ -360,7 +360,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
 
         rendered = f"{follow_text}\n{structure_text}"
         self.assertIn("50%标准进攻", rendered)
-        self.assertIn("参与窗口", rendered)
+        self.assertIn("固定交易窗口", rendered)
         self.assertNotIn(_m("30%", "条件试错"), rendered)
         self.assertNotIn(_m("30%", "条件试错仓"), rendered)
 
@@ -382,7 +382,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: (
                     captured_final_gate.update(kwargs.get("final_gate") or {})
-                    or {"target_position_pct": 50, "trigger_text": "完成60分钟确认"}
+                    or {"target_position_pct": 50, "trigger_text": "固定交易窗口内条件成立"}
                 ),
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",

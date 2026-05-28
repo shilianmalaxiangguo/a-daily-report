@@ -20,6 +20,8 @@ from report.final_conclusion_nodes import (
     build_final_conclusion_style_summary_node,
     build_final_conclusion_table_header_node,
 )
+from report.surface_wording import sanitize_user_visible_text
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 FINAL_CONCLUSION_NODE_BUILDERS = {
@@ -51,4 +53,4 @@ def build_legacy_final_conclusion_lines(context):
         enabled_node_keys=context.get("enabled_node_keys"),
     )
     result = run_final_conclusion_nodes(node_specs, context)
-    return result["lines"]
+    return normalize_trading_time_text(sanitize_user_visible_text(result["lines"]))

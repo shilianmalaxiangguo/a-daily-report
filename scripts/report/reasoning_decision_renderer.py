@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from report.trading_time_window_contract import normalize_trading_time_text
+
 
 FORBIDDEN_MARKERS = ("chain-of-thought", "思维链", "完整推理链", "隐藏推理")
 MAX_CELL_LENGTH = 120
@@ -10,6 +12,7 @@ MAX_CELL_LENGTH = 120
 
 def _sanitize_cell(value: Any) -> str:
     text = " ".join(str(value or "").split()).replace("|", "｜")
+    text = normalize_trading_time_text(text)
     for marker in FORBIDDEN_MARKERS:
         text = re.sub(re.escape(marker), "", text, flags=re.IGNORECASE)
     text = " ".join(text.split()).strip()

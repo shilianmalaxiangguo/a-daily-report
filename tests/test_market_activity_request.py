@@ -151,6 +151,35 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["market_stats"]["dt_count"], 54)
         self.assertEqual(result["module_logs"][0]["status"], "success")
 
+    def test_collect_market_activity_pool_request_bundle_keeps_pools_when_market_stats_fails(self):
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-05-27",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "半导体", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "白酒Ⅱ"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: (_ for _ in ()).throw(AttributeError("'NoneType' object has no attribute 'text'")),
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["step_status"]["涨停跌停数据获取"])
+        self.assertTrue(result["data_status"]["涨停池"])
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(result["results"]["zt_pool"][0]["代码"], "000001")
+        self.assertEqual(result["results"]["dt_pool"][0]["代码"], "000002")
+        self.assertEqual(result["results"]["market_stats"]["zt_count"], 1)
+        self.assertEqual(result["results"]["market_stats"]["dt_count"], 1)
+        self.assertTrue(any(log["step"] == "request.market_stats" and log["status"] == "degraded" for log in result["module_logs"]))
+
     def test_collect_market_activity_pool_request_bundle_uses_tushare_registry_before_legacy_sources(self):
         timer = _TimerStub()
         emitted = []
@@ -186,6 +215,91 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["artifacts"]["limit_up_df"].to_dict("records")[0]["代码"], "000001")
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.pool_snapshot"], "tushare.limit_list_ths")
+
+    def test_collect_market_activity_pool_request_bundle_uses_legacy_sources_when_registry_empty(self):
+        timer = _TimerStub()
+        emitted = []
+        legacy_calls = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-05-27",
+            get_limit_up_pool=lambda date_str: legacy_calls.append(("limit_up", date_str))
+            or (_FrameStub([{"代码": "000001", "名称": "平安银行", "所属行业": "银行", "涨停统计": "首板"}]), {"000001"}),
+            get_limit_down_pool=lambda date_str: legacy_calls.append(("limit_down", date_str))
+            or (_FrameStub([{"代码": "000002", "名称": "万科A", "所属行业": "地产"}]), {"000002"}),
+            fetch_market_activity_df=lambda: legacy_calls.append(("market_activity", None))
+            or _MarketActivityFrameStub(
+                [
+                    {"item": "上涨", "value": 3100},
+                    {"item": "下跌", "value": 1900},
+                    {"item": "涨停", "value": 1},
+                    {"item": "跌停", "value": 1},
+                ]
+            ),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [],
+                    "dt_pool": [],
+                    "market_stats": {},
+                    "provider": "legacy.limit_pool_snapshot",
+                    "fallback_used": True,
+                    "source_status": "empty",
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(legacy_calls, [("limit_up", "20260527"), ("limit_down", "20260527"), ("market_activity", None)])
+        self.assertTrue(result["step_status"]["涨停跌停数据获取"])
+        self.assertTrue(result["data_status"]["涨停池"])
+        self.assertTrue(result["data_status"]["跌停池"])
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(result["results"]["zt_pool"][0]["代码"], "000001")
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.pool_snapshot"], "akshare.limit_up_down+akshare.stock_market_activity_legu")
+
+    def test_collect_market_activity_pool_request_bundle_infers_sector_from_limit_reason(self):
+        timer = _TimerStub()
+        emitted = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-05-27",
+            get_limit_up_pool=lambda date_str: (_FrameStub([]), set()),
+            get_limit_down_pool=lambda date_str: (_FrameStub([]), set()),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub([]),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [
+                        {
+                            "代码": "603005",
+                            "名称": "晶方科技",
+                            "所属行业": "未知",
+                            "涨停统计": "首板",
+                            "涨停原因": "长鑫存储概念带动，国产芯片封测走强",
+                        },
+                        {
+                            "代码": "000901",
+                            "名称": "航天科技",
+                            "涨停统计": "商业航天与卫星互联网方向活跃",
+                        },
+                    ],
+                    "dt_pool": [],
+                    "limit_up_codes": {"603005", "000901"},
+                    "limit_down_codes": set(),
+                    "market_stats": {"up_count": 2600, "down_count": 2400, "zt_count": 2, "dt_count": 0},
+                    "provider": "tushare.limit_list_ths",
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertIn("国产芯片", result["results"]["zt_pool_by_sector"])
+        self.assertIn("商业航天", result["results"]["zt_pool_by_sector"])
+        self.assertNotEqual(set(result["results"]["zt_pool_by_sector"]), {"未知"})
+        self.assertEqual(result["results"]["zt_pool_by_sector"]["国产芯片"][0]["code"], "603005")
+        self.assertTrue(result["data_status"]["涨停股板块分布"])
 
     def test_collect_market_activity_hot_rank_request_bundle_builds_hot_rank_and_integrated_snapshot(self):
         timer = _TimerStub()
@@ -665,6 +779,44 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(result["data_status"]["行业资金流向"])
         self.assertTrue(result["step_status"]["行业资金流向获取"])
         self.assertTrue(result["results"]["sector_fund_flow"]["is_historical"])
+
+    def test_collect_market_activity_sector_snapshot_request_bundle_derives_sector_change_from_fund_flow(self):
+        timer = _TimerStub()
+        emitted = []
+        tencent = _TencentStub()
+
+        result = collect_market_activity_sector_snapshot_request_bundle(
+            "2026-05-27",
+            fetch_hot_plate=lambda: [],
+            tencent=tencent,
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: [],
+            get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: [],
+            request_registry={
+                "sector_fund_flow": lambda *, target_date, limit=50: {
+                    "inflow": [
+                        {"name": "电力", "net_amount": 22.0, "change_pct": 0.95, "data_source": "tushare.moneyflow_ind_ths"},
+                        {"name": "白酒", "net_amount": 6.0, "change_pct": 3.37, "data_source": "tushare.moneyflow_ind_ths"},
+                    ],
+                    "outflow": [
+                        {"name": "工业金属", "net_amount": -59.0, "change_pct": -3.68, "data_source": "tushare.moneyflow_ind_ths"},
+                        {"name": "贵金属", "net_amount": -37.0, "change_pct": -5.59, "data_source": "tushare.moneyflow_ind_ths"},
+                    ],
+                    "provider": "tushare.moneyflow_ind_ths",
+                }
+            },
+            timer=timer,
+            emit=emitted.append,
+            current_dates=("2026-05-27", "2026-05-26"),
+        )
+
+        self.assertEqual([item["name"] for item in result["results"]["sector_change_up"][:2]], ["白酒", "电力"])
+        self.assertEqual([item["name"] for item in result["results"]["sector_change_down"][:2]], ["贵金属", "工业金属"])
+        self.assertEqual(result["results"]["sector_change_up"][0]["data_source"], "tushare.moneyflow_ind_ths.derived_change")
+        self.assertTrue(result["data_status"]["板块涨幅排行"])
+        self.assertTrue(result["data_status"]["板块跌幅排行"])
+        self.assertTrue(result["step_status"]["板块涨跌幅排行获取"])
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.sector_change_rank"], "tushare.moneyflow_ind_ths.derived_change")
 
     def test_collect_market_activity_capital_snapshot_request_bundle_builds_lianban_and_lhb_views(self):
         timer = _TimerStub()

@@ -293,7 +293,7 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
     dragon_rebound_watch_pool = context.get("dragon_rebound_watch_pool", []) or []
     historical_extreme_review = context.get("historical_extreme_review", []) or []
 
-    lines = ["**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:"]
+    lines = ["**重点观察名单**（只保留最心动的少数，每只都绑定固定交易窗口条件）:"]
     if extreme_conviction_list:
         sniper_items = [
             stock for stock in extreme_conviction_list
@@ -320,8 +320,8 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
                 f"{_clean_cell(stock.get('conviction_rule'))} |"
             )
         lines.append("")
-        lines.append("**重点观察参与脚本**:")
-        lines.append("| 参与窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |")
+        lines.append("**重点观察复核脚本**:")
+        lines.append("| 固定交易窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归观察 | 封板策略 | 回封观察 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |")
         lines.append("|----------|----------|--------------|----------|--------|----------|----------|----------|--------------|--------------|----------|----------|------------|----------|----------|----------|")
         for stock in extreme_conviction_list:
             script = _build_participation_script(stock)

@@ -232,7 +232,7 @@ def _compose_probe(confirm_text, price_focus_text=''):
         composed = module.compose_observation_focus_text("10.50", "关键位/带10.00-10.30")
 
         self.assertEqual(lines, ["  价格怎么看：看10.30", "  价格怎么看：观察对象别破前低"])
-        self.assertEqual(composed, "60分钟确认点10.50；关键位/带10.00-10.30")
+        self.assertEqual(composed, "09:50-10:10观察价10.50；关键位/带10.00-10.30")
 
 
 if __name__ == "__main__":

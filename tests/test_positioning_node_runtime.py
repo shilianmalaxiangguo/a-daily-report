@@ -66,14 +66,14 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
                     "chanlun_confirmation": {
                         "confirmation_status": "forming_daily_level_zhongshu",
                         "confirmed": False,
-                        "explanation": "日K候选仍为9/20，60分钟结构只支持形成中。",
+                        "explanation": "日K候选仍为9/20，下级别结构只支持形成中。",
                     },
                     "current_zhongshu": {},
                     "latest_structure_segment": {},
                     "structure_segments": [],
                     "zhongshu_list": [],
                     "signal": {
-                        "status": "⏳ 日K候选形成中（9/20，60分钟确认：forming_daily_level_zhongshu）",
+                        "status": "⏳ 日K候选形成中（9/20，结构确认：forming_daily_level_zhongshu）",
                         "signal_type": "按个股信号操作",
                         "zd": 3992.41,
                         "zg": 4114.84,
@@ -87,7 +87,8 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("日K结构箱体", rendered)
-        self.assertIn("60分钟缠论确认", rendered)
+        self.assertIn("日K结构证据", rendered)
+        self.assertNotIn("60分钟", rendered)
         self.assertIn("9/20", rendered)
         self.assertNotIn("最近确认中枢", rendered)
 
@@ -102,7 +103,7 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("**怎么执行**：最终0%时不按参与窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
+        self.assertIn("**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
         self.assertIn("不新增参与", rendered)
         self.assertIn("只观察指数图形、主攻线承接和唯一对象是否重新成立", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)

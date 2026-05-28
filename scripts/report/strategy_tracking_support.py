@@ -741,7 +741,7 @@ def _build_candidate_feedback_clock_legacy_body(
         reasons.append(f"承接状态为{follow_state}")
     if confirmation.get("has_confirmation_chain"):
         score += 1
-        reasons.append("具备60分钟确认链")
+        reasons.append("具备09:50-10:10验证链")
     if can_trade and not candidate.get("report_day_is_one_word", False):
         score += 1
         reasons.append("可交易性正常")

@@ -1251,7 +1251,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         datang = next(item for item in conviction if item["code"] == "601991")
         self.assertEqual(datang["candidate_layer"], "watch_sample")
         self.assertEqual(datang["execution_eligibility"], "structure_confirm_only")
-        self.assertEqual(datang["conviction_rule"], "修复观察只看09:50-10:10承接确认，未确认不参与")
+        self.assertEqual(datang["conviction_rule"], "修复观察只看09:50-10:10窗口，未确认不参与")
         self.assertIn("修复观察", datang["conviction_reason"])
 
     def test_build_conviction_list_blocks_structured_tushare_risk_events(self):
@@ -1746,7 +1746,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("趋势比价链", fast_core["missed_entry_policy"])
 
         ordinary_core = ordinary[0]
-        self.assertEqual(ordinary_core["participation_window"], "60分钟确认")
+        self.assertEqual(ordinary_core["participation_window"], "09:50-10:10窗口")
         self.assertEqual(ordinary_core["participation_window_type"], "structure_confirm")
         self.assertEqual(ordinary_core["core_identity"]["role"], "tracked_sample")
         self.assertEqual(ordinary_core["core_identity"]["chain_position"], "unassigned")

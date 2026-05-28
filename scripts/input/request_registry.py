@@ -19,6 +19,7 @@ DEFAULT_INPUT_REQUEST_KEYS = (
     "stock_risk_map",
     "new_high_feedback",
     "top50_turnover_share_series",
+    "etf_turnover_series",
     "price_band_style_series",
     "margin_pressure",
 )
@@ -39,6 +40,7 @@ _HELPER_NAME_BY_REQUEST_KEY = {
     "stock_risk_map": "get_stock_risk_map_from_tushare_first",
     "new_high_feedback": "get_new_high_feedback_from_tushare_first",
     "top50_turnover_share_series": "get_top50_turnover_share_series_from_tushare_first",
+    "etf_turnover_series": "get_etf_turnover_series_from_sina_first",
     "price_band_style_series": "get_price_band_style_series_from_tushare_first",
     "margin_pressure": "get_margin_pressure_from_tushare_first",
 }
@@ -57,20 +59,31 @@ _FALLBACK_KWARG_BY_REQUEST_KEY = {
     "new_stock_calendar": ("legacy_get_new_stock_calendar_fn", "get_legacy_new_stock_calendar"),
 }
 
+_EXTRA_KWARGS_BY_REQUEST_KEY = {
+    "concept_fund_flow": (("snapshot_fallback_fn", "get_concept_fund_flow_from_snapshot"),),
+}
+
 
 def _wrap_tushare_first_helper(request_key, helper, helpers):
+    wrapped = helper
     fallback_kwarg = _FALLBACK_KWARG_BY_REQUEST_KEY.get(request_key)
-    if not fallback_kwarg:
-        return helper
-    kwarg_name, fallback_helper_name = fallback_kwarg
-    fallback_helper = helpers.get(fallback_helper_name)
-    if not callable(fallback_helper):
-        return helper
-    if not _helper_accepts_kwarg(helper, kwarg_name):
-        return helper
+    if fallback_kwarg:
+        kwarg_name, fallback_helper_name = fallback_kwarg
+        fallback_helper = helpers.get(fallback_helper_name)
+        if callable(fallback_helper) and _helper_accepts_kwarg(wrapped, kwarg_name):
+            wrapped = _wrap_default_kwarg(wrapped, kwarg_name, fallback_helper)
 
+    for kwarg_name, helper_name in _EXTRA_KWARGS_BY_REQUEST_KEY.get(request_key, ()):
+        extra_helper = helpers.get(helper_name)
+        if callable(extra_helper) and _helper_accepts_kwarg(wrapped, kwarg_name):
+            wrapped = _wrap_default_kwarg(wrapped, kwarg_name, extra_helper)
+
+    return wrapped
+
+
+def _wrap_default_kwarg(helper, kwarg_name, value):
     def _wrapped(*args, **kwargs):
-        kwargs.setdefault(kwarg_name, fallback_helper)
+        kwargs.setdefault(kwarg_name, value)
         return helper(*args, **kwargs)
 
     return _wrapped

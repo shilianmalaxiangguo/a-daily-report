@@ -435,7 +435,7 @@ def _build_front_follow_action_text_legacy_body(
         special_probe_verdict=special_probe_verdict,
     )
     target_position_pct = int(_safe_float(position_decision.get("target_position_pct", 0)))
-    trigger_text = position_decision.get("trigger_text", "完成60分钟确认")
+    trigger_text = position_decision.get("trigger_text", "09:50-10:10窗口满足条件")
     execute_anchor_window_text = _build_execute_anchor_window_text(
         position_decision=position_decision,
         watch_anchor=watch_anchor,
@@ -452,7 +452,7 @@ def _build_front_follow_action_text_legacy_body(
 
     if watch_anchor and watch_source == "gem_breathing_20cm":
         note_text = str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
-        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；命中参与窗口分层确认后才评估50%标准进攻，普通结构才等60分钟确认"
+        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；命中09:50-10:10窗口内满足条件后才评估50%标准进攻"
         if note_text:
             text = f"{text}；{note_text}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -466,7 +466,7 @@ def _build_front_follow_action_text_legacy_body(
         if execute_anchor_window_text:
             return execute_anchor_window_text
         if probe_state == "probe_crossline_upgrade_ready":
-            return f"跨线对象已先走势符合强势标准；只在参与窗口成立后评估50%标准进攻，{trigger_text}后才动手，不满足转为0%观察"
+            return f"跨线对象已先走势符合强势标准；只在固定交易窗口内条件成立后评估50%标准进攻，{trigger_text}后才动手，不满足转为0%观察"
         return f"只允许一只进入50%标准进攻预演；{trigger_text}后才动手，不满足转为0%观察"
     if execution_bias == "avoid":
         text = "0%，先不跟随，继续观察，等下一轮真正的新启动"
@@ -585,8 +585,8 @@ def _build_bridge_prep_context_legacy_body(
         and follow_state == "跌不下去"
         and "主线" in watch_anchor_type
     )
-    upgrade_text = f"若次日首个60分钟站上{confirm_price:.2f}且不破{guard_price:.2f}，才升级为唯一执行候选"
-    summary_prefix = "0%观察中优先保留一只参与窗口预备对象：" if priority_keep else "0%观察中保留一只参与窗口预备对象："
+    upgrade_text = f"若次日09:50-10:10站上{confirm_price:.2f}且不破{guard_price:.2f}，才升级为唯一执行候选"
+    summary_prefix = "0%观察中优先保留一只固定交易窗口预备对象：" if priority_keep else "0%观察中保留一只固定交易窗口预备对象："
     return {
         "active": True,
         "label": "条件执行预备态",
@@ -638,7 +638,7 @@ def _build_front_structure_layer_text_legacy_body(
         special_probe_verdict=special_probe_verdict,
     )
     target_position_pct = int(_safe_float(position_decision.get("target_position_pct", 0)))
-    trigger_text = position_decision.get("trigger_text", "完成60分钟确认")
+    trigger_text = position_decision.get("trigger_text", "09:50-10:10窗口满足条件")
     execute_anchor_window_text = _build_execute_anchor_window_text(
         position_decision=position_decision,
         watch_anchor=watch_anchor,
@@ -660,7 +660,7 @@ def _build_front_structure_layer_text_legacy_body(
         if target_position_pct == 30:
             text = f"创业板20cm预启动进入50%标准进攻预演；{trigger_text}后才动手，不满足继续0%观察"
         else:
-            text = "创业板20cm预启动只先进观察池；先看右侧确认和参与窗口分层确认，再决定是否进入50%标准进攻，普通结构才等60分钟确认"
+            text = "创业板20cm预启动只先进观察池；先看右侧确认和09:50-10:10窗口，再决定是否进入50%标准进攻"
         if note_text:
             text = f"{text}；{note_text}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -670,7 +670,7 @@ def _build_front_structure_layer_text_legacy_body(
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if target_position_pct == 30:
         if execute_anchor_window_text:
-            return "50%标准进攻预演；执行候选观察锚点已进入二次突破升级阶段，仍需参与窗口确认"
+            return "50%标准进攻预演；执行候选观察锚点已进入二次突破升级阶段，仍需固定交易窗口内条件确认"
         if probe_state == "probe_crossline_upgrade_ready":
             return f"50%标准进攻预演；跨线对象已先走势符合强势标准，{trigger_text}后才动手，不直接当成主攻线切换"
         return f"50%标准进攻预演；{trigger_text}后才动手，不满足继续0%观察"

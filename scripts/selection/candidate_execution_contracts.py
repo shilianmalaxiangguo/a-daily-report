@@ -3,7 +3,7 @@ from __future__ import annotations
 import daily_report_analysis_utils as analysis_utils
 from selection.advantage_dedup_runtime import build_grouped_advantage_score
 
-DEFENSIVE_EXIT_RULE_TEXT = "错了就跑：30分钟结构失守立即卖，最晚不超过单笔-5%"
+DEFENSIVE_EXIT_RULE_TEXT = "错了就跑：失效价失守立即卖，最晚不超过单笔-5%"
 PROFIT_EXIT_RULE_TEXT = "赚了主动卖：3~5日窗口内出现放量大阳优先兑现，最晚第5日收盘评估"
 STRATEGY_HOLDING_DAYS_MIN = 3
 STRATEGY_HOLDING_DAYS_MAX = 5
@@ -250,7 +250,7 @@ def build_limit_up_inertia_profile(candidate=None):
             "limit_up_inertia_level": "高惯性",
             "limit_up_inertia_score": min(score, 100),
             "next_day_limit_probability_band": "高于普通上涨样本",
-            "limit_up_inertia_reason": "昨日涨停/连板/T字板已经被资金选择，次日冲高或再涨停概率高于普通上涨样本；只在竞价、回封或10点承接成立时参与",
+            "limit_up_inertia_reason": "昨日涨停/连板/T字板已经被资金选择，次日冲高或再涨停概率高于普通上涨样本；只在竞价、回封或09:50-10:10窗口承接成立时参与",
             "limit_up_inertia_dedup": inertia_dedup,
         }
 
@@ -361,7 +361,9 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
     tight_count = int(_safe_float(profile.get("tight_count", 0)))
     loose_count = int(_safe_float(profile.get("loose_count", 0)))
     target_position_pct = int(_safe_float(position_decision.get("target_position_pct", 0)))
-    trigger_text = str(position_decision.get("trigger_text", "") or "完成60分钟确认").strip()
+    trigger_text = str(position_decision.get("trigger_text", "") or "09:50-10:10窗口满足条件").strip()
+    if trigger_text == "09:50-10:10窗口":
+        trigger_text = "09:50-10:10窗口内满足条件"
     ready = bool(position_decision.get("candidate_feedback_ready"))
 
     prefix_parts = []
@@ -382,7 +384,7 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
     if target_position_pct == 30:
         next_step = f"当前已进入50%标准进攻预演，{trigger_text}后才允许动手，不满足转为0%观察"
     elif label == "A级教材":
-        next_step = "当前还差右侧确认和参与窗口分层确认，普通结构才等60分钟确认，确认后才评估50%标准进攻" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%标准进攻"
+        next_step = "当前还差右侧确认和09:50-10:10窗口，确认后才评估50%标准进攻" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%标准进攻"
     elif label == "B级教材":
         next_step = "先保留观察合同，等它走成右侧确认后再考虑升级"
     elif label == "C级观察样本":
@@ -625,7 +627,7 @@ def build_entry_timing_policy(*, source_tier="extreme_conviction", participation
             "source_tier": source_tier,
             "entry_timing": "tail_exception",
             "buy_window": "14:30-14:55",
-            "entry_timing_reason": "尾盘只作为买卖窗口期的例外确认窗口，用于避开盘中分歧消耗",
+            "entry_timing_reason": "尾盘只作为买卖窗口期的例外处理，用于避开盘中分歧消耗",
         }
 
     if window_type in ("auction_reseal", "board_or_miss") or any(
@@ -635,14 +637,14 @@ def build_entry_timing_policy(*, source_tier="extreme_conviction", participation
             "source_tier": source_tier,
             "entry_timing": "open_core",
             "buy_window": "09:30-09:35",
-            "entry_timing_reason": "强核心必须用开盘表态和回封质量验证，不能等普通60分钟确认",
+            "entry_timing_reason": "强核心必须用开盘表态和回封质量验证，不能拖到后段确认",
         }
 
     return {
         "source_tier": source_tier,
         "entry_timing": "ten_confirm",
         "buy_window": "09:50-10:10",
-        "entry_timing_reason": "普通结构样本先等早盘承接稳定，再用10点附近确认参与",
+        "entry_timing_reason": "普通结构样本先等早盘承接稳定，再看09:50-10:10窗口条件是否满足",
     }
 
 
@@ -671,7 +673,7 @@ def build_quant_anchor_plan(candidate=None):
         if "顶部" in zone:
             action = "区间顶部锚点冲不过先止盈；放量吃掉并回踩不破，才恢复候选资格"
         elif "底部" in zone:
-            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP并完成09:50-10:10确认后，才允许小仓试错"
+            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP且09:50-10:10窗口条件满足后，才允许小仓试错"
         elif "吃掉" in zone or "消化" in hidden:
             action = "锚点被放量吃掉并回踩不破，只恢复候选资格；不能自动升级主买"
         elif "高潮" in zone or "反包" in zone:
@@ -729,18 +731,18 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
             "board_or_reseal": "大单金额持续进入 / 快速回封 / 封单质量改善",
             "missed_entry": missed_action,
         }
-    elif "开盘前几分钟" in window and "60分钟确认" in window:
+    elif "开盘前几分钟" in window and "09:50-10:10" in window:
         window_type = "opening_structure_confirm"
         auction_required = False
         first_minutes_required = True
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["交易逻辑确认", "开盘前几分钟承接", "主线确认", "60分钟确认", "MA执行锚点"]
+        required_steps = ["交易逻辑确认", "开盘前几分钟承接", "主线确认", "09:50-10:10窗口", "MA执行锚点"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "first_minutes": "主动资金继续抬价 / 承接连续",
             "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
-            "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
+            "structure": "09:50-10:10窗口只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
     else:
@@ -749,11 +751,11 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         first_minutes_required = False
         board_or_reseal_required = False
         ordinary_structure_confirm_allowed = True
-        required_steps = ["交易逻辑确认", "主线确认", "承接", "60分钟确认", "MA执行锚点"]
+        required_steps = ["交易逻辑确认", "主线确认", "承接", "09:50-10:10窗口", "MA执行锚点"]
         fallback_state = "不满足回到0%"
         participation_basis = {
             "ma_reversion": "量能、情绪、板块、资金、辨识度和承接已经给出买入资格后，才看日K MA5/MA10与分时黄线优化买点",
-            "structure": "60分钟确认只服务普通结构，不覆盖强核心快路径",
+            "structure": "09:50-10:10窗口只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
 
@@ -772,8 +774,8 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         "ma_reversion_probe_allowed": source_tier == "extreme_conviction",
         "ma_reversion_window": "09:50-10:10" if source_tier == "extreme_conviction" else "none",
         "ma_reversion_probe": "只限已经由量能、情绪、板块、资金、辨识度和承接给出买入资格的样本；常规回踩日K MA5/MA10，极度龙头可提前看MA3；MA只是执行锚点，不能因为MA3/MA5/MA10单独买入；分时黄线不破，且9:50-10:10承接不再继续杀，才允许小仓试错",
-        "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；10点前后价格上穿分时黄色均价线并形成金叉，或水下强势修复到0轴后承接连续，才算试错条件；不是所有股票的低吸理由",
-        "intraday_average_line_cross_probe": "10点前后价格上穿分时黄色均价线并形成金叉，且上穿后不再快速跌回黄线下方，才允许小仓试错",
+        "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；09:50-10:10价格上穿分时黄色均价线并形成金叉，或水下强势修复到0轴后承接连续，才算试错条件；不是所有股票的低吸理由",
+        "intraday_average_line_cross_probe": "09:50-10:10价格上穿分时黄色均价线并形成金叉，且上穿后不再快速跌回黄线下方，才允许小仓试错",
         "zero_axis_reclaim_probe": "水下强势修复到0轴，0轴附近不再放量回落，才允许把修复视为资金重新表态",
         "daily_ma_entry_probe": "逻辑确认后再看MA3/MA5/MA10：MA3/MA5/MA10分别对应极度龙头/强势/趋势；MA不是买入理由，只是执行锚点和失效参考，仍要叠加分时承接",
         "daily_ma_role_map": {
@@ -845,8 +847,8 @@ def build_participation_window_from_candidate(candidate=None, *, is_anchor=False
         return "竞价表态 + 回封参与"
 
     if is_mainline:
-        return "开盘前几分钟 + 60分钟确认"
-    return "60分钟确认"
+        return "开盘前几分钟 + 09:50-10:10窗口"
+    return "09:50-10:10窗口"
 
 
 def format_holding_window_text(min_days, max_days):
@@ -873,7 +875,7 @@ def build_candidate_exit_rules(candidate=None, stop_plan=None):
     if effective_stop is not None:
         defensive_rule = (
             f"错了就跑：这笔交易如果还对，就不该失守{effective_stop:.2f}；"
-            f"30分钟结构失守立即卖，最晚不超过单笔-5%"
+            f"失效价失守立即卖，最晚不超过单笔-5%"
         )
 
     return {

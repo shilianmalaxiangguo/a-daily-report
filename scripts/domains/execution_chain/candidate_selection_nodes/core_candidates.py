@@ -1,4 +1,5 @@
 from selection.candlestick_signature import infer_signature_big_yangline
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 def build_candidate_selection_core_candidates_node(context, node_meta=None, node_lookup=None):
@@ -21,7 +22,7 @@ def build_candidate_selection_core_candidates_node(context, node_meta=None, node
                 stock.get("acceptance_state")
                 or stock.get("tomorrow_focus")
                 or stock.get("tmr_forecast")
-                or "10点前后看是否抗跌、是否有承接回流"
+                or "09:50-10:10看是否抗跌、是否有承接回流"
             )
             capital_trace = (
                 stock.get("capital_trace")
@@ -36,20 +37,20 @@ def build_candidate_selection_core_candidates_node(context, node_meta=None, node
                 or stock.get("permission_label")
             )
             if explicit_qualification:
-                qualification_text = explicit_qualification
+                qualification_text = normalize_trading_time_text(explicit_qualification)
             elif trade_gate_open:
                 qualification_text = "可做"
             else:
-                qualification_text = "观察，等10点确认" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
+                qualification_text = "观察，等09:50-10:10窗口" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
             if not trade_gate_open and "观察" not in str(qualification_text) and "无" not in str(qualification_text):
-                qualification_text = "观察，等10点确认" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
+                qualification_text = "观察，等09:50-10:10窗口" if final_gate.get("allow_attack_50_ready") else "仅观察，条件未满足"
             elif not trade_gate_open and final_gate.get("allow_attack_50_ready") and str(qualification_text) in ("有条件执行", "资格", "可做"):
-                qualification_text = "观察，等10点确认"
+                qualification_text = "观察，等09:50-10:10窗口"
             elif not trade_gate_open and not final_gate.get("allow_attack_50_ready") and str(qualification_text) in ("有条件执行", "资格", "可做"):
                 qualification_text = "仅观察，条件未满足"
             lines.append(
                 f"| {stock.get('name', '-')} | {stock.get('code', '-')} | {stock.get('sector', primary_mainline or '-')} | "
-                f"{signature_big_yangline} | {five_day_burst_state} | {acceptance_state} | {capital_trace} | {qualification_text} |"
+                f"{signature_big_yangline} | {five_day_burst_state} | {normalize_trading_time_text(acceptance_state)} | {capital_trace} | {qualification_text} |"
             )
     else:
         lines.append("- 无明日核心股")

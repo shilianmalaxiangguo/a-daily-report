@@ -59,6 +59,7 @@ def run(ctx):
         "new_stock_research_pool": inputs.get("new_stock_research_pool", []) or [],
         "new_stock_candidate_upgrades": inputs.get("new_stock_candidate_upgrades", []) or [],
         "margin_pressure": inputs.get("margin_pressure", {}) or {},
+        "etf_turnover_series": inputs.get("etf_turnover_series", {}) or {},
         "extreme_conviction_list": inputs.get("extreme_conviction_list", []) or [],
         "dragon_rebound_watch_pool": inputs.get("dragon_rebound_watch_pool", []) or [],
     }
@@ -83,6 +84,7 @@ def run(ctx):
         "new_stock_candidate_upgrades": render_context["new_stock_candidate_upgrades"],
         "request_diagnostics": render_context["request_diagnostics"],
         "margin_pressure": render_context["margin_pressure"],
+        "etf_turnover_series": render_context["etf_turnover_series"],
         "extreme_conviction_list": render_context["extreme_conviction_list"],
         "dragon_rebound_watch_pool": render_context["dragon_rebound_watch_pool"],
     }

@@ -135,7 +135,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertEqual(result["position_level"], "二档（防守档）")
         self.assertTrue(result["final_gate"]["can_hold"])
         self.assertFalse(result["final_gate"]["can_new_entry"])
-        self.assertIn("参与窗口", result["final_gate"]["final_action"])
+        self.assertIn("09:50-10:10窗口", result["final_gate"]["final_action"])
         self.assertIn("50%标准进攻", result["final_gate"]["final_action"])
         self.assertNotIn(_m("30%", "条件试错"), result["final_gate"]["final_action"])
         self.assertIn("指数仍在上行中枢内", result["position_reason"])
@@ -269,7 +269,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
                 },
                 "signal": {
                     "signal_type": "按个股信号操作",
-                    "status": "⏳ 日K候选形成中（9/20，60分钟确认：forming_daily_level_zhongshu）",
+                    "status": "⏳ 日K候选形成中（9/20，结构确认：forming_daily_level_zhongshu）",
                     "comparison_state": "range",
                 },
             },
@@ -347,7 +347,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
         self.assertFalse(result["final_gate"]["can_new_entry"])
         self.assertNotIn("中枢突破是最高优先级信号", result["final_gate"].get("gate_reason", ""))
         self.assertNotIn("积极做多", result["position_reason"])
-        self.assertIn("60分钟缠论确认", result["position_reason"])
+        self.assertIn("日K结构证据", result["position_reason"])
         self.assertIn("未确认", result["position_reason"])
 
     def test_index_recovery_preserves_unconfirmed_60m_chanlun_warning(self):
@@ -402,7 +402,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
 
         self.assertEqual(result["position_level"], "二档（防守档）")
         self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
-        self.assertIn("60分钟缠论确认", result["position_reason"])
+        self.assertIn("日K结构证据", result["position_reason"])
         self.assertIn("未确认", result["position_reason"])
 
     def test_defensive_position_skips_price_plan_and_keeps_logs(self):

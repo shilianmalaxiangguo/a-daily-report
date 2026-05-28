@@ -56,7 +56,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                     display_position_pct = safe_float(item.get("position_pct", signal.position_pct))
                     lines.append(
                         f"- ✅ {item.get('name')}({item.get('code')}) - {buy_type}，日线预设区间"
-                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日首个60分钟确认点{confirm_text}，仓位{display_position_pct:.0f}%"
+                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日09:50-10:10观察价{confirm_text}，仓位{display_position_pct:.0f}%"
                     )
                     if confirm_rule:
                         lines.append(f"  {item.get('permission_label', '执行资格')}；{confirm_rule}；{price_focus_text}")
@@ -66,7 +66,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                 else:
                     lines.append(
                         f"- ⏳ {item.get('name')}({item.get('code')}) - {buy_type}，日线预设区间"
-                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}，60分钟确认点{confirm_text}，仅观察，禁止买入"
+                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}，09:50-10:10观察价{confirm_text}，仅观察，禁止买入"
                     )
                     if price_focus_text != "-":
                         lines.append(f"  {price_focus_text}")
@@ -82,7 +82,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                     confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
                     lines.append(
                         f"- ✅ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '执行资格')}，"
-                        f"明日60分钟确认点{confirm_text}后按{item.get('trigger')}执行"
+                        f"明日09:50-10:10观察价{confirm_text}后按{item.get('trigger')}执行"
                     )
                     if confirm_rule:
                         lines.append(f"  {confirm_rule}；{price_focus_text}")

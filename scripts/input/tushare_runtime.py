@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from domains.market_activity.new_high_runtime import build_new_high_feedback_snapshot
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
@@ -55,6 +56,7 @@ __all__ = [
     "get_stock_risk_map_from_tushare_first",
     "get_new_high_feedback_from_tushare_first",
     "get_top50_turnover_share_series_from_tushare_first",
+    "get_etf_turnover_series_from_sina_first",
     "get_price_band_style_series_from_tushare_first",
     "get_margin_pressure_from_tushare_first",
 ]
@@ -312,11 +314,61 @@ def _fetch_turnover_rows_with_retry(fetcher, target_date, retry_count=1):
     return last_rows, attempts - 1
 
 
+def _build_new_high_snapshot_from_fact_rows(rows, target_date, *, source=""):
+    target_date_text = normalize_kline_date_str(target_date) or str(target_date or "").strip()
+    fact_rows = []
+    for row in rows or []:
+        item = dict(row or {})
+        trade_date = normalize_kline_date_str(item.get("trade_date") or item.get("date"))
+        if not trade_date:
+            continue
+        item["trade_date"] = trade_date
+        item["new_high_count"] = _safe_int(item.get("new_high_count"), 0)
+        item["all_a_share_pct"] = round(_safe_float(item.get("all_a_share_pct")), 2)
+        item["leading_sectors"] = _clean_text(item.get("leading_sectors"))
+        fact_rows.append(item)
+    fact_rows = sorted(fact_rows, key=lambda item: item.get("trade_date") or "")
+    target_row = next((row for row in fact_rows if row.get("trade_date") == target_date_text), None)
+    if not target_row or _safe_int(target_row.get("new_high_count"), 0) <= 0:
+        return {}
+    previous_count = None
+    trend_rows = []
+    for row in fact_rows:
+        current_count = _safe_int(row.get("new_high_count"), 0)
+        item = dict(row)
+        if previous_count is None:
+            item["change_text"] = item.get("change_text") or "待累计"
+        else:
+            existing_change = str(item.get("change_text") or "").strip()
+            item["change_text"] = existing_change if existing_change and existing_change != "待累计" else f"{current_count - previous_count:+d}"
+        previous_count = current_count
+        trend_rows.append(item)
+    data_source = source or target_row.get("source") or target_row.get("source_policy") or "storage.new_high_feedback_daily"
+    leading_sectors = target_row.get("leading_sectors") or "待补充板块"
+    count = _safe_int(target_row.get("new_high_count"), 0)
+    share_pct = round(_safe_float(target_row.get("all_a_share_pct")), 2)
+    return {
+        "available": True,
+        "status": "success",
+        "source": data_source,
+        "new_high_count": count,
+        "all_a_share_pct": share_pct,
+        "leading_sectors": leading_sectors,
+        "summary": f"本地事实库记录显示阶段新高 {count} 只，占全A约 {share_pct:.2f}%，主要集中在 {leading_sectors}。",
+        "sector_distribution": target_row.get("sector_distribution") or [],
+        "top_stocks": target_row.get("top_stocks") or [],
+        "trend_rows": trend_rows[-25:],
+        "excluded_counts": {},
+    }
+
+
 def get_total_turnover_from_tushare_first(
     target_date=None,
     *,
     fetch_stock_daily_turnover_records_fn=None,
     legacy_get_total_turnover_fn=None,
+    db_path=None,
+    database_service_cls=None,
 ):
     fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
     retry_count = 0
@@ -335,8 +387,40 @@ def get_total_turnover_from_tushare_first(
         pass
 
     fallback = _fallback_call(legacy_get_total_turnover_fn, target_date)
+    fallback_value = _safe_float(fallback)
+    if fallback_value > 0:
+        return ProviderValue(
+            fallback_value,
+            data_source="legacy.total_turnover",
+            source_endpoint="fallback",
+            source_row_count=0,
+            source_retry_count=retry_count,
+        )
+
+    if database_service_cls is None:
+        try:
+            from storage.database_service import DatabaseService
+        except Exception:  # pragma: no cover - optional runtime dependency
+            DatabaseService = None
+        database_service_cls = DatabaseService
+    if database_service_cls is not None:
+        try:
+            service = database_service_cls.sqlite_d1_compatible(db_path)
+            row = service.query_market_daily_total(normalize_kline_date_str(target_date) or target_date, market_scope="all_a")
+            local_total = _safe_float((row or {}).get("total_amount_yi", (row or {}).get("total_turnover_yi")))
+            if local_total > 0:
+                return ProviderValue(
+                    round(local_total, 2),
+                    data_source="storage.market_daily_totals",
+                    source_endpoint="market_daily_totals",
+                    source_row_count=_safe_int((row or {}).get("stock_count"), 0),
+                    source_retry_count=retry_count,
+                )
+        except Exception:
+            pass
+
     return ProviderValue(
-        _safe_float(fallback),
+        fallback_value,
         data_source="legacy.total_turnover",
         source_endpoint="fallback",
         source_row_count=0,
@@ -737,6 +821,16 @@ def get_new_high_feedback_from_tushare_first(
                 target_date_text or factor_trade_date,
                 window_days=25,
             )
+            fact_snapshot = _build_new_high_snapshot_from_fact_rows(
+                raw_history_rows,
+                target_date_text or factor_trade_date,
+            )
+            if fact_snapshot:
+                if factor_error is not None:
+                    fact_snapshot.setdefault("factor_error", str(factor_error))
+                fact_snapshot.setdefault("requested_trade_date", target_date_text)
+                fact_snapshot.setdefault("factor_trade_date", factor_trade_date)
+                return fact_snapshot
             history_rows = [
                 row for row in (raw_history_rows or [])
                 if str((row or {}).get("trade_date") or (row or {}).get("date") or "").strip()
@@ -967,6 +1061,223 @@ def get_top50_turnover_share_series_from_tushare_first(
         payload = {"rows": []}
     payload.setdefault("source", "storage.turnover_rank_daily")
     return payload
+
+
+def _sina_etf_symbol(code):
+    clean = _clean_code(code)
+    if not clean:
+        return ""
+    market = _market_from_code(clean)
+    if market == "bj":
+        return ""
+    return f"{market}{clean}" if market else ""
+
+
+def _sina_etf_amount_yi(value):
+    amount = _safe_float(value)
+    if amount <= 0:
+        return 0.0
+    return amount / 100_000_000
+
+
+def _extract_sina_etf_universe_symbol(row):
+    for key in ("symbol", "代码", "code", "基金代码", "fund_code"):
+        value = (row or {}).get(key)
+        symbol = _sina_etf_symbol(value)
+        if symbol:
+            return symbol
+    return ""
+
+
+def _fetch_sina_etf_hist_encoded(symbol, *, timeout=10):
+    import requests
+
+    url = f"https://finance.sina.com.cn/realstock/company/{symbol}/hisdata_klc2/klc_kl.js"
+    response = requests.get(url, timeout=timeout)
+    response.raise_for_status()
+    text = response.text or ""
+    if "=" not in text:
+        return ""
+    return text.split("=", 1)[1].split(";", 1)[0].replace('"', "")
+
+
+def _new_sina_etf_hist_decoder():
+    from akshare.fund.fund_etf_sina import hk_js_decode
+    from py_mini_racer import MiniRacer
+
+    js_code = MiniRacer()
+    js_code.eval(hk_js_decode)
+    return js_code
+
+
+def _decode_sina_etf_hist_rows(encoded_text, decoder):
+    encoded_text = str(encoded_text or "").strip()
+    if not encoded_text:
+        return []
+    rows = decoder.call("d", encoded_text)
+    return list(rows or [])
+
+
+def get_etf_turnover_series_from_sina_first(
+    target_date=None,
+    *,
+    window_days=25,
+    max_workers=None,
+    fetch_etf_universe_fn=None,
+    fetch_etf_hist_fn=None,
+):
+    try:
+        injected_hist_fetcher = fetch_etf_hist_fn is not None
+        if fetch_etf_universe_fn is None:
+            import akshare as ak
+
+            fetch_etf_universe_fn = fetch_etf_universe_fn or (lambda: ak.fund_etf_category_sina(symbol="ETF基金"))
+
+        universe = fetch_etf_universe_fn()
+        if hasattr(universe, "to_dict"):
+            universe_rows = universe.to_dict("records")
+        else:
+            universe_rows = list(universe or [])
+
+        target_date_text = normalize_kline_date_str(target_date) or str(target_date or "").strip()
+        symbols = []
+        seen = set()
+        for row in universe_rows:
+            symbol = _extract_sina_etf_universe_symbol(row)
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            symbols.append(symbol)
+
+        amount_by_date = {}
+        count_by_date = {}
+        usable_count = 0
+        empty_count = 0
+
+        def _recent_hist_rows_from_fetcher(symbol):
+            hist = fetch_etf_hist_fn(symbol)
+            if hasattr(hist, "to_dict"):
+                if hasattr(hist, "__getitem__") and target_date_text:
+                    try:
+                        dates = hist["date"].astype(str)
+                        hist = hist.loc[dates <= target_date_text]
+                    except Exception:
+                        pass
+                if hasattr(hist, "tail"):
+                    try:
+                        hist = hist.tail(max(int(window_days or 25) + 5, 30))
+                    except Exception:
+                        pass
+                hist_rows = hist.to_dict("records")
+            else:
+                hist_rows = list(hist or [])
+            return symbol, hist_rows
+
+        def _fetch_encoded(symbol):
+            return symbol, _fetch_sina_etf_hist_encoded(symbol)
+
+        def _merge_hist_rows(hist_rows):
+            if not hist_rows:
+                return False
+            usable_for_symbol = False
+            for row in hist_rows:
+                trade_date = normalize_kline_date_str(_pick(row, "trade_date", "date", "日期", default=""))
+                if not trade_date:
+                    continue
+                if target_date_text and trade_date > target_date_text:
+                    continue
+                amount_yi = _sina_etf_amount_yi(_pick(row, "amount", "成交额", "成交金额", default=0))
+                if amount_yi <= 0:
+                    continue
+                amount_by_date[trade_date] = amount_by_date.get(trade_date, 0.0) + amount_yi
+                count_by_date[trade_date] = count_by_date.get(trade_date, 0) + 1
+                usable_for_symbol = True
+            return usable_for_symbol
+
+        worker_count = max_workers
+        if worker_count is None:
+            worker_count = 1 if injected_hist_fetcher else 8
+        worker_count = max(1, int(worker_count or 1))
+
+        if not injected_hist_fetcher:
+            encoded_payloads = []
+            if worker_count == 1:
+                for symbol in symbols:
+                    try:
+                        encoded_payloads.append(_fetch_encoded(symbol))
+                    except Exception:
+                        empty_count += 1
+            else:
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    futures = [executor.submit(_fetch_encoded, symbol) for symbol in symbols]
+                    for future in as_completed(futures):
+                        try:
+                            encoded_payloads.append(future.result())
+                        except Exception:
+                            empty_count += 1
+            decoder = _new_sina_etf_hist_decoder()
+            for _, encoded_text in encoded_payloads:
+                try:
+                    if _merge_hist_rows(_decode_sina_etf_hist_rows(encoded_text, decoder)):
+                        usable_count += 1
+                    else:
+                        empty_count += 1
+                except Exception:
+                    empty_count += 1
+        elif worker_count == 1:
+            for symbol in symbols:
+                try:
+                    _, hist_rows = _recent_hist_rows_from_fetcher(symbol)
+                    if _merge_hist_rows(hist_rows):
+                        usable_count += 1
+                    else:
+                        empty_count += 1
+                except Exception:
+                    empty_count += 1
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = [executor.submit(_recent_hist_rows_from_fetcher, symbol) for symbol in symbols]
+                for future in as_completed(futures):
+                    try:
+                        _, hist_rows = future.result()
+                        if _merge_hist_rows(hist_rows):
+                            usable_count += 1
+                        else:
+                            empty_count += 1
+                    except Exception:
+                        empty_count += 1
+
+        previous_amount = None
+        rows = []
+        for trade_date in sorted(amount_by_date)[-int(window_days or 25):]:
+            amount = round(amount_by_date.get(trade_date, 0.0), 2)
+            change_pct = "待累计" if previous_amount in (None, 0) else round((amount / previous_amount - 1) * 100, 2)
+            rows.append(
+                {
+                    "trade_date": trade_date,
+                    "etf_turnover_yi": amount,
+                    "change_pct": change_pct,
+                    "covered_etf_count": count_by_date.get(trade_date, 0),
+                }
+            )
+            previous_amount = amount
+
+        return {
+            "available": bool(rows),
+            "source": "sina.etf.daily_amount",
+            "requested_trade_date": target_date_text,
+            "usable_etf_count": usable_count,
+            "empty_etf_count": empty_count,
+            "rows": rows,
+        }
+    except Exception as error:
+        return {
+            "available": False,
+            "source": "sina.etf.daily_amount",
+            "requested_trade_date": normalize_kline_date_str(target_date) or str(target_date or "").strip(),
+            "error": str(error),
+            "rows": [],
+        }
 
 
 PRICE_BAND_HIGH_PRICE_CODE = "883916.TI"
@@ -1264,7 +1575,7 @@ def get_margin_pressure_from_tushare_first(
             calibration_days=calibration_days,
             target_date=target_date_text,
         )
-        if not primary_snapshot.get("available") and primary_snapshot.get("status") == "incomplete_exchange_rows":
+        if not primary_snapshot.get("available") and primary_snapshot.get("status") in {"incomplete_exchange_rows", "upstream_empty"}:
             market_margin_rows = market_margin_fetcher(start, end)
             fallback_rows = _merge_margin_and_turnover_rows(market_margin_rows, amount_rows)
             fallback_rows = [row for row in fallback_rows if row.get("trade_date") in selected_set]
@@ -1511,6 +1822,76 @@ def _normalize_member_stock_code(row):
     return _clean_code(_pick(row or {}, "con_code", "ts_code", "code", default=""))
 
 
+def _empty_concept_fund_flow_payload(*, fallback_used=False):
+    return {
+        "rows": [],
+        "inflow": [],
+        "outflow": [],
+        "provider": "tushare.ths_member+tushare.moneyflow",
+        "fallback_used": bool(fallback_used),
+    }
+
+
+def _concept_fund_flow_snapshot_payload(snapshot_fallback_fn, target_date, *, limit=20):
+    if not callable(snapshot_fallback_fn):
+        return {}
+    try:
+        payload = snapshot_fallback_fn(target_date) or {}
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    rows = [dict(row) for row in (payload.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return {}
+    limit_value = max(int(limit or 20), 1)
+    return {
+        "rows": rows,
+        "inflow": list(payload.get("inflow") or rows)[:limit_value],
+        "outflow": list(payload.get("outflow") or [])[:limit_value],
+        "provider": payload.get("provider") or "snapshot.concept_fund_flow",
+        "fallback_used": True,
+    }
+
+
+def _concept_fund_flow_pending_hot_plate_payload(concept_plates, target_date, *, limit=20):
+    rows = []
+    for plate in concept_plates[: max(int(limit or 20), 1)]:
+        code = str(plate.get("code") or plate.get("ts_code") or "").strip().upper()
+        name = _clean_text(plate.get("name"))
+        if not code or not name:
+            continue
+        change_pct = _safe_float(_pick(plate, "change_pct", "zdf", "change", default=0.0))
+        rows.append(
+            {
+                "name": name,
+                "code": code,
+                "zljlr": "",
+                "net_amount": "",
+                "net_inflow": "",
+                "change_pct": change_pct,
+                "zdf": change_pct,
+                "matched_member_count": 0,
+                "missing_member_count": 0,
+                "member_count": 0,
+                "hot_plate_rank": plate.get("rank") or plate.get("order"),
+                "hot_plate_heat": _safe_float(plate.get("rate")),
+                "fund_flow_status": "pending",
+                "data_source": "tushare.ths_hot.pending_moneyflow",
+                "trade_date": normalize_kline_date_str(target_date),
+            }
+        )
+    if not rows:
+        return {}
+    return {
+        "rows": rows,
+        "inflow": rows[: max(int(limit or 20), 1)],
+        "outflow": [],
+        "provider": "tushare.ths_hot.pending_moneyflow",
+        "fallback_used": True,
+    }
+
+
 def get_hot_concept_fund_flow_from_tushare_first(
     target_date=None,
     *,
@@ -1518,6 +1899,8 @@ def get_hot_concept_fund_flow_from_tushare_first(
     limit=20,
     fetch_tushare_ths_member_fn=None,
     fetch_stock_moneyflow_map_fn=None,
+    snapshot_fallback_fn=None,
+    retry_sleep_fn=None,
 ):
     hot_plates = list(hot_plates or [])
     concept_plates = []
@@ -1537,63 +1920,106 @@ def get_hot_concept_fund_flow_from_tushare_first(
             break
 
     if not concept_plates:
-        return {"rows": [], "inflow": [], "outflow": [], "provider": "tushare.ths_member+tushare.moneyflow", "fallback_used": False}
+        return _empty_concept_fund_flow_payload(fallback_used=False)
 
     member_fetcher = fetch_tushare_ths_member_fn or fetch_tushare_ths_member
     moneyflow_fetcher = fetch_stock_moneyflow_map_fn or fetch_stock_moneyflow_map
-    try:
-        stock_moneyflow = moneyflow_fetcher(target_date) or {}
-    except Exception:
-        stock_moneyflow = {}
-    if not stock_moneyflow:
-        return {"rows": [], "inflow": [], "outflow": [], "provider": "tushare.ths_member+tushare.moneyflow", "fallback_used": True}
-
-    rows = []
-    for plate in concept_plates:
-        code = str(plate.get("code") or plate.get("ts_code") or "").strip().upper()
-        name = _clean_text(plate.get("name"))
+    def _fetch_stock_moneyflow():
         try:
-            member_rows = list(member_fetcher(code) or [])
+            return moneyflow_fetcher(target_date) or {}
         except Exception:
-            member_rows = []
-        if not member_rows:
-            continue
+            return {}
 
-        net_inflow = 0.0
-        matched_count = 0
-        missing_count = 0
-        for member in member_rows:
-            member_code = _normalize_member_stock_code(member)
-            if not member_code:
+    def _aggregate_rows(stock_moneyflow):
+        aggregated = []
+        member_fetch_error_count = 0
+        for plate in concept_plates:
+            code = str(plate.get("code") or plate.get("ts_code") or "").strip().upper()
+            name = _clean_text(plate.get("name"))
+            try:
+                member_rows = list(member_fetcher(code) or [])
+            except Exception:
+                member_fetch_error_count += 1
+                member_rows = []
+            if not member_rows:
                 continue
-            value = stock_moneyflow.get(member_code)
-            if value is None:
-                value = stock_moneyflow.get(str(_pick(member or {}, "con_code", "ts_code", "code", default="")).strip().upper())
-            if value is None:
-                missing_count += 1
-                continue
-            net_inflow += _safe_float(value)
-            matched_count += 1
 
-        if matched_count <= 0:
-            continue
-        change_pct = _safe_float(_pick(plate, "change_pct", "zdf", "change", default=0.0))
-        item = {
-            "name": name,
-            "code": code,
-            "zljlr": round(net_inflow, 6),
-            "net_amount": round(net_inflow, 6),
-            "net_inflow": round(net_inflow, 6),
-            "change_pct": change_pct,
-            "zdf": change_pct,
-            "matched_member_count": matched_count,
-            "missing_member_count": missing_count,
-            "member_count": matched_count + missing_count,
-            "hot_plate_rank": plate.get("rank") or plate.get("order"),
-            "data_source": "tushare.ths_member+tushare.moneyflow",
-            "trade_date": normalize_kline_date_str(target_date),
-        }
-        rows.append(item)
+            net_inflow = 0.0
+            matched_count = 0
+            missing_count = 0
+            for member in member_rows:
+                member_code = _normalize_member_stock_code(member)
+                if not member_code:
+                    continue
+                value = stock_moneyflow.get(member_code)
+                if value is None:
+                    value = stock_moneyflow.get(str(_pick(member or {}, "con_code", "ts_code", "code", default="")).strip().upper())
+                if value is None:
+                    missing_count += 1
+                    continue
+                net_inflow += _safe_float(value)
+                matched_count += 1
+
+            if matched_count <= 0:
+                continue
+            change_pct = _safe_float(_pick(plate, "change_pct", "zdf", "change", default=0.0))
+            aggregated.append(
+                {
+                    "name": name,
+                    "code": code,
+                    "zljlr": round(net_inflow, 6),
+                    "net_amount": round(net_inflow, 6),
+                    "net_inflow": round(net_inflow, 6),
+                    "change_pct": change_pct,
+                    "zdf": change_pct,
+                    "matched_member_count": matched_count,
+                    "missing_member_count": missing_count,
+                    "member_count": matched_count + missing_count,
+                    "hot_plate_rank": plate.get("rank") or plate.get("order"),
+                    "data_source": "tushare.ths_member+tushare.moneyflow",
+                    "trade_date": normalize_kline_date_str(target_date),
+                }
+            )
+        return aggregated, member_fetch_error_count
+
+    stock_moneyflow = _fetch_stock_moneyflow()
+    if not stock_moneyflow:
+        fallback = _concept_fund_flow_snapshot_payload(snapshot_fallback_fn, target_date, limit=limit)
+        return fallback or _concept_fund_flow_pending_hot_plate_payload(concept_plates, target_date, limit=limit) or _empty_concept_fund_flow_payload(fallback_used=True)
+
+    rows, member_fetch_error_count = _aggregate_rows(stock_moneyflow)
+
+    if not rows:
+        if member_fetch_error_count >= len(concept_plates):
+            fallback = _concept_fund_flow_snapshot_payload(snapshot_fallback_fn, target_date, limit=limit)
+            if fallback:
+                return fallback
+        elif callable(retry_sleep_fn):
+            try:
+                retry_sleep_fn(1)
+            except Exception:
+                pass
+            stock_moneyflow = _fetch_stock_moneyflow()
+            if stock_moneyflow:
+                rows, member_fetch_error_count = _aggregate_rows(stock_moneyflow)
+        elif retry_sleep_fn is None:
+            try:
+                import time
+
+                time.sleep(1)
+            except Exception:
+                pass
+            stock_moneyflow = _fetch_stock_moneyflow()
+            if stock_moneyflow:
+                rows, member_fetch_error_count = _aggregate_rows(stock_moneyflow)
+
+    if not rows:
+        fallback = _concept_fund_flow_snapshot_payload(snapshot_fallback_fn, target_date, limit=limit)
+        if fallback:
+            return fallback
+        pending = _concept_fund_flow_pending_hot_plate_payload(concept_plates, target_date, limit=limit)
+        if pending:
+            return pending
 
     rows.sort(key=lambda item: (_safe_float(item.get("net_inflow")), item.get("name") or ""), reverse=True)
     return {
@@ -2033,11 +2459,27 @@ def get_limit_pool_snapshot_from_tushare_first(
     fetch_stock_daily_turnover_records_fn=None,
     fetch_stock_industry_map_fn=None,
     legacy_get_limit_pool_snapshot_fn=None,
+    retry_sleep_fn=None,
 ):
     limit_fetcher = fetch_tushare_limit_rows_fn or fetch_tushare_limit_rows
     daily_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
     try:
         rows = limit_fetcher(target_date) or []
+        if not rows:
+            if callable(retry_sleep_fn):
+                try:
+                    retry_sleep_fn(1)
+                except Exception:
+                    pass
+                rows = limit_fetcher(target_date) or []
+            elif retry_sleep_fn is None:
+                try:
+                    import time
+
+                    time.sleep(1)
+                except Exception:
+                    pass
+                rows = limit_fetcher(target_date) or []
         if rows:
             try:
                 daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []

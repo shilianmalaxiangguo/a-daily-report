@@ -36,7 +36,7 @@ def run(ctx):
     else:
         contract_label = "standard_attack"
         permission_label = "execute_50"
-        action_plan = f"沿{primary_line}预演50%标准进攻，前提是次日按参与窗口分层确认：{PARTICIPATION_WINDOW_LAYER_TEXT}；不满足即0%不参与"
+        action_plan = f"沿{primary_line}预演50%标准进攻，前提是次日按固定交易窗口条件执行：{PARTICIPATION_WINDOW_LAYER_TEXT}；不满足即0%不参与"
 
     gate_chain = list(DECISION_GATE_CHAIN)
     gate_chain_text = " -> ".join(gate_chain)

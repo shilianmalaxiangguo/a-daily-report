@@ -369,7 +369,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["chanlun_confirmation"]["confirmation_status"], "data_insufficient")
-        self.assertIn("60分钟确认", result["signal"]["status"])
+        self.assertIn("结构确认", result["signal"]["status"])
         self.assertEqual(result["signal"]["action"], "只观察，等结构确认补齐")
         self.assertNotEqual(result["signal"]["action"], "积极做多")
 
@@ -458,7 +458,7 @@ class ZhongshuRuntimeTest(unittest.TestCase):
             print_fn=lambda *args, **kwargs: None,
         )
         self.assertEqual(not_confirmed["chanlun_confirmation"]["confirmation_status"], "not_confirmed")
-        self.assertIn("60分钟确认：not_confirmed", not_confirmed["signal"]["status"])
+        self.assertIn("结构确认：not_confirmed", not_confirmed["signal"]["status"])
         self.assertNotIn("当前中枢形成中", not_confirmed["signal"]["status"])
 
 

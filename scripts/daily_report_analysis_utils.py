@@ -123,7 +123,7 @@ def build_stop_execution_plan(entry_price, structure_stop=None, structure_label=
         structure = None
 
     effective_stop = hard_stop
-    rule = "30分钟结构未落地前，先用-5%硬止损底线"
+    rule = "盘前风险线未落地前，先用-5%硬止损底线"
     if structure is not None:
         structure = round(structure, 2)
         effective_stop = round(max(structure, hard_stop), 2)
@@ -137,7 +137,7 @@ def build_stop_execution_plan(entry_price, structure_stop=None, structure_label=
     if structure is not None:
         summary = f"预估{effective_stop:.2f} / 最晚{hard_stop:.2f}"
     else:
-        summary = f"先看30分钟结构 / 最晚{hard_stop:.2f}"
+        summary = f"先看失效价 / 最晚{hard_stop:.2f}"
 
     return {
         "entry_price": round(entry, 2),
@@ -205,7 +205,7 @@ def calculate_price_range(stock_data):
         "buy_high": buy_high,
         "stop_loss_price": stop_loss_price,
         "take_profit_price": take_profit_price,
-        "stop_rule": "盘前预案先给-5%硬止损底线，买入后改用30分钟结构止损",
+        "stop_rule": "盘前预案先给-5%硬止损底线，买入后按失效价和单笔-5%底线处理风险",
     }
 
 
@@ -295,8 +295,8 @@ def merge_position_gate(position_level, exit_analysis):
             "should_reduce": False,
             "allow_attack_50_ready": True,
             "base_position_cap_pct": 0,
-            "final_action": "0%观察，只看主线核心；09:50-10:10完成竞价表态并形成参与窗口后才评估50%标准进攻，否则不参与",
-            "final_participation": "这不是随手上车的位置，只能观察、持有强者，或等参与窗口成立后的标准进攻",
+            "final_action": "0%观察，只看主线核心；09:50-10:10窗口内条件成立后才评估50%标准进攻，否则不参与",
+            "final_participation": "这不是随手上车的位置，只能观察、持有强者，或等固定交易窗口内条件成立后的标准进攻",
             "gate_reason": "市场环境还没完全满足进攻条件，先让子弹飞一会儿",
         }
     if light == "黄灯":

@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-ACTION_TEXT = "只买军工一号，参与窗口确认后执行"
+ACTION_TEXT = "只买军工一号，固定交易窗口条件满足后执行"
 
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.conclusion_support import (
@@ -62,7 +62,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 环境与跟随裁决 |", rendered)
         self.assertIn("| 明天观察池 | 12只 |", rendered)
-        self.assertIn("| 唯一动作 | 军工一号(000001)；按预演参与窗口触发 |", rendered)
+        self.assertIn("| 唯一动作 | 军工一号(000001)；按固定交易窗口条件触发 |", rendered)
         self.assertIn("| 明日策略 | 唯一标的条件触发：只操作军工一号", rendered)
         self.assertNotIn("stage_key", rendered)
         self.assertNotIn("Step 4.5", rendered)
@@ -96,7 +96,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 主看方向 | 军工 / 高端装备 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按竞价/开盘前几分钟/回封/60分钟分层参与窗口触发 |", rendered)
+        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发 |", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertIn("| 操作风格 | 短线 |", rendered)
         self.assertIn("| 盈亏比约束 | 预估赚赔比 1:2.4", rendered)
@@ -178,7 +178,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 今日关注标的 | 汇源通信(000586)：明日目标标的，参与窗口确认才执行 |", rendered)
+        self.assertIn("| 今日关注标的 | 汇源通信(000586)：明日目标标的，固定交易窗口内条件成立才执行 |", rendered)
         self.assertNotIn("景兴纸业(002067)：主线核心候选", rendered)
 
     def test_selected_target_stays_observation_when_position_decision_is_zero(self):
@@ -236,7 +236,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "final_gate": {
                     "can_new_entry": False,
                     "allow_attack_50_ready": True,
-                    "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信，参与窗口确认才执行，不满足回到0%",
+                    "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信，固定交易窗口内条件成立才执行，不满足回到0%",
                 },
                 "trade_gate_open": False,
                 "watchlist_count": 15,
@@ -263,8 +263,8 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("明日目标标的保留条件50%预演：只看000586 汇源通信", rendered)
-        self.assertIn("| 明日风险预判 | 参与窗口失败回到0%，只接受小亏试错，不接受大亏硬扛 |", rendered)
-        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的自己走出参与窗口 |", rendered)
+        self.assertIn("| 明日风险预判 | 固定交易窗口内条件不成立就回到0%，只接受小亏试错，不接受大亏硬扛 |", rendered)
+        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的在固定交易窗口内满足条件 |", rendered)
         self.assertNotIn("旧结论：空仓等待", rendered)
         self.assertNotIn("旧风险：0%", rendered)
         self.assertNotIn("旧买点：不开新仓", rendered)
@@ -376,7 +376,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 最终结论", rendered)
         self.assertIn("| 项目 | 明日指引 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按竞价/开盘前几分钟/回封/60分钟分层参与窗口触发 |", rendered)
+        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发 |", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertNotIn("| 主看方向 |", rendered)
         self.assertNotIn("| 执行纪律 |", rendered)
@@ -393,7 +393,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("竞价表态/开盘前几分钟/回封/60分钟确认分层处理", rendered)
+        self.assertIn("09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口", rendered)
         self.assertIn("不满足预演情境就回到0%", rendered)
         self.assertNotIn("明日前30分钟先确认环境", rendered)
         self.assertNotIn("买点一律" + "等60" + "分钟确认", rendered)

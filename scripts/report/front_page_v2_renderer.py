@@ -22,6 +22,14 @@ from report.market_structure_judgement import (
     build_market_structure_judgement,
     render_market_structure_section,
 )
+from report.trading_time_window_contract import (
+    OPENING_WINDOW,
+    SECOND_CONFIRM_LABEL,
+    SECOND_CONFIRM_WINDOW,
+    TAIL_WINDOW,
+    normalize_participation_window,
+    normalize_trading_time_text,
+)
 
 
 FORBIDDEN_FRONT_PAGE_MARKERS = ("### 🔬 市场研究快照", "Step 0")
@@ -236,7 +244,7 @@ def _discipline_table(final_gate=None, position_level="", snapshot=None):
         "## 一、交易纪律",
         "| 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |",
         "|----------|----------|----------|----------|----------|",
-        f"| {position_state['discipline']} | 09:50-10:10确认，10:00左右处理买卖 | 仅量化电风扇行情允许尾盘试错，次日高开兑现 | 单笔最晚-5%，不能大亏 | {position_level or '先看市场底色'}；先看周期主线，只在主线个股上做小亏小赚偶尔大赚 |",
+        f"| {position_state['discipline']} | {SECOND_CONFIRM_WINDOW}窗口处理买卖 | 仅量化电风扇行情允许{TAIL_WINDOW}例外处理，次日高开兑现 | 单笔最晚-5%，不能大亏 | {position_level or '先看市场底色'}；先看周期主线，只在主线个股上做小亏小赚偶尔大赚 |",
         "",
     ]
 
@@ -773,14 +781,16 @@ def _unique_target_label(target):
 
 def _conditional_zero_action_text(target, position_decision=None):
     label = _unique_target_label(target)
-    participation_window = _text_value(target.get("participation_window"), target.get("buy_window")) or "09:50-10:10"
+    participation_window = normalize_participation_window(
+        _text_value(target.get("participation_window"), target.get("buy_window"))
+    )
     position_decision = position_decision if isinstance(position_decision, dict) else {}
-    condition = (
+    condition = normalize_trading_time_text(
         _text_value(position_decision.get("trigger_text"))
         or _text_value(target.get("condition"))
         or "主线承接 + 个股强弱重新确认"
     )
-    fallback = _text_value(target.get("fallback_state")) or "不满足继续0%"
+    fallback = normalize_trading_time_text(_text_value(target.get("fallback_state")) or "不满足继续0%")
     condition_text = condition if participation_window in condition else f"{participation_window}{condition}"
     return f"盘前0%；只看{label}，{condition_text}成立才执行条件50%标准进攻；{fallback}"
 
@@ -824,11 +834,16 @@ def _effective_unique_action_target(snapshot):
                 "code": selected.get("code") or selected.get("stock_code"),
                 "sector": selected.get("sector") or selected.get("sector_name"),
                 "direction": selected.get("direction") or selected.get("theme"),
-                "participation_window": selected.get("participation_window") or selected.get("buy_window") or "09:50-10:10",
+                "participation_window": normalize_participation_window(
+                    selected.get("participation_window") or selected.get("buy_window")
+                ),
                 "participation_window_type": selected.get("participation_window_type") or "auction_reseal",
-                "required_steps": selected.get("required_steps") or ["竞价表态", "开盘前几分钟承接", "回封/打板"],
-                "fallback_state": selected.get("fallback_state") or "条件不满足回到0%",
-                "condition": selected.get("condition") or "竞价表态 + 开盘前几分钟 + 回封/打板",
+                "required_steps": [
+                    normalize_trading_time_text(step)
+                    for step in (selected.get("required_steps") or ["竞价表态", "开盘前几分钟承接", "回封/打板"])
+                ],
+                "fallback_state": normalize_trading_time_text(selected.get("fallback_state") or "条件不满足回到0%"),
+                "condition": normalize_trading_time_text(selected.get("condition") or "竞价表态 + 开盘前几分钟 + 回封/打板"),
             },
         )
     return _enrich_unique_action_target(snapshot, derive_unique_action_target_from_reasoning_decision(snapshot))
@@ -848,11 +863,13 @@ def _conditional_observation_target(snapshot):
             "code": selected.get("code") or selected.get("stock_code"),
             "sector": selected.get("sector") or selected.get("sector_name"),
             "direction": selected.get("direction") or selected.get("theme"),
-            "participation_window": selected.get("participation_window") or selected.get("buy_window") or "09:50-10:10",
+            "participation_window": normalize_participation_window(
+                selected.get("participation_window") or selected.get("buy_window")
+            ),
             "participation_window_type": selected.get("participation_window_type") or "structure_confirm",
-            "required_steps": selected.get("required_steps") or [],
-            "fallback_state": selected.get("fallback_state") or "不满足继续0%",
-            "condition": selected.get("condition") or "主线承接 + 个股强弱重新确认",
+            "required_steps": [normalize_trading_time_text(step) for step in (selected.get("required_steps") or [])],
+            "fallback_state": normalize_trading_time_text(selected.get("fallback_state") or "不满足继续0%"),
+            "condition": normalize_trading_time_text(selected.get("condition") or "主线承接 + 个股强弱重新确认"),
         },
     )
 
@@ -931,12 +948,12 @@ def _t0_main_target(snapshot, position_state):
     if "reasoning_decision" in snapshot:
         target = derive_unique_action_target_from_reasoning_decision(snapshot)
         if isinstance(target, dict) and (target.get("name") or target.get("code")):
-            return target, "参与窗口确认"
+            return target, "固定交易窗口条件"
     target = snapshot.get("unique_action_target") or {}
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
-        return target, "参与窗口确认"
+        return target, "固定交易窗口条件"
     target = _t0_selected_target(snapshot)
-    return (target, "参与窗口确认") if target else ({}, "")
+    return (target, "固定交易窗口条件") if target else ({}, "")
 
 
 def _account_status_lines(snapshot=None, final_gate=None):
@@ -1001,7 +1018,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         stock_state = position_state["stock_state"] if has_unique_object else position_state.get("stock_state_without_target", position_state["stock_state"])
     front_no_buy_reason = str(front_page.get("no_buy_reason") or "").strip()
     if has_unique_object and (not front_no_buy_reason or "没有唯一对象" in front_no_buy_reason):
-        no_buy_reason = "有条件观察对象，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有唯一对象，只等参与窗口确认；条件不满足回到0%"
+        no_buy_reason = "有条件观察对象，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有唯一对象，只等固定交易窗口内条件成立；条件不满足回到0%"
     else:
         no_buy_reason = front_no_buy_reason or "没有唯一对象，完整候选仅保留在附录和快照"
     backup_watch = front_page.get("backup_watch") if isinstance(front_page.get("backup_watch"), list) else []
@@ -1032,9 +1049,9 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         f"| 唯一对象 | {_candidate_section_unique_object_label(snapshot, observation_target=observation_target, has_observation_target=has_observation_target, front_page=front_page, is_zero_participation=is_zero_participation)} |",
         f"| 当前状态 | {stock_state} |",
         f"| 备用观察 | {front_page.get('backup_text') or '暂无'} |",
-        f"| 今日不买原因 | {no_buy_reason} |",
-        f"| 明日触发 | {front_page.get('trigger_condition') or '10点确认 + 主线承接 + 个股突破或回踩确认'} |",
-        f"| 明日失效 | {front_page.get('failure_condition') or '主线回落 / 放量不承接'} |",
+        f"| 今日不买原因 | {normalize_trading_time_text(no_buy_reason)} |",
+        f"| 明日触发 | {normalize_trading_time_text(front_page.get('trigger_condition') or f'{SECOND_CONFIRM_LABEL} + 主线承接 + 个股突破或回踩确认')} |",
+        f"| 明日失效 | {normalize_trading_time_text(front_page.get('failure_condition') or '主线回落 / 放量不承接')} |",
         "",
         f"### 2. {sniper_title}",
         sniper_header,
@@ -1082,11 +1099,11 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
                 "| {label} | {sector} | {role} | {trigger_condition} | {failure_condition} |".format(
                     label=item.get("label") or "观察对象",
                     sector=item.get("sector") or "-",
-                    role=item.get("role") or "观察",
-                    trigger_condition=item.get("trigger_condition") or "10点确认承接",
-                    failure_condition=item.get("failure_condition") or "主线回落",
-                )
+                role=normalize_trading_time_text(item.get("role") or "观察"),
+                trigger_condition=normalize_trading_time_text(item.get("trigger_condition") or f"{SECOND_CONFIRM_WINDOW}确认承接"),
+                failure_condition=normalize_trading_time_text(item.get("failure_condition") or "主线回落"),
             )
+        )
     else:
         lines.append("| 暂无 | - | - | - | - |")
     lines.extend([
@@ -1098,7 +1115,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
             principle=(
                 "最终0%时只观察，不做新增参与；观察对象重新成立后再进入明日动作评估"
                 if is_zero_participation
-                else "竞价表态、开盘前几分钟、打板/回封、60分钟确认分层处理，买后30分钟结构止损"
+                else f"{OPENING_WINDOW}竞价表态、开盘前几分钟、打板/回封；{SECOND_CONFIRM_LABEL}，买后用失效价和单笔-5%底线处理风险"
             )
         ),
         "",
@@ -1113,38 +1130,42 @@ def _unique_action_target_lines(snapshot, final_gate=None):
     target = observation_target if observation_target else _effective_unique_action_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         label = _unique_target_label(target)
-        participation_window = str(target.get("participation_window") or "").strip()
+        participation_window = normalize_participation_window(target.get("participation_window"))
         participation_window_type = str(target.get("participation_window_type") or "").strip()
         required_steps = target.get("required_steps") or []
         if isinstance(required_steps, str):
             required_steps = [part.strip() for part in required_steps.split("/") if part.strip()]
         if not required_steps and participation_window_type and participation_window_type != "structure_confirm":
             required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
-        condition = " / ".join(str(step).strip() for step in required_steps if str(step).strip())
+        condition = " / ".join(normalize_trading_time_text(step) for step in required_steps if str(step).strip())
         if not condition:
-            condition = str(target.get("condition") or "").strip()
+            condition = normalize_trading_time_text(target.get("condition") or "")
         if not condition:
-            condition = "主线确认 + 承接 + 60分钟确认" if participation_window_type == "structure_confirm" or participation_window in ("", "60分钟确认") else "竞价表态 + 开盘前几分钟 + 回封/打板"
-        default_fallback = "不满足回到0%" if participation_window_type and participation_window_type != "structure_confirm" else "不做"
-        fallback_state = str(target.get("fallback_state") or default_fallback).strip() or default_fallback
+            condition = (
+                f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}"
+                if participation_window_type == "structure_confirm"
+                else "竞价表态 + 开盘前几分钟 + 回封/打板"
+            )
+        default_fallback = "不满足回到0%"
+        fallback_state = normalize_trading_time_text(str(target.get("fallback_state") or default_fallback).strip() or default_fallback)
     else:
         label = "暂无"
-        participation_window = ""
-        condition = "主线确认 + 承接 + 60分钟确认未同时满足"
+        participation_window = SECOND_CONFIRM_WINDOW
+        condition = f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}未同时满足"
         participation_window_type = "structure_confirm"
-        fallback_state = "不做"
+        fallback_state = "不满足回到0%"
     if is_zero_participation:
         action_label = "只看条件观察对象" if observation_target else "只看唯一对象"
         return [
             "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |",
             "|--------------|------|------|------|--------------|",
-            f"| {action_label} | {label} | {participation_window or '60分钟确认'} | {condition} | {fallback_state} |",
+            f"| {action_label} | {label} | {participation_window} | {condition} | {fallback_state} |",
             "",
         ]
     return [
         "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |",
         "|--------------|------|------|------|--------------|",
-        f"| 只看唯一对象 | {label} | {participation_window or '60分钟确认'} | {condition} | {fallback_state} |",
+        f"| 只看唯一对象 | {label} | {participation_window} | {condition} | {fallback_state} |",
         "",
     ]
 
@@ -1154,23 +1175,15 @@ def _execution_plan_lines(snapshot=None, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     if position_state.get("grade") == "0":
         schedule_lines = [
-            "| 09:25-09:40 | 只看风险是否钝化 | 无 | 有旧仓先看是否需要降风险 | 不做新增参与 |",
             "| 09:30-09:35 | 只看跌停扩散、主攻线承接和唯一对象是否出现 | 无 | 弱仓/错仓先降风险 | 观察，不抢开盘 |",
-            "| 09:50-10:10 | 观察市场底色、主线承接、唯一对象强弱 | 无 | 10:00左右处理弱仓/错仓 | 条件未同时满足继续0% |",
-            "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
-            "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
-            "| 午后 | 看主线是否延续，不追轮动末端 | 无 | 若走弱继续降风险 | 不做情绪补偿 |",
-            "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+            "| 09:50-10:10 | 观察市场底色、主线承接、唯一对象强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |",
+            f"| {TAIL_WINDOW} | 只判断是否量化电风扇行情 | 无 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     else:
         schedule_lines = [
-            "| 09:25-09:40 | 竞价表态、主线核心是否被核、跌停扩散 | 仅核心竞价表态清楚才可做 | 有旧仓先看是否需要降风险 | 合格则参与，不合格回到0% |",
             "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 核心对象承接连续可按预演参与 | 弱仓/错仓先降风险 | 前几分钟进攻窗口 |",
-            "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入结构确认 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |",
-            "| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖，不做自救 | 防大亏 |",
-            "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价/前几分钟/回封未触发时，再看60分钟确认 | 买后用30分钟结构止损 | 50%/100%或0% |",
-            "| 午后 | 看主线是否延续，不追轮动末端 | 默认谨慎 | 若走弱继续降风险 | 不做情绪补偿 |",
-            "| 尾盘 | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不尾盘开新仓 | 例外，不是常规 |",
+            "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入二次确认 | 窗口内处理弱仓/错仓 | 核心执行窗口 |",
+            f"| {TAIL_WINDOW} | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     return [
         "## 六、明日执行计划",
@@ -1249,4 +1262,4 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     lines.extend(_execution_plan_lines(snapshot, final_gate=final_gate))
     lines.extend(_final_summary_lines(report_lines, snapshot, final_gate=final_gate))
     lines = [line for line in lines if not any(marker in str(line) for marker in FORBIDDEN_FRONT_PAGE_MARKERS)]
-    return sanitize_front_page_text(lines)
+    return sanitize_front_page_text([normalize_trading_time_text(line) for line in lines])

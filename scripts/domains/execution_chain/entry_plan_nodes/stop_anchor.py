@@ -8,7 +8,7 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     if final_gate.get("can_new_entry", False):
         lines.append("**明日止损锚定**（买入后严格执行）:")
         if executable_stocks:
-            lines.append("| 股票 | 怎么买 | 60分钟确认 | 关键位/带 | 执行止损 | 最晚硬止损 | 止损模式 | 介入周期纪律 | 跌破动作 |")
+            lines.append("| 股票 | 怎么买 | 09:50-10:10窗口 | 关键位/带 | 执行止损 | 最晚硬止损 | 止损模式 | 介入周期纪律 | 跌破动作 |")
             lines.append("|------|----------|------------|----------|----------|------------|----------|----------------|----------|")
             for item in executable_stocks:
                 if "signal" in item:
@@ -56,7 +56,7 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     else:
         lines.append("**明日止损锚定**:")
         if final_gate.get("allow_attack_50_ready"):
-            lines.append("- 50%标准进攻需要先等参与窗口成立；未确认前按0%处理，确认后用30分钟结构止损管理风险")
+            lines.append("- 50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险")
         else:
             lines.append("- 0%不参与：无合格标的或取消条件已经出现，无需设置新增参与止损")
     lines.append("")

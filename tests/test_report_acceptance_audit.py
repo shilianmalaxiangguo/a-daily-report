@@ -14,7 +14,7 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 ## 一、交易纪律
 | 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |
 |----------|----------|----------|----------|----------|
-| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |
+| 50%标准进攻 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 只做主线 |
 
 ### 月度攻防与进攻仓位
 | 项目 | 结论 |
@@ -58,22 +58,19 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 唯一对象 | 富瀚微(300613) |
 | 当前状态 | 50%标准进攻对象 |
 | 备用观察 | 暂无 |
-| 今日不买原因 | 等10点确认 |
-| 明日触发 | 主线确认 + 承接 + 60分钟确认 |
+| 今日不买原因 | 等09:50-10:10窗口 |
+| 明日触发 | 主线确认 + 承接 + 09:50-10:10窗口 |
 | 明日失效 | 主线回落 |
 
 ## 六、明日执行计划
 | 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |
 |--------------|------|------|--------------|
-| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |
+| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |
 | 时间窗口 | 要看什么 | 买入资格 | 卖出/风控 | 结论 |
 |----------|----------|----------|-----------|------|
-| 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |
-| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 仅主线核心可进入观察买点 | 10:00左右处理弱仓/错仓 | 核心确认窗口 |
-| 10:00左右卖 | 弱仓、错仓、破结构仓位 | 无 | 该卖就卖 | 防大亏 |
-| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |
-| 午后 | 看主线是否延续 | 默认谨慎 | 若走弱继续降风险 | 不扩大试错 |
-| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |
+| 09:30-09:35 | 竞价强弱、主攻线承接 | 默认无 | 处理风险 | 不抢开盘 |
+| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 主线核心承接稳定且个股确认 | 买后用失效价和单笔-5%底线处理风险 | 核心执行窗口 |
+| 14:30-14:55 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不新增参与 | 例外 |
 
 ## 七、最终结论
 | 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |
@@ -105,16 +102,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
     def zero_position_report(self):
         return (
             GOOD_MARKDOWN.replace(
-                "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-                "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
-            )
-            .replace(
-                "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |",
-                "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
-            )
-            .replace(
-                "| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |",
-                "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+                "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+                "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
             )
             .replace(
                 "| 进攻仓位三态 | 50% |",
@@ -125,8 +114,16 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 "| 明日最大仓位 | 0% |",
             )
             .replace(
-                "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
-                "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+                "| 当前状态 | 50%标准进攻对象 |",
+                "| 当前状态 | 0%观察 |",
+            )
+            .replace(
+                "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 主线核心承接稳定且个股确认 | 买后用失效价和单笔-5%底线处理风险 | 核心执行窗口 |",
+                "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 无 | 无新增参与止损 | 继续0%观察 |",
+            )
+            .replace(
+                "| 50%标准进攻 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 只做主线 |",
+                "| 0%不参与 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 不新增参与 |",
             )
             .replace(
                 "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
@@ -350,6 +347,33 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 result = audit_report_markdown(bad)
 
                 self.assertIn("legacy_surface_wording", {finding["code"] for finding in result["findings"]})
+                self.assertFalse(result["passed"])
+
+    def test_audit_flags_historical_timing_language_anywhere_in_report(self):
+        bad = GOOD_MARKDOWN.replace("09:50-10:10窗口", "60" + "分钟确认", 1)
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("legacy_trading_time_wording", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_residual_legacy_timing_fragments_from_generated_report(self):
+        legacy_fragments = (
+            "30分钟定止损",
+            "30分钟结构失守",
+            "30分钟结构止损线",
+            "09:35-10:30",
+            "10:30-14:30",
+            "结构确认窗口",
+            "盘中执行（10:30-14:30）",
+        )
+        for fragment in legacy_fragments:
+            with self.subTest(fragment=fragment):
+                bad = GOOD_MARKDOWN + f"\n{fragment}\n"
+
+                result = audit_report_markdown(bad)
+
+                self.assertIn("legacy_trading_time_wording", {finding["code"] for finding in result["findings"]})
                 self.assertFalse(result["passed"])
 
     def test_audit_flags_front_page_heading_order_and_duplicates(self):
@@ -637,8 +661,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_allows_same_unique_focus_with_different_label_format(self):
         report = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 只看唯一对象 | 300613 富瀚微（半导体） | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 只看唯一对象 | 300613 富瀚微（半导体） | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
         )
 
         result = audit_report_markdown(report)
@@ -652,14 +676,14 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             .replace(
                 "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |\n"
                 "|--------------|------|------|--------------|\n"
-                "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+                "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
                 "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |\n"
                 "|--------------|------|------|------|--------------|\n"
                 "| 只看条件观察对象 | 300613 富瀚微（半导体） | 09:50-10:10 | 主线确认 + 承接 + 观察窗口同时成立 | 不满足继续0% |",
             )
             .replace(
                 "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
-                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 盘前0%；09:50-10:10主线确认 + 承接 + 观察窗口同时成立，才评估50%标准进攻；不满足继续0% |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 盘前0%；09:50-10:10窗口主线确认 + 承接 + 观察窗口同时成立，才评估50%标准进攻；不满足继续0% |",
             )
             + "\n##### 附录：# 今日总决策面板\n"
             + "| 字段 | 内容 |\n"
@@ -670,10 +694,10 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             + "\n**最终动作表**（只展示真正具备参与资格的对象）:\n"
             + "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
             + "|----------|------|------|----------|-----------|\n"
-            + "| ⏳ 确认后执行预案 | 富瀚微 | 300613 | 09:50-10:10站上确认价，且板块承接不塌，参与窗口成立后才评估50%标准进攻 | 失效价 |\n"
+            + "| ⏳ 确认后执行预案 | 富瀚微 | 300613 | 09:50-10:10站上确认价，且板块承接不塌，固定交易窗口内条件成立后才评估50%标准进攻 | 失效价 |\n"
             + "\n**明天仓位怎么放**:\n"
             + "- **进攻仓位三态**: 50%标准进攻预演\n"
-            + "- **明天仓位放多少**: 条件50%；盘前不抢跑，参与窗口命中后执行，不满足回到0%\n"
+            + "- **明天仓位放多少**: 条件50%；盘前不抢跑，固定交易窗口条件满足后执行，不满足回到0%\n"
         )
 
         result = audit_report_markdown(report)
@@ -699,8 +723,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_allows_empty_unique_focus_with_observation_only_rows(self):
         report = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
         ).replace(
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
@@ -713,11 +737,11 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_empty_unique_focus_with_concrete_buy_candidate(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
         ).replace(
             "| 当前状态 | 50%标准进攻对象 |",
-            "| 当前状态 | 富瀚微(300613) 唯一买入，10点确认 |",
+            "| 当前状态 | 富瀚微(300613) 唯一买入，09:50-10:10窗口 |",
         ).replace(
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
@@ -730,8 +754,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_final_zero_position_with_tomorrow_participation_action(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 明日主买对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 新增参与 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 明日主买对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 新增参与 |",
         ).replace(
             "| 进攻仓位三态 | 50% |",
             "| 进攻仓位三态 | 0% |",
@@ -739,8 +763,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 明日最大仓位 | 50% |",
             "| 明日最大仓位 | 0% |",
         ).replace(
-            "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
-            "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+            "| 50%标准进攻 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 只做主线 |",
+            "| 0%不参与 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 不新增参与 |",
         ).replace(
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
             "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
@@ -768,14 +792,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_allows_zero_position_plan_without_new_position_stop(self):
         report = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |",
-        ).replace(
-            "| 10:00左右买 | 只看周期主线核心，且必须有承接 | 竞价表态、参与窗口与结构确认共同成立 | 买后用30分钟结构止损 | 50%/100%或0% |",
-            "| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |",
-        ).replace(
-            "| 尾盘 | 只判断是否量化电风扇行情 | 仅例外 | 非电风扇不尾盘开新仓 | 例外 |",
-            "| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
         ).replace(
             "| 进攻仓位三态 | 50% |",
             "| 进攻仓位三态 | 0% |",
@@ -783,8 +801,8 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "| 明日最大仓位 | 50% |",
             "| 明日最大仓位 | 0% |",
         ).replace(
-            "| 50%标准进攻 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 只做主线 |",
-            "| 0%不参与 | 09:50-10:10确认 | 仅例外 | 单笔最晚-5% | 不新增参与 |",
+            "| 50%标准进攻 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 只做主线 |",
+            "| 0%不参与 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 不新增参与 |",
         ).replace(
             "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
             "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
@@ -841,7 +859,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_missing_execution_windows(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 09:25-09:40 | 竞价强弱 | 默认无 | 处理风险 | 不抢 |\n",
+            "| 09:30-09:35 | 竞价强弱、主攻线承接 | 默认无 | 处理风险 | 不抢开盘 |\n",
             "",
         )
 
@@ -849,24 +867,26 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("execution_window_missing", {finding["code"] for finding in result["findings"]})
 
-    def test_audit_flags_missing_10_point_confirmation(self):
-        bad = GOOD_MARKDOWN.replace("10点确认", "开盘确认")
+    def test_audit_flags_missing_second_window_condition(self):
+        bad = GOOD_MARKDOWN.replace("09:50-10:10窗口", "开盘确认")
 
-        self.assertExecutionConditionMissing(bad, "10点确认")
+        self.assertExecutionConditionMissing(bad, "09:50-10:10窗口")
 
-    def test_audit_flags_missing_participation_window(self):
+    def test_audit_flags_missing_fixed_execution_window_condition(self):
         bad = (
             GOOD_MARKDOWN
-            .replace("60分钟确认", "结构确认")
-            .replace("竞价表态、参与窗口与结构确认共同成立", "结构确认共同成立")
+            .replace("固定交易窗口条件", "结构确认")
+            .replace("竞价强弱、主攻线承接", "主攻线承接")
+            .replace("09:30-09:35", "开盘前")
+            .replace("09:50-10:10窗口", "结构确认")
         )
 
-        self.assertExecutionConditionMissing(bad, "参与窗口")
+        self.assertExecutionConditionMissing(bad, "固定交易窗口条件")
 
     def test_audit_flags_fast_window_polluted_by_structure_condition(self):
         bad = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 60分钟确认 | 不做 |",
-            "| 只看唯一对象 | 富瀚微(300613) | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
+            "| 只看唯一对象 | 富瀚微(300613) | 竞价表态 + 回封 | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
         )
 
         result = audit_report_markdown(bad)
@@ -874,15 +894,15 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("fast_window_polluted_by_structure_condition", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
-    def test_audit_flags_missing_30_minute_structural_stop(self):
-        bad = GOOD_MARKDOWN.replace("30分钟结构止损", "结构止损")
+    def test_audit_flags_missing_invalidation_and_risk_bottom_line(self):
+        bad = GOOD_MARKDOWN.replace("买后用失效价和单笔-5%底线处理风险", "结构止损")
 
-        self.assertExecutionConditionMissing(bad, "30分钟结构止损")
+        self.assertExecutionConditionMissing(bad, "失效价 / 单笔-5%底线")
 
     def test_audit_flags_missing_no_action_fallback(self):
         bad = GOOD_MARKDOWN.replace("不做", "继续观察").replace("空仓", "等待")
 
-        self.assertExecutionConditionMissing(bad, "不做 / 不开新仓 / 空仓")
+        self.assertExecutionConditionMissing(bad, "不参与 / 不做 / 空仓")
 
     def test_audit_flags_reasoning_surface_missing_required_rows(self):
         bad = GOOD_MARKDOWN.replace(
@@ -908,9 +928,9 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "|------|------|\n"
             "| 结论 | 主线仍需确认。 |\n"
             "| 关键证据 | 主线为半导体 |\n"
-            "| 触发条件 | 10点确认 |\n"
+            "| 触发条件 | 09:50-10:10窗口 |\n"
             "| 失败条件 | 主线回落 |\n"
-            "| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |\n"
+            "| 排除对象 | 富瀚微(300613)：09:50-10:10窗口未满足 |\n"
             "| 推理深度 | xhigh |\n\n"
             "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |",
         )

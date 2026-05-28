@@ -14,7 +14,7 @@ def strict_chanlun_policy_for_security(security_type: str = "stock") -> dict[str
         "daily_level_confirmation": "日线平台由日线走势类型重叠识别",
         "minute_confirmation": "not_requested",
         "full_recursive_mode": "deferred",
-        "execution_reference": "分钟级别仅作执行与止损辅助，当前画布不请求分钟确认",
+        "execution_reference": "下级别结构仅作执行与止损辅助，当前画布不请求额外交易时间",
         "market_index_role": "上证指数决定市场参与条件",
         "stock_position_role": "个股自身结构决定单票仓位",
         "security_type": security_type,

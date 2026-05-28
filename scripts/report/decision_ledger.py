@@ -579,7 +579,7 @@ def _default_participation_script(item):
         board = "首次封板只看大单金额持续进入，弱封不追"
         missed = f"过快封死就沿{sector}趋势比价链找低位承接，找不到就跳过"
     else:
-        window = "60分钟确认"
+        window = "09:50-10:10窗口"
         board = "不以涨停为唯一条件，先等价格确认和承接连续"
         missed = f"确认前快速拉高就跳过，只沿{sector}趋势比价链找低位承接，找不到就跳过"
     planned = {
@@ -708,7 +708,7 @@ def classify_planned_participation_review(
     if first_minutes_accepted:
         base["matched_steps"].append("开盘前几分钟承接")
     if structure_confirmed:
-        base["matched_steps"].append("60分钟确认")
+        base["matched_steps"].append("09:50-10:10窗口")
     if board_sealed:
         base["matched_steps"].append("打板策略")
     if reseal_success:
@@ -775,7 +775,7 @@ def classify_planned_participation_review(
             base.update(
                 {
                     "status": "预演命中",
-                    "reason": "60分钟确认和板块同步共同验证。",
+                    "reason": "09:50-10:10窗口和板块同步共同验证。",
                     "evidence": base["evidence"] or "结构确认命中",
                 }
             )
@@ -783,7 +783,7 @@ def classify_planned_participation_review(
         base.update(
             {
                 "status": "等待复盘",
-                "reason": "普通结构确认样本还缺少60分钟确认事实。",
+                "reason": "普通结构确认样本还缺少09:50-10:10窗口事实。",
                 "evidence": base["evidence"],
             }
         )
@@ -793,7 +793,7 @@ def classify_planned_participation_review(
         base.update(
             {
                 "status": "预演命中",
-                "reason": "参与窗口、承接、封板/回封和板块同步共同验证。",
+                "reason": "固定交易窗口、承接、封板/回封和板块同步共同验证。",
                 "evidence": base["evidence"] or "预演关键步骤连续命中",
             }
         )
@@ -1005,7 +1005,7 @@ def _standard_action_text(entry_timing, buy_window, decision):
     if entry_timing == "open_core":
         return f"按{window}开盘核心参与；只在竞价表态、开盘承接、回封/打板同时成立时买"
     if entry_timing == "ten_confirm":
-        return f"按{window}完成10点确认后再参与；确认前不抢跑"
+        return f"按{window}完成二次确认后再参与；确认前不抢跑"
     if entry_timing == "tail_exception":
         return f"按{window}尾盘例外确认；只用于避开盘中分歧消耗"
     return "只观察，不生成买入动作"
@@ -1185,7 +1185,7 @@ def build_participation_review_facts_from_market_fact(planned_participation=None
             entry_decision,
         ),
         "avoid_action": "任一预演条件失败按0%；封死买不到就跳过，不补票",
-        "next_action": "若已买入，次日先看是否继续强于市场；30分钟结构失守立即卖，不能把短线拿成长线",
+        "next_action": "若已买入，次日先看是否继续强于市场；失效价失守立即卖，不能把短线拿成长线",
         "standard_answer_basis": standard_answer_basis,
         "market_outcome": market_outcome,
     }
@@ -1196,20 +1196,21 @@ def _parse_participation_scripts(lines):
         lines,
         "极度看好参与脚本",
         "重点观察参与脚本",
+        "重点观察复核脚本",
     )
     if not header:
         return []
 
-    window_idx = _header_index(header, "参与窗口")
+    window_idx = _header_index(header, "固定交易窗口条件", "固定交易窗口", "参与窗口")
     attack_idx = _header_index(header, "仓位三态", "进攻仓位三态")
     inertia_idx = _header_index(header, "涨停惯性", "惯性等级", "概率优势")
     risk_reward_idx = _header_index(header, "盈亏比", "风险收益比", "风险收益")
     auction_idx = _header_index(header, "集合竞价", "竞价表态")
     first_minutes_idx = _header_index(header, "开盘前几分钟", "开盘前分钟")
-    ma_reversion_idx = _header_index(header, "均线回归试错", "日K均线回归", "分时黄线承接")
+    ma_reversion_idx = _header_index(header, "均线回归观察", "均线回归试错", "日K均线回归", "分时黄线承接")
     quant_anchor_idx = _header_index(header, "量化锚点动作")
-    board_idx = _header_index(header, "打板策略", "打板")
-    reseal_idx = _header_index(header, "回封参与", "回封")
+    board_idx = _header_index(header, "封板策略", "打板策略", "打板")
+    reseal_idx = _header_index(header, "回封观察", "回封参与", "回封")
     missed_idx = _header_index(header, "错过后动作")
     ma20_idx = _header_index(header, "MA20作废", "MA20失效", "趋势作废")
     tracking_idx = _header_index(header, "跟踪周期", "追踪周期", "跟踪天数")
@@ -1285,7 +1286,7 @@ def _parse_sniper_role_rows(header, rows):
     sell_line_idx = _header_index(header, "卖点线")
     repair_idx = _header_index(header, "承接修复条件")
     risk_idx = _header_index(header, "最终复核")
-    window_idx = _header_index(header, "参与窗", "参与窗口")
+    window_idx = _header_index(header, "固定交易窗口条件", "固定交易窗口", "参与窗", "参与窗口")
     if role_idx < 0 or target_idx < 0 or buy_line_idx < 0 or sell_line_idx < 0:
         return []
 
@@ -2096,7 +2097,7 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
                     "planned_window": planned.get("participation_window"),
                     "buy_window": planned.get("buy_window"),
                     "review_status": review.get("status") or record.get("participation_review_status") or record.get("status"),
-                    "next_action": review.get("next_action") or review.get("same_day_action") or "等待下一次参与窗口确认",
+                    "next_action": review.get("next_action") or review.get("same_day_action") or "等待下一次固定交易窗口条件确认",
                     "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
                     "_record": record,
                 }

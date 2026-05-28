@@ -217,6 +217,7 @@ class InputRuntimeTest(unittest.TestCase):
             "build_input_request_registry": lambda helpers: {},
             "get_new_high_feedback_from_tushare_first": lambda *args, **kwargs: {},
             "get_top50_turnover_share_series_from_tushare_first": lambda *args, **kwargs: {},
+            "get_etf_turnover_series_from_sina_first": lambda *args, **kwargs: {},
             "get_price_band_style_series_from_tushare_first": lambda *args, **kwargs: {},
             "get_margin_pressure_from_tushare_first": lambda *args, **kwargs: {},
             "resolve_request_target_date": lambda target_date=None: str(target_date),
@@ -280,6 +281,7 @@ assert runtime_mock.call_args[0] == ("2026-04-22",)
 assert "helpers" in runtime_mock.call_args.kwargs
 assert "get_new_high_feedback_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_top50_turnover_share_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert "get_etf_turnover_series_from_sina_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_price_band_style_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_margin_pressure_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert result["target_date"] == "2026-04-22"
@@ -486,6 +488,28 @@ assert snapshot["lhb_analysis"][0]["data_source"] == "finshare.get_lhb"
         self.assertTrue(result["step_status"]["价格带风格趋势获取"])
         provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
         self.assertEqual(provider_by_step["request.price_band_style_series"], "tushare.ths_daily.price_band_style")
+
+    def test_run_input_runtime_fetches_etf_turnover_series(self):
+        input_runtime = importlib.import_module("input.runtime")
+        calls = []
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: calls.append((target_date, window_days))
+            or {
+                "available": True,
+                "source": "sina.etf.daily_amount",
+                "rows": [{"trade_date": "2026-05-18", "etf_turnover_yi": 4484.9}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-05-18", helpers=helpers)
+
+        self.assertEqual(calls, [("2026-05-18", 25)])
+        self.assertEqual(result["etf_turnover_series"]["rows"][0]["etf_turnover_yi"], 4484.9)
+        self.assertTrue(result["data_status"]["ETF两市成交额趋势"])
+        self.assertTrue(result["step_status"]["ETF两市成交额趋势获取"])
+        provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
+        self.assertEqual(provider_by_step["request.etf_turnover_series"], "sina.etf.daily_amount")
 
     def test_run_input_runtime_fetches_margin_pressure(self):
         input_runtime = importlib.import_module("input.runtime")

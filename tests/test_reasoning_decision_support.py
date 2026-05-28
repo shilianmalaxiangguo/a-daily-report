@@ -299,7 +299,7 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
 
         target = derive_unique_action_target_from_reasoning_decision(snapshot)
 
-        self.assertEqual(target["participation_window"], "竞价表态 + 回封参与")
+        self.assertEqual(target["participation_window"], "09:30-09:35")
         self.assertEqual(target["participation_window_type"], "auction_reseal")
         self.assertEqual(target["required_steps"], ["竞价表态", "开盘前几分钟承接", "回封/打板"])
         self.assertEqual(target["fallback_state"], "不满足回到0%")
@@ -325,7 +325,7 @@ class ReasoningDecisionSupportTest(unittest.TestCase):
 
         target = derive_unique_action_target_from_reasoning_decision(snapshot)
 
-        self.assertEqual(target["participation_window"], "竞价表态")
+        self.assertEqual(target["participation_window"], "09:30-09:35")
         self.assertEqual(target["participation_window_type"], "auction_reseal")
         self.assertEqual(target["required_steps"], ["竞价表态", "开盘前几分钟承接", "回封/打板"])
 

@@ -467,6 +467,75 @@ def _ensure_replay_price_band_style_series(snapshot_data, target_date, safe_floa
     return snapshot_data
 
 
+def _etf_turnover_series_needs_refresh(series, target_date):
+    if not isinstance(series, dict):
+        return True
+    rows = [row for row in series.get("rows") or [] if isinstance(row, dict)]
+    if len(rows) < 25:
+        return True
+    target = str(target_date or "").strip()
+    if target and not any(_trend_row_date(row) == target for row in rows):
+        return True
+    return False
+
+
+def _ensure_replay_etf_turnover_series(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    if not _etf_turnover_series_needs_refresh(snapshot_data.get("etf_turnover_series"), target_date):
+        return snapshot_data
+    helpers = helpers or {}
+    fetcher = helpers.get("get_etf_turnover_series_from_sina")
+    if not callable(fetcher):
+        return snapshot_data
+    try:
+        series = fetcher(target_date=target_date, window_days=25) or {}
+    except TypeError as error:
+        if "target_date" not in str(error):
+            raise
+        series = fetcher(target_date) or {}
+    except Exception as error:
+        snapshot_data.setdefault("data_status", {})["ETF两市成交额趋势"] = False
+        snapshot_data.setdefault("step_status", {})["ETF两市成交额趋势获取"] = False
+        _replace_request_module_log(
+            snapshot_data,
+            module="input.runtime",
+            step="request.etf_turnover_series",
+            status="degraded",
+            message="ETF两市成交额趋势刷新失败，保留快照内已有数据",
+            provider="sina.etf.daily_amount",
+            target_keys=["etf_turnover_series"],
+            row_count=0,
+            error=str(error),
+        )
+        _refresh_request_diagnostics(snapshot_data)
+        return snapshot_data
+    rows = [row for row in (series.get("rows") if isinstance(series, dict) else []) or [] if isinstance(row, dict)]
+    if not rows:
+        return snapshot_data
+
+    snapshot_data["etf_turnover_series"] = series
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["ETF两市成交额趋势"] = True
+    step_status["ETF两市成交额趋势获取"] = True
+    _mark_replayed_step_success(snapshot_data, "ETF两市成交额趋势获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="input.runtime",
+        step="request.etf_turnover_series",
+        status="success",
+        message="已刷新ETF两市成交额趋势",
+        provider=series.get("source") or "sina.etf.daily_amount",
+        target_keys=["etf_turnover_series"],
+        row_count=len(rows),
+        usable_etf_count=series.get("usable_etf_count", 0),
+        empty_etf_count=series.get("empty_etf_count", 0),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
 def _build_replay_sector_attack_evidence_rows(snapshot_data, market_research_snapshot=None):
     try:
         from research.market_research_runtime import _build_sector_attack_evidence_rows
@@ -1958,6 +2027,12 @@ def build_replay_snapshot_contract(
         safe_float,
         helpers=runtime_helpers,
     )
+    snapshot_data = _ensure_replay_etf_turnover_series(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
     snapshot_data = _ensure_replay_decision_sources(
         snapshot_data,
         target_date,
@@ -2118,6 +2193,15 @@ def build_replay_report_outputs_contract(
     return replay_contract
 
 
+def _legacy_runtime_helper_overrides():
+    overrides = {}
+    for key in ("get_etf_turnover_series_from_sina",):
+        value = globals().get(key)
+        if callable(value):
+            overrides[key] = value
+    return overrides
+
+
 def _replay_from_snapshot_legacy_body(target_date, refresh_sources=None):
     return build_replay_snapshot_contract(
         target_date,
@@ -2126,4 +2210,5 @@ def _replay_from_snapshot_legacy_body(target_date, refresh_sources=None):
         tencent_factory=TencentFinanceData,
         get_major_indices_from_iwencai=get_major_indices_from_iwencai,
         safe_float=safe_float,
+        helpers=_legacy_runtime_helper_overrides(),
     )

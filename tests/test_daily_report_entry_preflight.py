@@ -38,6 +38,23 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
 
         self.assertIs(captured["risk_context"], risk_context)
 
+    def test_concept_fund_flow_snapshot_helper_returns_saved_rows(self):
+        import daily_report_entry_demo
+
+        snapshot_data = {
+            "concept_fund_flow": {
+                "rows": [{"name": "PCB概念", "net_inflow": 12.3}],
+                "inflow": [{"name": "PCB概念", "net_inflow": 12.3}],
+                "provider": "tushare.ths_member+tushare.moneyflow",
+            }
+        }
+
+        with patch.object(daily_report_entry_demo, "load_data_snapshot", return_value=(snapshot_data, "")):
+            result = daily_report_entry_demo.get_concept_fund_flow_from_snapshot("2026-05-26")
+
+        self.assertEqual(result["rows"][0]["name"], "PCB概念")
+        self.assertEqual(result["provider"], "tushare.ths_member+tushare.moneyflow")
+
     def test_main_aborts_before_snapshot_and_public_publish_when_critical_data_missing_even_without_report(self):
         import daily_report_entry_demo
         from daily_report_render import ReportCriticalDataMissingError
@@ -150,6 +167,45 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             report_outputs[daily_report_entry_demo.REPORT_VARIANT_FULL],
             companion_html=html_text,
         )
+
+    def test_main_overwrite_official_keeps_frozen_mode_when_report_exists(self):
+        import daily_report_entry_demo
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+        saved_paths = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "/tmp/summary.md",
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-26", "--overwrite-official"]), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": [{"date": "2026-05-26"}]}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=True), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value=saved_paths) as save_mock, \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo.Path, "read_text", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            daily_report_entry_demo.main()
+
+        self.assertEqual(build_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(save_mock.call_args.kwargs["mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertTrue(save_mock.call_args.kwargs["overwrite_existing"])
 
 
 if __name__ == "__main__":

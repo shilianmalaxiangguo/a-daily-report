@@ -47,6 +47,32 @@ class BoardTagAnalysisBuilderTest(unittest.TestCase):
         self.assertIn("**主热方向**：军工", rendered)
         self.assertTrue(any(log["step"] == "render.board_tag_analysis" for log in result["module_logs"]))
 
+    def test_build_board_tag_analysis_sections_contract_falls_back_when_ai_summary_is_empty(self):
+        result = build_board_tag_analysis_sections_contract(
+            data={
+                "tag_distribution": {"存储芯片": 5, "国家大基金持股": 3, "半导体": 2},
+                "status_distribution": {},
+                "high_lianban_stocks": [],
+                "market_stats": {"up_count": 2900, "down_count": 2100},
+            },
+            analyze_sector_distribution=lambda *args, **kwargs: {},
+        )
+
+        rendered = "\n".join(str(line or "") for line in result["lines"])
+        self.assertIn("**主热标签**：存储芯片（5次）", rendered)
+        self.assertIn("存储芯片5次、国家大基金持股3次、半导体2次", rendered)
+        self.assertIn("上涨2900家、下跌2100家", rendered)
+        self.assertNotIn("**暂无板块分布数据**", rendered)
+
+    def test_build_board_tag_analysis_sections_contract_renders_no_data_when_tags_missing(self):
+        result = build_board_tag_analysis_sections_contract(
+            data={"tag_distribution": {}, "status_distribution": {}, "high_lianban_stocks": []},
+            analyze_sector_distribution=None,
+        )
+
+        rendered = "\n".join(str(line or "") for line in result["lines"])
+        self.assertIn("**暂无板块分布数据**", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
