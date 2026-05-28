@@ -492,7 +492,7 @@ def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None
     _append_table(
         lines,
         "### 附录A：新股周期判定",
-        ["标的", "上市窗口", "新股周期", "C阶段承接", "情绪出口", "辨识度", "是否升级", "结论", "判定"],
+        ["标的", "上市窗口", "新股周期", "C阶段承接", "情绪出口", "辨识度", "是否升级", "结论"],
         [
             [
                 _stock_label(item),
@@ -503,7 +503,6 @@ def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None
                 item.get("new_stock_recognition_status"),
                 "是" if item.get("upgrade_eligible") else "否",
                 conclusion_for(item),
-                item.get("candidate_upgrade_reason"),
             ]
             for item in research_pool
         ],
