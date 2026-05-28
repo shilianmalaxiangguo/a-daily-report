@@ -111,7 +111,7 @@ class NewStockReferenceNodeRuntimeTest(unittest.TestCase):
         self.assertIn("有新股研究升级，进入观察。", result["context"]["new_stock_report_lines"])
         self.assertTrue(result["context"]["new_stock_audit_passed"])
         self.assertEqual(result["diagnostics"]["render"]["upgrade_count"], 1)
-        self.assertIn("new_stock_research", result["report_sections"])
+        self.assertIn("有新股研究升级，进入观察。", result["report_sections"]["new_stock_research"])
 
     def test_research_only_slice_explains_absence_reason(self):
         node_specs = build_new_stock_reference_node_specs(
@@ -127,6 +127,9 @@ class NewStockReferenceNodeRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["diagnostics"]["score"]["research_count"], 1)
         self.assertEqual(result["diagnostics"]["score"]["upgrade_count"], 0)
+        research_item = result["context"]["new_stock_research_pool"][0]
+        self.assertFalse(research_item["upgrade_eligible"])
+        self.assertIn("新股周期证明不足", research_item["candidate_upgrade_reason"])
         self.assertIn(
             "有新股研究池，但今日未形成买入资格。",
             result["context"]["new_stock_report_lines"],
