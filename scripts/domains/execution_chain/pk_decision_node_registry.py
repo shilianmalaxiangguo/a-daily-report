@@ -5,6 +5,7 @@ DEFAULT_PK_DECISION_NODE_SPECS = [
     {"node_key": "probe_position", "title": "探针与仓位"},
     {"node_key": "front_texts", "title": "前摘要文本"},
     {"node_key": "pk_context", "title": "PK渲染上下文"},
+    {"node_key": "candidate_quality_scorecard", "title": "候选质量评分卡"},
     {"node_key": "action_plan_context", "title": "操作计划上下文"},
     {"node_key": "render_sections", "title": "渲染"},
     {"node_key": "export_stage_state", "title": "阶段导出"},

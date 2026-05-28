@@ -15,6 +15,9 @@ def build_pk_decision_export_stage_state_node(context, node_meta=None, node_look
         "scored_executable_stocks",
         "core_mvp_digest_lines",
         "mvp_focus_summary_lines",
+        "candidate_quality_panel_fields",
+        "candidate_quality_samples",
+        "candidate_quality_scorecard_diagnostics",
         "candidate_traces",
         "candidate_trace_eliminated_summary",
     ]

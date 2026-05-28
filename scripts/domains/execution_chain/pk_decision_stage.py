@@ -1,6 +1,7 @@
 from domains.execution_chain.pk_decision_node_registry import build_pk_decision_node_specs
 from domains.execution_chain.pk_decision_node_runtime import run_pk_decision_nodes
 from domains.execution_chain.pk_decision_nodes.action_plan_context import build_pk_decision_action_plan_context_node
+from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_pk_decision_candidate_quality_scorecard_node
 from domains.execution_chain.pk_decision_nodes.export_stage_state import build_pk_decision_export_stage_state_node
 from domains.execution_chain.pk_decision_nodes.front_texts import build_pk_decision_front_texts_node
 from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_decision_observation_pool_node
@@ -37,6 +38,7 @@ PK_DECISION_NODE_BUILDERS = {
     "probe_position": build_pk_decision_probe_position_node,
     "front_texts": build_pk_decision_front_texts_node,
     "pk_context": build_pk_decision_pk_context_node,
+    "candidate_quality_scorecard": build_pk_decision_candidate_quality_scorecard_node,
     "action_plan_context": build_pk_decision_action_plan_context_node,
     "render_sections": build_pk_decision_render_sections_node,
     "export_stage_state": build_pk_decision_export_stage_state_node,

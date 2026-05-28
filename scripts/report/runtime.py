@@ -16,6 +16,7 @@ from diagnostics.helper_diagnostics_runtime import (
 from domains.calendar_events.infer import normalize_calendar_ai_analysis
 from knowledge.llm_wiki_context import build_llm_wiki_context
 from report.calendar_section_nodes import render_calendar_section
+from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.decision_board_nodes import render_decision_board_section
 from report.decision_ledger import (
     build_decision_ledger_snapshot as _default_build_decision_ledger_snapshot,

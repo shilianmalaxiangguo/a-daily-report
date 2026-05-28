@@ -155,6 +155,86 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["best_stock"]["code"], "000001")
         self.assertEqual(result["exports"]["trade_gate_open"], True)
 
+    def test_candidate_quality_scorecard_node_can_run_alone_with_diagnostics(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
+                "has_personal_positions": True,
+                "best_stock": {"name": "晶方科技", "code": "603005"},
+                "watch_anchor": {"name": "上峰水泥", "code": "000672"},
+                "display_observation_candidates": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "selection_quality": "高",
+                        "entry_cost_state": "高成本",
+                        "risk_flags": ["公告待确认"],
+                    }
+                ],
+                "waiting_stocks": [
+                    {
+                        "name": "上峰水泥",
+                        "code": "000672",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                    }
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["candidate_quality_scorecard", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["daily_new_entry_limit"], 0)
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"], "603005")
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["backup_candidate"]["code"], "000672")
+        self.assertEqual(
+            [sample["code"] for sample in result["exports"]["candidate_quality_samples"]],
+            ["603005", "000672"],
+        )
+        self.assertEqual(
+            result["exports"]["candidate_quality_scorecard_diagnostics"],
+            {
+                "candidate_count": 2,
+                "scored_count": 2,
+                "missing_quality_count": 0,
+                "degraded": False,
+                "source": "pk_decision",
+            },
+        )
+
+    def test_candidate_quality_scorecard_node_keeps_empty_panel_visible(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction_cn": "退潮防守",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "best_stock": None,
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["candidate_quality_scorecard", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["market_emotion_label"], "退潮防守")
+        self.assertEqual(result["exports"]["candidate_quality_samples"], [])
+        self.assertEqual(
+            result["exports"]["candidate_quality_scorecard_diagnostics"],
+            {
+                "candidate_count": 0,
+                "scored_count": 0,
+                "missing_quality_count": 0,
+                "degraded": True,
+                "source": "pk_decision",
+            },
+        )
+
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(
             {
@@ -759,6 +839,51 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(sample["entry_cost_state"], "高成本")
         self.assertEqual(sample["cost_flags"], ["远离MA/VWAP"])
 
+    def test_action_plan_context_reuses_candidate_quality_scorecard_payload_when_present(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "should_reduce": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "原始主对象", "code": "000001"},
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "替换节点输出",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": {"name": "替换对象", "code": "999999"},
+                    "backup_candidate": None,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "替换对象",
+                        "code": "999999",
+                        "selection_quality": "高",
+                        "entry_cost_state": "确认中",
+                    }
+                ],
+                "candidate_quality_scorecard_diagnostics": {
+                    "candidate_count": 1,
+                    "scored_count": 1,
+                    "missing_quality_count": 0,
+                    "degraded": False,
+                    "source": "replacement",
+                },
+                "get_execution_framework_text": lambda: "竞价表态 -> 固定交易窗口条件 -> 30分钟止损",
+            }
+        )
+
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["market_emotion_label"], "替换节点输出")
+        self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"], "999999")
+        self.assertEqual(result["exports"]["candidate_quality_samples"][0]["code"], "999999")
+        self.assertEqual(result["exports"]["candidate_quality_scorecard_diagnostics"]["source"], "replacement")
+
     def test_render_sections_passes_candidate_quality_inputs_to_action_plan_renderer(self):
         captured = {}
 
@@ -1085,6 +1210,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "scored_executable_stocks",
                 "core_mvp_digest_lines",
                 "mvp_focus_summary_lines",
+                "candidate_quality_panel_fields",
+                "candidate_quality_samples",
+                "candidate_quality_scorecard_diagnostics",
             },
         )
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
