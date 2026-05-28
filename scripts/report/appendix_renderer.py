@@ -481,11 +481,18 @@ def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None
     if not research_pool:
         return {"lines": [], "exports": {}}
 
+    def conclusion_for(item):
+        if item.get("upgrade_eligible"):
+            return "有新股研究升级，进入观察。"
+        reason = item.get("candidate_upgrade_reason")
+        conclusion = "有新股研究池，但今日未形成买入资格。"
+        return f"{conclusion}{reason}" if reason else conclusion
+
     lines = []
     _append_table(
         lines,
         "### 附录A：新股周期判定",
-        ["标的", "上市窗口", "新股周期", "C阶段承接", "情绪出口", "辨识度", "是否升级", "判定"],
+        ["标的", "上市窗口", "新股周期", "C阶段承接", "情绪出口", "辨识度", "是否升级", "结论"],
         [
             [
                 _stock_label(item),
@@ -495,7 +502,7 @@ def _build_new_stock_cycle_review_node(context, node_meta=None, node_lookup=None
                 item.get("emotion_outlet_status"),
                 item.get("new_stock_recognition_status"),
                 "是" if item.get("upgrade_eligible") else "否",
-                item.get("candidate_upgrade_reason"),
+                conclusion_for(item),
             ]
             for item in research_pool
         ],

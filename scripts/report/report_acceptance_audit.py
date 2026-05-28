@@ -200,7 +200,14 @@ MARGIN_PRESSURE_FRONT_HEADER = "| 日期 | 融资余额 | 两市成交额 | 融�
 MARGIN_PRESSURE_APPENDIX_HEADER = "| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 压力差 | 状态 | 较前日 |"
 EXTREME_CONVICTION_TRACKING_HEADING = "**明日极度看好近25日跟踪表**"
 EXTREME_CONVICTION_TRACKING_HEADER = "| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |"
-__all__ = ["audit_report_markdown"]
+NEW_STOCK_VISIBILITY_HEADING = "### 附录A：新股周期判定"
+NEW_STOCK_VISIBILITY_MARKERS = (
+    "有新股研究升级，进入观察。",
+    "有新股研究池，但今日未形成买入资格。",
+    "新股研究池为空，今日不参与。",
+    "上市日期缺失，不参与。",
+)
+__all__ = ["audit_new_stock_visibility", "audit_report_markdown"]
 
 CHANLUN_TOMORROW_DECISION_HEADING = "明日抉择"
 CHANLUN_ZERO_POSITION_ACTION_MARKERS = ("空仓等待", "不参与", "不新增参与", "禁止参与")
@@ -506,6 +513,24 @@ def _audit_candidate_section_contract(lines):
             )
         )
     return findings
+
+
+def audit_new_stock_visibility(markdown_text):
+    lines = _lines(markdown_text)
+    if NEW_STOCK_VISIBILITY_HEADING not in lines:
+        return {"passed": True, "findings": []}
+    section_text = "\n".join(_section_after(lines, NEW_STOCK_VISIBILITY_HEADING))
+    if any(marker in section_text for marker in NEW_STOCK_VISIBILITY_MARKERS):
+        return {"passed": True, "findings": []}
+    return {
+        "passed": False,
+        "findings": [
+            _finding(
+                "new_stock_visibility_missing",
+                "新股周期判定缺少升级或不参与原因",
+            )
+        ],
+    }
 
 
 def _audit_mainline_capacity_regime_contract(lines):
@@ -1273,6 +1298,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_reasoning_surface(lines))
     findings.extend(_audit_anti_noise_language(lines))
     findings.extend(_audit_unique_focus(lines))
+    findings.extend(audit_new_stock_visibility(markdown)["findings"])
     findings.extend(_audit_zero_position_tomorrow_action_consistency(lines))
     findings.extend(_audit_chanlun_tomorrow_decision_consistency(lines, companion_html))
     findings.extend(_audit_position_state_rendering(lines))
