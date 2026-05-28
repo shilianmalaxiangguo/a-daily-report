@@ -4,12 +4,14 @@ import datetime
 
 import daily_report_analysis_utils as analysis_utils
 from daily_report_snapshot_io import load_data_snapshot
+from domains.market_state.two_market_turnover.nodes import build_turnover_comparison
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
 
 _DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
 
 __all__ = [
     "build_market_style_switch_snapshot",
+    "build_turnover_comparison",
     "build_market_state_machine_snapshot",
     "build_unified_sector_strength_rows",
     "calculate_exit_price_lines",
@@ -1181,38 +1183,20 @@ def _build_market_style_switch_snapshot_legacy_body(target_date, data, observati
     abnormal_projection = abnormal_projection or {}
 
     current_turnover = _safe_float(data.get("total_turnover"))
-    turnover_history = load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_days=8)
-    turnover_series = list(turnover_history)
-    if current_turnover > 0:
-        turnover_series.append(
-            {
-                "date": _normalize_kline_date_str(target_date),
-                "turnover": round(current_turnover, 2),
-            }
-        )
-
-    prev_turnover = _safe_float(turnover_history[-1].get("turnover")) if turnover_history else 0.0
-    prev2_turnover = _safe_float(turnover_history[-2].get("turnover")) if len(turnover_history) >= 2 else 0.0
-    turnover_delta_pct = (current_turnover / prev_turnover - 1.0) if current_turnover > 0 and prev_turnover > 0 else None
-
-    turnover_state = "unknown"
-    turnover_label = "量能历史不足"
-    if current_turnover > 0 and prev_turnover > 0:
-        if prev2_turnover > 0 and current_turnover < prev_turnover * 0.97 and prev_turnover < prev2_turnover * 0.97:
-            turnover_state = "shrinking"
-            turnover_label = "成交额连续回落"
-        elif prev2_turnover > 0 and current_turnover > prev_turnover * 1.03 and prev_turnover >= prev2_turnover * 0.98:
-            turnover_state = "rising"
-            turnover_label = "成交额继续回升"
-        elif current_turnover < prev_turnover * 0.97:
-            turnover_state = "pullback"
-            turnover_label = "成交额冲高后回落"
-        elif current_turnover > prev_turnover * 1.03:
-            turnover_state = "rebound"
-            turnover_label = "成交额重新放大"
-        else:
-            turnover_state = "flat"
-            turnover_label = "成交额横向波动"
+    if not data.get("market_turnover_history"):
+        data = {
+            **data,
+            "market_turnover_history": load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_days=8),
+        }
+    turnover_comparison = build_turnover_comparison(data, target_date)
+    turnover_series = list(turnover_comparison.get("series") or [])
+    turnover_delta_pct = (
+        turnover_comparison.get("previous_change_pct") / 100
+        if turnover_comparison.get("previous_change_pct") is not None
+        else None
+    )
+    turnover_state = turnover_comparison.get("state") or "unknown"
+    turnover_label = turnover_comparison.get("label") or "量能历史不足"
 
     status_distribution = data.get("status_distribution", {}) or {}
     tag_distribution = data.get("tag_distribution", {}) or {}

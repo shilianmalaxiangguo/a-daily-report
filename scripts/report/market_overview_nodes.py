@@ -1,9 +1,10 @@
 from pathlib import Path
 
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
+from domains.market_state.two_market_turnover.node_registry import build_two_market_turnover_node_specs
+from domains.market_state.two_market_turnover.node_runtime import run_two_market_turnover_nodes
 from report.market_overview_node_registry import build_market_overview_node_specs
 from report.market_overview_node_runtime import run_market_overview_nodes
-from report.market_condition_wording import describe_market_turnover_condition
 from storage.database_service import DatabaseService
 
 
@@ -232,6 +233,12 @@ def _format_change_pct_point(value):
     if value is None:
         return "样本不足"
     return f"{_safe_float(value):+.2f}pct"
+
+
+def _format_turnover_change_pct(value):
+    if value is None:
+        return "-"
+    return _format_signed_pct(value)
 
 
 def _pct_change_between(current, previous):
@@ -525,6 +532,11 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     data = _data(context)
     target_date = _target_date(context)
     margin_pressure = _margin_pressure_snapshot(data, target_date, db_path=_daily_fact_db_path(context))
+    turnover_result = run_two_market_turnover_nodes(
+        build_two_market_turnover_node_specs(enabled_node_keys=["compare"]),
+        {"data": data, "target_date": target_date},
+    )
+    turnover_comparison = turnover_result["context"].get("two_market_turnover_comparison", {})
     lines = [
         "### 1. 指数与市场底色",
         "| 指标 | 数值 | 涨跌幅 | 解读 |",
@@ -557,7 +569,14 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
     up_count = data.get("market_stats", {}).get("up_count", 0)
     down_count = data.get("market_stats", {}).get("down_count", 0)
     top50_share = resolve_top50_turnover_share(data)
-    lines.append(f"| 两市成交额 | {turnover:.2f}亿 | - | {describe_market_turnover_condition(data)} |")
+    turnover_basis = str(turnover_comparison.get("condition_text") or "").strip()
+    turnover_label = str(turnover_comparison.get("label") or "").strip()
+    if turnover_label and turnover_label != "量能历史不足":
+        turnover_basis = f"{turnover_label}；{turnover_basis}" if turnover_basis else turnover_label
+    lines.append(
+        f"| 两市成交额 | {turnover:.2f}亿 | "
+        f"{_format_turnover_change_pct(turnover_comparison.get('previous_change_pct'))} | {turnover_basis} |"
+    )
     lines.append(
         f"| Top50成交额占比 | {_format_top50_share_pct(top50_share)} | {top50_share['regime']} | {top50_share['interpretation']} |"
     )
@@ -587,7 +606,11 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
                 f"{_format_amount_yi(row.get('market_amount_yi'))} |"
             )
         lines.append("")
-    return {"lines": lines, "exports": {}, "module_logs": []}
+    return {
+        "lines": lines,
+        "exports": {"two_market_turnover_comparison": turnover_comparison},
+        "module_logs": list(turnover_result.get("module_logs") or []),
+    }
 
 
 def build_market_overview_volume_node(context, node_meta=None, node_lookup=None):

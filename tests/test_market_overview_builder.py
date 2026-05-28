@@ -110,6 +110,36 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("| 两市成交额 | 29170.74亿 | - | 量能充沛，但赚钱效应不足 |", rendered)
 
+    def test_build_market_trend_sections_contract_renders_turnover_history_comparison(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "indices": {"上证指数": {"点位": 4131.53, "涨跌幅": -2.04}},
+                "total_turnover": 35072.8,
+                "market_turnover_history": [
+                    {"date": "2026-05-19", "turnover": 29089.77},
+                    {"date": "2026-05-20", "turnover": 29764.59},
+                ],
+                "zt_pool": [{"code": "000001"}] * 35,
+                "dt_pool": [{"code": "000002"}] * 65,
+                "market_stats": {"up_count": 800, "down_count": 4600},
+            },
+            target_date="2026-05-21",
+            enabled_node_keys=["indices"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 两市成交额 | 35072.80亿 | +17.83% | 成交额继续回升；量能充沛，但赚钱效应不足 |",
+            rendered,
+        )
+        self.assertNotIn("### 2. 市场状态结论", rendered)
+        self.assertEqual(result["context"]["two_market_turnover_comparison"]["state"], "rising")
+        self.assertAlmostEqual(
+            result["node_outputs"]["indices"]["two_market_turnover_comparison"]["previous_change_pct"],
+            17.83,
+            places=2,
+        )
+
     def test_build_market_trend_sections_contract_renders_top50_turnover_share_regime(self):
         result = build_market_trend_sections_contract(
             data={

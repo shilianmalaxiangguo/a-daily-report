@@ -439,6 +439,63 @@ assert leader["name"] == "军工龙头"
         self.assertIn("先防踩踏", result["primary_action"])
         self.assertNotIn("趋势分歧优先", result["style_label"])
 
+    def test_build_market_style_switch_snapshot_reuses_two_market_turnover_node(self):
+        support = self._load_module()
+        calls = []
+
+        def fake_compare(data, target_date=""):
+            calls.append((target_date, data.get("total_turnover")))
+            return {
+                "state": "rebound",
+                "label": "成交额重新放大",
+                "condition_text": "量能充沛，赚钱效应尚可",
+                "latest_turnover_yi": 35072.8,
+                "previous_turnover_yi": 29764.59,
+                "previous_change_pct": 17.83,
+                "history_rows": [{"date": "2026-05-20", "turnover": 29764.59}],
+                "series": [
+                    {"date": "2026-05-20", "turnover": 29764.59},
+                    {"date": "2026-05-21", "turnover": 35072.8},
+                ],
+                "source": "test",
+            }
+
+        result = support.build_market_style_switch_snapshot(
+            "2026-05-21",
+            {
+                "benchmark_change_pct": 0.2,
+                "total_turnover": 35072.8,
+                "status_distribution": {"3板": 1},
+                "tag_distribution": {"机器人": 3},
+                "integrated_hot_list": [],
+                "zt_pool": [{"name": "机器人一号"}],
+                "hot_rank_top30": [],
+            },
+            observation_snapshot={
+                "resilient_abnormal_count": 2,
+                "failed_abnormal_count": 0,
+                "densest_sector_trend_count": 3,
+                "densest_sector": "机器人",
+                "leader_memory_count": 2,
+                "trusted_tracking_count": 1,
+            },
+            abnormal_projection={},
+            helpers={
+                "build_turnover_comparison": fake_compare,
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "_round_or_none": lambda value, digits=2: round(float(value), digits) if value is not None else None,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "_parse_status_board_count": lambda label: int(str(label).replace("板", "")) if str(label).replace("板", "").isdigit() else 0,
+                "_count_keyword_hits_in_mapping": lambda mapping, keywords: 0,
+                "_count_keyword_hits_in_items": lambda items, keywords, fields: 0,
+            },
+        )
+
+        self.assertEqual(calls, [("2026-05-21", 35072.8)])
+        self.assertEqual(result["turnover_state"], "rebound")
+        self.assertEqual(result["turnover_label"], "成交额重新放大")
+        self.assertIn("2026-05-21:35073亿", result["turnover_series_text"])
+
     def test_market_state_support_loads_recent_sector_flow_history_from_snapshots(self):
         support = self._load_module()
 
