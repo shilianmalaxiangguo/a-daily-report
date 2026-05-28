@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.report_acceptance_audit import audit_report_markdown
+from report.report_acceptance_audit import audit_new_stock_visibility, audit_report_markdown
 
 
 GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
@@ -1108,6 +1108,30 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("appendix_duplicate_front_page_section", {finding["code"] for finding in result["findings"]})
+
+
+class NewStockReportVisibilityAuditTest(unittest.TestCase):
+    def test_accepts_upgrade_marker(self):
+        result = audit_new_stock_visibility(
+            "### 附录A：新股周期判定\n\n有新股研究升级，进入观察。\n"
+        )
+
+        self.assertEqual(result["findings"], [])
+        self.assertTrue(result["passed"])
+
+    def test_accepts_absence_marker(self):
+        result = audit_new_stock_visibility(
+            "### 附录A：新股周期判定\n\n有新股研究池，但今日未形成买入资格。\n"
+        )
+
+        self.assertEqual(result["findings"], [])
+        self.assertTrue(result["passed"])
+
+    def test_fails_when_heading_has_no_upgrade_or_absence_reason(self):
+        result = audit_new_stock_visibility("### 附录A：新股周期判定\n\n今日跟踪新股研究池。\n")
+
+        self.assertIn("new_stock_visibility_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
 
 if __name__ == "__main__":
