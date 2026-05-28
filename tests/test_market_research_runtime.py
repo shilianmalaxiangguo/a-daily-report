@@ -412,6 +412,60 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["mainline_turnover_summary"]["conclusion"], "主线未切换，通信仍是中心")
         self.assertIn("18.1%", result["mainline_turnover_summary"]["data_text"])
 
+    def test_build_market_research_snapshot_contract_uses_mainline_capacity_node_by_default(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="通信")
+
+        result = build_market_research_snapshot_contract(
+            data={
+                "current_mainline_history_record": {
+                    "date": "2026-04-24",
+                    "primary_mainline": "通信",
+                    "secondary_mainline": "机器人",
+                },
+                "recent_mainline_history": [
+                    {"date": "2026-04-22", "primary_mainline": "通信"},
+                    {"date": "2026-04-23", "primary_mainline": "通信"},
+                ],
+                "current_sector_turnover_snapshot": {
+                    "date": "2026-04-24",
+                    "sector_name": "通信",
+                    "sector_turnover": 4050.0,
+                    "total_turnover": 35000.0,
+                    "turnover_share_pct": 11.57,
+                    "source_status": "success",
+                },
+                "recent_sector_turnover_history": [
+                    {
+                        "date": "2026-04-22",
+                        "sector_name": "通信",
+                        "sector_turnover": 2744.0,
+                        "total_turnover": 28000.0,
+                        "turnover_share_pct": 9.8,
+                    },
+                    {
+                        "date": "2026-04-23",
+                        "sector_name": "通信",
+                        "sector_turnover": 3286.0,
+                        "total_turnover": 31000.0,
+                        "turnover_share_pct": 10.6,
+                    },
+                ],
+            },
+            **kwargs,
+        )
+
+        summary = result["mainline_turnover_summary"]
+        self.assertEqual(summary["current_mainline"], "通信")
+        self.assertEqual(summary["share_trend_label"], "强化")
+        self.assertEqual(
+            summary["mainline_capacity_regime_summary"]["mainline_capacity"],
+            "双线孕育",
+        )
+        self.assertTrue(
+            any(log["step"] == "run.summary" for log in result["module_logs"]),
+            result["module_logs"],
+        )
+
     def test_build_market_research_snapshot_contract_loads_latest_25_mainline_history_days(self):
         kwargs = self._minimal_snapshot_kwargs(leading_line="半导体")
         calls = []

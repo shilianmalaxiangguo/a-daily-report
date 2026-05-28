@@ -222,9 +222,9 @@ def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_hist
             continue
         row = rows_by_date.get(record_date)
         if row:
-            row.setdefault("date", record_date)
-            row.setdefault("cycle_mainline", mainline)
-            row.setdefault("daily_attack_line", _daily_attack_text(record, mainline) or mainline)
+            row["date"] = record_date
+            row["cycle_mainline"] = mainline
+            row["daily_attack_line"] = _daily_attack_text(record, mainline) or mainline
             completed.append(row)
             continue
         completed.append(
@@ -575,10 +575,12 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
         )
         and callable(helpers.get("load_recent_mainline_history"))
     ):
-        snapshot_data["recent_mainline_history"] = _load_recent_mainline_history_for_cycle_calendar(
+        loaded_history = _load_recent_mainline_history_for_cycle_calendar(
             helpers["load_recent_mainline_history"],
             target_date,
         )
+        if loaded_history:
+            snapshot_data["recent_mainline_history"] = loaded_history
 
     observation = market_research_snapshot.get("observation", {}) if isinstance(market_research_snapshot, dict) else {}
     if callable(helpers.get("resolve_effective_total_turnover")):

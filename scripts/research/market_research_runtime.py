@@ -1,4 +1,5 @@
 from report.market_fit_calibration import build_market_fit_calibration
+from domains.market_state.mainline_capacity.node_runtime import run_mainline_capacity_summary_node
 import daily_report_analysis_utils as analysis_utils
 
 
@@ -46,6 +47,51 @@ def _has_resolved_mainline_turnover_summary(summary):
         if has_mainline_turnover and missing_market_turnover:
             return False
     return True
+
+
+def _has_displayable_mainline_turnover_summary(summary):
+    if not isinstance(summary, dict):
+        return False
+    return any(str(summary.get(key) or "").strip() for key in ("conclusion", "data_text", "action_text"))
+
+
+def _run_mainline_capacity_summary(
+    *,
+    target_date,
+    current_mainline_history_record,
+    recent_mainline_history,
+    current_sector_turnover_snapshot,
+    recent_sector_turnover_history,
+    sector_attack_evidence_rows,
+    realtime_tag_evidence_snapshot,
+    build_mainline_turnover_summary=None,
+):
+    if callable(build_mainline_turnover_summary):
+        summary = build_mainline_turnover_summary(
+            target_date=target_date,
+            current_mainline_history_record=current_mainline_history_record,
+            recent_mainline_history=recent_mainline_history,
+            current_sector_turnover_snapshot=current_sector_turnover_snapshot,
+            recent_sector_turnover_history=recent_sector_turnover_history,
+            sector_attack_evidence_rows=sector_attack_evidence_rows,
+            realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
+        )
+        return {
+            "context": {"mainline_turnover_summary": summary},
+            "module_logs": [],
+        }
+
+    return run_mainline_capacity_summary_node(
+        {
+            "target_date": target_date,
+            "current_mainline_history_record": current_mainline_history_record,
+            "recent_mainline_history": recent_mainline_history,
+            "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
+            "recent_sector_turnover_history": recent_sector_turnover_history,
+            "sector_attack_evidence_rows": sector_attack_evidence_rows,
+            "realtime_tag_evidence_snapshot": realtime_tag_evidence_snapshot,
+        }
+    )
 
 
 def _confirmed_attack_line(mainline_turnover_summary):
@@ -384,8 +430,8 @@ def _load_recent_turnover_by_daily_mainline(loader, recent_mainline_history, tar
                 continue
             record = record_by_date.get(row_date) or {}
             row["date"] = row_date
-            row.setdefault("cycle_mainline", mainline)
-            row.setdefault("daily_attack_line", str((record or {}).get("daily_attack_line") or mainline).strip())
+            row["cycle_mainline"] = mainline
+            row["daily_attack_line"] = str((record or {}).get("daily_attack_line") or mainline).strip()
             rows_by_date[row_date] = row
     return [rows_by_date[date] for date in sorted(rows_by_date)]
 
@@ -404,9 +450,9 @@ def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_hist
             continue
         row = rows_by_date.get(record_date)
         if row:
-            row.setdefault("date", record_date)
-            row.setdefault("cycle_mainline", mainline)
-            row.setdefault("daily_attack_line", str((record or {}).get("daily_attack_line") or mainline).strip())
+            row["date"] = record_date
+            row["cycle_mainline"] = mainline
+            row["daily_attack_line"] = str((record or {}).get("daily_attack_line") or mainline).strip()
             completed.append(row)
             continue
         completed.append(
@@ -926,9 +972,12 @@ def build_market_research_snapshot_contract(
             mainline_turnover_summary,
             current_mainline_history_record,
         )
-        or not _has_resolved_mainline_turnover_summary(mainline_turnover_summary)
-    ) and callable(build_mainline_turnover_summary):
-        mainline_turnover_summary = build_mainline_turnover_summary(
+        or (
+            not _has_resolved_mainline_turnover_summary(mainline_turnover_summary)
+            and not _has_displayable_mainline_turnover_summary(mainline_turnover_summary)
+        )
+    ):
+        mainline_capacity_result = _run_mainline_capacity_summary(
             target_date=target_date,
             current_mainline_history_record=current_mainline_history_record,
             recent_mainline_history=recent_mainline_history,
@@ -936,7 +985,13 @@ def build_market_research_snapshot_contract(
             recent_sector_turnover_history=recent_sector_turnover_history,
             sector_attack_evidence_rows=sector_attack_evidence_rows,
             realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
+            build_mainline_turnover_summary=build_mainline_turnover_summary,
         )
+        mainline_turnover_summary = (
+            (mainline_capacity_result.get("context") or {}).get("mainline_turnover_summary")
+            or mainline_turnover_summary
+        )
+        logs.extend(mainline_capacity_result.get("module_logs") or [])
 
     current_mainline_history_record = _align_current_mainline_history_record_with_attack(
         current_mainline_history_record,
