@@ -1133,6 +1133,20 @@ class NewStockReportVisibilityAuditTest(unittest.TestCase):
         self.assertIn("new_stock_visibility_missing", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_fails_when_only_other_section_has_upgrade_marker(self):
+        result = audit_new_stock_visibility(
+            "## 五、个股解读\n"
+            "\n"
+            "有新股研究升级，进入观察。\n"
+            "\n"
+            "### 附录A：新股周期判定\n"
+            "\n"
+            "今日跟踪新股研究池。\n"
+        )
+
+        self.assertIn("new_stock_visibility_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

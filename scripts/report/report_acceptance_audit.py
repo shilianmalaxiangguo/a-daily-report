@@ -516,10 +516,11 @@ def _audit_candidate_section_contract(lines):
 
 
 def audit_new_stock_visibility(markdown_text):
-    text = str(markdown_text or "")
-    if NEW_STOCK_VISIBILITY_HEADING not in text:
+    lines = _lines(markdown_text)
+    if NEW_STOCK_VISIBILITY_HEADING not in lines:
         return {"passed": True, "findings": []}
-    if any(marker in text for marker in NEW_STOCK_VISIBILITY_MARKERS):
+    section_text = "\n".join(_section_after(lines, NEW_STOCK_VISIBILITY_HEADING))
+    if any(marker in section_text for marker in NEW_STOCK_VISIBILITY_MARKERS):
         return {"passed": True, "findings": []}
     return {
         "passed": False,
