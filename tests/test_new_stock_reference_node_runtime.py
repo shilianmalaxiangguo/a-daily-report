@@ -17,6 +17,16 @@ class NewStockReferenceNodeRuntimeTest(unittest.TestCase):
 
         self.assertEqual([spec["node_key"] for spec in node_specs], ["score", "render"])
 
+    def test_node_specs_respect_explicit_empty_selection(self):
+        node_specs = build_new_stock_reference_node_specs(enabled_node_keys=[])
+
+        self.assertEqual(node_specs, [])
+
+    def test_node_specs_respect_explicit_empty_builder_map(self):
+        node_specs = build_new_stock_reference_node_specs(builder_map={})
+
+        self.assertEqual(node_specs, [])
+
     def test_runtime_can_execute_only_selected_score_node(self):
         node_specs = build_new_stock_reference_node_specs(enabled_node_keys=["score"])
         context = {
