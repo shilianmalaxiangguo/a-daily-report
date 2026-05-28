@@ -42,4 +42,6 @@ def build_market_trend_sections_contract(data, target_date, *, enabled_node_keys
     return {
         "lines": lines,
         "module_logs": logs,
+        "context": dict(node_result.get("context") or {}),
+        "node_outputs": dict(node_result.get("node_outputs") or {}),
     }
