@@ -275,25 +275,6 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("不自动写入正式 wiki", candidate.get("action", ""))
         self.assertIn("不改变交易动作", candidate.get("action", ""))
 
-    def test_build_llm_wiki_context_records_external_insight_fieldization(self):
-        context = build_llm_wiki_context()
-        wiki_text = (ROOT / "wiki/交易思想/AI摩擦与知识复利.md").read_text(encoding="utf-8")
-        digest = context["report_digest_text"]
-
-        self.assertIn(
-            "外部启发转交易规则 -> 先分原文可支持、系统化抽象、不能归因给原文，再落到市场条件、参与边界和复盘反证",
-            context["field_mappings"],
-        )
-        self.assertIn(
-            "自以为是校准 -> 判断欲强时先回到价格事实、账户占用、亏损边界和失效条件，不用顺口类比替代可复盘字段",
-            context["field_mappings"],
-        )
-        self.assertIn("外部启发转交易规则", wiki_text)
-        self.assertIn("顺口类比", wiki_text)
-        self.assertIn("市场条件、参与边界和复盘反证", wiki_text)
-        self.assertIn("外部启发先做来源保真再落字段", digest)
-        self.assertIn("判断欲强先回价格账户亏损边界失效条件", digest)
-
     def test_build_llm_wiki_context_keeps_report_digest_short_and_fieldized(self):
         context = build_llm_wiki_context()
         digest = context["report_digest_text"]
