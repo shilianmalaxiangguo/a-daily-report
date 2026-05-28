@@ -47,7 +47,66 @@ def _is_ten_confirm_upgrade_candidate(candidate):
     )
 
 
-def build_pk_decision_action_plan_context_node(context, node_meta=None, node_lookup=None):
+ACTION_PLAN_CONTEXT_EXPORT_KEYS = (
+    "action_rows",
+    "observation_priority_lines",
+    "backup_observation_lines",
+    "position_section_lines",
+    "pre_market_lines",
+    "opening_lines",
+    "first_hour_lines",
+    "intraday_lines",
+    "closing_lines",
+    "alert_rows",
+    "action_plan_context_diagnostics",
+)
+
+
+def _build_action_plan_context_diagnostics(
+    *,
+    action_rows,
+    observation_priority_lines,
+    backup_observation_lines,
+    alert_rows,
+    daily_new_entry_limit,
+    best_stock,
+    watch_anchor,
+):
+    return {
+        "source": "pk_decision",
+        "action_row_count": len(action_rows),
+        "observation_priority_count": len(observation_priority_lines),
+        "backup_observation_count": len(backup_observation_lines),
+        "alert_count": len(alert_rows),
+        "daily_new_entry_limit": daily_new_entry_limit,
+        "has_best_stock": bool(best_stock),
+        "has_watch_anchor": bool(watch_anchor),
+        "degraded": not bool(action_rows),
+    }
+
+
+def _sanitize_action_plan_context_payload(payload):
+    payload = dict(payload or {})
+    sanitized = {}
+    for key in ACTION_PLAN_CONTEXT_EXPORT_KEYS:
+        if key not in payload:
+            continue
+        value = payload.get(key)
+        if key == "action_plan_context_diagnostics":
+            sanitized[key] = dict(value or {})
+        elif key == "alert_rows":
+            sanitized[key] = list(value or [])
+        else:
+            sanitized[key] = sanitize_user_visible_text(value)
+    return sanitized
+
+
+def build_action_plan_context_payload(context):
+    context = context or {}
+    existing_payload = context.get("action_plan_context_payload")
+    if existing_payload is not None:
+        return _sanitize_action_plan_context_payload(existing_payload)
+
     trade_gate_open = context.get("trade_gate_open", False)
     best_stock = context.get("best_stock")
     watch_anchor = context.get("watch_anchor")
@@ -417,20 +476,43 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             }
         )
 
+    payload = {
+        "action_rows": sanitize_user_visible_text(action_rows),
+        "observation_priority_lines": sanitize_user_visible_text(observation_priority_lines),
+        "backup_observation_lines": sanitize_user_visible_text(backup_observation_lines),
+        "position_section_lines": sanitize_user_visible_text(position_section_lines),
+        "pre_market_lines": sanitize_user_visible_text(pre_market_lines),
+        "opening_lines": sanitize_user_visible_text(opening_lines),
+        "first_hour_lines": sanitize_user_visible_text(first_hour_lines),
+        "intraday_lines": sanitize_user_visible_text(intraday_lines),
+        "closing_lines": sanitize_user_visible_text(closing_lines),
+        "alert_rows": alert_rows,
+        "action_plan_context_diagnostics": _build_action_plan_context_diagnostics(
+            action_rows=action_rows,
+            observation_priority_lines=observation_priority_lines,
+            backup_observation_lines=backup_observation_lines,
+            alert_rows=alert_rows,
+            daily_new_entry_limit=daily_new_entry_limit,
+            best_stock=best_stock,
+            watch_anchor=watch_anchor,
+        ),
+        **scorecard_payload,
+    }
+    return payload
+
+
+def build_pk_decision_action_plan_context_node(context, node_meta=None, node_lookup=None):
+    payload = build_action_plan_context_payload(context)
     return {
         "lines": [],
-        "exports": {
-            "action_rows": sanitize_user_visible_text(action_rows),
-            "observation_priority_lines": sanitize_user_visible_text(observation_priority_lines),
-            "backup_observation_lines": sanitize_user_visible_text(backup_observation_lines),
-            "position_section_lines": sanitize_user_visible_text(position_section_lines),
-            "pre_market_lines": sanitize_user_visible_text(pre_market_lines),
-            "opening_lines": sanitize_user_visible_text(opening_lines),
-            "first_hour_lines": sanitize_user_visible_text(first_hour_lines),
-            "intraday_lines": sanitize_user_visible_text(intraday_lines),
-            "closing_lines": sanitize_user_visible_text(closing_lines),
-            "alert_rows": alert_rows,
-            **scorecard_payload,
-        },
-        "module_logs": [],
+        "exports": payload,
+        "module_logs": [
+            {
+                "module": "domains.execution_chain.pk_decision_nodes.action_plan_context",
+                "step": "build.action_plan_context",
+                "status": "success",
+                "message": "已生成明日操作计划上下文",
+                "details": payload.get("action_plan_context_diagnostics", {}),
+            }
+        ],
     }

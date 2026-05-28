@@ -884,6 +884,106 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["candidate_quality_samples"][0]["code"], "999999")
         self.assertEqual(result["exports"]["candidate_quality_scorecard_diagnostics"]["source"], "replacement")
 
+    def test_action_plan_context_node_exports_stable_payload_and_diagnostics(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
+                "has_personal_positions": True,
+                "best_stock": None,
+                "watch_anchor": {
+                    "name": "观察锚点",
+                    "code": "000001",
+                    "minute_plan": {"confirm_price_60m": 10.5},
+                },
+                "watch_anchor_type": "重点观察谁",
+                "display_observation_candidates": [
+                    {
+                        "name": "观察锚点",
+                        "code": "000001",
+                        "permission_label": "重点观察权",
+                        "minute_plan": {"confirm_price_60m": 10.5},
+                    }
+                ],
+                "waiting_stocks": [{"name": "备选股", "code": "000002"}],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "compact_text": "盯10.50",
+                    "key_zone_display": "10.50",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("compact_text", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+                "build_candidate_exit_rules": lambda candidate, stop_plan=None: {
+                    "holding_days_min": 1,
+                    "holding_days_max": 3,
+                },
+                "format_holding_window_text": lambda min_days, max_days: f"{min_days}-{max_days}天",
+                "get_execution_framework_text": lambda: "竞价表态 -> 参与窗口 -> 60分钟确认 -> 30分钟止损",
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["action_plan_context", "export_stage_state"],
+        )
+
+        diagnostics = result["exports"]["action_plan_context_diagnostics"]
+        self.assertEqual(diagnostics["source"], "pk_decision")
+        self.assertEqual(diagnostics["action_row_count"], 1)
+        self.assertEqual(diagnostics["observation_priority_count"], 1)
+        self.assertEqual(diagnostics["backup_observation_count"], 1)
+        self.assertEqual(diagnostics["alert_count"], 0)
+        self.assertEqual(diagnostics["daily_new_entry_limit"], 0)
+        self.assertTrue(diagnostics["has_watch_anchor"])
+        self.assertFalse(diagnostics["has_best_stock"])
+
+    def test_action_plan_context_reuses_replacement_payload_when_present(self):
+        replacement_payload = {
+            "action_rows": [{"action": "替换动作", "name": "替换对象", "code": "999999"}],
+            "observation_priority_lines": ["替换观察"],
+            "backup_observation_lines": [],
+            "position_section_lines": ["替换仓位"],
+            "pre_market_lines": ["替换盘前"],
+            "opening_lines": ["替换开盘"],
+            "first_hour_lines": ["替换首小时"],
+            "intraday_lines": ["替换盘中"],
+            "closing_lines": ["替换尾盘"],
+            "alert_rows": [],
+            "action_plan_context_diagnostics": {
+                "source": "replacement",
+                "action_row_count": 1,
+                "observation_priority_count": 1,
+                "backup_observation_count": 0,
+                "alert_count": 0,
+                "daily_new_entry_limit": 0,
+                "has_best_stock": False,
+                "has_watch_anchor": True,
+                "degraded": False,
+            },
+        }
+
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": True,
+                "position_level": "三档（进攻档）",
+                "step0_prediction": "GOOD",
+                "step0_prediction_cn": "进攻观察",
+                "final_gate": {"can_new_entry": True},
+                "best_stock": {"name": "原始对象", "code": "000001"},
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "action_plan_context_payload": replacement_payload,
+            }
+        )
+
+        self.assertEqual(result["exports"]["action_rows"][0]["code"], "999999")
+        self.assertEqual(result["exports"]["position_section_lines"], ["替换仓位"])
+        self.assertEqual(result["exports"]["action_plan_context_diagnostics"]["source"], "replacement")
+
     def test_render_sections_passes_candidate_quality_inputs_to_action_plan_renderer(self):
         captured = {}
 
@@ -1210,6 +1310,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "scored_executable_stocks",
                 "core_mvp_digest_lines",
                 "mvp_focus_summary_lines",
+                "action_plan_context_diagnostics",
                 "candidate_quality_panel_fields",
                 "candidate_quality_samples",
                 "candidate_quality_scorecard_diagnostics",
