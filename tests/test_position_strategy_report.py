@@ -105,6 +105,43 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| 合百集团 | 40.0% | 是 |", report)
         self.assertIn("| 合百集团 | 000417 | 股权转让 |", report)
 
+    def test_render_does_not_turn_observation_appendix_into_new_opportunity_when_new_position_is_zero(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={},
+            target_date="2026-05-26",
+            positions=[{"name": "晶方科技", "position": 42.0}],
+            source_report_markdown="""
+## 明日账户建议
+| 项目 | 结论 |
+|------|------|
+| 明日动作 | 先处理旧仓，不为新候选分散资金 |
+| T0主对象 | 持有晶方科技(603005)，100股，成本43.835；先看45.1能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手 |
+| T0备用 | 华天科技(002185)：仅作条件观察 |
+| 新开仓上限 | 0 |
+
+**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|----------|
+| 1 | 步步高 | 002251 | 超市连锁 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10窗口，未确认不参与 |
+| 2 | 大众公用 | 600635 | 供气供热 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10窗口，未确认不参与 |
+| 3 | 红星发展 | 600367 | 化工原料 | 核心传导者 / 中位传导 | 可执行候选 | 首板 / 趋势审美 | 修复观察只看09:50-10:10窗口，未确认不参与 |
+
+#### 附录A：明日极度看好列表
+| 序号 | 股票 | 代码 | 板块 | 名单身份 | 观察理由 | 明日原则 |
+|------|------|------|------|------|------|------|
+| 1 | 步步高 | 002251 | 超市连锁 | 候选观察 | 板块锚定龙 / 首板 | 最终0%时只作观察样本，不构成明日新增参与 |
+""",
+        )
+
+        self.assertIn("当前没有明日极度看好候选，明日不设目标标的。", report)
+        self.assertIn("| 晶方科技 | 42.0% | 否 |", report)
+        self.assertNotIn("| 步步高 | 002251 |", report)
+        self.assertNotIn("| 大众公用 | 600635 |", report)
+        self.assertNotIn("| 红星发展 | 600367 |", report)
+        self.assertNotIn("50%标准进攻预演 | 09:30-09:35", report)
+
     def test_render_preserves_prior_high_inertia_identity_for_old_holding(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 
@@ -306,8 +343,9 @@ class PositionStrategyReportTest(unittest.TestCase):
 
             assert exit_code == 0
             assert len(report_output_calls) == 1
-            assert report_output_calls[0].get("has_personal_positions") is False
+            assert report_output_calls[0].get("has_personal_positions") is True
             assert report_output_calls[0].get("position_report_text", "") == ""
+            assert fake_data["personal_position_context"]["existing_position_summary"]["has_position"] is True
             assert len(calls) == 1
             assert calls[0][1:] == ("2026-05-19", "replay")
             assert "军工一号" in calls[0][0]

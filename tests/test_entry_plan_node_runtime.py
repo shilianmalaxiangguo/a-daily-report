@@ -71,8 +71,8 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
 
         self.assertIn("50%标准进攻", stop_lines)
         self.assertIn("50%标准进攻", conclusion_lines)
-        self.assertIn("参与窗口", stop_lines)
-        self.assertIn("参与窗口", conclusion_lines)
+        self.assertIn("固定交易窗口内条件成立", stop_lines)
+        self.assertIn("固定交易窗口内条件成立", conclusion_lines)
         self.assertNotIn(_m("30%", "条件试错"), stop_lines)
         self.assertNotIn(_m("30%", "条件试错"), conclusion_lines)
         self.assertNotIn("二档（防守档）", stop_lines)
@@ -104,15 +104,15 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
             "executable_stocks": [{"name": "大唐发电", "code": "601991"}],
             "waiting_stocks": [],
             "untradable_stocks": [],
-            "step4_structure_layer_text": "趋势比价链核心，允许围绕参与窗口预演",
+            "step4_structure_layer_text": "趋势比价链核心，允许围绕固定交易窗口条件预演",
             "get_execution_framework_text": lambda: "日线定环境；竞价/开盘前几分钟/回封/60分钟分层参与；30分钟定止损",
         }
 
         rendered = "\n".join(build_entry_plan_conclusion_node(context)["lines"])
 
-        self.assertIn("竞价/开盘前几分钟/回封/60分钟分层参与", rendered)
-        self.assertIn("参与窗口", rendered)
-        self.assertIn("30分钟结构止损", rendered)
+        self.assertIn("竞价/开盘前几分钟/回封/09:50-10:10窗口", rendered)
+        self.assertIn("固定交易窗口条件", rendered)
+        self.assertIn("失效价和单笔-5%底线", rendered)
         self.assertNotIn(_m("即便满足价格条件，也要", "等60", "分钟确认后再买"), rendered)
         self.assertNotIn(_m("买点必须", "等60分钟"), rendered)
 

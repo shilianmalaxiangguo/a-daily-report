@@ -51,17 +51,17 @@ class CandidateExecutionContractsTest(unittest.TestCase):
 
         front_text = build_gem_textbook_front_text(
             candidate,
-            {"target_position_pct": 30, "trigger_text": "首个60分钟确认"},
+            {"target_position_pct": 30, "trigger_text": "09:50-10:10窗口"},
         )
         next_step = build_gem_textbook_next_step_text(
             candidate,
-            {"target_position_pct": 30, "trigger_text": "首个60分钟确认"},
+            {"target_position_pct": 30, "trigger_text": "09:50-10:10窗口"},
         )
         rules = build_candidate_exit_rules(candidate, {"effective_stop": 12.34})
 
         self.assertIn("A级教材", front_text)
         self.assertIn("参考样本：东山精密", front_text)
-        self.assertEqual(next_step, "当前已进入50%标准进攻预演，首个60分钟确认后才允许动手，不满足转为0%观察")
+        self.assertEqual(next_step, "当前已进入50%标准进攻预演，09:50-10:10窗口内满足条件后才允许动手，不满足转为0%观察")
         self.assertNotIn(_m("30%", "条件试错"), front_text)
         self.assertEqual(rules["holding_days_min"], 2)
         self.assertEqual(rules["holding_days_max"], 4)
@@ -126,8 +126,8 @@ class CandidateExecutionContractsTest(unittest.TestCase):
 
         ordinary = build_participation_window_policy("60分钟确认")
 
-        self.assertEqual(ordinary["required_steps"], ["交易逻辑确认", "主线确认", "承接", "60分钟确认", "MA执行锚点"])
-        self.assertEqual(ordinary["participation_basis"]["structure"], "60分钟确认只服务普通结构，不覆盖强核心快路径")
+        self.assertEqual(ordinary["required_steps"], ["交易逻辑确认", "主线确认", "承接", "09:50-10:10窗口", "MA执行锚点"])
+        self.assertEqual(ordinary["participation_basis"]["structure"], "09:50-10:10窗口只服务普通结构，不覆盖强核心快路径")
 
     def test_participation_window_policy_includes_ma_reversion_probe_for_extreme_conviction(self):
         policy = build_participation_window_policy(
@@ -150,7 +150,7 @@ class CandidateExecutionContractsTest(unittest.TestCase):
             "过快封死就沿电力趋势比价链找低位承接",
         )
 
-        self.assertIn("10点前后", policy["intraday_average_line_cross_probe"])
+        self.assertIn("09:50-10:10", policy["intraday_average_line_cross_probe"])
         self.assertIn("价格上穿分时黄色均价线", policy["intraday_average_line_cross_probe"])
         self.assertIn("水下强势修复到0轴", policy["zero_axis_reclaim_probe"])
         self.assertEqual(policy["daily_ma_role_map"]["ma3"], "极度龙头")
@@ -259,9 +259,9 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         )
         self.assertEqual(
             build_participation_window_from_candidate({"sector": "电力"}, is_mainline=True),
-            "开盘前几分钟 + 60分钟确认",
+            "开盘前几分钟 + 09:50-10:10窗口",
         )
-        self.assertEqual(build_participation_window_from_candidate({}), "60分钟确认")
+        self.assertEqual(build_participation_window_from_candidate({}), "09:50-10:10窗口")
 
     def test_entry_timing_policy_fieldizes_open_ten_tail_and_no_trade(self):
         open_core = build_entry_timing_policy(

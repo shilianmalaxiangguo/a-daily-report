@@ -140,14 +140,14 @@ class CandidateQualityContractsTest(unittest.TestCase):
                 "failure_condition": "主线回落或放量不承接",
             },
             action_ceiling="核心观察",
-            new_entry_action="09:50-10:10确认，不满足继续不参与",
+            new_entry_action="09:50-10:10窗口条件，不满足继续不参与",
         )
 
         trace = contract["trace"]
         self.assertEqual(trace["stock_code"], "002185")
         self.assertEqual(trace["stock_name"], "华天科技")
         self.assertEqual(trace["tier"], "T0")
-        self.assertEqual(trace["final_action"], "09:50-10:10确认，不满足继续不参与")
+        self.assertEqual(trace["final_action"], "09:50-10:10窗口条件，不满足继续不参与")
         self.assertEqual(contract["data"]["trace"]["stock_code"], "002185")
 
     def test_candidate_quality_contract_trace_uses_action_when_candidate_has_no_final_action(self):

@@ -127,6 +127,52 @@ assert report == "# report"
             ],
         )
 
+    def test_parse_position_string_extracts_real_holding_account_context(self):
+        module = self._load_module()
+
+        result = module.parse_position_string(
+            "现在为的仓位是1手晶方科技，成本43.835，现在1w本金 总资产10126.52 当日盈利126.52 1.27%"
+        )
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["name"], "晶方科技")
+        self.assertEqual(result[0]["shares"], 100)
+        self.assertEqual(result[0]["cost"], 43.835)
+        self.assertEqual(result[0]["account_capital"], "1w")
+        self.assertEqual(result[0]["total_asset"], 10126.52)
+        self.assertEqual(result[0]["daily_profit"], 126.52)
+        self.assertEqual(result[0]["daily_profit_pct"], 1.27)
+
+    def test_personal_position_context_prefers_quote_with_close_price_for_old_holding(self):
+        module = self._load_module()
+
+        context = module.build_personal_position_context(
+            {
+                "turnover_rank": [
+                    {"code": "603005", "name": "晶方科技", "change_pct": 4.7619},
+                ],
+                "lhb_net_sell_top10": [
+                    {"code": "603005", "name": "晶方科技", "close": 45.10},
+                ],
+            },
+            [
+                {
+                    "name": "晶方科技",
+                    "shares": 100,
+                    "cost": 43.835,
+                    "account_capital": "1w",
+                    "total_asset": 10126.52,
+                    "daily_profit": 126.52,
+                    "daily_profit_pct": 1.27,
+                }
+            ],
+        )
+
+        self.assertIn(
+            "先看45.1能否守住，跌破42.84~43.05或09:50-10:10收不回先卖",
+            context["existing_position_summary"]["summary"],
+        )
+
     def test_analyze_position_management_runtime_exposes_helper_bindings(self):
         module = self._load_module()
         exec(

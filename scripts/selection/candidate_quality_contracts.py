@@ -92,6 +92,20 @@ def _stock_code(candidate):
     return digits.zfill(6) if digits else ""
 
 
+def _stock_name(candidate):
+    candidate = candidate or {}
+    return str(candidate.get("name") or candidate.get("名称") or "").strip()
+
+
+def _candidate_tier(candidate):
+    candidate = candidate or {}
+    return str(candidate.get("tier") or candidate.get("层级") or "").strip()
+
+
+def _branch_path_text(*parts):
+    return "；".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
 def _format_lot_amount(value):
     amount = _as_number(value)
     if amount <= 0:
@@ -372,6 +386,7 @@ def build_candidate_quality_contract(
         "trace": trace,
         "data": {
             "candidate": dict(candidate),
+            "trace": trace,
             "selection_quality_label": selection_quality_label,
             "entry_quality_label": entry_quality_label,
             "risk_items": risk_items,

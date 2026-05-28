@@ -71,8 +71,8 @@ def _chanlun_confirmation_is_unconfirmed(market_zhongshu):
 
 
 def _append_chanlun_unconfirmed_reason(reason):
-    warning = "日K结构仍需60分钟缠论确认，未确认前只作防守观察。"
-    if "60分钟缠论确认" in str(reason or "") and "未确认" in str(reason or ""):
+    warning = "日K结构证据仍不完整，未确认前只作防守观察。"
+    if "日K结构证据仍不完整" in str(reason or "") and "未确认" in str(reason or ""):
         return reason
     return f"{reason}；{warning}"
 
@@ -178,7 +178,7 @@ def build_market_phase_context_contract(
     if chanlun_is_unconfirmed:
         if "三档" in str(base_position_level):
             base_position_level = "二档（防守档）"
-            base_position_reason = "日K结构仍需60分钟缠论确认，未确认前降为二档防守观察。"
+            base_position_reason = "日K结构证据仍不完整，未确认前降为二档防守观察。"
 
     if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
         market_zhongshu,
@@ -191,7 +191,7 @@ def build_market_phase_context_contract(
         base_position_level = "二档（防守档）"
         base_position_reason = (
             f"指数仍在上行中枢内({zs_signal_status})，单日跌停{dt_count}只和涨跌比偏弱只降为防守观察，"
-            "不直接判定空仓；明日仍需10点确认主线承接。"
+            "不直接判定空仓；明日仍需09:50-10:10窗口检查主线承接。"
         )
         _append_log(
             logs,

@@ -26,6 +26,7 @@ class TradingTimeWindowContractTest(unittest.TestCase):
             "10" + "点前后",
             "10:00" + "左右买",
             "10:00" + "左右观察",
+            "09:50-10:10" + "确认",
             "尾盘" + "开新仓",
             "尾盘" + "新增参与",
             "形成参与窗口后",
@@ -68,6 +69,22 @@ class TradingTimeWindowContractTest(unittest.TestCase):
         self.assertEqual(
             "09:50-10:10窗口内条件成立后评估",
             normalize_trading_time_text("形成参与窗口后评估"),
+        )
+        self.assertEqual(
+            "日线定环境，09:50-10:10窗口定买点，按失效价和单笔-5%底线处理风险",
+            normalize_trading_time_text("日线定环境，09:50-10:10窗口定买点，30分钟定止损"),
+        )
+        self.assertEqual(
+            "若你有仓位，失效价失守或日内明显转弱 -> 执行减仓/止损",
+            normalize_trading_time_text("若你有仓位，30分钟结构失守或日内明显转弱 -> 执行减仓/止损"),
+        )
+        self.assertEqual(
+            "**09:50-10:10买卖窗口（09:50-10:10）**:",
+            normalize_trading_time_text("**结构确认窗口（09:35-10:30）**:"),
+        )
+        self.assertEqual(
+            "09:50-10:10窗口处理买卖",
+            normalize_trading_time_text("09:50-10:10确认并处理买卖"),
         )
 
     def test_historical_timing_text_is_normalized_inside_nested_payloads(self):

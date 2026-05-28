@@ -478,7 +478,7 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["code"], "conditional_defense")
         self.assertEqual(result["label"], "🟡 条件防守观察")
         self.assertIn("指数结构未坏", result["reason"])
-        self.assertIn("参与窗口", result["action"])
+        self.assertIn("固定交易窗口", result["action"])
         self.assertIn("50%标准进攻", result["action"])
         self.assertNotIn(_m("30%", "条件试错"), result["action"])
 

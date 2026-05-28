@@ -1,3 +1,6 @@
+from report.trading_time_window_contract import normalize_trading_time_text
+
+
 def build_entry_plan_conclusion_node(context, node_meta=None, node_lookup=None):
     final_gate = context.get("final_gate", {}) or {}
     keep_group = context.get("keep_group", []) or []
@@ -19,13 +22,13 @@ def build_entry_plan_conclusion_node(context, node_meta=None, node_lookup=None):
         lines.append("- **明天先怎么观察**: 当前没有需要特别盯的执行记录，先看市场自己给答案")
     if untradable_stocks:
         lines.append(f"- **哪些票看着强但买不进去**: {len(untradable_stocks)}只（如一字/连续一字，只记观察不计执行收益）")
-    lines.append(f"- **执行节奏**: {context['get_execution_framework_text']()}")
+    lines.append(f"- **执行节奏**: {normalize_trading_time_text(context['get_execution_framework_text']())}")
     if final_gate.get("can_new_entry", False):
         lines.append(
-            "- **⚠️ 重要**: 以上买点基于今日收盘数据预计算；明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层处理，任一路径不满足预演情境就回到0%，买后用30分钟结构止损"
+            "- **⚠️ 重要**: 以上买点基于今日收盘数据预计算；明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口分层处理，任一路径不满足预演情境就回到0%，买后用失效价和单笔-5%底线处理风险"
         )
     elif final_gate.get("allow_attack_50_ready"):
-        lines.append("- **进攻仓位**: 50%标准进攻（待参与窗口确认）；没有主线承接、竞价表态、开盘前几分钟承接或结构确认就自动转为0%不参与")
+        lines.append("- **进攻仓位**: 50%标准进攻（待固定交易窗口内条件成立）；没有主线承接、竞价表态、开盘前几分钟承接或结构确认就自动转为0%不参与")
     else:
         lines.append("- **进攻仓位**: 0%不参与；无合格标的或取消条件已经出现")
     lines.append("")

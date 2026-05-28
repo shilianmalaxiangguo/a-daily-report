@@ -222,7 +222,7 @@ assert leader["name"] == "军工龙头"
         )
 
         self.assertEqual(pulse["execution_bias"], "conditional_defense")
-        self.assertIn("参与窗口", pulse["pulse_action_reason"])
+        self.assertIn("固定交易窗口", pulse["pulse_action_reason"])
         self.assertIn("50%标准进攻", pulse["pulse_action_reason"])
         self.assertNotIn(_m("30%", "条件试错"), pulse["pulse_action_reason"])
         self.assertNotIn("只允许处理旧仓", pulse["pulse_action_reason"])

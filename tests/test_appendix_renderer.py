@@ -142,6 +142,36 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertLess(rendered.index("2026-05-25"), rendered.index("2026-05-01"))
         self.assertEqual(rendered.count("| 2026-05-"), 25)
 
+    def test_render_execution_appendix_outputs_etf_turnover_full_25_day_table(self):
+        etf_rows = []
+        for index in range(25):
+            etf_rows.append(
+                {
+                    "trade_date": f"2026-05-{index + 1:02d}",
+                    "etf_turnover_yi": 4400 + index,
+                    "change_pct": "待累计" if index == 0 else 1.25,
+                    "covered_etf_count": 1500 + index,
+                }
+            )
+
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["etf_turnover_detail"],
+                "etf_turnover_series": {
+                    "available": True,
+                    "rows": etf_rows,
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 附录A：ETF两市成交额完整25日表", rendered)
+        self.assertIn("| 日期 | ETF两市成交额 | 较前日 | 有成交ETF数 |", rendered)
+        self.assertIn("| 2026-05-01 | 4400.00亿 | 待累计 | 1500 |", rendered)
+        self.assertIn("| 2026-05-25 | 4424.00亿 | +1.25% | 1524 |", rendered)
+        self.assertLess(rendered.index("2026-05-25"), rendered.index("2026-05-01"))
+        self.assertEqual(rendered.count("| 2026-05-"), 25)
+
     def test_render_execution_appendix_outputs_new_stock_cycle_table(self):
         lines = render_execution_appendix(
             {

@@ -42,6 +42,7 @@ DECISION_CRITICAL_REPORT_DATA_FIELDS = (
     ("连板梯队", "连板梯队提取", ("request.lianban_snapshot",), "lianban_data", True),
     ("创新高趋势反馈", "创新高趋势反馈获取", ("request.new_high_feedback",), "new_high_feedback", False),
     ("Top50成交额占比趋势", "Top50成交额占比趋势获取", ("request.top50_turnover_share_series",), "top50_turnover_share_series", False),
+    ("ETF两市成交额趋势", "ETF两市成交额趋势获取", ("request.etf_turnover_series",), "etf_turnover_series", False),
     ("龙虎榜数据", "龙虎榜数据获取", ("request.lhb_snapshot",), "lhb_analysis", False),
     ("概念资金流向", "概念资金流向获取", ("request.concept_fund_flow",), "concept_fund_flow", False),
     ("雪球A股24小时热榜", "雪球A股24小时热榜获取", ("request.xueqiu_hot_rank",), "xueqiu_hot_rank_top100", False),
@@ -242,6 +243,8 @@ def _row_count_for_steps(data, steps, payload_key):
         return len(payload.get("trend_rows") or []) or (1 if payload else 0)
     if payload_key == "margin_pressure" and isinstance(payload, dict):
         return len(payload.get("rows") or []) or (1 if payload else 0)
+    if payload_key == "etf_turnover_series" and isinstance(payload, dict):
+        return len(payload.get("rows") or []) or (1 if payload else 0)
     if isinstance(payload, (list, tuple)):
         return len(payload)
     if isinstance(payload, dict):
@@ -263,6 +266,8 @@ def _decision_payload_valid(data, payload_key, allow_empty):
     if payload_key == "new_high_feedback":
         return isinstance(payload, dict) and payload.get("available") is True
     if payload_key == "top50_turnover_share_series":
+        return isinstance(payload, dict) and bool(payload.get("rows") or [])
+    if payload_key == "etf_turnover_series":
         return isinstance(payload, dict) and bool(payload.get("rows") or [])
     if payload_key == "concept_fund_flow":
         if not isinstance(payload, dict):
@@ -772,11 +777,12 @@ def save_report_output(
     mode: str = LEDGER_MODE_FROZEN,
     variant: str = REPORT_VARIANT_FULL,
     output_path: str | None = None,
+    overwrite_existing: bool = False,
 ):
     target_path = Path(output_path) if output_path else Path(_get_report_output_path(target_date, mode=mode, variant=variant))
     _ensure_parent_dir(target_path)
 
-    if output_path is None and mode == LEDGER_MODE_FROZEN and target_path.exists():
+    if not overwrite_existing and output_path is None and mode == LEDGER_MODE_FROZEN and target_path.exists():
         replay_path = Path(_get_report_output_path(target_date, mode=LEDGER_MODE_REPLAY, variant=variant))
         _ensure_parent_dir(replay_path)
         replay_path.write_text(report_text, encoding="utf-8")
@@ -796,6 +802,7 @@ def save_report_outputs(
     target_date: str,
     mode: str = LEDGER_MODE_FROZEN,
     output_dir: str | None = None,
+    overwrite_existing: bool = False,
 ):
     saved_paths = {}
     for variant, report_text in (report_outputs or {}).items():
@@ -809,6 +816,7 @@ def save_report_outputs(
                 mode=mode,
                 variant=variant,
                 output_path=str(custom_path),
+                overwrite_existing=overwrite_existing,
             )
         else:
             saved_paths[variant] = save_report_output(
@@ -816,6 +824,7 @@ def save_report_outputs(
                 target_date,
                 mode=mode,
                 variant=variant,
+                overwrite_existing=overwrite_existing,
             )
     if mode == LEDGER_MODE_REPLAY:
         _sync_replay_decision_ledger_from_full_report(saved_paths, target_date, output_dir=output_dir)

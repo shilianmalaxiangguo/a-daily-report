@@ -62,7 +62,7 @@ def build_focus_recap_text(context):
     selected = resolve_selected_position_candidate(context)
     if selected:
         if selected_target_is_attack_ready(context):
-            return f"{format_stock_label(selected)}：明日目标标的，参与窗口确认才执行"
+            return f"{format_stock_label(selected)}：明日目标标的，固定交易窗口内条件成立才执行"
         return f"{format_stock_label(selected)}：明日目标标的，先观察强弱与承接"
 
     best_stock = context.get("best_stock") or {}
@@ -112,7 +112,7 @@ def build_candidate_trade_directive(context):
     watch_anchor = context.get("watch_anchor") or {}
     if selected:
         if selected_target_is_attack_ready(context):
-            directive = f"已缩到明日目标标的{format_stock_label(selected)}，只看参与窗口是否成立"
+            directive = f"已缩到明日目标标的{format_stock_label(selected)}，只看固定交易窗口内条件是否成立"
         else:
             directive = f"已缩到明日目标标的{format_stock_label(selected)}，先观察强弱与承接"
     elif best_stock:
@@ -160,7 +160,7 @@ def derive_trade_style(context):
 def build_risk_trade_note(context):
     selected = resolve_selected_position_candidate(context)
     if selected and selected_target_is_attack_ready(context):
-        return "参与窗口失败回到0%，只接受小亏试错，不接受大亏硬扛"
+        return "固定交易窗口内条件不成立就回到0%，只接受小亏试错，不接受大亏硬扛"
     best_stock = context.get("best_stock") or {}
     rr = best_stock.get("r_reward_ratio")
     if rr not in (None, ""):
@@ -175,7 +175,7 @@ def build_risk_trade_note(context):
 def derive_risk_guard_text(context):
     selected = resolve_selected_position_candidate(context)
     if selected and selected_target_is_attack_ready(context):
-        return "明日目标标的只做参与窗口确认；不满足回到0%，不为抢跑承担大亏"
+        return "明日目标标的只看固定交易窗口内条件；不满足回到0%，不为抢跑承担大亏"
     best_stock = context.get("best_stock") or {}
     rr = best_stock.get("r_reward_ratio")
     if rr not in (None, ""):

@@ -916,14 +916,14 @@ def analyze_market_zhongshu(
                 candidate_label = "平台待确认" if confirmation_status == "not_confirmed" else "平台数据不足"
                 signal["status"] = (
                     f"⏳ {candidate_label}（走势类型数：{current_candidate.get('trend_type_count', 0)}，"
-                    f"60分钟确认：{confirmation_status}）"
+                    f"结构确认：{confirmation_status}）"
                 )
                 signal["signal_type"] = "中枢确认待观察"
                 signal["position_level"] = "观察档（不加仓）"
                 if confirmation_status in ("data_insufficient", "insufficient_60m_history"):
                     signal["action"] = "只观察，等结构确认补齐"
                 elif confirmation_status == "not_confirmed":
-                    signal["action"] = "只观察，等60分钟重新形成平台重叠"
+                    signal["action"] = "只观察，等结构重新形成平台重叠"
 
         result.update(
             {

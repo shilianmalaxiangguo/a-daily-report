@@ -26,7 +26,7 @@ def _append_log(logs, step, status, message, **details):
 def format_closed_gate_buy_limit_text(position_level, final_gate):
     final_gate = final_gate or {}
     if final_gate.get("allow_attack_50_ready"):
-        return "等参与窗口确认；未确认按0%不参与"
+        return "等固定交易窗口内条件成立；未确认按0%不参与"
     return "保持空仓，不新增参与"
 
 

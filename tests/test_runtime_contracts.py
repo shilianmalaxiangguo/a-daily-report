@@ -31,7 +31,7 @@ class RuntimeContractsTest(unittest.TestCase):
 
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "主线弱转强执行预备态")
-        self.assertIn("参与窗口预演", result["permission_reason"])
+        self.assertIn("固定交易窗口", result["permission_reason"])
         self.assertIn("50%标准进攻", result["permission_reason"])
         self.assertNotIn(_m("30%", "条件试错"), result["permission_reason"])
 
@@ -96,7 +96,7 @@ class RuntimeContractsTest(unittest.TestCase):
         self.assertIn("环境关闭", reason)
         self.assertIn("收缩防守", reason)
         self.assertNotIn("积极做多", reason)
-        self.assertNotIn("状态机", reason)
+        self.assertNotIn(_m("状态", "机"), reason)
         self.assertIn("顶层环境以执行条件为准", reason)
 
 

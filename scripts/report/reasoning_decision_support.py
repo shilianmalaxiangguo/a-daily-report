@@ -8,6 +8,12 @@ from report.mainline_turnover_summary_support import (
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
 )
+from report.trading_time_window_contract import (
+    SECOND_CONFIRM_WINDOW,
+    SECOND_CONFIRM_LABEL,
+    normalize_participation_window,
+    normalize_trading_time_text,
+)
 from selection.candidate_execution_contracts import build_participation_window_policy
 
 
@@ -58,13 +64,15 @@ def _candidate_pool(snapshot: Mapping[str, Any]) -> List[Dict[str, Any]]:
 
 
 def _infer_participation_window(candidate: Mapping[str, Any]) -> tuple[str, str]:
-    participation_window = str(candidate.get("participation_window") or "").strip()
+    raw_participation_window = str(candidate.get("participation_window") or "").strip()
+    participation_window = raw_participation_window
     participation_window_type = str(candidate.get("participation_window_type") or "").strip()
     if not participation_window:
-        participation_window = "60分钟确认"
+        participation_window = SECOND_CONFIRM_WINDOW
+    participation_window = normalize_participation_window(participation_window)
     if participation_window_type:
         return participation_window, participation_window_type
-    policy = build_participation_window_policy(participation_window)
+    policy = build_participation_window_policy(raw_participation_window or participation_window)
     return participation_window, str(policy.get("participation_window_type") or "structure_confirm")
 
 
@@ -234,7 +242,7 @@ def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, A
         if target_id in {str(candidate.get("id") or ""), str(candidate.get("code") or "")}:
             participation_window, participation_window_type = _infer_participation_window(candidate)
             if participation_window_type == "structure_confirm":
-                required_steps = ["主线确认", "承接", "60分钟确认"]
+                required_steps = ["主线确认", "承接", SECOND_CONFIRM_LABEL]
             else:
                 required_steps = ["竞价表态", "开盘前几分钟承接", "回封/打板"]
             return {
@@ -244,6 +252,10 @@ def derive_unique_action_target_from_reasoning_decision(snapshot: Mapping[str, A
                 "participation_window_type": participation_window_type,
                 "required_steps": required_steps,
                 "fallback_state": "不满足回到0%",
-                "condition": "主线确认 + 承接 + 60分钟确认" if participation_window_type == "structure_confirm" else "竞价表态 + 开盘前几分钟 + 回封/打板",
+                "condition": normalize_trading_time_text(
+                    f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}"
+                    if participation_window_type == "structure_confirm"
+                    else "竞价表态 + 开盘前几分钟 + 回封/打板"
+                ),
             }
     return {}

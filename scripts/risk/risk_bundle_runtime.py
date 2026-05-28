@@ -328,16 +328,16 @@ def build_risk_bundle_contract(
 
         risk_score = max(risk_score, 0)
         if abnormal_light == "🟢 绿灯" and risk_score < 20:
-            tomorrow_risk = "异动后承接强，明日即使低开也先看60分钟确认"
+            tomorrow_risk = "异动后承接强，明日即使低开也先看09:50-10:10窗口"
         elif abnormal_light == "🟡 黄灯" and risk_score < 20 and "低开风险" in tomorrow_risk:
             tomorrow_risk = "异动后仍在消化，明日先看竞价与承接是否继续稳定"
         elif abnormal_light == "🟠 橙灯" and risk_score < 40 and "低开风险" in tomorrow_risk:
             tomorrow_risk = "异动刚出现且承接未验证，明日先看是否跌得下去"
 
         if abnormal_light == "🟢 绿灯" and raw_risk_score >= 30:
-            tomorrow_risk = "盘中分歧不小，但承接仍在；明日只看竞价和60分钟确认，不宜直接乐观"
+            tomorrow_risk = "盘中分歧不小，但承接仍在；明日只看09:30-09:35竞价和09:50-10:10窗口，不宜直接乐观"
         elif abnormal_light == "🟢 绿灯" and raw_risk_score >= 12 and risk_score < 20:
-            tomorrow_risk = "分歧已出现但承接尚可，明日只看回踩后的60分钟确认"
+            tomorrow_risk = "分歧已出现但承接尚可，明日只看回踩后的09:50-10:10窗口"
         elif abnormal_light == "🟡 黄灯" and raw_risk_score >= 20:
             tomorrow_risk = abnormal_forecast or "仍在消化分歧，明日先看竞价与承接"
 

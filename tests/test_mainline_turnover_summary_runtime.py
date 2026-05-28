@@ -766,7 +766,7 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["window_state"], "confirm_next")
         self.assertEqual(result["speed_gap"], "未拉开")
-        self.assertEqual(result["action"], "等竞价、开盘承接、回封或60分钟确认")
+        self.assertEqual(result["action"], "等竞价、开盘承接、回封或09:50-10:10窗口")
 
     def test_overtake_window_observes_chaotic_rotation(self):
         runtime = self._load_module()

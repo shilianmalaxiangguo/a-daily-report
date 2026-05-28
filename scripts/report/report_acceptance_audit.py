@@ -7,6 +7,48 @@ from pathlib import Path
 
 from report.surface_wording import find_legacy_surface_wording
 
+LEGACY_TRADING_TIME_WORDING_MARKERS = (
+    "60" + "分钟" + "确认",
+    "60 " + "分钟" + "确认",
+    "首个60" + "分钟",
+    "10" + "点确认",
+    "10" + "点承接",
+    "10" + "点后",
+    "10" + "点附近",
+    "10" + "点前后",
+    "10" + "点左右",
+    "10:00" + "左右买",
+    "10:00" + "左右观察",
+    "尾盘" + "开新仓",
+    "尾盘" + "新增参与",
+    "09:50-10:10" + "承接确认",
+    "09:50-10:10" + "二次确认",
+    "09:50-10:10" + "确认",
+    "形成" + "参与窗口后",
+    "60" + "分钟结构确认",
+    "60" + "分钟缠论确认",
+    "60" + "分钟走势类型",
+    "60" + "分钟定买点",
+    "60" + "分钟再转强",
+    "30" + "分钟定止损",
+    "30" + "分钟结构失守",
+    "30" + "分钟结构止损线",
+    "09:35-10:30",
+    "10:30-14:30",
+    "结构确认窗口",
+    "盘中执行（10:30-14:30）",
+    "分钟" + "确认",
+    "参与窗口" + "分层确认",
+    "参与窗口" + "确认",
+    "参与窗口" + "成立",
+    "参与窗口" + "命中",
+    "预演" + "参与窗口",
+    "形成" + "参与窗口",
+    "参与窗口" + "失败",
+    "参与窗口" + "不成立",
+    "参与窗口" + "才",
+)
+
 FRONT_PAGE_HEADINGS = [
     "## 一、交易纪律",
     "## 二、市场基底",
@@ -20,40 +62,33 @@ FRONT_PAGE_HEADINGS = [
 APPENDIX_HEADING = "## 八、详细附录"
 
 REQUIRED_EXECUTION_WINDOWS = [
-    "09:25-09:40",
+    "09:30-09:35",
     "09:50-10:10",
-    "10:00左右卖",
-    "10:00左右买",
-    "午后",
-    "尾盘",
+    "14:30-14:55",
 ]
 
 ZERO_POSITION_REQUIRED_EXECUTION_WINDOWS = [
-    "09:25-09:40",
+    "09:30-09:35",
     "09:50-10:10",
-    "10:00左右卖",
-    "10:00左右观察",
-    "午后",
-    "尾盘",
+    "14:30-14:55",
 ]
 
 REQUIRED_EXECUTION_CONDITIONS = [
-    ("10点确认", ("10点确认", "10点附近确认")),
+    ("09:50-10:10窗口", ("09:50-10:10窗口",)),
     (
-        "参与窗口",
+        "固定交易窗口条件",
         (
-            "参与窗口",
-            "参与窗",
+            "固定交易窗口",
+            "09:30-09:35",
+            "09:50-10:10窗口",
             "竞价表态",
             "开盘前几分钟",
-            "回封参与",
+            "回封",
             "打板",
-            "60分钟确认",
-            "60分钟K线确认",
         ),
     ),
-    ("30分钟结构止损", ("30分钟结构止损", "30分钟结构定止损", "30分钟定止损")),
-    ("不做 / 不开新仓 / 空仓", ("不做", "不开新仓", "空仓")),
+    ("失效价 / 单笔-5%底线", ("失效价", "单笔-5%")),
+    ("不参与 / 不做 / 空仓", ("不参与", "不做", "不开新仓", "空仓")),
 ]
 
 APPENDIX_DUPLICATE_FRONT_PAGE_HEADINGS = {
@@ -82,7 +117,7 @@ UNIQUE_FOCUS_EVIDENCE_FAMILIES = [
     ("主线一致性", ("主线", "周期主线", "当天主攻线")),
     ("承接", ("承接",)),
     ("资金痕迹", ("资金", "资金痕迹")),
-    ("60分钟确认", ("60分钟确认", "60分钟K线确认")),
+    ("09:50-10:10窗口", ("09:50-10:10窗口",)),
     ("排除/不做兜底", ("不满足", "不做", "不开新仓", "排除")),
 ]
 
@@ -106,7 +141,7 @@ UNIQUE_FOCUS_OBSERVATION_ONLY_MARKERS = (
     "不直接给资格",
     "不直接给买入资格",
     "条件未满足",
-    "等10点确认",
+    "等09:50-10:10窗口条件",
     "待确认",
     "不开新仓",
     "不做",
@@ -173,8 +208,6 @@ ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS = (
     "可执行爆发",
     "真正可执行对象",
     "新仓止损",
-    "10:00左右买",
-    "尾盘开新仓",
     "回封/打板",
 )
 MONTHLY_RHYTHM_HEADING = "### 月度攻防与进攻仓位"
@@ -367,7 +400,7 @@ def _audit_execution_conditions(lines):
         required_conditions = [
             (label, markers)
             for label, markers in required_conditions
-            if label not in {"30分钟结构止损", "参与窗口"}
+            if label not in {"失效价 / 单笔-5%底线", "固定交易窗口条件"}
         ]
     findings = []
     for label, markers in required_conditions:
@@ -392,14 +425,14 @@ def _audit_unique_action_target_contract(lines):
         condition = cells[3]
         fallback = cells[4]
         is_fast_window = any(marker in participation_window for marker in ("竞价", "回封", "打板"))
-        uses_structure_condition = "60分钟确认" in condition and not any(
+        uses_structure_condition = "09:50-10:10窗口" in condition and not any(
             marker in condition for marker in ("竞价", "开盘前几分钟", "回封", "打板")
         )
         if is_fast_window and uses_structure_condition:
             findings.append(
                 _finding(
                     "fast_window_polluted_by_structure_condition",
-                    "fast participation windows must render auction/opening/reseal steps instead of legacy 60-minute structure condition",
+                    "fast execution windows must render auction/opening/reseal steps instead of structure-only condition",
                     line=offset,
                 )
             )
@@ -545,6 +578,21 @@ def _audit_legacy_surface_wording(lines):
             _finding(
                 "legacy_surface_wording",
                 f"front page must use 资格/条件/可做 wording instead of legacy marker: {marker}",
+            )
+        )
+    return findings
+
+
+def _audit_legacy_trading_time_wording(lines):
+    report_text = "\n".join(lines)
+    findings = []
+    for marker in LEGACY_TRADING_TIME_WORDING_MARKERS:
+        if marker not in report_text:
+            continue
+        findings.append(
+            _finding(
+                "legacy_trading_time_wording",
+                f"report uses old timing language instead of fixed trading windows: {marker}",
             )
         )
     return findings
@@ -1261,6 +1309,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_candidate_section_contract(lines))
     findings.extend(_audit_mainline_capacity_regime_contract(lines))
     findings.extend(_audit_legacy_surface_wording(lines))
+    findings.extend(_audit_legacy_trading_time_wording(lines))
     findings.extend(_audit_execution_windows(lines))
     findings.extend(_audit_execution_conditions(lines))
     findings.extend(_audit_unique_action_target_contract(lines))

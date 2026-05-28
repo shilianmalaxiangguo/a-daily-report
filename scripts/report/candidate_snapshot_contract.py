@@ -23,7 +23,7 @@ def build_candidate_snapshot(data=None, *, market_research_snapshot=None):
         "unique_object": _label(target) if has_target else "暂无",
         "backup_text": "暂无",
         "no_buy_reason": "没有唯一对象，完整候选仅保留在附录和快照",
-        "trigger_condition": "10点确认 + 主线承接 + 个股突破或回踩确认",
+        "trigger_condition": "09:50-10:10窗口 + 主线承接 + 个股突破或回踩确认",
         "failure_condition": "主线回落 / 放量不承接",
         "backup_watch": [],
     }

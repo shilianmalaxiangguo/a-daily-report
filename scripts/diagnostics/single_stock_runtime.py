@@ -9,6 +9,52 @@ __all__ = [
 _MISSING = object()
 
 
+def safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+quant_system_available = False
+
+
+def enrich_stop_plan_with_reference_anchors(stop_plan, *args, **kwargs):
+    alias = globals().get("_enrich_stop_plan_with_reference_anchors")
+    if callable(alias):
+        return alias(stop_plan, *args, **kwargs)
+    return stop_plan or {}
+
+
+def build_trade_price_focus(minute_plan=None, stop_plan=None):
+    alias = globals().get("_build_trade_price_focus")
+    if callable(alias):
+        return alias(minute_plan, stop_plan)
+    return {
+        "key_zone_display": "-",
+        "execution_stop_display": "-",
+        "hard_stop_display": "-",
+        "note_text": "-",
+    }
+
+
+def _resolve_stop_prior_low_trading_days():
+    return int(globals().get("stop_prior_low_trading_days", globals().get("STOP_PRIOR_LOW_TRADING_DAYS", 5)) or 5)
+
+
+def compute_bar_change_pct(current_bar, prev_bar=None):
+    alias = globals().get("_compute_bar_change_pct")
+    if callable(alias):
+        return alias(current_bar, prev_bar)
+    current_close = safe_float((current_bar or {}).get("close"))
+    prev_close = safe_float((prev_bar or {}).get("close"))
+    if current_close <= 0 or prev_close <= 0:
+        return 0.0
+    return (current_close / prev_close - 1.0) * 100.0
+
+
 def _install_runtime_bindings(bindings):
     previous = {}
     module_globals = globals()
@@ -617,7 +663,7 @@ def _generate_single_stock_diagnostic_markdown_legacy_body(
         build_intraday_execution_plan=build_intraday_execution_plan,
         build_stop_execution_plan=build_stop_execution_plan,
         enrich_stop_plan_with_reference_anchors=enrich_stop_plan_with_reference_anchors,
-        stop_prior_low_trading_days=stop_prior_low_trading_days,
+        stop_prior_low_trading_days=_resolve_stop_prior_low_trading_days(),
         score_candidate_decision_stack=score_candidate_decision_stack,
         score_execution_candidate=score_execution_candidate,
         build_strategy_ev_calibration=build_strategy_ev_calibration,

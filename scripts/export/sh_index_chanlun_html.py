@@ -171,7 +171,7 @@ def _summary_rows(payload: dict[str, Any]) -> list[list[Any]]:
         ["最新分段", f"{_segment_type_label(latest.get('segment_type') or latest.get('segmentType'))} {_date_span(latest)}" if latest else "-"],
         ["基础K线数", windows.get("structural_base_daily_bars", "-")],
         ["展示K线数", windows.get("display_row_count", "-")],
-        ["分钟确认", _status_label(policy.get("minute_confirmation", "-"))],
+        ["下级别结构证据", _status_label(policy.get("minute_confirmation", "-"))],
         ["数据状态", _status_label(payload.get("source_status", "-"))],
     ]
 

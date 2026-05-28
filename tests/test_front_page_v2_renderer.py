@@ -64,7 +64,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "unique_action_target": {
                         "name": "晶方科技",
                         "code": "603005",
-                        "condition": "参与窗口确认",
+                        "condition": "固定交易窗口条件",
                     },
                     "position_decision": {
                         "signal_grade": "50",
@@ -111,10 +111,44 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("竞价表态", rendered)
         self.assertIn("开盘前几分钟", rendered)
         self.assertIn("回封参与", rendered)
-        self.assertIn("60分钟确认", rendered)
-        self.assertIn("50%/100%或0%", rendered)
+        self.assertIn("09:50-10:10窗口处理买卖", rendered)
+        self.assertIn("09:50-10:10", rendered)
+        self.assertIn("14:30-14:55", rendered)
         self.assertNotIn("买点等60分钟", rendered)
         self.assertNotIn(_m("满足60分钟确认", "才允许"), rendered)
+        self.assertNotIn("60分钟确认", rendered)
+        self.assertNotIn("09:50-10:10确认", rendered)
+
+    def test_front_page_execution_plan_keeps_participation_to_fixed_time_windows(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-26",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "unique_action_target": {
+                        "name": "富瀚微",
+                        "code": "300613",
+                        "participation_window": "60分钟确认",
+                        "condition": "主线确认 + 承接 + 60分钟确认",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                        "monthly_rhythm": {"max_position_pct": 50},
+                    },
+                },
+            )
+        )
+
+        self.assertIn(
+            "| 只看唯一对象 | 300613 富瀚微 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口 | 不满足回到0% |",
+            rendered,
+        )
+        self.assertIn("| 09:30-09:35 |", rendered)
+        self.assertIn("| 09:50-10:10 |", rendered)
+        self.assertIn("| 14:30-14:55 |", rendered)
+        self.assertNotIn("60分钟确认", rendered)
 
     def test_front_page_unique_action_prefers_structured_required_steps(self):
         rendered = "\n".join(
@@ -141,7 +175,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
+        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 09:30-09:35 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
         self.assertNotIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
 
     def test_front_page_unique_action_uses_window_type_over_legacy_condition(self):
@@ -167,7 +201,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
+        self.assertIn("| 只看唯一对象 | 601991 大唐发电 | 09:30-09:35 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 不满足回到0% |", rendered)
         self.assertNotIn("| 只看唯一对象 | 601991 大唐发电 | 竞价表态 + 回封参与 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
 
     def test_front_page_renders_dragon_pullback_second_confirmation(self):
@@ -354,7 +388,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 唯一对象 | 暂无 |", front_stock_section)
         self.assertIn("| 今日不买原因 | 没有唯一对象，完整候选仅保留在附录和快照 |", front_stock_section)
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", front_stock_section)
-        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
 
     def test_50_state_without_unique_target_falls_back_to_zero_not_condition_waiting(self):
         rendered = "\n".join(
@@ -419,7 +453,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertIn("| 唯一对象 | 000586 汇源通信（通信设备） |", rendered)
         self.assertIn("| 当前状态 | 50%标准进攻对象 |", rendered)
-        self.assertIn("| 只看唯一对象 | 000586 汇源通信（通信设备） | 竞价表态 + 回封参与 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 条件不满足回到0% |", rendered)
+        self.assertIn("| 只看唯一对象 | 000586 汇源通信（通信设备） | 09:30-09:35 | 竞价表态 / 开盘前几分钟承接 / 回封/打板 | 条件不满足回到0% |", rendered)
         self.assertIn("| 50%标准进攻", rendered)
         self.assertNotIn("| 唯一对象 | 暂无 |", rendered)
 
@@ -457,7 +491,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertIn("| 唯一对象 | 暂无 |", rendered)
         self.assertIn("| 当前状态 | 0%无合格标的 |", rendered)
-        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 人形机器人 | 人形机器人 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
         self.assertNotIn("50%标准进攻对象", rendered)
         self.assertNotIn("50%标准进攻，只做预演命中的合格对象", rendered)
@@ -570,7 +604,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 明日动作 | 只看T0对象，条件满足才新开一手 |", account_section)
-        self.assertIn("| T0主对象 | 大唐发电(601991)：参与窗口确认 |", account_section)
+        self.assertIn("| T0主对象 | 大唐发电(601991)：固定交易窗口条件 |", account_section)
         self.assertIn("| 新开仓上限 | 1 |", account_section)
         self.assertIn("| 50%标准进攻 |", rendered)
 
@@ -605,6 +639,42 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| T0备用 | 华天科技(002185)：仅作条件观察 |", account_section)
         self.assertIn("| 新开仓上限 | 0 |", account_section)
 
+    def test_front_page_t0_card_shows_position_decision_for_real_small_account_holding(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-26",
+                market_research_snapshot={
+                    "account_profile": {
+                        "capital_text": "1w本金；总资产10126.52；当日盈利126.52（+1.27%）",
+                    },
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手",
+                    },
+                    "selected_position_candidate": {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                    },
+                },
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 1w本金；总资产10126.52；当日盈利126.52（+1.27%）；已有昨日持仓优先处理 |", account_section)
+        self.assertIn("| 明日动作 | 先处理旧仓，不为新候选分散资金 |", account_section)
+        self.assertIn(
+            "| T0主对象 | 持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手 |",
+            account_section,
+        )
+        self.assertIn("| T0备用 | 华天科技(002185)：仅作条件观察 |", account_section)
+        self.assertIn("| 新开仓上限 | 0 |", account_section)
+
     def test_zero_participation_final_summary_prefers_position_trigger_text(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -622,7 +692,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "position_decision": {
                         "signal_grade": "0",
                         "target_position_pct": 0,
-                        "trigger_text": "首个60分钟站上63.22且不破60.06",
+                        "trigger_text": "09:50-10:10站上63.22且不破60.06",
                     },
                 },
                 final_gate={"can_new_entry": False, "should_reduce": True},
@@ -631,7 +701,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 条件观察：605111 新洁能（半导体） | 0% / 不参与 | 盘前0%；只看605111 新洁能（半导体），09:50-10:10首个60分钟站上63.22且不破60.06成立才执行条件50%标准进攻；不满足继续0% |",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 条件观察：605111 新洁能（半导体） | 0% / 不参与 | 盘前0%；只看605111 新洁能（半导体），09:50-10:10站上63.22且不破60.06成立才执行条件50%标准进攻；不满足继续0% |",
             rendered,
         )
         self.assertNotIn("环境已转撤退，先退出", rendered.split("## 七、最终结论", 1)[-1])
@@ -690,7 +760,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("002703 浙江世宝", rendered)
         self.assertNotIn("| 明日主买对象 |", rendered)
         self.assertNotIn("| 明日补位对象 |", rendered)
-        self.assertIn("| 09:25-09:40 | 只看风险是否钝化 | 无 | 有旧仓先看是否需要降风险 | 不做新增参与 |", rendered)
+        self.assertIn("| 09:30-09:35 | 只看跌停扩散、主攻线承接和唯一对象是否出现 | 无 | 弱仓/错仓先降风险 | 观察，不抢开盘 |", rendered)
         self.assertNotIn("买后用30分钟结构止损", rendered)
         self.assertNotIn("合格则参与，不合格回到0%", rendered)
         self.assertNotIn("买后用30分钟结构止损", rendered)
@@ -873,13 +943,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
         stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
         self.assertIn("### 1. 个股裁决", stock_section)
         self.assertIn("| 备用观察 | 富瀚微(300613)；华特气体(688268) |", stock_section)
-        self.assertIn("| 今日不买原因 | 60分钟确认未完成 |", stock_section)
-        self.assertIn("| 明日触发 | 10点确认；主线承接 |", stock_section)
+        self.assertIn("| 今日不买原因 | 09:50-10:10窗口未完成 |", stock_section)
+        self.assertIn("| 明日触发 | 09:50-10:10窗口；主线承接 |", stock_section)
         self.assertIn("| 明日失效 | 主线回落；跌破关键位 |", stock_section)
         self.assertIn("### 2. 明日候选观察", stock_section)
         self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |", stock_section)
         self.assertIn("### 3. 备用观察", stock_section)
-        self.assertIn("| 富瀚微(300613) | 半导体 | 主线备选 | 10点确认承接 | 跌破关键位 |", stock_section)
+        self.assertIn("| 富瀚微(300613) | 半导体 | 主线备选 | 09:50-10:10窗口 | 跌破关键位 |", stock_section)
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", stock_section)
 
     def test_front_page_renders_reasoning_decision_without_chain_of_thought(self):
@@ -918,13 +988,14 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("| 主线状态 | strengthening |", rendered)
         self.assertIn("| 结论 | 主线仍需确认，明天只观察承接。 |", rendered)
         self.assertIn("| 关键证据 | 主线为半导体 |", rendered)
-        self.assertIn("| 触发条件 | 10点后主线继续放量；候选股完成60分钟确认 |", rendered)
+        self.assertIn("| 触发条件 | 09:50-10:10主线继续放量；候选股09:50-10:10窗口满足条件 |", rendered)
         self.assertIn("| 失败条件 | 主线回落；候选股承接失败 |", rendered)
-        self.assertIn("| 排除对象 | 富瀚微(300613)：60分钟确认未完成 |", rendered)
+        self.assertIn("| 排除对象 | 富瀚微(300613)：09:50-10:10窗口未完成 |", rendered)
         self.assertIn("| 推理深度 | xhigh |", rendered)
         self.assertNotIn("| 置信度 | medium |", rendered)
         self.assertNotIn("chain-of-thought", rendered)
         self.assertNotIn("思维链", rendered)
+        self.assertNotIn("60分钟确认", rendered)
 
     def test_reasoning_decision_surface_sanitizes_forbidden_markers_and_table_breaks(self):
         rendered = "\n".join(
@@ -990,7 +1061,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         expected_label = "300613 富瀚微（半导体、AI端侧芯片）"
-        self.assertIn(f"| 只看唯一对象 | {expected_label} | 60分钟确认 | 主线确认 / 承接 / 60分钟确认 | 不满足回到0% |", rendered)
+        self.assertIn(f"| 只看唯一对象 | {expected_label} | 09:50-10:10 | 主线确认 / 承接 / 09:50-10:10窗口 | 不满足回到0% |", rendered)
         self.assertIn(
             f"| 50%标准进攻，只做预演命中的合格对象 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | {expected_label} | 50% / 标准进攻 |",
             rendered,
@@ -1031,7 +1102,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         expected_label = "300613 富瀚微（半导体、AI｜端侧 芯片）"
-        self.assertIn(f"| 只看唯一对象 | {expected_label} | 60分钟确认 | 主线确认 / 承接 / 60分钟确认 | 不满足回到0% |", rendered)
+        self.assertIn(f"| 只看唯一对象 | {expected_label} | 09:50-10:10 | 主线确认 / 承接 / 09:50-10:10窗口 | 不满足回到0% |", rendered)
         for line in rendered.splitlines():
             if line.startswith("| 只看唯一对象 |") or line.startswith("| 50%标准进攻"):
                 self.assertNotIn("AI|端侧", line)
@@ -1061,7 +1132,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
         self.assertNotIn(_m("B档", "30%"), rendered)
 
@@ -1094,8 +1165,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("| 0%不参与 |", rendered)
-        self.assertIn("| 10:00左右观察 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |", rendered)
-        self.assertIn("| 尾盘 | 只判断是否量化电风扇行情 | 无 | 非电风扇不尾盘新增参与 | 例外，不是常规 |", rendered)
+        self.assertIn("| 09:50-10:10 | 观察市场底色、主线承接、唯一对象强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |", rendered)
+        self.assertIn("| 14:30-14:55 | 只判断是否量化电风扇行情 | 无 | 非电风扇不新增参与 | 例外，不是常规 |", rendered)
         self.assertNotIn("10:00左右买", rendered)
         self.assertNotIn("新仓止损", rendered)
         self.assertNotIn("尾盘开新仓", rendered)
@@ -1128,7 +1199,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn("### 1. 个股裁决", rendered)
-        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_non_actionable_reasoning_decision_blocks_snapshot_unique_target(self):
@@ -1162,7 +1233,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertIn("### 1. 个股裁决", rendered)
         self.assertNotIn("### 1. 主线内可执行候选", rendered)
-        self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_empty_or_malformed_reasoning_decision_blocks_snapshot_unique_target(self):
@@ -1187,7 +1258,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
                 self.assertIn("### 1. 个股裁决", rendered)
                 self.assertNotIn("### 1. 主线内可执行候选", rendered)
-                self.assertIn("| 只看唯一对象 | 暂无 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认未同时满足 | 不做 |", rendered)
+                self.assertIn("| 只看唯一对象 | 暂无 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足回到0% |", rendered)
                 self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0% / 不参与 |", rendered)
 
     def test_turnover_share_lines_derives_share_change_from_structured_same_mainline_history(self):
@@ -1474,7 +1545,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("| 股票 | 代码 | 所属方向 | 标志性大阳线 | 近5日状态 | 承接 | 资金痕迹 | 明日资格 |", front_stock_section)
         self.assertIn("| 唯一对象 | 300613 富瀚微 |", front_stock_section)
         self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)
-        self.assertIn("| 只看唯一对象 | 300613 富瀚微 | 60分钟确认 | 主线确认 + 承接 + 60分钟确认 | 不做 |", rendered)
+        self.assertIn("| 只看唯一对象 | 300613 富瀚微 | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口 | 不满足回到0% |", rendered)
         for forbidden in (
             "## 市场贴合度校准",
             "## 大阳线与承接",

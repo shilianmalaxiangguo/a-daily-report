@@ -1500,7 +1500,7 @@ def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
             "trend_type_count": len(structures),
             "zg": None,
             "zd": None,
-            "explanation": "60分钟走势类型不足3段，不能确认日线级别缠论中枢。",
+            "explanation": "下级别走势类型不足3段，不能确认日线级别缠论中枢。",
         }
     overlap = _overlap_range(structures[:3])
     if not overlap:
@@ -1510,7 +1510,7 @@ def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
             "trend_type_count": len(structures[:3]),
             "zg": None,
             "zd": None,
-            "explanation": "前三个60分钟走势类型没有重叠区间。",
+            "explanation": "前三个下级别走势类型没有重叠区间。",
         }
     return {
         "confirmed": True,
@@ -1518,7 +1518,7 @@ def confirm_daily_level_zhongshu(candidate, chanlun_60m_structures):
         "trend_type_count": 3,
         "zg": overlap["zg"],
         "zd": overlap["zd"],
-        "explanation": "至少三个连续60分钟走势类型存在重叠，日线级别平台/中枢成立。",
+        "explanation": "至少三个连续下级别走势类型存在重叠，日线级别平台/中枢成立。",
     }
 
 

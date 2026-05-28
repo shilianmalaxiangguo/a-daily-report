@@ -332,32 +332,32 @@ def _build_intraday_execution_plan_legacy_body(stock_code, target_date, entry_pr
         volume_ratio_60m = round(float(latest_60m.get("volume") or 0) / avg_volume_60m, 2)
 
     if signal_type == "breakout":
-        confirm_rule = f"首个60分钟放量站上{confirm_price_60m:.2f}"
+        confirm_rule = f"09:50-10:10放量站上{confirm_price_60m:.2f}"
         if support_60m:
             confirm_rule += f"，且不破{support_60m:.2f}"
-        confirm_state = "60分钟突破雏形" if (
+        confirm_state = "09:50-10:10突破雏形" if (
             latest_60m_close and latest_60m_close >= entry and (volume_ratio_60m or 0) >= 1.0
-        ) else "等待60分钟放量确认"
+        ) else "等待09:50-10:10放量确认"
     elif signal_type == "panic_buy":
-        confirm_rule = f"首个60分钟不破{support_60m:.2f}并收回{confirm_price_60m:.2f}" if support_60m else f"首个60分钟收回{confirm_price_60m:.2f}"
-        confirm_state = "60分钟尾盘已回稳" if (
+        confirm_rule = f"09:50-10:10不破{support_60m:.2f}并收回{confirm_price_60m:.2f}" if support_60m else f"09:50-10:10收回{confirm_price_60m:.2f}"
+        confirm_state = "09:50-10:10已回稳" if (
             latest_60m_close and latest_60m_open and latest_60m_close >= latest_60m_open
-        ) else "等待60分钟转强"
+        ) else "等待09:50-10:10转强"
     elif signal_type == "sweet_zone":
-        confirm_rule = f"首个60分钟回踩不破{support_60m:.2f}后再站上{confirm_price_60m:.2f}" if support_60m else f"首个60分钟站上{confirm_price_60m:.2f}"
-        confirm_state = "60分钟尾盘偏强" if (
+        confirm_rule = f"09:50-10:10回踩不破{support_60m:.2f}后再站上{confirm_price_60m:.2f}" if support_60m else f"09:50-10:10站上{confirm_price_60m:.2f}"
+        confirm_state = "09:50-10:10偏强" if (
             latest_60m_close and latest_60m_open and latest_60m_close >= latest_60m_open
-        ) else "60分钟仍待确认"
+        ) else "09:50-10:10仍待确认"
     else:
-        confirm_rule = f"首个60分钟站上{confirm_price_60m:.2f}"
+        confirm_rule = f"09:50-10:10站上{confirm_price_60m:.2f}"
         if support_60m:
             confirm_rule += f"，且不破{support_60m:.2f}"
-        confirm_state = "可按60分钟确认" if latest_60m_close else "分钟数据不足"
+        confirm_state = "可按09:50-10:10窗口" if latest_60m_close else "分钟数据不足"
 
     stop_plan = build_stop_execution_plan(
         entry,
         structure_stop_30m,
-        structure_label="30分钟结构止损",
+        structure_label="失效价",
     )
     entry_cycle_stop_policy = build_entry_cycle_stop_policy(entry, stop_plan, entry_cycle_profile)
     confirm_basis_60m = "entry_cycle_calibrated" if entry_cycle_stop_policy else "entry_or_recent_high"

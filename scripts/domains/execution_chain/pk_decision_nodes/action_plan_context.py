@@ -1,10 +1,11 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 def _format_closed_gate_buy_limit_text(position_level, final_gate):
     final_gate = final_gate or {}
     if final_gate.get("allow_attack_50_ready"):
-        return "等参与窗口确认；未确认按0%不参与"
+        return "等固定交易窗口内条件成立；未确认按0%不参与"
     return "保持空仓，不新增参与"
 
 
@@ -125,7 +126,7 @@ def _build_candidate_quality_panel_fields(
     return {
         "market_emotion_label": step0_prediction_cn,
         "account_attention_load": "有持仓需先处理" if has_personal_positions else "无持仓负担",
-        "holding_priority_action": "先处理旧仓，再看新增" if has_personal_positions else "无旧仓时只等参与窗口",
+        "holding_priority_action": "先处理旧仓，再看新增" if has_personal_positions else "无旧仓时只等固定交易窗口内条件",
         "daily_new_entry_limit": daily_new_entry_limit,
         "primary_buy_candidate": best_stock,
         "backup_candidate": backup_candidate,
@@ -191,7 +192,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                     "action": "🔥 唯一买入",
                     "name": best_stock.get("name"),
                     "code": best_stock.get("code"),
-                    "trigger": f"明日首个60分钟站上{confirm_price:.2f}" if confirm_price else "明日60分钟确认后触发",
+                    "trigger": f"明日09:50-10:10站上{confirm_price:.2f}" if confirm_price else "明日09:50-10:10窗口内满足条件后触发",
                     "risk_window": f"{stop_summary_text} / {format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
                 }
             )
@@ -206,11 +207,11 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                     "name": best_stock.get("name"),
                     "code": best_stock.get("code"),
                     "trigger": (
-                        f"明日首个60分钟站上{confirm_price:.2f}后按{best_stock.get('trigger', '条件')}执行"
+                        f"明日09:50-10:10站上{confirm_price:.2f}后按{best_stock.get('trigger', '条件')}执行"
                         if confirm_price
-                        else f"明日60分钟确认后按{best_stock.get('trigger', '条件')}执行"
+                        else f"明日09:50-10:10窗口内满足条件后按{best_stock.get('trigger', '条件')}执行"
                     ),
-                    "risk_window": f"{(stop_plan or {}).get('summary', '先看30分钟结构 / 最晚-5%')} / "
+                    "risk_window": f"{(stop_plan or {}).get('summary', '先看失效价 / 最晚-5%')} / "
                     f"{format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
                 }
             )
@@ -226,9 +227,9 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 "name": watch_anchor.get("name"),
                 "code": watch_anchor.get("code"),
                 "trigger": (
-                    f"首个60分钟站上{confirm_price:.2f}后，再看是否走成明天唯一能买的那只"
+                    f"09:50-10:10站上{confirm_price:.2f}后，再看是否走成明天唯一能买的那只"
                     if confirm_price
-                    else "先看60分钟确认，再看是否走成明天唯一能买的那只"
+                    else "先看09:50-10:10窗口，再看是否走成明天唯一能买的那只"
                 ),
                 "risk_window": f"{(price_focus or {}).get('key_zone_display', '-')} / "
                 f"{format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
@@ -240,13 +241,13 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
         stop_plan = candidate.get("stop_plan")
         price_focus = build_trade_price_focus(minute_plan, stop_plan)
         confirm_price = minute_plan.get("confirm_price_60m")
-        confirm_text = f"09:50-10:10站上{confirm_price:.2f}" if confirm_price else "09:50-10:10完成参与窗口确认"
+        confirm_text = f"09:50-10:10站上{confirm_price:.2f}" if confirm_price else "09:50-10:10窗口内条件成立"
         action_rows.append(
             {
                 "action": "⏳ 确认后执行预案",
                 "name": candidate.get("name"),
                 "code": candidate.get("code"),
-                "trigger": f"{confirm_text}，且板块承接不塌，参与窗口成立后才评估50%标准进攻",
+                "trigger": f"{confirm_text}，且板块承接不塌，固定交易窗口内条件成立后才评估50%标准进攻",
                 "risk_window": (price_focus or {}).get("key_zone_display", "-"),
             }
         )
@@ -273,7 +274,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             observation_priority_lines.append(
                 f"- 👀 {candidate.get('name')}({candidate.get('code')}) - "
                 f"{candidate.get('watch_anchor_type', candidate.get('permission_label', '观察权'))}，"
-                f"{compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+                f"{normalize_trading_time_text(compose_observation_focus_text(confirm_text, observation_price_focus_text))}"
             )
             append_watch_anchor_note(observation_priority_lines, candidate, prefix="  ")
             append_observation_price_focus_note(observation_priority_lines, price_focus, prefix="  ")
@@ -288,21 +289,21 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
         observation_price_focus_text = build_observation_price_focus_text(price_focus)
         backup_observation_lines.append(
             f"- ⏳ {candidate.get('name')}({candidate.get('code')}) - 等买点出现，"
-            f"{compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+            f"{normalize_trading_time_text(compose_observation_focus_text(confirm_text, observation_price_focus_text))}"
         )
         append_observation_price_focus_note(backup_observation_lines, price_focus, prefix="  ")
 
     position_section_lines = [
         f"- **进攻仓位三态**: {_format_position_display(position_level)}",
         f"- **明日裁决**: {step0_prediction_cn}",
-        f"- **怎么执行**: {get_execution_framework_text()}",
+        f"- **怎么执行**: {normalize_trading_time_text(get_execution_framework_text())}",
     ]
     if position_level == "一档（空仓档）":
         if can_ten_confirm_upgrade and display_observation_candidates:
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
-                    "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
+                    "- **明天仓位放多少**: 盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
                     "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，命中后才评估50%标准进攻，未命中继续0%",
                 ]
             )
@@ -315,7 +316,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 ]
             )
     elif position_level == "二档（防守档）":
-        position_section_lines.append("- **现在到底是什么状态**: 0%观察，等待参与窗口")
+        position_section_lines.append("- **现在到底是什么状态**: 0%观察，等待固定交易窗口内条件")
         if final_gate.get("should_reduce"):
             position_section_lines.append("- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）")
             position_section_lines.append(
@@ -324,11 +325,11 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，不新增参与"
             )
         else:
-            position_section_lines.append("- **明天仓位放多少**: 0%观察；参与窗口成立后才评估50%标准进攻")
+            position_section_lines.append("- **明天仓位放多少**: 0%观察；固定交易窗口内条件成立后才评估50%标准进攻")
             position_section_lines.append(
-                "- **明天具体怎么做**: 旧强仓可持有；新仓只看主线核心是否命中参与窗口分层确认，强核心走竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认"
+                "- **明天具体怎么做**: 旧强仓可持有；新仓只看主线核心是否在固定交易窗口内满足条件，强核心走竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口"
                 if has_personal_positions
-                else "- **明天具体怎么做**: 只观察主线核心是否命中参与窗口分层确认；未命中0%，命中后才评估50%标准进攻"
+                else "- **明天具体怎么做**: 只观察主线核心是否在固定交易窗口内满足条件；未满足0%，满足后才评估50%标准进攻"
             )
     else:
         if not best_stock:
@@ -360,8 +361,8 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    "- **明天仓位放多少**: 50%标准进攻（只在参与窗口成立后）",
-                    "- **明天具体怎么做**: 严格按买点触发，不追涨；不满足参与窗口就转为0%",
+                    "- **明天仓位放多少**: 50%标准进攻（只在固定交易窗口内条件成立后）",
+                    "- **明天具体怎么做**: 严格按买点触发，不追涨；固定交易窗口内条件不满足就转为0%",
                 ]
             )
         else:
@@ -381,18 +382,18 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             confirm_price = minute_plan.get("confirm_price_60m")
             structure_stop_30m = minute_plan.get("structure_stop_30m")
             if confirm_price:
-                pre_market_lines.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 首个60分钟站上{confirm_price:.2f}提醒")
+                pre_market_lines.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 09:50-10:10站上{confirm_price:.2f}提醒")
             else:
                 entry_range = best_stock.get("entry_range", (signal.entry_price, signal.entry_price))
                 pre_market_lines.append(f"- **设价格预警**: {best_stock.get('name')}({best_stock.get('code')}) - 触及{entry_range[0]:.2f}-{entry_range[1]:.2f}提醒")
             if structure_stop_30m:
-                pre_market_lines.append(f"- **止损预埋**: 若买入，30分钟结构止损先盯{structure_stop_30m:.2f}")
+                pre_market_lines.append(f"- **风险预埋**: 若买入，先盯失效价{structure_stop_30m:.2f}")
         else:
             minute_plan = best_stock.get("minute_plan") or {}
             confirm_price = minute_plan.get("confirm_price_60m")
             pre_market_lines.append(
                 f"- **关注标的**: {best_stock.get('name')}({best_stock.get('code')}) - "
-                f"{'首个60分钟站上' + format(confirm_price, '.2f') + '后按条件触发' if confirm_price else '按条件触发'}"
+                f"{'09:50-10:10站上' + format(confirm_price, '.2f') + '后按条件触发' if confirm_price else '按条件触发'}"
             )
     elif watch_anchor:
         minute_plan = watch_anchor.get("minute_plan") or {}
@@ -403,7 +404,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
         observation_price_focus_text = build_observation_price_focus_text(price_focus)
         pre_market_lines.append(
             f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')}) - "
-            f"{compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
+            f"{normalize_trading_time_text(compose_observation_focus_text(confirm_text, observation_price_focus_text))}"
         )
         append_watch_anchor_note(pre_market_lines, watch_anchor)
         append_observation_price_focus_note(pre_market_lines, price_focus)
@@ -415,21 +416,21 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
         "- 观察涨跌比、昨日涨停溢价率",
         "- 重新评估Step 0裁决是否仍然成立",
         "- 观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步",
-        "- 若竞价表态和开盘前几分钟承接同时成立，按预演参与窗口处理；不成立回到0%",
+        "- 若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%",
     ]
     if trade_gate_open and best_stock:
         first_hour_lines = [
-            "- 竞价/开盘前几分钟未触发时，再看60分钟结构确认",
+            "- 竞价/开盘前几分钟未触发时，只等09:50-10:10窗口内条件成立",
             "- 直接高开离计划过远且没有回封/承接方案 → 放弃，等新的买点",
         ]
         intraday_lines = [
-            "- 竞价表态、开盘承接、打板/回封或60分钟确认任一路径命中，且大盘不崩 → 按预设仓位执行",
-            "- 买入后用30分钟结构设置止损；若结构止损过深，则直接用单笔-5%硬止损",
+            "- 竞价表态、开盘承接、打板/回封或09:50-10:10窗口任一路径命中，且大盘不崩 → 按预设仓位执行",
+            "- 买入后按失效价和单笔-5%底线处理风险；若失效价过深，则直接用单笔-5%底线",
             "- 跌破执行止损线 → 无条件止损",
         ]
     elif trade_gate_open and watch_anchor:
         first_hour_lines = [
-            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否完成预演参与窗口",
+            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否在固定交易窗口内满足条件",
             "- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入参与流程",
         ]
         intraday_lines = [
@@ -440,12 +441,12 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     else:
         if can_ten_confirm_upgrade:
             first_hour_lines = [
-                "- 当前是0%观察，本时段只确认主线核心是否命中参与窗口分层确认",
+                "- 当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
                 "- 重点观察优先锚点是否继续走强；确认后才评估50%标准进攻，未确认保持0%",
             ]
             intraday_lines = [
-                "- 以观察和处理持仓为主；新仓只允许参与窗口成立后的主线核心50%标准进攻",
-                "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
+                "- 以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻",
+                "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
                 "- 若观察标的全天未形成更强确认 → 继续等待",
             ]
         else:
@@ -455,15 +456,15 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             ]
             intraday_lines = [
                 "- 以观察和处理持仓为主，不做新开仓",
-                "- 若你有仓位，30分钟结构失守或日内明显转弱 → 执行减仓/止损",
+                "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
                 "- 若观察标的全天未形成更强确认 → 继续等待",
             ]
 
     closing_lines = ["- 未买入的保持观望"]
     if trade_gate_open and best_stock:
-        closing_lines.append("- 已买入的确认30分钟止损线是否需要上移")
+        closing_lines.append("- 已买入的确认风险线是否需要上移")
     else:
-        closing_lines.append("- 若你有旧仓，确认30分钟结构止损线是否需要上移")
+        closing_lines.append("- 若你有旧仓，确认风险线是否需要上移")
 
     alert_rows = []
     for pred in today_predictions[:3]:

@@ -110,7 +110,7 @@ def _build_execution_row(context, stage_meta=None):
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     if selected and selected_target_is_attack_ready(context):
-        guidance = "只等明日目标标的自己走出参与窗口"
+        guidance = "只等明日目标标的在固定交易窗口内满足条件"
     elif trade_gate_open:
         if best_stock:
             guidance = "只等明天唯一能买的那只自己走出来"
@@ -138,15 +138,15 @@ def _build_decisive_row(context, stage_meta=None):
     if selected:
         stock_label = f"{selected.get('name')}({selected.get('code') or selected.get('stock_code')})"
         if selected_target_is_attack_ready(context):
-            return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按参与窗口确认，不满足回到0%")
+            return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按固定交易窗口条件确认，不满足回到0%")
         return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；先观察强弱，不抢跑")
     if best_stock:
         stock_label = f"{best_stock.get('name')}({best_stock.get('code')})"
-        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按预演参与窗口触发")
+        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"{stock_label}；按固定交易窗口条件触发")
     if watch_anchor:
         stock_label = f"{watch_anchor.get('name')}({watch_anchor.get('code')})"
         if trade_gate_open:
-            guidance = f"{stock_label}；先看预演参与窗口，只有走成明天唯一能买的那只才参与"
+            guidance = f"{stock_label}；先看固定交易窗口内条件，只有走成明天唯一能买的那只才参与"
         else:
             guidance = f"{stock_label}；仅作强弱观察，不构成买入指令"
         if watch_anchor_type:

@@ -389,7 +389,7 @@ def _derive_watch_anchor_note_legacy_body(candidate, mainline_name=""):
             or candidate.get("abnormal_summary", "")
             or "创业板20cm预启动观察。"
         ).strip()
-        suffix = "只先进观察池，先看右侧确认和60分钟确认，不满足继续观察"
+        suffix = "只先进观察池，先看右侧确认和09:50-10:10窗口，不满足继续观察"
         return f"{base_note}；{suffix}" if base_note else suffix
     if (not mainline_name or _candidate_matches_mainline(candidate, mainline_name)) and trend_note:
         if washout_note:
@@ -534,7 +534,7 @@ def _build_execute_anchor_window_text_legacy_body(position_decision=None, watch_
         text = f"{prefix}；已完成{second_shot_breakout_price:.2f}二次突破，只进入50%标准进攻预演"
     else:
         wait_text = f"，当前还剩{remaining_days}日观察寿命" if remaining_days else ""
-        trigger_text = f"只有重新站上{second_shot_breakout_price:.2f}并形成参与窗口才考虑50%标准进攻" if second_shot_breakout_price is not None else "只有重新完成二次突破并形成参与窗口才考虑50%标准进攻"
+        trigger_text = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才考虑50%标准进攻" if second_shot_breakout_price is not None else "只有重新完成二次突破且固定交易窗口内条件成立，才考虑50%标准进攻"
         text = f"{prefix}{wait_text}；{trigger_text}"
     if support_price is not None:
         text += f"；不破{support_price:.2f}继续观察"
@@ -549,7 +549,8 @@ def _build_cycle_triplet_texts_legacy_body(position_decision=None, candidate=Non
     watch_source = str(candidate.get("watch_source", "") or "").strip()
     gem_contract = candidate.get("gem_breathing_contract") or {}
     target_position_pct = int(_safe_float(position_decision.get("target_position_pct", 0)))
-    trigger_text = str(position_decision.get("trigger_text", "") or "完成60分钟确认").strip()
+    trigger_text = str(position_decision.get("trigger_text", "") or "09:50-10:10窗口满足条件").strip()
+    trigger_after_text = f"{trigger_text}内满足条件后" if trigger_text.endswith("窗口") else f"{trigger_text}后"
     execute_anchor_window_text = _build_execute_anchor_window_text(
         position_decision=position_decision,
         watch_anchor=candidate,
@@ -588,33 +589,33 @@ def _build_cycle_triplet_texts_legacy_body(position_decision=None, candidate=Non
     second_shot_ready = bool(position_decision.get("second_shot_ready"))
     second_shot_breakout_price = _round_or_none(position_decision.get("second_shot_breakout_price"))
     if target_position_pct == 50:
-        intervention_cycle = f"{trigger_text}后按50%执行，才算被市场正式指派接货，不做模糊试单"
+        intervention_cycle = f"{trigger_after_text}按50%执行，才算被市场正式指派接货，不做模糊试单"
     elif target_position_pct == 30:
         if second_shot_ready and second_shot_breakout_price is not None:
-            intervention_cycle = f"已完成{second_shot_breakout_price:.2f}二次突破，{trigger_text}后评估50%标准进攻"
+            intervention_cycle = f"已完成{second_shot_breakout_price:.2f}二次突破，{trigger_after_text}评估50%标准进攻"
         else:
-            intervention_cycle = f"{trigger_text}后才评估50%标准进攻，确认后才算被市场指派接货，不满足继续0%观察"
+            intervention_cycle = f"{trigger_after_text}才评估50%标准进攻，确认后才算被市场指派接货，不满足继续0%观察"
     elif execute_anchor_window_text:
         if second_shot_breakout_price is not None:
-            intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}并命中参与窗口分层确认，才评估50%标准进攻；普通结构才等60分钟确认"
+            intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才评估50%标准进攻；普通结构只看09:50-10:10窗口"
         else:
-            intervention_cycle = f"{trigger_text}后再评估是否进入50%标准进攻"
+            intervention_cycle = f"{trigger_after_text}再评估是否进入50%标准进攻"
     elif candidate:
         if watch_source == "gem_breathing_20cm":
             upgrade_text = str(gem_contract.get("upgrade_condition_text", "") or "").strip()
             reset_price = _round_or_none(gem_contract.get("reset_breakout_price"))
             if target_position_pct == 30:
-                intervention_cycle = f"{trigger_text}后才评估50%标准进攻，确认后才算被市场指派接货，不满足继续0%观察"
+                intervention_cycle = f"{trigger_after_text}才评估50%标准进攻，确认后才算被市场指派接货，不满足继续0%观察"
             elif second_shot_breakout_price is not None:
-                intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}并命中参与窗口分层确认，才评估50%标准进攻；普通结构才等60分钟确认"
+                intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才评估50%标准进攻；普通结构只看09:50-10:10窗口"
             elif reset_price is not None:
-                intervention_cycle = f"只有重新站上{reset_price:.2f}并命中参与窗口分层确认，才评估50%标准进攻；普通结构才等60分钟确认"
+                intervention_cycle = f"只有重新站上{reset_price:.2f}且固定交易窗口内条件成立，才评估50%标准进攻；普通结构只看09:50-10:10窗口"
             elif upgrade_text:
                 intervention_cycle = f"{upgrade_text}；确认后才评估50%标准进攻"
             else:
-                intervention_cycle = f"{trigger_text}后才评估是否出手，确认前不提前接货"
+                intervention_cycle = f"{trigger_after_text}才评估是否出手，确认前不提前接货"
         else:
-            intervention_cycle = f"当前还没进入介入周期；{trigger_text}后才评估是否出手，确认前不提前接货"
+            intervention_cycle = f"当前还没进入介入周期；{trigger_after_text}才评估是否出手，确认前不提前接货"
 
     exit_cycle_parts = []
     history_feedback = position_decision.get("history_feedback", {}) or {}

@@ -78,7 +78,7 @@ def build_entry_cycle_stop_policy(entry_price, base_stop_plan=None, entry_cycle_
             "hard_stop_role": "风险底线，不是观察淘汰线",
             "execution_stop": execution_stop,
             "risk_floor": risk_floor,
-            "display_rule": "观察期看收盘修复和后续再突破；买入后按30分钟结构执行。",
+            "display_rule": "观察期看收盘修复和后续再突破；买入后按失效价执行。",
             "report_action_text": "先看修复/再突破，固定-5%只作为风险底线。",
         }
 

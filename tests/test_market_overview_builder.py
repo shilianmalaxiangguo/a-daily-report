@@ -126,6 +126,47 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("| Top50成交额占比 | 20.50% | 资金活跃期 | Top50成交额占比超过20%，雨量变大，资金处于活跃期。 |", rendered)
         self.assertIn("| 头部成交状态 | 资金活跃期 |", rendered)
 
+    def test_build_market_trend_sections_contract_renders_top20_capacity_summary(self):
+        top20_amounts = [
+            372.54,
+            301.25,
+            293.88,
+            275.43,
+            266.33,
+            244.33,
+            240.28,
+            224.99,
+            210.49,
+            201.05,
+            186.17,
+            184.56,
+            178.98,
+            169.43,
+            166.20,
+            159.80,
+            158.36,
+            154.79,
+            153.43,
+            149.80,
+        ]
+        result = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 32269.52,
+                "turnover_rank": [{"turnover": amount} for amount in top20_amounts]
+                + [{"turnover": 90.0} for _ in range(30)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2600, "down_count": 2200},
+            },
+            target_date="2026-05-25",
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| Top20成交容量 | 19/20只150亿级 | 高容量聚焦 |", rendered)
+        self.assertIn("Top20第20名149.80亿", rendered)
+        self.assertIn("作为Top50后的补充观察，只说明资金选择方向，不单独给参与资格。", rendered)
+        self.assertIn("| Top20成交容量 | 高容量聚焦 |", rendered)
+
     def test_build_market_trend_sections_contract_renders_top50_turnover_share_trend_rows(self):
         result = build_market_trend_sections_contract(
             data={

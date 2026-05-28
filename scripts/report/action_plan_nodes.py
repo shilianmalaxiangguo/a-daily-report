@@ -12,7 +12,7 @@ def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
         "lines": [
             f"#### {section_title}",
             "> **先看结论**：明天只执行唯一动作，或者只观察。",
-            "> **怎么执行**：按盘前、竞价表态、开盘前几分钟、结构确认、盘中、尾盘顺序，不临场改单。",
+            "> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序，不临场改单。",
             "",
         ],
         "exports": {},
@@ -105,8 +105,8 @@ def build_action_plan_schedule_node(context, node_meta=None, node_lookup=None):
     schedule_sections = [
         ("**盘前准备（08:30-09:15）**:", context.get("pre_market_lines") or []),
         ("**竞价表态与开盘买卖窗口（09:20-09:35，买卖只在09:30-09:35）**:", context.get("opening_lines") or []),
-        ("**结构确认窗口（09:35-10:30）**:", context.get("first_hour_lines") or []),
-        ("**盘中执行（10:30-14:30）**:", context.get("intraday_lines") or []),
+        ("**09:50-10:10买卖窗口（09:50-10:10）**:", context.get("first_hour_lines") or []),
+        ("**盘中观察（非买卖窗口）**:", context.get("intraday_lines") or []),
         ("**尾盘买卖窗口（14:30-14:55）**:", context.get("closing_lines") or []),
     ]
     for title, section_lines in schedule_sections:

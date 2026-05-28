@@ -17,7 +17,7 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-05-27")
+        self.assertEqual(context["version"], "2026-05-28")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
@@ -36,7 +36,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("wiki/交易思想/日报术语契约.md", context["source_paths"])
         self.assertIn("wiki/运行契约/日报数据源契约.md", context["source_paths"])
         self.assertIn("wiki/运行契约/snap-ui发布契约.md", context["source_paths"])
-        self.assertIn("日线结构中枢定环境 -> 固定交易窗口条件 -> 30分钟止损", context["field_mappings"])
+        self.assertIn("日线结构中枢定环境 -> 固定交易窗口条件 -> 失效价和单笔-5%底线", context["field_mappings"])
         self.assertIn("普通结构观察 -> 09:50-10:10窗口；强核心快路径 -> 09:30-09:35竞价表态、开盘前几分钟或回封", context["field_mappings"])
         self.assertIn("参与时机 -> open_core开盘核心 / ten_confirm 09:50-10:10窗口 / tail_exception尾盘14:30-14:55例外 / no_trade不交易", context["field_mappings"])
         self.assertIn("买卖窗口期 -> 只在09:30-09:35、09:50-10:10、14:30-14:55三段处理买卖；窗口外不新增买卖动作，只等待下一窗口或处理既定风险", context["field_mappings"])
@@ -48,7 +48,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("龙头速度档 -> 极致加速看MA3/MA5，高弹性强趋势看MA5/MA10，大容量趋势看MA10/MA20", context["field_mappings"])
         self.assertIn("共同选择一致性 -> 昨日持筹者不急卖、明日新买盘愿意接、主线资金仍有理由选择", context["field_mappings"])
         self.assertIn("心理价位与量化锚点 -> 对子数、整数位、前高前低、VWAP、MA和成交密集区只作价格锚点，不作独立买入理由", context["field_mappings"])
-        self.assertIn("隐藏买卖盘 -> 顶部锚点冲不过按隐藏卖盘和止盈观察，底部锚点必须站回VWAP并在09:50-10:10窗口确认承接才允许试错", context["field_mappings"])
+        self.assertIn("隐藏买卖盘 -> 顶部锚点冲不过按隐藏卖盘和止盈观察，底部锚点必须站回VWAP并在09:50-10:10窗口承接稳定才允许试错", context["field_mappings"])
         self.assertIn("量化共同选择 -> 昨日持筹者、明日新买盘、主线资金、量化动量四方一致后才提高参与质量", context["field_mappings"])
         self.assertIn("高潮反包 -> 高潮后反包优先按先手兑现点，放量吃掉压力并回踩不破才恢复候选", context["field_mappings"])
         self.assertIn("最终风险复核 -> 公告风险、连续长上影未修复、跌破对应卖点线收不回，取消主买和补位资格", context["field_mappings"])
@@ -67,12 +67,14 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("收益预期现实化 -> 日赚1%不是稳定目标，按月净值和最大回撤评估系统", context["field_mappings"])
         self.assertIn("月度攻击目标 -> 15%-20%是阶段进攻目标，不是每日交易要求，不达标也不能用错误仓硬凑", context["field_mappings"])
         self.assertIn("小资金盈利模式 -> 少数高质量核心机会贡献主要利润，轻仓试错、确认后加、冲高分批卖、破结构减", context["field_mappings"])
-        self.assertIn("结构止损 -> 个股3%-5%浮亏先检查买入理由，结构破坏才处理，个股-10%是事故极限", context["field_mappings"])
+        self.assertIn("风险处理 -> 个股3%-5%浮亏先检查买入理由，失效价破坏才处理，个股-10%是事故极限", context["field_mappings"])
         self.assertIn("账户伤害 -> 止损看个股结构，伤害看账户本金，普通波动不能打残账户", context["field_mappings"])
         self.assertIn("攻击频次 -> 没有防守边界的高频进攻会把收益对冲成无效波动", context["field_mappings"])
         self.assertIn("亏损边界 -> 先避免大亏损，再追求偶尔向上大盈利", context["field_mappings"])
+        self.assertIn("收益风险不对称 -> 先承认高波动，再用仓位、窗口、做T、卖点线和失效条件让收益靠近弹性、亏损边界收敛", context["field_mappings"])
         self.assertIn("胜率赔率 -> 胜率接近天花板时用大赚小亏和利润奔跑修复期望", context["field_mappings"])
         self.assertIn("小资金做T纪律 -> 优先选择更正确的确认买点，不追求更便宜；做T先降风险，确认后买回", context["field_mappings"])
+        self.assertIn("做T博值率 -> 下方防守条件和上方止盈条件同时写清；没有止盈只等拉升不是博值率", context["field_mappings"])
         self.assertIn("市场兜底校准 -> 结果被板块修复兜底不等于决策正确；复盘先看当时条件是否满足", context["field_mappings"])
         self.assertIn("赚钱效应退潮 -> 单边趋势道寻常，震荡退潮期降低攻击频次和预期收益", context["field_mappings"])
         self.assertIn("震荡市短线波段 -> 连跌后只允许轻仓低吸，反弹先卖回，不把低吸扩成满仓趋势持有", context["field_mappings"])
@@ -115,6 +117,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("主窗口不漂移 -> 09:45-09:50是前哨观察，09:50-10:10是执行窗口，10:10-10:15只复核不新增买点", context["field_mappings"])
         self.assertIn("点位依据声明 -> 盘中买卖点必须说明来自MA组合、VWAP、开盘价、前高前低、成交密集区或形态脚本，无来源区间不作决策", context["field_mappings"])
         self.assertIn("形态交易脚本 -> 上升趋势顺势回踩，下降趋势只做右侧确认，V/M/W/A按确认与破坏执行", context["field_mappings"])
+        self.assertIn("高位后手不追形态 -> 烂板、停顿、空中加油都不给后手追涨资格；只看次日或分歧后的重新承接", context["field_mappings"])
+        self.assertIn("三类形态处理 -> 烂板看次日强承接，停顿等放量转强，空中加油按已有仓管理；新仓等充分换手或回踩确认", context["field_mappings"])
         self.assertIn("紧急止损规则 -> 收盘同破MA7/MA10、放量大跌超7%、连续3日MA3下方、MA20下拐", context["field_mappings"])
         self.assertIn("成交量确认 -> 放量破位优先信风险，缩量破位必须看能否收回", context["field_mappings"])
         self.assertIn("指数价跌量增 -> 指数或全市场大跌且两市成交额放大，优先按卖压释放、量化踩踏或出货风险处理", context["field_mappings"])
@@ -124,6 +128,24 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("创新高用法 -> 只作资金扩散方向雷达，权重封顶；不直接生成个股买点，参与仍看趋势审美、承接、回踩质量和作废线", context["field_mappings"])
         self.assertIn("市场情绪总状态 -> 先看盘面亏钱效应，指数大跌、跌多涨少、跌停扩散时，局部指标高潮只能写局部过热，整体高潮必须亏钱效应不重、热度扩散强、方向确认强", context["field_mappings"])
         self.assertIn("时间窗口偏好 -> 买卖只认09:30-09:35、09:50-10:10、14:30-14:55三段；尾盘不再拆其他子窗口", context["field_mappings"])
+        self.assertIn("低位缩量横盘试龙头 -> 长期低位缩量后突放巨量/涨停/炸板，再缩量横盘后二次放量启动，才进入强势样本观察", context["field_mappings"])
+        self.assertIn("无公开题材异动 -> 只记资金提前表态假设和研究优先级，不能直接写成已知利好或无条件买点", context["field_mappings"])
+        self.assertIn("开盘核心0轴收复 -> 低开不超过-3%，09:30-09:35收复0轴并站稳分时黄线，才算开盘主动性；不新增9:40买卖窗口", context["field_mappings"])
+        self.assertIn("龙头日内转弱 -> 开盘-5%以下、跌破-3%后无近端强支撑、尾盘大幅下杀收不回、放量大跌，优先降风险", context["field_mappings"])
+        self.assertIn("特殊节点隔日确认 -> 龙头分歧日、首阴日、龙回头支撑日当天只观察，隔天开盘走强确认后才恢复参与资格", context["field_mappings"])
+        self.assertIn("市场总龙节点纪律 -> 分歧日、首阴日、龙回头支撑日只用于市场总龙；补涨龙、支线龙、龙二龙三不做这些节点", context["field_mappings"])
+        self.assertIn("周五风险 -> 周四或周五加速、周五高位博弈和周末消息不确定时，先降仓位和预期，周一再确认", context["field_mappings"])
+        self.assertIn("异动监管验证 -> 监管提示后能不大跌并继续走强，才算龙头韧性；低于预期则降级", context["field_mappings"])
+        self.assertIn("低开-5%处理 -> 龙头任何时候到-5%都极度小心，当天不开新仓，拉高先处理，真想参与等隔天走强", context["field_mappings"])
+        self.assertIn("龙头急跌后急拉 -> 急跌后可等下一分钟急拉修复；若再转弱跌破-3%且无近端支撑，先降风险", context["field_mappings"])
+        self.assertIn("加速风险 -> +7%以上或冲板按加速观察，周四周五加速更偏兑现风险，温和放量上涨更健康", context["field_mappings"])
+        self.assertIn("核买核卖博弈 -> 核买后马上核卖或反向急拉急跌时，比较回撤和反击比例，空方吃掉三分之二要小心", context["field_mappings"])
+        self.assertIn("龙头恐惧处理 -> 恐惧来自畏高和大亏；用低仓位试错、确认后加仓和利润壁垒替代空想勇敢", context["field_mappings"])
+        self.assertIn("龙头心态纪律 -> 利润放大贪婪时继续跟随市场；看不懂就离场，不因利润垫硬格局，接受龙头结束时亏一笔", context["field_mappings"])
+        self.assertIn("中军持续性 -> 板块上涨后中军次日继续放量上涨或横住，才说明大资金仍在；缩量下跌时板块延续降级", context["field_mappings"])
+        self.assertIn("名字辨识度 -> 股票名称能承接题材记忆只算热度加分，必须叠加板块路径、中军和个股承接", context["field_mappings"])
+        self.assertIn("板块高标反馈 -> 小弟和高标不能大面积负反馈；一字板高标跳水伤板块，板块强而龙头弱也要降级", context["field_mappings"])
+        self.assertIn("抱团环境 -> 普跌环境更容易抱团市场总龙，普涨环境会降低龙头辨识度和单票溢价", context["field_mappings"])
         self.assertIn("上影线趋势警惕 -> 连续上影线说明做多被压制，次日破MA5先离场观察", context["field_mappings"])
         self.assertIn("经验规则校准 -> 避坑规则必须带重新参与条件，否则避坑会变成错过", context["field_mappings"])
         self.assertIn("启动板 -> 短线触发转趋势观察仓，必须记录启动逻辑、持股规则、破坏退出", context["field_mappings"])
@@ -227,7 +249,7 @@ class LlmWikiContextTest(unittest.TestCase):
             context["field_mappings"],
         )
         self.assertIn(
-            "新题材早信/不信 -> 真新题材只在早期主动性和第一确认窗口提高参与质量，后手只观察或等分歧确认",
+            "新题材早信/不信 -> 真新题材只在早期主动性和第一执行窗口提高参与质量，后手只观察或等分歧条件",
             context["field_mappings"],
         )
         self.assertIn("载体错配先判周期", digest)
@@ -253,6 +275,25 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("不自动写入正式 wiki", candidate.get("action", ""))
         self.assertIn("不改变交易动作", candidate.get("action", ""))
 
+    def test_build_llm_wiki_context_records_external_insight_fieldization(self):
+        context = build_llm_wiki_context()
+        wiki_text = (ROOT / "wiki/交易思想/AI摩擦与知识复利.md").read_text(encoding="utf-8")
+        digest = context["report_digest_text"]
+
+        self.assertIn(
+            "外部启发转交易规则 -> 先分原文可支持、系统化抽象、不能归因给原文，再落到市场条件、参与边界和复盘反证",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "自以为是校准 -> 判断欲强时先回到价格事实、账户占用、亏损边界和失效条件，不用顺口类比替代可复盘字段",
+            context["field_mappings"],
+        )
+        self.assertIn("外部启发转交易规则", wiki_text)
+        self.assertIn("顺口类比", wiki_text)
+        self.assertIn("市场条件、参与边界和复盘反证", wiki_text)
+        self.assertIn("外部启发先做来源保真再落字段", digest)
+        self.assertIn("判断欲强先回价格账户亏损边界失效条件", digest)
+
     def test_build_llm_wiki_context_keeps_report_digest_short_and_fieldized(self):
         context = build_llm_wiki_context()
         digest = context["report_digest_text"]
@@ -274,8 +315,10 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("账户不能被普通波动打残", digest)
         self.assertIn("攻击频次服从亏损边界", digest)
         self.assertIn("先避免大亏再追求大赚", digest)
+        self.assertIn("收益风险不对称让收益靠近弹性亏损边界收敛", digest)
         self.assertIn("胜率难绝对统治时靠赔率", digest)
         self.assertIn("小资金做T优先正确确认不追求更便宜", digest)
+        self.assertIn("做T博值率下方防守上方止盈无止盈只等拉升不是博值率", digest)
         self.assertIn("市场兜底不等于决策正确", digest)
         self.assertIn("同天样本先强度后账户买不了不降级", digest)
         self.assertIn("强票可买不用弱替代", digest)
@@ -320,6 +363,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("MA3/MA7/MA10/MA20", digest)
         self.assertIn("点位说明MA/VWAP/开盘价/前高低/密集区/形态", digest)
         self.assertIn("V/M/W/A按确认与破坏执行", digest)
+        self.assertIn("烂板停顿空中加油不追", digest)
+        self.assertIn("等重新承接", digest)
         self.assertIn("紧急止损规则", digest)
         self.assertIn("放量大跌超7%", digest)
         self.assertIn("成交量确认", digest)
@@ -327,6 +372,25 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("局部强势只按逆势试攻", digest)
         self.assertIn("情绪总状态先看盘面亏钱效应", digest)
         self.assertIn("局部指标高潮只写局部过热", digest)
+        self.assertIn("低位缩量横盘突放量再缩量后二次启动纳入强势样本", digest)
+        self.assertIn("无公开题材异动只记资金表态假设不写无条件买点", digest)
+        self.assertIn("开盘低开不超-3%收复0轴站稳黄线才算主动", digest)
+        self.assertIn("不新增0940窗口", digest)
+        self.assertIn("特殊节点隔日确认", digest)
+        self.assertIn("市场总龙才做分歧首阴龙回头", digest)
+        self.assertIn("周五和加速先防风险", digest)
+        self.assertIn("监管后不大跌才算韧性", digest)
+        self.assertIn("-5%当天不开新仓", digest)
+        self.assertIn("急跌等下一分钟急拉修复", digest)
+        self.assertIn("核买核卖看三分之二力量", digest)
+        self.assertIn("老龙未死不做新龙", digest)
+        self.assertIn("低仓试错利润壁垒克服畏高大亏恐惧", digest)
+        self.assertIn("看不懂离场不靠利润垫硬格局", digest)
+        self.assertIn("接受龙头结束亏一笔", digest)
+        self.assertIn("中军次日放量或横住验证板块延续", digest)
+        self.assertIn("名字辨识度只作热度加分", digest)
+        self.assertIn("高标小弟大面积负反馈降级", digest)
+        self.assertIn("普跌抱团普涨降辨识度", digest)
         self.assertIn("连续上影破MA5先离场", digest)
         self.assertIn("避坑规则带重新参与条件", digest)
         self.assertIn("换仓先证旧仓失效、新仓更强、风险能承受", digest)
@@ -344,12 +408,122 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("强核心开盘核心", digest)
         self.assertIn("09:50-10:10窗口", digest)
         self.assertIn("买卖窗口0930-0935/0950-1010/1430-1455", digest)
-        self.assertIn("30分钟止损", digest)
+        self.assertIn("失效价和单笔-5%底线", digest)
         self.assertIn("资格条件可做参与", digest)
-        self.assertLessEqual(len(digest), 1130)
+        self.assertLessEqual(len(digest), 1450)
         self.assertNotIn("缠论原文", digest)
         self.assertNotIn("能量学", digest)
         self.assertNotIn("教你炒股票", digest)
+
+    def test_t_risk_control_wiki_records_expected_value_rule(self):
+        wiki_text = (ROOT / "wiki/交易思想/做T与风险控制.md").read_text(encoding="utf-8")
+
+        self.assertIn("## T仓博值率", wiki_text)
+        self.assertIn("下方防守和上方兑现", wiki_text)
+        self.assertIn("只有防守线、没有止盈线", wiki_text)
+        self.assertIn("MA3/VWAP附近只提供执行锚点", wiki_text)
+
+    def test_price_action_wiki_records_asymmetric_risk_reward_rule(self):
+        wiki_text = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+
+        self.assertIn("收益风险不能按静态对称理解", wiki_text)
+        self.assertIn("让收益尽量靠近强势弹性，让亏损边界尽量收敛", wiki_text)
+        self.assertIn("收益风险不对称", wiki_text)
+
+    def test_price_action_wiki_records_high_position_no_chase_shapes(self):
+        wiki_text = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+
+        for required in [
+            "高位后手不追形态",
+            "烂板不追",
+            "停顿不追",
+            "空中加油不追",
+            "分歧后的重新承接",
+            "已有仓",
+            "新仓",
+            "不新增独立选股逻辑",
+        ]:
+            self.assertIn(required, wiki_text)
+
+    def test_price_action_wiki_records_low_volume_sideways_and_intraday_leader_rules(self):
+        wiki_text = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+
+        for required in [
+            "低位缩量横盘与试龙头",
+            "长期低位缩量横盘",
+            "突放巨量",
+            "涨停或炸板",
+            "二次启动",
+            "无公开题材异动",
+            "不能直接写成已知利好",
+            "龙头日内强弱脚本",
+            "09:30-09:35",
+            "不新增 09:40",
+            "收复0轴",
+            "分时黄线",
+            "开盘 -5% 以下",
+            "尾盘大幅下杀",
+            "1分钟分时",
+            "MA10/MA20",
+        ]:
+            self.assertIn(required, wiki_text)
+
+    def test_price_action_wiki_records_leader_special_nodes_and_holding_discipline(self):
+        wiki_text = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+
+        for required in [
+            "龙头特殊节点与持仓纪律",
+            "特殊节点隔日确认",
+            "龙头分歧日",
+            "首阴日",
+            "龙回头支撑日",
+            "市场总龙节点纪律",
+            "补涨龙、支线龙、龙二龙三",
+            "周五风险",
+            "异动监管验证",
+            "老龙未死不做新龙",
+            "低开-5%处理",
+            "龙头急跌后急拉",
+            "加速风险",
+            "核买核卖博弈",
+            "龙头阴线修复",
+            "龙头心态纪律",
+            "龙头恐惧处理",
+            "畏高和大亏",
+            "低仓位试错",
+            "利润壁垒",
+            "看不懂就离场",
+            "不因利润垫硬格局",
+            "接受龙头结束时亏一笔",
+            "原文可直接支持",
+            "系统化抽象",
+            "不能归因给原文",
+        ]:
+            self.assertIn(required, wiki_text)
+
+    def test_sector_wiki_records_middle_core_continuation_and_name_recognition(self):
+        wiki_text = (ROOT / "wiki/板块补充/板块中枢与主线延续.md").read_text(encoding="utf-8")
+
+        for required in [
+            "中军持续性与名字辨识度",
+            "中军",
+            "次日继续放量上涨",
+            "横住不破",
+            "缩量下跌",
+            "板块延续降级",
+            "名字辨识度",
+            "热度加分",
+            "不能替代板块路径",
+            "板块高标反馈与抱团环境",
+            "板块高标反馈",
+            "大面积负反馈",
+            "一字板高标跳水",
+            "板块强而龙头弱",
+            "抱团环境",
+            "普跌环境",
+            "普涨环境",
+        ]:
+            self.assertIn(required, wiki_text)
 
 
 if __name__ == "__main__":

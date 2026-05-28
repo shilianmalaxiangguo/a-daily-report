@@ -5,7 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-ACTION_TEXT = "只买军工一号，参与窗口确认后执行"
+ACTION_TEXT = "只买军工一号，固定交易窗口条件满足后执行"
 
 from report.front_summary_renderer import render_front_digest, render_front_summary_sections, render_mvp_focus_summary
 
@@ -114,7 +114,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "stage_label": "主升试错段",
                 "stage_action": "只做主线强者",
                 "index_profit_relation": "指数震荡但赚钱效应修复",
-                "execution_framework_text": "日线定环境，60分钟定买点，30分钟定止损",
+                "execution_framework_text": "日线定环境，09:50-10:10窗口定买点，30分钟定止损",
                 "compact": False,
             }
         )
@@ -126,7 +126,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("- **执行依据**: 先选边站队，再等确认", rendered)
         self.assertIn("- **弱转强先看谁**: 军工一号的弱转强确认最完整", rendered)
         self.assertIn("- **现在更像哪个阶段**: 主升试错段；只做主线强者", rendered)
-        self.assertIn("- **怎么执行**: 日线定环境，60分钟定买点，30分钟定止损", rendered)
+        self.assertIn("- **怎么执行**: 日线定环境，09:50-10:10窗口定买点，按失效价和单笔-5%底线处理风险", rendered)
         self.assertNotIn("底层逻辑", rendered)
 
     def test_render_front_digest_uses_action_label_for_inactive_weak_to_strong(self):
@@ -185,16 +185,16 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "special_probe_summary_text": "军工一号是主线异常探针",
                 "structure_layer_text": "只等唯一动作",
                 "observation_cycle": "先给3~5日观察合同",
-                "intervention_cycle": "预演参与窗口命中后只做50%标准进攻或0%",
+                "intervention_cycle": "固定交易窗口条件满足后只做50%标准进攻或0%",
                 "exit_cycle": "失守关键位就作废",
                 "delete_preview": "军工弱票 / 军工后排",
-                "buy_target_text": "军工一号(000001)，只按预演参与窗口，不追盘中情绪顶点",
+                "buy_target_text": "军工一号(000001)，只按固定交易窗口条件，不追盘中情绪顶点",
                 "bridge_prep_label": "条件执行预备态",
                 "bridge_prep_text": "军工一号，等待突破升级",
                 "mainline_probe_text": "军工一号(000001)",
                 "crossline_probe_text": "高端装备一号(000002)",
                 "validation_probe_text": "军工二号(000003)",
-                "front_follow_action_text": "只买军工一号，预演参与窗口命中后执行",
+                "front_follow_action_text": "只买军工一号，固定交易窗口条件满足后执行",
                 "compact": False,
             }
         )
@@ -205,7 +205,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("**主线研究对象**: 军工一号(军工) / 军工二号(军工)", rendered)
         self.assertIn("**异常承接先看谁**: 军工一号(承接) / 军工二号(回封)", rendered)
         self.assertIn("**明天能不能开仓**: 只等唯一动作", rendered)
-        self.assertIn("**明日唯一动作**: 只买军工一号，预演参与窗口命中后执行", rendered)
+        self.assertIn("**明日唯一动作**: 只买军工一号，固定交易窗口条件满足后执行", rendered)
 
     def test_front_summary_renderers_replace_english_trading_jargon(self):
         context = {

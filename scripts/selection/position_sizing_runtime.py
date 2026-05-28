@@ -131,7 +131,7 @@ def _build_single_focus_constraint(final_gate=None, state_machine_snapshot=None,
         if candidate and _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type):
             return {
                 "status": "clear",
-                "reason": "已缩到明日极度看好目标，等待参与窗口确认。",
+                "reason": "已缩到明日极度看好目标，等待固定交易窗口内条件成立。",
             }
         return {
             "status": "missing_target",
@@ -307,7 +307,7 @@ def _build_full_attack_check(
     if not _has_explicit_trend_chain(candidate):
         missing.append("趋势比价链")
     if not _has_explicit_participation_window(candidate):
-        missing.append("参与窗口")
+        missing.append("固定交易窗口条件")
     if not _has_explicit_acceptance_act_right(candidate):
         missing.append("承接继续正确")
     if not _has_clear_invalidation(candidate, support_price):
@@ -317,7 +317,7 @@ def _build_full_attack_check(
     return {
         "status": "ready" if not missing else "incomplete",
         "missing": missing,
-        "required": ["唯一对象", "趋势比价链", "参与窗口", "承接继续正确", "失效价", "非冰点进攻环境"],
+        "required": ["唯一对象", "趋势比价链", "固定交易窗口条件", "承接继续正确", "失效价", "非冰点进攻环境"],
     }
 
 
@@ -493,11 +493,11 @@ def _build_position_sizing_decision_legacy_body(
     confirm_price = feedback_clock.get("confirm_price")
     support_price = feedback_clock.get("support_price")
     if confirm_price is not None and support_price is not None:
-        trigger_text = f"首个60分钟站上{confirm_price:.2f}且不破{support_price:.2f}"
+        trigger_text = f"09:50-10:10站上{confirm_price:.2f}且不破{support_price:.2f}"
     elif confirm_price is not None:
-        trigger_text = f"首个60分钟站上{confirm_price:.2f}"
+        trigger_text = f"09:50-10:10站上{confirm_price:.2f}"
     else:
-        trigger_text = "完成60分钟确认"
+        trigger_text = "09:50-10:10窗口满足条件"
 
     probe_state = str(special_probe_verdict.get("probe_state", "") or "").strip()
     probe_code = str(special_probe_verdict.get("code", "") or "").strip()
@@ -650,7 +650,7 @@ def _build_position_sizing_decision_legacy_body(
         if second_shot_ready and second_shot_breakout_price is not None:
             return f"执行候选观察锚点仍在活观察窗口内，且已完成{second_shot_breakout_price:.2f}二次突破，按50%标准进攻预演。"
         if weak_to_strong_upgrade_ready:
-            return "主线弱转强样本已具备60分钟确认链：强基底假弱非真弱，按50%标准进攻；后续继续 act right 再评估是否升级为核心进攻。"
+            return "主线弱转强样本已具备09:50-10:10验证链：强基底假弱非真弱，按50%标准进攻；后续继续 act right 再评估是否升级为核心进攻。"
         if probe_state == "probe_crossline_upgrade_ready":
             return "跨线对象已先 act right，按50%标准进攻，但不直接当成核心进攻。"
         if probe_allows_attack_50_ready:
@@ -706,7 +706,7 @@ def _build_position_sizing_decision_legacy_body(
             {
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
-                "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，参与窗口失败回到0%。",
+                "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。",
             }
         )
         return _finalize(decision)
@@ -724,7 +724,7 @@ def _build_position_sizing_decision_legacy_body(
             decision["sizing_reason"] = "当前只有观察权，没有执行仓位。"
     elif execution_bias == "prep_only":
         if bridge_prep_observe_only:
-            decision["sizing_reason"] = "当前只保留条件执行预备态，仍需次日继续观察与60分钟确认，不直接升级50%。"
+            decision["sizing_reason"] = "当前只保留条件执行预备态，仍需次日继续观察与09:50-10:10窗口，不直接升级50%。"
         else:
             decision["sizing_reason"] = "虽有条件执行预备态，但反馈时钟未成熟，维持0%。"
     return _finalize(decision)

@@ -793,7 +793,7 @@ def build_market_research_snapshot_contract(
         sector_trend_snapshot=observation_snapshot.get("sector_trend_snapshot", []),
         abnormal_watch_pool=observation_snapshot.get("abnormal_watch_pool", []),
     )
-    _append_log(logs, "state_machine", "success", "已构建状态机快照", state_code=state_machine_snapshot.get("state_code", ""))
+    _append_log(logs, "market_state", "success", "已构建市场状态快照", state_code=state_machine_snapshot.get("state_code", ""))
 
     mainline_rotation_snapshot = build_mainline_rotation_snapshot(
         observation=observation_snapshot,

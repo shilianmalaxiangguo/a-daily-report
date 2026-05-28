@@ -7,10 +7,11 @@ from report.mainline_turnover_summary_support import (
     resolve_turnover_share_trend_rows,
 )
 from report.surface_wording import sanitize_user_visible_text
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 def sanitize_front_page_text(value):
-    return sanitize_user_visible_text(value)
+    return normalize_trading_time_text(sanitize_user_visible_text(value))
 
 
 def _display_latest_first(rows):

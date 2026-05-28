@@ -689,7 +689,7 @@ def _build_gem_observation_pool_legacy_body(gem_breathing_candidates=None, targe
         note = str(item.get("note", "") or "").strip() or "创业板20cm预启动观察。"
         textbook_profile = build_gem_breathing_textbook_profile(item, target_date=target_date) if target_date else _empty_textbook_profile()
         textbook_summary = str(textbook_profile.get("summary_text", "") or "").strip()
-        watch_anchor_note = str(item.get("watch_anchor_note", "") or "先看右侧确认和60分钟确认，不直接给买入资格").strip()
+        watch_anchor_note = str(item.get("watch_anchor_note", "") or "先看右侧确认和09:50-10:10窗口，不直接给买入资格").strip()
         if textbook_summary:
             watch_anchor_note = f"{watch_anchor_note}；{textbook_summary}"
         item.update(
@@ -698,7 +698,7 @@ def _build_gem_observation_pool_legacy_body(gem_breathing_candidates=None, targe
                 "core_level": f"🫁 20cm预启动观察{' / ' + textbook_profile.get('label', '') if textbook_profile.get('label') else ''}",
                 "abnormal_summary": note,
                 "abnormal_follow_state": "预启动呼吸感",
-                "tmr_forecast": "先看右侧确认和60分钟确认是否成立，确认前只观察不执行",
+                "tmr_forecast": "先看右侧确认和09:50-10:10窗口内条件是否成立，确认前只观察不执行",
                 "tomorrow_strength": round(base_score + strength_bonus + _safe_float(textbook_profile.get("score_bonus", 0)), 1),
                 "watch_source": "gem_breathing_20cm",
                 "close": _safe_float(item.get("close", 0)),
@@ -755,11 +755,11 @@ def _build_gem_breathing_contract_legacy_body(candidate=None):
     )
     active_window_days = min(max(holding_days_max, 3), 5)
     if confirm_price is not None and support_price is not None:
-        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}且不破{support_price:.2f}，才评估50%标准进攻"
+        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}且不破{support_price:.2f}，才评估50%标准进攻"
     elif confirm_price is not None:
-        upgrade_condition_text = f"首个60分钟站上{confirm_price:.2f}，才评估50%标准进攻"
+        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}，才评估50%标准进攻"
     else:
-        upgrade_condition_text = "先完成右侧确认并命中参与窗口分层确认，才评估50%标准进攻；普通结构才等60分钟确认"
+        upgrade_condition_text = "先完成右侧确认，并且固定交易窗口内条件成立，才评估50%标准进攻；普通结构只看09:50-10:10窗口"
     return {
         "active": bool(confirm_price or support_price or reset_breakout_price),
         "contract_kind": "gem_breathing_20cm",
@@ -820,11 +820,11 @@ def _build_gem_breathing_watch_anchor_legacy_body(gem_candidate=None, target_dat
         {
             "watch_source": "gem_breathing_20cm",
             "permission_label": "创业板20cm预启动观察权",
-            "permission_reason": "只先进观察池，先看右侧确认和60分钟确认，不直接给买入资格",
+            "permission_reason": "只先进观察池，先看右侧确认和09:50-10:10窗口，不直接给买入资格",
             "watch_anchor_type": "创业板20cm预启动先看谁",
             "watch_anchor_note": (
                 f"{str(gem_candidate.get('note', '') or '创业板20cm预启动观察。').strip()}；"
-                "只先进观察池，先看右侧确认和60分钟确认，不满足继续观察"
+                "只先进观察池，先看右侧确认和09:50-10:10窗口，不满足继续观察"
             ),
             "tradability_guard": tradability_guard,
             "report_day_is_one_word": tradability_guard.get("report_day_is_one_word", False),
@@ -853,7 +853,7 @@ def _build_gem_breathing_watch_anchor_legacy_body(gem_candidate=None, target_dat
         note_parts.append(f"失守{void_price:.2f}作废")
     elif reset_breakout_price is not None:
         note_parts.append(f"失守后至少重新站回{reset_breakout_price:.2f}再评估")
-    note_parts.append("确认前只先进观察池，先看右侧确认和60分钟确认，不直接给买入资格")
+    note_parts.append("确认前只先进观察池，先看右侧确认和09:50-10:10窗口，不直接给买入资格")
     watch_anchor["watch_anchor_note"] = "；".join(part for part in note_parts if part)
     return watch_anchor
 
@@ -975,9 +975,9 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
     allow_conditional = allow_watch_pool and allow_attack_50_ready and ((right_side_ok and feedback_ready) or (textbook_ready and feedback_ready))
     if allow_conditional:
         if textbook_ready and not right_side_ok:
-            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%标准进攻预演；不满足参与窗口则0%观察。"
+            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%标准进攻预演；固定交易窗口内条件不满足则0%观察。"
         else:
-            reason = "20cm 只作为右侧补充分支；主线、确认链、参与窗口和风险边界都清楚时，才评估50%标准进攻；不满足则0%观察。"
+            reason = "20cm 只作为右侧补充分支；主线、确认链、固定交易窗口条件和风险边界都清楚时，才评估50%标准进攻；不满足则0%观察。"
     elif breathing_prep.get("active") and elasticity_context.get("active"):
         reason = f"{breathing_prep.get('note') or '创业板20cm呼吸感预启动。'}；{elasticity_context.get('reason', '')}"
     elif breathing_prep.get("active"):

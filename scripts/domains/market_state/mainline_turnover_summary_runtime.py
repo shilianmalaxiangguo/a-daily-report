@@ -301,7 +301,7 @@ def _default_regime_action(regime, current_mainline, action_text):
     if regime == "混沌接力":
         return "不把每次轮动都当新主线，候选只保留判断样本"
     if regime == "多主线牛市":
-        return "多线可以同时给资格，但仍要缩到具体参与窗口"
+        return "多线可以同时给资格，但仍要缩到具体固定交易窗口"
     return action_text or "先看主线证据是否继续聚焦"
 
 
@@ -650,7 +650,7 @@ def build_overtake_window_summary(
             "rival_slowdown": "旧主线或竞争线尚未完全退开" if competing_rows else "对手失速仍待确认",
             "own_stability": f"{primary_line}资金扩散，核心承接稳定",
             "speed_gap": "未拉开",
-            "action": "等竞价、开盘承接、回封或60分钟确认",
+            "action": "等竞价、开盘承接、回封或09:50-10:10窗口",
             "evidence_labels": ["我方稳住"],
             "evidence_gaps": ["对手失速待确认"],
         }

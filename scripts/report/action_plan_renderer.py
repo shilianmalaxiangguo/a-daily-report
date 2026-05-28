@@ -9,6 +9,7 @@ from report.action_plan_nodes import (
     build_action_plan_schedule_node,
     build_action_plan_table_node,
 )
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 ACTION_PLAN_NODE_BUILDERS = {
@@ -28,7 +29,9 @@ def render_action_plan_result(context):
         ACTION_PLAN_NODE_BUILDERS,
         enabled_node_keys=context.get("enabled_node_keys"),
     )
-    return run_action_plan_nodes(node_specs, context)
+    result = run_action_plan_nodes(node_specs, context)
+    result["lines"] = normalize_trading_time_text(result.get("lines") or [])
+    return result
 
 
 def render_action_plan_section(context):

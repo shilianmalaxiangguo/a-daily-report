@@ -25,8 +25,8 @@ MAIN_DERIVATION_CHAIN = [
     "龙头记忆",
     "固定Setup异动信号",
     "观察资格/买入资格",
-    "60分钟确认",
-    "30分钟止损",
+    "09:50-10:10窗口",
+    "失效价和单笔-5%底线",
     "周期归因",
     "自校准",
 ]
@@ -36,11 +36,11 @@ DECISION_GATE_CHAIN = [
     "主线确认",
     "异常/触发",
     "可交易性",
-    "参与窗口分层确认",
-    "30分钟止损",
+    "固定交易窗口条件",
+    "失效价和单笔-5%底线",
 ]
 
-PARTICIPATION_WINDOW_LAYER_TEXT = "强核心走竞价表态、开盘前几分钟或回封；普通结构才等60分钟确认"
+PARTICIPATION_WINDOW_LAYER_TEXT = "强核心走09:30-09:35竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口"
 
 TRADING_PHILOSOPHY_BOTTOM_LINE_TEXT = "不买庄股，不靠孤立技术指标做买卖，不跟随大神/专家指令抄作业；这类方法即便偶尔赚钱，更多也是运气，不构成可复制优势"
 TRADING_PHILOSOPHY_TACTICAL_TEXT = "狙击手视角更接近卫宫切嗣式交易：不和市场正面缠斗，不为证明勇敢或追求漂亮买点而硬上；先隐藏、先观察、先等待，只在胜率明显倾斜时，对唯一目标做最务实的一击"
@@ -48,7 +48,7 @@ TRADING_PHILOSOPHY_RISK_TEXT = "这里的务实，不是靠消息、庄股或违
 TRADING_PHILOSOPHY_PUT_CONTRACT_TEXT = "短线参与更像在主线里卖短久期put：先选愿意接的货，再定guard和confirm，再给一个有限观察合同；不破guard就继续站队，重回confirm才升级执行"
 TRADING_PHILOSOPHY_ALIGNMENT_TEXT = "现在这个位置先做选方向、选站队，不做全面撒网；最近半个月到一个月持续发酵、反复被资金选择的方向优先进入站队池，周末一次性新故事先降级为探针"
 TRADING_PHILOSOPHY_10CM_CONTRACT_TEXT = f"10cm主模式按周度合同处理：只对主线核心、异常承接、率先转强对象给3~5日观察合同；{PARTICIPATION_WINDOW_LAYER_TEXT}"
-TRADING_PHILOSOPHY_20CM_CONTRACT_TEXT = "20cm创业板按两段合同处理：先给5~10日呼吸感观察合同，右侧确认后再切到1~3日快速验证；参与窗口成立才评估50%标准进攻，不成立就是0%观察"
+TRADING_PHILOSOPHY_20CM_CONTRACT_TEXT = "20cm创业板按两段合同处理：先给5~10日呼吸感观察合同，右侧确认后再切到1~3日快速验证；固定交易窗口内条件成立才评估50%标准进攻，不成立就是0%观察"
 TRADING_PHILOSOPHY_CYCLE_CONTRACT_TEXT = "观察周期看愿不愿继续站在它这边，介入周期看是否到了被市场指派接货的时点，退出周期看合同该续命、兑现还是作废"
 TRADING_PHILOSOPHY_WEAK_TO_STRONG_TEXT = "弱转强不是抄底，也不是追高，而是只做第一波强势基础仍在、随后出现假弱、再等超预期转强的对象"
 TRADING_PHILOSOPHY_FAKE_WEAK_TEXT = "假弱优先于真弱：跌不下去、缩量消化、长上影后仍能收住、恐怖洗盘后快速修复才继续看；已经转弱、A杀、重心下移就按真弱降级"
@@ -81,7 +81,7 @@ __all__ = [
 
 
 def use_execution_framework_text() -> str:
-    return f"日线结构中枢定环境，{PARTICIPATION_WINDOW_LAYER_TEXT}，30分钟定止损"
+    return f"日线结构中枢定环境，{PARTICIPATION_WINDOW_LAYER_TEXT}，按失效价和单笔-5%底线处理风险"
 
 
 def use_contract_logic_digest_text() -> str:
@@ -101,7 +101,7 @@ def use_trading_philosophy_lines(
             "- **方向性错误回避**：不买庄股，不抄作业。",
             "- **战术气质**：先藏、先等、只做高确定性一击。",
             "- **站队优先**：只站市场已选方向，不为新故事切换。",
-            "- **模式分层**：10cm按合同处理；20cm先观察，参与窗口成立后才评估50%标准进攻。",
+            "- **模式分层**：10cm按合同处理；20cm先观察，固定交易窗口内条件成立后才评估50%标准进攻。",
             "- **弱转强纪律**：只做假弱非真弱；缺共振、退潮先降级。",
             "- **执行原则**：少切换，少主观，少大亏。",
             f"- **适配边界**：{TRADING_PHILOSOPHY_SCOPE_TEXT}。",

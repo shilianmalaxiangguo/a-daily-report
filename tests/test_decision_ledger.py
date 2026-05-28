@@ -40,7 +40,7 @@ class DecisionLedgerTest(unittest.TestCase):
 **极度看好名单**（只保留最心动的少数，其他只观察）:
 | 优先级 | 股票 | 代码 | 所属板块 | 极看理由 | 明日原则 |
 |--------|------|------|----------|----------|----------|
-| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 / 首波先锋 / 分歧转一致形态 | 优先盯首个60分钟确认，若继续强就只做它 |
+| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 / 首波先锋 / 分歧转一致形态 | 优先盯09:50-10:10窗口，若继续强就只做它 |
 | 2 | 花王股份 | 603007 | 汽车零部 | 板块锚定龙 / 首波先锋 / 分歧转一致形态 | 只盯分歧后的转强，不追情绪顶点 |
 
 **击球区结果**
@@ -54,7 +54,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(items[0]["code"], "601991")
         self.assertEqual(items[0]["sector"], "电力")
         self.assertIn("主线内核", items[0]["conviction_reason"])
-        self.assertIn("60分钟确认", items[0]["conviction_rule"])
+        self.assertIn("09:50-10:10窗口", items[0]["conviction_rule"])
 
     def test_parses_extreme_conviction_participation_script_from_markdown_report(self):
         markdown = """
@@ -107,7 +107,7 @@ class DecisionLedgerTest(unittest.TestCase):
 **重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:
 | 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |
 |--------|------|------|----------|----------|----------|----------|----------|
-| 1 | 大唐发电 | 601991 | 电力 | 趋势比价链锚点 / 高位锚 | 修复观察 | 修复观察 / 趋势辨识度高 | 修复观察只看09:50-10:10承接确认，未确认不参与 |
+| 1 | 大唐发电 | 601991 | 电力 | 趋势比价链锚点 / 高位锚 | 修复观察 | 修复观察 / 趋势辨识度高 | 修复观察只看09:50-10:10窗口，未确认不参与 |
 
 **重点观察参与脚本**:
 | 参与窗口 | 仓位三态 | 涨停惯性 | 盈亏比 | 集合竞价 | 开盘前几分钟 | 均线回归试错 | 打板策略 | 回封参与 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |
@@ -143,7 +143,7 @@ class DecisionLedgerTest(unittest.TestCase):
 | 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |
 |--------|------|------|----------|----------|----------|----------|----------|
 | 1 | 晶方科技 | 603005 | 半导体 | 趋势比价链锚点 / 核心传导 | 可执行候选 | 主线内核 / 板块锚定龙 / 首板 | 优先盯竞价表态、开盘承接和回封质量，继续强就只做它 |
-| 2 | 潍柴重机 | 000880 | 专用机械 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10承接确认，未确认不参与 |
+| 2 | 潍柴重机 | 000880 | 专用机械 | 核心传导者 / 中位传导 | 可执行候选 | 板块锚定龙 / 首板 | 修复观察只看09:50-10:10窗口，未确认不参与 |
 """
 
         items = parse_extreme_conviction_list_from_markdown(markdown)
@@ -405,7 +405,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("冲不过先止盈", plans[0]["anchor_action_plan"])
         self.assertNotIn("提高主买", plans[0]["anchor_action_plan"])
         self.assertIn("站回VWAP", plans[1]["anchor_action_plan"])
-        self.assertIn("09:50-10:10确认", plans[1]["anchor_action_plan"])
+        self.assertIn("09:50-10:10窗口条件", plans[1]["anchor_action_plan"])
         self.assertIn("不直接参与", plans[1]["anchor_action_plan"])
         self.assertIn("只恢复候选", plans[2]["anchor_action_plan"])
         self.assertNotIn("自动主买", plans[2]["anchor_action_plan"])
@@ -417,7 +417,7 @@ class DecisionLedgerTest(unittest.TestCase):
 **极度看好名单**（只保留最心动的少数，其他只观察）:
 | 优先级 | 股票 | 代码 | 所属板块 | 极看理由 | 明日原则 |
 |--------|------|------|----------|----------|----------|
-| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 | 优先盯首个60分钟确认 |
+| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 | 优先盯09:50-10:10窗口 |
 """
 
         snapshot = build_decision_ledger_snapshot_from_markdown_report(
@@ -499,7 +499,7 @@ class DecisionLedgerTest(unittest.TestCase):
 **极度看好名单**（只保留最心动的少数，其他只观察）:
 | 优先级 | 股票 | 代码 | 所属板块 | 极看理由 | 明日原则 |
 |--------|------|------|----------|----------|----------|
-| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 | 优先盯首个60分钟确认 |
+| 1 | 大唐发电 | 601991 | 电力 | 主线内核 / 板块锚定龙 | 优先盯09:50-10:10窗口 |
 """
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -1098,7 +1098,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("承接没有延续", premature["reason"])
         self.assertEqual(ordinary_hit["status"], "预演命中")
         self.assertEqual(ordinary_hit["participation_window_type"], "structure_confirm")
-        self.assertIn("60分钟确认", ordinary_hit["matched_steps"])
+        self.assertIn("09:50-10:10窗口", ordinary_hit["matched_steps"])
         self.assertEqual(ordinary_waiting["status"], "等待复盘")
 
     def test_planned_participation_review_does_not_count_unavailable_limit_as_hit(self):
@@ -2269,7 +2269,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(review["entry_decision"], "open_buy")
         self.assertIn("09:30-09:35", review["same_day_action"])
         self.assertIn("不补票", review["avoid_action"])
-        self.assertIn("30分钟结构", review["next_action"])
+        self.assertIn("失效价", review["next_action"])
         self.assertIn("竞价表态", review["standard_answer_basis"])
 
     def test_writer_can_review_previous_cases_from_local_stock_kline_table(self):

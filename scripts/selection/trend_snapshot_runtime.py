@@ -1627,7 +1627,7 @@ def _apply_st_resume_observation_policy(candidate, risk_context):
     updated["systemic_risk_review"] = {
         "status": "降主动性",
         "reason": reason,
-        "action": "保留主买/补位比较，但只在参与窗口确认后评估50%标准进攻；风险扩散未钝化就回到0%。",
+        "action": "保留主买/补位比较，但只在固定交易窗口内条件成立后评估50%标准进攻；风险扩散未钝化就回到0%。",
         "position_cap_pct": 50,
     }
     final_review = dict(updated.get("final_risk_review") or {})
@@ -1860,7 +1860,7 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             reason_parts.append("趋势审美")
             reason_parts.extend(_trend_aesthetic_reason_labels(trend_aesthetic_review))
 
-        action_rule = "修复观察只看09:50-10:10承接确认，未确认不参与"
+        action_rule = "修复观察只看09:50-10:10窗口，未确认不参与"
         if is_anchor and is_mainline:
             action_rule = "优先盯竞价表态、开盘承接和回封质量，继续强就只做它"
         elif lianban >= 2:
@@ -1979,7 +1979,7 @@ def _build_leader_memory_bank_legacy_body(sector_snapshot, watchlist, dragon_sto
                 "remember_score": round(remember_score, 1),
                 "remember_reason": " / ".join([part for part in remember_reason_parts if part]),
                 "remember_window": "10~20个交易日",
-                "action_rule": "后续若板块再发力，优先回看它；只做分歧后的60分钟再转强",
+                "action_rule": "后续若板块再发力，优先回看它；只在固定交易窗口内做分歧后再转强",
             }
         )
 

@@ -133,7 +133,10 @@ def fetch_stock_daily_turnover_records(trade_date, *, pro=None, ts_module=None):
     if not compact:
         return []
     pro = pro or create_tushare_pro_api(ts_module=ts_module)
-    frame = pro.daily(trade_date=compact)
+    frame = pro.daily(
+        trade_date=compact,
+        fields="ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount",
+    )
     records = []
     for row in _frame_to_records(frame):
         normalized = _normalize_daily_row(row)

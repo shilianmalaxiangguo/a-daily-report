@@ -429,6 +429,51 @@ def _run_input_runtime_legacy_body(target_date=None):
             )
 
         try:
+            etf_turnover_fetcher = (
+                request_registry.get("etf_turnover_series") if isinstance(request_registry, dict) else None
+            )
+            if callable(etf_turnover_fetcher):
+                etf_turnover_series = etf_turnover_fetcher(target_date=target_date, window_days=25)
+            else:
+                etf_turnover_series = {}
+            results["etf_turnover_series"] = etf_turnover_series or {}
+            etf_rows = (etf_turnover_series or {}).get("rows") or []
+            data_status["ETF两市成交额趋势"] = bool(etf_rows)
+            step_status["ETF两市成交额趋势获取"] = bool(etf_rows)
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.etf_turnover_series",
+                    "status": "success" if etf_rows else "degraded",
+                    "message": "已获取ETF两市成交额趋势",
+                    "details": {
+                        "provider": (etf_turnover_series or {}).get("source") or "sina.etf.daily_amount",
+                        "target_keys": ["etf_turnover_series"],
+                        "row_count": len(etf_rows),
+                        "usable_etf_count": (etf_turnover_series or {}).get("usable_etf_count", 0),
+                        "empty_etf_count": (etf_turnover_series or {}).get("empty_etf_count", 0),
+                    },
+                }
+            )
+        except Exception as error:
+            results["etf_turnover_series"] = {}
+            data_status["ETF两市成交额趋势"] = False
+            step_status["ETF两市成交额趋势获取"] = False
+            module_logs.append(
+                {
+                    "module": "input.runtime",
+                    "step": "request.etf_turnover_series",
+                    "status": "degraded",
+                    "message": "ETF两市成交额趋势获取失败",
+                    "details": {
+                        "provider": "sina.etf.daily_amount",
+                        "target_keys": ["etf_turnover_series"],
+                        "error": str(error),
+                    },
+                }
+            )
+
+        try:
             price_band_fetcher = (
                 request_registry.get("price_band_style_series") if isinstance(request_registry, dict) else None
             )

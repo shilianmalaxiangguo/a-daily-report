@@ -97,7 +97,7 @@ def build_decision_board_positioning_section_node(context, node_meta=None, node_
         lines.append(f"- **日线预估买入区间**: {price_info.get('buy_range')}元")
         lines.append(f"- **硬止损底线**: {price_info.get('stop_loss')}元")
         lines.append(f"- **止盈观察位**: {price_info.get('take_profit')}元")
-        lines.append(f"- **执行说明**: {price_info.get('stop_rule', '盘中以30分钟结构止损为准')}")
+        lines.append(f"- **执行说明**: {price_info.get('stop_rule', '盘中以失效价和单笔-5%底线为准')}")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

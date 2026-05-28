@@ -189,7 +189,7 @@ def _build_market_performance_evidence(data, leading_line):
         "new_high_attack": new_high_attack,
         "target_sector_alignment": alignment,
         "summary": summary,
-        "decision_boundary": "单指标不直接给买入或加仓；只作为旧市场表现、主线承接和参与窗口的证据。",
+        "decision_boundary": "单指标不直接给买入或加仓；只作为旧市场表现、主线承接和固定交易窗口条件的证据。",
     }
 
 
@@ -1672,7 +1672,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
             execution_bias = "prep_only"
             pulse_action_bias = "只保留条件执行预备态"
             pulse_action_reason = (
-                f"{leading_line or '主线'}优势开始拉开，但环境条件仍未正式满足；只能保留条件执行预备态，等待次日60分钟确认。"
+                f"{leading_line or '主线'}优势开始拉开，但环境条件仍未正式满足；只能保留条件执行预备态，等待次日09:50-10:10窗口。"
             )
         elif operation_state == "撤退态":
             execution_bias = "avoid"
@@ -1680,8 +1680,8 @@ def _derive_mainline_pulse_snapshot_legacy_body(
             pulse_action_reason = "环境已转撤退，先退出，等下一轮新脉冲。"
         elif allow_attack_50_ready and not should_reduce:
             execution_bias = "conditional_defense"
-            pulse_action_bias = "只保留参与窗口预演"
-            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做参与窗口预演，强核心看竞价表态、开盘前几分钟或回封，普通结构才等60分钟确认，命中后才评估50%标准进攻。"
+            pulse_action_bias = "只保留固定交易窗口预案"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做固定交易窗口预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口，条件成立后才评估50%标准进攻。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"
@@ -1779,7 +1779,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         state_code = "expand"
         flow_direction = f"能量继续向{leading_line}集中"
         state_reason = "涨停、涨跌比和有势板块数量同步走强，主线具备继续承接能力。"
-        reflection_focus = "只盯主线内异常后跌不下去的对象，按竞价表态、开盘承接、回封或60分钟结构确认分层参与，不做支线分流。"
+        reflection_focus = "只盯主线内异常后跌不下去的对象，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口分层参与，不做支线分流。"
         transition_signal = ""
         transition_reason = ""
         transition_action = ""

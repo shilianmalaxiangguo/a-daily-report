@@ -1,5 +1,6 @@
 from report.positioning_node_registry import build_positioning_node_specs
 from report.positioning_node_runtime import run_positioning_nodes
+from report.trading_time_window_contract import normalize_trading_time_text
 
 
 def _compact(context):
@@ -122,7 +123,7 @@ def _has_explicit_empty_unique_object(context):
 def _intraday_note_text(context):
     if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
         return "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接和唯一对象是否重新成立；未同时满足前继续0%。"
-    return "> **真到盘中怎么做**：日报这里只做盘前预案。明日按竞价表态、开盘前几分钟承接、打板/回封、60分钟确认分层参与，买入后再用30分钟结构刷新止损。"
+    return "> **真到盘中怎么做**：日报这里只做盘前预案。明日只按09:30-09:35、09:50-10:10、14:30-14:55三段窗口处理；不满足预演情境就回到0%。"
 
 
 def build_positioning_header_node(context, node_meta=None, node_lookup=None):
@@ -131,11 +132,11 @@ def build_positioning_header_node(context, node_meta=None, node_lookup=None):
 
 def build_positioning_execution_framework_node(context, node_meta=None, node_lookup=None):
     if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
-        framework_text = "最终0%时不按参与窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
+        framework_text = "最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
     else:
         get_execution_framework_text = context.get("get_execution_framework_text")
         framework_text = get_execution_framework_text() if callable(get_execution_framework_text) else "-"
-    return {"lines": [f"**怎么执行**：{framework_text}"], "exports": {}, "module_logs": []}
+    return {"lines": [f"**怎么执行**：{normalize_trading_time_text(framework_text)}"], "exports": {}, "module_logs": []}
 
 
 def build_positioning_structure_note_node(context, node_meta=None, node_lookup=None):
@@ -184,7 +185,7 @@ def build_positioning_structure_range_node(context, node_meta=None, node_lookup=
         lines = [
             f"- **日K结构箱体**：{_daily_structure_range_text(daily_structure)}（{_daily_structure_ratio(daily_structure)}）",
             f"- **日K候选区间**：{_daily_candidate_range_text(daily_structure)}",
-            f"- **60分钟缠论确认**：{_chanlun_confirmation_text(confirmation)}",
+            f"- **日K结构证据**：{_chanlun_confirmation_text(confirmation)}",
             f"- **今日收盘**：{signal.get('today_price', 0):.2f}",
             f"- **相对ZG**：{float(signal.get('dist_to_zg', 0) or 0) * 100:+.2f}%",
             "",
@@ -259,7 +260,7 @@ def build_positioning_zhongshu_table_node(context, node_meta=None, node_lookup=N
                 f"{_format_price(daily_structure.get('zg_candidate'))} | {_format_price(daily_structure.get('zd_candidate'))} | "
                 f"{daily_structure.get('candidate_status') or '候选形成中'} |"
             ),
-            f"| 60分钟缠论确认 | - | - | - | {_chanlun_confirmation_text(confirmation)} |",
+            f"| 日K结构证据 | - | - | - | {_chanlun_confirmation_text(confirmation)} |",
             "",
         ]
         return {"lines": lines, "exports": {}, "module_logs": []}

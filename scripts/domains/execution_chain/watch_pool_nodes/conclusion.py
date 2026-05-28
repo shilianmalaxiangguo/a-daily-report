@@ -33,7 +33,7 @@ def build_watch_pool_conclusion_node(context, node_meta=None, node_lookup=None):
     ]
     if abnormal_watch_pool:
         resilient_count = len([item for item in abnormal_watch_pool if item.get("follow_state") in ["跌不下去", "缩量消化"]])
-        lines.append(f"- **异动后跟踪**: {len(abnormal_watch_pool)}只里有{resilient_count}只处于“跌不下去/缩量消化”，优先留给明日60分钟确认")
+        lines.append(f"- **异动后跟踪**: {len(abnormal_watch_pool)}只里有{resilient_count}只处于“跌不下去/缩量消化”，优先留给明日09:50-10:10窗口")
     if mainline_competition_snapshot:
         confirmed_line = _confirmed_attack_line(context)
         if confirmed_line:

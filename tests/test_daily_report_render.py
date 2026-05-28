@@ -21,13 +21,32 @@ from daily_report_render import (
     render_report_preflight_lines,
     generate_markdown_report,
     generate_markdown_report_from_sections,
+    save_report_output,
     save_report_outputs,
 )
-from daily_report_snapshot_io import LEDGER_MODE_REPLAY
+from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
 from report.decision_ledger import build_decision_ledger_snapshot, write_decision_ledger_artifacts
 
 
 class DailyReportRenderTest(unittest.TestCase):
+    def test_save_report_output_can_explicitly_overwrite_official_report(self):
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            target_path = root / "2026-05-26_A股日报_完整版.md"
+            target_path.write_text("# old", encoding="utf-8")
+
+            saved_path = save_report_output(
+                "# new",
+                "2026-05-26",
+                mode=LEDGER_MODE_FROZEN,
+                variant=REPORT_VARIANT_FULL,
+                output_path=str(target_path),
+                overwrite_existing=True,
+            )
+
+            self.assertEqual(saved_path, str(target_path))
+            self.assertEqual(target_path.read_text(encoding="utf-8"), "# new")
+
     def test_build_report_outputs_suppresses_helper_diagnostics_for_summary_render(self):
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
             outputs = build_report_outputs({"foo": "bar"}, "2026-04-22", emit_preflight=False)
@@ -83,6 +102,31 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertNotIn("持仓策略", outputs[REPORT_VARIANT_SUMMARY])
         self.assertNotIn("上峰水泥", outputs[REPORT_VARIANT_SUMMARY])
         self.assertNotIn("100.0%", outputs[REPORT_VARIANT_SUMMARY])
+
+    def test_build_report_outputs_passes_structured_position_context_without_private_report_text(self):
+        data = {
+            "personal_position_context": {
+                "account_profile": {"capital_text": "1w本金；总资产10126.52；当日盈利126.52（+1.27%）"},
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有晶方科技(603005)1手，成本43.835；先处理旧仓",
+                },
+            }
+        }
+
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
+            outputs = build_report_outputs(
+                data,
+                "2026-05-26",
+                has_personal_positions=True,
+                position_report_text="\n## 持仓策略\n| 晶方科技 | 100.0% | 私密动作 |\n",
+                emit_preflight=False,
+            )
+
+        self.assertNotIn("持仓策略", outputs[REPORT_VARIANT_FULL])
+        self.assertEqual(render_mock.call_count, 2)
+        self.assertTrue(render_mock.call_args_list[0].kwargs["has_personal_positions"])
+        self.assertIn("personal_position_context", data)
 
     def test_save_replay_outputs_rebuilds_decision_ledger_from_final_full_markdown(self):
         stale_snapshot = build_decision_ledger_snapshot(
@@ -651,6 +695,36 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertEqual(preflight["status"], "failed")
         self.assertIn("融资承接压力", preflight["failures"])
+
+    def test_report_preflight_fails_when_etf_turnover_series_missing(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "ETF两市成交额趋势": False,
+            },
+            "step_status": {"ETF两市成交额趋势获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "etf_turnover_series": {"available": False, "rows": []},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.etf_turnover_series",
+                    "status": "degraded",
+                    "details": {"provider": "sina.etf.daily_amount", "row_count": 0},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("ETF两市成交额趋势", preflight["failures"])
 
     def test_report_preflight_fails_when_lhb_factor_missing(self):
         data = {

@@ -173,7 +173,7 @@ class GemBreathingRuntimeTest(unittest.TestCase):
                 },
                 "_build_gem_breathing_contract": lambda candidate=None: {
                     "contract_kind": "gem_breathing_20cm",
-                    "upgrade_condition_text": "首个60分钟站上12.66且不破11.88",
+                    "upgrade_condition_text": "09:50-10:10站上12.66且不破11.88",
                     "void_price": 11.88,
                     "reset_breakout_price": 12.9,
                 },

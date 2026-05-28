@@ -197,6 +197,7 @@ from diagnostics.single_stock_runtime import (
 )
 from portfolio.position_management_report import (
     analyze_position_management as run_analyze_position_management,
+    build_personal_position_context as run_build_personal_position_context,
     parse_position_string as run_parse_position_string,
 )
 from portfolio.position_strategy_report import (
@@ -339,6 +340,7 @@ from input.iwencai_runtime import (
 )
 from input.tushare_runtime import (
     get_margin_pressure_from_tushare_first,
+    get_etf_turnover_series_from_sina_first,
     get_hot_concept_fund_flow_from_tushare_first,
     get_lhb_snapshot_from_tushare_first,
     get_major_indices_from_tushare_first,
@@ -863,6 +865,24 @@ def get_daily_data(target_date=None):
         },
         config={},
     )
+
+
+def get_concept_fund_flow_from_snapshot(target_date=None):
+    snapshot_data, _ = load_data_snapshot(str(target_date or ""))
+    if not isinstance(snapshot_data, dict):
+        return {}
+    concept_flow = snapshot_data.get("concept_fund_flow")
+    if not isinstance(concept_flow, dict):
+        return {}
+    rows = [dict(row) for row in (concept_flow.get("rows") or []) if isinstance(row, dict)]
+    if not rows:
+        return {}
+    return {
+        "rows": rows,
+        "inflow": list(concept_flow.get("inflow") or rows),
+        "outflow": list(concept_flow.get("outflow") or []),
+        "provider": concept_flow.get("provider") or "snapshot.concept_fund_flow",
+    }
 
 
 def _normalize_lhb_code(fs_code):
@@ -3632,6 +3652,10 @@ def analyze_position_management(data, target_date, positions):
         },
     )
 
+
+def build_personal_position_context(data, positions):
+    return run_build_personal_position_context(data, positions)
+
 def replay_from_snapshot(target_date, refresh_sources=None):
     result = run_replay_from_snapshot(
         target_date,
@@ -3640,6 +3664,7 @@ def replay_from_snapshot(target_date, refresh_sources=None):
             "load_data_snapshot": load_data_snapshot,
             "TencentFinanceData": TencentFinanceData,
             "get_major_indices_from_iwencai": get_major_indices_from_iwencai,
+            "get_etf_turnover_series_from_sina": get_etf_turnover_series_from_sina_first,
             "safe_float": _safe_float,
         },
     )
@@ -3723,6 +3748,8 @@ def main():
                        help='单票诊断可选股票名称，提升可读性')
     parser.add_argument('--publish-snap-ui', action='store_true',
                        help='显式发布 snap-ui 静态数据并运行契约检查；默认只生成日报与快照')
+    parser.add_argument('--overwrite-official', action='store_true',
+                       help='显式覆盖该日期正式日报；默认保护已有正式历史')
     
     args = parser.parse_args()
     
@@ -3752,7 +3779,7 @@ def main():
                 )
             )
     run_mode = LEDGER_MODE_REPLAY if args.replay else LEDGER_MODE_FROZEN
-    if run_mode == LEDGER_MODE_FROZEN:
+    if run_mode == LEDGER_MODE_FROZEN and not args.overwrite_official:
         official_ledger = load_strategy_performance_ledger(mode=LEDGER_MODE_FROZEN)
         official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
         official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
@@ -3768,6 +3795,7 @@ def main():
             positions = parse_position_string(args.position)
             if positions:
                 print(f"   ✅ 解析到 {len(positions)} 只持仓股票")
+                data["personal_position_context"] = build_personal_position_context(data, positions)
             else:
                 print(f"   ⚠️ 持仓信息解析失败，请检查格式")
 
@@ -3775,11 +3803,16 @@ def main():
             data,
             target_date,
             supplementary_perspective="",
-            has_personal_positions=False,
+            has_personal_positions=bool(positions),
             run_mode=run_mode,
             position_report_text="",
         )
-        save_report_outputs(report_outputs, target_date, mode=run_mode)
+        save_report_outputs(
+            report_outputs,
+            target_date,
+            mode=run_mode,
+            overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
+        )
         chanlun_html_path = save_sh_index_chanlun_html_report(
             target_date,
             root=Path(__file__).resolve().parents[1],

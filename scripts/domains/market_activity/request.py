@@ -59,10 +59,50 @@ def _infer_sector_from_reason(text):
     return ""
 
 
-def _build_sector_bucket(records, *, include_zt_type=False):
+def _stock_code_keys(item):
+    raw_values = [
+        item.get("代码", ""),
+        item.get("code", ""),
+        item.get("ts_code", ""),
+    ]
+    keys = []
+    for raw in raw_values:
+        code = str(raw or "").strip()
+        if not code:
+            continue
+        keys.append(code)
+        keys.append(code.upper())
+        keys.append(code.replace(".SZ", "").replace(".SH", "").replace(".SS", "").replace(".BJ", ""))
+    return keys
+
+
+def _pick_sector_label(item, code_to_sector=None):
+    for key in ("所属行业", "industry", "行业", "sector", "板块", "概念", "所属板块"):
+        sector = item.get(key, "")
+        if _is_valid_sector_label(sector):
+            return str(sector).strip()
+
+    code_to_sector = code_to_sector or {}
+    for code in _stock_code_keys(item):
+        sector = code_to_sector.get(code)
+        if _is_valid_sector_label(sector):
+            return str(sector).strip()
+
+    reason_text = " ".join(
+        str(item.get(key, "") or "")
+        for key in ("涨停原因", "涨停统计", "原因", "reason", "limit_reason", "涨停解析", "涨停分析", "上榜原因")
+    )
+    inferred = _infer_sector_from_reason(reason_text)
+    if _is_valid_sector_label(inferred):
+        return inferred
+
+    return "未知"
+
+
+def _build_sector_bucket(records, *, include_zt_type=False, code_to_sector=None):
     buckets = {}
     for item in records or []:
-        sector = item.get("所属行业", "未知")
+        sector = _pick_sector_label(item, code_to_sector=code_to_sector)
         if sector not in buckets:
             buckets[sector] = []
         row = {
@@ -142,6 +182,30 @@ def _normalize_sector_fund_flow_rows(rows):
             item["turnover_yi"] = round(_safe_float(turnover_yi), 2)
         normalized.append(item)
     return normalized
+
+
+def _derive_sector_change_rank_from_fund_flow(sector_fund_flow, *, rank_type="up", limit=10):
+    seen = {}
+    for row in list((sector_fund_flow or {}).get("inflow") or []) + list((sector_fund_flow or {}).get("outflow") or []):
+        item = dict(row or {})
+        name = str(item.get("name") or item.get("sector_name") or item.get("industry") or "").strip()
+        if not name:
+            continue
+        change_pct = _safe_float(item.get("change_pct", item.get("zdf", item.get("pct_change", 0.0))))
+        existing = seen.get(name)
+        if existing is None or abs(change_pct) > abs(_safe_float(existing.get("change_pct"))):
+            seen[name] = {
+                "name": name,
+                "change_pct": change_pct,
+                "zdf": change_pct,
+                "data_source": f"{item.get('data_source') or (sector_fund_flow or {}).get('provider') or 'sector_fund_flow'}.derived_change",
+            }
+    rows = list(seen.values())
+    rows.sort(key=lambda item: (_safe_float(item.get("change_pct")), item.get("name") or ""), reverse=(rank_type != "down"))
+    rows = rows[: max(int(limit or 10), 1)]
+    for rank, item in enumerate(rows, start=1):
+        item["rank"] = rank
+    return rows
 
 
 _PROVIDER_ALIASES = {
@@ -336,14 +400,6 @@ def collect_market_activity_pool_request_bundle(
                     "artifacts": artifacts,
                 }
 
-            results["zt_pool"] = []
-            results["dt_pool"] = []
-            results["limit_up_codes"] = set()
-            results["limit_down_codes"] = set()
-            results["market_stats"] = {}
-            data_status["涨停池"] = False
-            data_status["跌停池"] = False
-            data_status["大盘涨跌统计"] = False
             _append_log(
                 module_logs,
                 "request.pool_snapshot",
@@ -354,13 +410,6 @@ def collect_market_activity_pool_request_bundle(
                 fallback_used=bool(snapshot.get("fallback_used")),
                 error=snapshot.get("source_error", "empty_result"),
             )
-            return {
-                "results": results,
-                "data_status": data_status,
-                "step_status": step_status,
-                "module_logs": module_logs,
-                "artifacts": artifacts,
-            }
 
         date_str = str(target_date or "").replace("-", "")
 
@@ -399,29 +448,51 @@ def collect_market_activity_pool_request_bundle(
             data_status["跌停池"] = False
             emit("   ❌ 跌停池为空")
 
-        market_activity_df = fetch_market_activity_df()
-        emit(f"   📊 大盘涨跌统计原始数据: {len(market_activity_df)} 行")
-        if not market_activity_df.empty:
-            market_stats = {}
-            for _, row in market_activity_df.iterrows():
-                item = _market_activity_row_value(row, "item", 0, "")
-                value = _market_activity_row_value(row, "value", 1, 0)
-                numeric_value = _normalize_market_stats_value(value)
-                if item == "上涨":
-                    market_stats["up_count"] = numeric_value
-                elif item == "下跌":
-                    market_stats["down_count"] = numeric_value
-                elif item == "涨停":
-                    market_stats["zt_count"] = numeric_value
-                elif item == "跌停":
-                    market_stats["dt_count"] = numeric_value
-            results["market_stats"] = market_stats
-            data_status["大盘涨跌统计"] = True
-            emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
-        else:
-            results["market_stats"] = {}
-            data_status["大盘涨跌统计"] = False
-            emit("   ⚠️ 大盘涨跌统计数据为空")
+        try:
+            market_activity_df = fetch_market_activity_df()
+            emit(f"   📊 大盘涨跌统计原始数据: {len(market_activity_df)} 行")
+            if not market_activity_df.empty:
+                market_stats = {}
+                for _, row in market_activity_df.iterrows():
+                    item = _market_activity_row_value(row, "item", 0, "")
+                    value = _market_activity_row_value(row, "value", 1, 0)
+                    numeric_value = _normalize_market_stats_value(value)
+                    if item == "上涨":
+                        market_stats["up_count"] = numeric_value
+                    elif item == "下跌":
+                        market_stats["down_count"] = numeric_value
+                    elif item == "涨停":
+                        market_stats["zt_count"] = numeric_value
+                    elif item == "跌停":
+                        market_stats["dt_count"] = numeric_value
+                results["market_stats"] = market_stats
+                data_status["大盘涨跌统计"] = True
+                emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+            else:
+                results["market_stats"] = {}
+                data_status["大盘涨跌统计"] = False
+                emit("   ⚠️ 大盘涨跌统计数据为空")
+        except Exception as stats_error:
+            fallback_stats = {
+                "up_count": 0,
+                "down_count": 0,
+                "zt_count": len(results.get("zt_pool", []) or []),
+                "dt_count": len(results.get("dt_pool", []) or []),
+            }
+            results["market_stats"] = fallback_stats
+            data_status["大盘涨跌统计"] = bool(fallback_stats.get("zt_count") or fallback_stats.get("dt_count"))
+            emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
+            _append_log(
+                module_logs,
+                "request.market_stats",
+                "degraded",
+                "大盘涨跌统计接口异常，使用涨跌停池数量补足",
+                provider="akshare.stock_market_activity_legu",
+                target_keys=["market_stats"],
+                zt_count=fallback_stats["zt_count"],
+                dt_count=fallback_stats["dt_count"],
+                error=str(stats_error),
+            )
 
         step_status["涨停跌停数据获取"] = True
         elapsed, _ = timer.record("涨停跌停数据获取", 4)
@@ -996,6 +1067,18 @@ def collect_market_activity_sector_snapshot_request_bundle(
         else:
             sector_up = get_sector_change_from_iwencai(rank_type="up", limit=10, target_date=target_date)
             sector_down = get_sector_change_from_iwencai(rank_type="down", limit=10, target_date=target_date)
+        if not sector_up:
+            sector_up = _derive_sector_change_rank_from_fund_flow(
+                results.get("sector_fund_flow", {}),
+                rank_type="up",
+                limit=10,
+            )
+        if not sector_down:
+            sector_down = _derive_sector_change_rank_from_fund_flow(
+                results.get("sector_fund_flow", {}),
+                rank_type="down",
+                limit=10,
+            )
         results["sector_change_up"] = sector_up or []
         results["sector_change_down"] = sector_down or []
         data_status["板块涨幅排行"] = bool(sector_up)

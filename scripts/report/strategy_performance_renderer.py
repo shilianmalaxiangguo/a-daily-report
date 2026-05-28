@@ -66,7 +66,7 @@ def render_strategy_performance_section(performance_summary, helpers):
     lines.extend(
         [
             "",
-            "| 日期 | 计划状态 | 状态层 | 标的 | 买入区间 | 60分钟确认 | 次日观察边界 | 历史异动锚点 | 执行止损 | 备注 |",
+            "| 日期 | 计划状态 | 状态层 | 标的 | 买入区间 | 09:50-10:10窗口 | 次日观察边界 | 历史异动锚点 | 执行止损 | 备注 |",
             "|------|----------|--------|------|----------|-------------|--------------|--------------|----------|------|",
         ]
     )
@@ -108,7 +108,7 @@ def render_strategy_performance_section(performance_summary, helpers):
         )
         state_machine = factor_snapshot.get("state_machine", {}) or {}
         lines.append(
-            f"| 状态机/能量 | {state_machine.get('energy_state', '-') or '-'} | "
+            f"| 市场状态/能量 | {state_machine.get('energy_state', '-') or '-'} | "
             f"{state_machine.get('flow_direction', '-') or '-'} |"
         )
         decision_stack = ((factor_snapshot.get("selection", {}) or {}).get("selected_candidate", {}) or {}).get("decision_stack", {}) or {}

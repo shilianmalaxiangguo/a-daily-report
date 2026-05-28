@@ -244,6 +244,28 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertEqual(captured["render_context"]["margin_pressure"], margin_pressure)
         self.assertEqual(result["value"]["exports"]["margin_pressure"], margin_pressure)
 
+    def test_execution_appendix_tail_hook_passes_etf_turnover_series_to_renderer(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["etf-turnover-detail"]
+
+        etf_turnover_series = {
+            "available": True,
+            "rows": [{"trade_date": "2026-05-25", "etf_turnover_yi": 4484.87}],
+        }
+
+        result = run(
+            {
+                "inputs": {"etf_turnover_series": etf_turnover_series},
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        self.assertEqual(captured["render_context"]["etf_turnover_series"], etf_turnover_series)
+        self.assertEqual(result["value"]["exports"]["etf_turnover_series"], etf_turnover_series)
+
     def test_execution_appendix_renderer_outputs_appendix_b_and_c_continuity_tables(self):
         lines = render_execution_appendix(
             {

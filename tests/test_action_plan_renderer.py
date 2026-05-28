@@ -66,12 +66,14 @@ class ActionPlanRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 明日操作计划", rendered)
         self.assertIn("> **先看结论**：明天只执行唯一动作，或者只观察。", rendered)
-        self.assertIn("> **怎么执行**：按盘前、竞价表态、开盘前几分钟、结构确认、盘中、尾盘顺序，不临场改单。", rendered)
+        self.assertIn("> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序，不临场改单。", rendered)
+        self.assertIn("- **怎么执行**: 日线定环境，09:50-10:10窗口，按失效价和单笔-5%底线处理风险", rendered)
+        self.assertIn("- 若你有旧仓，确认风险线是否需要上移", rendered)
         self.assertIn("| 👀 明天先盯哪只 | 军工观察 | 000002 |", rendered)
         self.assertIn("**明天仓位怎么放**:", rendered)
         self.assertIn("**盘前准备（08:30-09:15）**:", rendered)
         self.assertIn("**竞价表态与开盘买卖窗口（09:20-09:35，买卖只在09:30-09:35）**:", rendered)
-        self.assertIn("**尾盘买卖窗口（14:30-14:55）**:", rendered)
+        self.assertIn("**14:30-14:55买卖窗口（14:30-14:55）**:", rendered)
         self.assertIn("**⚠️ 异动预警**:", rendered)
         self.assertIn("| 军工观察(000002) | 2天 | +3.00% | - | 待观察 |", rendered)
         self.assertNotIn("为什么这样排", rendered)
@@ -84,7 +86,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                         "action": "🔥 唯一买入",
                         "name": "军工一号",
                         "code": "000001",
-                        "trigger": "明日首个60分钟站上10.50",
+                        "trigger": "明日09:50-10:10站上10.50",
                         "risk_window": "预估9.50 / 1-3天",
                     }
                 ],
