@@ -1,22 +1,88 @@
-def run_execution_chain_overview_nodes(node_specs, node_context=None):
+def _append_log(logs, step, status, message, **details):
+    logs.append(
+        {
+            "module": "report.execution_chain_overview_node_runtime",
+            "step": step,
+            "status": status,
+            "message": message,
+            "details": details,
+        }
+    )
+
+
+def build_execution_chain_overview_node_lookup(node_specs):
+    lookup = {}
+    for index, spec in enumerate(node_specs or []):
+        node_key = str(spec.get("node_key", "") or "").strip()
+        if not node_key:
+            continue
+        title = str(spec.get("title", "") or node_key).strip() or node_key
+        lookup[node_key] = {
+            "node_key": node_key,
+            "title": title,
+            "node_no": index,
+        }
+    return lookup
+
+
+def run_execution_chain_overview_nodes(node_specs, node_context=None, node_lookup=None):
+    node_specs = list(node_specs or [])
+    node_lookup = node_lookup or build_execution_chain_overview_node_lookup(node_specs)
     current_context = dict(node_context or {})
     lines = []
     module_logs = []
-    for index, spec in enumerate(node_specs or []):
-        node_key = spec.get("node_key", "")
+    node_outputs = {}
+    executed_nodes = []
+
+    for spec in node_specs:
+        node_key = str(spec.get("node_key", "") or "").strip()
         builder = spec.get("builder")
         if not node_key or builder is None:
             continue
-        result = builder(current_context, {"node_key": node_key, "node_no": index}, {}) or {}
-        node_lines = list(result.get("lines") or [])
-        lines.extend(node_lines)
-        module_logs.append(
-            {
-                "module": "report.execution_chain_overview_node_runtime",
-                "step": f"run.{node_key}",
-                "status": "success",
-                "message": "已执行 execution chain overview node",
-                "details": {"node_key": node_key, "line_count": len(node_lines)},
+
+        node_meta = dict(node_lookup.get(node_key) or {})
+        if not node_meta:
+            node_meta = {
+                "node_key": node_key,
+                "title": str(spec.get("title", "") or node_key).strip() or node_key,
+                "node_no": len(executed_nodes),
             }
+
+        try:
+            result = builder(current_context, node_meta, node_lookup) or {}
+        except Exception as error:
+            _append_log(
+                module_logs,
+                f"run.{node_key}",
+                "error",
+                "执行 execution chain overview node 失败",
+                node_key=node_key,
+                error=str(error),
+            )
+            raise
+
+        node_lines = list(result.get("lines") or [])
+        exports = dict(result.get("exports") or {})
+        node_logs = list(result.get("module_logs") or [])
+        lines.extend(node_lines)
+        module_logs.extend(node_logs)
+        node_outputs[node_key] = exports
+        current_context.update(exports)
+        executed_nodes.append(node_meta)
+        _append_log(
+            module_logs,
+            f"run.{node_key}",
+            "success",
+            "已执行 execution chain overview node",
+            node_key=node_key,
+            line_count=len(node_lines),
+            export_keys=sorted(exports.keys()),
         )
-    return {"lines": lines, "module_logs": module_logs, "context": current_context}
+    return {
+        "lines": lines,
+        "module_logs": module_logs,
+        "context": current_context,
+        "node_outputs": node_outputs,
+        "node_lookup": node_lookup,
+        "nodes": executed_nodes,
+    }
