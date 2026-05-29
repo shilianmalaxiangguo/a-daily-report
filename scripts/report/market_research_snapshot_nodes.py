@@ -30,6 +30,22 @@ def _full_row(label, current_evidence, derived_judgement, action_effect):
     return f"| {label} | {current_evidence} | {derived_judgement} | {action_effect} |"
 
 
+def _evidence_table_header_lines():
+    return [
+        "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
+        "|----------|----------|----------|--------------|",
+    ]
+
+
+def _ensure_evidence_table_header(lines):
+    lines = list(lines or [])
+    if not lines or not str(lines[0]).startswith("| "):
+        return lines
+    if len(lines) >= 2 and "---" in str(lines[1]):
+        return lines
+    return _evidence_table_header_lines() + lines
+
+
 def _display_text(value, context):
     return normalize_display_text_by_tag_pool(value, context)
 
@@ -369,7 +385,7 @@ def derive_market_research_cycle_layer(data, state_machine=None):
 
     groups = _group_mainline_cycles(records)
     calendar_rows = []
-    selected_groups = groups[-2:]
+    selected_groups = groups[-5:]
     selected_records = records[-25:]
     calendar_row_by_week = {}
     for record in selected_records:
@@ -392,8 +408,12 @@ def derive_market_research_cycle_layer(data, state_machine=None):
 
     cycle_rows = []
     attack_summary = resolve_mainline_attack_evidence_summary(data)
-    labels = ["上个周期", "当前周期"] if len(selected_groups) > 1 else ["当前周期"]
-    for label, group in zip(labels, selected_groups):
+    total_groups = len(selected_groups)
+    for index, group in enumerate(selected_groups):
+        if index == total_groups - 1:
+            label = "当前周期"
+        else:
+            label = f"近5周期-{index + 1}"
         market_state = _cycle_market_state(group["records"])
         attack_line = _cycle_attack_line(label, group["mainline"], attack_summary)
         cycle_stage = _cycle_stage(label, group["records"], attack_summary)
@@ -414,7 +434,8 @@ def derive_market_research_cycle_layer(data, state_machine=None):
         )
 
     pivot_rows = []
-    for row in data.get("pivot_mainline_history") or data.get("pivot_mainline_rows") or []:
+    source_pivot_rows = list(data.get("pivot_mainline_history") or data.get("pivot_mainline_rows") or [])[-3:]
+    for row in source_pivot_rows:
         if not isinstance(row, dict):
             continue
         mainline = row.get("mainline") or row.get("primary_mainline") or state_machine.get("leading_line") or "-"
@@ -470,10 +491,7 @@ def build_market_research_snapshot_table_header_node(context, node_meta=None, no
     if context.get("compact"):
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
-        "lines": [
-            "| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |",
-            "|----------|----------|----------|--------------|",
-        ],
+        "lines": _evidence_table_header_lines(),
         "exports": {},
         "module_logs": [],
     }
@@ -559,12 +577,12 @@ def _build_overtake_window_table_lines(context):
         return []
     lines = [
         "#### 超车窗口判断",
-        "| 对手失速 | 我方稳住 | 失速差 | 明日动作 |",
-        "|----------|----------|--------|----------|",
+        "| 观察成熟度 | 对手方向 | 对手弱化证据 | 我方方向 | 我方承接证据 | 超车逻辑 | 主战场边界 | 失速差 | 不成立条件 | 明日验证 |",
+        "|------------|----------|--------------|----------|--------------|----------|------------|--------|------------|----------|",
     ]
     for row in rows[:1]:
         lines.append(
-            "| {rival_slowdown} | {own_stability} | {speed_gap} | {action} |".format(
+            "| {observation_maturity} | {rival_line} | {rival_slowdown} | {own_line} | {own_stability} | {overtake_logic} | {arena_boundary} | {speed_gap} | {failure_condition} | {action} |".format(
                 **row
             )
         )
@@ -794,14 +812,14 @@ def build_market_research_snapshot_rotation_node(context, node_meta=None, node_l
     turnover_summary = resolve_mainline_turnover_summary(context)
     if str((context.get("mainline_turnover_summary") or {}).get("share_trend_label") or "").strip() == "逆势试攻":
         return {
-            "lines": [
+            "lines": _ensure_evidence_table_header([
                 _full_row(
                     "主线内部轮动",
                     context.get("rotation_label", "-"),
                     turnover_summary.get("conclusion", "-") if turnover_summary else context.get("rotation_summary_text", "-"),
                     turnover_summary.get("action_text", "-") if turnover_summary else context.get("rotation_action", "-"),
                 )
-            ],
+            ]),
             "exports": {},
             "module_logs": [],
         }
@@ -811,26 +829,26 @@ def build_market_research_snapshot_rotation_node(context, node_meta=None, node_l
         if attack_state == "no_attack":
             rotation_label = "无主线"
         return {
-            "lines": [
+            "lines": _ensure_evidence_table_header([
                 _full_row(
                     "主线内部轮动",
                     rotation_label,
                     attack_summary.get("confirmation_evidence") or "板块攻击证据不足",
                     "不围着单一方向做减法，只保留候选观察",
                 )
-            ],
+            ]),
             "exports": {},
             "module_logs": [],
         }
     return {
-        "lines": [
+        "lines": _ensure_evidence_table_header([
             _full_row(
                 "主线内部轮动",
                 context.get("rotation_label", "-"),
                 _display_text(context.get("rotation_summary_text", "-") or context.get("rotation_reason", "-"), context),
                 _display_text(context.get("rotation_action", "-"), context),
             )
-        ],
+        ]),
         "exports": {},
         "module_logs": [],
     }
@@ -895,6 +913,8 @@ def build_market_research_snapshot_style_background_node(context, node_meta=None
 def build_market_research_snapshot_abnormal_projection_node(context, node_meta=None, node_lookup=None):
     abnormal_label = context.get("abnormal_projection_label", "-")
     abnormal_reason = context.get("abnormal_projection_reason", "-")
+    if str(abnormal_label).strip() == "异常观察为空":
+        abnormal_label = "未形成样本"
     if context.get("compact"):
         lines = [f"- **异常承接证据**: {abnormal_label}；{abnormal_reason}"]
     else:

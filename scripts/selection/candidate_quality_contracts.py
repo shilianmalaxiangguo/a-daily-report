@@ -379,6 +379,11 @@ def build_candidate_quality_contract(
         "failure_condition": candidate.get("failure_condition") or visible_row["取关条件"],
     }
     trace = build_candidate_trace(trace_candidate)
+    if trace.get("missing_data") and new_entry_action == "等触发条件成立":
+        new_entry_action = "只观察，不新增参与"
+        visible_row["新开仓动作"] = new_entry_action
+        single_stock_fields["新开仓动作"] = new_entry_action
+        trace["final_action"] = "关键数据不完整，停止生成动作"
 
     return {
         "visible_row": visible_row,

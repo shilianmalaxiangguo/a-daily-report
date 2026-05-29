@@ -205,7 +205,13 @@ from portfolio.position_strategy_report import (
     save_position_strategy_report,
 )
 from publish.snap_ui_public_data import publish_snap_ui_public_data
-from export.sh_index_chanlun_html import save_sh_index_chanlun_html_report
+from export.sh_index_chanlun_html import (
+    DEFAULT_INDEX_CODE,
+    normalize_visual_payload,
+    render_sh_index_chanlun_html,
+    run_analysis as run_sh_index_chanlun_analysis,
+    save_sh_index_chanlun_html_report,
+)
 from replay.report_replay import replay_from_snapshot as run_replay_from_snapshot
 from report.report_acceptance_audit import audit_report_markdown
 from market_data.daily_price_runtime import (
@@ -3716,9 +3722,24 @@ def _resolve_chanlun_tomorrow_decision(data):
     return final_gate if isinstance(final_gate, dict) and final_gate else None
 
 
-def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path):
+def _build_sh_index_chanlun_html_for_audit(
+    target_date,
+    *,
+    index_code=DEFAULT_INDEX_CODE,
+    tomorrow_decision=None,
+    runner=run_sh_index_chanlun_analysis,
+):
+    market_zhongshu, rows = runner(target_date, index_code)
+    payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
+    if tomorrow_decision:
+        payload["tomorrow_decision"] = dict(tomorrow_decision)
+    return render_sh_index_chanlun_html(payload)
+
+
+def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path=None, companion_html=None):
     full_report = (report_outputs or {}).get(REPORT_VARIANT_FULL, "")
-    companion_html = Path(chanlun_html_path).read_text(encoding="utf-8") if chanlun_html_path else None
+    if companion_html is None and chanlun_html_path:
+        companion_html = Path(chanlun_html_path).read_text(encoding="utf-8")
     result = audit_report_markdown(full_report, companion_html=companion_html)
     if result.get("passed"):
         print("日报一致性检查通过")
@@ -3727,6 +3748,19 @@ def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path)
         line_suffix = f":{finding['line']}" if "line" in finding else ""
         print(f"{finding['code']}{line_suffix} {finding['message']}")
     raise ReportCriticalDataMissingError("日报一致性检查未通过，停止生成")
+
+
+def _audit_existing_official_report_or_raise(target_date, official_report_path):
+    path = Path(official_report_path)
+    if not path.exists():
+        return None
+    result = audit_report_markdown(path.read_text(encoding="utf-8"))
+    if result.get("passed"):
+        return result
+    for finding in result.get("findings", []):
+        line_suffix = f":{finding['line']}" if "line" in finding else ""
+        print(f"{finding['code']}{line_suffix} {finding['message']}")
+    raise ReportCriticalDataMissingError(f"{target_date} 已有正式日报一致性检查未通过，停止生成")
 
 
 def main():
@@ -3784,6 +3818,7 @@ def main():
         official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
         official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
         if official_record or os.path.exists(official_report_path):
+            _audit_existing_official_report_or_raise(target_date, official_report_path)
             run_mode = LEDGER_MODE_REPLAY
             print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
     
@@ -3798,6 +3833,8 @@ def main():
                 data["personal_position_context"] = build_personal_position_context(data, positions)
             else:
                 print(f"   ⚠️ 持仓信息解析失败，请检查格式")
+        else:
+            data["position_context_provided"] = False
 
         report_outputs = build_report_outputs(
             data,
@@ -3807,6 +3844,12 @@ def main():
             run_mode=run_mode,
             position_report_text="",
         )
+        tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
+        chanlun_html = _build_sh_index_chanlun_html_for_audit(
+            target_date,
+            tomorrow_decision=tomorrow_decision,
+        )
+        _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
         save_report_outputs(
             report_outputs,
             target_date,
@@ -3816,10 +3859,9 @@ def main():
         chanlun_html_path = save_sh_index_chanlun_html_report(
             target_date,
             root=Path(__file__).resolve().parents[1],
-            tomorrow_decision=_resolve_chanlun_tomorrow_decision(data),
+            tomorrow_decision=tomorrow_decision,
         )
         print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
-        _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path)
         if positions:
             position_strategy_report = render_position_strategy_report(
                 data,

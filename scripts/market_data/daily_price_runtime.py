@@ -354,6 +354,15 @@ def _fetch_daily_price_bars(
     )
 
 
+def _fetch_baostock_daily_price_bars(bs_code, start_date, end_date, is_index=False):
+    return _fetch_baostock_daily_price_bars_legacy_body(
+        bs_code,
+        start_date,
+        end_date,
+        is_index=is_index,
+    )
+
+
 def _get_first_bar_after(bars, after_date):
     return _get_first_bar_after_legacy_body(bars, after_date)
 
@@ -573,41 +582,16 @@ def _fetch_daily_price_bars_legacy_body(
             return _finalize(quicktiny_bars)
 
     bars = []
-    try:
-        import baostock as bs
-
-        if _ensure_baostock_login():
-            if is_index:
-                rs = bs.query_history_k_data_plus(
-                    bs_code,
-                    "date,open,high,low,close,volume",
-                    start_date=start_date,
-                    end_date=end_date,
-                    frequency="d",
-                )
-            else:
-                rs = bs.query_history_k_data_plus(
-                    bs_code,
-                    "date,open,high,low,close,volume",
-                    start_date=start_date,
-                    end_date=end_date,
-                    frequency="d",
-                    adjustflag="3",
-                )
-
-            if rs.error_code == "0":
-                while (rs.error_code == "0") and rs.next():
-                    row = rs.get_row_data()
-                    bars.append({
-                        "date": _normalize_kline_date_str(row[0]),
-                        "open": _safe_float(row[1]),
-                        "high": _safe_float(row[2]),
-                        "low": _safe_float(row[3]),
-                        "close": _safe_float(row[4]),
-                        "volume": _safe_float(row[5]),
-                    })
-    except Exception:
-        bars = []
+    if allow_baostock_fallback:
+        bars = _run_with_wall_clock_timeout(
+            6,
+            _fetch_baostock_daily_price_bars,
+            bs_code,
+            start_date,
+            end_date,
+            is_index=is_index,
+            default=[],
+        ) or []
 
     if not bars and not is_index:
         try:
@@ -647,6 +631,46 @@ def _fetch_daily_price_bars_legacy_body(
             bars = _merge_daily_price_bars(bars, quicktiny_bars)
 
     return _finalize(bars)
+
+
+def _fetch_baostock_daily_price_bars_legacy_body(bs_code, start_date, end_date, is_index=False):
+    bars = []
+    try:
+        import baostock as bs
+
+        if _ensure_baostock_login():
+            if is_index:
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,open,high,low,close,volume",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                )
+            else:
+                rs = bs.query_history_k_data_plus(
+                    bs_code,
+                    "date,open,high,low,close,volume",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="3",
+                )
+
+            if rs.error_code == "0":
+                while (rs.error_code == "0") and rs.next():
+                    row = rs.get_row_data()
+                    bars.append({
+                        "date": _normalize_kline_date_str(row[0]),
+                        "open": _safe_float(row[1]),
+                        "high": _safe_float(row[2]),
+                        "low": _safe_float(row[3]),
+                        "close": _safe_float(row[4]),
+                        "volume": _safe_float(row[5]),
+                    })
+    except Exception:
+        return []
+    return bars
 
 
 def _get_first_bar_after_legacy_body(bars, after_date):

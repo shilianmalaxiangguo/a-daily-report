@@ -70,7 +70,7 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["cycle_calendar_rows"][0]["week_label"], "04-13当周")
         self.assertEqual(result["cycle_calendar_rows"][0]["tuesday"], {"date": "04-14", "mainline": "电力", "state": "主导"})
         self.assertEqual(result["cycle_calendar_rows"][1]["friday"], {"date": "04-24", "mainline": "半导体", "state": "试探修复"})
-        self.assertEqual(result["cycle_interpretation_rows"][0]["cycle_label"], "上个周期")
+        self.assertEqual(result["cycle_interpretation_rows"][0]["cycle_label"], "近5周期-1")
         self.assertEqual(result["cycle_interpretation_rows"][1]["cycle_label"], "当前周期")
         self.assertEqual(result["cycle_interpretation_rows"][1]["trading_days"], "4日")
         self.assertIn("半导体", result["cycle_interpretation_rows"][1]["interpretation"])
@@ -351,6 +351,37 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         self.assertEqual(result["mainline_turnover_summary"]["conclusion"], "主线未切换，军工仍是中心")
         self.assertEqual(result["special_probe_verdict"]["action"], "看军工异常股")
         self.assertTrue(any(log["step"] == "follow_verdict" for log in result["module_logs"]))
+
+    def test_market_fit_uses_visible_observation_pool_not_full_candidate_pool(self):
+        kwargs = self._minimal_snapshot_kwargs(leading_line="电力")
+        kwargs["observation_snapshot"] = {
+            "abnormal_watch_pool": [
+                {"code": f"{index:06d}", "sector": "电力"}
+                for index in range(5)
+            ],
+            "leader_memory_bank": [],
+            "main_sectors_info": [{"name": "电力"}],
+            "secondary_sectors_info": [],
+            "sector_trend_snapshot": [],
+        }
+        result = build_market_research_snapshot_contract(
+            data={
+                "zt_pool": [
+                    {"code": f"{index:06d}", "sector": "电力"}
+                    for index in range(20)
+                ],
+                "candidates": [
+                    {"code": f"{index:06d}", "sector": "电力"}
+                    for index in range(126)
+                ],
+            },
+            **kwargs,
+        )
+
+        evidence_text = result["market_fit_calibration"]["evidence_text"]
+
+        self.assertIn("观察池命中5只", evidence_text)
+        self.assertNotIn("观察池命中20只", evidence_text)
 
     def test_derive_step0_follow_plan_contract_merges_probe_and_style_actions(self):
         result = derive_step0_follow_plan_contract(

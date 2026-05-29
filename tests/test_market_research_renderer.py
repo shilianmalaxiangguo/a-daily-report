@@ -157,6 +157,30 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertNotIn("| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |", rendered)
         self.assertNotIn("正在承担当前周期的主线观察任务", rendered)
 
+    def test_market_research_cycle_layer_keeps_recent_five_cycles(self):
+        records = [
+            {"date": "2026-05-18", "primary_mainline": "电力", "market_state": "爆发"},
+            {"date": "2026-05-19", "primary_mainline": "电力", "market_state": "分化"},
+            {"date": "2026-05-20", "primary_mainline": "半导体", "market_state": "试攻"},
+            {"date": "2026-05-21", "primary_mainline": "机器人", "market_state": "接力"},
+            {"date": "2026-05-22", "primary_mainline": "电力", "market_state": "回流"},
+            {"date": "2026-05-25", "primary_mainline": "光通信/CPO", "market_state": "爆发"},
+        ]
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["cycle_interpretation"],
+                "recent_mainline_history": records[:-1],
+                "current_mainline_history_record": records[-1],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 近5周期-1 | 05-18 ~ 05-19 | 2日 | 电力 | 已结束周期 |", rendered)
+        self.assertIn("| 近5周期-4 | 05-22 | 1日 | 电力 | 已结束周期 |", rendered)
+        self.assertIn("| 当前周期 | 05-25 | 1日 | 光通信/CPO |", rendered)
+        self.assertNotIn("| 上个周期 |", rendered)
+
     def test_render_market_research_snapshot_section_renders_pivot_mainline_interpretation_table(self):
         lines = render_market_research_snapshot_section(
             {
@@ -198,6 +222,31 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 04-21 ~ 04-23 | 小中枢 | 3992.41 - 4114.84 | 中枢内 | 半导体 | 小周期主线 | 修复接力 | 接替电力 |", rendered)
         self.assertIn("[半导体] 开始接替 [电力]", rendered)
         self.assertNotIn("震荡 / 修复", rendered)
+
+    def test_market_research_cycle_layer_keeps_recent_three_pivots(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["pivot_mainline_interpretation"],
+                "recent_mainline_history": [
+                    {"date": "2026-05-20", "primary_mainline": "半导体", "market_state": "试攻"},
+                    {"date": "2026-05-21", "primary_mainline": "机器人", "market_state": "接力"},
+                    {"date": "2026-05-22", "primary_mainline": "电力", "market_state": "回流"},
+                ],
+                "pivot_mainline_history": [
+                    {"date_range": "05-13 ~ 05-15", "pivot_level": "日线中枢", "mainline": "小金属", "evolution": "退潮"},
+                    {"date_range": "05-18 ~ 05-19", "pivot_level": "日线中枢", "mainline": "半导体", "evolution": "试攻"},
+                    {"date_range": "05-20 ~ 05-21", "pivot_level": "日线中枢", "mainline": "机器人", "evolution": "接力"},
+                    {"date_range": "05-22", "pivot_level": "日线中枢", "mainline": "电力", "evolution": "回流"},
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertNotIn("05-13 ~ 05-15", rendered)
+        self.assertIn("05-18 ~ 05-19", rendered)
+        self.assertIn("05-20 ~ 05-21", rendered)
+        self.assertIn("05-22", rendered)
 
     def test_render_market_research_snapshot_section_renders_mainline_turnover_node(self):
         lines = render_market_research_snapshot_section(
@@ -292,6 +341,9 @@ class MarketResearchRendererTest(unittest.TestCase):
                         "window_state": "open",
                         "rival_slowdown": "旧主线承接转弱，竞争线冲高回落",
                         "own_stability": "半导体资金扩散，核心承接稳定",
+                        "observation_maturity": "跑过一段后再判断",
+                        "overtake_logic": "对手过弯打滑，我方仍能弯道加速",
+                        "arena_boundary": "短线/超短主战场内主动出手",
                         "speed_gap": "失速差拉开",
                         "action": "只在半导体核心里找参与资格",
                     },
@@ -314,8 +366,8 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("#### 主线攻击证据", rendered)
         self.assertIn("| 半导体 | 确认主攻线 | 第1 | +45.00亿 | 5 | 4 | +1.6pct | 半导体资金净流入靠前，涨停和高标更集中，成交占比扩张 |", rendered)
         self.assertIn("#### 超车窗口判断", rendered)
-        self.assertIn("| 对手失速 | 我方稳住 | 失速差 | 明日动作 |", rendered)
-        self.assertIn("| 旧主线承接转弱，竞争线冲高回落 | 半导体资金扩散，核心承接稳定 | 失速差拉开 | 只在半导体核心里找参与资格 |", rendered)
+        self.assertIn("| 观察成熟度 | 对手方向 | 对手弱化证据 | 我方方向 | 我方承接证据 | 超车逻辑 | 主战场边界 | 失速差 | 不成立条件 | 明日验证 |", rendered)
+        self.assertIn("| 跑过一段后再判断 | 旧主线 | 旧主线承接转弱，竞争线冲高回落 | 半导体 | 半导体资金扩散，核心承接稳定 | 对手过弯打滑，我方仍能弯道加速 | 短线/超短主战场内主动出手 | 失速差拉开 | 对手重新放量回流或半导体开盘不承接 | 只在半导体核心里找参与资格 |", rendered)
         self.assertIn("#### 能力圈匹配判断", rendered)
         self.assertIn("| 适配位置 | 行情类型 | 适配理由 | 明日动作 |", rendered)
         self.assertIn("| 短线/超短线主战场 | 单主线聚焦 | 量能、资金扩散、板块效应和核心承接进入短线/超短线可发挥区 | 按短线/超短线主战场处理，围绕半导体核心继续寻找参与资格 |", rendered)
@@ -447,6 +499,21 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 主线内部轮动 | 逆势攻击 | 人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理 | 人形机器人只按观察主攻线处理，先防踩踏，再看次日是否修复承接 |", rendered)
         self.assertNotIn("主攻线半导体", rendered)
         self.assertNotIn("只观察半导体", rendered)
+
+    def test_rotation_node_renders_table_header_when_used_without_section_header(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["rotation"],
+                "rotation_label": "分化整理",
+                "rotation_summary_text": "主攻线电力 / 次强线通信设备",
+                "rotation_action": "先看电力能否重新聚焦",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |", rendered)
+        self.assertLess(rendered.index("| 证据环节 |"), rendered.index("| 主线内部轮动 |"))
 
     def test_render_market_research_snapshot_narrative_uses_countertrend_attack_line_instead_of_stale_narrative(self):
         lines = render_market_research_snapshot_section(
@@ -704,6 +771,21 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("先区分核心锚、量化弹性和情绪后排", rendered)
         self.assertIn("什么情况下先不认这轮修复", rendered)
 
+    def test_render_market_research_snapshot_empty_abnormal_projection_does_not_show_zero_zero_strength(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["abnormal_projection"],
+                "abnormal_projection_label": "异常观察为空",
+                "abnormal_projection_reason": "当前没有明确的异常承接样本，不能把孤立异动当成主线强化证据。",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 异常承接证据 | 未形成样本 | 当前没有明确的异常承接样本，不能把孤立异动当成主线强化证据。 |", rendered)
+        self.assertNotIn("0强", rendered)
+        self.assertNotIn("0弱", rendered)
+
     def test_render_step0_follow_section_compact(self):
         lines = render_step0_follow_section(
             {
@@ -776,6 +858,22 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("> **Step 0 结论**: 环境未坏，但还需确认", rendered)
         self.assertNotIn("| 盘面风险偏好 |", rendered)
         self.assertNotIn("> **⚠️ 重要提醒**", rendered)
+
+    def test_render_step0_follow_empty_abnormal_projection_does_not_show_zero_zero_strength(self):
+        lines = render_step0_follow_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["abnormal_projection"],
+                "resilient_abnormal_count": 0,
+                "failed_abnormal_count": 0,
+                "abnormal_projection_label": "异常观察为空",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 异常承接证据 | 未形成样本 | 异常观察为空 |", rendered)
+        self.assertNotIn("0强", rendered)
+        self.assertNotIn("0弱", rendered)
 
     def test_render_step0_follow_reminder_respects_zero_participation(self):
         lines = render_step0_follow_section(

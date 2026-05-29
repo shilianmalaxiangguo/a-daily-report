@@ -15,6 +15,7 @@ from diagnostics.helper_diagnostics_runtime import (
 )
 from domains.calendar_events.infer import normalize_calendar_ai_analysis
 from knowledge.llm_wiki_context import build_llm_wiki_context
+from knowledge.llm_wiki_router import build_llm_wiki_fact_tags, route_llm_wiki_knowledge
 from report.calendar_section_nodes import render_calendar_section
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.decision_board_nodes import render_decision_board_section
@@ -32,7 +33,9 @@ from report.execution_chain_overview_nodes import render_execution_chain_overvie
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
 from report.front_summary_renderer import sanitize_front_page_text
+from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from hooks.report.use_report_sections import (
+    build_knowledge_hits_note,
     build_knowledge_compounding_candidate_note,
     build_knowledge_update_note,
 )
@@ -197,19 +200,12 @@ def _number_report_tables(lines):
     return numbered
 
 
-_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
+_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。"
 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%标准进攻"
 
 
-def _has_conditional_observation_target_surface(lines):
-    text = "\n".join(str(line or "") for line in list(lines or []))
-    if "条件观察：" not in text:
-        return False
-    return "0%：条件不满足" in text or "不满足继续0%" in text or "条件50%" in text
-
-
 def _should_apply_pure_zero_participation_cleanup(lines):
-    return _has_final_zero_participation_surface(lines) and not _has_conditional_observation_target_surface(lines)
+    return _has_final_zero_participation_surface(lines)
 
 
 def _has_existing_position_zero_new_entry_surface(lines):
@@ -339,6 +335,19 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("补位", "观察"),
         ("实际可买", "仅观察"),
         ("动作上限", "观察上限"),
+        ("条件观察：", "观察锚："),
+        ("50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险", "0%不参与：最终结论不允许新增参与，只观察风险是否钝化"),
+        ("盘前0%；固定交易窗口条件满足后才评估50%标准进攻", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
+        ("盘前0%；固定交易窗口条件满足后才保留观察，不能转成新增参与", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
+        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察", "只保留观察，不能转成新增参与；未命中继续0%观察"),
+        ("盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻", "盘前0%只代表不抢跑；只观察，不新增参与"),
+        ("以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻", "以观察和处理持仓为主；不做新开仓"),
+        ("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%"),
+        ("才评估50%标准进攻", "才保留观察，不能转成新增参与"),
+        ("触发后50%标准进攻", "触发后只观察"),
+        ("条件50%", "只观察"),
+        ("50%标准进攻", "只观察"),
+        ("唯一对象是否", "观察锚是否"),
         ("✓ 溢价候选", "观察样本"),
         ("溢价候选", "观察样本"),
         ("MVP快照回退：先看次日是否继续强于市场，再按预演观察窗口确认。", "观察样本：先看是否强于市场，不预设参与。"),
@@ -348,6 +357,13 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         text = normalize_trading_time_text(str(line or ""))
         for source, target in replacements:
             text = text.replace(source, target)
+        if text.lstrip().startswith("| 0%不参与 |") and "| 观察锚：" in text:
+            cells = text.strip().strip("|").split("|")
+            if len(cells) >= 8:
+                target = cells[5].strip()
+                label = target.replace("观察锚：", "", 1).strip()
+                cells[7] = f" 盘前0%；只观察{label}，成立才保留观察，不能转成新增参与；不满足继续0% "
+                text = "|" + "|".join(cells) + "|"
         if "允许进入" in text and "继续观察复核" in text:
             text = text.replace("允许进入", "只进入")
         text = text.replace("继续继续观察复核", "继续观察复核")
@@ -492,6 +508,18 @@ def _prefer_structured_mainline_turnover_summary(primary_summary, fallback_summa
     if _summary_has_attack_evidence(fallback_summary) and not _summary_has_attack_evidence(primary_summary):
         return fallback_summary
     return primary_summary or fallback_summary
+
+
+def _mainline_name_from_turnover_summary(summary):
+    summary = summary or {}
+    attack_summary = summary.get("mainline_attack_evidence_summary") or {}
+    return str(
+        attack_summary.get("primary_line")
+        or summary.get("current_mainline")
+        or summary.get("cycle_mainline")
+        or summary.get("daily_attack_line")
+        or ""
+    ).strip()
 
 
 def _resolve_decision_ledger_sector_relationship(execution_stage_context):
@@ -935,24 +963,52 @@ def _current_extreme_conviction_codes(execution_stage_context=None):
 
 def _build_front_page_selected_position_candidate(execution_stage_context=None):
     execution_stage_context = execution_stage_context or {}
-    selected = execution_stage_context.get("selected_position_candidate") or execution_stage_context.get("best_stock") or execution_stage_context.get("watch_anchor")
+    position_decision = (
+        execution_stage_context.get("position_decision")
+        if isinstance(execution_stage_context.get("position_decision"), dict)
+        else {}
+    )
+    zero_position = _has_zero_participation_context(position_decision)
+    extreme_items = execution_stage_context.get("extreme_conviction_list", []) or []
+    if zero_position:
+        for item in extreme_items:
+            if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
+                return _front_page_candidate_from_extreme_item(item)
+    selected = execution_stage_context.get("selected_position_candidate") or execution_stage_context.get("best_stock")
+    if not selected and execution_stage_context.get("trade_gate_open"):
+        selected = execution_stage_context.get("watch_anchor")
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return dict(selected)
-    for item in execution_stage_context.get("extreme_conviction_list", []) or []:
+    observation_candidates = execution_stage_context.get("display_observation_candidates") or execution_stage_context.get("observation_candidates") or []
+    if isinstance(observation_candidates, list):
+        for item in observation_candidates:
+            if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
+                return dict(item)
+    selected = execution_stage_context.get("watch_anchor")
+    if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return dict(selected)
+    for item in extreme_items:
         if not isinstance(item, dict):
             continue
-        plan = item.get("planned_participation") or item.get("participation_script") or {}
-        return {
-            "name": item.get("name") or item.get("stock_name"),
-            "code": item.get("code") or item.get("stock_code"),
-            "sector": item.get("sector") or item.get("sector_name") or item.get("所属板块"),
-            "source_tier": "extreme_conviction",
-            "participation_window": plan.get("buy_window") or plan.get("participation_window") or "09:50-10:10",
-            "participation_window_type": plan.get("participation_window_type") or "auction_reseal",
-            "required_steps": plan.get("required_steps") or ["竞价表态", "开盘前几分钟承接", "回封/打板"],
-            "fallback_state": plan.get("fallback_state") or plan.get("cancellation") or "条件不满足回到0%",
-            "condition": plan.get("condition") or "竞价表态 + 开盘前几分钟 + 回封/打板",
-        }
+        return _front_page_candidate_from_extreme_item(item)
+
+
+def _front_page_candidate_from_extreme_item(item):
+    item = item or {}
+    plan = item.get("planned_participation") or item.get("participation_script") or {}
+    default_required_steps = ["竞价表态", "开盘前几分钟承接", "回封观察"]
+    default_condition = "竞价表态 + 开盘前几分钟承接 + 回封观察"
+    return {
+        "name": item.get("name") or item.get("stock_name"),
+        "code": item.get("code") or item.get("stock_code"),
+        "sector": item.get("sector") or item.get("sector_name") or item.get("所属板块"),
+        "source_tier": "extreme_conviction",
+        "participation_window": plan.get("buy_window") or plan.get("participation_window") or "09:50-10:10",
+        "participation_window_type": plan.get("participation_window_type") or "auction_reseal",
+        "required_steps": plan.get("required_steps") or default_required_steps,
+        "fallback_state": plan.get("fallback_state") or plan.get("cancellation") or "条件不满足回到0%",
+        "condition": plan.get("condition") or default_condition,
+    }
     return {}
 
 
@@ -1073,6 +1129,41 @@ def _force_observation_for_missing_execution_evidence(position_decision):
             "single_focus_constraint": {
                 "status": "observe",
                 "reason": "已有观察对象，但仓位结论仍需来自独立参与证据。",
+            },
+        }
+    )
+    return updated
+
+
+def _force_observation_for_unbuyable_core(position_decision):
+    position_decision = dict(position_decision or {}) if isinstance(position_decision, dict) else {}
+    monthly_rhythm = (
+        dict(position_decision.get("monthly_rhythm") or {})
+        if isinstance(position_decision.get("monthly_rhythm"), dict)
+        else {}
+    )
+    monthly_rhythm.update(
+        {
+            "month_mode": monthly_rhythm.get("month_mode") or "account_observation",
+            "target_role": "observe",
+            "max_position_pct": 0,
+            "allow_full_attack": False,
+            "trend_invalid": bool(monthly_rhythm.get("trend_invalid")),
+            "reason": "当前账户买不了一手，实际不参与；市场核心身份只保留观察。",
+        }
+    )
+    updated = dict(position_decision)
+    updated.update(
+        {
+            "participation_mode": "observe_0",
+            "target_position_pct": 0,
+            "signal_grade": "0",
+            "candidate_feedback_ready": False,
+            "sizing_reason": "当前账户买不了一手，实际不参与；市场核心身份只保留观察。",
+            "monthly_rhythm": monthly_rhythm,
+            "single_focus_constraint": {
+                "status": "observe",
+                "reason": "市场身份不降级，但当前账户没有新增参与条件。",
             },
         }
     )
@@ -1239,6 +1330,43 @@ def _front_page_candidate_position_pct(candidate):
     return 0
 
 
+def _runtime_knowledge_hits(data):
+    if not isinstance(data, dict):
+        return []
+    llm_wiki = (data.get("knowledge") or {}).get("llm_wiki") or {}
+    hits = llm_wiki.get("knowledge_hits") or []
+    return [hit for hit in hits if isinstance(hit, dict)]
+
+
+def _runtime_has_knowledge_hit(data, knowledge_id):
+    return any(hit.get("knowledge_id") == knowledge_id for hit in _runtime_knowledge_hits(data))
+
+
+def _runtime_account_profile(data=None, market_research_snapshot=None):
+    data = data if isinstance(data, dict) else {}
+    market_research_snapshot = market_research_snapshot if isinstance(market_research_snapshot, dict) else {}
+    personal_position_context = data.get("personal_position_context") if isinstance(data.get("personal_position_context"), dict) else {}
+    for source in (
+        data.get("account_profile"),
+        data.get("account"),
+        personal_position_context.get("account_profile"),
+        market_research_snapshot.get("account_profile"),
+    ):
+        if isinstance(source, dict):
+            return source
+    return {}
+
+
+def _runtime_account_unbuyable_core_active(data=None, selected_position_candidate=None, market_research_snapshot=None):
+    if not _runtime_has_knowledge_hit(data, "account.unbuyable-core-anchor"):
+        return False
+    candidate = selected_position_candidate if isinstance(selected_position_candidate, dict) else {}
+    account = _runtime_account_profile(data=data, market_research_snapshot=market_research_snapshot)
+    cash_available = _runtime_cell_float(account.get("cash_available"))
+    one_lot_amount = _runtime_cell_float(candidate.get("one_lot_amount"))
+    return bool(cash_available and one_lot_amount and one_lot_amount > cash_available)
+
+
 def _repair_confirmed_front_page_position_decision(position_decision, *, selected_position_candidate=None):
     updated = dict(position_decision or {})
     target_pct = _front_page_target_pct(updated)
@@ -1340,6 +1468,12 @@ def _build_front_page_position_decision(
     selected_position_candidate = selected_position_candidate or {}
     if not selected_position_candidate:
         return position_decision
+    if _runtime_account_unbuyable_core_active(
+        data=data,
+        selected_position_candidate=selected_position_candidate,
+        market_research_snapshot=market_research_snapshot,
+    ):
+        return _force_observation_for_unbuyable_core(position_decision)
     if _is_runtime_countertrend_attack_day(
         data=data,
         market_research_snapshot=market_research_snapshot,
@@ -1476,11 +1610,16 @@ def _normalize_zero_participation_appendix_line(line):
     if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
         text = text.replace(
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-            "明日不新增参与，只观察风险是否钝化、主攻线承接和唯一对象是否重新成立",
+            "明日不新增参与，只观察风险是否钝化、主攻线承接和观察锚是否重新成立",
         )
     if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
         text = text.replace(
             "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
+            "盘前0%；暂无新增参与资格，只观察风险是否钝化",
+        )
+    if "盘前0%；观察窗口命中后才评估50%标准进攻" in text:
+        text = text.replace(
+            "盘前0%；观察窗口命中后才评估50%标准进攻",
             "盘前0%；暂无新增参与资格，只观察风险是否钝化",
         )
     if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
@@ -1493,6 +1632,34 @@ def _normalize_zero_participation_appendix_line(line):
             "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
             "0%观察，不抢跑，只保留候选观察的盘中复核路径",
         )
+    text = text.replace("条件观察：", "观察锚：")
+    text = text.replace(
+        "50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险",
+        "0%不参与：最终结论不允许新增参与，只观察风险是否钝化",
+    )
+    text = text.replace(
+        "09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察",
+        "只保留观察，不能转成新增参与；未命中继续0%观察",
+    )
+    text = text.replace(
+        "盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻",
+        "盘前0%只代表不抢跑；只观察，不新增参与",
+    )
+    text = text.replace(
+        "以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻",
+        "以观察和处理持仓为主；不做新开仓",
+    )
+    text = text.replace("只在", "仅在") if "核心里找参与资格" in text else text
+    text = text.replace("核心里找参与资格", "核心里继续观察")
+    text = text.replace("继续寻找参与资格", "继续观察")
+    text = text.replace("寻找参与资格", "观察")
+    text = text.replace("等触发条件成立", "只观察，不新增参与")
+    text = text.replace("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%")
+    text = text.replace("才评估50%标准进攻", "才保留观察，不能转成新增参与")
+    text = text.replace("触发后50%标准进攻", "触发后只观察")
+    text = text.replace("条件50%", "只观察")
+    text = text.replace("50%标准进攻", "只观察")
+    text = text.replace("唯一对象是否", "观察锚是否")
     return text
 
 
@@ -1516,9 +1683,7 @@ def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candida
     has_selected_target = isinstance(selected_position_candidate, dict) and bool(
         selected_position_candidate.get("name") or selected_position_candidate.get("code")
     )
-    if has_selected_target and _should_keep_zero_appendix_for_selected_target(position_decision):
-        return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
-    if _has_zero_participation_context(position_decision) and not has_selected_target:
+    if _has_zero_participation_context(position_decision):
         return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
     if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
@@ -1535,6 +1700,45 @@ def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candida
             )
         if text == "- **进攻仓位三态**: 0%不参与":
             text = "- **进攻仓位三态**: 50%标准进攻预演"
+        if text == "- **进攻仓位三态**: 0%观察":
+            text = "- **进攻仓位三态**: 50%标准进攻预演"
+        if text.startswith("**次日市场环境**: 0%观察 /"):
+            text = text.replace("**次日市场环境**: 0%观察 /", "**次日市场环境**: 预计50%标准进攻 /", 1)
+        if "当前按0%不参与，固定交易窗口内条件未成立前只观察" in text:
+            text = text.replace(
+                "当前按0%不参与，固定交易窗口内条件未成立前只观察",
+                "预计50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%",
+            )
+        if text.startswith("- ✅ 不新增参与：预计50%标准进攻"):
+            text = text.replace("- ✅ 不新增参与：", "- ⚠️ 不抢跑：", 1)
+        if "0%观察不开新仓" in text:
+            text = text.replace(
+                "0%观察不开新仓",
+                "预计50%标准进攻，盘前不抢跑",
+            )
+        if "0%观察，等待固定交易窗口内条件" in text:
+            text = text.replace(
+                "0%观察，等待固定交易窗口内条件",
+                "预计50%标准进攻预演，等待固定交易窗口内条件",
+            )
+        if "0%新仓（只处理旧仓，不新增）" in text:
+            text = text.replace(
+                "0%新仓（只处理旧仓，不新增）",
+                "预计50%标准进攻；条件不成立回0%",
+            )
+        if "市场级原则是若你有旧仓就去弱留强，不新增参与" in text:
+            text = text.replace(
+                "市场级原则是若你有旧仓就去弱留强，不新增参与",
+                "若你有旧仓先去弱留强；明日执行目标只按固定交易窗口处理",
+            )
+        if "**⛔ 当前先不开新仓**" in text:
+            text = text.replace("**⛔ 当前先不开新仓**", "**⚠️ 当前不抢跑**")
+            text = text.replace("本轮不做PK出手结论", "本轮只保留固定交易窗口预演")
+        if "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件" in text:
+            text = text.replace(
+                "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
+                "当前是预计50%标准进攻预演，本时段只确认主线核心是否在固定交易窗口内满足条件",
+            )
         if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
             text = text.replace(
                 "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
@@ -2114,13 +2318,14 @@ def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_cont
     )
     pool_specs = [
         ("core_stocks", "主线核心"),
-        ("secondary_stocks", "主线备选"),
         ("crossline_observation_stocks", "跨线观察"),
+        ("secondary_stocks", "主线备选"),
         ("gem_observation_stocks", "创业板观察"),
         ("generic_watch_stocks", "普通观察"),
         ("watchlist", "普通观察"),
     ]
     seen_codes = set()
+    monitoring_index_by_key = {}
     monitoring_pool = []
     lifecycle_records = []
     for key, source_pool in pool_specs:
@@ -2128,8 +2333,21 @@ def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_cont
             code = _appendix_stock_code(item)
             dedupe_key = code or _appendix_stock_name(item)
             if dedupe_key in seen_codes:
+                if source_pool == "跨线观察" and dedupe_key in monitoring_index_by_key:
+                    existing_index = monitoring_index_by_key[dedupe_key]
+                    display_source_pool, current_action, forced_interpretation = _appendix_monitoring_labels(
+                        item,
+                        source_pool,
+                        mainline_name,
+                    )
+                    monitoring_pool[existing_index]["source_pool"] = display_source_pool
+                    monitoring_pool[existing_index]["current_action"] = current_action
+                    lifecycle_records[existing_index]["current_action"] = current_action
+                    if forced_interpretation:
+                        lifecycle_records[existing_index]["current_interpretation"] = forced_interpretation
                 continue
             seen_codes.add(dedupe_key)
+            monitoring_index_by_key[dedupe_key] = len(monitoring_pool)
             display_source_pool, current_action, forced_interpretation = _appendix_monitoring_labels(item, source_pool, mainline_name)
             interpretation = (
                 forced_interpretation
@@ -2434,6 +2652,22 @@ def _attach_market_structure_judgement(data):
     return judgement
 
 
+def _attach_llm_wiki_knowledge_hits(data, llm_wiki_context):
+    if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
+        return []
+    facts = build_llm_wiki_fact_tags(data)
+    hits = route_llm_wiki_knowledge(facts, scenario="daily_report", limit=3)
+    llm_wiki_context["knowledge_hits"] = hits
+    data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
+    return hits
+
+
+def _refresh_llm_wiki_knowledge_hits(data, llm_wiki_context):
+    if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
+        return []
+    return _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
+
+
 def render_markdown_report_runtime(
     data,
     target_date,
@@ -2449,6 +2683,8 @@ def render_markdown_report_runtime(
     if isinstance(data, dict):
         data.setdefault("knowledge", {})["llm_wiki"] = llm_wiki_context
     _attach_market_structure_judgement(data)
+    if isinstance(data, dict):
+        _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
     bindings = {}
     bindings.update(helpers or {})
     bindings.update(config or {})
@@ -2470,6 +2706,9 @@ def render_markdown_report_runtime(
     candidate_note_lines = build_knowledge_compounding_candidate_note(llm_wiki_context)
     if candidate_note_lines:
         report = "\n".join([report.rstrip(), "", *candidate_note_lines]).strip()
+    knowledge_hit_lines = build_knowledge_hits_note(llm_wiki_context)
+    if knowledge_hit_lines:
+        report = "\n".join([report.rstrip(), "", *knowledge_hit_lines]).strip()
 
     return {
         "report": report,
@@ -2582,46 +2821,6 @@ def _render_markdown_report_legacy_body(
     
     integrated_hot_data = data.get('integrated_hot_data', {})
     high_board_count = integrated_hot_data.get('high_board_count', 0)
-    report.extend(
-        render_decision_board_section(
-            {
-                "compact": DISPLAY_MVP_MODE,
-                "high_board_count": high_board_count,
-                "exit_analysis": exit_analysis,
-                "main_sectors": main_sectors,
-                "mainline_turnover_summary": data.get("mainline_turnover_summary", {}) or {},
-                "data": data,
-                "position_level": position_level,
-                "overall_level": overall_level,
-                "final_gate": final_gate,
-                "price_info": price_info,
-                "display_position_reason": display_position_reason,
-                "get_execution_framework_text": get_execution_framework_text,
-                "dt_count": dt_count,
-                "turnover": turnover,
-                "rise_fall_ratio": rise_fall_ratio,
-                "up_count": up_count,
-                "down_count": down_count,
-                "abnormal_risk": data.get('abnormal_risk', []),
-            }
-        )
-    )
-    
-    prohibition_position_level = display_position_level or position_level
-    prohibition_operation_state = display_operation_state or final_gate.get('operation_state', '观察态')
-    prohibition_result = build_prohibition_section_contract(
-        prohibition_position_level,
-        prohibition_operation_state,
-        environment_headline=environment_headline,
-        has_personal_positions=has_personal_positions,
-        final_gate=final_gate,
-        main_sectors=main_sectors,
-        exit_analysis=exit_analysis,
-    )
-    replace_placeholder_lines(report, "<!-- PROHIBITION_PLACEHOLDER -->", prohibition_result.get('lines', []))
-    
-    report.append("")
-
     calendar_ai_context = _get_or_build_calendar_ai_context(data) if data.get('calendar_events') else {}
     top_directions = calendar_ai_context.get("top_directions", []) or []
     chain_analysis_insights = ""
@@ -2774,6 +2973,47 @@ def _render_markdown_report_legacy_body(
         market_research_bundle["mainline_turnover_summary"] = data["mainline_turnover_summary"]
         if isinstance(market_research_bundle.get("market_research_snapshot"), dict):
             market_research_bundle["market_research_snapshot"]["mainline_turnover_summary"] = data["mainline_turnover_summary"]
+    unified_mainline_name = _mainline_name_from_turnover_summary(data.get("mainline_turnover_summary", {}) or {})
+    unified_main_sectors = [unified_mainline_name] if unified_mainline_name else main_sectors
+    report.extend(
+        render_decision_board_section(
+            {
+                "compact": DISPLAY_MVP_MODE,
+                "high_board_count": high_board_count,
+                "exit_analysis": exit_analysis,
+                "main_sectors": unified_main_sectors,
+                "mainline_turnover_summary": data.get("mainline_turnover_summary", {}) or {},
+                "data": data,
+                "position_level": position_level,
+                "overall_level": overall_level,
+                "final_gate": final_gate,
+                "price_info": price_info,
+                "display_position_reason": display_position_reason,
+                "get_execution_framework_text": get_execution_framework_text,
+                "dt_count": dt_count,
+                "turnover": turnover,
+                "rise_fall_ratio": rise_fall_ratio,
+                "up_count": up_count,
+                "down_count": down_count,
+                "abnormal_risk": data.get('abnormal_risk', []),
+            }
+        )
+    )
+
+    prohibition_position_level = display_position_level or position_level
+    prohibition_operation_state = display_operation_state or final_gate.get('operation_state', '观察态')
+    prohibition_result = build_prohibition_section_contract(
+        prohibition_position_level,
+        prohibition_operation_state,
+        environment_headline=environment_headline,
+        has_personal_positions=has_personal_positions,
+        final_gate=final_gate,
+        main_sectors=unified_main_sectors,
+        exit_analysis=exit_analysis,
+    )
+    replace_placeholder_lines(report, "<!-- PROHIBITION_PLACEHOLDER -->", prohibition_result.get('lines', []))
+
+    report.append("")
     front_market_research_lines = _render_market_research_snapshot_section(
         market_research_bundle.get("market_research_snapshot", {}) or {},
         compact=DISPLAY_MVP_MODE,
@@ -3025,6 +3265,7 @@ def _render_markdown_report_legacy_body(
     )
     if isinstance(candidate_trace_result, dict):
         data["candidate_trace_artifact"] = candidate_trace_result
+        execution_stage_context["candidate_trace_artifact"] = candidate_trace_result
     decision_ledger_tracking_lines = list(
         (decision_ledger_result or {}).get("tracking_lines")
         or _build_decision_ledger_tracking_lines(decision_ledger_result)
@@ -3163,6 +3404,12 @@ def _render_markdown_report_legacy_body(
         report_lines=report,
         target_date=target_date,
     )
+    if selected_position_candidate:
+        data["selected_position_candidate"] = selected_position_candidate
+        if isinstance(market_research_snapshot, dict):
+            market_research_snapshot["selected_position_candidate"] = selected_position_candidate
+            data["market_research_snapshot"] = market_research_snapshot
+        _refresh_llm_wiki_knowledge_hits(data, (data.get("knowledge") or {}).get("llm_wiki") or {})
     abnormal_probe_group = execution_stage_context.get('abnormal_probe_group', {}) or {}
     special_probe_verdict = execution_stage_context.get('special_probe_verdict', {}) or {}
     position_decision = execution_stage_context.get('position_decision', {}) or {}
@@ -3393,6 +3640,12 @@ def _render_markdown_report_legacy_body(
         report_lines=report,
         target_date=target_date,
     )
+    if selected_position_candidate:
+        data["selected_position_candidate"] = selected_position_candidate
+        if isinstance(market_research_snapshot, dict):
+            market_research_snapshot["selected_position_candidate"] = selected_position_candidate
+            data["market_research_snapshot"] = market_research_snapshot
+        _refresh_llm_wiki_knowledge_hits(data, (data.get("knowledge") or {}).get("llm_wiki") or {})
     position_decision = _build_front_page_position_decision(
         position_decision=position_decision,
         selected_position_candidate=selected_position_candidate,
@@ -3419,6 +3672,9 @@ def _render_markdown_report_legacy_body(
             for key in ("account_profile", "existing_position_summary"):
                 if isinstance(personal_position_context.get(key), dict):
                     market_research_snapshot[key] = dict(personal_position_context.get(key) or {})
+            market_research_snapshot["position_context_provided"] = "existing_position_summary" in personal_position_context
+        elif isinstance(data, dict) and data.get("position_context_provided"):
+            market_research_snapshot["position_context_provided"] = True
         if extreme_conviction_list:
             market_research_snapshot["extreme_conviction_list"] = extreme_conviction_list
             candidate_snapshot = market_research_snapshot.get("candidate_snapshot")
@@ -3446,6 +3702,7 @@ def _render_markdown_report_legacy_body(
         "selected_position_candidate": selected_position_candidate,
         "extreme_conviction_list": extreme_conviction_list,
         "front_page_final_gate": front_page_final_gate,
+        "knowledge_hits": ((data.get("knowledge") or {}).get("llm_wiki") or {}).get("knowledge_hits", []),
     }
     front_page_lines = render_front_page_v2(
         report,

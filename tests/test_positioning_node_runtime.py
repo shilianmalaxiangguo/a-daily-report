@@ -103,9 +103,9 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
+        self.assertIn("**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
         self.assertIn("不新增参与", rendered)
-        self.assertIn("只观察指数图形、主攻线承接和唯一对象是否重新成立", rendered)
+        self.assertIn("只观察指数图形、主攻线承接和观察锚是否重新成立", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("分层参与，买入后", rendered)
 

@@ -42,7 +42,7 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("## 四、热度核心结果", rendered)
-        self.assertIn("## 六、行业资金结果", rendered)
+        self.assertIn("## 六、板块资金流向", rendered)
         self.assertNotIn("## 五、成交核心结果", rendered)
         self.assertNotIn("## 七、龙虎榜结果", rendered)
 
@@ -102,6 +102,37 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 1 | 华工科技 | 000988 | 23.0w | 光通信 | +10.00% |", rendered)
         self.assertNotIn("| HS |", rendered)
 
+    def test_hot_rank_table_renders_top50_rows_when_sample_available(self):
+        hot_rank_rows = [
+            {"name": f"热股{idx}", "code": f"000{idx:03d}", "rate": 230000, "popularity_tag": "热榜"}
+            for idx in range(1, 51)
+        ]
+        stock_full_info = {
+            f"000{idx:03d}": {"change_pct": 1.0, "high": 10.0, "low": 9.0, "open": 9.5, "close": 9.8}
+            for idx in range(1, 51)
+        }
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": hot_rank_rows,
+                "hot_rank_sample_size": 50,
+                "hot_rank_sample_target": 50,
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-05-28",
+            stock_full_info=stock_full_info,
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "热榜概念",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("小阳", 60, "中"),
+            enabled_node_keys=["hot_rank_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 50 | 热股50 | 000050 |", rendered)
+
     def test_build_market_activity_report_sections_can_render_turnover_header_without_table(self):
         result = build_market_activity_report_sections(
             data={
@@ -148,8 +179,8 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("## 六、行业资金结果", rendered)
-        self.assertIn("### 资金流入结果", rendered)
+        self.assertIn("## 六、板块资金流向", rendered)
+        self.assertIn("### 资金流入TOP10", rendered)
         self.assertIn("| 1 | 军工 | +12.30亿 | +1.23% |", rendered)
         self.assertNotIn("### 资金流出结果", rendered)
         self.assertNotIn("消费", rendered)
@@ -362,10 +393,10 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("**先看什么**: 只看真放量的成交核心，缩量凑热闹的不算。", rendered)
         self.assertNotIn("**筛选标准**: 成交额>100亿的个股", rendered)
         self.assertIn("| 1 | 军工一号 | 000001 | 23.0w | 军工 | +5.20% |", rendered)
-        self.assertIn("## 六、行业资金结果", rendered)
+        self.assertIn("## 六、板块资金流向", rendered)
         self.assertNotIn("## 六、行业资金净流向", rendered)
-        fund_section = rendered.split("## 六、行业资金结果", 1)[1].split("## 七、", 1)[0]
-        self.assertIn("### 资金流入结果", fund_section)
+        fund_section = rendered.split("## 六、板块资金流向", 1)[1].split("## 七、", 1)[0]
+        self.assertIn("### 资金流入TOP10", fund_section)
         self.assertNotIn("### 净流入前十", fund_section)
         self.assertIn("### 资金流出结果", fund_section)
         self.assertNotIn("### 净流出前十", fund_section)

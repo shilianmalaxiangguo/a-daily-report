@@ -464,6 +464,44 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertFalse(result["full_attack_ready"])
         self.assertEqual(result["monthly_rhythm"]["target_role"], "defense_0")
 
+    def test_attack_prepare_candidate_with_execution_window_gets_50_instead_of_daily_observe_0(self):
+        result = build_position_sizing_decision(
+            final_gate={"can_new_entry": False, "market_ice_point": False},
+            state_machine_snapshot={"execution_bias": "watch_only", "leading_line": "电力", "market_ice_point": False},
+            watch_anchor={
+                "name": "电力一号",
+                "code": "000001",
+                "sector": "电力",
+                "participation_window": "09:50-10:10确认",
+                "acceptance_act_right": True,
+                "invalidation_price": 11.8,
+            },
+            watch_anchor_type="明日候选目标",
+            mainline_name="电力",
+            target_date="2026-06-18",
+            monthly_context={"month_mode": "ordinary_attack", "market_ice_point": False},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 12.34,
+                    "support_price": 11.8,
+                    "ready": False,
+                    "score": 72,
+                    "reasons": ["候选已有固定交易窗口"],
+                    "history_feedback": {},
+                    "active_watch": True,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "attack_50_preview")
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertEqual(result["signal_grade"], "50")
+        self.assertIn("明确候选", result["sizing_reason"])
+
     def test_extreme_conviction_target_keeps_50_attack_preview_in_non_ice_avoid_state(self):
         result = build_position_sizing_decision(
             final_gate={"can_new_entry": False, "should_reduce": True, "market_ice_point": False},
@@ -508,6 +546,56 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertEqual(result["signal_grade"], "50")
         self.assertIn("明日极度看好", result["sizing_reason"])
         self.assertEqual(result["single_focus_constraint"]["status"], "clear")
+
+    def test_reduce_only_extreme_conviction_with_fixed_window_keeps_50_preview(self):
+        result = build_position_sizing_decision(
+            final_gate={
+                "can_new_entry": False,
+                "should_reduce": True,
+                "allow_attack_50_ready": True,
+                "market_ice_point": False,
+            },
+            state_machine_snapshot={
+                "execution_bias": "reduce_only",
+                "leading_line": "电力",
+                "energy_state": "迁移竞争",
+                "market_ice_point": False,
+            },
+            watch_anchor={
+                "name": "华电能源",
+                "code": "600726",
+                "sector": "电力",
+                "source_tier": "extreme_conviction",
+                "participation_window": "09:50-10:10",
+                "required_steps": ["竞价表态", "开盘前几分钟承接", "回封观察"],
+                "fallback_state": "条件不满足回到0%",
+            },
+            watch_anchor_type="明日极度看好目标标的",
+            mainline_name="电力",
+            target_date="2026-05-28",
+            monthly_context={"market_ice_point": False, "month_mode": "weak_market_defense"},
+            special_probe_verdict={"probe_state": "probe_flow_unconfirmed"},
+            helpers={
+                "_build_candidate_feedback_clock": lambda **kwargs: {
+                    "confirm_price": 9.21,
+                    "support_price": 8.75,
+                    "ready": False,
+                    "score": 3,
+                    "reasons": ["具备09:50-10:10验证链"],
+                    "history_feedback": {},
+                    "active_watch": False,
+                    "second_shot_ready": False,
+                },
+                "_classify_20cm_branch": lambda **kwargs: {"is_20cm": False},
+                "_build_weak_to_strong_context": lambda **kwargs: {"active": False},
+                "_is_bridge_priority_setup": lambda candidate, mainline_name="": False,
+            },
+        )
+
+        self.assertEqual(result["participation_mode"], "attack_50_preview")
+        self.assertEqual(result["target_position_pct"], 50)
+        self.assertEqual(result["signal_grade"], "50")
+        self.assertIn("固定交易窗口", result["sizing_reason"])
 
     def test_extreme_conviction_target_is_not_zeroed_by_unconfirmed_special_probe(self):
         result = build_position_sizing_decision(

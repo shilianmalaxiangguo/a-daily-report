@@ -64,6 +64,15 @@ class FrontSummaryBuilderTest(unittest.TestCase):
                 "mainline_turnover_summary": {
                     "conclusion": "主线未切换，军工仍是中心",
                     "data_text": "成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
+                    "overtake_window_summary": {
+                        "window_state": "confirm_next",
+                        "primary_line": "军工",
+                        "rival_slowdown": "对手失速仍待确认",
+                        "own_stability": "军工资金扩散，核心承接稳定",
+                        "observation_maturity": "还在跑圈确认",
+                        "overtake_logic": "我方有节奏，但对手打滑仍待确认",
+                        "action": "等竞价、开盘承接、回封或09:50-10:10窗口",
+                    },
                     "mainline_capacity_regime_summary": {
                         "mainline_capacity": "单线容量",
                         "mainline_regime": "单主线聚焦",
@@ -105,6 +114,10 @@ class FrontSummaryBuilderTest(unittest.TestCase):
 
         self.assertEqual(payload["mainline_label"], "主攻线军工")
         self.assertEqual(payload["mainline_turnover_text"], "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化")
+        self.assertEqual(
+            payload["opening_tone_text"],
+            "对手失速仍待确认；军工资金扩散，核心承接稳定；等竞价、开盘承接、回封或09:50-10:10窗口",
+        )
         self.assertEqual(payload["mainline_capacity_regime_summary"]["mainline_regime"], "单主线聚焦")
         self.assertEqual(payload["mainline_capacity_regime_summary"]["primary_line"], "军工")
         self.assertEqual(payload["rotation_summary_text"], "军工继续聚焦")

@@ -20,6 +20,7 @@ class UseHotRankTest(unittest.TestCase):
 
         result = run(ctx)
 
+        mocked_fetch.assert_called_once_with(limit=50)
         self.assertEqual(result["patches"]["raw"]["hot_rank"][0]["code"], "000001")
         self.assertEqual(result["patches"]["normalized"]["market_snapshot"]["hot_rank_count"], 1)
         self.assertEqual(result["diagnostics"]["source_used"], "ths")

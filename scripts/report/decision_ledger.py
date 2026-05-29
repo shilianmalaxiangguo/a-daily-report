@@ -2163,6 +2163,24 @@ def _selection_quality_label(planned):
     return f"{level} / {probability}" if probability else level
 
 
+def _selection_result_from_mention_or_record(mention, record):
+    result = (mention or {}).get("selection_result")
+    if isinstance(result, dict) and result:
+        return result
+    result = (record or {}).get("selection_result")
+    return result if isinstance(result, dict) else {}
+
+
+def _selection_review_mentions(record):
+    mentions = _extreme_conviction_mentions(record)
+    if mentions:
+        return mentions
+    if not _selection_result_from_mention_or_record({}, record):
+        return []
+    latest = _latest_mention(record)
+    return [latest] if latest else []
+
+
 def _extreme_conviction_mentions(record):
     planned = _record_planned_participation(record)
     mentions = []
@@ -2318,14 +2336,15 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
         for record in list(records or []):
             if _is_a_kill_eliminated_record(record):
                 continue
-            extreme_mentions = _extreme_conviction_mentions(record)
-            if not extreme_mentions and _record_is_extreme_conviction(record):
-                extreme_mentions = [_latest_mention(record)]
-            if not extreme_mentions:
+            review_mentions = _selection_review_mentions(record)
+            if not review_mentions and _record_is_extreme_conviction(record):
+                review_mentions = [_latest_mention(record)]
+            if not review_mentions:
                 continue
-            for mention in extreme_mentions:
+            for mention in review_mentions:
                 planned = _mention_planned_participation(mention, record)
-                review = _mention_participation_review(mention, record, len(extreme_mentions))
+                review = _mention_participation_review(mention, record, len(review_mentions))
+                selection_result = _selection_result_from_mention_or_record(mention, record)
                 rows.append(
                     {
                         "mention_trade_date": _clean_text(mention.get("mention_trade_date"))
@@ -2343,6 +2362,9 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
                         "review_status": review.get("status") or "等待复盘",
                         "standard_action": review.get("same_day_action") or review.get("next_action") or "等待计划窗口事实回写",
                         "market_outcome": review.get("market_outcome") or "",
+                        "selection_result_status": selection_result.get("status") or "待验证",
+                        "selection_result_evidence": selection_result.get("evidence") or "",
+                        "selection_result_lesson": selection_result.get("lesson") or "",
                     }
                 )
     rows.sort(
@@ -2365,15 +2387,16 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
 
     lines.append("> 历史回测表仅记录过去预演，不作为明日新增参与依据。")
     lines.append("")
-    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |")
-    lines.append("|--------|------|------|----------|----------|--------|----------|----------|----------|")
+    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |")
+    lines.append("|--------|------|------|----------|----------|----------|--------|----------|----------|----------|")
     for row in rows:
         lines.append(
-            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {standard_action} |".format(
+            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {selection_result_status} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {standard_action} |".format(
                 mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
                 stock_name=_clean_markdown_cell(row.get("stock_name")),
                 stock_code=_clean_markdown_cell(row.get("stock_code")),
                 selection_quality=_clean_markdown_cell(row.get("selection_quality")),
+                selection_result_status=_clean_markdown_cell(row.get("selection_result_status")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 risk_reward=_clean_markdown_cell(row.get("risk_reward")),
                 buy_point_quality=_clean_markdown_cell(row.get("buy_point_quality")),

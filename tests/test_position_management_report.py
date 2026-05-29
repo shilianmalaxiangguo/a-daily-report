@@ -143,6 +143,13 @@ assert report == "# report"
         self.assertEqual(result[0]["daily_profit"], 126.52)
         self.assertEqual(result[0]["daily_profit_pct"], 1.27)
 
+    def test_parse_position_string_extracts_two_lot_holding_without_percent(self):
+        module = self._load_module()
+
+        result = module.parse_position_string("另外我持仓是2手晶方科技 接近满仓")
+
+        self.assertEqual(result, [{"name": "晶方科技", "lots": 2.0, "shares": 200}])
+
     def test_personal_position_context_prefers_quote_with_close_price_for_old_holding(self):
         module = self._load_module()
 

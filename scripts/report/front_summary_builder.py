@@ -1,6 +1,7 @@
 from report.mainline_turnover_summary_support import (
     resolve_double_mainline_summary,
     resolve_mainline_capacity_regime_summary,
+    resolve_overtake_opening_tone_text,
     resolve_turnover_share_trend_rows,
 )
 from selection.position_sizing_runtime import with_single_focus_counts
@@ -167,11 +168,13 @@ def render_core_mvp_digest_contract(
         state_machine_snapshot=state_machine,
     )
     mainline_turnover_text = build_front_mainline_turnover_text_contract(market_research_snapshot)
+    opening_tone_text = resolve_overtake_opening_tone_text(market_research_snapshot)
     return render_front_digest(
         {
             "headline": front_follow_action_text,
             "state_text": f"{state_machine.get('energy_state', position_level)}；{state_machine.get('state_reason', position_reason)}",
             "mainline_label": mainline_label,
+            "opening_tone_text": opening_tone_text,
             "mainline_turnover_text": mainline_turnover_text,
             "mainline_capacity_regime_summary": resolve_mainline_capacity_regime_summary(market_research_snapshot),
             "turnover_share_trend_summary": str(

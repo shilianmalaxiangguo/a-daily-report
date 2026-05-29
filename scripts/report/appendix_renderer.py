@@ -86,6 +86,17 @@ def _status_label(status):
     return text
 
 
+def _request_issue_count(request_logs):
+    count = 0
+    for item in request_logs or []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip()
+        if status in {"degraded", "error"} or bool(item.get("fallback_used")):
+            count += 1
+    return count
+
+
 def _timer_elapsed_by_step_name(normalized_timer_steps):
     mapping = {}
     for row in normalized_timer_steps or []:
@@ -106,7 +117,7 @@ def _request_step_timer_alias(step):
         "request.major_indices": "主要指数获取",
         "request.wind_a": "中证全指获取",
         "request.limit_pool": "涨停跌停数据获取",
-        "request.hot_rank.primary": "热度前三十个股获取",
+        "request.hot_rank.primary": "热度前50个股获取",
         "request.integrated_hot_rank": "整合热榜获取",
         "request.hot_plates": "板块热榜获取",
         "request.sector_fund_flow": "行业资金流向获取",
@@ -125,13 +136,22 @@ def _request_step_timer_alias(step):
     return aliases.get(step, "")
 
 
-def _elapsed_for_request_step(step, elapsed_by_step_name):
+def _request_step_timer_aliases(step):
     alias = _request_step_timer_alias(step)
-    if not alias:
+    aliases = [alias] if alias else []
+    if step == "request.hot_rank.primary":
+        aliases.append("热度前三十个股获取")
+    return aliases
+
+
+def _elapsed_for_request_step(step, elapsed_by_step_name):
+    aliases = _request_step_timer_aliases(step)
+    if not aliases:
         return None
     for step_name, elapsed in elapsed_by_step_name.items():
-        if alias in step_name:
-            return elapsed
+        for alias in aliases:
+            if alias in step_name:
+                return elapsed
     return None
 
 
@@ -181,15 +201,23 @@ def _build_appendix_step_status_node(context, node_meta=None, node_lookup=None):
 def _build_appendix_summary_stats_node(context, node_meta=None, node_lookup=None):
     data_status = _context_value(context, "data_status", {}) or {}
     step_status = _context_value(context, "step_status", {}) or {}
+    request_logs = ((_context_value(context, "request_diagnostics", {}) or {}).get("request_logs") or [])
+    request_issue_count = _request_issue_count(request_logs)
     lines = ["### 三、统计信息"]
     if data_status:
         success_count = sum(1 for value in data_status.values() if value)
         total_count = len(data_status)
+        if request_issue_count:
+            success_count += max(0, len(request_logs) - request_issue_count)
+            total_count += len(request_logs)
         success_rate = (success_count / total_count * 100) if total_count > 0 else 0
         lines.append(f"- **数据源获取成功率**: {success_count}/{total_count} ({success_rate:.1f}%)")
     if step_status:
         success_count = sum(1 for value in step_status.values() if value)
         total_count = len(step_status)
+        if request_issue_count:
+            success_count += max(0, len(request_logs) - request_issue_count)
+            total_count += len(request_logs)
         success_rate = (success_count / total_count * 100) if total_count > 0 else 0
         lines.append(f"- **步骤执行成功率**: {success_count}/{total_count} ({success_rate:.1f}%)")
     lines.append("")

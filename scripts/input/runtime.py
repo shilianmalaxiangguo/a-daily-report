@@ -892,7 +892,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             print(f"🌐 中证全指(Wind全A平替): {wa.get('点位', wa.get('price', 0)):.2f}点 ({wa.get('涨跌幅', wa.get('change_pct', 0)):+.2f}%)")
         
         if results.get('hot_rank_top30'):
-            print(f"🔥 热度前三十: {len(results['hot_rank_top30'])} 只")
+            print(f"🔥 热度前50: {len(results['hot_rank_top30'])} 只")
         
         if results.get('hot_plates'):
             print(f"📊 板块热榜: {len(results['hot_plates'])} 条")

@@ -423,6 +423,13 @@ def _tomorrow_participation_text(decision: dict[str, Any]) -> str:
     return "-"
 
 
+def _tomorrow_final_action_text(decision: dict[str, Any]) -> str:
+    text = _first_text(decision, "final_action", "action", "summary", default="-")
+    if decision.get("can_new_entry") is False and text not in ("", "-"):
+        return text.replace("禁止新增", "不新增参与")
+    return text
+
+
 def _tomorrow_structure_text(payload: dict[str, Any]) -> str:
     signal = ((payload.get("market_zhongshu") or {}).get("signal") or {})
     parts = [
@@ -437,7 +444,7 @@ def _tomorrow_decision_section(payload: dict[str, Any]) -> str:
     if not isinstance(decision, dict) or not decision:
         return ""
     rows = [
-        ["最终执行条件", _first_text(decision, "final_action", "action", "summary", default="-")],
+        ["最终执行条件", _tomorrow_final_action_text(decision)],
         ["操作状态", _first_text(decision, "operation_state", "state", default="-")],
         ["明日最大仓位", _tomorrow_position_text(decision)],
         ["新增参与", _tomorrow_participation_text(decision)],

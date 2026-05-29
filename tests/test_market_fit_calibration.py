@@ -53,6 +53,22 @@ class MarketFitCalibrationTest(unittest.TestCase):
         self.assertNotIn("集中HS", result["cycle_note"])
         self.assertNotIn("集中GEM", result["cycle_note"])
 
+    def test_caps_observation_hits_to_visible_pool_size(self):
+        result = build_market_fit_calibration(
+            strong_samples=[
+                {"code": f"{index:06d}", "sector": "元件"}
+                for index in range(20)
+            ],
+            current_mainline="光通信/CPO",
+            observation_pool=[
+                {"code": f"{index:06d}", "sector": "元件"}
+                for index in range(5)
+            ],
+        )
+
+        self.assertIn("观察池命中5只", result["evidence_text"])
+        self.assertNotIn("观察池命中20只", result["evidence_text"])
+
 
 if __name__ == "__main__":
     unittest.main()

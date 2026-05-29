@@ -1752,6 +1752,36 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(pool[1]["current_action"], "跌停/接近跌停，取消明日参与")
         self.assertEqual(lifecycle[1]["current_interpretation"], "跌停/接近跌停，不是明日核心")
 
+    def test_appendix_c_keeps_crossline_identity_when_same_code_also_in_core_pool(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-05-28",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "core_stocks": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "current_action": "继续观察",
+                    }
+                ],
+                "crossline_observation_stocks": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "current_action": "跨线承接观察",
+                    }
+                ],
+            },
+        )
+
+        pool = payload["current_stock_monitoring_pool"]
+
+        self.assertEqual(len([item for item in pool if item["stock_code"] == "600726"]), 1)
+        self.assertEqual(pool[0]["source_pool"], "跨线观察")
+        self.assertNotEqual(pool[0]["source_pool"], "主线核心")
+
     def test_render_markdown_report_runtime_rebuilds_appendix_c_when_snapshot_has_stale_pool(self):
         class _ExecutionAppendixCaptured(RuntimeError):
             pass
@@ -2420,7 +2450,7 @@ class ReportRuntimeTest(unittest.TestCase):
             "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
             rendered,
         )
-        self.assertIn("| 上个周期 | 04-17 ~ 04-20 | 2日 | 电力 | 已结束周期 | 背景观察 | 强化后退潮 |", rendered)
+        self.assertIn("| 近5周期-1 | 04-17 ~ 04-20 | 2日 | 电力 | 已结束周期 | 背景观察 | 强化后退潮 |", rendered)
         self.assertIn("| 当前周期 | 04-21 ~ 04-24 | 3日 | 半导体 | 延续验证 | 待二次验证 | 接力后修复接力 |", rendered)
         self.assertIn("不能由单日攻击自动升级周期主线", rendered)
         self.assertIn("| 2026-04-21 ~ 2026-04-24 | 日线中枢 | 3992-4114 | 中枢内 | 半导体 | 周期主线 | 中枢内修复 | 接替电力 | [半导体] 在中枢内接替 [电力]，等待放量确认。 |", rendered)
@@ -2836,6 +2866,37 @@ class ReportRuntimeTest(unittest.TestCase):
 
         self.assertNotIn("act right", result["report"].lower())
         self.assertIn("走势符合强势标准", result["report"])
+        self.assertIn("连续走势符合强势标准", result["report"])
+        self.assertNotIn("连续 走势", result["report"])
+
+    def test_front_page_target_prefers_zero_position_extreme_observation_over_waiting_layer(self):
+        selected = report_runtime._build_front_page_selected_position_candidate(
+            {
+                "trade_gate_open": False,
+                "position_decision": {
+                    "participation_mode": "observe_0",
+                    "signal_grade": "0",
+                    "target_position_pct": 0,
+                },
+                "best_stock": {"name": "京能电力", "code": "600578", "watch_source": "waiting_layer"},
+                "display_observation_candidates": [
+                    {"name": "京能电力", "code": "600578", "watch_source": "waiting_layer"},
+                ],
+                "extreme_conviction_list": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "source_tier": "extreme_conviction",
+                        "attack_state": "0%观察",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(selected["code"], "600726")
+        self.assertIn("回封观察", selected["condition"])
+        self.assertNotIn("回封/打板", selected["condition"])
 
     def test_render_markdown_report_runtime_sanitizes_legacy_surface_words_in_report_and_logs(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
@@ -3018,6 +3079,179 @@ assert rendered == "# migrated"
         self.assertIn("选股形态审美 ASCII 流程图", "\n".join(data["knowledge"]["llm_wiki"]["process_flows"]))
         self.assertIn("knowledge_compounding_candidates", data["knowledge"]["llm_wiki"])
         self.assertEqual(result["artifacts"]["llm_wiki"]["version"], data["knowledge"]["llm_wiki"]["version"])
+
+    def test_render_markdown_report_runtime_attaches_knowledge_hits_from_facts(self):
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            data = {
+                "knowledge_hit_facts": {
+                    "market": {
+                        "index_trend": "上涨",
+                        "breadth": "上涨家数偏弱",
+                        "turnover_distribution": "成交集中",
+                    }
+                }
+            }
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-29",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        hits = data["knowledge"]["llm_wiki"]["knowledge_hits"]
+        self.assertEqual(hits[0]["knowledge_id"], "market.low-frequency-focus")
+        self.assertIn("指数上涨", hits[0]["triggered_by"])
+        self.assertIn("## 经验库命中", result["report"])
+        self.assertIn("| 指数强但赚钱效应弱 | 指数上涨；上涨家数偏弱；成交集中 |", result["report"])
+        self.assertEqual(result["artifacts"]["llm_wiki"]["knowledge_hits"], hits)
+
+    def test_render_markdown_report_runtime_derives_market_structure_knowledge_hits(self):
+        data = {
+            "indices": {"创业板指": {"涨跌幅": 1.2}},
+            "total_turnover": 32600.0,
+            "market_stats": {"up_count": 947, "down_count": 4300},
+            "market_research_snapshot": {
+                "market_structure_inputs": {
+                    "opposition_rotation": ["消费", "白酒"],
+                    "old_mainline": "科技",
+                    "old_mainline_fatigue": True,
+                }
+            },
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-29",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        hits = data["knowledge"]["llm_wiki"]["knowledge_hits"]
+        self.assertEqual(hits[0]["knowledge_id"], "market.low-frequency-focus")
+        self.assertIn("指数上涨", hits[0]["triggered_by"])
+        self.assertIn("上涨家数偏弱", hits[0]["triggered_by"])
+        self.assertIn("成交集中", hits[0]["triggered_by"])
+        self.assertIn("## 经验库命中", result["report"])
+
+    def test_render_markdown_report_runtime_derives_account_and_candidate_knowledge_hits(self):
+        data = {
+            "account_profile": {
+                "cash_available": 9800,
+                "capital_text": "约1w账户",
+            },
+            "selected_position_candidate": {
+                "name": "强核心",
+                "identity": "市场核心",
+                "one_lot_amount": 18000,
+                "action_limit": "核心观察",
+                "risk_items": ["公告风险待确认"],
+                "recover_condition": "重新站回MA5",
+                "drop_condition": "跌破MA10",
+            },
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-29",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        ids = [hit["knowledge_id"] for hit in data["knowledge"]["llm_wiki"]["knowledge_hits"]]
+        self.assertIn("account.unbuyable-core-anchor", ids)
+        self.assertIn("candidate.quality-action-layer", ids)
+        self.assertIn("实际不可买不降低市场身份", result["report"])
+        self.assertIn("先挣分、再扣分、再看动作上限", result["report"])
+
+    def test_runtime_front_page_uses_account_knowledge_hit_for_real_action(self):
+        from report.report_document_builder import (
+            build_report_shell_contract as _build_report_shell_contract_actual,
+            replace_placeholder_lines as _replace_placeholder_lines_actual,
+        )
+
+        selected_candidate = {
+            "name": "强核心",
+            "code": "000001",
+            "sector": "半导体",
+            "identity": "市场核心",
+            "one_lot_amount": 18000,
+        }
+        position_decision = {
+            "signal_grade": "50",
+            "target_position_pct": 50,
+        }
+        data = {
+            "personal_position_context": {
+                "account_profile": {
+                    "cash_available": 9800,
+                    "capital_text": "约1w账户",
+                },
+                "existing_position_summary": {
+                    "has_position": False,
+                },
+            },
+            "market_research_snapshot": {
+                "position_decision": position_decision,
+            },
+        }
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_research_snapshot": {
+                        "selected_position_candidate": selected_candidate,
+                        "position_decision": position_decision,
+                    },
+                    "selected_position_candidate": selected_candidate,
+                    "position_decision": position_decision,
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            DISPLAY_MVP_MODE=False,
+            EMIT_HELPER_DIAGNOSTICS=False,
+            build_report_shell_contract=_build_report_shell_contract_actual,
+            replace_placeholder_lines=_replace_placeholder_lines_actual,
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_context_tail_sections=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+        )
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-05-29",
+                helpers=helpers,
+                config={},
+            )
+
+        report = result["report"]
+        self.assertIn("| 明日动作 | 当前账户不参与；强核心仍保留市场核心观察 |", report)
+        self.assertIn("| 观察对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", report)
+        self.assertIn("| T0对象 | 无昨日持仓，不涉及T0 |", report)
+        self.assertNotIn("| T0主对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", report)
+        self.assertIn("| 新增参与上限 | 0 |", report)
+        self.assertIn("| 经验库依据 | 实际不可买不降低市场身份 |", report)
+        self.assertIn("| 当前状态 | 0%条件观察 |", report)
+        self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", report)
+        self.assertIn("| 0%不参与 | 不确定时不值得主动参与 |", report)
+        self.assertNotIn("50%标准进攻，只做预演命中的合格对象", report)
+        self.assertIn("最终执行条件: 观察", stdout.getvalue())
+        self.assertNotIn("最终执行条件: 明日目标标的保留条件50%预演", stdout.getvalue())
 
     def test_render_markdown_report_runtime_appends_ai_friction_knowledge_note_when_requested(self):
         with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
@@ -4367,12 +4601,17 @@ def _runtime_binding_probe(
         self.assertNotIn("试错条件", rendered)
         self.assertNotIn("| 50% |", rendered)
 
-    def test_runtime_appendix_preserves_conditional_plan_when_zero_has_selected_candidate(self):
+    def test_runtime_appendix_keeps_selected_candidate_observation_only_under_zero_participation(self):
         lines = [
             "- **明天具体怎么做**: 空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
             "- **进攻仓位三态**: 0%不参与",
             "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
             "- **现在到底是什么状态**: 0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
+            "- 50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险",
+            "- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察",
+            "- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻",
+            "- 以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻",
+            "- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。",
             "**重点观察参与脚本**:",
             "| 参与窗口 | 仓位三态 | 检查步骤 | 回封参与 | 作废条件 |",
             "|----------|----------|----------|----------|----------|",
@@ -4386,16 +4625,59 @@ def _runtime_binding_probe(
         )
         rendered = "\n".join(normalized)
 
-        self.assertIn("明日目标标的保留条件50%预演：只看605111 新洁能", rendered)
-        self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
-        self.assertIn("- **明天仓位放多少**: 条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%", rendered)
-        self.assertIn("条件50%预演，盘前不抢跑，只等明日目标标的盘中确认路径", rendered)
+        self.assertIn("明日不新增参与，只观察风险是否钝化、主攻线承接和观察锚是否重新成立", rendered)
+        self.assertIn("- **进攻仓位三态**: 0%不参与", rendered)
+        self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
+        self.assertIn("0%观察，不抢跑，只保留候选观察的盘中复核路径", rendered)
+        self.assertIn("- 0%不参与：最终结论不允许新增参与，只观察风险是否钝化", rendered)
+        self.assertIn("- **确认后怎么做**: 只保留观察，不能转成新增参与；未命中继续0%观察", rendered)
+        self.assertIn("- **出手时怎么做**: 盘前0%只代表不抢跑；只观察，不新增参与", rendered)
+        self.assertIn("- 以观察和处理持仓为主；不做新开仓", rendered)
+        self.assertIn("观察锚是否重新成立", rendered)
         self.assertIn("重点观察复核脚本", rendered)
-        self.assertIn("| 固定交易窗口条件 | 仓位三态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
-        self.assertIn("| 09:50-10:10 | 50% | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
-        self.assertNotIn("明日不新增参与，只观察风险是否钝化", rendered)
+        self.assertIn("| 观察窗口 | 观察状态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
+        self.assertIn("| 09:50-10:10 | 0%观察 | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
         self.assertNotIn("重点观察参与脚本", rendered)
-        self.assertNotIn("0%观察 |", rendered)
+        self.assertNotIn("条件50", rendered)
+        self.assertNotIn("才评估50%", rendered)
+        self.assertNotIn("50%标准进攻", rendered)
+        self.assertNotIn("唯一对象是否", rendered)
+        self.assertNotIn("50%标准进攻预演", rendered)
+
+    def test_runtime_attack_preview_relabels_legacy_zero_appendix_lines(self):
+        lines = [
+            "**次日市场环境**: 0%观察 / 防守态 - 先看环境，再决定是否保留观察权",
+            "- ✅ 不新增参与：当前按0%不参与，固定交易窗口内条件未成立前只观察",
+            "- **现在是什么情况**: 0%观察不开新仓，个股结构未坏，但环境未开",
+            "- **明天能不能开仓**: 0%观察不开新仓，只保留高优先级观察权",
+            "- **进攻仓位三态**: 0%观察",
+            "- **现在到底是什么状态**: 0%观察，等待固定交易窗口内条件",
+            "- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）",
+            "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，不新增参与",
+            "**⛔ 当前先不开新仓**: 二档（防守档），本轮不做PK出手结论。",
+            "- 当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"code": "600726", "name": "华电能源"},
+            position_decision={"signal_grade": "50", "target_position_pct": 50, "participation_mode": "attack_50_preview"},
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("预计50%标准进攻 / 防守态", rendered)
+        self.assertIn("预计50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%", rendered)
+        self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
+        self.assertIn("当前是预计50%标准进攻预演", rendered)
+        self.assertIn("- **明天仓位放多少**: 预计50%标准进攻；条件不成立回0%", rendered)
+        self.assertIn("明日执行目标只按固定交易窗口处理", rendered)
+        self.assertIn("**⚠️ 当前不抢跑**: 二档（防守档），本轮只保留固定交易窗口预演。", rendered)
+        self.assertNotIn("当前按0%不参与", rendered)
+        self.assertNotIn("0%观察不开新仓", rendered)
+        self.assertNotIn("0%新仓", rendered)
+        self.assertNotIn("不新增参与", rendered)
+        self.assertNotIn("当前先不开新仓", rendered)
+        self.assertNotIn("- **进攻仓位三态**: 0%观察", rendered)
 
     def test_sanitize_report_lines_relabels_legacy_execution_framework_under_zero_participation(self):
         lines = [
@@ -4409,12 +4691,12 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
-        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。", rendered)
+        self.assertIn("最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
+        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("普通结构才等60分钟确认", rendered)
 
-    def test_sanitize_report_lines_preserves_conditional_buy_plan_under_zero_with_observation_target(self):
+    def test_sanitize_report_lines_relabels_conditional_buy_plan_under_zero_with_observation_target(self):
         lines = [
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
@@ -4429,14 +4711,17 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("条件观察：605111 新洁能（半导体）", rendered)
-        self.assertIn("09:50-10:10站上63.22且板块承接不塌，才评估50%标准进攻", rendered)
-        self.assertIn("- **明天仓位放多少**: 盘前0%；固定交易窗口条件满足后才评估50%标准进攻", rendered)
+        self.assertIn("观察锚：605111 新洁能（半导体）", rendered)
+        self.assertIn("只观察605111 新洁能（半导体），成立才保留观察，不能转成新增参与；不满足继续0%", rendered)
+        self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
         self.assertNotIn("参与窗口命中", rendered)
-        self.assertIn("| 09:50-10:10 | 新洁能站上63.22且板块承接不塌 | 条件50% | 买后用60.06做失效 | 不满足继续0% |", rendered)
-        self.assertIn("| 新洁能(605111) | 实际可买 | 0 | 0 | 中 | 等确认 | 补位 | 触发后50%标准进攻 |", rendered)
-        self.assertNotIn("最终0%时不按观察窗口执行", rendered)
+        self.assertIn("| 09:50-10:10 | 新洁能站上63.22且板块承接不塌 | 只观察 | 买后用60.06做失效 | 不满足继续0% |", rendered)
+        self.assertIn("| 新洁能(605111) | 仅观察 | 0 | 0 | 中 | 等确认 | 观察 | 触发后只观察 |", rendered)
+        self.assertIn("最终0%时不按观察窗口执行", rendered)
         self.assertNotIn("主观察对象", rendered)
+        self.assertNotIn("条件50", rendered)
+        self.assertNotIn("50%标准进攻", rendered)
+        self.assertNotIn("才评估50%", rendered)
 
     def test_sanitize_report_lines_relabels_tomorrow_action_soft_words_under_zero_participation(self):
         lines = [
@@ -4753,7 +5038,7 @@ def _runtime_binding_probe(
             )
 
         rendered = result["report"]
-        self.assertIn("| 唯一对象 | 暂无 |", rendered)
+        self.assertIn("| 观察锚 | 暂无 |", rendered)
         self.assertIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("| 明日最大仓位 | 0% |", rendered)
         self.assertIn("| 0%不参与 |", rendered)

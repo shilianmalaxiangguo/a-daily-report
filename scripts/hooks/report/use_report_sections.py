@@ -152,6 +152,43 @@ def build_knowledge_compounding_candidate_note(llm_wiki):
     return ["## 知识复利候选", *lines]
 
 
+def _knowledge_source_label(source_path):
+    name = str(source_path or "").strip().rsplit("/", 1)[-1]
+    if name.endswith(".md"):
+        name = name[:-3]
+    return name or "-"
+
+
+def _format_knowledge_hit_row(hit):
+    if not isinstance(hit, dict):
+        return ""
+    title = str(hit.get("title") or hit.get("knowledge_id") or "").strip()
+    triggered_by = [
+        str(item or "").strip()
+        for item in hit.get("triggered_by") or []
+        if str(item or "").strip()
+    ]
+    impact = str(hit.get("impact") or "").strip()
+    source = _knowledge_source_label(hit.get("source_path"))
+    if not title or not triggered_by or not impact:
+        return ""
+    return f"| {title} | {'；'.join(triggered_by)} | {impact} | {source} |"
+
+
+def build_knowledge_hits_note(llm_wiki):
+    hits = (llm_wiki or {}).get("knowledge_hits") or []
+    rows = [_format_knowledge_hit_row(hit) for hit in hits]
+    rows = [row for row in rows if row]
+    if not rows:
+        return []
+    return [
+        "## 经验库命中",
+        "| 命中经验 | 触发事实 | 本次影响 | 来源 |",
+        "| --- | --- | --- | --- |",
+        *rows,
+    ]
+
+
 def _build_review_section(knowledge, llm_wiki=None, request=None):
     wiki = llm_wiki or {}
     request = request or {}
@@ -169,6 +206,9 @@ def _build_review_section(knowledge, llm_wiki=None, request=None):
     candidate_lines = build_knowledge_compounding_candidate_note(wiki)
     if candidate_lines:
         lines.extend(["", candidate_lines[0].replace("## ", "### ", 1), *candidate_lines[1:]])
+    knowledge_hit_lines = build_knowledge_hits_note(wiki)
+    if knowledge_hit_lines:
+        lines.extend(["", knowledge_hit_lines[0].replace("## ", "### ", 1), *knowledge_hit_lines[1:]])
     process_flows = wiki.get("process_flows") or []
     if process_flows:
         lines.extend(["", "```text", str(process_flows[0]).strip(), "```"])

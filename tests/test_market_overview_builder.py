@@ -82,13 +82,39 @@ class MarketOverviewBuilderTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("## 二、市场基底", rendered)
-        self.assertIn("| 上证指数 | 3200.12 | +0.52% | 强势上涨 |", rendered)
-        self.assertIn("| 中证全指 | 5432.10 | +0.31% | 强势上涨 |", rendered)
+        self.assertIn("| 上证指数 | 3200.12 | +0.52% | 温和修复 |", rendered)
+        self.assertIn("| 中证全指 | 5432.10 | +0.31% | 温和修复 |", rendered)
         self.assertIn("| 两市成交额 | 16888.00亿 | - | 量能不差，但赚钱效应不足 |", rendered)
         self.assertIn("| 涨停 / 跌停 | 35 / 3 | - | 活跃度还在，但亏钱端不轻 |", rendered)
         self.assertIn("| 涨跌比 | 3600 / 1600 | - | 多头仍占优 |", rendered)
         self.assertIn("### 2. 市场状态结论", rendered)
         self.assertTrue(any(log["step"] == "render.market_trend_sections" for log in result["module_logs"]))
+
+    def test_build_market_trend_sections_contract_labels_small_deep_v_as_intraday_repair(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "indices": {
+                    "上证指数": {
+                        "点位": 4098.64,
+                        "涨跌幅": 0.12,
+                        "open": 4080.30,
+                        "high": 4110.78,
+                        "low": 4055.83,
+                        "close": 4098.64,
+                    },
+                },
+                "total_turnover": 29873.26,
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 3018, "down_count": 2365},
+            },
+            target_date="2026-05-28",
+            enabled_node_keys=["header", "indices"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 上证指数 | 4098.64 | +0.12% | 探底回升 |", rendered)
+        self.assertNotIn("强势上涨", rendered)
 
     def test_build_market_trend_sections_contract_keeps_high_turnover_weak_breadth_wording_consistent(self):
         result = build_market_trend_sections_contract(
@@ -405,11 +431,11 @@ class MarketOverviewBuilderTest(unittest.TestCase):
             rendered,
         )
         self.assertIn(
-            "> 读法：这里看 `百元股涨跌幅 - 低价股涨跌幅`。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
+            "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
             rendered,
         )
-        self.assertIn("| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 价格带状态 |", rendered)
-        self.assertIn("| 2026-05-21 | -4.26% | -2.88% | -1.38pct | 震荡 |", rendered)
+        self.assertIn("| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 相对风格 | 绝对状态 |", rendered)
+        self.assertIn("| 2026-05-21 | -4.26% | -2.88% | -1.38pct | 震荡 | 同步回落 |", rendered)
 
     def test_build_market_trend_sections_contract_renders_new_high_feedback(self):
         result = build_market_trend_sections_contract(

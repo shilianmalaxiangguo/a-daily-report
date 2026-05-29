@@ -384,6 +384,7 @@ def _replay_probe(target_date, refresh_sources=None):
                     "dt_pool": [{"代码": "301588", "名称": "维达利", "所属行业": "消费电子"}],
                     "market_stats": {"up_count": 2375, "down_count": 3003},
                 },
+                "get_stock_hot_rank": lambda target_date=None, limit=50: [],
                 "fetch_wanzhu_top10": lambda target_date: [{"rank": 1, "code": "601991", "name": "大唐发电"}],
                 "fetch_xuangubao_data": lambda target_date=None: xgb_calls.append(target_date) or {
                     "xuangubao_news": [],
@@ -1319,6 +1320,7 @@ def _replay_probe(target_date, refresh_sources=None):
             helpers={
                 "load_replay_snapshot_data": lambda target_date: replay_snapshot,
                 "get_new_high_feedback_from_tushare": lambda target_date: (_ for _ in ()).throw(TimeoutError("proxy timeout")),
+                "fetch_stock_batch_quote_info": lambda codes, target_date=None: {},
             },
         )
 
@@ -1802,6 +1804,165 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(degraded_steps, ["request.wind_a"])
         preflight = build_report_preflight(data, "2026-05-13")
         self.assertEqual(preflight["failures"], ["中证全指"])
+
+    def test_build_replay_snapshot_contract_restores_market_breadth_from_fact_db(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29873.26,
+            "turnover_rank": [{"code": "300308", "data_source": "tushare.daily"}],
+            "wind_a_alternative": {"price": 6480.47, "data_source": "tushare.index_daily"},
+            "market_stats": {"up_count": 0, "down_count": 0, "zt_count": 102, "dt_count": 8},
+            "hot_rank_top50": [{"rank": index, "code": f"{index:06d}"} for index in range(1, 51)],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "涨停跌停数据获取": True,
+                "热度前50个股获取": True,
+                "选股通盘中异动获取": True,
+            },
+            "module_logs": [
+                {"module": "domains.market_state.request", "step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"module": "domains.market_state.request", "step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"module": "domains.market_activity.request", "step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily", "row_count": 50}},
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.market_stats",
+                    "status": "degraded",
+                    "message": "大盘涨跌统计接口异常，使用涨跌停池数量补足",
+                    "details": {"provider": "akshare.stock_market_activity_legu", "zt_count": 102, "dt_count": 8},
+                },
+            ],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-28",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": lambda target_date: {},
+                "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
+                "get_wind_a_from_tushare": lambda target_date: {},
+                "get_market_breadth_from_fact_db": lambda target_date: {
+                    "trade_date": target_date,
+                    "stock_count": 5506,
+                    "up_count": 3018,
+                    "down_count": 2365,
+                    "flat_count": 123,
+                },
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["market_stats"]["up_count"], 3018)
+        self.assertEqual(data["market_stats"]["down_count"], 2365)
+        self.assertEqual(data["market_stats"]["flat_count"], 123)
+        self.assertTrue(data["data_status"]["大盘涨跌统计"])
+        by_step = {item["step"]: item for item in data["module_logs"] if item.get("step") == "request.market_stats"}
+        self.assertEqual(by_step["request.market_stats"]["status"], "success")
+        self.assertEqual(by_step["request.market_stats"]["details"]["provider"], "storage.stock_daily_quotes_recent.breadth")
+        preflight = build_report_preflight(data, "2026-05-28")
+        self.assertNotIn("大盘涨跌统计", preflight["failures"])
+
+    def test_build_replay_snapshot_contract_refills_short_hot_rank_to_top50(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29873.26,
+            "turnover_rank": [{"code": "300308", "data_source": "tushare.daily"}],
+            "wind_a_alternative": {"price": 6480.47, "data_source": "tushare.index_daily"},
+            "market_stats": {"up_count": 3018, "down_count": 2365},
+            "hot_rank_top30": [{"rank": index, "code": f"{index:06d}", "name": f"热股{index}", "concepts": ["CPO"]} for index in range(1, 31)],
+            "hot_rank_sample_size": 30,
+            "hot_rank_sample_target": 50,
+            "integrated_hot_list": [],
+            "tag_distribution": {},
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": False,
+                "整合热榜": False,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "涨停跌停数据获取": True,
+                "热度前50个股获取": False,
+                "整合热榜获取": False,
+                "选股通盘中异动获取": True,
+            },
+            "module_logs": [
+                {"module": "domains.market_state.request", "step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"module": "domains.market_state.request", "step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"module": "domains.market_activity.request", "step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily", "row_count": 50}},
+                {
+                    "module": "domains.market_activity.request",
+                    "step": "request.hot_rank.primary",
+                    "status": "degraded",
+                    "message": "热榜样本不足",
+                    "details": {"provider": "同花顺热榜", "hot_rank_count": 30, "required_count": 50},
+                },
+            ],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+        }
+
+        hot_rank_rows = [
+            {"rank": index, "code": f"{index:06d}", "name": f"热股{index}", "concepts": ["CPO"] if index <= 4 else ["电力"]}
+            for index in range(1, 51)
+        ]
+        result = build_replay_snapshot_contract(
+            "2026-05-28",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": lambda target_date: {},
+                "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
+                "get_wind_a_from_tushare": lambda target_date: {},
+                "get_stock_hot_rank": lambda target_date=None, limit=50: hot_rank_rows[:limit],
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(len(data["hot_rank_top50"]), 50)
+        self.assertEqual(data["hot_rank_sample_size"], 50)
+        self.assertTrue(data["data_status"]["热度前50个股"])
+        self.assertTrue(data["step_status"]["热度前50个股获取"])
+        self.assertEqual(data["tag_distribution"]["CPO"], 4)
+        self.assertEqual(len(data["integrated_hot_list"]), 50)
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") in {"request.hot_rank.primary", "request.integrated_hot_rank"}
+        }
+        self.assertEqual(by_step["request.hot_rank.primary"]["status"], "success")
+        self.assertEqual(by_step["request.hot_rank.primary"]["details"]["hot_rank_count"], 50)
+        self.assertEqual(by_step["request.integrated_hot_rank"]["details"]["integrated_count"], 50)
+        preflight = build_report_preflight(data, "2026-05-28")
+        self.assertNotIn("热度前50个股", preflight["failures"])
 
     def test_build_replay_snapshot_contract_refills_empty_lhb_from_tushare(self):
         snapshot = {

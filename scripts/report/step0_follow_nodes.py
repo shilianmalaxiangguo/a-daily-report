@@ -86,7 +86,9 @@ def build_step0_follow_mainline_focus_node(context, node_meta=None, node_lookup=
 
 
 def build_step0_follow_abnormal_projection_node(context, node_meta=None, node_lookup=None):
-    current = f"{context.get('resilient_abnormal_count', 0)}强 / {context.get('failed_abnormal_count', 0)}弱"
+    resilient_count = int(context.get("resilient_abnormal_count", 0) or 0)
+    failed_count = int(context.get("failed_abnormal_count", 0) or 0)
+    current = f"{resilient_count}强 / {failed_count}弱" if resilient_count > 0 or failed_count > 0 else "未形成样本"
     derived = context.get("abnormal_projection_label", "-")
     if context.get("compact"):
         lines = [f"**异常承接**: {current}；{derived}"]

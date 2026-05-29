@@ -43,6 +43,9 @@ class DatabaseService:
             market_scope=market_scope,
         )
 
+    def query_market_breadth_counts(self, trade_date):
+        return self.repository.query_market_breadth_counts(trade_date)
+
     def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
         return self.repository.rebuild_turnover_rank_daily(
             trade_date,

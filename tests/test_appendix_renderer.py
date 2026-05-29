@@ -64,6 +64,27 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertIn("**报告版本**: v2.5.0", rendered)
         self.assertIn("**数据日期**: 2026-04-22", rendered)
 
+    def test_render_execution_appendix_counts_request_degraded_rows_in_summary(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["summary_stats"],
+                "data_status": {"market_stats": True},
+                "step_status": {"collect_market_stats": True},
+                "request_diagnostics": {
+                    "request_logs": [
+                        {"step": "request.market_stats", "status": "degraded", "provider": "akshare"},
+                        {"step": "request.pool_snapshot", "status": "success", "provider": "legacy"},
+                    ]
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+
+        self.assertIn("数据源获取成功率**: 2/3 (66.7%)", rendered)
+        self.assertIn("步骤执行成功率**: 2/3 (66.7%)", rendered)
+        self.assertNotIn("1/1 (100.0%)", rendered)
+
     def test_render_execution_appendix_outputs_data_source_audit_table(self):
         lines = render_execution_appendix(
             {
@@ -97,7 +118,7 @@ class AppendixRendererTest(unittest.TestCase):
                 },
                 "normalized_timer_steps": [
                     ("步骤1: 两市成交额获取", 1.20, 1.20),
-                    ("步骤5: 热度前三十个股获取", 3.40, 4.60),
+                    ("步骤5: 热度前50个股获取", 3.40, 4.60),
                     ("步骤15: 候选股历史成交额获取", 5.52, 10.12),
                 ],
             }

@@ -89,7 +89,7 @@ class EntryPlanStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 4 - 明日买点预计算", rendered)
         self.assertIn("> **先看结论**：只给仍有资格的候选预设买点、确认点和止损锚。", rendered)
-        self.assertIn("> **怎么执行**：先把价格区间和纪律定好，盘中只按“先09:50-10:10窗口，再看30分钟止损”执行。", rendered)
+        self.assertIn("> **怎么执行**：先把价格区间和纪律定好，盘中只按“先09:50-10:10窗口，再看失效价和单笔-5%底线”执行。", rendered)
         self.assertIn("**买点判断**", rendered)
         self.assertIn("**结论**:", rendered)
         self.assertIn("继续进入Step 5", rendered)

@@ -712,6 +712,9 @@ def _sort_watch_anchor_candidates_legacy_body(candidates, mainline_name="", stat
             advantage_points.append({"group": "watch_source", "label": "异动试探", "score": 120})
         if _is_bridge_priority_setup(candidate, mainline_name=mainline_name):
             advantage_points.append({"group": "shape_confirmation", "label": "主线桥接", "score": 180})
+        if candidate.get("is_high_anchor") or _safe_float(candidate.get("limit_up_days"), 0) >= 3:
+            advantage_points.append({"group": "shape_confirmation", "label": "当前高标", "score": 180})
+            advantage_points.append({"group": "market_selection", "label": "板块高度", "score": 100})
 
         advantage_dedup = build_grouped_advantage_score(
             advantage_points,

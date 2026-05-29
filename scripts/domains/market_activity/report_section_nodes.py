@@ -24,7 +24,19 @@ def _dt_pool(context):
 
 
 def _hot_rank_data(context):
-    return _data(context).get("hot_rank_top30", []) or []
+    data = _data(context)
+    return data.get("hot_rank_top50") or data.get("hot_rank_top30") or []
+
+
+def _hot_rank_sample_limit(context):
+    data = _data(context)
+    sample_size = _safe_float(data.get("hot_rank_sample_size"), 0)
+    sample_target = _safe_float(data.get("hot_rank_sample_target"), 50)
+    if sample_size > 0:
+        return int(sample_size)
+    if sample_target > 0:
+        return int(sample_target)
+    return 50
 
 
 def _lianban_data(context):
@@ -178,8 +190,9 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
         "| 排名 | 股票 | 代码 | 热度分(w) | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 | 连板标签 | 蜡烛图形态 |",
         "|------|------|------|-----------|----------|--------|--------|--------|--------|--------|----------|------------|",
     ]
-    if data.get("hot_rank_top30"):
-        for idx, stock in enumerate(data["hot_rank_top30"][:30], 1):
+    hot_rank_rows = _hot_rank_data(context)
+    if hot_rank_rows:
+        for idx, stock in enumerate(hot_rank_rows[: _hot_rank_sample_limit(context)], 1):
             name = stock.get("name", "?")
             code = stock.get("code", "?")
             rate_val = int(stock.get("rate", 0)) if isinstance(stock.get("rate"), str) else stock.get("rate", 0)
@@ -281,7 +294,7 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
 
 def build_sector_fund_header_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
-    lines = ["## 六、行业资金结果"]
+    lines = ["## 六、板块资金流向"]
     if data.get("sector_fund_flow", {}).get("is_historical", False):
         lines.extend(
             [
@@ -297,8 +310,34 @@ def build_sector_fund_header_node(context, node_meta=None, node_lookup=None):
 
 def build_sector_fund_inflow_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
+
+    # 尝试使用增强模块
+    enhanced_report = None
+    try:
+        from domains.market_state.sector_fund_flow_enhancer import build_enhanced_sector_fund_flow_report
+
+        enhanced_report = build_enhanced_sector_fund_flow_report(
+            sector_fund_flow=data.get("sector_fund_flow") or {},
+            zt_pool=data.get("zt_pool") or [],
+            lianban_data=data.get("lianban_data") or [],
+            market_data={
+                "index_change_pct": _safe_float(data.get("wind_a_alternative", {}).get("change_pct")),
+                "up_ratio": _safe_float(data.get("market_stats", {}).get("up_count")) / max(_safe_float(data.get("market_stats", {}).get("total_count"), 1), 1) * 100,
+                "top50_turnover_share_pct": _safe_float(data.get("top50_turnover_share_pct")),
+            },
+            sector_turnover_history=data.get("sector_turnover_history") or []
+        )
+    except Exception as e:
+        print(f"[警告] 板块资金流向增强模块加载失败: {e}")
+
+    # 如果增强模块可用,使用增强的Markdown章节
+    if enhanced_report and enhanced_report.get("markdown_sections"):
+        lines = enhanced_report["markdown_sections"]
+        return {"lines": lines, "exports": {}, "module_logs": []}
+
+    # 否则使用原始格式
     lines = [
-        "### 资金流入结果",
+        "### 资金流入TOP10",
         "| 排名 | 板块 | 净流入 | 涨跌幅 |",
         "|------|------|--------|--------|",
     ]

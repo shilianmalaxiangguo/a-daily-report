@@ -122,7 +122,7 @@ def _has_explicit_empty_unique_object(context):
 
 def _intraday_note_text(context):
     if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
-        return "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接和唯一对象是否重新成立；未同时满足前继续0%。"
+        return "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接和观察锚是否重新成立；未同时满足前继续0%。"
     return "> **真到盘中怎么做**：日报这里只做盘前预案。明日只按09:30-09:35、09:50-10:10、14:30-14:55三段窗口处理；不满足预演情境就回到0%。"
 
 
@@ -132,7 +132,7 @@ def build_positioning_header_node(context, node_meta=None, node_lookup=None):
 
 def build_positioning_execution_framework_node(context, node_meta=None, node_lookup=None):
     if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
-        framework_text = "最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和唯一对象是否重新成立。"
+        framework_text = "最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。"
     else:
         get_execution_framework_text = context.get("get_execution_framework_text")
         framework_text = get_execution_framework_text() if callable(get_execution_framework_text) else "-"

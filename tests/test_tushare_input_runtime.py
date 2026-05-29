@@ -51,7 +51,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_major_indices_from_tushare_first": lambda *, target_date: calls.append("tushare_indices") or {},
             "get_wind_a_from_tushare_first": lambda *, target_date: calls.append("tushare_wind_a") or {},
             "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_turnover_rank") or [],
-            "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=30: calls.append("tushare_hot_rank") or [],
+            "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_hot_rank") or [],
             "get_limit_pool_snapshot_from_tushare_first": lambda *, target_date: calls.append("tushare_limit_pool") or {},
             "get_sector_hot_plates_from_tushare_first": lambda *, target_date, limit=20: calls.append("tushare_sector_hot") or [],
             "get_hot_concept_fund_flow_from_tushare_first": lambda *, target_date, hot_plates=None, limit=20: calls.append("tushare_concept_flow") or {},
@@ -69,7 +69,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_major_indices_from_iwencai": lambda *, target_date: calls.append("legacy_indices") or {},
             "get_wind_a_from_iwencai": lambda *, target_date: calls.append("legacy_wind_a") or {},
             "get_turnover_rank_from_iwencai": lambda *, target_date, limit=50: calls.append("legacy_turnover_rank") or [],
-            "fetch_ths_hot_stock": lambda num=30: calls.append("legacy_ths_hot") or [],
+            "fetch_ths_hot_stock": lambda num=50: calls.append("legacy_ths_hot") or [],
             "get_legacy_limit_pool_snapshot": lambda target_date=None: calls.append("legacy_limit_pool") or {},
             "fetch_hot_plate": lambda: calls.append("legacy_sector_hot") or [],
             "get_sector_change_from_iwencai": lambda rank_type="up", limit=10, target_date=None: calls.append("legacy_sector_change") or [],
@@ -83,7 +83,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         registry["major_indices"](target_date="2026-05-13")
         registry["wind_a"](target_date="2026-05-13")
         registry["turnover_rank"](target_date="2026-05-13", limit=50)
-        registry["stock_hot_rank"](target_date="2026-05-13", limit=30)
+        registry["stock_hot_rank"](target_date="2026-05-13", limit=50)
         registry["limit_pool_snapshot"](target_date="2026-05-13")
         registry["sector_hot_plates"](target_date="2026-05-13", limit=20)
         registry["concept_fund_flow"](target_date="2026-05-13", hot_plates=[], limit=20)
@@ -587,7 +587,10 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(rows[3]["style_label"], "震荡")
         self.assertAlmostEqual(rows[4]["spread_pct"], -1.3778, places=4)
         self.assertEqual(rows[4]["style_label"], "震荡")
+        self.assertEqual(rows[4]["absolute_label"], "同步回落")
         self.assertEqual(result["latest_style_label"], "震荡")
+        self.assertEqual(result["latest_absolute_label"], "同步回落")
+        self.assertIn("绝对状态同步回落", result["summary"])
         self.assertAlmostEqual(result["latest_spread_pct"], -1.3778, places=4)
         self.assertIn("最新差值 -1.38pct，当前为震荡", result["summary"])
         self.assertNotIn("相对收益", result["summary"])
@@ -698,6 +701,42 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual([row["trade_date"] for row in result["rows"]], trade_dates)
         self.assertIn(("upsert", "2026-05-18"), calls)
         self.assertIn(("upsert", "2026-05-19"), calls)
+
+    def test_price_band_style_series_uses_recent_fact_window_when_refresh_has_no_permission(self):
+        calls = []
+
+        class FakeService:
+            def query_price_band_style_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return {
+                    "source": "storage.price_band_style_daily",
+                    "rows": [
+                        {"trade_date": "2026-05-26", "high_price_pct": -1.91, "low_price_pct": -1.27},
+                        {"trade_date": "2026-05-27", "high_price_pct": -1.55, "low_price_pct": -1.87},
+                    ],
+                }
+
+        class FakeDatabaseService:
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                calls.append(("db", db_path))
+                return FakeService()
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-05-28",
+            window_days=2,
+            db_path="daily.db",
+            database_service_cls=FakeDatabaseService,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: ["2026-05-27", "2026-05-28"],
+            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(Exception("no permission")),
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "storage.price_band_style_daily.recent_window")
+        self.assertEqual(result["requested_trade_date"], "2026-05-28")
+        self.assertEqual(result["latest_trade_date"], "2026-05-27")
+        self.assertEqual([row["trade_date"] for row in result["rows"]], ["2026-05-26", "2026-05-27"])
+        self.assertIn("最近可用窗口", result["summary"])
 
     def test_top50_turnover_share_series_uses_existing_database_service(self):
         calls = []

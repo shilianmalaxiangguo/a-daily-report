@@ -85,6 +85,8 @@ def render_front_digest(context):
         f"- **市场现在什么状态**: {context.get('state_text', '-')}",
         f"- **明日主看方向**: {context.get('mainline_label', '-')}",
     ]
+    if context.get("opening_tone_text"):
+        lines.append(f"- **今日基调**: {context.get('opening_tone_text')}")
     if context.get("mainline_turnover_text"):
         lines.append(f"- **主线更替与占比**: {context.get('mainline_turnover_text')}")
     lines.extend(_render_mainline_capacity_regime_table(context))
@@ -124,6 +126,7 @@ def render_front_digest(context):
             "先说结论",
             "市场现在什么状态",
             "明日主看方向",
+            "今日基调",
             "主线更替与占比",
             "特殊标的先看谁",
             "明天更适合怎么做",

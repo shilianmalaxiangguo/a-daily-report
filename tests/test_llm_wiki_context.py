@@ -294,6 +294,32 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("外部启发先做来源保真再落字段", digest)
         self.assertIn("判断欲强先回价格账户亏损边界失效条件", digest)
 
+    def test_action_layer_wiki_records_position_and_inside_boundary_discipline(self):
+        context = build_llm_wiki_context()
+        wiki_text = (ROOT / "wiki/交易思想/扣分系统与动作分层.md").read_text(encoding="utf-8")
+        digest = context["report_digest_text"]
+
+        for required in [
+            "## 位置与线内动作",
+            "位置先于能力",
+            "动作线头",
+            "线内动作",
+            "愿望事实分离",
+            "边界外不证明自己",
+        ]:
+            self.assertIn(required, wiki_text)
+
+        for required in [
+            "位置先于能力 -> 先判市场阶段、账户状态、持仓身份和先后手，再给参与动作",
+            "线内动作 -> 主线、辨识度、承接、时间窗口、失效条件和账户承受力清楚才参与；边界外不证明自己",
+            "愿望事实分离 -> 应该要拉、跌多了、逻辑没问题不能替代价格承接和失效条件",
+        ]:
+            self.assertIn(required, context["field_mappings"])
+
+        self.assertIn("位置先于能力", digest)
+        self.assertIn("线内动作边界外不证明自己", digest)
+        self.assertIn("愿望不替代承接失效条件", digest)
+
     def test_build_llm_wiki_context_keeps_report_digest_short_and_fieldized(self):
         context = build_llm_wiki_context()
         digest = context["report_digest_text"]

@@ -131,6 +131,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             "total_turnover": 1000,
             "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
             "market_research_snapshot": {
                 "front_page_final_gate": {
                     "final_action": "空仓等待，禁止参与",
@@ -155,9 +156,9 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value=html_text), \
              patch.object(daily_report_entry_demo, "save_report_outputs", return_value=saved_paths), \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=html_path), \
-             patch.object(daily_report_entry_demo.Path, "read_text", return_value=html_text), \
              patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}) as audit_mock, \
              patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
              patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
@@ -167,6 +168,94 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             report_outputs[daily_report_entry_demo.REPORT_VARIANT_FULL],
             companion_html=html_text,
         )
+
+    def test_main_does_not_save_report_when_generated_report_audit_fails(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 涨跌比 | 0 / 0 | - | 多头仍占优 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-28", "--replay"]), \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-05-28")), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={
+                 "passed": False,
+                 "findings": [{"code": "market_breadth_incomplete", "message": "关键数据不完整，停止生成"}],
+             }), \
+             patch.object(daily_report_entry_demo, "save_report_outputs") as save_mock, \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report") as save_html_mock, \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            with self.assertRaises(ReportCriticalDataMissingError):
+                daily_report_entry_demo.main()
+
+        save_mock.assert_not_called()
+        save_html_mock.assert_not_called()
+
+    def test_main_aborts_when_existing_official_report_fails_audit(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "hot_rank_top50": [{"code": f"{index:06d}"} for index in range(50)],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
+        }
+        stale_report = Path("/tmp/2026-05-28_A股日报_完整版.md")
+        stale_report.write_text("| 涨跌比 | 0 / 0 | - | 多头仍占优 |", encoding="utf-8")
+
+        def fake_exists(path):
+            return str(path) == str(stale_report)
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-28"]), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo, "_get_report_output_path", return_value=str(stale_report)), \
+             patch.object(daily_report_entry_demo.os.path, "exists", side_effect=fake_exists), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={
+                 "passed": False,
+                 "findings": [{"code": "market_breadth_incomplete", "message": "关键数据不完整，停止生成", "line": 1}],
+             }) as audit_mock, \
+             patch.object(daily_report_entry_demo, "build_report_outputs") as build_mock, \
+             patch.object(daily_report_entry_demo, "save_report_outputs") as save_mock, \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            with self.assertRaises(ReportCriticalDataMissingError) as error:
+                daily_report_entry_demo.main()
+
+        self.assertIn("已有正式日报一致性检查未通过", str(error.exception))
+        audit_mock.assert_called_once_with(stale_report.read_text(encoding="utf-8"))
+        build_mock.assert_not_called()
+        save_mock.assert_not_called()
 
     def test_main_overwrite_official_keeps_frozen_mode_when_report_exists(self):
         import daily_report_entry_demo
@@ -180,6 +269,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             "total_turnover": 1000,
             "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
         }
         report_outputs = {
             daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
@@ -195,9 +285,9 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": [{"date": "2026-05-26"}]}), \
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=True), \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
              patch.object(daily_report_entry_demo, "save_report_outputs", return_value=saved_paths) as save_mock, \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
-             patch.object(daily_report_entry_demo.Path, "read_text", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
              patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
              patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
              patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):

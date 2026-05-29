@@ -68,7 +68,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("#### Step 2 - 明日核心标的", rendered)
         self.assertIn("> **先看结论**：从观察池继续缩到明日核心、次核心和跨线观察。", rendered)
-        self.assertIn("> **只留什么**：主线最强的留核心，跨线对象只留观察。", rendered)
+        self.assertIn("> **只留什么**：主线最强的留核心，跨线观察只留观察。", rendered)
         self.assertIn("**主线内可执行候选**", rendered)
         self.assertIn("**重点观察名单**", rendered)
         self.assertIn("执行分层", rendered)

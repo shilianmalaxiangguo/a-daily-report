@@ -5,7 +5,7 @@ def build_candidate_selection_overview_node(context, node_meta=None, node_lookup
         "lines": [
             f"#### {stage_label} - {stage_title}",
             "> **先看结论**：从观察池继续缩到明日核心、次核心和跨线观察。",
-            "> **只留什么**：主线最强的留核心，跨线对象只留观察。",
+            "> **只留什么**：主线最强的留核心，跨线观察只留观察。",
             "",
         ],
         "exports": {},

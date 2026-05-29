@@ -493,6 +493,98 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("action_rows", captured["action"])
         self.assertIn("position_section_lines", captured["action"])
 
+    def test_pk_decision_runtime_keeps_final_observation_anchor_through_probe_and_render(self):
+        captured = {}
+        huadian = {
+            "name": "华电能源",
+            "code": "600726",
+            "watch_source": "keep_group_watch",
+            "watch_anchor_type": "主线重点观察谁",
+            "watch_anchor_note": "趋势续强，连续走势符合强势标准，重点看是否继续创高。",
+            "minute_plan": {"confirm_price_60m": 9.21},
+            "stop_plan": {"effective_stop": 8.75},
+        }
+
+        def render_pk(context):
+            captured["pk"] = dict(context)
+            return ["pk"]
+
+        def render_action(context):
+            captured["action"] = dict(context)
+            return ["action"]
+
+        result = build_pk_decision_runtime(
+            {
+                "target_date": "2026-05-28",
+                "render_pk_decision_section": render_pk,
+                "render_action_plan_section": render_action,
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "position_reason": "只处理旧仓",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": True},
+                "has_personal_positions": True,
+                "mainline_name": "电力储能",
+                "market_research_snapshot": {"state_machine": {}, "style_switch": {}},
+                "abnormal_watch_pool_all": [],
+                "focus_group": [],
+                "keep_group": [],
+                "display_observation_candidates": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "watch_source": "waiting_layer",
+                        "watch_anchor_type": "主线继续看谁",
+                        "conviction_reason": "板块锚定龙 / 首波先锋",
+                        "minute_plan": {"confirm_price_60m": 10.05},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                    {"name": "金房能源", "code": "001210", "watch_source": "waiting_layer"},
+                    {**huadian, "conviction_reason": "板块锚定龙 / 首波先锋"},
+                ],
+                "extreme_conviction_list": [{**huadian, "conviction_reason": "板块锚定龙 / 首波先锋"}],
+                "watch_anchor": {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "watch_anchor_type": "主线继续看谁",
+                    "conviction_reason": "板块锚定龙 / 首波先锋",
+                    "minute_plan": {"confirm_price_60m": 10.05},
+                    "stop_plan": {"effective_stop": 8.75},
+                },
+                "watch_anchor_type": "主线继续看谁",
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": lambda **kwargs: {
+                    "target_position_pct": 0,
+                    "candidate_feedback_ready": False,
+                },
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "compact_text": "盯9.21",
+                    "key_zone_display": f"关键位/带{(stop_plan or {}).get('effective_stop')}",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+                "should_surface_price_note": lambda price_focus: False,
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["probe_position", "pk_context", "action_plan_context", "render_sections", "export_stage_state"],
+        )
+
+        self.assertEqual(result["exports"]["selected_position_candidate"]["code"], "600726")
+        pk_text = "\n".join(captured["pk"]["observation_lines"] + captured["pk"]["conclusion_lines"])
+        action_text = "\n".join(captured["action"]["observation_priority_lines"] + captured["action"]["pre_market_lines"])
+        self.assertIn("观察优先锚点**: 华电能源(600726)", pk_text)
+        self.assertIn("盘前不抢跑**: 华电能源(600726)", pk_text)
+        self.assertLess(action_text.index("华电能源(600726)"), action_text.index("京能电力(600578)"))
+        self.assertNotIn("盘前不抢跑**: 京能电力(600578)", pk_text)
+        self.assertNotIn("主线继续看谁**: 京能电力(600578)", pk_text)
+
     def test_action_plan_context_maps_legacy_defense_position_to_zero_or_50_model(self):
         result = build_pk_decision_action_plan_context_node(
             {
@@ -592,6 +684,275 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("命中后才评估50%标准进攻", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)
+
+    def test_action_plan_context_does_not_execute_candidate_with_incomplete_trace(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
+                "has_personal_positions": False,
+                "display_observation_candidates": [
+                    {
+                        "name": "江海股份",
+                        "code": "002484",
+                        "permission_label": "重点观察名单",
+                        "minute_plan": {"confirm_price_60m": 74.07},
+                        "stop_plan": {"effective_stop": 70.37},
+                        "trace": {
+                            "final_action": "市场条件数据缺失；关键数据不完整，停止生成动作",
+                        },
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {"key_zone_display": "70.37"},
+            }
+        )
+
+        action_text = "\n".join(
+            " | ".join(str(row.get(key, "")) for key in ("action", "name", "code", "trigger", "risk_window"))
+            for row in result["exports"]["action_rows"]
+        )
+
+        self.assertIn("明天没有可买对象", action_text)
+        self.assertNotIn("确认后执行预案", action_text)
+        self.assertNotIn("江海股份 | 002484", action_text)
+
+    def test_action_plan_context_does_not_execute_candidate_with_external_incomplete_trace(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": True},
+                "has_personal_positions": True,
+                "display_observation_candidates": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "permission_label": "主线观察权",
+                        "minute_plan": {"confirm_price_60m": 9.21},
+                        "stop_plan": {"effective_stop": 8.75},
+                    }
+                ],
+                "candidate_trace_artifact": {
+                    "payload": {
+                        "traces": [
+                            {
+                                "stock_code": "600578",
+                                "stock_name": "京能电力",
+                                "checks": [{"label": "市场条件", "result": "数据缺失"}],
+                                "branch_path": ["市场条件数据缺失", "关键数据不完整，停止生成动作"],
+                                "missing_data": ["market_fit"],
+                            }
+                        ]
+                    }
+                },
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {"key_zone_display": "8.75"},
+            }
+        )
+
+        action_text = "\n".join(
+            " | ".join(str(row.get(key, "")) for key in ("action", "name", "code", "trigger", "risk_window"))
+            for row in result["exports"]["action_rows"]
+        )
+
+        self.assertIn("明天没有可买对象", action_text)
+        self.assertNotIn("确认后执行预案", action_text)
+        self.assertNotIn("京能电力 | 600578", action_text)
+
+    def test_action_plan_context_keeps_old_position_first_observation_without_50_attack_plan(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": True},
+                "has_personal_positions": True,
+                "display_observation_candidates": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "watch_anchor_type": "主线重点观察谁",
+                        "watch_anchor_note": "趋势续强，连续走势符合强势标准，重点看是否继续创高。",
+                        "minute_plan": {"confirm_price_60m": 9.21},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "watch_anchor_type": "主线继续看谁",
+                        "watch_anchor_note": "有辨识度，但最近没有连续走势符合强势标准，先别按趋势续强处理。",
+                        "minute_plan": {"confirm_price_60m": 10.05},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "key_zone_display": f"关键位/带{stop_plan.get('effective_stop')}",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+                "append_watch_anchor_note": lambda report_lines, candidate, prefix="  ": report_lines.append(
+                    f"{prefix}{candidate.get('watch_anchor_note')}"
+                )
+                if candidate.get("watch_anchor_note")
+                else None,
+            }
+        )
+
+        exports = result["exports"]
+        action_text = "\n".join(
+            " | ".join(str(row.get(key, "")) for key in ("action", "name", "code", "trigger", "risk_window"))
+            for row in exports["action_rows"]
+        )
+        rendered = "\n".join(
+            [action_text]
+            + exports["position_section_lines"]
+            + exports["observation_priority_lines"]
+            + exports["first_hour_lines"]
+            + exports["intraday_lines"]
+        )
+
+        self.assertIn("明天没有可买对象", action_text)
+        self.assertIn("只处理旧仓", rendered)
+        self.assertIn("华电能源(600726)", rendered)
+        self.assertLess(rendered.index("华电能源(600726)"), rendered.index("京能电力(600578)"))
+        self.assertNotIn("确认后执行预案", rendered)
+        self.assertNotIn("50%标准进攻", rendered)
+        self.assertNotIn("条件50", rendered)
+        self.assertNotIn("才评估50%", rendered)
+
+    def test_action_plan_context_keeps_display_observation_order_ahead_of_legacy_watch_anchor(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "has_personal_positions": True,
+                "watch_anchor": {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "watch_anchor_type": "主线继续看谁",
+                    "minute_plan": {"confirm_price_60m": 10.05},
+                    "stop_plan": {"effective_stop": 8.75},
+                },
+                "display_observation_candidates": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "watch_anchor_type": "主线重点观察谁",
+                        "watch_anchor_note": "趋势续强，连续走势符合强势标准，重点看是否继续创高。",
+                        "minute_plan": {"confirm_price_60m": 9.21},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "watch_anchor_type": "主线继续看谁",
+                        "watch_anchor_note": "有辨识度，但最近没有连续走势符合强势标准，先别按趋势续强处理。",
+                        "minute_plan": {"confirm_price_60m": 10.05},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "key_zone_display": f"关键位/带{stop_plan.get('effective_stop')}",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+                "append_watch_anchor_note": lambda report_lines, candidate, prefix="  ": report_lines.append(
+                    f"{prefix}{candidate.get('watch_anchor_note')}"
+                )
+                if candidate.get("watch_anchor_note")
+                else None,
+            }
+        )
+
+        lines = result["exports"]["observation_priority_lines"]
+        rendered = "\n".join(lines)
+        self.assertLess(rendered.index("华电能源(600726)"), rendered.index("京能电力(600578)"))
+        self.assertIn("趋势续强，连续走势符合强势标准", rendered)
+        self.assertNotIn("连续 走势", rendered)
+
+    def test_action_plan_context_prioritizes_final_observation_anchor_across_plan_surfaces(self):
+        huadian = {
+            "name": "华电能源",
+            "code": "600726",
+            "watch_anchor_type": "主线重点观察谁",
+            "watch_anchor_note": "趋势续强，连续走势符合强势标准，重点看是否继续创高。",
+            "minute_plan": {"confirm_price_60m": 9.21},
+            "stop_plan": {"effective_stop": 8.75},
+        }
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": True},
+                "has_personal_positions": True,
+                "selected_position_candidate": huadian,
+                "watch_anchor": {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "watch_anchor_type": "主线继续看谁",
+                    "minute_plan": {"confirm_price_60m": 10.05},
+                    "stop_plan": {"effective_stop": 8.75},
+                },
+                "display_observation_candidates": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "watch_anchor_type": "主线继续看谁",
+                        "minute_plan": {"confirm_price_60m": 10.05},
+                        "stop_plan": {"effective_stop": 8.75},
+                    },
+                    {"name": "金房能源", "code": "001210", "watch_anchor_type": "主线继续看谁"},
+                    huadian,
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "key_zone_display": f"关键位/带{stop_plan.get('effective_stop')}",
+                }
+                if stop_plan
+                else {},
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+            }
+        )
+
+        exports = result["exports"]
+        priority_text = "\n".join(exports["observation_priority_lines"])
+        pre_market_text = "\n".join(exports["pre_market_lines"])
+        self.assertLess(priority_text.index("华电能源(600726)"), priority_text.index("京能电力(600578)"))
+        self.assertIn("主线重点观察谁", pre_market_text)
+        self.assertIn("华电能源(600726)", pre_market_text)
+        self.assertNotIn("京能电力(600578) - 09:50-10:10", pre_market_text)
+        self.assertEqual(exports["candidate_quality_panel_fields"]["backup_candidate"]["code"], "600726")
+        self.assertEqual(exports["candidate_quality_samples"][0]["code"], "600726")
 
     def test_action_plan_context_exports_candidate_quality_inputs_from_daily_candidates(self):
         result = build_pk_decision_action_plan_context_node(
@@ -1175,6 +1536,63 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("当前先不买", rendered)
 
+    def test_pk_context_prioritizes_final_observation_anchor_over_waiting_order(self):
+        huadian = {
+            "name": "华电能源",
+            "code": "600726",
+            "watch_source": "keep_group_watch",
+            "watch_anchor_type": "主线重点观察谁",
+            "watch_priority_label": "趋势续强",
+            "reason": "重点看是否继续创高",
+            "minute_plan": {"confirm_price_60m": 9.21},
+            "stop_plan": {"effective_stop": 8.75},
+        }
+        result = build_pk_decision_pk_context_node(
+            {
+                "trade_gate_open": False,
+                "display_observation_candidates": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "watch_source": "waiting_layer",
+                        "watch_anchor_type": "主线继续看谁",
+                        "watch_priority_label": "顺势观察",
+                        "reason": "先看承接",
+                        "minute_plan": {"confirm_price_60m": 10.05},
+                    },
+                    {"name": "金房能源", "code": "001210", "watch_source": "waiting_layer"},
+                    huadian,
+                ],
+                "selected_position_candidate": huadian,
+                "best_stock": None,
+                "watch_anchor": {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "watch_anchor_type": "主线继续看谁",
+                    "minute_plan": {"confirm_price_60m": 10.05},
+                },
+                "watch_anchor_type": "主线继续看谁",
+                "position_level": "二档（防守档）",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+                "front_structure_layer_text": "只处理旧仓",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "compact_text": "盯9.21",
+                    "key_zone_display": "9.21/8.75",
+                    "note_text": "确认价9.21",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("compact_text", "-"),
+                "should_surface_price_note": lambda price_focus: False,
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+            }
+        )
+
+        observation_text = "\n".join(result["exports"]["observation_lines"])
+        conclusion_text = "\n".join(result["exports"]["conclusion_lines"])
+        self.assertLess(observation_text.index("| 华电能源 |"), observation_text.index("| 京能电力 |"))
+        self.assertIn("观察优先锚点**: 华电能源(600726)", observation_text)
+        self.assertIn("主线重点观察谁**: 华电能源(600726)", conclusion_text)
+        self.assertNotIn("主线继续看谁**: 京能电力(600578)", conclusion_text)
+
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
             [
@@ -1300,6 +1718,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "runner_up",
                 "watch_anchor",
                 "watch_anchor_type",
+                "selected_position_candidate",
+                "display_observation_candidates",
+                "observation_candidates",
                 "abnormal_probe_group",
                 "special_probe_verdict",
                 "position_decision",

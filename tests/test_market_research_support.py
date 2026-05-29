@@ -552,6 +552,48 @@ assert follow == {"code": "follow"}
         self.assertIn("上看高端制造", result["narrative_reason"])
         self.assertIn("相关环节卫星 / 导弹", result["narrative_reason"])
 
+    def test_build_mainline_rotation_snapshot_does_not_present_empty_abnormal_acceptance_as_evidence(self):
+        support = self._load_module()
+
+        result = support.build_mainline_rotation_snapshot(
+            observation={
+                "mainline_competition_snapshot": [
+                    {"role": "主攻线", "sector": "光通信/CPO"},
+                    {"role": "次强线", "sector": "电力"},
+                    {"role": "竞争线", "sector": "小金属"},
+                ],
+                "mainline_candidates": ["光通信/CPO"],
+                "secondary_candidates": ["电力"],
+                "densest_sector_trend_count": 4,
+                "resilient_abnormal_count": 0,
+                "failed_abnormal_count": 0,
+            },
+            state_machine={"leading_line": "光通信/CPO", "state_code": "migrate", "pulse_stage": "分歧承接"},
+            style_switch={
+                "style_code": "dual",
+                "turnover_label": "成交额冲高后回落",
+                "turnover_state": "cooling",
+                "style_reason": "成交额冲高后回落，但趋势承接没有塌，连板/次新等情绪端也在冒头，明天需要先看量能再决定跟哪一侧。",
+            },
+            sector_ai_analysis={
+                "relationships": {
+                    "光通信/CPO": {"standard_name": "泛半导体/硬科技电子", "parent": "光通信/CPO", "type": "概念"}
+                },
+                "mapping": {"光通信/CPO": "泛半导体/硬科技电子"},
+                "standard_sectors": ["泛半导体/硬科技电子"],
+            },
+            helpers={
+                "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+                "sector_name_matches": lambda left, right: left == right,
+            },
+        )
+
+        self.assertNotIn("承接0强/0弱", result["summary_text"])
+        self.assertIn("异常承接未形成样本", result["summary_text"])
+        self.assertEqual(result["narrative_label"], "光通信/CPO节点")
+        self.assertNotIn("光通信/CPO在归链里更接近泛半导体/硬科技电子这一节点；概念，上看光通信/CPO。", result["narrative_reason"])
+        self.assertIn("上看泛半导体/硬科技电子", result["narrative_reason"])
+
     def test_build_mainline_rotation_snapshot_marks_confirmed_attack_as_countertrend_when_market_sells_off(self):
         support = self._load_module()
 

@@ -49,8 +49,8 @@ class RequestDiagnosticsRuntimeTest(unittest.TestCase):
                     },
                 },
             ],
-            data_status={"热度前三十个股": True, "主要指数": False},
-            step_status={"热度前三十个股获取": True, "主要指数获取": False},
+            data_status={"热度前50个股": True, "主要指数": False},
+            step_status={"热度前50个股获取": True, "主要指数获取": False},
         )
 
         self.assertEqual(diagnostics["summary"]["request_log_count"], 3)
