@@ -325,6 +325,89 @@ class DailyReportRenderTest(unittest.TestCase):
         render_mock.assert_not_called()
         self.assertIn("整合热榜", str(error.exception))
 
+    def test_report_preflight_aborts_when_market_breadth_has_only_limit_counts(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+            },
+            "step_status": {"涨停跌停数据获取": True},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 0, "down_count": 0, "zt_count": 102, "dt_count": 8},
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.market_stats",
+                    "status": "degraded",
+                    "details": {"provider": "akshare.stock_market_activity_legu"},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-28")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("大盘涨跌统计", preflight["failures"])
+
+    def test_report_preflight_aborts_when_hot_rank_sample_is_short(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "热度前50个股": False,
+            },
+            "step_status": {"热度前50个股获取": False},
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "hot_rank_top30": [{"code": f"000{idx:03d}"} for idx in range(1, 31)],
+            "hot_rank_sample_size": 30,
+            "hot_rank_sample_target": 50,
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "tushare.daily"}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily"}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "tushare.daily"}},
+                {
+                    "step": "request.hot_rank.primary",
+                    "status": "degraded",
+                    "details": {"provider": "tushare.ths_hot", "hot_rank_count": 30, "required_count": 50},
+                },
+            ],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-28")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("热度前50个股", preflight["failures"])
+        hot_rank_check = next(check for check in preflight["checks"] if check["label"] == "热度前50个股")
+        self.assertEqual(hot_rank_check["value"], "30/50")
+        self.assertEqual(hot_rank_check["row_count"], 30)
+
+    def test_report_preflight_aborts_when_legacy_hot_rank_payload_has_only_top30(self):
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "total_turnover": 12345.67,
+            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "hot_rank_top30": [{"code": f"000{idx:03d}"} for idx in range(1, 31)],
+        }
+
+        preflight = build_report_preflight(data, "2026-05-28")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("热度前50个股", preflight["failures"])
+
     def test_report_preflight_allows_empty_lianban_when_extraction_succeeded(self):
         data = {
             "data_status": {

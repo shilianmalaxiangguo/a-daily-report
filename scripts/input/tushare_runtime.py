@@ -1316,17 +1316,31 @@ def _build_price_band_style_payload(rows, *, source="tushare.ths_daily.price_ban
             (row or {}).get("low_price_pct"),
         )
         row["style_label"] = _price_band_style_label(row.get("spread_pct"))
+        high_pct = _safe_float((row or {}).get("high_price_pct"))
+        low_pct = _safe_float((row or {}).get("low_price_pct"))
+        if high_pct < 0 and low_pct < 0:
+            row["absolute_label"] = "同步回落"
+        elif high_pct > 0 and low_pct > 0:
+            row["absolute_label"] = "同步修复"
+        elif high_pct > 0 and low_pct <= 0:
+            row["absolute_label"] = "高价占优"
+        elif high_pct <= 0 and low_pct > 0:
+            row["absolute_label"] = "低价抗跌"
+        else:
+            row["absolute_label"] = "待判断"
     high_total = sum(_safe_float((row or {}).get("high_price_pct")) for row in rows)
     low_total = sum(_safe_float((row or {}).get("low_price_pct")) for row in rows)
     spread_total = sum(_safe_float((row or {}).get("spread_pct")) for row in rows)
     latest_row = rows[-1] if rows else {}
     latest_spread = _safe_float((latest_row or {}).get("spread_pct"))
     latest_label = (latest_row or {}).get("style_label") or _price_band_style_label(latest_spread)
+    latest_absolute_label = (latest_row or {}).get("absolute_label") or "待判断"
     summary = ""
     if rows:
         summary = (
             f"近{len(rows)}个交易日价格带风格："
             f"最新差值 {latest_spread:+.2f}pct，当前为{latest_label}；"
+            f"绝对状态{latest_absolute_label}；"
             f"百元股累计 {high_total:+.2f}%，低价股累计 {low_total:+.2f}%。"
             f"价格带只作风格背景，不单独说明明日走势，明日仍看成交额与核心承接。"
         )
@@ -1338,9 +1352,27 @@ def _build_price_band_style_payload(rows, *, source="tushare.ths_daily.price_ban
         "spread_total_pct": spread_total,
         "latest_spread_pct": latest_spread,
         "latest_style_label": latest_label,
+        "latest_absolute_label": latest_absolute_label,
         "rows": rows,
         "summary": summary if rows else "价格带风格趋势待累计。",
     }
+
+
+def _build_recent_price_band_style_payload(rows, *, target_date, source="storage.price_band_style_daily.recent_window", error=""):
+    payload = _build_price_band_style_payload(rows, source=source)
+    if not payload.get("available"):
+        return payload
+    latest_row = (payload.get("rows") or [])[-1]
+    latest_trade_date = normalize_kline_date_str((latest_row or {}).get("trade_date"))
+    payload["requested_trade_date"] = normalize_kline_date_str(target_date) or str(target_date or "").strip()
+    payload["latest_trade_date"] = latest_trade_date
+    if error:
+        payload["refresh_error"] = str(error)
+    payload["summary"] = "最近可用窗口（截至{}）：{}".format(
+        latest_trade_date or "待确认",
+        payload.get("summary") or "价格带风格趋势已生成。",
+    )
+    return payload
 
 
 def get_price_band_style_series_from_tushare_first(
@@ -1457,6 +1489,12 @@ def get_price_band_style_series_from_tushare_first(
                 pass
         return _build_price_band_style_payload(rows)
     except Exception as error:
+        if fact_rows:
+            return _build_recent_price_band_style_payload(
+                fact_rows,
+                target_date=target_date_text,
+                error=str(error),
+            )
         payload = _build_price_band_style_payload([])
         payload["error"] = str(error)
         return payload
@@ -1743,7 +1781,7 @@ def _normalize_tushare_sector_hot_row(row, rank, *, market):
 def get_stock_hot_rank_from_tushare_first(
     target_date=None,
     *,
-    limit=30,
+    limit=50,
     fetch_tushare_ths_hot_fn=None,
     legacy_fetch_hot_rank_fn=None,
 ):

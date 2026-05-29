@@ -435,16 +435,48 @@ def resolve_overtake_window_summary(context=None):
         source = dict((context.get("mainline_turnover_summary") or {}).get("overtake_window_summary") or {})
     if not source:
         return {}
+    def _extract_line_from_stability(text):
+        text = str(text or "").strip()
+        for marker in ("资金", "承接", "核心"):
+            if marker in text:
+                return text.split(marker, 1)[0].strip("，；、 ")
+        return ""
+    own_line = str(source.get("own_line") or source.get("primary_line") or _extract_line_from_stability(source.get("own_stability")) or "-").strip() or "-"
+    failure_condition = str(
+        source.get("failure_condition")
+        or source.get("invalid_condition")
+        or "对手重新放量回流或我方开盘不承接"
+    ).strip() or "对手重新放量回流或我方开盘不承接"
+    if own_line != "-":
+        failure_condition = failure_condition.replace("我方", own_line)
     return {
         "window_state": str(source.get("window_state") or "-").strip() or "-",
         "primary_line": str(source.get("primary_line") or "-").strip() or "-",
+        "rival_line": str(source.get("rival_line") or source.get("rival_direction") or "旧主线").strip() or "旧主线",
+        "own_line": own_line,
         "rival_slowdown": str(source.get("rival_slowdown") or "-").strip() or "-",
         "own_stability": str(source.get("own_stability") or "-").strip() or "-",
+        "observation_maturity": str(source.get("observation_maturity") or "-").strip() or "-",
+        "overtake_logic": str(source.get("overtake_logic") or "-").strip() or "-",
+        "arena_boundary": str(source.get("arena_boundary") or "-").strip() or "-",
         "speed_gap": str(source.get("speed_gap") or "-").strip() or "-",
+        "failure_condition": failure_condition,
         "action": str(source.get("action") or "-").strip() or "-",
         "evidence_labels": _string_list(source.get("evidence_labels")),
         "evidence_gaps": _string_list(source.get("evidence_gaps")),
     }
+
+
+def resolve_overtake_opening_tone_text(context=None):
+    summary = resolve_overtake_window_summary(context)
+    if not summary:
+        return ""
+    parts = []
+    for key in ("rival_slowdown", "own_stability", "action"):
+        value = str(summary.get(key) or "").strip()
+        if value and value != "-" and value not in parts:
+            parts.append(value)
+    return "；".join(parts)
 
 
 def resolve_overtake_window_rows(context=None):
@@ -453,9 +485,15 @@ def resolve_overtake_window_rows(context=None):
         return []
     return [
         {
+            "rival_line": summary["rival_line"],
             "rival_slowdown": summary["rival_slowdown"],
+            "own_line": summary["own_line"],
             "own_stability": summary["own_stability"],
+            "observation_maturity": summary["observation_maturity"],
+            "overtake_logic": summary["overtake_logic"],
+            "arena_boundary": summary["arena_boundary"],
             "speed_gap": summary["speed_gap"],
+            "failure_condition": summary["failure_condition"],
             "action": summary["action"],
         }
     ]

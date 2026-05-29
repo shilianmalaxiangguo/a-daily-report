@@ -1,6 +1,44 @@
 from selection.position_sizing_runtime import with_single_focus_counts
 
 
+def _candidate_key(candidate):
+    candidate = candidate or {}
+    return str(candidate.get("code") or candidate.get("stock_code") or candidate.get("代码") or candidate.get("name") or candidate.get("名称") or "").strip()
+
+
+def _preferred_observation_target(context):
+    for key in ("front_page_selected_position_candidate", "selected_position_candidate"):
+        candidate = context.get(key)
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    for candidate in context.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    step2_bundle = context.get("step2_bundle") if isinstance(context.get("step2_bundle"), dict) else {}
+    for candidate in step2_bundle.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    return None
+
+
+def _prioritized_observation_candidates(context):
+    candidates = list(context.get("display_observation_candidates", []) or [])
+    target = _preferred_observation_target(context)
+    target_key = _candidate_key(target)
+    if not target_key:
+        return candidates
+    matched = []
+    remaining = []
+    for candidate in candidates:
+        if _candidate_key(candidate) == target_key:
+            matched.append(candidate)
+        else:
+            remaining.append(candidate)
+    if matched:
+        return matched + remaining
+    return [target] + remaining
+
+
 def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=None):
     target_date = context.get("target_date", "")
     final_gate = with_single_focus_counts(
@@ -45,7 +83,14 @@ def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=N
         special_probe_verdict=special_probe_verdict,
         monthly_context=context.get("monthly_context", {}) or {},
     )
-    selected_position_candidate = best_stock or watch_anchor
+    selected_position_candidate = best_stock or (watch_anchor if context.get("trade_gate_open") else None)
+    if not selected_position_candidate:
+        for candidate in _prioritized_observation_candidates(context):
+            if isinstance(candidate, dict) and (candidate.get("name") or candidate.get("code")):
+                selected_position_candidate = candidate
+                break
+    if not selected_position_candidate:
+        selected_position_candidate = watch_anchor
     if selected_position_candidate and position_decision.get("target_position_pct", 0) > 0:
         selected_position_candidate["position_pct"] = int(safe_float(position_decision.get("target_position_pct", 0)))
     if selected_position_candidate:

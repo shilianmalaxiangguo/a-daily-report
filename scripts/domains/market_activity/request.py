@@ -30,6 +30,10 @@ _NON_SECTOR_LABELS = {
     "-",
 }
 
+HOT_RANK_SAMPLE_TARGET = 50
+HOT_RANK_STATUS_LABEL = f"热度前{HOT_RANK_SAMPLE_TARGET}个股"
+HOT_RANK_STEP_LABEL = f"{HOT_RANK_STATUS_LABEL}获取"
+
 
 def _is_valid_sector_label(value):
     label = str(value or "").strip()
@@ -148,6 +152,36 @@ def _normalize_market_stats_value(value):
         return int(value)
     except Exception:
         return 0
+
+
+def _hot_rank_sample_count(rows):
+    return len(rows or [])
+
+
+def _hot_rank_sample_complete(rows, target=HOT_RANK_SAMPLE_TARGET):
+    return _hot_rank_sample_count(rows) >= int(target or HOT_RANK_SAMPLE_TARGET)
+
+
+def _store_hot_rank_results(results, rows, *, target=HOT_RANK_SAMPLE_TARGET):
+    rows = list(rows or [])
+    results["hot_rank_top30"] = rows
+    results["hot_rank_top50"] = rows
+    results["hot_rank_sample_size"] = len(rows)
+    results["hot_rank_sample_target"] = int(target or HOT_RANK_SAMPLE_TARGET)
+
+
+def _store_best_hot_rank_results(results, rows, *, target=HOT_RANK_SAMPLE_TARGET):
+    rows = list(rows or [])
+    if len(rows) >= len(results.get("hot_rank_top30") or []):
+        _store_hot_rank_results(results, rows, target=target)
+
+
+def _market_breadth_counts_complete(market_stats):
+    market_stats = market_stats or {}
+    return (
+        _normalize_market_stats_value(market_stats.get("up_count")) > 0
+        and _normalize_market_stats_value(market_stats.get("down_count")) > 0
+    )
 
 
 def _market_activity_row_value(row, key, position, default=None):
@@ -348,11 +382,11 @@ def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
         emit("   ❌ 跌停池为空")
 
     results["market_stats"] = market_stats
-    data_status["大盘涨跌统计"] = bool(market_stats)
-    if market_stats:
+    data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
+    if data_status["大盘涨跌统计"]:
         emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
     else:
-        emit("   ⚠️ 大盘涨跌统计数据为空")
+        emit("   ⚠️ 大盘涨跌统计数据不完整")
 
 
 def collect_market_activity_pool_request_bundle(
@@ -466,8 +500,11 @@ def collect_market_activity_pool_request_bundle(
                     elif item == "跌停":
                         market_stats["dt_count"] = numeric_value
                 results["market_stats"] = market_stats
-                data_status["大盘涨跌统计"] = True
-                emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
+                if data_status["大盘涨跌统计"]:
+                    emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                else:
+                    emit("   ⚠️ 大盘涨跌统计缺少上涨/下跌家数")
             else:
                 results["market_stats"] = {}
                 data_status["大盘涨跌统计"] = False
@@ -480,7 +517,7 @@ def collect_market_activity_pool_request_bundle(
                 "dt_count": len(results.get("dt_pool", []) or []),
             }
             results["market_stats"] = fallback_stats
-            data_status["大盘涨跌统计"] = bool(fallback_stats.get("zt_count") or fallback_stats.get("dt_count"))
+            data_status["大盘涨跌统计"] = False
             emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
             _append_log(
                 module_logs,
@@ -553,12 +590,12 @@ def collect_market_activity_hot_rank_request_bundle(
     results = {}
     data_status = {}
     step_status = {
-        "热度前三十个股获取": False,
+        HOT_RANK_STEP_LABEL: False,
         "整合热榜获取": False,
     }
     module_logs = []
 
-    emit(f"  5️⃣ 获取{target_date}热度前三十个股（Tushare 优先）...")
+    emit(f"  5️⃣ 获取{target_date}{HOT_RANK_STATUS_LABEL}（Tushare 优先）...")
     primary_error = ""
     hot_stocks = []
     registry_attempted = False
@@ -566,7 +603,7 @@ def collect_market_activity_hot_rank_request_bundle(
     if callable(hot_rank_fetcher):
         registry_attempted = True
         try:
-            hot_stocks = hot_rank_fetcher(target_date=target_date, limit=30)
+            hot_stocks = hot_rank_fetcher(target_date=target_date, limit=HOT_RANK_SAMPLE_TARGET)
         except Exception as error:
             primary_error = str(error)
             emit(f"   ⚠️ Tushare 热榜失败: {error}，尝试腾讯备用...")
@@ -599,25 +636,30 @@ def collect_market_activity_hot_rank_request_bundle(
         for stock in hot_stocks:
             if stock.get("code") in code_to_sector:
                 stock["sector"] = code_to_sector[stock.get("code")]
-        results["hot_rank_top30"] = hot_stocks
-        data_status["热度前三十个股"] = True
-        step_status["热度前三十个股获取"] = True
-        elapsed, _ = timer.record("热度前三十个股获取", 5)
+        _store_hot_rank_results(results, hot_stocks)
+        sample_complete = _hot_rank_sample_complete(hot_stocks)
+        data_status[HOT_RANK_STATUS_LABEL] = sample_complete
+        step_status[HOT_RANK_STEP_LABEL] = sample_complete
+        elapsed, _ = timer.record(HOT_RANK_STEP_LABEL, 5)
         provider = _provider_from_rows(hot_stocks, "tushare.ths_hot")
-        emit(f"   ✅ 热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+        if sample_complete:
+            emit(f"   ✅ 热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+        else:
+            emit(f"   ⚠️ 热榜样本不足: {len(hot_stocks)}/{HOT_RANK_SAMPLE_TARGET} 只 [⏱ {elapsed:.2f}s]")
         _append_log(
             module_logs,
             "request.hot_rank.primary",
-            "success",
-            "热榜成功",
+            "success" if sample_complete else "degraded",
+            "热榜成功" if sample_complete else "热榜样本不足",
             provider=provider,
             target_keys=["hot_rank_top30"],
             hot_rank_count=len(hot_stocks),
+            required_count=HOT_RANK_SAMPLE_TARGET,
         )
 
-    if not data_status.get("热度前三十个股") and not registry_attempted:
+    if not _hot_rank_sample_complete(results.get("hot_rank_top30")):
         try:
-            hot_stocks = fetch_ths_hot_stock(num=30)
+            hot_stocks = fetch_ths_hot_stock(num=HOT_RANK_SAMPLE_TARGET)
         except Exception as error:
             primary_error = str(error)
             emit(f"   ⚠️ 同花顺热榜失败: {error}，尝试腾讯备用...")
@@ -650,44 +692,55 @@ def collect_market_activity_hot_rank_request_bundle(
             for stock in hot_stocks:
                 if stock.get("code") in code_to_sector:
                     stock["sector"] = code_to_sector[stock.get("code")]
-            results["hot_rank_top30"] = hot_stocks
-            data_status["热度前三十个股"] = True
-            step_status["热度前三十个股获取"] = True
-            elapsed, _ = timer.record("热度前三十个股获取", 5)
-            emit(f"   ✅ 同花顺热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+            _store_best_hot_rank_results(results, hot_stocks)
+            sample_complete = _hot_rank_sample_complete(hot_stocks)
+            data_status[HOT_RANK_STATUS_LABEL] = sample_complete
+            step_status[HOT_RANK_STEP_LABEL] = sample_complete
+            elapsed, _ = timer.record(HOT_RANK_STEP_LABEL, 5)
+            if sample_complete:
+                emit(f"   ✅ 同花顺热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+            else:
+                emit(f"   ⚠️ 同花顺热榜样本不足: {len(hot_stocks)}/{HOT_RANK_SAMPLE_TARGET} 只 [⏱ {elapsed:.2f}s]")
             _append_log(
                 module_logs,
                 "request.hot_rank.primary",
-                "success",
-                "同花顺热榜成功",
+                "success" if sample_complete else "degraded",
+                "同花顺热榜成功" if sample_complete else "同花顺热榜样本不足",
                 provider="ths_hot_stock",
                 target_keys=["hot_rank_top30"],
                 hot_rank_count=len(hot_stocks),
+                required_count=HOT_RANK_SAMPLE_TARGET,
             )
 
-    if not data_status.get("热度前三十个股"):
+    if not _hot_rank_sample_complete(results.get("hot_rank_top30")):
         try:
-            hot_stocks = tencent.get_hot_stocks(num=30)
+            hot_stocks = tencent.get_hot_stocks(num=HOT_RANK_SAMPLE_TARGET)
             if hot_stocks:
-                results["hot_rank_top30"] = hot_stocks
-                data_status["热度前三十个股"] = True
-                step_status["热度前三十个股获取"] = True
-                elapsed, _ = timer.record("热度前三十个股获取", 5)
-                emit(f"   ✅ 腾讯热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+                _store_best_hot_rank_results(results, hot_stocks)
+                sample_complete = _hot_rank_sample_complete(hot_stocks)
+                data_status[HOT_RANK_STATUS_LABEL] = sample_complete
+                step_status[HOT_RANK_STEP_LABEL] = sample_complete
+                elapsed, _ = timer.record(HOT_RANK_STEP_LABEL, 5)
+                if sample_complete:
+                    emit(f"   ✅ 腾讯热榜成功: {len(hot_stocks)} 只 [⏱ {elapsed:.2f}s]")
+                else:
+                    emit(f"   ⚠️ 腾讯热榜样本不足: {len(hot_stocks)}/{HOT_RANK_SAMPLE_TARGET} 只 [⏱ {elapsed:.2f}s]")
                 _append_log(
                     module_logs,
                     "request.hot_rank.fallback",
-                    "success",
-                    "腾讯热榜兜底成功",
+                    "success" if sample_complete else "degraded",
+                    "腾讯热榜兜底成功" if sample_complete else "腾讯热榜兜底样本不足",
                     provider="tencent.get_hot_stocks",
                     target_keys=["hot_rank_top30"],
                     hot_rank_count=len(hot_stocks),
+                    required_count=HOT_RANK_SAMPLE_TARGET,
                     fallback_used=True,
                     upstream_error=primary_error,
                 )
             else:
-                results["hot_rank_top30"] = []
-                data_status["热度前三十个股"] = False
+                results.setdefault("hot_rank_sample_target", HOT_RANK_SAMPLE_TARGET)
+                results.setdefault("hot_rank_sample_size", len(results.get("hot_rank_top30") or []))
+                data_status[HOT_RANK_STATUS_LABEL] = False
                 emit("   ❌ 所有热榜数据源失败")
                 _append_log(
                     module_logs,
@@ -698,10 +751,12 @@ def collect_market_activity_hot_rank_request_bundle(
                     target_keys=["hot_rank_top30"],
                     fallback_used=True,
                     upstream_error=primary_error,
+                    required_count=HOT_RANK_SAMPLE_TARGET,
                 )
         except Exception as error:
-            results["hot_rank_top30"] = []
-            data_status["热度前三十个股"] = False
+            results.setdefault("hot_rank_sample_target", HOT_RANK_SAMPLE_TARGET)
+            results.setdefault("hot_rank_sample_size", len(results.get("hot_rank_top30") or []))
+            data_status[HOT_RANK_STATUS_LABEL] = False
             emit(f"   ❌ 腾讯热榜兜底失败: {error}")
             _append_log(
                 module_logs,
@@ -713,6 +768,7 @@ def collect_market_activity_hot_rank_request_bundle(
                 error=str(error),
                 fallback_used=True,
                 upstream_error=primary_error,
+                required_count=HOT_RANK_SAMPLE_TARGET,
             )
 
     _collect_xueqiu_hot_rank_factors(
@@ -949,10 +1005,17 @@ def collect_market_activity_sector_snapshot_request_bundle(
     try:
         today, yesterday = current_dates or (None, None)
         sector_flow_fetcher = (request_registry or {}).get("sector_fund_flow")
+        provider = ""
         if callable(sector_flow_fetcher):
             sector_flow = sector_flow_fetcher(target_date=target_date, limit=50) or {}
             inflow = _normalize_sector_fund_flow_rows(sector_flow.get("inflow", []))
             outflow = _normalize_sector_fund_flow_rows(sector_flow.get("outflow", []))
+            provider = (sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths")
+            if not (inflow or outflow) and (target_date == today or target_date == yesterday):
+                inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
+                outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
+                if inflow or outflow:
+                    provider = "tencent.get_sector_fund_flow"
             results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
             if inflow or outflow:
                 data_status["行业资金流向"] = True
@@ -992,7 +1055,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
             "request.sector_fund_flow",
             "success" if data_status.get("行业资金流向") else "degraded",
             "已处理行业资金流向请求",
-            provider=(sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths") if "sector_flow" in locals() else "tencent.get_sector_fund_flow",
+            provider=provider or ((sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths") if "sector_flow" in locals() else "tencent.get_sector_fund_flow"),
             target_keys=["sector_fund_flow"],
             historical=bool(results.get("sector_fund_flow", {}).get("is_historical")),
         )

@@ -131,6 +131,31 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             )
         )
 
+    def zero_position_report_with_decision_attribution(self):
+        return self.zero_position_report().replace(
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 唯一对象 | 富瀚微(300613) |\n"
+            "| 当前状态 | 0%观察 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 等09:50-10:10窗口 |\n",
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 0%不参与 |\n"
+            "| 执行目标 | 无 |\n"
+            "| 观察锚 | 暂无 |\n"
+            "| 不参与依据 | 候选全部未达参与资格，需要复盘候选筛选。 |\n"
+            "| 无执行目标原因 | 候选池没有选出足够强的核心 |\n"
+            "| 责任归因 | 决策问题 |\n"
+            "| 当前状态 | 0%无合格标的 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 没有观察锚，完整候选仅保留在附录和快照 |\n",
+        )
+
     def test_audit_accepts_valid_front_page_contract(self):
         result = audit_report_markdown(GOOD_MARKDOWN)
 
@@ -670,9 +695,9 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertNotIn("unique_focus_mismatch", {finding["code"] for finding in result["findings"]})
         self.assertTrue(result["passed"], result["findings"])
 
-    def test_audit_allows_zero_position_conditional_observation_target(self):
+    def test_audit_flags_zero_position_conditional_observation_target_as_participation_plan(self):
         report = (
-            self.zero_position_report()
+            self.zero_position_report_with_decision_attribution()
             .replace(
                 "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |\n"
                 "|--------------|------|------|--------------|\n"
@@ -703,11 +728,204 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(report)
 
         codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("zero_position_tomorrow_action_conflict", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_zero_position_observation_anchor_without_participation_plan(self):
+        report = (
+            self.zero_position_report_with_decision_attribution()
+            .replace(
+                "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|--------------|\n"
+                "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
+                "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|------|--------------|\n"
+                "| 只看观察锚 | 300613 富瀚微（半导体） | 09:50-10:10 | 主线确认 + 承接 + 观察窗口同时成立 | 不满足继续0% |",
+            )
+            .replace(
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 观察锚：300613 富瀚微（半导体） | 0% / 不参与 | 盘前0%；只观察300613 富瀚微（半导体），成立才保留观察，不能转成新增参与；不满足继续0% |",
+            )
+            .replace("| 观察锚 | 暂无 |", "| 观察锚 | 300613 富瀚微（半导体） |")
+            .replace(
+                "| 不参与依据 | 候选全部未达参与资格，需要复盘候选筛选。 |",
+                "| 不参与依据 | 弱市场或趋势失效时，只允许0%保护本金。 |",
+            )
+            .replace("| 无执行目标原因 | 候选池没有选出足够强的核心 |", "| 无执行目标原因 | 市场条件未到，只保留观察锚 |")
+            .replace("| 责任归因 | 决策问题 |", "| 责任归因 | 市场问题 |")
+            .replace(
+                "| 责任归因 | 市场问题 |\n"
+                "| 当前状态 | 0%无合格标的 |",
+                "| 责任归因 | 市场问题 |\n"
+                "| 观察锚性质 | 强弱参照，不是执行目标 |\n"
+                "| 恢复评估条件 | 主线确认 + 承接 + 观察窗口同时成立 |\n"
+                "| 观察锚去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |\n"
+                "| 当前状态 | 0%无合格标的 |",
+            )
+            + "\n##### 附录：# 今日总决策面板\n"
+            + "| 字段 | 内容 |\n"
+            + "|------|------|\n"
+            + "| 今日新增上限 | 0 |\n"
+            + "| 主观察对象 | 暂无 |\n"
+            + "| 观察对象 | 富瀚微(300613) |\n"
+            + "\n**最终动作表**（只展示真正具备参与资格的对象）:\n"
+            + "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
+            + "|----------|------|------|----------|-----------|\n"
+            + "| ❌ 明天没有可买对象 | - | - | 无符合条件标的 | - |\n"
+            + "\n**明天仓位怎么放**:\n"
+            + "- **进攻仓位三态**: 0%不参与\n"
+            + "- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化\n"
+        )
+
+        result = audit_report_markdown(report)
+
+        codes = {finding["code"] for finding in result["findings"]}
         self.assertNotIn("unique_focus_mismatch", codes)
         self.assertNotIn("execution_condition_missing", codes)
         self.assertNotIn("zero_position_tomorrow_action_conflict", codes)
         self.assertNotIn("zero_position_legacy_tomorrow_wording", codes)
         self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_zero_position_without_decision_attribution(self):
+        result = audit_report_markdown(self.zero_position_report())
+
+        self.assertIn("zero_position_decision_attribution_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_allows_zero_position_with_observation_anchor_and_attribution(self):
+        report = self.zero_position_report().replace(
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 唯一对象 | 富瀚微(300613) |\n"
+            "| 当前状态 | 0%观察 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 等09:50-10:10窗口 |\n",
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 0%不参与 |\n"
+            "| 执行目标 | 无 |\n"
+            "| 观察锚 | 富瀚微(300613) |\n"
+            "| 不参与依据 | 弱市场或趋势失效时，只允许0%保护本金。 |\n"
+            "| 无执行目标原因 | 市场条件未到，只保留观察锚 |\n"
+            "| 责任归因 | 市场问题 |\n"
+            "| 观察锚性质 | 强弱参照，不是执行目标 |\n"
+            "| 恢复评估条件 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 |\n"
+            "| 观察锚去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |\n"
+            "| 当前状态 | 0%条件观察 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 等09:50-10:10窗口 |\n",
+        ).replace(
+            "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
+            "| 只看观察锚 | 富瀚微(300613) | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足继续0% |",
+        ).replace(
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 观察锚：富瀚微(300613) | 0% / 不参与 | 盘前0%；只观察富瀚微(300613)，条件成立才保留观察，不能转成新增参与；不满足继续0% |",
+        )
+
+        result = audit_report_markdown(report)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertNotIn("zero_position_decision_attribution_missing", codes)
+        self.assertNotIn("zero_position_observation_anchor_lifecycle_missing", codes)
+
+    def test_audit_flags_zero_position_observation_anchor_without_strong_basis(self):
+        report = self.zero_position_report_with_decision_attribution().replace(
+            "| 观察锚 | 暂无 |",
+            "| 观察锚 | 富瀚微(300613) |",
+        ).replace(
+            "| 不参与依据 | 候选全部未达参与资格，需要复盘候选筛选。 |",
+            "| 不参与依据 | 市场条件未到，只保留观察锚 |",
+        ).replace(
+            "| 无执行目标原因 | 候选池没有选出足够强的核心 |",
+            "| 无执行目标原因 | 市场条件未到，只保留观察锚 |",
+        ).replace(
+            "| 责任归因 | 决策问题 |",
+            "| 责任归因 | 市场问题 |",
+        ).replace(
+            "| 责任归因 | 市场问题 |\n"
+            "| 当前状态 | 0%无合格标的 |",
+            "| 责任归因 | 市场问题 |\n"
+            "| 观察锚性质 | 强弱参照，不是执行目标 |\n"
+            "| 恢复评估条件 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 |\n"
+            "| 观察锚去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |\n"
+            "| 当前状态 | 0%无合格标的 |",
+        ).replace(
+            "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
+            "| 只看观察锚 | 富瀚微(300613) | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足继续0% |",
+        ).replace(
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 观察锚：富瀚微(300613) | 0% / 不参与 | 盘前0%；只观察富瀚微(300613)，条件成立才保留观察，不能转成新增参与；不满足继续0% |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertIn("zero_position_strong_basis_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_observation_anchor_without_lifecycle(self):
+        report = self.zero_position_report().replace(
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 唯一对象 | 富瀚微(300613) |\n"
+            "| 当前状态 | 0%观察 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 等09:50-10:10窗口 |\n",
+            "## 五、个股解读\n"
+            "### 1. 个股裁决\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 0%不参与 |\n"
+            "| 执行目标 | 无 |\n"
+            "| 观察锚 | 富瀚微(300613) |\n"
+            "| 不参与依据 | 弱市场或趋势失效时，只允许0%保护本金。 |\n"
+            "| 无执行目标原因 | 市场条件未到，只保留观察锚 |\n"
+            "| 责任归因 | 市场问题 |\n"
+            "| 当前状态 | 0%条件观察 |\n"
+            "| 备用观察 | 暂无 |\n"
+            "| 今日不买原因 | 等09:50-10:10窗口 |\n",
+        ).replace(
+            "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
+            "| 只看观察锚 | 富瀚微(300613) | 09:50-10:10 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不满足继续0% |",
+        ).replace(
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 观察锚：富瀚微(300613) | 0% / 不参与 | 盘前0%；只观察富瀚微(300613)，条件成立才保留观察，不能转成新增参与；不满足继续0% |",
+        )
+
+        result = audit_report_markdown(report)
+
+        self.assertIn("zero_position_observation_anchor_lifecycle_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_observation_anchor_mismatch_between_front_and_appendix(self):
+        bad = (
+            self.zero_position_report()
+            .replace(
+                "| 明日唯一动作 | 标的 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|--------------|\n"
+                "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
+                "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |\n"
+                "|--------------|------|------|------|--------------|\n"
+                "| 只看观察锚 | 600726 华电能源（电力） | 09:50-10:10 | 主线确认 + 承接 + 观察窗口同时成立 | 不满足继续0% |",
+            )
+            .replace(
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
+                "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 观察锚：600726 华电能源（电力） | 0% / 不参与 | 盘前0%；只观察600726 华电能源（电力），成立才保留观察，不能转成新增参与；不满足继续0% |",
+            )
+            + "\n**观察优先锚点**: 京能电力(600578)\n"
+            + "**先看顺序**（优先盯最能反映主线承接的对象）:\n"
+            + "- 👀 京能电力(600578) - 主线继续看谁，09:50-10:10观察价9.21\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("observation_anchor_mismatch", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_concrete_unique_focus_without_required_decision_evidence(self):
         bad = GOOD_MARKDOWN.replace("承接", "强弱")
@@ -791,22 +1009,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_allows_zero_position_plan_without_new_position_stop(self):
-        report = GOOD_MARKDOWN.replace(
-            "| 只看唯一对象 | 富瀚微(300613) | 主线确认 + 承接 + 09:50-10:10窗口 | 不做 |",
-            "| 只看唯一对象 | 暂无 | 09:50-10:10窗口 | 主线确认 + 承接 + 09:50-10:10窗口未同时满足 | 不做 |",
-        ).replace(
-            "| 进攻仓位三态 | 50% |",
-            "| 进攻仓位三态 | 0% |",
-        ).replace(
-            "| 明日最大仓位 | 50% |",
-            "| 明日最大仓位 | 0% |",
-        ).replace(
-            "| 50%标准进攻 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 只做主线 |",
-            "| 0%不参与 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 不新增参与 |",
-        ).replace(
-            "| 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |",
-            "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
-        )
+        report = self.zero_position_report_with_decision_attribution()
 
         result = audit_report_markdown(report)
 
@@ -816,7 +1019,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertTrue(result["passed"], result["findings"])
 
     def test_audit_flags_chanlun_html_zero_position_mismatch(self):
-        report = self.zero_position_report()
+        report = self.zero_position_report_with_decision_attribution()
         html = """
         <h2>明日抉择</h2>
         <table>
@@ -832,7 +1035,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
     def test_audit_allows_chanlun_html_matching_zero_position(self):
-        report = self.zero_position_report()
+        report = self.zero_position_report_with_decision_attribution()
         html = """
         <h2>明日抉择</h2>
         <table>
@@ -1128,6 +1331,247 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("appendix_duplicate_front_page_section", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_flags_zero_zero_breadth_as_incomplete_data(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "| 涨跌比 | 0 / 0 | - | 多头仍占优 |\n\n## 八、详细附录",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("market_breadth_incomplete", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_zero_board_tag_breadth_sentence_as_incomplete_data(self):
+        bad = GOOD_MARKDOWN.replace(
+            "### 附录B：历史主线池",
+            "### 附录：十一、板块标签分析\n"
+            "- **资金偏好**：上涨0家、下跌0家，热榜标签集中度优先看前排承接。\n\n"
+            "### 附录B：历史主线池",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("market_breadth_incomplete", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_unknown_position_context_rendered_as_no_holding(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 一、交易纪律",
+            "## 明日账户建议\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 账户约束 | 约1w账户；未输入持仓 |\n"
+            "| 账户后台任务负担 | 无持仓负担 |\n\n"
+            "## 一、交易纪律",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("unknown_position_rendered_as_no_holding", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_t0_object_without_holding_context(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 一、交易纪律",
+            "## 明日账户建议\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 账户约束 | 约1w账户；未输入持仓，先确认旧仓再看T0对象 |\n"
+            "| 明日动作 | 不新开，只做条件观察 |\n"
+            "| T0主对象 | 华电能源(600726)：条件观察 |\n"
+            "| 新增参与上限 | 0 |\n\n"
+            "## 一、交易纪律",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("t0_object_without_holding_context", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_account_advice_without_position_line(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 一、交易纪律",
+            "## 明日账户建议\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 账户约束 | 约1w账户；未输入持仓，先确认旧仓再看T0对象 |\n"
+            "| 明日动作 | 0%不参与；只保留观察对象，不新开 |\n"
+            "| 观察对象 | 华电能源(600726)：观察锚，不是T0 |\n"
+            "| 新增参与上限 | 0 |\n\n"
+            "## 一、交易纪律",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("account_advice_missing_position", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_incomplete_candidate_trace_with_execution_plan(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "## 八、详细附录\n"
+            "| 层级 | 候选 | 来源池 | 主线/板块 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |\n"
+            "|------|------|------|------|------|------|------|------|------|------|\n"
+            "|  | 江海股份(002484) |  | 元件 | 账户适配：实际可买 |  | 市场条件：数据缺失 | 关键数据不完整，停止生成动作 | 等触发条件成立 |  |\n\n"
+            "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
+            "|----------|------|------|----------|-----------|\n"
+            "| ⏳ 确认后执行预案 | 江海股份 | 002484 | 09:50-10:10站上74.07后再评估50%标准进攻 | 70.37 |\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("incomplete_candidate_has_execution_plan", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_crossline_candidate_rendered_as_mainline_core(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "- 👀 江海股份(002484) - 跨线继续看谁\n"
+            "跨线对象（元件），只用于观察强弱，不代表主攻线切换。\n\n"
+            "## 八、详细附录\n"
+            "| 标的 | 来源池 | 当前处理 |\n"
+            "|------|------|------|\n"
+            "| 江海股份(002484) | 主线核心 | 2进3，观察竞价是否超预期 |\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("candidate_identity_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_success_rates_that_ignore_request_degradation(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "## 八、详细附录\n"
+            "- **数据源获取成功率**: 29/29 (100.0%)\n"
+            "- **步骤执行成功率**: 27/27 (100.0%)\n\n"
+            "| 请求步骤 | 状态 | 实际 provider | 目标字段 | 耗时 | 是否回退 | 上游异常 | 诊断明细 |\n"
+            "|------|------|------|------|------|------|------|------|\n"
+            "| request.market_stats | ⚠️ degraded | akshare.stock_market_activity_legu | market_stats | - | 否 | empty_result | - |\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("success_rate_ignores_request_issues", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_observation_hits_exceed_visible_observation_pool(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "| 明天观察池 | 15只；江海股份(002484)：先观察 |\n"
+            "| 市场贴合度 | 主线偏差 | 强势样本102只，主线命中0只，观察池命中99只 |\n\n"
+            "## 八、详细附录",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("market_fit_observation_hits_exceed_visible_pool", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_front_page_rr_as_participation(self):
+        bad = self.zero_position_report().replace(
+            "## 三、周期与主线",
+            "### 2. 市场状态结论\n"
+            "| 项目 | 结论 | 依据 |\n"
+            "|------|------|------|\n"
+            "| 当前盈亏比 | 勉强可参与 | 参与只看主线、承接和个股结构同时成立。 |\n\n"
+            "## 三、周期与主线",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("zero_position_participation_language", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_zero_position_appendix_searching_participation_language(self):
+        bad = (
+            self.zero_position_report()
+            + "\n##### 附录：超车窗口判断\n"
+            + "| 对手方向 | 我方方向 | 明日验证 |\n"
+            + "|----------|----------|----------|\n"
+            + "| 旧主线 | 半导体 | 只在半导体核心里找参与资格 |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("zero_position_participation_language", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_incomplete_candidate_trace_waiting_for_trigger(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "## 八、详细附录\n"
+            "| 层级 | 候选 | 来源池 | 主线/板块 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |\n"
+            "|------|------|------|------|------|------|------|------|------|------|\n"
+            "|  | 江海股份(002484) |  | 元件 | 账户适配：实际可买 |  | 市场条件：数据缺失 | 关键数据不完整，停止生成动作 | 等触发条件成立 |  |\n",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("incomplete_candidate_waits_for_trigger", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_duplicate_front_page_long_table_cell(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 二、市场基底\n| 项目 | 结论 |",
+            "## 二、市场基底\n"
+            "| 指标 | 数值 | 解读 |\n"
+            "|------|------|------|\n"
+            "| Top20成交容量 | 14/20只150亿级 | Top20第20名128.51亿，Top20合计3842.81亿，占两市12.86%；资金集中在大成交趋势核心，作为Top50后的补充观察，只说明资金选择方向，不单独给参与资格。 |\n"
+            "### 2. 市场状态结论\n"
+            "| 项目 | 结论 | 依据 |\n"
+            "|------|------|------|\n"
+            "| Top20成交容量 | 容量活跃 | Top20第20名128.51亿，Top20合计3842.81亿，占两市12.86%；资金集中在大成交趋势核心，作为Top50后的补充观察，只说明资金选择方向，不单独给参与资格。 |\n\n"
+            "| 项目 | 结论 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("front_page_duplicate_long_cell", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_accepts_pure_stopped_report_notice(self):
+        stopped = """# 2026-05-28 A股日报
+
+关键数据不完整，停止生成。
+
+本日旧版日报已作废，不能作为交易计划或复盘依据继续使用。
+
+## 停止原因
+
+| 字段 | 当前状态 | 说明 |
+|------|----------|------|
+| 大盘涨跌统计 | 0 / 0 | 上涨、下跌家数未取到 |
+| 热度前50个股 | 30 / 50 | 热榜样本不足 |
+
+## 当前处理
+
+2026-05-28 不生成日报，不给明日策略，不给个股执行计划。
+"""
+
+        result = audit_report_markdown(stopped)
+
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_does_not_accept_stopped_notice_with_trade_plan_content(self):
+        bad = """# 2026-05-28 A股日报
+
+关键数据不完整，停止生成。
+
+## 明日账户建议
+| 项目 | 结论 |
+|------|------|
+| T0主对象 | 江海股份(002484)：条件观察 |
+
+处理结论：不生成日报，不给明日策略，不给个股执行计划。
+"""
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("stopped_report_contains_trade_plan", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
 
 if __name__ == "__main__":

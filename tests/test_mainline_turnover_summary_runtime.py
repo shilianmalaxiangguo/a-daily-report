@@ -737,6 +737,9 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["window_state"], "open")
+        self.assertEqual(result["observation_maturity"], "跑过一段后再判断")
+        self.assertEqual(result["overtake_logic"], "对手过弯打滑，我方仍能弯道加速")
+        self.assertEqual(result["arena_boundary"], "短线/超短主战场内主动出手")
         self.assertEqual(result["speed_gap"], "失速差拉开")
         self.assertEqual(result["action"], "只在半导体核心里找参与资格")
 

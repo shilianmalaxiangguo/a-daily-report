@@ -279,10 +279,30 @@ class ShIndexChanlunHtmlTest(unittest.TestCase):
             self.assertIn("明日抉择", text)
             self.assertIn("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", text)
 
+    def test_zero_position_tomorrow_decision_final_action_mentions_no_participation(self):
+        payload = {
+            "date": "2026-05-21",
+            "index_code": "sh000001",
+            "market_zhongshu": _sample_market_zhongshu(),
+            "index_klines": {"sh000001": _sample_rows()},
+            "tomorrow_decision": {
+                "final_action": "禁止新增；若你有旧仓，去弱留强，不强就卖",
+                "can_new_entry": False,
+                "operation_state": "防守态",
+            },
+        }
+
+        html = render_sh_index_chanlun_html(payload)
+
+        self.assertIn("<td>最终执行条件</td><td>不新增参与；若你有旧仓，去弱留强，不强就卖</td>", html)
+        self.assertIn("<td>明日最大仓位</td><td>0%</td>", html)
+        self.assertIn("<td>新增参与</td><td>不参与</td>", html)
+
     def test_daily_entry_invokes_independent_html_report(self):
         source = (ROOT / "scripts" / "daily_report_entry_demo.py").read_text(encoding="utf-8")
 
-        self.assertIn("from export.sh_index_chanlun_html import save_sh_index_chanlun_html_report", source)
+        self.assertIn("save_sh_index_chanlun_html_report,", source)
+        self.assertIn("save_sh_index_chanlun_html_report(", source)
         self.assertIn("_resolve_chanlun_tomorrow_decision(data)", source)
 
 

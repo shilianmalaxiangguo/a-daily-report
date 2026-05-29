@@ -82,6 +82,25 @@ class CloudflareFreeDailyDbTest(unittest.TestCase):
             self.assertEqual(ranks[0]["amount_yi"], 60.0)
             self.assertAlmostEqual(ranks[0]["amount_share_pct"], 60.0 / sum(range(1, 61)) * 100)
 
+    def test_query_market_breadth_counts_from_recent_quotes(self):
+        from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
+
+        rows = self._rows_for_date("2026-05-12", count=4)
+        rows[0]["pct_chg"] = 2.1
+        rows[1]["pct_chg"] = -0.8
+        rows[2]["pct_chg"] = 0.0
+        rows[3]["pct_chg"] = 3.4
+        with tempfile.TemporaryDirectory() as tmp:
+            db = CloudflareFreeDailyDb(Path(tmp) / "daily.db")
+            db.upsert_stock_daily_quotes_recent(rows, source_run_id=1)
+
+            breadth = db.query_market_breadth_counts("2026-05-12")
+
+        self.assertEqual(breadth["stock_count"], 4)
+        self.assertEqual(breadth["up_count"], 2)
+        self.assertEqual(breadth["down_count"], 1)
+        self.assertEqual(breadth["flat_count"], 1)
+
     def test_monthly_account_ledger_round_trip_uses_latest_record_before_date(self):
         from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
 

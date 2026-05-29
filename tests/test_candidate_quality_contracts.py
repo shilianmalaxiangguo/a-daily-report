@@ -171,6 +171,23 @@ class CandidateQualityContractsTest(unittest.TestCase):
         self.assertEqual(contract["trace"]["final_action"], "账户条件不适配，只观察强度，不参与")
         self.assertIn("账户不适配，不能新增参与", contract["trace"]["branch_path"])
 
+    def test_candidate_quality_contract_blocks_waiting_action_when_key_data_missing(self):
+        contract = evaluate_candidate_quality_sample_contract(
+            {
+                "name": "华电能源",
+                "code": "600726",
+                "sector": "电力",
+                "market_fit": "数据缺失",
+                "mainline_fit": "数据缺失",
+                "stock_structure_fit": "数据缺失",
+            }
+        )
+
+        self.assertEqual(contract["visible_row"]["新开仓动作"], "只观察，不新增参与")
+        self.assertEqual(contract["single_stock_fields"]["新开仓动作"], "只观察，不新增参与")
+        self.assertIn("关键数据不完整", contract["trace"]["final_action"])
+        self.assertNotIn("等触发条件成立", contract["visible_row"]["新开仓动作"])
+
     def test_candidate_quality_contract_trace_uses_resolved_account_status(self):
         contract = build_candidate_quality_contract(
             {"name": "无价格样本", "code": "000001"},

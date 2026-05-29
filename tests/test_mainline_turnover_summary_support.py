@@ -11,6 +11,7 @@ from report.mainline_turnover_summary_support import (
     resolve_mainline_attack_evidence_rows,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
+    resolve_overtake_opening_tone_text,
     resolve_overtake_window_rows,
     resolve_overtake_window_summary,
     resolve_trading_arena_fit_rows,
@@ -355,6 +356,9 @@ class MainlineTurnoverSummarySupportTest(unittest.TestCase):
                         "primary_line": "半导体",
                         "rival_slowdown": "旧主线承接转弱",
                         "own_stability": "半导体资金扩散，核心承接稳定",
+                        "observation_maturity": "跑过一段后再判断",
+                        "overtake_logic": "对手过弯打滑，我方仍能弯道加速",
+                        "arena_boundary": "短线/超短主战场内主动出手",
                         "speed_gap": "失速差拉开",
                         "action": "只在半导体核心里找参与资格",
                     }
@@ -363,7 +367,32 @@ class MainlineTurnoverSummarySupportTest(unittest.TestCase):
         )
 
         self.assertEqual(summary["window_state"], "open")
+        self.assertEqual(summary["observation_maturity"], "跑过一段后再判断")
+        self.assertEqual(summary["overtake_logic"], "对手过弯打滑，我方仍能弯道加速")
+        self.assertEqual(summary["arena_boundary"], "短线/超短主战场内主动出手")
         self.assertEqual(summary["action"], "只在半导体核心里找参与资格")
+
+    def test_resolve_overtake_opening_tone_text_compacts_window_summary(self):
+        tone = resolve_overtake_opening_tone_text(
+            {
+                "mainline_turnover_summary": {
+                    "overtake_window_summary": {
+                        "window_state": "open",
+                        "primary_line": "半导体",
+                        "rival_slowdown": "旧主线承接转弱，竞争线冲高回落",
+                        "own_stability": "半导体资金扩散，核心承接稳定",
+                        "observation_maturity": "跑过一段后再判断",
+                        "overtake_logic": "对手过弯打滑，我方仍能弯道加速",
+                        "action": "只在半导体核心里找参与资格",
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(
+            tone,
+            "旧主线承接转弱，竞争线冲高回落；半导体资金扩散，核心承接稳定；只在半导体核心里找参与资格",
+        )
 
     def test_resolve_overtake_window_rows_returns_front_table_row(self):
         rows = resolve_overtake_window_rows(
@@ -372,6 +401,9 @@ class MainlineTurnoverSummarySupportTest(unittest.TestCase):
                     "window_state": "observe",
                     "rival_slowdown": "多方向都有局部热度",
                     "own_stability": "当前方向强度不足",
+                    "observation_maturity": "样本不足，继续跑圈观察",
+                    "overtake_logic": "未形成对手打滑、我方加速的差值",
+                    "arena_boundary": "不为制造动作扩大战法",
                     "speed_gap": "未拉开",
                     "action": "仅观察，不给新增参与资格",
                 }
@@ -382,9 +414,15 @@ class MainlineTurnoverSummarySupportTest(unittest.TestCase):
             rows,
             [
                 {
+                    "rival_line": "旧主线",
                     "rival_slowdown": "多方向都有局部热度",
+                    "own_line": "-",
                     "own_stability": "当前方向强度不足",
+                    "observation_maturity": "样本不足，继续跑圈观察",
+                    "overtake_logic": "未形成对手打滑、我方加速的差值",
+                    "arena_boundary": "不为制造动作扩大战法",
                     "speed_gap": "未拉开",
+                    "failure_condition": "对手重新放量回流或我方开盘不承接",
                     "action": "仅观察，不给新增参与资格",
                 }
             ],

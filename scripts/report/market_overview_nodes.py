@@ -24,10 +24,28 @@ def _daily_fact_db_path(context):
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
+            if default is None:
+                return None
             return float(default)
         return float(value)
     except (TypeError, ValueError):
+        if default is None:
+            return None
         return float(default)
+
+
+def _price_band_absolute_label(high_pct, low_pct):
+    high_pct = _safe_float(high_pct)
+    low_pct = _safe_float(low_pct)
+    if high_pct < 0 and low_pct < 0:
+        return "同步回落"
+    if high_pct > 0 and low_pct > 0:
+        return "同步修复"
+    if high_pct > 0 and low_pct <= 0:
+        return "高价占优"
+    if high_pct <= 0 and low_pct > 0:
+        return "低价抗跌"
+    return "待判断"
 
 
 def _turnover_rank_amount(row):
@@ -670,7 +688,7 @@ def resolve_unified_market_sentiment(data, target_date="", *, db_path=None):
     return {
         "state": "震荡",
         "local_heat": "局部指标只作证据，整体仍按震荡处理，等待亏钱效应收敛、热度扩散和方向确认。",
-        "rr_text": "勉强可参与",
+        "rr_text": "等待确认",
         "meaning": "量能尚可，但要等更清晰主线信号。",
     }
 
@@ -694,6 +712,54 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         "|------|------|--------|------|",
     ]
 
+    def _index_trend_label(index_data, change):
+        try:
+            change = float(change or 0)
+        except (TypeError, ValueError):
+            change = 0.0
+        close = _safe_float(
+            (index_data or {}).get("close")
+            or (index_data or {}).get("收盘")
+            or (index_data or {}).get("price")
+            or (index_data or {}).get("最新价"),
+            None,
+        )
+        low = _safe_float((index_data or {}).get("low") or (index_data or {}).get("最低"), None)
+        open_price = _safe_float((index_data or {}).get("open") or (index_data or {}).get("开盘"), None)
+        high = _safe_float((index_data or {}).get("high") or (index_data or {}).get("最高"), None)
+        intraday_range_pct = None
+        low_repair_pct = None
+        close_position = None
+        if close and low and low > 0:
+            low_repair_pct = (close - low) / low * 100
+        if high and low and high > low:
+            intraday_range_pct = (high - low) / low * 100
+            close_position = (close - low) / (high - low) if close is not None else None
+        opened_weak = bool(open_price and close and open_price < close)
+        has_deep_repair = (
+            change > -0.3
+            and low_repair_pct is not None
+            and low_repair_pct >= 0.8
+            and (intraday_range_pct is None or intraday_range_pct >= 1.0)
+            and (close_position is None or close_position >= 0.55)
+            and opened_weak
+        )
+        if has_deep_repair:
+            return "探底回升"
+        if change <= -1.5:
+            return "明显走弱"
+        if change <= -0.3:
+            return "震荡调整"
+        if change < 0:
+            return "弱震荡"
+        if change < 0.3:
+            return "小幅修复"
+        if change < 0.8:
+            return "温和修复"
+        if change < 1.5:
+            return "偏强修复"
+        return "强势上涨"
+
     if data.get("indices"):
         for name, index_data in data["indices"].items():
             point = (
@@ -705,14 +771,14 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
                 or 0
             )
             change = index_data.get("涨跌幅", index_data.get("change_pct", 0))
-            trend = "弱势震荡" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
+            trend = _index_trend_label(index_data, change)
             lines.append(f"| {name} | {point:.2f} | {change:+.2f}% | {trend} |")
 
     if data.get("wind_a_alternative"):
         wa = data["wind_a_alternative"]
         point = wa.get("点位", wa.get("price", 0))
         change = wa.get("涨跌幅", wa.get("change_pct", 0))
-        trend = "全市场普跌" if change < -1 else "震荡调整" if change < 0 else "强势上涨"
+        trend = _index_trend_label(wa, change)
         lines.append(f"| 中证全指 | {point:.2f} | {change:+.2f}% | {trend} |")
     turnover = float(data.get("total_turnover", 0) or 0)
     zt_count = len(data.get("zt_pool", []))
@@ -785,7 +851,7 @@ def build_market_overview_volume_node(context, node_meta=None, node_lookup=None)
             "|------|------|------|",
             f"| 市场情绪总状态 | {unified['state']} | 先看指数、涨跌家数、跌停扩散，再看局部热度。 |",
             f"| 头部成交状态 | {top50_share['regime']} | {top50_share['interpretation']} |",
-            f"| Top20成交容量 | {top20_capacity['regime']} | {top20_capacity['interpretation']} |",
+            f"| Top20成交容量 | {top20_capacity['regime']} | 详见指数与市场底色表，只作成交容量背景。 |",
             f"| ETF容量协同 | {etf_combo['state']} | {etf_combo['basis']} |",
             f"| 融资承接压力 | {_margin_pressure_label(margin_pressure)} | {_margin_pressure_basis(margin_pressure, target_date)} |",
             f"| 局部热度处理 | {unified['local_heat']} | 单项热度不能替代整体盘面。 |",
@@ -818,16 +884,16 @@ def build_market_overview_price_band_style_node(context, node_meta=None, node_lo
     lines = [
         "### 3. 价格带风格",
         f"> {snapshot.get('summary') or '价格带风格趋势已生成。'}",
-        "> 读法：这里看 `百元股涨跌幅 - 低价股涨跌幅`。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
+        "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
         "",
-        "| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 价格带状态 |",
-        "|------|--------------|--------------|--------------|----------|",
+        "| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 相对风格 | 绝对状态 |",
+        "|------|--------------|--------------|--------------|----------|----------|",
     ]
     for row in _display_latest_first(rows):
         lines.append(
             f"| {row.get('trade_date', '')} | {_format_signed_pct(row.get('high_price_pct'))} | "
             f"{_format_signed_pct(row.get('low_price_pct'))} | {_safe_float(row.get('spread_pct')):+.2f}pct | "
-            f"{row.get('style_label', '震荡')} |"
+            f"{row.get('style_label', '震荡')} | {row.get('absolute_label') or _price_band_absolute_label(row.get('high_price_pct'), row.get('low_price_pct'))} |"
         )
     lines.append("")
     return {"lines": lines, "exports": {"price_band_style_series": snapshot}, "module_logs": []}

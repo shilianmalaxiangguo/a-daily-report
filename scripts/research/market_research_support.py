@@ -39,6 +39,7 @@ __all__ = [
     "build_market_research_snapshot",
     "derive_step0_follow_plan",
     "get_market_daily_total_from_fact_db_runtime",
+    "get_market_breadth_from_fact_db_runtime",
     "get_market_total_turnover_from_fact_db_runtime",
     "get_turnover_rank_from_fact_db_runtime",
     "render_market_research_snapshot_section",
@@ -135,6 +136,15 @@ def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="al
     try:
         service = DatabaseService.sqlite_d1_compatible(db_path)
         row = service.query_market_daily_total(target_date, market_scope=market_scope)
+    except Exception:
+        return {}
+    return dict(row or {})
+
+
+def get_market_breadth_from_fact_db_runtime(target_date, *, db_path=None):
+    try:
+        service = DatabaseService.sqlite_d1_compatible(db_path)
+        row = service.query_market_breadth_counts(target_date)
     except Exception:
         return {}
     return dict(row or {})
@@ -886,7 +896,12 @@ def _build_mainline_rotation_snapshot_legacy_body(
     summary_bits = [lifecycle_text, f"当前{rotation_label}"]
     if style_note:
         summary_bits.append(style_note)
-    summary_bits.extend([relay_text, f"趋势密度{trend_density}只", f"承接{resilient_count}强/{failed_count}弱"])
+    abnormal_acceptance_text = (
+        f"异常承接{resilient_count}强/{failed_count}弱"
+        if resilient_count > 0 or failed_count > 0
+        else "异常承接未形成样本"
+    )
+    summary_bits.extend([relay_text, f"趋势密度{trend_density}只", abnormal_acceptance_text])
     summary_text = "；".join(summary_bits)
 
     relationships = sector_ai_analysis.get("relationships", {}) or {}
@@ -911,7 +926,9 @@ def _build_mainline_rotation_snapshot_legacy_body(
     related = [str(item).strip() for item in (relation_entry.get("related", []) or []) if str(item).strip()][:3]
     parent_name = str(relation_entry.get("parent", "") or "").strip()
     type_name = str(relation_entry.get("type", "") or "").strip()
-    if standard_name and standard_name != node_source:
+    if parent_name and parent_name == node_source:
+        narrative_label = f"{node_source}节点"
+    elif standard_name and standard_name != node_source:
         narrative_label = f"{standard_name}节点"
     elif node_source:
         narrative_label = f"{node_source}节点"
@@ -922,11 +939,13 @@ def _build_mainline_rotation_snapshot_legacy_body(
         if type_name:
             node_reason_bits.append(type_name)
         if parent_name:
-            node_reason_bits.append(f"上看{parent_name}")
+            upper_name = standard_name if parent_name == node_source and standard_name != node_source else parent_name
+            node_reason_bits.append(f"上看{upper_name}")
         if related:
             node_reason_bits.append(f"相关环节{' / '.join(related)}")
         extra_reason = f"；{'，'.join(node_reason_bits)}" if node_reason_bits else ""
-        narrative_reason = f"{relation_name or node_source or '主线'}在归链里更接近{standard_name or node_source or '主线'}这一节点{extra_reason}。"
+        display_node_name = parent_name or standard_name or node_source or "主线"
+        narrative_reason = f"{relation_name or node_source or '主线'}在归链里更接近{display_node_name}这一节点{extra_reason}。"
     elif standard_sectors:
         narrative_reason = f"AI归链把多条板块压到{standard_sectors[0]}等标准方向，当前交易的是{node_source or '主线'}这个承接节点，而不是泛题材扩散。"
     else:

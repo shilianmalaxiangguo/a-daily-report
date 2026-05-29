@@ -334,6 +334,35 @@ assert selected == ({"code": "300001"}, "创业板20cm预启动先看谁")
 
         self.assertLess(ranked[0]["watch_advantage_dedup"]["group_scores"]["shape_confirmation"], 180)
 
+    def test_watch_anchor_support_prioritizes_current_high_anchor_over_waiting_layer_legacy_name(self):
+        support = self._load_module()
+        ranked = support.sort_watch_anchor_candidates(
+            [
+                {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "sector": "电力",
+                    "watch_source": "waiting_layer",
+                    "risk_score": 0,
+                    "decision_stack": {"setup_priority_score": 18, "mainline_score": 8, "memory_score": 6},
+                },
+                {
+                    "name": "华电能源",
+                    "code": "600726",
+                    "sector": "电力",
+                    "watch_source": "keep_group_watch",
+                    "risk_score": 0,
+                    "limit_up_days": 4,
+                    "is_high_anchor": True,
+                    "decision_stack": {"setup_priority_score": 30, "mainline_score": 8, "memory_score": 9},
+                },
+            ],
+            mainline_name="电力",
+        )
+
+        self.assertEqual(ranked[0]["code"], "600726")
+        self.assertGreater(ranked[0]["watch_priority_score"], ranked[1]["watch_priority_score"])
+
     def test_watch_anchor_support_keeps_negative_weak_to_strong_feedback(self):
         support = self._load_module()
         positive = support.sort_watch_anchor_candidates(

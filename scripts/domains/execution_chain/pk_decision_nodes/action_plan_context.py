@@ -22,6 +22,8 @@ def _format_position_display(position_level):
 
 def _is_ten_confirm_upgrade_candidate(candidate):
     candidate = candidate or {}
+    if _candidate_has_incomplete_action_trace(candidate):
+        return False
     text = " ".join(
         str(candidate.get(key, "") or "")
         for key in (
@@ -47,9 +49,105 @@ def _is_ten_confirm_upgrade_candidate(candidate):
     )
 
 
+def _candidate_has_incomplete_action_trace(candidate):
+    candidate = candidate or {}
+    if candidate.get("missing_data"):
+        return True
+    trace_values = []
+    for key in ("trace", "candidate_trace", "quality_trace"):
+        value = candidate.get(key)
+        if isinstance(value, dict):
+            trace_values.extend(_flatten_trace_texts(value))
+        else:
+            trace_values.append(str(value or ""))
+    for key in ("checks", "final_action", "branch_result", "branch_path", "missing_reason", "reason", "action"):
+        trace_values.extend(_flatten_trace_texts(candidate.get(key)))
+    text = "；".join(trace_values)
+    return "关键数据不完整" in text or "数据缺失" in text
+
+
+def _flatten_trace_texts(value):
+    if isinstance(value, dict):
+        texts = []
+        for item in value.values():
+            texts.extend(_flatten_trace_texts(item))
+        return texts
+    if isinstance(value, (list, tuple, set)):
+        texts = []
+        for item in value:
+            texts.extend(_flatten_trace_texts(item))
+        return texts
+    return [str(value or "")]
+
+
+def _trace_code(trace):
+    trace = trace or {}
+    return str(trace.get("stock_code") or trace.get("code") or trace.get("代码") or "").strip()
+
+
+def _incomplete_trace_codes_from_artifact(artifact):
+    payload = artifact.get("payload") if isinstance(artifact, dict) else {}
+    if not isinstance(payload, dict):
+        payload = {}
+    traces = artifact.get("traces") if isinstance(artifact, dict) else []
+    if not traces:
+        traces = payload.get("traces") or []
+    codes = set()
+    for trace in traces or []:
+        if not isinstance(trace, dict):
+            continue
+        if _candidate_has_incomplete_action_trace(trace) or trace.get("missing_data"):
+            code = _trace_code(trace)
+            if code:
+                codes.add(code)
+    return codes
+
+
+def _actionable_observation_candidates(candidates, incomplete_trace_codes=None):
+    incomplete_trace_codes = set(incomplete_trace_codes or set())
+    return [
+        candidate
+        for candidate in list(candidates or [])
+        if not _candidate_has_incomplete_action_trace(candidate)
+        and _candidate_key(candidate) not in incomplete_trace_codes
+    ]
+
+
 def _candidate_key(candidate):
     candidate = candidate or {}
     return str(candidate.get("code") or candidate.get("代码") or candidate.get("name") or candidate.get("名称") or "").strip()
+
+
+def _preferred_observation_target(context):
+    for key in ("front_page_selected_position_candidate", "selected_position_candidate"):
+        candidate = context.get(key)
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    for candidate in context.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    step2_bundle = context.get("step2_bundle") if isinstance(context.get("step2_bundle"), dict) else {}
+    for candidate in step2_bundle.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    return None
+
+
+def _prioritize_final_observation_anchor(context, candidates):
+    target = _preferred_observation_target(context)
+    target_key = _candidate_key(target)
+    if not target_key:
+        return list(candidates or [])
+    matched = []
+    remaining = []
+    for candidate in list(candidates or []):
+        if _candidate_key(candidate) == target_key:
+            matched.append(candidate)
+        else:
+            remaining.append(candidate)
+    if matched:
+        return matched + remaining
+    return [target] + remaining
 
 
 def _as_list(value):
@@ -125,8 +223,8 @@ def _build_candidate_quality_panel_fields(
         backup_candidate = None
     return {
         "market_emotion_label": step0_prediction_cn,
-        "account_attention_load": "有持仓需先处理" if has_personal_positions else "无持仓负担",
-        "holding_priority_action": "先处理旧仓，再看新增" if has_personal_positions else "无旧仓时只等固定交易窗口内条件",
+        "account_attention_load": "有持仓需先处理" if has_personal_positions else "未录入持仓，先确认",
+        "holding_priority_action": "先处理旧仓，再看新增" if has_personal_positions else "确认没有旧仓后只等固定交易窗口内条件",
         "daily_new_entry_limit": daily_new_entry_limit,
         "primary_buy_candidate": best_stock,
         "backup_candidate": backup_candidate,
@@ -146,6 +244,12 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
+    incomplete_trace_codes = _incomplete_trace_codes_from_artifact(context.get("candidate_trace_artifact") or {})
+    actionable_observation_candidates = _actionable_observation_candidates(
+        display_observation_candidates,
+        incomplete_trace_codes,
+    )
     waiting_stocks = context.get("waiting_stocks", []) or []
     today_predictions = context.get("today_predictions", []) or []
     nextday_predictions = context.get("nextday_predictions", []) or []
@@ -166,10 +270,13 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     format_holding_window_text = context.get("format_holding_window_text", lambda min_days, max_days: "")
     get_execution_framework_text = context.get("get_execution_framework_text", lambda: "")
     ten_confirm_upgrade_candidate = next(
-        (candidate for candidate in display_observation_candidates if _is_ten_confirm_upgrade_candidate(candidate)),
+        (candidate for candidate in actionable_observation_candidates if _is_ten_confirm_upgrade_candidate(candidate)),
         None,
     )
-    can_ten_confirm_upgrade = bool(final_gate.get("allow_attack_50_ready") or ten_confirm_upgrade_candidate)
+    old_position_first = bool(final_gate.get("should_reduce") and has_personal_positions)
+    can_ten_confirm_upgrade = (not old_position_first) and bool(
+        final_gate.get("allow_attack_50_ready") or ten_confirm_upgrade_candidate
+    )
     daily_new_entry_limit = 1 if final_gate.get("can_new_entry") or trade_gate_open else 0
 
     action_rows = []
@@ -235,8 +342,8 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 f"{format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
             }
         )
-    elif can_ten_confirm_upgrade and display_observation_candidates:
-        candidate = ten_confirm_upgrade_candidate or display_observation_candidates[0] or {}
+    elif can_ten_confirm_upgrade and actionable_observation_candidates:
+        candidate = ten_confirm_upgrade_candidate or actionable_observation_candidates[0] or {}
         minute_plan = candidate.get("minute_plan") or {}
         stop_plan = candidate.get("stop_plan")
         price_focus = build_trade_price_focus(minute_plan, stop_plan)
@@ -262,9 +369,22 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
             }
         )
 
+    observation_anchor = display_observation_candidates[0] if display_observation_candidates else watch_anchor
+    quality_backup_anchor = watch_anchor if best_stock else observation_anchor
     observation_priority_lines = []
     if not trade_gate_open and display_observation_candidates:
-        for candidate in display_observation_candidates[:3]:
+        normalized_observation_candidates = []
+        seen_observation_codes = set()
+        for candidate in list(display_observation_candidates or []) + [context.get("watch_anchor")]:
+            if not isinstance(candidate, dict):
+                continue
+            code = str(candidate.get("code") or candidate.get("stock_code") or "").strip()
+            key = code or str(candidate.get("name") or "").strip()
+            if not key or key in seen_observation_codes:
+                continue
+            seen_observation_codes.add(key)
+            normalized_observation_candidates.append(candidate)
+        for candidate in normalized_observation_candidates[:3]:
             minute_plan = candidate.get("minute_plan") or {}
             stop_plan = candidate.get("stop_plan")
             price_focus = build_trade_price_focus(minute_plan, stop_plan)
@@ -325,11 +445,15 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，不新增参与"
             )
         else:
-            position_section_lines.append("- **明天仓位放多少**: 0%观察；固定交易窗口内条件成立后才评估50%标准进攻")
             position_section_lines.append(
-                "- **明天具体怎么做**: 旧强仓可持有；新仓只看主线核心是否在固定交易窗口内满足条件，强核心走竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口"
+                "- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）"
                 if has_personal_positions
-                else "- **明天具体怎么做**: 只观察主线核心是否在固定交易窗口内满足条件；未满足0%，满足后才评估50%标准进攻"
+                else "- **明天仓位放多少**: 0%观察；只看主线核心是否继续证明自己"
+            )
+            position_section_lines.append(
+                "- **明天具体怎么做**: 旧强仓可持有，弱仓按风险线处理；新观察对象只看不买"
+                if has_personal_positions
+                else "- **明天具体怎么做**: 只观察主线核心是否继续证明自己；未满足继续0%"
             )
     else:
         if not best_stock:
@@ -395,18 +519,19 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                 f"- **关注标的**: {best_stock.get('name')}({best_stock.get('code')}) - "
                 f"{'09:50-10:10站上' + format(confirm_price, '.2f') + '后按条件触发' if confirm_price else '按条件触发'}"
             )
-    elif watch_anchor:
-        minute_plan = watch_anchor.get("minute_plan") or {}
-        stop_plan = watch_anchor.get("stop_plan")
+    elif observation_anchor:
+        minute_plan = observation_anchor.get("minute_plan") or {}
+        stop_plan = observation_anchor.get("stop_plan")
         price_focus = build_trade_price_focus(minute_plan, stop_plan)
         confirm_price = minute_plan.get("confirm_price_60m")
         confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
         observation_price_focus_text = build_observation_price_focus_text(price_focus)
+        anchor_type = observation_anchor.get("watch_anchor_type") or watch_anchor_type or "观察对象"
         pre_market_lines.append(
-            f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')}) - "
+            f"- **{anchor_type}**: {observation_anchor.get('name')}({observation_anchor.get('code')}) - "
             f"{normalize_trading_time_text(compose_observation_focus_text(confirm_text, observation_price_focus_text))}"
         )
-        append_watch_anchor_note(pre_market_lines, watch_anchor)
+        append_watch_anchor_note(pre_market_lines, observation_anchor)
         append_observation_price_focus_note(pre_market_lines, price_focus)
     else:
         pre_market_lines.append("- **空仓准备**: 无操作标的，准备观望")
@@ -415,7 +540,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
     opening_lines = [
         "- 观察涨跌比、昨日涨停溢价率",
         "- 重新评估Step 0裁决是否仍然成立",
-        "- 观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步",
+        "- 观察核心对象的竞价表态、匹配金额、委托稳定和板块同步",
         "- 若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%",
     ]
     if trade_gate_open and best_stock:
@@ -521,7 +646,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                     has_personal_positions=has_personal_positions,
                     daily_new_entry_limit=daily_new_entry_limit,
                     best_stock=best_stock,
-                    watch_anchor=watch_anchor,
+                    watch_anchor=quality_backup_anchor,
                 )
             ),
             "candidate_quality_samples": sanitize_user_visible_text(
@@ -535,7 +660,7 @@ def build_pk_decision_action_plan_context_node(context, node_meta=None, node_loo
                             is_core=True,
                         ),
                         _quality_candidate(
-                            watch_anchor,
+                            quality_backup_anchor,
                             quality_role="补位对象",
                             selection_quality="中",
                             entry_cost_state="确认中",

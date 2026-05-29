@@ -34,6 +34,32 @@ venv/bin/python3.11
 .generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py ...
 ```
 
+# 日报 bug 修复短口令
+
+当用户说 `修日报bug`、`日报有bug`、`修 YYYY-MM-DD 日报`、`重新生成昨天日报和推论`，或同类短句时，默认进入“历史日报修复”流程。不要要求用户重复完整约束。
+
+默认展开如下：
+
+- Goal：修复指定交易日的日报问题，并重新生成该交易日的 replay 日报、推论和必要的 replay 快照。
+- In Scope：报告逻辑、推理逻辑、渲染逻辑、replay 缺口回补、与该 bug 直接相关的最小测试。
+- Out of Scope：重新按当前实时盘面全量采集历史日期、覆盖正式历史日报、顺手重构无关模块、扩展新功能。
+- Non-goals：不把今天的热度、异动、盘中新闻、顽主杯、龙虎榜、资金流、涨跌家数、成交额排行等当前数据混入历史日报。
+- Done Definition：目标日期 replay 产物重新生成，关键检查通过，并说明哪些事实来自官方快照、哪些事实按目标日期回补、哪些事实仍缺失。
+
+执行规则：
+
+1. 先解析目标日期；如果用户只说“昨天/前天”，按当前时区换算成明确日期；如果日期无法判断，只问日期。
+2. 历史日期优先读取 `snapshots/<date>.json`，默认命令是：
+   ```bash
+   .generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py <date> --replay
+   ```
+3. 如果官方快照不存在，不要直接改走实时全量采集；先说明缺少历史快照，并询问是否允许按目标日期重新采集。
+4. 修数据源 bug 时，不能只修实时采集路径；如果坏数据已经冻结在历史快照里，还要检查 `scripts/replay/report_replay.py` 是否需要按目标日期回补。
+5. replay 回补只能使用明确支持 `target_date=<date>` 的历史源、本地事实库、官方快照或 replay 快照；如果某个来源只能返回当前数据，不得用它补历史日期。
+6. 对会随当天变化的数据，回补时必须保留 `query_date`、`source_date`、`trade_date` 或等价字段；无法证明属于目标日期时，宁可保留缺失并报告风险。
+7. 默认只写 `reports/replay/` 和 `snapshots/replay/`；除非用户明确要求覆盖正式历史并允许 `--overwrite-official`，否则不覆盖 `reports/` 下的正式日报。
+8. 验证优先级：相关单测；然后运行 `<date> --replay`；最后对 `reports/replay/<date>_A股日报_完整版_replay.md` 运行日报一致性检查。
+
 # 文件读取工具选择
 
 ## 规则

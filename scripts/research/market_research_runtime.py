@@ -322,12 +322,16 @@ def _append_log(logs, step, status, message, **details):
 
 def _collect_market_fit_observation_pool(data, observation_snapshot):
     pool = []
-    for source in (
+    visible_sources = (
         (observation_snapshot or {}).get("abnormal_watch_pool"),
         (observation_snapshot or {}).get("leader_memory_bank"),
-        (data or {}).get("watchlist"),
-        (data or {}).get("candidates"),
-    ):
+    )
+    for source in visible_sources:
+        if isinstance(source, list):
+            pool.extend(item for item in source if isinstance(item, dict))
+    if pool:
+        return pool
+    for source in ((data or {}).get("watchlist"),):
         if isinstance(source, list):
             pool.extend(item for item in source if isinstance(item, dict))
     return pool

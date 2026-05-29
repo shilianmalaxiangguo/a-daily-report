@@ -32,6 +32,9 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "candidate_trace_eliminated_summary": context.get("candidate_trace_eliminated_summary"),
         "enabled_node_keys": context.get("action_plan_enabled_node_keys"),
     }
+    existing_traces = context.get("candidate_traces")
+    if existing_traces:
+        action_context["candidate_traces"] = existing_traces
     lines.extend(context["render_pk_decision_section"](pk_context))
     action_exports = {}
     action_logs = []

@@ -29,6 +29,8 @@ CRITICAL_REPORT_DATA_FIELDS = (
     ("两市成交额", "total_turnover"),
     ("中证全指", "wind_a_alternative"),
     ("成交额排名", "turnover_rank"),
+    ("大盘涨跌统计", "market_stats"),
+    ("热度前50个股", "hot_rank_top50"),
 )
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
     "wind_a_alternative": ("tushare.",),
@@ -142,6 +144,17 @@ def _critical_payload_valid(data, payload_key):
         return _safe_float(payload.get("price", payload.get("点位", 0))) > 0
     if payload_key == "turnover_rank":
         return bool(data.get("turnover_rank"))
+    if payload_key == "market_stats":
+        payload = data.get("market_stats") or {}
+        if not isinstance(payload, dict):
+            return False
+        return _safe_float(payload.get("up_count")) > 0 and _safe_float(payload.get("down_count")) > 0
+    if payload_key == "hot_rank_top50":
+        target = int(_safe_float(data.get("hot_rank_sample_target"), 50) or 50)
+        sample_size = int(_safe_float(data.get("hot_rank_sample_size"), 0))
+        if sample_size <= 0:
+            sample_size = len(data.get("hot_rank_top50") or data.get("hot_rank_top30") or [])
+        return sample_size >= target
     return True
 
 
@@ -168,6 +181,24 @@ def _critical_data_failures(data):
 
 def _critical_field_tracked(data, label, payload_key):
     data_status = (data or {}).get("data_status") or {}
+    if payload_key == "market_stats":
+        step_status = (data or {}).get("step_status") or {}
+        return (
+            label in data_status
+            or payload_key in (data or {})
+            or "涨停跌停数据获取" in step_status
+            or bool(_request_logs_for_steps(data or {}, ("request.market_stats",)))
+        )
+    if payload_key == "hot_rank_top50":
+        step_status = (data or {}).get("step_status") or {}
+        return (
+            label in data_status
+            or "热度前50个股获取" in step_status
+            or "hot_rank_top50" in (data or {})
+            or "hot_rank_top30" in (data or {})
+            or "hot_rank_sample_size" in (data or {})
+            or bool(_request_logs_for_steps(data or {}, ("request.hot_rank.primary", "request.hot_rank.fallback")))
+        )
     return label in data_status or payload_key in (data or {})
 
 
@@ -215,7 +246,7 @@ def _row_count_for_step(data, step, payload_key):
         if not isinstance(log, dict) or log.get("step") != step:
             continue
         details = log.get("details") or {}
-        for key in ("row_count", "rank_count", "index_count", "count"):
+        for key in ("row_count", "rank_count", "index_count", "hot_rank_count", "count"):
             if details.get(key) not in (None, ""):
                 return details.get(key)
     payload = data.get(payload_key)
@@ -235,7 +266,7 @@ def _row_count_for_steps(data, steps, payload_key):
                 + int(_safe_float(details.get("plate_count"), 0))
                 + int(_safe_float(details.get("limit_up_reason_count"), 0))
             )
-        for key in ("row_count", "rank_count", "index_count", "count", "integrated_count", "calendar_count", "news_count", "stock_count", "lianban_count"):
+        for key in ("row_count", "rank_count", "index_count", "hot_rank_count", "count", "integrated_count", "calendar_count", "news_count", "stock_count", "lianban_count"):
             if details.get(key) not in (None, ""):
                 return details.get(key)
     payload = data.get(payload_key)
@@ -482,6 +513,19 @@ def _critical_value(data, payload_key):
         return 0.0
     if payload_key == "turnover_rank":
         return _row_count_for_step(data, "request.turnover_rank", payload_key)
+    if payload_key == "market_stats":
+        payload = data.get("market_stats") or {}
+        if isinstance(payload, dict):
+            up_count = int(_safe_float(payload.get("up_count")))
+            down_count = int(_safe_float(payload.get("down_count")))
+            return f"{up_count}/{down_count}"
+        return "0/0"
+    if payload_key == "hot_rank_top50":
+        target = int(_safe_float(data.get("hot_rank_sample_target"), 50) or 50)
+        sample_size = int(_safe_float(data.get("hot_rank_sample_size"), 0))
+        if sample_size <= 0:
+            sample_size = len(data.get("hot_rank_top50") or data.get("hot_rank_top30") or [])
+        return f"{sample_size}/{target}"
     return ""
 
 
@@ -492,6 +536,8 @@ def build_report_preflight(data, target_date):
         "total_turnover": "request.total_turnover",
         "wind_a_alternative": "request.wind_a",
         "turnover_rank": "request.turnover_rank",
+        "market_stats": "request.market_stats",
+        "hot_rank_top50": "request.hot_rank.primary",
     }
     checks = []
     failures = set(_critical_data_failures(data))
@@ -507,11 +553,14 @@ def build_report_preflight(data, target_date):
             if not provider and hasattr(payload, "data_source"):
                 provider = getattr(payload, "data_source", "")
         provider_failed = tracked and not _provider_allowed_for_critical_payload(payload_key, provider)
+        status = "未采集"
+        if tracked:
+            status = "failed" if label in failures or provider_failed else "success"
         checks.append(
             {
                 "label": label,
                 "payload_key": payload_key,
-                "status": "failed" if label in failures or provider_failed else "success",
+                "status": status,
                 "provider": provider or "unknown",
                 "value": _critical_value(data, payload_key),
                 "row_count": _row_count_for_step(data, step, payload_key),

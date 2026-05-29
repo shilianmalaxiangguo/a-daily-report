@@ -79,6 +79,7 @@ def build_market_fit_calibration(strong_samples=None, current_mainline="", obser
     mainline_hits = sum(1 for sample in strong_samples if current_mainline and _sample_sector(sample) == current_mainline)
     observation_codes = {_sample_code(item) for item in observation_pool if _sample_code(item)}
     observation_hits = sum(1 for sample in strong_samples if _sample_code(sample) in observation_codes)
+    observation_hits = min(observation_hits, len(observation_codes))
     dominant_sector = _dominant_sector(strong_samples) or current_mainline or "强势方向"
 
     if current_mainline and mainline_hits == 0:

@@ -5,7 +5,7 @@ HOOK_NAME = "input.hot_rank"
 
 
 def run(ctx):
-    items = fetch_hot_rank(limit=30)
+    items = fetch_hot_rank(limit=50)
     return {
         "value": {"hot_rank": items},
         "patches": {

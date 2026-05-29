@@ -277,6 +277,25 @@ def _tradability_probe(stock, target_date='', recent_bars=None):
         result = runtime.run_with_wall_clock_timeout(1, lambda: "ok")
         self.assertEqual(result, "ok")
 
+    def test_daily_price_runtime_caps_baostock_history_fetch(self):
+        runtime = self._load_module()
+        timeout_calls = []
+
+        def fake_timeout(seconds, fn, *args, default=None, **kwargs):
+            fn_name = getattr(fn, "__name__", type(fn).__name__)
+            timeout_calls.append((seconds, fn_name))
+            if fn_name == "_fetch_baostock_daily_price_bars":
+                return default
+            return fn(*args, **kwargs)
+
+        with patch("market_data.daily_price_runtime._fetch_quicktiny_daily_price_bars", return_value=[]), \
+             patch("market_data.daily_price_runtime._ensure_baostock_login", side_effect=AssertionError("baostock must be reached only inside timeout wrapper")), \
+             patch("market_data.daily_price_runtime._run_with_wall_clock_timeout", side_effect=fake_timeout):
+            result = runtime.fetch_daily_price_bars("000001", "2026-05-20", "2026-05-28")
+
+        self.assertEqual(result, [])
+        self.assertIn((6, "_fetch_baostock_daily_price_bars"), timeout_calls)
+
     def test_daily_price_runtime_fetch_recent_price_bars_trims_to_target_window(self):
         runtime = self._load_module()
         fetcher = getattr(runtime, "fetch_recent_price_bars", None)

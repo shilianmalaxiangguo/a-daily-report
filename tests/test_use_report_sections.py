@@ -181,6 +181,66 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertNotIn("摩擦是资产不是成本", review)
         self.assertNotIn("认知投降", review)
 
+    def test_report_sections_surface_knowledge_hits_as_short_table(self):
+        ctx = build_empty_context({"target_date": "2026-05-29"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                        "source_path": "/tmp/source.md",
+                    },
+                    "llm_wiki": {
+                        "version": "2026-05-29",
+                        "source": "llm_wiki",
+                        "knowledge_hits": [
+                            {
+                                "knowledge_id": "market.low-frequency-focus",
+                                "title": "指数强但赚钱效应弱",
+                                "source_path": "wiki/板块补充/板块中枢与主线延续.md",
+                                "triggered_by": ["指数上涨", "上涨家数偏弱"],
+                                "impact": "只保留主线核心，不从旧方向强行扩散候选。",
+                                "report_slot": "市场结构判断",
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+
+        result = run(ctx)
+
+        review = result["patches"]["sections"]["review"]
+        self.assertIn("经验库命中", review)
+        self.assertIn("| 命中经验 | 触发事实 | 本次影响 | 来源 |", review)
+        self.assertIn("| 指数强但赚钱效应弱 | 指数上涨；上涨家数偏弱 | 只保留主线核心，不从旧方向强行扩散候选。 | 板块中枢与主线延续 |", review)
+
+    def test_report_sections_hide_knowledge_hits_table_when_absent(self):
+        ctx = build_empty_context({"target_date": "2026-05-29"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                        "source_path": "/tmp/source.md",
+                    },
+                    "llm_wiki": {
+                        "version": "2026-05-29",
+                        "source": "llm_wiki",
+                    },
+                },
+            },
+        )
+
+        result = run(ctx)
+
+        review = result["patches"]["sections"]["review"]
+        self.assertNotIn("经验库命中", review)
+
     def test_report_sections_surface_market_structure_knowledge_update(self):
         ctx = build_empty_context(
             {

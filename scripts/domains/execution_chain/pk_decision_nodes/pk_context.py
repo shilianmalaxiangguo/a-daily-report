@@ -1,6 +1,43 @@
 from report.surface_wording import sanitize_user_visible_text
 
 
+def _candidate_key(candidate):
+    candidate = candidate or {}
+    return str(candidate.get("code") or candidate.get("stock_code") or candidate.get("代码") or candidate.get("name") or candidate.get("名称") or "").strip()
+
+
+def _preferred_observation_target(context):
+    for key in ("front_page_selected_position_candidate", "selected_position_candidate"):
+        candidate = context.get(key)
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    for candidate in context.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    step2_bundle = context.get("step2_bundle") if isinstance(context.get("step2_bundle"), dict) else {}
+    for candidate in step2_bundle.get("extreme_conviction_list", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    return None
+
+
+def _prioritize_final_observation_anchor(context, candidates):
+    target = _preferred_observation_target(context)
+    target_key = _candidate_key(target)
+    if not target_key:
+        return list(candidates or [])
+    matched = []
+    remaining = []
+    for candidate in list(candidates or []):
+        if _candidate_key(candidate) == target_key:
+            matched.append(candidate)
+        else:
+            remaining.append(candidate)
+    if matched:
+        return matched + remaining
+    return [target] + remaining
+
+
 def _is_ten_confirm_upgrade_candidate(candidate):
     candidate = candidate or {}
     text = " ".join(
@@ -32,6 +69,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
     trade_gate_open = context.get("trade_gate_open", False)
     display_pending_candidates = context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
     best_stock = context.get("best_stock")
     watch_anchor = context.get("watch_anchor")
     watch_anchor_type = context.get("watch_anchor_type", "")
@@ -50,7 +88,8 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
         lambda confirm_text, observation_price_focus_text: f"{confirm_text} / {observation_price_focus_text}",
     )
     build_stop_execution_plan = context.get("build_stop_execution_plan", lambda *args, **kwargs: {})
-    watch_anchor_for_upgrade = dict(watch_anchor or {})
+    observation_anchor = display_observation_candidates[0] if display_observation_candidates else watch_anchor
+    watch_anchor_for_upgrade = dict(observation_anchor or watch_anchor or {})
     if watch_anchor_type and "watch_anchor_type" not in watch_anchor_for_upgrade:
         watch_anchor_for_upgrade["watch_anchor_type"] = watch_anchor_type
     ten_confirm_upgrade_candidate = next(
@@ -197,19 +236,20 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
         else:
             conclusion_lines.append("- **明天没有可买对象**: 明日不产生买入动作")
         conclusion_lines.append(f"- **明天能不能开仓**: {front_structure_layer_text}")
-        if watch_anchor:
-            minute_plan = watch_anchor.get("minute_plan") or {}
-            stop_plan = watch_anchor.get("stop_plan")
+        if observation_anchor:
+            minute_plan = observation_anchor.get("minute_plan") or {}
+            stop_plan = observation_anchor.get("stop_plan")
             price_focus = build_trade_price_focus(minute_plan, stop_plan)
             confirm_price = minute_plan.get("confirm_price_60m")
             confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
             observation_price_focus_text = build_observation_price_focus_text(price_focus)
-            conclusion_lines.append(f"- **{watch_anchor_type}**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
+            anchor_type = observation_anchor.get("watch_anchor_type") or watch_anchor_type or "观察对象"
+            conclusion_lines.append(f"- **{anchor_type}**: {observation_anchor.get('name')}({observation_anchor.get('code')})")
             conclusion_lines.append(
                 f"- **{'现在重点盯什么' if trade_gate_open else '现在重点看什么'}**: "
                 f"{compose_observation_focus_text(confirm_text, observation_price_focus_text)}"
             )
-            append_watch_anchor_note(conclusion_lines, watch_anchor)
+            append_watch_anchor_note(conclusion_lines, observation_anchor)
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(price_focus)}")
             if trade_gate_open:

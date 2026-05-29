@@ -1559,6 +1559,33 @@ class CloudflareFreeDailyDb:
             ).fetchone()
         return dict(row) if row else {}
 
+    def query_market_breadth_counts(self, trade_date):
+        trade_date = _text(trade_date)
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS stock_count,
+                       SUM(CASE WHEN pct_chg > 0 THEN 1 ELSE 0 END) AS up_count,
+                       SUM(CASE WHEN pct_chg < 0 THEN 1 ELSE 0 END) AS down_count,
+                       SUM(CASE WHEN pct_chg = 0 THEN 1 ELSE 0 END) AS flat_count,
+                       MIN(pct_chg) AS min_pct_chg,
+                       MAX(pct_chg) AS max_pct_chg
+                FROM stock_daily_quotes_recent
+                WHERE trade_date = ?
+                """,
+                (trade_date,),
+            ).fetchone()
+        item = dict(row) if row else {}
+        return {
+            "trade_date": trade_date,
+            "stock_count": _safe_int(item.get("stock_count")),
+            "up_count": _safe_int(item.get("up_count")),
+            "down_count": _safe_int(item.get("down_count")),
+            "flat_count": _safe_int(item.get("flat_count")),
+            "min_pct_chg": _safe_float(item.get("min_pct_chg")),
+            "max_pct_chg": _safe_float(item.get("max_pct_chg")),
+        }
+
     def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
         trade_date = _text(trade_date)
         rank_limit = max(_safe_int(rank_limit, 100), 1)

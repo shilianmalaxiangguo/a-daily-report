@@ -144,6 +144,7 @@ def build_market_analysis_risk_sectors_node(context, node_meta=None, node_lookup
 
 
 def build_market_analysis_hot_chains_node(context, node_meta=None, node_lookup=None):
+    data = _data(context)
     market_analysis = _market_analysis(context)
     ai_group_concepts_into_chains = context.get("ai_group_concepts_into_chains")
     hot_sectors = market_analysis.get("hot_sectors", [])
@@ -151,7 +152,8 @@ def build_market_analysis_hot_chains_node(context, node_meta=None, node_lookup=N
     if hot_sectors:
         all_concepts = [sector for sector, _ in hot_sectors]
         concept_chains = ai_group_concepts_into_chains(all_concepts) if callable(ai_group_concepts_into_chains) else {}
-        lines.append("**热榜关注产业链**（AI归纳，热度前30个股概念分布）：")
+        sample_target = data.get("hot_rank_sample_target") or 50
+        lines.append(f"**热榜关注产业链**（AI归纳，热度前{sample_target}个股概念分布）：")
         for chain_name, concepts in concept_chains.items():
             total_count = sum(count for sector, count in hot_sectors if sector in concepts)
             if len(concepts) > 1:

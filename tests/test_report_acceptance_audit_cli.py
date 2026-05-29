@@ -27,6 +27,19 @@ def run_audit_cli(*args):
     )
 
 
+def run_audit_script_direct(*args):
+    return subprocess.run(
+        [
+            str(PYTHON),
+            str(ROOT / "scripts" / "report" / "report_acceptance_audit.py"),
+            *(str(arg) for arg in args),
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+
 def zero_position_report():
     return (
         GOOD_MARKDOWN.replace(
@@ -103,6 +116,22 @@ class ReportAcceptanceAuditCliTest(unittest.TestCase):
 
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("chanlun_tomorrow_decision_conflict", completed.stdout)
+        finally:
+            for path in tmp_dir.glob("*"):
+                path.unlink()
+            tmp_dir.rmdir()
+
+    def test_direct_script_cli_works_without_manual_pythonpath(self):
+        tmp_dir = ROOT / "reports" / "_audit_cli_test"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        report_path = tmp_dir / "bad_report.md"
+        report_path.write_text("| 涨跌比 | 0 / 0 | - | 多头仍占优 |\n", encoding="utf-8")
+        try:
+            completed = run_audit_script_direct(report_path)
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("market_breadth_incomplete", completed.stdout)
+            self.assertNotIn("ModuleNotFoundError", completed.stderr)
         finally:
             for path in tmp_dir.glob("*"):
                 path.unlink()

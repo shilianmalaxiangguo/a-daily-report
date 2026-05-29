@@ -67,6 +67,21 @@ class _TencentStub:
         return list(self._hot_stocks[:num])
 
 
+def _hot_rank_rows(count, *, sector="军工", source="同花顺热榜", name_prefix=None):
+    name_prefix = name_prefix or sector
+    return [
+        {
+            "name": f"{name_prefix}{idx}",
+            "code": f"000{idx:03d}",
+            "rate": 230000,
+            "concepts": [sector],
+            "popularity_tag": "热榜",
+            "data_source": source,
+        }
+        for idx in range(1, count + 1)
+    ]
+
+
 class MarketActivityRequestTest(unittest.TestCase):
     def test_collect_market_activity_pool_request_bundle_builds_pool_and_stats(self):
         timer = _TimerStub()
@@ -151,7 +166,7 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["market_stats"]["dt_count"], 54)
         self.assertEqual(result["module_logs"][0]["status"], "success")
 
-    def test_collect_market_activity_pool_request_bundle_keeps_pools_when_market_stats_fails(self):
+    def test_collect_market_activity_pool_request_bundle_marks_market_breadth_incomplete_when_stats_fail(self):
         timer = _TimerStub()
         emitted = []
 
@@ -173,9 +188,11 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(result["step_status"]["涨停跌停数据获取"])
         self.assertTrue(result["data_status"]["涨停池"])
         self.assertTrue(result["data_status"]["跌停池"])
-        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertFalse(result["data_status"]["大盘涨跌统计"])
         self.assertEqual(result["results"]["zt_pool"][0]["代码"], "000001")
         self.assertEqual(result["results"]["dt_pool"][0]["代码"], "000002")
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 0)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 0)
         self.assertEqual(result["results"]["market_stats"]["zt_count"], 1)
         self.assertEqual(result["results"]["market_stats"]["dt_count"], 1)
         self.assertTrue(any(log["step"] == "request.market_stats" and log["status"] == "degraded" for log in result["module_logs"]))
@@ -304,16 +321,14 @@ class MarketActivityRequestTest(unittest.TestCase):
     def test_collect_market_activity_hot_rank_request_bundle_builds_hot_rank_and_integrated_snapshot(self):
         timer = _TimerStub()
         emitted = []
-        tencent = _TencentStub(hot_stocks=[{"name": "备用热榜", "code": "000009"}])
+        tencent = _TencentStub(hot_stocks=_hot_rank_rows(50, sector="备用", name_prefix="备用热榜"))
 
         result = collect_market_activity_hot_rank_request_bundle(
             "2026-04-22",
             existing_results={
                 "zt_pool": [{"代码": "000001", "所属行业": "军工"}],
             },
-            fetch_ths_hot_stock=lambda num=30: [
-                {"name": "军工一号", "code": "000001", "rate": 230000, "concepts": ["军工"], "popularity_tag": "龙头"}
-            ],
+            fetch_ths_hot_stock=lambda num=30: _hot_rank_rows(num, sector="军工", name_prefix="军工热股"),
             get_integrated_hot_list=lambda limit=100: (
                 [{"name": "军工一号", "code": "000001", "change_pct": 5.2, "sector_tags": ["军工"]}],
                 {"军工": 1},
@@ -328,18 +343,18 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["hot_rank_top30"][0]["sector"], "军工")
         self.assertEqual(result["results"]["code_to_sector"]["000001"], "军工")
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "000001")
-        self.assertEqual(result["results"]["tag_distribution"]["军工"], 1)
-        self.assertTrue(result["data_status"]["热度前三十个股"])
+        self.assertEqual(result["results"]["tag_distribution"]["军工"], 50)
+        self.assertTrue(result["data_status"]["热度前50个股"])
         self.assertTrue(result["data_status"]["整合热榜"])
-        self.assertTrue(result["step_status"]["热度前三十个股获取"])
+        self.assertTrue(result["step_status"]["热度前50个股获取"])
         self.assertTrue(result["step_status"]["整合热榜获取"])
-        self.assertEqual(timer.records[0], ("热度前三十个股获取", 5))
+        self.assertEqual(timer.records[0], ("热度前50个股获取", 5))
         self.assertTrue(any("热榜" in line for line in emitted))
 
     def test_collect_market_activity_hot_rank_request_bundle_records_primary_failure_and_fallback_success(self):
         timer = _TimerStub()
         emitted = []
-        tencent = _TencentStub(hot_stocks=[{"name": "腾讯兜底", "code": "000009"}])
+        tencent = _TencentStub(hot_stocks=_hot_rank_rows(50, sector="腾讯", name_prefix="腾讯兜底"))
 
         result = collect_market_activity_hot_rank_request_bundle(
             "2026-04-22",
@@ -351,8 +366,8 @@ class MarketActivityRequestTest(unittest.TestCase):
             emit=emitted.append,
         )
 
-        self.assertEqual(result["results"]["hot_rank_top30"][0]["name"], "腾讯兜底")
-        self.assertTrue(result["data_status"]["热度前三十个股"])
+        self.assertEqual(result["results"]["hot_rank_top30"][0]["name"], "腾讯兜底1")
+        self.assertTrue(result["data_status"]["热度前50个股"])
         self.assertTrue(any(log["step"] == "request.hot_rank.primary" and log["status"] == "error" for log in result["module_logs"]))
         self.assertTrue(
             any(
@@ -368,7 +383,7 @@ class MarketActivityRequestTest(unittest.TestCase):
         timer = _TimerStub()
         emitted = []
         legacy_calls = []
-        tencent = _TencentStub(hot_stocks=[{"name": "腾讯兜底", "code": "000009"}])
+        tencent = _TencentStub(hot_stocks=[])
         registry_calls = []
 
         result = collect_market_activity_hot_rank_request_bundle(
@@ -385,18 +400,53 @@ class MarketActivityRequestTest(unittest.TestCase):
             emit=emitted.append,
         )
 
-        self.assertEqual(registry_calls, [("2026-05-13", 30)])
-        self.assertEqual(legacy_calls, [])
+        self.assertEqual(registry_calls, [("2026-05-13", 50)])
+        self.assertEqual(legacy_calls, [("ths", 50)])
         self.assertEqual(result["results"]["hot_rank_top30"][0]["sector"], "白酒")
-        self.assertTrue(result["data_status"]["热度前三十个股"])
-        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
-        self.assertEqual(provider_by_step["request.hot_rank.primary"], "tushare.ths_hot")
+        self.assertFalse(result["data_status"]["热度前50个股"])
+        hot_rank_providers = [
+            log["details"].get("provider")
+            for log in result["module_logs"]
+            if log["step"] == "request.hot_rank.primary"
+        ]
+        self.assertEqual(hot_rank_providers[:2], ["tushare.ths_hot", "ths_hot_stock"])
+
+    def test_collect_market_activity_hot_rank_request_bundle_requests_top50_sample(self):
+        timer = _TimerStub()
+        emitted = []
+        legacy_calls = []
+        registry_calls = []
+
+        result = collect_market_activity_hot_rank_request_bundle(
+            "2026-05-28",
+            existing_results={},
+            fetch_ths_hot_stock=lambda num=30: legacy_calls.append(num) or [],
+            get_integrated_hot_list=lambda limit=100: ([], {}, {}, []),
+            tencent=_TencentStub(),
+            request_registry={
+                "stock_hot_rank": lambda *, target_date, limit=30: registry_calls.append((target_date, limit))
+                or [
+                    {"rank": idx, "name": f"热股{idx}", "code": f"000{idx:03d}", "data_source": "tushare.ths_hot"}
+                    for idx in range(1, limit + 1)
+                ],
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(registry_calls, [("2026-05-28", 50)])
+        self.assertEqual(legacy_calls, [])
+        self.assertEqual(len(result["results"]["hot_rank_top30"]), 50)
+        self.assertEqual(result["results"]["hot_rank_sample_size"], 50)
+        self.assertEqual(result["results"]["hot_rank_sample_target"], 50)
+        self.assertTrue(result["data_status"]["热度前50个股"])
+        self.assertTrue(result["step_status"]["热度前50个股获取"])
 
     def test_integrated_hot_rank_reuses_tushare_hot_rank_before_legacy_integrator(self):
         timer = _TimerStub()
         emitted = []
         legacy_calls = []
-        tencent = _TencentStub(hot_stocks=[{"name": "腾讯兜底", "code": "000009"}])
+        tencent = _TencentStub(hot_stocks=[])
 
         result = collect_market_activity_hot_rank_request_bundle(
             "2026-05-13",
@@ -419,10 +469,11 @@ class MarketActivityRequestTest(unittest.TestCase):
             emit=emitted.append,
         )
 
-        self.assertEqual(legacy_calls, [])
+        self.assertEqual(legacy_calls, [("ths", 50)])
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "601991")
         self.assertEqual(result["results"]["tag_distribution"], {"绿色电力": 1, "风电": 1})
         self.assertTrue(result["data_status"]["整合热榜"])
+        self.assertFalse(result["data_status"]["热度前50个股"])
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.integrated_hot_rank"], "tushare.ths_hot.primary_hot_rank")
         fallback_by_step = {log["step"]: log["details"].get("fallback_used") for log in result["module_logs"]}
@@ -455,6 +506,7 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(legacy_calls, [])
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "601991")
         self.assertEqual(result["results"]["tag_distribution"], {"绿色电力": 1, "风电": 1})
+        self.assertFalse(result["data_status"]["热度前50个股"])
         integrated_log = next(log for log in result["module_logs"] if log["step"] == "request.integrated_hot_rank")
         self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank")
         self.assertFalse(integrated_log["details"]["fallback_used"])
@@ -817,6 +869,42 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(result["step_status"]["板块涨跌幅排行获取"])
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.sector_change_rank"], "tushare.moneyflow_ind_ths.derived_change")
+
+    def test_collect_market_activity_sector_snapshot_request_bundle_uses_tencent_when_registry_flow_empty(self):
+        timer = _TimerStub()
+        emitted = []
+        tencent = _TencentStub()
+        tencent.get_sector_fund_flow = lambda flow_type="in", limit=50: (
+            [{"name": "电力", "zljlr": 18.0, "zdf": 2.1, "cje": 3200000.0}]
+            if flow_type == "in"
+            else [{"name": "半导体", "zljlr": -12.0, "zdf": -1.8, "cje": 2100000.0}]
+        )
+
+        result = collect_market_activity_sector_snapshot_request_bundle(
+            "2026-05-28",
+            fetch_hot_plate=lambda: [],
+            tencent=tencent,
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: [],
+            get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: [],
+            request_registry={
+                "sector_fund_flow": lambda *, target_date, limit=50: {
+                    "inflow": [],
+                    "outflow": [],
+                    "provider": "legacy.sector_fund_flow",
+                    "fallback_used": True,
+                }
+            },
+            timer=timer,
+            emit=emitted.append,
+            current_dates=("2026-05-28", "2026-05-27"),
+        )
+
+        self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["name"], "电力")
+        self.assertEqual(result["results"]["sector_fund_flow"]["outflow"][0]["name"], "半导体")
+        self.assertTrue(result["data_status"]["行业资金流向"])
+        self.assertTrue(result["step_status"]["行业资金流向获取"])
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.sector_fund_flow"], "tencent.get_sector_fund_flow")
 
     def test_collect_market_activity_capital_snapshot_request_bundle_builds_lianban_and_lhb_views(self):
         timer = _TimerStub()

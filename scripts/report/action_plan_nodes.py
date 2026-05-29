@@ -6,6 +6,38 @@ from selection.candidate_quality_contracts import (
 from selection.candidate_trace_contracts import build_eliminated_summary
 
 
+def _trace_code(trace):
+    trace = trace or {}
+    return str(trace.get("stock_code") or trace.get("code") or trace.get("代码") or "").strip()
+
+
+def _flatten_trace_texts(value):
+    if isinstance(value, dict):
+        texts = []
+        for item in value.values():
+            texts.extend(_flatten_trace_texts(item))
+        return texts
+    if isinstance(value, (list, tuple, set)):
+        texts = []
+        for item in value:
+            texts.extend(_flatten_trace_texts(item))
+        return texts
+    return [str(value or "")]
+
+
+def _incomplete_trace_codes(traces):
+    codes = set()
+    for trace in traces or []:
+        if not isinstance(trace, dict):
+            continue
+        text = "；".join(_flatten_trace_texts(trace))
+        if trace.get("missing_data") or "关键数据不完整" in text or "数据缺失" in text:
+            code = _trace_code(trace)
+            if code:
+                codes.add(code)
+    return codes
+
+
 def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
     section_title = str(context.get("section_title", "") or "明日操作计划").strip() or "明日操作计划"
     return {
@@ -38,11 +70,12 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
     if eliminated_summary is None:
         eliminated_summary = build_eliminated_summary(context.get("candidate_trace_eliminated_items") or [])
     render_trace_tables = bool(context.get("render_candidate_trace_tables"))
-    traces = [
+    contract_traces = [
         contract.get("trace")
         for contract in contracts
         if isinstance(contract, dict) and contract.get("trace")
     ]
+    traces = list(context.get("candidate_traces") or []) or contract_traces
     return {
         "lines": render_candidate_quality_section(
             panel,
@@ -67,7 +100,12 @@ def build_action_plan_table_node(context, node_meta=None, node_lookup=None):
         "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
         "|----------|------|------|----------|-----------|",
     ]
-    action_rows = context.get("action_rows") or []
+    blocked_codes = _incomplete_trace_codes(context.get("candidate_traces") or [])
+    action_rows = [
+        row
+        for row in (context.get("action_rows") or [])
+        if str(row.get("code") or "").strip() not in blocked_codes
+    ]
     if action_rows:
         for row in action_rows:
             lines.append(

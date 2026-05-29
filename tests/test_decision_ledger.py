@@ -1602,6 +1602,85 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows[1]["buy_point_quality"], "主目标不可成交")
         self.assertIn("2:1", rows[1]["risk_reward"])
 
+    def test_selection_result_preserves_success_sample_when_execution_is_skipped(self):
+        index = {
+            "latest_trade_date": "2026-05-28",
+            "by_stock_code": {
+                "000636": [
+                    {
+                        "stock_code": "000636",
+                        "stock_name": "风华高科",
+                        "planned_participation": {
+                            "source_tier": "ordinary_watch",
+                            "participation_window": "09:50-10:10观察",
+                            "buy_window": "09:50-10:10",
+                            "limit_up_inertia_level": "高惯性",
+                            "next_day_limit_probability_band": "高于普通上涨样本",
+                            "risk_reward_plan": "默认要求盈亏比不低于2:1",
+                        },
+                        "participation_review": {
+                            "status": "预演作废",
+                            "entry_decision": "skip",
+                            "same_day_action": "0%不参与；等下一次预演条件重新成立",
+                            "market_outcome": "次日封板后继续被资金选择",
+                        },
+                        "selection_result": {
+                            "status": "识别成功",
+                            "evidence": "风华高科后续涨停，说明元器件方向的高辨识度承接样本有效",
+                            "lesson": "保留高辨识度、强收盘、成交承接这些共同特征",
+                        },
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-22",
+                                "rank": 1,
+                                "source_section": "极度看好名单",
+                            }
+                        ],
+                    }
+                ],
+                "300721": [
+                    {
+                        "stock_code": "300721",
+                        "stock_name": "怡达股份",
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "participation_window": "竞价表态 + 回封参与",
+                            "buy_window": "09:30-09:35",
+                            "limit_up_inertia_level": "高惯性",
+                            "next_day_limit_probability_band": "高于普通上涨样本",
+                        },
+                        "participation_review": {
+                            "status": "预演作废",
+                            "entry_decision": "skip",
+                        },
+                        "selection_result": {
+                            "status": "识别成功",
+                            "evidence": "怡达股份后续走强，说明板块锚定龙/首波先锋信号有效",
+                        },
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-15",
+                                "rank": 2,
+                                "source_section": "极度看好名单",
+                            }
+                        ],
+                    }
+                ],
+            },
+        }
+
+        rows = build_extreme_conviction_backtest_rows(index, max_rows=5)
+        rendered = "\n".join(render_extreme_conviction_backtest_lines(index, max_rows=5))
+
+        rows_by_code = {row["stock_code"]: row for row in rows}
+        self.assertEqual(rows_by_code["000636"]["selection_result_status"], "识别成功")
+        self.assertEqual(rows_by_code["000636"]["review_status"], "预演作废")
+        self.assertIn("高辨识度", rows_by_code["000636"]["selection_result_evidence"])
+        self.assertEqual(rows_by_code["300721"]["selection_result_status"], "识别成功")
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
+        self.assertIn("| 2026-05-22 | 风华高科 | 000636 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
+        self.assertIn("| 2026-05-15 | 怡达股份 | 300721 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
+
     def test_rebuilt_same_day_snapshot_drops_stale_extreme_mentions_from_previous_index(self):
         stale_snapshot = build_decision_ledger_snapshot(
             trade_date="2026-05-18",
@@ -2200,7 +2279,7 @@ class DecisionLedgerTest(unittest.TestCase):
 
         self.assertIn("**重点观察历史回测表**", rendered)
         self.assertIn("历史回测表仅记录过去预演，不作为明日新增参与依据", rendered)
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
         self.assertIn("观察位成立", rendered)
         self.assertNotIn("买点质量", rendered)
         self.assertNotIn("买点成立", rendered)

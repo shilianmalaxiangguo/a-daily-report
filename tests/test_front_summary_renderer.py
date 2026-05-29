@@ -97,6 +97,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         lines = render_front_digest(
             {
                 "headline": ACTION_TEXT,
+                "opening_tone_text": "竞争方向承接转弱；军工资金扩散，核心承接稳定；只在军工核心里找参与资格",
                 "state_text": "强分歧修复；环境可做",
                 "mainline_label": "主攻线军工；趋势密度最强军工(3只)",
                 "mainline_turnover_text": "主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化",
@@ -122,6 +123,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 🧭 前台摘要", rendered)
         self.assertIn(f"- **先说结论**: {ACTION_TEXT}", rendered)
+        self.assertIn("- **今日基调**: 竞争方向承接转弱；军工资金扩散，核心承接稳定；只在军工核心里找参与资格", rendered)
         self.assertIn("- **主线更替与占比**: 主线未切换，军工仍是中心；成交额占比 10.2% -> 12.8% -> 15.1%，节奏偏强化", rendered)
         self.assertIn("- **执行依据**: 先选边站队，再等确认", rendered)
         self.assertIn("- **弱转强先看谁**: 军工一号的弱转强确认最完整", rendered)
@@ -153,6 +155,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "headline": "先观察",
                 "state_text": "防守观察",
                 "mainline_label": "主线待确认",
+                "opening_tone_text": "多方向都有局部热度；当前方向强度不足；仅观察，不给新增参与资格",
                 "special_probe_text": "军工观察",
                 "style_action_text": "先看量能",
                 "risk_parts": ["跌停3只"],
@@ -166,6 +169,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 🧭 前台摘要", rendered)
         self.assertIn("先说结论", rendered)
+        self.assertIn("今日基调", rendered)
         self.assertIn("特殊标的先看谁", rendered)
         self.assertNotIn("方向站队池", rendered)
 

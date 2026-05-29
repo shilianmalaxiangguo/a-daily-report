@@ -70,7 +70,7 @@ class PipelineRunnerTest(unittest.TestCase):
             "Legacy summary body"
         )
 
-        with patch("daily_report_render.generate_markdown_report", return_value=legacy_markdown):
+        with patch("daily_report_entry_demo.generate_markdown_report", return_value=legacy_markdown):
             ctx = run_pipeline(
                 request={"target_date": "2026-04-21"},
                 hooks=[

@@ -12,6 +12,31 @@ def _format_count(value):
     return str(value)
 
 
+def _safe_int(value):
+    try:
+        if value in (None, ""):
+            return 0
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _hot_rank_sample_label(data):
+    data = data or {}
+    target = _safe_int(data.get("hot_rank_sample_target")) or 50
+    sample_size = _safe_int(data.get("hot_rank_sample_size"))
+    if not sample_size:
+        sample_size = len(data.get("hot_rank_top50") or data.get("hot_rank_top30") or data.get("integrated_hot_list") or [])
+    if sample_size and sample_size < target:
+        return f"热度样本{sample_size}/{target}只，关键数据不完整，停止生成"
+    return f"热度前{target}个股"
+
+
+def _market_breadth_complete(market_stats):
+    market_stats = market_stats or {}
+    return _safe_int(market_stats.get("up_count")) > 0 and _safe_int(market_stats.get("down_count")) > 0
+
+
 def _sorted_distribution_items(distribution):
     items = []
     for raw_name, raw_count in (distribution or {}).items():
@@ -56,8 +81,10 @@ def _render_board_tag_fallback_summary(tag_distribution, status_distribution, hi
     market_stats = market_stats or {}
     up_count = market_stats.get("up_count")
     down_count = market_stats.get("down_count")
-    if up_count is not None and down_count is not None:
+    if _market_breadth_complete(market_stats):
         lines.append(f"- **资金偏好**：上涨{up_count}家、下跌{down_count}家，热榜标签集中度优先看前排承接。")
+    elif up_count is not None or down_count is not None:
+        lines.append("- **资金偏好**：涨跌家数未采集，关键数据不完整，停止生成。")
 
     return "\n".join(lines)
 
@@ -67,10 +94,11 @@ def build_board_tag_header_node(context, node_meta=None, node_lookup=None):
 
 
 def build_board_tag_source_note_node(context, node_meta=None, node_lookup=None):
+    sample_label = _hot_rank_sample_label(_data(context))
     return {
         "lines": [
-            "> **数据来源**: 同花顺热榜API（基于热度前30个股的板块标签统计）",
-            "> **说明**: 热度前30个股详情见第四章，本章聚焦板块分布与资金偏好分析",
+            f"> **数据来源**: 同花顺热榜API（基于{sample_label}的板块标签统计）",
+            f"> **说明**: {sample_label}详情见第四章，本章聚焦板块分布与资金偏好分析",
             "",
         ],
         "exports": {},
@@ -92,12 +120,13 @@ def build_board_tag_analysis_node(context, node_meta=None, node_lookup=None):
 
     analysis_text = ""
     if tag_distribution and callable(analyze_sector_distribution):
+        market_stats = data.get("market_stats", {})
         analysis_text = analyze_sector_distribution(
             tag_distribution,
             status_distribution,
             high_lianban_stocks,
             top_n=15,
-            market_stats=data.get("market_stats", {}),
+            market_stats=market_stats if _market_breadth_complete(market_stats) else {},
         )
     if not isinstance(analysis_text, str) or not analysis_text.strip():
         analysis_text = _render_board_tag_fallback_summary(

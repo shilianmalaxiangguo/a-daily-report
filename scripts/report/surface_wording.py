@@ -48,6 +48,7 @@ def sanitize_user_visible_text(value):
             sanitized = sanitized.replace(source, target)
         for source, target in PRICE_ACTION_WORDING_REPLACEMENTS:
             sanitized = sanitized.replace(source, target)
+        sanitized = sanitized.replace("连续 走势符合强势标准", "连续走势符合强势标准")
         return sanitized
     if isinstance(value, list):
         return [sanitize_user_visible_text(item) for item in value]

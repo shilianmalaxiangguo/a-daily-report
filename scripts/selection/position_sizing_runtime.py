@@ -675,6 +675,35 @@ def _build_position_sizing_decision_legacy_body(
             }
         )
         return _finalize(decision)
+    reduce_only_candidate_preview_ready = bool(
+        execution_bias == "reduce_only"
+        and candidate
+        and allow_attack_50_ready
+        and _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type)
+        and _has_explicit_participation_window(candidate)
+        and _has_clear_invalidation(candidate, support_price)
+        and not _explicit_market_ice_point(monthly_context, state_machine_snapshot, final_gate)
+        and not branch_20cm.get("observe_only")
+    )
+    if reduce_only_candidate_preview_ready:
+        monthly_rhythm.update(
+            {
+                "month_mode": "attack_prepare",
+                "target_role": "attack_prepare",
+                "max_position_pct": max(int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)), 50),
+                "allow_full_attack": False,
+                "trend_invalid": False,
+                "reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留预计50%标准进攻，条件不成立回0%。",
+            }
+        )
+        decision.update(
+            {
+                "participation_mode": "attack_50_preview",
+                "target_position_pct": 50,
+                "sizing_reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留预计50%标准进攻，条件不成立回0%。",
+            }
+        )
+        return _finalize(decision)
     if execution_bias == "watch_only" and candidate and allow_attack_50_ready and feedback_clock.get("ready") and (history_continuity_ready or probe_allows_attack_50_ready or second_shot_ready or weak_to_strong_upgrade_ready) and conditional_probe_ok:
         decision.update(
             {
@@ -707,6 +736,28 @@ def _build_position_sizing_decision_legacy_body(
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
                 "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。",
+            }
+        )
+        return _finalize(decision)
+
+    attack_prepare_candidate_ready = bool(
+        candidate
+        and execution_bias in ("watch_only", "prep_only", "divergence_only", "")
+        and int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)) >= 50
+        and not _explicit_market_ice_point(monthly_context, state_machine_snapshot, final_gate)
+        and not branch_20cm.get("is_20cm")
+        and not branch_20cm.get("observe_only")
+        and _has_explicit_participation_window(candidate)
+        and _has_clear_invalidation(candidate, support_price)
+        and conditional_probe_ok
+        and not bridge_prep_observe_only
+    )
+    if attack_prepare_candidate_ready:
+        decision.update(
+            {
+                "participation_mode": "attack_50_preview",
+                "target_position_pct": 50,
+                "sizing_reason": "已有明确候选、固定交易窗口和失效价，市场未到弱市场/冰点/趋势失效；按50%标准进攻预演，不再默认0%观察。",
             }
         )
         return _finalize(decision)

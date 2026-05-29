@@ -82,6 +82,7 @@ class DatabaseServiceTest(unittest.TestCase):
             self.assertEqual(total["total_amount_yi"], 2.5)
             self.assertEqual(queried_total["total_amount_yi"], 2.5)
             self.assertEqual(queried_total["stock_count"], 1)
+            self.assertEqual(service.query_market_breadth_counts("2026-05-12")["up_count"], 1)
             self.assertEqual(len(ranks), 1)
             self.assertEqual(series["rows"][0]["share_pct"], 100.0)
             self.assertEqual(service.query_mainline_daily_series("2026-05-12")[0]["primary_mainline"], "半导体")

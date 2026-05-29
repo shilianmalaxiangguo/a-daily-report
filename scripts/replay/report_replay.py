@@ -30,6 +30,7 @@ def _load_default_mainline_helpers():
         _resolve_effective_total_turnover,
     )
     from research.market_research_support import (
+        get_market_breadth_from_fact_db_runtime,
         get_market_daily_total_from_fact_db_runtime,
         get_market_total_turnover_from_fact_db_runtime,
         get_turnover_rank_from_fact_db_runtime,
@@ -54,6 +55,7 @@ def _load_default_mainline_helpers():
         "mainline_turnover_summary_conflicts_with_current_record": _mainline_turnover_summary_conflicts_with_current_record,
         "resolve_effective_total_turnover": _resolve_effective_total_turnover,
         "get_market_daily_total_from_fact_db": get_market_daily_total_from_fact_db_runtime,
+        "get_market_breadth_from_fact_db": get_market_breadth_from_fact_db_runtime,
         "get_market_total_turnover_from_fact_db": get_market_total_turnover_from_fact_db_runtime,
         "get_turnover_rank_from_fact_db": get_turnover_rank_from_fact_db_runtime,
         "get_wind_a_from_tushare": get_wind_a_from_tushare_first,
@@ -1110,6 +1112,59 @@ def _ensure_replay_critical_tushare_facts(snapshot_data, target_date, safe_float
     return snapshot_data
 
 
+def _market_breadth_complete(market_stats, safe_float):
+    market_stats = market_stats or {}
+    return safe_float(market_stats.get("up_count")) > 0 and safe_float(market_stats.get("down_count")) > 0
+
+
+def _ensure_replay_market_breadth(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    if _market_breadth_complete(snapshot_data.get("market_stats"), safe_float):
+        return snapshot_data
+
+    helpers = helpers or {}
+    fetcher = helpers.get("get_market_breadth_from_fact_db")
+    breadth = fetcher(target_date) if callable(fetcher) else {}
+    if not _market_breadth_complete(breadth, safe_float):
+        snapshot_data.setdefault("data_status", {})["大盘涨跌统计"] = False
+        _refresh_request_diagnostics(snapshot_data)
+        return snapshot_data
+
+    market_stats = dict(snapshot_data.get("market_stats") or {})
+    market_stats.update(
+        {
+            "up_count": int(safe_float(breadth.get("up_count"))),
+            "down_count": int(safe_float(breadth.get("down_count"))),
+            "flat_count": int(safe_float(breadth.get("flat_count"))),
+            "stock_count": int(safe_float(breadth.get("stock_count"))),
+        }
+    )
+    if breadth.get("min_pct_chg") not in (None, ""):
+        market_stats["min_pct_chg"] = safe_float(breadth.get("min_pct_chg"))
+    if breadth.get("max_pct_chg") not in (None, ""):
+        market_stats["max_pct_chg"] = safe_float(breadth.get("max_pct_chg"))
+    snapshot_data["market_stats"] = market_stats
+    snapshot_data.setdefault("data_status", {})["大盘涨跌统计"] = True
+    snapshot_data.setdefault("step_status", {})["涨停跌停数据获取"] = True
+    _mark_replayed_step_success(snapshot_data, "涨停跌停数据获取", safe_float)
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.market_stats",
+        status="success",
+        message="已从事实库回补大盘涨跌家数",
+        provider="storage.stock_daily_quotes_recent.breadth",
+        target_keys=["market_stats"],
+        up_count=market_stats["up_count"],
+        down_count=market_stats["down_count"],
+        flat_count=market_stats["flat_count"],
+        stock_count=market_stats["stock_count"],
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
+
+
 def _has_rows(value):
     if isinstance(value, (list, tuple)):
         return len(value) > 0
@@ -1127,7 +1182,7 @@ def _sync_replay_source_status(snapshot_data, *, data_label, step_label, timer_l
 
 
 def _fallback_integrated_hot_list_from_primary(snapshot_data):
-    hot_rank = snapshot_data.get("hot_rank_top30") or []
+    hot_rank = snapshot_data.get("hot_rank_top50") or snapshot_data.get("hot_rank_top30") or []
     if not isinstance(hot_rank, list):
         return []
     integrated = []
@@ -1138,6 +1193,116 @@ def _fallback_integrated_hot_list_from_primary(snapshot_data):
         row.setdefault("rank", index)
         integrated.append(row)
     return integrated
+
+
+def _hot_rank_sample_size(snapshot_data, safe_float):
+    explicit = int(safe_float((snapshot_data or {}).get("hot_rank_sample_size")))
+    if explicit > 0:
+        return explicit
+    return len((snapshot_data or {}).get("hot_rank_top50") or (snapshot_data or {}).get("hot_rank_top30") or [])
+
+
+def _hot_rank_sample_target(snapshot_data, safe_float):
+    target = int(safe_float((snapshot_data or {}).get("hot_rank_sample_target") or 50))
+    return target if target > 0 else 50
+
+
+def _fetch_replay_hot_rank(target_date, helpers, target):
+    fetcher = (helpers or {}).get("get_stock_hot_rank")
+    if callable(fetcher):
+        try:
+            return list(fetcher(target_date=target_date, limit=target) or [])
+        except TypeError as error:
+            if "target_date" not in str(error) and "limit" not in str(error):
+                raise
+            try:
+                return list(fetcher(target_date, target) or [])
+            except TypeError:
+                return list(fetcher(target_date) or [])
+    try:
+        from ths_hot_stock import fetch_ths_hot_stock
+
+        return list(fetch_ths_hot_stock(num=target) or [])
+    except Exception:
+        return []
+
+
+def _ensure_replay_hot_rank_top50(snapshot_data, target_date, safe_float, helpers=None):
+    if not isinstance(snapshot_data, dict):
+        return snapshot_data
+    target = _hot_rank_sample_target(snapshot_data, safe_float)
+    current_size = _hot_rank_sample_size(snapshot_data, safe_float)
+    if current_size >= target and snapshot_data.get("hot_rank_top50"):
+        return snapshot_data
+
+    rows = _fetch_replay_hot_rank(target_date, helpers or {}, target)
+    if len(rows) < target:
+        snapshot_data["hot_rank_sample_size"] = max(current_size, len(rows))
+        snapshot_data["hot_rank_sample_target"] = target
+        snapshot_data.setdefault("data_status", {})[f"热度前{target}个股"] = False
+        snapshot_data.setdefault("step_status", {})[f"热度前{target}个股获取"] = False
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.hot_rank.primary",
+            status="degraded",
+            message="热榜样本不足",
+            provider="ths_hot_stock",
+            target_keys=["hot_rank_top50", "hot_rank_top30"],
+            hot_rank_count=len(rows),
+            required_count=target,
+        )
+        _refresh_request_diagnostics(snapshot_data)
+        return snapshot_data
+
+    snapshot_data["hot_rank_top30"] = list(rows)
+    snapshot_data["hot_rank_top50"] = list(rows)
+    snapshot_data["hot_rank_sample_size"] = len(rows)
+    snapshot_data["hot_rank_sample_target"] = target
+    snapshot_data.setdefault("data_status", {})[f"热度前{target}个股"] = True
+    snapshot_data.setdefault("step_status", {})[f"热度前{target}个股获取"] = True
+    _mark_replayed_step_success(snapshot_data, f"热度前{target}个股获取", safe_float)
+
+    try:
+        from domains.market_activity.request import _build_integrated_hot_list_from_primary_hot_rank
+
+        integrated, tag_distribution, status_distribution, high_lianban_stocks = _build_integrated_hot_list_from_primary_hot_rank(rows)
+    except Exception:
+        integrated, tag_distribution, status_distribution, high_lianban_stocks = ([], {}, {}, [])
+
+    if integrated:
+        snapshot_data["integrated_hot_list"] = integrated
+        snapshot_data["tag_distribution"] = tag_distribution
+        snapshot_data["status_distribution"] = status_distribution
+        snapshot_data["high_lianban_stocks"] = high_lianban_stocks
+        snapshot_data.setdefault("data_status", {})["整合热榜"] = True
+        snapshot_data.setdefault("step_status", {})["整合热榜获取"] = True
+        _mark_replayed_step_success(snapshot_data, "整合热榜获取", safe_float)
+        _replace_request_module_log(
+            snapshot_data,
+            module="domains.market_activity.request",
+            step="request.integrated_hot_rank",
+            status="success",
+            message="已从热榜前50派生整合热榜",
+            provider="primary_hot_rank.derived",
+            target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
+            integrated_count=len(integrated),
+            fallback_used=False,
+        )
+
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.hot_rank.primary",
+        status="success",
+        message="已回补热度前50个股",
+        provider=(rows[0].get("data_source") if isinstance(rows[0], dict) else "") or "ths_hot_stock",
+        target_keys=["hot_rank_top50", "hot_rank_top30"],
+        hot_rank_count=len(rows),
+        required_count=target,
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
 
 
 def _fetch_replay_xuangubao_data(target_date, helpers):
@@ -1694,7 +1859,7 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 module="domains.market_activity.request",
                 step="request.integrated_hot_rank",
                 status="success",
-                message="已从热度前三十派生整合热榜",
+                message="已从热榜样本派生整合热榜",
                 provider="primary_hot_rank.derived",
                 target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
                 integrated_count=len(integrated),
@@ -2008,6 +2173,18 @@ def build_replay_snapshot_contract(
     if "query_new_high_feedback_series" in explicit_helpers:
         runtime_helpers["_use_default_query_new_high_feedback_series"] = False
     snapshot_data = _ensure_replay_critical_tushare_facts(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_replay_market_breadth(
+        snapshot_data,
+        target_date,
+        safe_float,
+        helpers=runtime_helpers,
+    )
+    snapshot_data = _ensure_replay_hot_rank_top50(
         snapshot_data,
         target_date,
         safe_float,
