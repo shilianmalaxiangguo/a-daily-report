@@ -13,6 +13,45 @@ class MonitoringPoolNodeRuntimeTest(unittest.TestCase):
         except ModuleNotFoundError as error:
             self.fail(f'report.monitoring_pool_nodes should exist: {error}')
 
+    def test_run_monitoring_pool_nodes_exports_runtime_contract_for_replay(self):
+        from report.monitoring_pool_node_runtime import run_monitoring_pool_nodes
+
+        def build_main_summary(context, node_meta, node_lookup=None):
+            self.assertEqual(node_meta['key'], 'main_pool_summary')
+            self.assertEqual(node_meta['node_key'], 'main_pool_summary')
+            self.assertEqual(node_meta['title'], 'main_pool_summary')
+            self.assertEqual(node_meta['node_no'], 0)
+            self.assertEqual(node_lookup['secondary_pool_summary']['node_key'], 'secondary_pool_summary')
+            return {
+                'lines': ['main summary'],
+                'exports': {'main_pool_count': 1},
+                'module_logs': [{'module': 'test', 'step': 'main', 'status': 'success'}],
+            }
+
+        def build_secondary_summary(context, node_meta, node_lookup=None):
+            self.assertEqual(context['main_pool_count'], 1)
+            self.assertEqual(node_meta['key'], 'secondary_pool_summary')
+            return {'lines': ['secondary summary'], 'exports': {'secondary_pool_count': 2}}
+
+        result = run_monitoring_pool_nodes(
+            [
+                {'key': 'main_pool_summary', 'builder': build_main_summary},
+                {'key': 'secondary_pool_summary', 'builder': build_secondary_summary},
+            ],
+            {'seed': True},
+        )
+
+        self.assertEqual(result['lines'], ['main summary', 'secondary summary'])
+        self.assertEqual(result['exports']['main_pool_count'], 1)
+        self.assertEqual(result['exports']['secondary_pool_count'], 2)
+        self.assertEqual(result['context']['main_pool_count'], 1)
+        self.assertEqual(result['context']['secondary_pool_count'], 2)
+        self.assertEqual(result['node_outputs']['main_pool_summary']['main_pool_count'], 1)
+        self.assertEqual(result['node_outputs']['secondary_pool_summary']['secondary_pool_count'], 2)
+        self.assertEqual([node['node_key'] for node in result['nodes']], ['main_pool_summary', 'secondary_pool_summary'])
+        self.assertTrue(any(log.get('step') == 'run.main_pool_summary' for log in result['module_logs']))
+        self.assertTrue(any(log.get('step') == 'run.secondary_pool_summary' for log in result['module_logs']))
+
     def test_render_monitoring_pool_nodes_can_render_only_main_summary(self):
         nodes = self._load_nodes_module()
         result = nodes.render_monitoring_pool_nodes(
