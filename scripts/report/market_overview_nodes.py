@@ -35,6 +35,62 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def evaluate_turnover_quality(market_data):
+    """
+    评估成交量质量，区分"做多放量"和"杀跌放量"。
+
+    Args:
+        market_data: 市场数据字典，包含total_turnover和market_stats
+
+    Returns:
+        dict: {
+            "turnover_quality": str,  # "做多放量" / "杀跌放量" / "缩量"
+            "turnover_quality_desc": str  # 描述
+        }
+    """
+    market_data = market_data or {}
+
+    # 获取两市成交额
+    total_turnover = _safe_float(market_data.get("total_turnover"), 0.0)
+
+    # 获取涨跌家数
+    market_stats = market_data.get("market_stats") or {}
+    up_count = _safe_float(market_stats.get("up_count"), 0.0)
+    down_count = _safe_float(market_stats.get("down_count"), 0.0)
+
+    # 处理数据缺失情况
+    if total_turnover <= 0 or (up_count <= 0 and down_count <= 0):
+        return {
+            "turnover_quality": "待累计",
+            "turnover_quality_desc": "成交量或涨跌家数数据不足，暂不判断成交量质量"
+        }
+
+    # 计算涨跌比
+    if down_count > 0:
+        rise_fall_ratio = up_count / down_count
+    else:
+        # 如果下跌家数为0，说明全部上涨，涨跌比视为无穷大
+        rise_fall_ratio = float('inf')
+
+    # 判断成交量质量
+    if total_turnover > 30000:
+        if rise_fall_ratio > 0.5:
+            return {
+                "turnover_quality": "做多放量",
+                "turnover_quality_desc": "成交量充沛且上涨家数占优，赚钱效应较强"
+            }
+        else:
+            return {
+                "turnover_quality": "杀跌放量",
+                "turnover_quality_desc": "成交量充沛但上涨家数不足，赚钱效应不足"
+            }
+    else:
+        return {
+            "turnover_quality": "缩量",
+            "turnover_quality_desc": "成交量不足，先按缩量处理"
+        }
+
+
 def _price_band_absolute_label(high_pct, low_pct):
     high_pct = _safe_float(high_pct)
     low_pct = _safe_float(low_pct)
@@ -810,6 +866,13 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         f"| 两市成交额 | {turnover:.2f}亿 | "
         f"{_format_turnover_change_pct(turnover_comparison.get('previous_change_pct'))} | {turnover_basis} |"
     )
+
+    # 追加成交量质量判断，避免只看绝对成交额。
+    turnover_quality = evaluate_turnover_quality(data)
+    lines.append(
+        f"| 成交量质量 | {turnover_quality['turnover_quality']} | - | {turnover_quality['turnover_quality_desc']} |"
+    )
+
     lines.append(
         f"| Top50成交额占比 | {_format_top50_share_pct(top50_share)} | {top50_share['regime']} | {top50_share['interpretation']} |"
     )

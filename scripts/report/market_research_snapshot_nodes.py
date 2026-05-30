@@ -51,7 +51,8 @@ def _display_text(value, context):
 
 
 def _observation(context):
-    return context.get("observation") or {}
+    observation = context.get("observation")
+    return observation if isinstance(observation, dict) else {}
 
 
 def _benchmark_change(context):

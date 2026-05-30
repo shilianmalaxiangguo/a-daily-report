@@ -614,6 +614,8 @@ def resolve_turnover_share_trend_rows(context=None):
         rows = (context.get("mainline_turnover_summary") or {}).get("turnover_share_trend_rows")
     normalized = []
     for row in rows or []:
+        if not isinstance(row, dict):
+            continue
         row = row or {}
         normalized_row = {
             "date": str(row.get("date") or "-").strip() or "-",

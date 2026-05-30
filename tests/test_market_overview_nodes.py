@@ -5,10 +5,69 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from report.market_overview_nodes import render_market_overview_section
+from report.market_overview_nodes import evaluate_turnover_quality, render_market_overview_section
 
 
 class MarketOverviewNodesTest(unittest.TestCase):
+    def test_evaluate_turnover_quality_classifies_sell_pressure_volume(self):
+        cases = [
+            {
+                "trade_date": "2026-05-26",
+                "total_turnover": 32643.59,
+                "up_count": 1354,
+                "down_count": 4082,
+            },
+            {
+                "trade_date": "2026-05-27",
+                "total_turnover": 32599.04,
+                "up_count": 974,
+                "down_count": 4489,
+            },
+        ]
+
+        for case in cases:
+            with self.subTest(trade_date=case["trade_date"]):
+                result = evaluate_turnover_quality(
+                    {
+                        "total_turnover": case["total_turnover"],
+                        "market_stats": {
+                            "up_count": case["up_count"],
+                            "down_count": case["down_count"],
+                        },
+                    }
+                )
+
+                self.assertEqual(result["turnover_quality"], "杀跌放量")
+                self.assertEqual(result["turnover_quality_desc"], "成交量充沛但上涨家数不足，赚钱效应不足")
+
+    def test_evaluate_turnover_quality_classifies_buying_volume(self):
+        result = evaluate_turnover_quality(
+            {
+                "total_turnover": 31000.0,
+                "market_stats": {"up_count": 3200, "down_count": 1200},
+            }
+        )
+
+        self.assertEqual(result["turnover_quality"], "做多放量")
+        self.assertEqual(result["turnover_quality_desc"], "成交量充沛且上涨家数占优，赚钱效应较强")
+
+    def test_evaluate_turnover_quality_classifies_low_turnover(self):
+        result = evaluate_turnover_quality(
+            {
+                "total_turnover": 29246.59,
+                "market_stats": {"up_count": 2600, "down_count": 2100},
+            }
+        )
+
+        self.assertEqual(result["turnover_quality"], "缩量")
+        self.assertEqual(result["turnover_quality_desc"], "成交量不足，先按缩量处理")
+
+    def test_evaluate_turnover_quality_handles_missing_breadth(self):
+        result = evaluate_turnover_quality({"total_turnover": 32643.59})
+
+        self.assertEqual(result["turnover_quality"], "待累计")
+        self.assertEqual(result["turnover_quality_desc"], "成交量或涨跌家数数据不足，暂不判断成交量质量")
+
     def test_market_base_renders_etf_turnover_capacity_with_existing_25_day_metrics(self):
         rows = [
             {"trade_date": "2026-05-19", "etf_turnover_yi": 4672.8, "change_pct": "待累计", "covered_etf_count": 1518},
@@ -58,6 +117,10 @@ class MarketOverviewNodesTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn(
             "| ETF两市成交额 | 4484.90亿 | 机构容量中性偏收缩 | 近5日-4.02%，区间4362.50亿-5146.80亿，机构容量流量未明显放大。 |",
+            rendered,
+        )
+        self.assertIn(
+            "| 成交量质量 | 缩量 | - | 成交量不足，先按缩量处理 |",
             rendered,
         )
         self.assertIn(

@@ -1,5 +1,7 @@
 from report.market_research_snapshot_node_registry import build_market_research_snapshot_node_specs
 from report.market_research_snapshot_node_runtime import run_market_research_snapshot_nodes
+from report.market_capacity_evolution_nodes import build_market_research_snapshot_market_capacity_evolution_node
+from report.sector_internal_analysis_nodes import build_market_research_snapshot_sector_internal_analysis_node
 from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_abnormal_projection_node,
     build_market_research_snapshot_dialectical_decision_node,
@@ -46,6 +48,8 @@ MARKET_RESEARCH_SNAPSHOT_NODE_BUILDERS = {
     "cycle_interpretation": build_market_research_snapshot_cycle_interpretation_node,
     "pivot_mainline_interpretation": build_market_research_snapshot_pivot_mainline_interpretation_node,
     "mainline_capacity_regime": build_market_research_snapshot_mainline_capacity_regime_node,
+    "market_capacity_evolution": build_market_research_snapshot_market_capacity_evolution_node,
+    "sector_internal_analysis": build_market_research_snapshot_sector_internal_analysis_node,
     "table_header": build_market_research_snapshot_table_header_node,
     "risk_preference": build_market_research_snapshot_risk_preference_node,
     "mainline_focus": build_market_research_snapshot_mainline_focus_node,

@@ -98,6 +98,20 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("有量配合的下跌更像指数图形走弱后，量化动量和风控卖出互相强化", rendered)
         self.assertIn("越跌图形越丑，越丑承接越弱，容易形成踩踏", rendered)
 
+    def test_risk_preference_tolerates_malformed_observation(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["risk_preference"],
+                "benchmark_change": -2.04,
+                "turnover": 35072.8,
+                "observation": "malformed",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证-2.04% / 涨停0 / 跌停0 / 涨跌比暂无 / 成交额35073亿 |", rendered)
+
     def test_render_market_research_snapshot_section_renders_cycle_interpretation_table(self):
         lines = render_market_research_snapshot_section(
             {
@@ -297,6 +311,25 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertLess(rendered.index("2026-04-24"), rendered.index("2026-04-23"))
         self.assertNotIn("| 盘面风险偏好 |", rendered)
 
+    def test_mainline_turnover_skips_malformed_trend_rows(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["mainline_turnover"],
+                "turnover_share_trend_rows": ["malformed"],
+                "mainline_turnover_summary": {
+                    "conclusion": "主线未切换，通信仍是中心",
+                    "data_text": "最近3日主线 通信 -> 通信 -> 通信",
+                    "action_text": "继续围绕通信做减法",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 主线更替与成交额占比 | 主线未切换，通信仍是中心 | 最近3日主线 通信 -> 通信 -> 通信 | 继续围绕通信做减法 |", rendered)
+        self.assertNotIn("#### 主线成交额占比趋势", rendered)
+        self.assertNotIn("malformed", rendered)
+
     def test_render_market_research_snapshot_section_renders_mainline_capacity_regime_node(self):
         lines = render_market_research_snapshot_section(
             {
@@ -371,6 +404,567 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("#### 能力圈匹配判断", rendered)
         self.assertIn("| 适配位置 | 行情类型 | 适配理由 | 明日动作 |", rendered)
         self.assertIn("| 短线/超短线主战场 | 单主线聚焦 | 量能、资金扩散、板块效应和核心承接进入短线/超短线可发挥区 | 按短线/超短线主战场处理，围绕半导体核心继续寻找参与资格 |", rendered)
+
+    def test_market_capacity_evolution_enabled_node_renders_replacement_phase_summary(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["market_capacity_evolution"],
+                "turnover": 12834,
+                "turnover_ma5": 11800,
+                "turnover_quality": "做多放量",
+                "market_stats": {"up_count": 3200, "down_count": 1700},
+                "capacity_evidence": "半导体成交占比连续抬升，电力占比回落。",
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "双线竞争",
+                        "mainline_regime": "主线+背景线",
+                        "primary_line": "半导体",
+                        "other_lines": "电力",
+                        "confirmation_evidence": "半导体高标和涨停更集中，成交占比靠前",
+                        "sector_relationship_state": "半导体接替电力，电力退成背景线",
+                        "mainline_process": "半导体从试攻转为接替",
+                        "tomorrow_action": "先看半导体承接能否继续强于电力",
+                    },
+                    "overtake_window_summary": {
+                        "window_state": "confirm_next",
+                        "rival_line": "电力",
+                        "own_line": "半导体",
+                        "rival_slowdown": "电力成交占比回落",
+                        "own_stability": "半导体核心承接稳定",
+                        "action": "半导体继续拉升则确认接替",
+                    },
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-05-27",
+                            "cycle_mainline": "半导体",
+                            "daily_attack_line": "半导体",
+                            "mainline_turnover": "1900.00亿",
+                            "market_turnover": "12000.00亿",
+                            "share": "15.8%",
+                            "share_change": "+0.8pct",
+                            "interpretation": "接替试攻",
+                        },
+                        {
+                            "date": "2026-05-28",
+                            "cycle_mainline": "半导体",
+                            "daily_attack_line": "半导体",
+                            "mainline_turnover": "2250.00亿",
+                            "market_turnover": "12834.00亿",
+                            "share": "17.6%",
+                            "share_change": "+1.8pct",
+                            "interpretation": "接替继续",
+                        },
+                    ],
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 市场容量演化", rendered)
+        self.assertIn("**当前阶段**: 接替期（竞争关系）", rendered)
+        self.assertIn("成交量质量: 做多放量", rendered)
+        self.assertIn("主线容量: 双线竞争", rendered)
+        self.assertIn("#### 板块竞争关系", rendered)
+        self.assertIn("主攻线: 半导体", rendered)
+        self.assertIn("竞争线/背景线: 电力", rendered)
+        self.assertIn("半导体从试攻转为接替", rendered)
+        self.assertIn("2026-05-28 半导体/半导体 17.6%（+1.8pct）", rendered)
+        self.assertIn("#### 明日观察", rendered)
+        self.assertIn("竞争线/背景线反超", rendered)
+
+    def test_market_capacity_evolution_replacement_phase_wins_when_volume_quality_is_selloff(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["market_capacity_evolution"],
+                "turnover_quality": "杀跌放量",
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "双线竞争",
+                        "mainline_regime": "主线+背景线",
+                        "primary_line": "半导体",
+                        "other_lines": "电力",
+                        "confirmation_evidence": "半导体承接强于电力",
+                        "sector_relationship_state": "半导体接替电力",
+                        "mainline_process": "接替确认中",
+                        "tomorrow_action": "先看半导体承接",
+                    },
+                    "overtake_window_summary": {"window_state": "confirm_next"},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**当前阶段**: 接替期（竞争关系）", rendered)
+        self.assertIn("成交量质量: 杀跌放量", rendered)
+
+    def test_market_capacity_evolution_waits_when_turnover_quality_missing(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["market_capacity_evolution"],
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "双线竞争",
+                        "mainline_regime": "主线+背景线",
+                        "primary_line": "半导体",
+                        "other_lines": "电力",
+                        "confirmation_evidence": "半导体承接强于电力",
+                        "sector_relationship_state": "半导体接替电力",
+                        "mainline_process": "接替确认中",
+                        "tomorrow_action": "先看半导体承接",
+                    },
+                    "overtake_window_summary": {"window_state": "confirm_next"},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**当前阶段**: 待确认", rendered)
+        self.assertNotIn("**当前阶段**: 接替期（竞争关系）", rendered)
+
+    def test_market_capacity_evolution_tolerates_malformed_optional_inputs(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["market_capacity_evolution"],
+                "turnover_quality": "做多放量",
+                "market_stats": "malformed",
+                "observation": ["malformed"],
+                "turnover_share_trend_rows": ["malformed"],
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "单线承载",
+                        "mainline_regime": "单主线聚焦",
+                        "primary_line": "半导体",
+                        "other_lines": "-",
+                        "confirmation_evidence": "半导体成交占比和高标反馈同步",
+                        "sector_relationship_state": "单主线聚焦",
+                        "mainline_process": "主线稳定",
+                        "tomorrow_action": "只看半导体核心承接",
+                    },
+                    "overtake_window_summary": {"window_state": "open"},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 市场容量演化", rendered)
+        self.assertIn("**当前阶段**: 分化期（趋势确立）", rendered)
+        self.assertNotIn("最近占比", rendered)
+
+    def test_default_snapshot_order_places_market_capacity_evolution_between_capacity_and_sector_analysis(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "turnover_quality": "做多放量",
+                "mainline_days": 3,
+                "turnover": 12834,
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "单线承载",
+                        "mainline_regime": "单主线聚焦",
+                        "primary_line": "半导体",
+                        "other_lines": "算力",
+                        "confirmation_evidence": "半导体成交占比和高标反馈同步",
+                        "sector_relationship_state": "单主线聚焦",
+                        "mainline_process": "主线稳定",
+                        "tomorrow_action": "只看半导体核心承接",
+                    },
+                    "overtake_window_summary": {
+                        "window_state": "open",
+                        "own_line": "半导体",
+                        "own_stability": "半导体核心承接稳定",
+                    },
+                },
+                "sector_internal_analysis": {
+                    "sectors": [
+                        {
+                            "sector_name": "半导体",
+                            "core_anchor": {"name": "芯片核心A", "code": "688001", "status": "放量上涨"},
+                            "relative_position": {"leaders": [], "core_anchors": [], "followers": [], "conclusion": "资金向核心集中"},
+                            "elastic_carrier": {"count": 0, "new_high_count": 0, "intraday_support": "弱", "stocks": []},
+                            "follower_support": {"grade": "C", "gain_5pct_count": 0, "gain_3pct_count": 0, "volume_ratio": 0.0},
+                            "second_wave_new_highs": {"count": 0, "ratio": 0.0, "stocks": [], "description": "近5日暂无二波创新高群"},
+                        }
+                    ],
+                    "sector_fund_flow": {"flows": []},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertLess(rendered.index("### 4. 主线容量与格局判断"), rendered.index("### 市场容量演化"))
+        self.assertLess(rendered.index("### 市场容量演化"), rendered.index("### 板块内部分析"))
+
+    def test_market_capacity_evolution_does_not_duplicate_capacity_regime_table(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "turnover_quality": "缩量",
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "容量待累计",
+                        "mainline_regime": "混沌轮动",
+                        "primary_line": "暂无",
+                        "other_lines": "半导体 / 电力",
+                        "confirmation_evidence": "多方向轮动，资金未明显胜出",
+                        "sector_relationship_state": "暂未分出",
+                        "mainline_process": "等待下一轮资金选择",
+                        "tomorrow_action": "先看量能是否重新放大",
+                    },
+                    "overtake_window_summary": {"window_state": "observe"},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 市场容量演化", rendered)
+        self.assertEqual(1, rendered.count("| 主线容量 | 主线格局 |"))
+
+    def test_sector_internal_analysis_renders_all_dimensions_when_context_allows(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "window_state": "open",
+                "mainline_regime": "单主线聚焦",
+                "primary_line": "半导体",
+                "turnover_quality": "做多放量",
+                "mainline_days": 3,
+                "sector_internal_analysis": {
+                    "sectors": [
+                        {"sector_name": "机器人", "core_anchor": {"name": "机器核心", "code": "300001", "status": "待观察"}},
+                        {
+                            "sector_name": "半导体",
+                            "core_anchor": {
+                                "name": "芯片核心A",
+                                "code": "688001",
+                                "status": "放量上涨",
+                                "volume": 320.0,
+                                "volume_ratio_in_sector": 0.28,
+                                "change_pct": 7.2,
+                            },
+                            "relative_position": {
+                                "leaders": [{"name": "芯片核心A", "code": "688001", "change_pct": 7.2, "volume": 320.0}],
+                                "core_anchors": [{"name": "芯片核心A", "code": "688001", "status": "放量上涨"}],
+                                "followers": [{"name": "后排B", "code": "688002", "change_pct": 3.5, "volume": 80.0}],
+                                "leader_avg_change": 7.2,
+                                "core_avg_change": 7.2,
+                                "follower_avg_change": 3.5,
+                                "leader_volume_ratio": 0.28,
+                                "core_volume_ratio": 0.28,
+                                "follower_volume_ratio": 0.42,
+                                "conclusion": "资金向核心集中",
+                            },
+                            "elastic_carrier": {
+                                "count": 2,
+                                "new_high_count": 2,
+                                "intraday_support": "强",
+                                "stocks": [{"name": "弹性C", "code": "688003", "change_pct": 9.1}],
+                            },
+                            "follower_support": {
+                                "grade": "B",
+                                "gain_5pct_count": 3,
+                                "gain_3pct_count": 6,
+                                "volume_ratio": 0.42,
+                                "description": "后排承接B级",
+                            },
+                            "second_wave_new_highs": {
+                                "count": 2,
+                                "ratio": 0.18,
+                                "stocks": [{"name": "二波D", "code": "688004"}],
+                                "description": "近5日至少2次创新高的个股有2只",
+                            },
+                            "total_stocks": 12,
+                            "turnover_share_change": 2.5,
+                        },
+                    ],
+                    "sector_fund_flow": {
+                        "description": "算力成交占比下降，半导体成交占比上升。",
+                        "flows": [
+                            {
+                                "from_sector": "算力",
+                                "to_sector": "半导体",
+                                "type": "扩散分流",
+                                "volume_change": 800.0,
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 板块内部分析", rendered)
+        self.assertIn("**当前阶段**: 主线稳定期", rendered)
+        self.assertIn("**分析板块**: 半导体", rendered)
+        self.assertIn("#### 中军状态", rendered)
+        self.assertIn("#### 板块内相对位置", rendered)
+        self.assertIn("#### 弹性载体", rendered)
+        self.assertIn("#### 后排承接质量", rendered)
+        self.assertIn("#### 二波创新高群", rendered)
+        self.assertIn("#### 板块间资金流动", rendered)
+
+    def test_sector_internal_analysis_observe_phase_stops_before_detail_sections(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "sector_analysis_trigger": {
+                    "should_analyze": False,
+                    "phase": "粘合期",
+                    "reason": "条件偏观察，先不做板块内部分析。",
+                    "dimensions": [],
+                },
+                "sector_internal_analysis": {
+                    "sectors": [{"sector_name": "半导体", "core_anchor": {"name": "芯片核心A", "status": "放量上涨"}}],
+                    "sector_fund_flow": {"flows": []},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 板块内部分析", rendered)
+        self.assertIn("**当前阶段**: 粘合期", rendered)
+        self.assertIn("条件偏观察，先不做板块内部分析。", rendered)
+        self.assertNotIn("#### 中军状态", rendered)
+        self.assertNotIn("#### 板块内相对位置", rendered)
+        self.assertNotIn("#### 弹性载体", rendered)
+        self.assertNotIn("#### 后排承接质量", rendered)
+        self.assertNotIn("#### 二波创新高群", rendered)
+        self.assertNotIn("#### 板块间资金流动", rendered)
+
+    def test_sector_internal_analysis_omits_section_without_analysis_data_by_default(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertNotIn("### 板块内部分析", rendered)
+
+    def test_sector_internal_analysis_explicit_analyze_without_sector_does_not_render_placeholder_sector(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "sector_analysis_trigger": {
+                    "should_analyze": True,
+                    "phase": "主线稳定期",
+                    "reason": "主攻线已进入可拆解区。",
+                    "dimensions": [],
+                },
+                "sector_internal_analysis": {"sectors": [], "sector_fund_flow": {}},
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertNotIn("**分析板块**: -", rendered)
+
+    def test_sector_internal_analysis_false_branch_hides_sector_and_core_fields(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "sector_analysis_trigger": {
+                    "should_analyze": False,
+                    "phase": "粘合期",
+                    "reason": "条件偏观察，先不做板块内部拆解。",
+                    "dimensions": [],
+                },
+                "sector_internal_analysis": {
+                    "sectors": [
+                        {
+                            "sector_name": "半导体",
+                            "total_stocks": 12,
+                            "turnover_share_change": 2.5,
+                            "core_anchor": {"name": "芯片核心A", "status": "放量上涨"},
+                        }
+                    ],
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 板块内部分析", rendered)
+        self.assertIn("**当前阶段**: 粘合期", rendered)
+        self.assertIn("**判断原因**: 条件偏观察，先不做板块内部拆解。", rendered)
+        self.assertNotIn("**分析板块**", rendered)
+        self.assertNotIn("**核心字段**", rendered)
+        self.assertNotIn("#### 中军状态", rendered)
+
+    def test_sector_internal_analysis_tolerates_malformed_nested_data(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "sector_analysis_trigger": {
+                    "should_analyze": True,
+                    "phase": "主线稳定期",
+                    "reason": "主攻线已进入可拆解区。",
+                    "dimensions": [
+                        "中军识别与跟踪",
+                        "板块内相对位置",
+                        "弹性载体识别",
+                        "后排承接质量",
+                        "二波创新高群",
+                        "板块间资金流动",
+                    ],
+                },
+                "sector_internal_analysis": {
+                    "sectors": [
+                        "半导体",
+                        {
+                            "sector_name": "半导体",
+                            "core_anchor": "芯片核心A",
+                            "relative_position": "核心更强",
+                            "elastic_carrier": "弹性扩散",
+                            "follower_support": "后排分化",
+                            "second_wave_new_highs": "暂无",
+                        },
+                    ],
+                    "sector_fund_flow": "半导体流入",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("### 板块内部分析", rendered)
+        self.assertIn("**分析板块**: 半导体", rendered)
+        self.assertIn("#### 中军状态", rendered)
+        self.assertIn("#### 板块间资金流动", rendered)
+
+    def test_sector_internal_analysis_formats_unit_strings(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis"],
+                "sector_analysis_trigger": {
+                    "should_analyze": True,
+                    "phase": "主线稳定期",
+                    "reason": "主攻线已进入可拆解区。",
+                    "dimensions": [
+                        "中军识别与跟踪",
+                        "板块内相对位置",
+                        "后排承接质量",
+                        "二波创新高群",
+                        "板块间资金流动",
+                    ],
+                },
+                "sector_internal_analysis": {
+                    "sectors": [
+                        {
+                            "sector_name": "半导体",
+                            "total_stocks": "1,280",
+                            "turnover_share_change": "+1.6pct",
+                            "core_anchor": {
+                                "name": "芯片核心A",
+                                "code": "688001",
+                                "status": "放量上涨",
+                                "volume": "320.00亿",
+                                "volume_ratio_in_sector": "28.0%",
+                                "change_pct": "+7.2%",
+                            },
+                            "relative_position": {
+                                "leaders": [{"name": "芯片核心A", "code": "688001"}],
+                                "leader_avg_change": "+7.2%",
+                                "leader_volume_ratio": "28.0%",
+                                "conclusion": "资金向核心集中",
+                            },
+                            "follower_support": {
+                                "grade": "B",
+                                "volume_ratio": "28.0%",
+                            },
+                            "second_wave_new_highs": {
+                                "count": 2,
+                                "ratio": "28.0%",
+                            },
+                        }
+                    ],
+                    "sector_fund_flow": {
+                        "description": "半导体成交占比上升。",
+                        "flows": [{"from_sector": "算力", "to_sector": "半导体", "type": "扩散分流", "volume_change": "320.00亿"}],
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("样本1,280只；成交占比变化+1.60%", rendered)
+        self.assertIn("成交额320.00亿；板块内占比28.0%；涨跌幅+7.20%", rendered)
+        self.assertIn("| 领涨层 | 芯片核心A(688001) | +7.20% | 28.0% | 资金向核心集中 |", rendered)
+        self.assertIn("| 算力 | 半导体 | 扩散分流 | 320.00亿 |", rendered)
+
+    def test_sector_internal_analysis_keeps_evidence_header_with_risk_preference(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["sector_internal_analysis", "risk_preference"],
+                "sector_analysis_trigger": {
+                    "should_analyze": False,
+                    "phase": "粘合期",
+                    "reason": "先观察。",
+                    "dimensions": [],
+                },
+                "benchmark_change": -2.04,
+                "turnover": 35072.8,
+                "observation": {
+                    "zt_count": 35,
+                    "dt_count": 65,
+                    "rise_fall_ratio_text": "0.15",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 证据环节 | 当前证据 | 推导判断 | 对动作的作用 |", rendered)
+        self.assertIn("| 盘面风险偏好 | 热点/趋势/异常 | 上证-2.04% / 涨停35 / 跌停65 / 涨跌比0.15 / 成交额35073亿 |", rendered)
+        self.assertLess(rendered.index("### 板块内部分析"), rendered.index("| 证据环节 |"))
+
+    def test_default_snapshot_order_places_sector_internal_analysis_after_capacity(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "turnover_quality": "做多放量",
+                "mainline_days": 3,
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "单线承载",
+                        "mainline_regime": "单主线聚焦",
+                        "primary_line": "半导体",
+                        "other_lines": "算力",
+                        "confirmation_evidence": "半导体成交占比和高标反馈同步",
+                        "sector_relationship_state": "单主线聚焦",
+                        "mainline_process": "主线稳定",
+                        "tomorrow_action": "只看半导体核心承接",
+                    },
+                    "overtake_window_summary": {
+                        "window_state": "open",
+                        "own_stability": "半导体核心承接稳定",
+                    },
+                },
+                "sector_internal_analysis": {
+                    "sectors": [
+                        {
+                            "sector_name": "半导体",
+                            "core_anchor": {"name": "芯片核心A", "code": "688001", "status": "放量上涨"},
+                            "relative_position": {"leaders": [], "core_anchors": [], "followers": [], "conclusion": "资金向核心集中"},
+                            "elastic_carrier": {"count": 0, "new_high_count": 0, "intraday_support": "弱", "stocks": []},
+                            "follower_support": {"grade": "C", "gain_5pct_count": 0, "gain_3pct_count": 0, "volume_ratio": 0.0},
+                            "second_wave_new_highs": {"count": 0, "ratio": 0.0, "stocks": [], "description": "近5日暂无二波创新高群"},
+                        }
+                    ],
+                    "sector_fund_flow": {"flows": []},
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertLess(rendered.index("### 4. 主线容量与格局判断"), rendered.index("### 板块内部分析"))
 
     def test_render_market_research_snapshot_mainline_focus_downgrades_when_attack_evidence_is_chaotic(self):
         lines = render_market_research_snapshot_section(
