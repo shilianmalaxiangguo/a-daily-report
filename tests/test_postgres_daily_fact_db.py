@@ -150,6 +150,59 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                         "turnover_share_change": 0.19,
                     }
                 ],
+                "diffusion_quality": {
+                    "sectors": [
+                        {
+                            "sector_name": "电力",
+                            "total_score": 76,
+                            "level": "强扩散",
+                            "conclusion": "电力扩散质量优秀",
+                            "action": "围绕核心做减法",
+                            "details": {
+                                "core_anchor": {
+                                    "score": 18,
+                                    "label": "核心稳定",
+                                    "detail": "锚定龙头承接稳定",
+                                },
+                                "turnover_share_change": {
+                                    "score": 15,
+                                    "label": "占比抬升",
+                                    "detail": "成交占比连续抬升",
+                                },
+                            },
+                        }
+                    ]
+                },
+                "observation": {
+                    "mainline_competition_snapshot": [
+                        {
+                            "role": "主攻线",
+                            "sector": "电力",
+                            "evidence": "趋势7只 / 强势3只 / 涨停8只",
+                        },
+                        {
+                            "role": "竞争线",
+                            "sector": "半导体",
+                            "evidence": "成交占比回升",
+                        },
+                    ]
+                },
+                "turnover_quality": "做多放量",
+                "mainline_turnover_summary": {
+                    "mainline_capacity_regime_summary": {
+                        "mainline_capacity": "双线竞争",
+                        "mainline_regime": "主线+背景线",
+                        "primary_line": "电力",
+                        "other_lines": "半导体",
+                        "confirmation_evidence": "电力成交占比连续抬升",
+                        "sector_relationship_state": "电力接替半导体",
+                        "mainline_process": "接替确认中",
+                        "capacity_evidence": "成交额放大且主攻线占比抬升",
+                    },
+                    "overtake_window_summary": {
+                        "window_state": "confirm_next",
+                    },
+                },
             },
         )
 
@@ -159,11 +212,19 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("INSERT INTO mainline_daily", sql)
         self.assertIn("INSERT INTO mainline_turnover_daily", sql)
         self.assertIn("INSERT INTO sector_attack_evidence_daily", sql)
+        self.assertIn("INSERT INTO sector_diffusion_score_daily", sql)
+        self.assertIn("INSERT INTO sector_diffusion_score_components", sql)
+        self.assertIn("INSERT INTO sector_competition_daily", sql)
+        self.assertIn("INSERT INTO market_capacity_evolution_daily", sql)
         self.assertEqual(saved["cycle_days"], 1)
         self.assertEqual(saved["cycle_periods"], 1)
         self.assertEqual(saved["mainline_records"], 2)
         self.assertEqual(saved["turnover_records"], 2)
         self.assertEqual(saved["sector_attack_records"], 1)
+        self.assertEqual(saved["sector_diffusion_records"], 1)
+        self.assertEqual(saved["sector_diffusion_components"], 2)
+        self.assertEqual(saved["sector_competition_records"], 2)
+        self.assertEqual(saved["market_capacity_evolution_records"], 1)
         self.assertGreater(conn.commit_count, 0)
 
     def test_replaces_observation_pool_items_and_tracking_memory_structurally(self):

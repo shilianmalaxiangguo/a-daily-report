@@ -440,6 +440,21 @@ def _row_dict(row, columns):
     return dict(zip(columns, row))
 
 
+def _market_capacity_phase(window_state, mainline_regime, turnover_quality):
+    window_state = _text(window_state)
+    mainline_regime = _text(mainline_regime)
+    turnover_quality = _text(turnover_quality)
+    if not turnover_quality or turnover_quality == "待确认":
+        return "待确认"
+    if window_state == "open" and mainline_regime == "单主线聚焦" and turnover_quality == "做多放量":
+        return "分化期（趋势确立）"
+    if window_state == "confirm_next" or mainline_regime in {"双主线竞争", "主线+背景线", "交替竞争"}:
+        return "接替期（竞争关系）"
+    if window_state == "observe" or mainline_regime in {"无主线", "混沌轮动", "混沌接力"} or turnover_quality in {"杀跌放量", "缩量", "待累计"}:
+        return "粘合期"
+    return "待确认"
+
+
 class PostgresDailyFactDb:
     def __init__(self, database_url, *, connect=None, ensure_schema=True):
         self.database_url = _text(database_url)
@@ -843,6 +858,10 @@ class PostgresDailyFactDb:
             "mainline_records": 0,
             "turnover_records": 0,
             "sector_attack_records": 0,
+            "sector_diffusion_records": 0,
+            "sector_diffusion_components": 0,
+            "sector_competition_records": 0,
+            "market_capacity_evolution_records": 0,
             "pivot_records": 0,
         }
         with self._connect() as conn:
@@ -852,6 +871,9 @@ class PostgresDailyFactDb:
                 self._replace_mainline_records(cursor, trade_date, snapshot, counts)
                 self._replace_turnover_records(cursor, trade_date, snapshot, counts)
                 self._replace_sector_attack_records(cursor, trade_date, snapshot, counts)
+                self._replace_sector_diffusion_records(cursor, trade_date, snapshot, counts)
+                self._replace_sector_competition_records(cursor, trade_date, snapshot, counts)
+                self._replace_market_capacity_evolution_record(cursor, trade_date, snapshot, counts)
                 self._replace_pivot_records(cursor, trade_date, snapshot, counts)
             conn.commit()
         return counts
@@ -1117,6 +1139,152 @@ class PostgresDailyFactDb:
                 rows,
             )
         counts["sector_attack_records"] = len(rows)
+
+    def _replace_sector_diffusion_records(self, cursor, trade_date, snapshot, counts):
+        cursor.execute("DELETE FROM sector_diffusion_score_components WHERE trade_date = %s", (trade_date,))
+        cursor.execute("DELETE FROM sector_diffusion_score_daily WHERE trade_date = %s", (trade_date,))
+        diffusion = (
+            snapshot.get("diffusion_quality")
+            or snapshot.get("sector_diffusion_quality")
+            or (snapshot.get("sector_internal_analysis") or {}).get("diffusion_quality")
+            or {}
+        )
+        sector_rows = diffusion if isinstance(diffusion, list) else diffusion.get("sectors") if isinstance(diffusion, dict) else []
+        rows = []
+        component_rows = []
+        for item in sector_rows or []:
+            if not isinstance(item, dict):
+                continue
+            sector = _text(item.get("sector_name") or item.get("name"))
+            if not sector:
+                continue
+            rows.append(
+                (
+                    trade_date,
+                    sector,
+                    _safe_float(item.get("total_score")),
+                    _text(item.get("level")),
+                    _text(item.get("conclusion")),
+                    _text(item.get("action")),
+                )
+            )
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            for component_key, component in details.items():
+                if not isinstance(component, dict):
+                    continue
+                component_rows.append(
+                    (
+                        trade_date,
+                        sector,
+                        _text(component_key),
+                        _safe_float(component.get("score")),
+                        _text(component.get("label")),
+                        _text(component.get("detail") or component.get("description")),
+                    )
+                )
+        if rows:
+            cursor.executemany(
+                """
+                INSERT INTO sector_diffusion_score_daily(
+                    trade_date, sector_name, total_score, level, conclusion, action
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trade_date, sector_name) DO UPDATE SET
+                    total_score=EXCLUDED.total_score,
+                    level=EXCLUDED.level,
+                    conclusion=EXCLUDED.conclusion,
+                    action=EXCLUDED.action,
+                    updated_at=now()
+                """,
+                rows,
+            )
+        if component_rows:
+            cursor.executemany(
+                """
+                INSERT INTO sector_diffusion_score_components(
+                    trade_date, sector_name, component_key, score, label, detail
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trade_date, sector_name, component_key) DO UPDATE SET
+                    score=EXCLUDED.score,
+                    label=EXCLUDED.label,
+                    detail=EXCLUDED.detail,
+                    updated_at=now()
+                """,
+                component_rows,
+            )
+        counts["sector_diffusion_records"] = len(rows)
+        counts["sector_diffusion_components"] = len(component_rows)
+
+    def _replace_sector_competition_records(self, cursor, trade_date, snapshot, counts):
+        cursor.execute("DELETE FROM sector_competition_daily WHERE trade_date = %s", (trade_date,))
+        observation = snapshot.get("observation") if isinstance(snapshot.get("observation"), dict) else {}
+        rows = []
+        for item in observation.get("mainline_competition_snapshot") or snapshot.get("mainline_competition_snapshot") or []:
+            if not isinstance(item, dict):
+                continue
+            sector = _text(item.get("sector") or item.get("sector_name"))
+            role = _text(item.get("role"))
+            if not sector or not role:
+                continue
+            evidence_parts = [
+                _text(item.get("evidence")),
+                _text(item.get("judgement")),
+                _text(item.get("action")),
+            ]
+            rows.append((trade_date, sector, role, "；".join(part for part in evidence_parts if part)))
+        if rows:
+            cursor.executemany(
+                """
+                INSERT INTO sector_competition_daily(
+                    trade_date, sector_name, role, evidence
+                )
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (trade_date, sector_name, role) DO UPDATE SET
+                    evidence=EXCLUDED.evidence,
+                    updated_at=now()
+                """,
+                rows,
+            )
+        counts["sector_competition_records"] = len(rows)
+
+    def _replace_market_capacity_evolution_record(self, cursor, trade_date, snapshot, counts):
+        cursor.execute("DELETE FROM market_capacity_evolution_daily WHERE trade_date = %s", (trade_date,))
+        summary = snapshot.get("mainline_turnover_summary") if isinstance(snapshot.get("mainline_turnover_summary"), dict) else {}
+        capacity = summary.get("mainline_capacity_regime_summary") if isinstance(summary.get("mainline_capacity_regime_summary"), dict) else {}
+        overtake = summary.get("overtake_window_summary") if isinstance(summary.get("overtake_window_summary"), dict) else {}
+        if not any(_text(capacity.get(key)) for key in ("mainline_capacity", "mainline_regime", "primary_line", "sector_relationship_state", "mainline_process")):
+            counts["market_capacity_evolution_records"] = 0
+            return
+        turnover_quality = _text(snapshot.get("turnover_quality") or summary.get("turnover_quality") or capacity.get("turnover_quality"))
+        mainline_regime = _text(capacity.get("mainline_regime"))
+        window_state = _text(snapshot.get("window_state") or overtake.get("window_state"))
+        row = (
+            trade_date,
+            _market_capacity_phase(window_state, mainline_regime, turnover_quality),
+            turnover_quality,
+            mainline_regime,
+            window_state,
+            _text(snapshot.get("capacity_evidence") or capacity.get("capacity_evidence") or capacity.get("confirmation_evidence")),
+        )
+        cursor.execute(
+            """
+            INSERT INTO market_capacity_evolution_daily(
+                trade_date, phase, turnover_quality, mainline_regime,
+                window_state, capacity_evidence
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (trade_date) DO UPDATE SET
+                phase=EXCLUDED.phase,
+                turnover_quality=EXCLUDED.turnover_quality,
+                mainline_regime=EXCLUDED.mainline_regime,
+                window_state=EXCLUDED.window_state,
+                capacity_evidence=EXCLUDED.capacity_evidence,
+                updated_at=now()
+            """,
+            row,
+        )
+        counts["market_capacity_evolution_records"] = 1
 
     def _replace_pivot_records(self, cursor, trade_date, snapshot, counts):
         cursor.execute("DELETE FROM zhongshu_mainline_records WHERE trade_date = %s", (trade_date,))
