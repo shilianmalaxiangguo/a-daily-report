@@ -1007,6 +1007,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertFalse(any("step_status" in str(row) for row in inserted))
         self.assertFalse(any("request_diagnostics" in str(row) for row in inserted))
         self.assertFalse(any("xuangubao_news" in str(row) for row in inserted))
+        self.assertTrue(any("xuangubao_data" in path and "news_count" in path for path in field_paths))
         self.assertFalse(any("raw_detail" in str(row) for row in inserted))
         self.assertFalse(any("raw_notice" in str(row) for row in inserted))
         self.assertFalse(any("debug_payload" in str(row) for row in inserted))
@@ -1054,6 +1055,39 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
         self.assertEqual(loaded["field_count"], 13)
+
+    def test_saves_postgres_xuangubao_summary_without_zeroing_counts(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.save_daily_report_snapshot(
+            "2026-05-29",
+            {
+                "postgres_only": True,
+                "xuangubao_data": {
+                    "news_count": 0,
+                    "plate_count": 1,
+                    "limit_up_reason_count": 2,
+                    "diagnostics_status": "success",
+                    "diagnostics_error": "",
+                },
+            },
+        )
+
+        inserted = next(call[2] for call in conn.cursor_obj.calls if call[0] == "executemany")
+        numeric_by_path = {row[1]: row[3] for row in inserted}
+        self.assertEqual(
+            numeric_by_path["k:14:xuangubao_data/k:11:plate_count"],
+            1,
+        )
+        self.assertEqual(
+            numeric_by_path["k:14:xuangubao_data/k:21:limit_up_reason_count"],
+            2,
+        )
 
     def test_import_daily_report_facts_populates_structured_market_and_sector_tables(self):
         conn = _FakeConnection()

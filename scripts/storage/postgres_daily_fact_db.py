@@ -1398,12 +1398,23 @@ def _compact_xuangubao_data(snapshot):
     if not isinstance(snapshot, dict):
         return {}
     diagnostics = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
+    news_items = snapshot.get("xuangubao_news")
+    plate_items = snapshot.get("xuangubao_plates")
+    limit_up_reason_items = snapshot.get("xuangubao_limit_up_reasons")
     return {
-        "news_count": len(snapshot.get("xuangubao_news") or []),
-        "plate_count": len(snapshot.get("xuangubao_plates") or []),
-        "limit_up_reason_count": len(snapshot.get("xuangubao_limit_up_reasons") or []),
-        "diagnostics_status": _text(diagnostics.get("status") or diagnostics.get("source_status")),
-        "diagnostics_error": _text(diagnostics.get("error"))[:200],
+        "news_count": len(news_items) if isinstance(news_items, list) else _safe_int(snapshot.get("news_count")),
+        "plate_count": len(plate_items) if isinstance(plate_items, list) else _safe_int(snapshot.get("plate_count")),
+        "limit_up_reason_count": (
+            len(limit_up_reason_items)
+            if isinstance(limit_up_reason_items, list)
+            else _safe_int(snapshot.get("limit_up_reason_count"))
+        ),
+        "diagnostics_status": _text(
+            diagnostics.get("status")
+            or diagnostics.get("source_status")
+            or snapshot.get("diagnostics_status")
+        ),
+        "diagnostics_error": _text(diagnostics.get("error") or snapshot.get("diagnostics_error"))[:200],
     }
 
 
