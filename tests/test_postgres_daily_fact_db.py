@@ -991,7 +991,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
 
         sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
         self.assertIn("INSERT INTO daily_report_fact_fields", sql)
-        inserted = next(call[2] for call in conn.cursor_obj.calls if call[0] == "executemany")
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
         field_paths = {row[1] for row in inserted}
         self.assertTrue(any("000001.SH" in path for path in field_paths))
         self.assertFalse(any("huge_cache" in str(row) for row in inserted))
@@ -1008,6 +1012,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertFalse(any("request_diagnostics" in str(row) for row in inserted))
         self.assertFalse(any("xuangubao_news" in str(row) for row in inserted))
         self.assertTrue(any("xuangubao_data" in path and "news_count" in path for path in field_paths))
+        self.assertFalse(any("diagnostics_status" in str(row) for row in inserted))
+        self.assertFalse(any("diagnostics_error" in str(row) for row in inserted))
         self.assertFalse(any("raw_detail" in str(row) for row in inserted))
         self.assertFalse(any("raw_notice" in str(row) for row in inserted))
         self.assertFalse(any("debug_payload" in str(row) for row in inserted))
@@ -1078,7 +1084,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             },
         )
 
-        inserted = next(call[2] for call in conn.cursor_obj.calls if call[0] == "executemany")
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
         numeric_by_path = {row[1]: row[3] for row in inserted}
         self.assertEqual(
             numeric_by_path["k:14:xuangubao_data/k:11:plate_count"],
@@ -1147,6 +1157,65 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(result["structured_counts"]["market_cycle"]["sector_attack_records"], 1)
         self.assertEqual(result["structured_counts"]["market_cycle"]["sector_diffusion_records"], 1)
         self.assertEqual(result["structured_counts"]["candidate_trace"]["trace_count"], 1)
+
+    def test_import_daily_report_facts_reads_runtime_sector_internal_analysis(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "sector_internal_analysis": {
+                    "diffusion_quality": {
+                        "sectors": [
+                            {"sector_name": "电力", "total_score": 76, "level": "强扩散"},
+                        ],
+                    },
+                },
+            },
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO sector_diffusion_score_daily", sql)
+        self.assertEqual(result["structured_counts"]["market_cycle"]["sector_diffusion_records"], 1)
+
+    def test_import_daily_report_facts_preserves_runtime_sector_internal_analysis_fields(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "market_research_snapshot": {"market_branch": "混沌轮动"},
+                "sector_internal_analysis": {
+                    "diffusion_quality": {
+                        "sectors": [
+                            {"sector_name": "电力", "total_score": 76, "level": "强扩散"},
+                        ],
+                    },
+                    "turnover_trend": {"summary": "电力成交占比抬升"},
+                    "quant_environment": {"environment": "弱扩散"},
+                },
+            },
+        )
+
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        field_paths = [row[1] for row in inserted]
+
+        self.assertTrue(any("sector_internal_analysis" in path and "turnover_trend" in path for path in field_paths))
+        self.assertTrue(any("sector_internal_analysis" in path and "quant_environment" in path for path in field_paths))
 
 
 if __name__ == "__main__":

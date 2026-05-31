@@ -738,6 +738,8 @@ _LOW_VALUE_FACT_KEYS = {
     "debug_payload",
     "decision_ledger_artifacts",
     "details_payload",
+    "diagnostics_error",
+    "diagnostics_status",
     "duplicate",
     "huge_cache",
     "large_rendered_context",
@@ -1397,7 +1399,6 @@ def _compact_tracking_memory_status(status):
 def _compact_xuangubao_data(snapshot):
     if not isinstance(snapshot, dict):
         return {}
-    diagnostics = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
     news_items = snapshot.get("xuangubao_news")
     plate_items = snapshot.get("xuangubao_plates")
     limit_up_reason_items = snapshot.get("xuangubao_limit_up_reasons")
@@ -1409,12 +1410,6 @@ def _compact_xuangubao_data(snapshot):
             if isinstance(limit_up_reason_items, list)
             else _safe_int(snapshot.get("limit_up_reason_count"))
         ),
-        "diagnostics_status": _text(
-            diagnostics.get("status")
-            or diagnostics.get("source_status")
-            or snapshot.get("diagnostics_status")
-        ),
-        "diagnostics_error": _text(diagnostics.get("error") or snapshot.get("diagnostics_error"))[:200],
     }
 
 
@@ -1673,6 +1668,8 @@ def _compact_market_research_snapshot(snapshot):
         if key == "sector_internal_analysis" and isinstance(value, dict):
             result[key] = {
                 "diffusion_quality": value.get("diffusion_quality"),
+                "turnover_trend": value.get("turnover_trend"),
+                "quant_environment": value.get("quant_environment"),
                 "summary": value.get("summary"),
             }
             result[key] = {sub_key: sub_value for sub_key, sub_value in result[key].items() if sub_value}
@@ -3905,7 +3902,18 @@ class PostgresDailyFactDb:
         trade_date = _date_or_none(trade_date)
         data = data or {}
         structured_counts = {}
-        market_snapshot = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+        market_snapshot = dict(data.get("market_research_snapshot") or {}) if isinstance(data.get("market_research_snapshot"), dict) else {}
+        if isinstance(data.get("sector_internal_analysis"), dict):
+            existing_internal = market_snapshot.get("sector_internal_analysis")
+            merged_internal = dict(existing_internal or {}) if isinstance(existing_internal, dict) else {}
+            merged_internal.update(data.get("sector_internal_analysis") or {})
+            market_snapshot["sector_internal_analysis"] = merged_internal
+        for key in ("diffusion_quality", "sector_diffusion_quality"):
+            if key in data and key not in market_snapshot:
+                market_snapshot[key] = data.get(key)
+        if market_snapshot:
+            data = dict(data)
+            data["market_research_snapshot"] = market_snapshot
         structured_counts["market_cycle"] = self.replace_market_cycle_context(trade_date, market_snapshot or data)
         market_total = _market_daily_total_from_data(trade_date, data)
         if market_total:

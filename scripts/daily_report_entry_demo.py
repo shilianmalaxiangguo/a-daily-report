@@ -4008,7 +4008,7 @@ def main():
         # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
         if data:
             if args.postgres_only:
-                result = save_daily_report_data_to_postgres(target_date, data)
+                result = import_daily_report_data_to_postgres(target_date, data)
                 print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
             else:
                 _save_data_snapshot(data, target_date, mode=run_mode)

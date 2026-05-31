@@ -90,6 +90,7 @@ def build_market_activity_report_sections(
     )
     lines = list(node_result.get("lines") or [])
     logs = list(node_result.get("module_logs") or [])
+    exports = dict(node_result.get("node_outputs", {}).get("sector_fund_inflow") or {})
     over_100b = data.get("turnover_over_100b", []) or [stock for stock in data.get("turnover_rank", []) if stock.get("turnover", 0) > 100]
 
     _append_log(
@@ -104,6 +105,7 @@ def build_market_activity_report_sections(
     return {
         "lines": lines,
         "module_logs": logs,
+        "exports": exports,
     }
 
 

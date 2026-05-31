@@ -286,6 +286,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
              patch.object(daily_report_entry_demo, "_save_data_snapshot") as save_snapshot_mock, \
              patch.object(daily_report_entry_demo, "save_daily_report_data_to_postgres") as save_pg_mock, \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres") as import_pg_mock, \
              patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
             daily_report_entry_demo.main()
 
@@ -293,7 +294,8 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         get_daily_mock.assert_not_called()
         replay_mock.assert_not_called()
         save_snapshot_mock.assert_not_called()
-        save_pg_mock.assert_called_once()
+        save_pg_mock.assert_not_called()
+        import_pg_mock.assert_called_once()
         self.assertFalse(daily_report_entry_demo._POSTGRES_ONLY_RUNTIME)
         self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
 

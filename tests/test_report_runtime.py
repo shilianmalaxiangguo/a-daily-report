@@ -310,6 +310,192 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(numbered[1], "**T-001**")
         self.assertNotIn("**T-002**", numbered)
 
+    def test_number_report_tables_keeps_default_labels_without_postgres_only(self):
+        lines = [
+            "### 周期解读",
+            "| 周期 | 时间段 | 交易日数 | 攻击线 |",
+            "|------|--------|----------|--------|",
+            "| 第1周期 | 2026-05-01~2026-05-29 | 18 | 半导体 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines)
+
+        self.assertEqual(numbered[1], "**T-001**")
+        self.assertNotIn("（PSQL）", "\n".join(numbered))
+
+    def test_number_report_tables_marks_psql_structured_fact_contexts_in_postgres_only(self):
+        lines = [
+            "### 周期解读",
+            "| 周期 | 时间段 | 交易日数 | 攻击线 |",
+            "|------|--------|----------|--------|",
+            "| 第1周期 | 2026-05-01~2026-05-29 | 18 | 半导体 |",
+            "",
+            "**明日极度看好近25日跟踪表**",
+            "| 入选日 | 股票 | 代码 | 所属方向 | 复盘状态 |",
+            "|--------|------|------|----------|----------|",
+            "| 2026-05-29 | 新洁能 | 605111 | 半导体 | 跟踪中 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+        self.assertIn("**T-002（PSQL）**", numbered)
+
+    def test_number_report_tables_marks_psql_context_by_heading_not_dynamic_id(self):
+        lines = [
+            "## 明日账户建议",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 账户约束 | 先处理旧仓 |",
+            "",
+            "### 主线成交额占比趋势",
+            "| 日期 | 主线 | 占比 |",
+            "|------|------|------|",
+            "| 2026-05-29 | 电力 | 0.9% |",
+            "",
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
+            "| 入选日 | 股票 | 代码 | 所属方向 |",
+            "|--------|------|------|----------|",
+            "| 2026-05-29 | 粤电力Ａ | 000539 | 电力 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+        rendered = "\n".join(numbered)
+
+        self.assertIn("### 主线成交额占比趋势\n**T-002（PSQL）**", rendered)
+        self.assertIn("**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:\n**T-003（PSQL）**", rendered)
+
+    def test_number_report_tables_marks_pivot_and_sector_flow_contexts(self):
+        lines = [
+            "### 中枢与主线解读",
+            "| 时间段 | 中枢级别 | 对应主线 |",
+            "|--------|----------|----------|",
+            "| 05-29 | 日线中枢 | 暂无确认主线 |",
+            "",
+            "#### 中枢对应主线记录",
+            "| 时间段 | 中枢级别 | 对应主线 |",
+            "|--------|----------|----------|",
+            "| 05-29 | 日线中枢 | 暂无确认主线 |",
+            "",
+            "#### 资金流入TOP10",
+            "| 排名 | 板块 | 净流入 |",
+            "|------|------|--------|",
+            "| 1 | 电力 | +18.2亿 |",
+            "",
+            "#### 资金流出结果",
+            "| 排名 | 板块 | 净流出 |",
+            "|------|------|--------|",
+            "| 1 | 半导体 | 6.5亿 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+        self.assertIn("**T-002（PSQL）**", numbered)
+        self.assertIn("**T-003（PSQL）**", numbered)
+        self.assertIn("**T-004（PSQL）**", numbered)
+
+    def test_number_report_tables_does_not_carry_previous_table_cells_into_psql_context(self):
+        lines = [
+            "##### 资金结论",
+            "| 当前资金状态 | 对明日动作的含义 |",
+            "|--------------|------------------|",
+            "| 龙虎榜资金强 | 先看板块攻击证据，龙虎榜只作为验证层 |",
+            "",
+            "**明日裁决**: 暂不跟随",
+            "| 证据环节 | 当前证据 | 推导判断 |",
+            "|----------|----------|----------|",
+            "| 盘面风险偏好 | 49 / 50 | 先观察 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertIn("**T-001**", numbered)
+        self.assertIn("**T-002**", numbered)
+        self.assertNotIn("**T-001（PSQL）**", numbered)
+        self.assertNotIn("**T-002（PSQL）**", numbered)
+
+    def test_number_report_tables_marks_populated_diffusion_table(self):
+        lines = [
+            "#### 板块扩散质量评分",
+            "| 板块 | 总分 | 评级 |",
+            "|------|------|------|",
+            "| 银行 | 18 | 弱扩散 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+
+    def test_number_report_tables_does_not_mark_placeholder_psql_context(self):
+        lines = [
+            "### 主线成交额占比趋势",
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+            "|------|----------|------------|------------|------------|------|----------|------|",
+            "| 今日 | - | - | 数据暂缺 | - | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001**")
+
+    def test_number_report_tables_does_not_mark_cycle_placeholder_without_facts(self):
+        lines = [
+            "### 1. 周期日历主视图",
+            "| 周次 | 一 | 二 | 三 | 四 | 五 |",
+            "|------|------|------|------|------|------|",
+            "| 当前周期 | 主线待累计 | 主线待累计 | 主线待累计 | 主线待累计 | 主线待累计 |",
+            "",
+            "### 2. 周期解读",
+            "| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |",
+            "|------|------|------|------|------|------|------|------|------|",
+            "| 当前周期 | 待累计 | 待累计 | 主线待确认 | 待验证 | 待二次验证 | 待确认 | 验证是否二次攻击 | 周期数据不足，只记录攻击线，后续日报继续验证传递性。 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertIn("**T-001**", numbered)
+        self.assertIn("**T-002**", numbered)
+        self.assertNotIn("（PSQL）", "\n".join(numbered))
+
+    def test_number_report_tables_marks_sector_turnover_trend_context(self):
+        lines = [
+            "### 板块成交占比趋势 (近5日)",
+            "| 板块 | 最新占比 | 3日趋势 | 5日均线 | 趋势序列 | 结论 |",
+            "|------|----------|---------|---------|----------|------|",
+            "| 电力 | 18.2% | 强化 | 14.5% | 12.1% → 15.0% → 18.2% (扩张) | 强化 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+
+    def test_number_report_tables_does_not_mark_ordinary_tables_in_postgres_only(self):
+        lines = [
+            "### 周期解读",
+            "| 周期 | 时间段 | 交易日数 | 攻击线 |",
+            "|------|--------|----------|--------|",
+            "| 第1周期 | 2026-05-01~2026-05-29 | 18 | 半导体 |",
+            "",
+            "## 一、交易纪律",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 仓位 | 先按纪律处理 |",
+            "",
+            "## 明日账户建议",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 账户约束 | 先处理旧仓 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+        self.assertIn("**T-002**", numbered)
+        self.assertIn("**T-003**", numbered)
+        self.assertNotIn("**T-002（PSQL）**", numbered)
+        self.assertNotIn("**T-003（PSQL）**", numbered)
+
     def test_sanitize_report_lines_deduplicates_repeated_no_trade_action_lines(self):
         lines = [
             "## 八、详细附录",
@@ -1846,6 +2032,33 @@ class ReportRuntimeTest(unittest.TestCase):
 
         self.assertEqual(pool[0]["stock_code"], "001210")
         self.assertEqual(pool[0]["source_pool"], "跨线观察")
+
+    def test_appendix_c_uses_crossline_label_when_watch_anchor_note_matches_core_stock(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-05-29",
+            execution_stage_context={
+                "mainline_name": "半导体",
+                "core_stocks": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "current_action": "继续观察",
+                    }
+                ],
+                "watch_anchor": {
+                    "name": "华电能源",
+                    "code": "600726",
+                    "sector": "电力",
+                },
+                "special_probe_text": "华电能源(600726)：跨线对象（电力），只用于观察强弱，不代表主攻线从半导体切换。",
+            },
+        )
+
+        pool = payload["current_stock_monitoring_pool"]
+
+        self.assertEqual(pool[0]["source_pool"], "跨线观察")
+        self.assertNotEqual(pool[0]["source_pool"], "主线核心")
 
     def test_appendix_c_keeps_core_identity_when_observation_text_is_not_crossline(self):
         payload = report_runtime._build_appendix_c_continuity_payload(

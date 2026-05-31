@@ -182,7 +182,203 @@ def _is_t_number_line(line):
     return text.startswith("**T-") and text.endswith("**")
 
 
-def _number_report_tables(lines):
+_PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
+    "周期日历主视图",
+    "周期解读",
+    "周期日历",
+    "周期表",
+    "周期切换",
+    "中枢与主线",
+    "中枢对应主线",
+    "枢纽主线",
+    "主线容量",
+    "主线切换",
+    "攻击证据",
+    "主线攻击证据",
+    "换手占比",
+    "换手趋势",
+    "主线成交额占比趋势",
+    "主线成交额占比完整历史",
+    "板块成交占比趋势",
+    "板块周",
+    "板块周期",
+    "板块资金流",
+    "概念资金流",
+    "资金流入TOP10",
+    "资金流出结果",
+    "主线趋势密度",
+    "主线竞争格局",
+    "主线内观察候选",
+    "明日次核心预判",
+    "跨线观察候选",
+    "重点观察名单",
+    "异动后观察池",
+    "观察池",
+    "观察对象生命周期",
+    "当前个股观察监控池",
+    "跟踪记忆",
+    "龙头记忆",
+    "龙头记忆库",
+    "历史主线池",
+    "历史重点观察样本去向",
+    "候选追踪",
+    "候选链路",
+    "候选选股轨迹明细",
+    "极度看好",
+    "明日极度看好近25日跟踪表",
+    "重点观察25日跟踪表",
+    "重点观察历史回测表",
+    "板块扩散质量评分",
+)
+
+_PSQL_STRUCTURED_TABLE_CONTEXT_EXCLUDE_MARKERS = (
+    "交易纪律",
+    "明日账户建议",
+    "月度攻防",
+    "市场基底",
+    "创新高趋势反馈",
+    "融资承接",
+    "资金意图",
+    "龙虎榜资金状态",
+    "资金结论",
+    "个股裁决",
+    "明日候选观察",
+    "备用观察",
+    "个股结论",
+    "明日执行计划",
+    "执行计划依据",
+    "最终结论",
+    "量化环境识别",
+    "预期日历",
+    "热度核心",
+    "成交核心",
+    "龙虎榜结果",
+    "净买入结果",
+    "净流出结果",
+    "多维交易",
+    "放量结果",
+    "交易信号结果",
+    "异动监控",
+    "数据获取",
+    "执行步骤清单",
+    "请求审计",
+    "统计信息",
+    "缠论",
+)
+
+_PSQL_STRUCTURED_TABLE_CELL_PLACEHOLDERS = {
+    "",
+    "-",
+    "—",
+    "--",
+    "N/A",
+    "n/a",
+    "待累计",
+    "待验证",
+    "待二次验证",
+    "待确认",
+    "主线待确认",
+    "主线待累计",
+    "暂无确认主线",
+    "暂无确认主攻线",
+    "观察",
+    "当前周期",
+    "今日",
+}
+
+_PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS = (
+    "数据暂缺",
+    "后续日报自动累计",
+    "暂无请求日志",
+    "今天开始记录",
+    "数据不足",
+    "关键数据不完整",
+    "暂不输出",
+)
+
+
+def _recent_table_context_lines(source_lines, table_start_index):
+    context_lines = []
+    for line in reversed(source_lines[:table_start_index]):
+        text = str(line or "").strip()
+        if not text or _is_t_number_line(text):
+            continue
+        if _is_markdown_table_line(text):
+            break
+        context_lines.append(text)
+        if len(context_lines) >= 18:
+            break
+    context_lines = list(reversed(context_lines))
+    heading_indexes = [index for index, text in enumerate(context_lines) if text.startswith("#")]
+    if heading_indexes:
+        return context_lines[heading_indexes[-1] :]
+    marker_indexes = [
+        index
+        for index, text in enumerate(context_lines)
+        if any(marker in text for marker in _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS)
+    ]
+    if marker_indexes:
+        return context_lines[marker_indexes[0] :]
+    return context_lines
+
+
+def _split_markdown_table_cells(line):
+    return [cell.strip() for cell in str(line or "").strip().strip("|").split("|")]
+
+
+def _table_body_rows(source_lines, table_start_index):
+    rows = []
+    index = table_start_index + 2
+    while index < len(source_lines):
+        text = str(source_lines[index] or "").strip()
+        if not _is_markdown_table_line(text):
+            break
+        if not _is_markdown_table_separator(text):
+            rows.append(text)
+        index += 1
+    return rows
+
+
+def _table_row_has_structured_fact(row):
+    cells = _split_markdown_table_cells(row)
+    joined = " ".join(cell for cell in cells if cell)
+    if not joined:
+        return False
+    if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS):
+        return False
+    factual_markers = (
+        r"\d{4}-\d{2}-\d{2}",
+        r"\d{2}-\d{2}",
+        r"\b\d{6}\b",
+        r"\d+(?:\.\d+)?%",
+        r"[+-]?\d+(?:\.\d+)?(?:亿|万|pct|日|分)",
+    )
+    if any(re.search(pattern, joined) for pattern in factual_markers):
+        return True
+    meaningful_cells = [
+        cell
+        for cell in cells
+        if cell.strip() and cell.strip() not in _PSQL_STRUCTURED_TABLE_CELL_PLACEHOLDERS
+    ]
+    return len(meaningful_cells) >= 2 and not all("待" in cell or "暂无" in cell for cell in meaningful_cells)
+
+
+def _table_has_structured_fact_rows(source_lines, table_start_index):
+    return any(_table_row_has_structured_fact(row) for row in _table_body_rows(source_lines, table_start_index))
+
+
+def _is_psql_structured_table_context(source_lines, table_start_index):
+    context = "\n".join(_recent_table_context_lines(source_lines, table_start_index))
+    if not context:
+        return False
+    if any(marker in context for marker in _PSQL_STRUCTURED_TABLE_CONTEXT_EXCLUDE_MARKERS):
+        return False
+    if not any(marker in context for marker in _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS):
+        return False
+    return _table_has_structured_fact_rows(source_lines, table_start_index)
+
+
+def _number_report_tables(lines, postgres_only=False):
     numbered = []
     table_index = 0
     source_lines = list(lines or [])
@@ -195,7 +391,8 @@ def _number_report_tables(lines):
             if _is_t_number_line(previous_line):
                 numbered.pop()
             table_index += 1
-            numbered.append(f"**T-{table_index:03d}**")
+            source_label = "（PSQL）" if postgres_only and _is_psql_structured_table_context(source_lines, index) else ""
+            numbered.append(f"**T-{table_index:03d}{source_label}**")
         numbered.append(line)
         index += 1
     return numbered
@@ -373,14 +570,15 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
     return normalized
 
 
-def _sanitize_report_lines(lines):
+def _sanitize_report_lines(lines, postgres_only=False):
     return _number_report_tables(
         [
             sanitize_front_page_text(line)
             for line in _normalize_legacy_execution_framework_under_zero_participation(
                 _normalize_tomorrow_action_soft_words_under_zero_participation(_dedupe_repeated_no_trade_lines(lines))
             )
-        ]
+        ],
+        postgres_only=postgres_only,
     )
 
 
@@ -2969,6 +3167,8 @@ def _render_markdown_report_legacy_body(
         analyze_candlestick_pattern=analyze_candlestick_pattern,
     )
     report.extend(market_activity_sections.get('lines', []))
+    if market_activity_sections.get("exports"):
+        data.update(market_activity_sections.get("exports") or {})
     data.setdefault("module_logs", []).extend(market_activity_sections.get("module_logs", []))
     
     market_and_sector_analysis = build_market_and_sector_analysis_contract(
@@ -3828,7 +4028,10 @@ def _render_markdown_report_legacy_body(
 
     print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(front_page_final_gate.get('final_action', '未知'))}")
     _finalize_helper_diagnostics(data)
-    report = _sanitize_report_lines(report)
+    report = _sanitize_report_lines(
+        report,
+        postgres_only=bool((data or {}).get("postgres_only") or globals().get("decision_ledger_postgres_only", False)),
+    )
     return "\n".join(report)
 
 

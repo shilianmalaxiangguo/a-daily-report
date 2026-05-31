@@ -185,6 +185,82 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertNotIn("### 资金流出结果", rendered)
         self.assertNotIn("消费", rendered)
 
+    def test_build_market_activity_report_sections_exports_sector_diffusion_for_postgres(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [
+                    {"name": "军工龙头", "code": "000001", "sector": "军工"},
+                    {"name": "军工后排", "code": "000002", "sector": "军工"},
+                ],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "军工", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [],
+                },
+                "lianban_data": [{"name": "军工龙头", "code": "000001", "sector": "军工", "height": 3}],
+                "market_stats": {"up_count": 3000, "total_count": 5000},
+            },
+            target_date="2026-04-22",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow"],
+        )
+
+        exported = result["exports"]["sector_internal_analysis"]["diffusion_quality"]
+
+        self.assertTrue(exported["sectors"])
+        self.assertEqual(exported["sectors"][0]["sector_name"], "军工")
+
+    def test_build_market_activity_report_sections_exports_turnover_trend_and_quant_environment_for_postgres(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [
+                    {"name": "电力一号", "code": "000001", "sector": "电力"},
+                    {"name": "半导体一号", "code": "000002", "sector": "半导体"},
+                    {"name": "机器人一号", "code": "000003", "sector": "机器人"},
+                ],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "电力", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [],
+                },
+                "lianban_data": [{"name": "电力一号", "code": "000001", "sector": "电力", "height": 3}],
+                "market_stats": {"up_count": 1800, "total_count": 5000},
+                "top50_turnover_share_pct": 22.5,
+                "sector_turnover_history": [
+                    {
+                        "sector_name": "电力",
+                        "history": [
+                            {"date": "2026-05-25", "turnover_share_pct": 12.1},
+                            {"date": "2026-05-26", "turnover_share_pct": 14.0},
+                            {"date": "2026-05-27", "turnover_share_pct": 16.2},
+                            {"date": "2026-05-28", "turnover_share_pct": 17.5},
+                            {"date": "2026-05-29", "turnover_share_pct": 18.2},
+                        ],
+                    }
+                ],
+            },
+            target_date="2026-05-29",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "电力",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow"],
+        )
+
+        exported = result["exports"]["sector_internal_analysis"]
+
+        self.assertEqual(exported["turnover_trend"]["sectors"][0]["sector_name"], "电力")
+        self.assertEqual(exported["turnover_trend"]["sectors"][0]["latest_share"], 18.2)
+        self.assertIn("quant_environment", exported)
+        self.assertIn("### 板块成交占比趋势 (近5日)", "\n".join(result["lines"]))
+
     def test_build_market_activity_report_sections_can_render_lhb_buy_without_sell(self):
         result = build_market_activity_report_sections(
             data={

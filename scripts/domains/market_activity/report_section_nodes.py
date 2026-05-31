@@ -325,7 +325,7 @@ def build_sector_fund_inflow_node(context, node_meta=None, node_lookup=None):
                 "up_ratio": _safe_float(data.get("market_stats", {}).get("up_count")) / max(_safe_float(data.get("market_stats", {}).get("total_count"), 1), 1) * 100,
                 "top50_turnover_share_pct": _safe_float(data.get("top50_turnover_share_pct")),
             },
-            sector_turnover_history=data.get("sector_turnover_history") or []
+            sector_turnover_history=data.get("sector_turnover_history") or data.get("recent_sector_turnover_history") or []
         )
     except Exception as e:
         print(f"[警告] 板块资金流向增强模块加载失败: {e}")
@@ -333,7 +333,17 @@ def build_sector_fund_inflow_node(context, node_meta=None, node_lookup=None):
     # 如果增强模块可用,使用增强的Markdown章节
     if enhanced_report and enhanced_report.get("markdown_sections"):
         lines = enhanced_report["markdown_sections"]
-        return {"lines": lines, "exports": {}, "module_logs": []}
+        exports = {
+            "sector_internal_analysis": {
+                "diffusion_quality": enhanced_report.get("diffusion_quality"),
+                "turnover_trend": enhanced_report.get("turnover_trend"),
+                "quant_environment": enhanced_report.get("quant_environment"),
+            }
+        }
+        exports["sector_internal_analysis"] = {
+            key: value for key, value in exports["sector_internal_analysis"].items() if value not in (None, "", [], {})
+        }
+        return {"lines": lines, "exports": exports if exports["sector_internal_analysis"] else {}, "module_logs": []}
 
     # 否则使用原始格式
     lines = [
