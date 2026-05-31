@@ -1,6 +1,7 @@
 import sys
 from tempfile import TemporaryDirectory
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -2213,6 +2214,68 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(result["fact_db_sync"]["status"], "failed")
         self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
         self.assertIn("database unavailable", result["fact_db_sync"]["error"])
+
+    def test_postgres_configured_writer_failure_does_not_write_json_archive(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-20",
+            extreme_conviction_list=[
+                {"code": "603005", "name": "晶方科技", "sector": "半导体", "conviction_reason": "主线核心"},
+            ],
+            market_branch="半导体支线轮动",
+            sector_relationship_state="半导体主攻",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            with patch.dict(os.environ, {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                with patch("storage.database_service.DatabaseService.from_environment") as factory:
+                    factory.side_effect = RuntimeError("database unavailable")
+                    result = write_decision_ledger_artifacts(
+                        snapshot,
+                        root_dir=root,
+                        review_market_facts_by_stock_code={},
+                    )
+
+            self.assertEqual(result["fact_db_sync"]["status"], "failed")
+            self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
+            self.assertIn("database unavailable", result["fact_db_sync"]["error"])
+            self.assertFalse((root / "data" / "decision-ledger" / "2026-05-20.json").exists())
+            self.assertFalse((root / "data" / "decision-ledger" / "index.json").exists())
+
+    def test_postgres_selected_write_failure_does_not_write_json_archive(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-20",
+            extreme_conviction_list=[
+                {"code": "603005", "name": "晶方科技", "sector": "半导体", "conviction_reason": "主线核心"},
+            ],
+            market_branch="半导体支线轮动",
+            sector_relationship_state="半导体主攻",
+        )
+
+        class BrokenPostgresService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                raise RuntimeError("postgres write failed")
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            result = write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=root,
+                database_service=BrokenPostgresService(),
+                review_market_facts_by_stock_code={},
+            )
+
+            self.assertEqual(result["fact_db_sync"]["status"], "failed")
+            self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
+            self.assertIn("postgres write failed", result["fact_db_sync"]["error"])
+            self.assertFalse((root / "data" / "decision-ledger" / "2026-05-20.json").exists())
+            self.assertFalse((root / "data" / "decision-ledger" / "index.json").exists())
 
     def test_writer_can_use_structured_database_without_daily_archive_files(self):
         snapshot = build_decision_ledger_snapshot(

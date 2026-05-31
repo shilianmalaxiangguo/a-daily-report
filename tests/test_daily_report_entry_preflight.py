@@ -210,6 +210,44 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         save_mock.assert_not_called()
         save_html_mock.assert_not_called()
 
+    def test_replay_snapshot_position_context_counts_as_personal_positions(self):
+        import daily_report_entry_demo
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "personal_position_context": {
+                "existing_position_summary": {"has_position": True}
+            },
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--replay"]), \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-05-29")), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            daily_report_entry_demo.main()
+
+        self.assertTrue(build_mock.call_args.kwargs["has_personal_positions"])
+        self.assertTrue(data["position_context_provided"])
+
     def test_main_aborts_when_existing_official_report_fails_audit(self):
         import daily_report_entry_demo
         from daily_report_render import ReportCriticalDataMissingError

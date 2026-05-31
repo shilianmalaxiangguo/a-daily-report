@@ -4050,6 +4050,54 @@ def _runtime_binding_probe(
         self.assertIn("**重点观察历史回测表**", result["report"])
         self.assertIn("| 京能电力 | 600578 | D2/25 |", result["report"])
 
+    def test_postgres_configured_decision_ledger_tracking_reads_database_not_json(self):
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {
+                    "latest_trade_date": "2026-05-29",
+                    "by_stock_code": {"601991": [{"stock_code": "601991", "stock_name": "大唐发电"}]},
+                }
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return StubService()
+
+        with TemporaryDirectory() as tempdir:
+            ledger_dir = Path(tempdir) / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            (ledger_dir / "index.json").write_text(
+                '{"by_stock_code":{"000001":[{"stock_code":"000001","stock_name":"JSON样本"}]}}',
+                encoding="utf-8",
+            )
+            with patch.object(report_runtime, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    index = report_runtime._read_decision_ledger_index_for_tracking(tempdir)
+
+        self.assertIn("601991", index["by_stock_code"])
+        self.assertNotIn("000001", index["by_stock_code"])
+
+    def test_postgres_configured_decision_ledger_tracking_failure_does_not_read_json(self):
+        class BrokenDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                raise RuntimeError("database unavailable")
+
+        with TemporaryDirectory() as tempdir:
+            ledger_dir = Path(tempdir) / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            (ledger_dir / "index.json").write_text(
+                '{"by_stock_code":{"000001":[{"stock_code":"000001","stock_name":"JSON样本"}]}}',
+                encoding="utf-8",
+            )
+            with patch.object(report_runtime, "DatabaseService", BrokenDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                        report_runtime._read_decision_ledger_index_for_tracking(tempdir)
+
     def test_runtime_extreme_mention_tracking_prefers_fact_db_rows_for_crud_review(self):
         from storage.database_service import DatabaseService
 
@@ -4242,6 +4290,21 @@ def _runtime_binding_probe(
         self.assertEqual(rows[0]["stock_code"], "601991")
         self.assertEqual(StubDatabaseService.service.marked, [("2026-05-29", 25, True)])
         self.assertEqual(StubDatabaseService.service.queries, [("2026-05-29", 25, True)])
+
+    def test_postgres_configured_extreme_mention_tracking_failure_does_not_hide_error(self):
+        class BrokenDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                raise RuntimeError("database unavailable")
+
+        with patch.dict("sys.modules", {"storage.database_service": types.SimpleNamespace(DatabaseService=BrokenDatabaseService)}):
+            with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                    report_runtime._query_extreme_conviction_mention_rows_for_tracking(
+                        root_dir="/tmp/daily-report",
+                        end_date="2026-05-29",
+                        window_days=25,
+                    )
 
     def test_runtime_records_a_kill_shape_mark_details_for_tracking_query(self):
         captured = {}

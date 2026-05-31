@@ -59,6 +59,27 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
         self.assertEqual(saved["updated_at"], "2026-05-29")
         self.assertEqual(saved["items"][0]["code"], "601991")
 
+    def test_postgres_configured_service_failure_does_not_use_json_state(self):
+        class BrokenDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                raise RuntimeError("database unavailable")
+
+        with patch.object(runtime, "DatabaseService", BrokenDatabaseService, create=True):
+            with patch.object(runtime, "_load_tracking_memory_state") as load_json:
+                with patch.object(runtime, "_save_tracking_memory_state") as save_json:
+                    with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                        with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                            refresh_tracking_memory(
+                                "2026-05-29",
+                                watchlist=[{"code": "601991", "name": "大唐发电", "sector": "电力"}],
+                                leader_memory_bank=[],
+                                abnormal_watch_pool=[],
+                            )
+
+        load_json.assert_not_called()
+        save_json.assert_not_called()
+
     def test_refresh_tracking_memory_promotes_confirmed_items_and_drops_failed_ones(self):
         saved = {}
 

@@ -3722,6 +3722,16 @@ def _resolve_chanlun_tomorrow_decision(data):
     return final_gate if isinstance(final_gate, dict) and final_gate else None
 
 
+def _has_existing_position_context(data):
+    if not isinstance(data, dict):
+        return False
+    context = data.get("personal_position_context")
+    if not isinstance(context, dict):
+        return False
+    summary = context.get("existing_position_summary")
+    return bool(isinstance(summary, dict) and summary.get("has_position"))
+
+
 def _build_sh_index_chanlun_html_for_audit(
     target_date,
     *,
@@ -3836,11 +3846,15 @@ def main():
         else:
             data["position_context_provided"] = False
 
+        has_personal_positions = bool(positions) or _has_existing_position_context(data)
+        if has_personal_positions:
+            data["position_context_provided"] = True
+
         report_outputs = build_report_outputs(
             data,
             target_date,
             supplementary_perspective="",
-            has_personal_positions=bool(positions),
+            has_personal_positions=has_personal_positions,
             run_mode=run_mode,
             position_report_text="",
         )

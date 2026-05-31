@@ -207,6 +207,54 @@ class DatabaseService:
             return {}
         return reader(end_date=end_date, window_days=window_days)
 
+    def query_a_kill_cooling_records(self):
+        reader = getattr(self.repository, "query_a_kill_cooling_records", None)
+        if not callable(reader):
+            return []
+        return reader()
+
+    def replace_a_kill_cooling_records(self, records):
+        writer = getattr(self.repository, "replace_a_kill_cooling_records", None)
+        if not callable(writer):
+            return 0
+        return writer(records)
+
+    def query_active_a_kill_cooling_records(self, target_date):
+        reader = getattr(self.repository, "query_active_a_kill_cooling_records", None)
+        if not callable(reader):
+            return []
+        return reader(target_date)
+
+    def load_strategy_performance_ledger(self, mode="frozen"):
+        reader = getattr(self.repository, "load_strategy_performance_ledger", None)
+        if not callable(reader):
+            return {}
+        return reader(mode=mode)
+
+    def save_strategy_performance_ledger(self, ledger, mode="frozen"):
+        writer = getattr(self.repository, "save_strategy_performance_ledger", None)
+        if not callable(writer):
+            return ""
+        return writer(ledger, mode=mode)
+
+    def save_factor_snapshot(self, target_date, factor_snapshot, mode="frozen"):
+        writer = getattr(self.repository, "save_factor_snapshot", None)
+        if not callable(writer):
+            return {"path": "", "mode": mode, "saved": False}
+        return writer(target_date, factor_snapshot, mode=mode)
+
+    def replace_candidate_trace_artifact(self, payload):
+        writer = getattr(self.repository, "replace_candidate_trace_artifact", None)
+        if not callable(writer):
+            return {}
+        return writer(payload)
+
+    def load_candidate_trace_artifact(self, trade_date):
+        reader = getattr(self.repository, "load_candidate_trace_artifact", None)
+        if not callable(reader):
+            return {}
+        return reader(trade_date)
+
     def upsert_monthly_account_ledger(self, row):
         return self.repository.upsert_monthly_account_ledger(row)
 

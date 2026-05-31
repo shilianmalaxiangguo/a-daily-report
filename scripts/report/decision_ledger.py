@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from selection.candidate_execution_contracts import (
@@ -2486,13 +2487,46 @@ def write_decision_ledger_artifacts(
     index_path = ledger_dir / "index.json"
     previous_index = {}
     service = database_service
+    postgres_configured = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip().startswith(("postgres://", "postgresql://"))
     if service is None:
         try:
             from storage.database_service import DatabaseService
 
             service = DatabaseService.from_environment(root / "data" / "cloudflare_free_daily.db")
-        except Exception:
+        except Exception as exc:
+            if postgres_configured:
+                return {
+                    "snapshot_path": str(snapshot_path),
+                    "index_path": str(index_path),
+                    "case_count": 0,
+                    "index": {},
+                    "fact_db_sync": {
+                        "status": "failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    },
+                }
             service = None
+    if postgres_configured and (
+        service is None
+        or not callable(getattr(service, "is_postgres_backed", None))
+        or not service.is_postgres_backed()
+    ):
+        return {
+            "snapshot_path": str(snapshot_path),
+            "index_path": str(index_path),
+            "case_count": 0,
+            "index": {},
+            "fact_db_sync": {
+                "status": "failed",
+                "error_type": "RuntimeError",
+                "error": "PostgreSQL decision ledger storage is configured but DatabaseService did not select PostgreSQL",
+            },
+        }
     if (
         service is not None
         and callable(getattr(service, "is_postgres_backed", None))
@@ -2501,6 +2535,18 @@ def write_decision_ledger_artifacts(
     ):
         previous_index = _sanitize_decision_ledger_index(service.read_decision_ledger_index(end_date=trade_date, window_days=25))
     else:
+        if postgres_configured:
+            return {
+                "snapshot_path": str(snapshot_path),
+                "index_path": str(index_path),
+                "case_count": 0,
+                "index": {},
+                "fact_db_sync": {
+                    "status": "failed",
+                    "error_type": "RuntimeError",
+                    "error": "PostgreSQL decision ledger index reader is unavailable",
+                },
+            }
         previous_index = _sanitize_decision_ledger_index(_read_json_if_exists(index_path))
     if review_market_facts_by_stock_code is None:
         review_market_facts_by_stock_code = _load_review_market_facts(root, trade_date, previous_index)
@@ -2513,23 +2559,41 @@ def write_decision_ledger_artifacts(
     previous_index = _prune_replaced_same_day_records(previous_index, snapshot)
     merged_snapshot = _sanitize_decision_ledger_snapshot(merge_snapshot_with_previous_index(snapshot, previous_index))
     index = build_decision_ledger_index(merged_snapshot, previous_index=previous_index)
-    if write_json_archive:
-        _write_json(snapshot_path, merged_snapshot)
-        _write_json(index_path, index)
     fact_db_sync = {"status": "not_run", "rows": 0}
-    try:
-        if service is None:
-            from storage.database_service import DatabaseService
-
-            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
-        if callable(getattr(service, "is_postgres_backed", None)) and service.is_postgres_backed():
+    service_is_postgres = (
+        service is not None
+        and callable(getattr(service, "is_postgres_backed", None))
+        and service.is_postgres_backed()
+    )
+    if service_is_postgres:
+        try:
             structured_result = service.replace_decision_ledger_snapshot(merged_snapshot)
             fact_db_sync = {
                 "status": "success",
                 "rows": int(structured_result.get("mentions") or 0),
                 "cases": int(structured_result.get("cases") or 0),
             }
-        else:
+        except Exception as exc:
+            return {
+                "snapshot_path": str(snapshot_path),
+                "index_path": str(index_path),
+                "case_count": len(merged_snapshot.get("cases") or []),
+                "index": index,
+                "fact_db_sync": {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            }
+    if write_json_archive:
+        _write_json(snapshot_path, merged_snapshot)
+        _write_json(index_path, index)
+    if not service_is_postgres:
+        try:
+            if service is None:
+                from storage.database_service import DatabaseService
+
+                service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
             current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
             recent_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=25, exclude_a_kill=False)
             service.replace_extreme_conviction_mentions_for_trade_date(
@@ -2538,12 +2602,12 @@ def write_decision_ledger_artifacts(
             )
             service.upsert_extreme_conviction_mentions(recent_rows)
             fact_db_sync = {"status": "success", "rows": len(recent_rows)}
-    except Exception as exc:
-        fact_db_sync = {
-            "status": "failed",
-            "error_type": type(exc).__name__,
-            "error": str(exc),
-        }
+        except Exception as exc:
+            fact_db_sync = {
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
     return {
         "snapshot_path": str(snapshot_path),
         "index_path": str(index_path),

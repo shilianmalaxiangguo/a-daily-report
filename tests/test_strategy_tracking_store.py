@@ -91,6 +91,219 @@ class StrategyTrackingStoreTest(unittest.TestCase):
         except ModuleNotFoundError as error:
             self.fail(f"report.strategy_tracking_store should exist: {error}")
 
+    def test_postgres_configured_ledger_load_and_save_use_database_service(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def __init__(self):
+                self.saved = None
+
+            def is_postgres_backed(self):
+                return True
+
+            def load_strategy_performance_ledger(self, mode="frozen"):
+                return {"version": "v-test", "mode": mode, "records": [{"report_date": "2026-05-29"}]}
+
+            def save_strategy_performance_ledger(self, ledger, mode="frozen"):
+                self.saved = {"ledger": dict(ledger), "mode": mode}
+                return "postgresql://strategy_performance/frozen"
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            ledger_path = Path(tempdir) / "strategy_performance.json"
+            ledger_path.write_text(json.dumps({"records": [{"report_date": "json"}]}), encoding="utf-8")
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    loaded = store.load_strategy_performance_ledger(
+                        mode="frozen",
+                        helpers={
+                            "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                            "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                        },
+                    )
+                    saved = store.save_strategy_performance_ledger(
+                        {"records": [{"report_date": "2026-05-30"}]},
+                        mode="frozen",
+                        helpers={
+                            "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                            "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                        },
+                    )
+
+            self.assertEqual(loaded["records"][0]["report_date"], "2026-05-29")
+            self.assertEqual(service.saved["ledger"]["records"][0]["report_date"], "2026-05-30")
+            self.assertEqual(saved, "postgresql://strategy_performance/frozen")
+            self.assertEqual(json.loads(ledger_path.read_text(encoding="utf-8"))["records"][0]["report_date"], "json")
+
+    def test_postgres_configured_factor_snapshot_uses_database_service(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def __init__(self):
+                self.saved = None
+
+            def is_postgres_backed(self):
+                return True
+
+            def save_factor_snapshot(self, target_date, factor_snapshot, mode="frozen"):
+                self.saved = {
+                    "target_date": target_date,
+                    "factor_snapshot": dict(factor_snapshot),
+                    "mode": mode,
+                }
+                return {
+                    "path": "postgresql://factor-snapshots/2026-05-29",
+                    "mode": mode,
+                    "saved": True,
+                    "version": "snapshot-v1",
+                    "saved_at": "2026-05-29 15:10:00",
+                }
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            snapshot_path = Path(tempdir) / "2026-05-29.json"
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    result = store.save_factor_snapshot(
+                        "2026-05-29",
+                        {"foo": "bar"},
+                        mode="frozen",
+                        helpers={
+                            "_get_factor_snapshot_path": lambda target_date, mode="frozen": str(snapshot_path),
+                            "_make_serializable": lambda value: value,
+                            "STRATEGY_FACTOR_SNAPSHOT_VERSION": "snapshot-v1",
+                            "LEDGER_MODE_FROZEN": "frozen",
+                            "LEDGER_MODE_REPLAY": "replay",
+                        },
+                    )
+
+        self.assertEqual(service.saved["target_date"], "2026-05-29")
+        self.assertEqual(service.saved["factor_snapshot"], {"foo": "bar"})
+        self.assertEqual(result["path"], "postgresql://factor-snapshots/2026-05-29")
+        self.assertFalse(snapshot_path.exists())
+
+    def test_postgres_configured_service_failure_does_not_read_legacy_ledger(self):
+        store = self._load_store_module()
+
+        class BrokenDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                raise RuntimeError("database unavailable")
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            ledger_path = Path(tempdir) / "strategy_performance.json"
+            ledger_path.write_text(json.dumps({"records": [{"report_date": "json"}]}), encoding="utf-8")
+            with patch.object(store, "DatabaseService", BrokenDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "database unavailable"):
+                        store.load_strategy_performance_ledger(
+                            mode="frozen",
+                            helpers={
+                                "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                                "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                            },
+                        )
+
+    def test_postgres_configured_missing_writer_does_not_write_legacy_snapshot(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            snapshot_path = Path(tempdir) / "2026-05-29.json"
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "factor snapshot writer"):
+                        store.save_factor_snapshot(
+                            "2026-05-29",
+                            {"foo": "bar"},
+                            mode="frozen",
+                            helpers={
+                                "_get_factor_snapshot_path": lambda target_date, mode="frozen": str(snapshot_path),
+                                "_make_serializable": lambda value: value,
+                                "STRATEGY_FACTOR_SNAPSHOT_VERSION": "snapshot-v1",
+                                "LEDGER_MODE_FROZEN": "frozen",
+                                "LEDGER_MODE_REPLAY": "replay",
+                            },
+                        )
+            self.assertFalse(snapshot_path.exists())
+
+    def test_postgres_configured_missing_ledger_reader_does_not_read_legacy_file(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            ledger_path = Path(tempdir) / "strategy_performance.json"
+            ledger_path.write_text(json.dumps({"records": [{"report_date": "json"}]}), encoding="utf-8")
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "ledger reader"):
+                        store.load_strategy_performance_ledger(
+                            mode="frozen",
+                            helpers={
+                                "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                                "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                            },
+                        )
+            self.assertEqual(json.loads(ledger_path.read_text(encoding="utf-8"))["records"][0]["report_date"], "json")
+
+    def test_postgres_configured_missing_ledger_writer_does_not_write_legacy_file(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def load_strategy_performance_ledger(self, mode="frozen"):
+                return {"records": []}
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            ledger_path = Path(tempdir) / "strategy_performance.json"
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                    with self.assertRaisesRegex(RuntimeError, "ledger writer"):
+                        store.save_strategy_performance_ledger(
+                            {"records": [{"report_date": "2026-05-29"}]},
+                            mode="frozen",
+                            helpers={
+                                "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                                "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                            },
+                        )
+            self.assertFalse(ledger_path.exists())
+
     def test_legacy_load_ledger_wrapper_delegates_to_store(self):
         result = _run_legacy_entry_probe(
             """

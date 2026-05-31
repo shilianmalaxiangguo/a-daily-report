@@ -163,18 +163,17 @@ def _postgres_database_configured():
 
 def _configured_tracking_memory_store():
     service_cls = globals().get("DatabaseService")
-    if service_cls is None or not _postgres_database_configured():
+    if not _postgres_database_configured():
         return None
-    try:
-        service = service_cls.from_environment()
-    except Exception:
-        return None
+    if service_cls is None:
+        raise RuntimeError("PostgreSQL tracking memory storage is configured but DatabaseService is unavailable")
+    service = service_cls.from_environment()
     if not callable(getattr(service, "is_postgres_backed", None)) or not service.is_postgres_backed():
-        return None
+        raise RuntimeError("PostgreSQL tracking memory storage is configured but DatabaseService did not select PostgreSQL")
     if not callable(getattr(service, "load_tracking_memory_state", None)):
-        return None
+        raise RuntimeError("PostgreSQL tracking memory reader is unavailable")
     if not callable(getattr(service, "save_tracking_memory_state", None)):
-        return None
+        raise RuntimeError("PostgreSQL tracking memory writer is unavailable")
     return service
 
 

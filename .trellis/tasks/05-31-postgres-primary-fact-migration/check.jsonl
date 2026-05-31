@@ -1,0 +1,5 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for review"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality guideline placeholder plus testing expectation"}
+{"file": ".trellis/tasks/05-31-postgres-primary-fact-migration/research/postgres-primary-store-audit.md", "reason": "Review against JSON primary store audit and snap-ui exclusion"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review data-flow and boundary consistency"}

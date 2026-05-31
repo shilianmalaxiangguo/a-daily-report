@@ -28,6 +28,9 @@ class _FakeCursor:
         return list(self.rows)
 
     def fetchone(self):
+        if self.row_batches:
+            batch = self.row_batches.pop(0)
+            return batch[0] if batch else None
         return self.rows[0] if self.rows else None
 
     def __enter__(self):
@@ -73,6 +76,15 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "leader_memory_items",
             "tracking_memory_daily_status",
             "a_kill_cooling_items",
+            "strategy_performance_ledger",
+            "strategy_performance_record_fields",
+            "strategy_factor_snapshots",
+            "strategy_factor_snapshot_fields",
+            "strategy_factor_snapshot_pool_items",
+            "candidate_trace_artifacts",
+            "candidate_trace_rows",
+            "candidate_trace_eliminated_groups",
+            "candidate_trace_row_fields",
             "extreme_conviction_cases",
             "extreme_conviction_mentions",
             "planned_participation_steps",
@@ -579,6 +591,218 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(record["planned_participation"]["auction"], "看竞价")
         self.assertEqual(record["participation_review"]["status"], "等待复盘")
         self.assertEqual(record["mentions"][0]["source_section"], "极度看好名单")
+
+    def test_replaces_remaining_primary_fact_stores_structurally(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        a_kill_count = db.replace_a_kill_cooling_records(
+            [
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "a_kill_date": "2026-05-29",
+                    "ban_until": "2026-06-23",
+                    "reason": "日K连续破位",
+                }
+            ]
+        )
+        ledger_result = db.save_strategy_performance_ledger(
+            {
+                "version": "v2",
+                "updated_at": "2026-05-29 15:10:00",
+                "records": [
+                    {
+                        "report_date": "2026-05-29",
+                        "action_type": "execute",
+                        "stock_code": "601991",
+                        "stock_name": "大唐发电",
+                        "entry_range_low": 8.2,
+                        "confirm_price_60m": 8.8,
+                        "candidate_feedback_ready": True,
+                        "factor_snapshot": {
+                            "version": "v2",
+                            "environment": {"score": 80, "position_level": "50%"},
+                            "selection": {"participation_mode": "attack_50_ready"},
+                            "core_stocks": [{"code": "601991", "name": "大唐发电", "sector": "电力"}],
+                        },
+                    }
+                ],
+            },
+            mode="frozen",
+        )
+        snapshot_result = db.save_factor_snapshot(
+            "2026-05-29",
+            {"report_date": "2026-05-29", "market_branch": "电力主攻"},
+            mode="frozen",
+        )
+        trace_result = db.replace_candidate_trace_artifact(
+            {
+                "artifact_version": 1,
+                "trade_date": "2026-05-29",
+                "visible_scope": "T0_T1_T2_T3",
+                "generated_at": "2026-05-29T15:10:00+08:00",
+                "source_report": {"path": "reports/2026-05-29_A股日报_完整版.md"},
+                "traces": [
+                    {
+                        "stock_code": "601991",
+                        "stock_name": "大唐发电",
+                        "tier": "T0",
+                        "key_inputs": [{"field": "账户适配", "value": "实际可买", "source": "account_context"}],
+                        "checks": [{"label": "市场条件", "result": "满足", "evidence": "电力承接"}],
+                        "branch_path": ["市场条件满足", "进入 T0 条件观察"],
+                        "missing_data": [],
+                        "final_action": "进入 T0 条件观察",
+                    }
+                ],
+                "eliminated_summary": [
+                    {"reason": "主线不匹配", "count": 2, "representatives": ["样本一"], "treatment": "保留观察"}
+                ],
+            }
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO a_kill_cooling_items", sql)
+        self.assertIn("INSERT INTO strategy_performance_ledger", sql)
+        self.assertIn("INSERT INTO strategy_performance_record_fields", sql)
+        self.assertIn("INSERT INTO strategy_factor_snapshots", sql)
+        self.assertIn("INSERT INTO strategy_factor_snapshot_fields", sql)
+        self.assertIn("INSERT INTO strategy_factor_snapshot_pool_items", sql)
+        self.assertIn("INSERT INTO candidate_trace_artifacts", sql)
+        self.assertIn("INSERT INTO candidate_trace_rows", sql)
+        self.assertIn("INSERT INTO candidate_trace_row_fields", sql)
+        self.assertIn("INSERT INTO candidate_trace_eliminated_groups", sql)
+        self.assertEqual(a_kill_count, 1)
+        self.assertEqual(ledger_result, "postgresql://strategy_performance/frozen")
+        self.assertTrue(snapshot_result["saved"])
+        self.assertEqual(trace_result["trace_count"], 1)
+
+    def test_loads_structured_strategy_ledger_without_json_payload(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [
+            [
+                (
+                    "frozen",
+                    "2026-05-29",
+                    "execute",
+                    "明天唯一能买的那只",
+                    "50%",
+                    "进攻",
+                    "",
+                    True,
+                    "执行",
+                    "电力",
+                    "601991",
+                    "大唐发电",
+                    "电力",
+                    "postgresql://factor-snapshots/2026-05-29",
+                    "v2",
+                    "2026-05-29 15:10:00",
+                )
+            ],
+            [
+                ("2026-05-29", "entry_range_low", "", 8.2, None, "number"),
+                ("2026-05-29", "confirm_price_60m", "", 8.8, None, "number"),
+                ("2026-05-29", "candidate_feedback_ready", "", None, True, "bool"),
+            ],
+            [
+                ("2026-05-29", "environment.score", "", 80.0, None, "number"),
+                ("2026-05-29", "environment.position_level", "50%", None, None, "text"),
+                ("2026-05-29", "selection.participation_mode", "attack_50_ready", None, None, "text"),
+            ],
+            [
+                (
+                    "2026-05-29",
+                    "core_stocks",
+                    0,
+                    "601991",
+                    "大唐发电",
+                    "电力",
+                    "execute",
+                    "attack_50_ready",
+                    50,
+                    "setup-a",
+                    "主升",
+                    "active",
+                    "电力核心",
+                    "执行",
+                    "站上8.80",
+                )
+            ],
+            [("frozen", "2026-05-29", "v2", "电力", "", "2026-05-29 15:10:00")],
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.load_strategy_performance_ledger(mode="frozen")
+
+        record = result["records"][0]
+        self.assertEqual(result["version"], "v2")
+        self.assertEqual(record["stock_code"], "601991")
+        self.assertEqual(record["entry_range_low"], 8.2)
+        self.assertEqual(record["confirm_price_60m"], 8.8)
+        self.assertTrue(record["candidate_feedback_ready"])
+        self.assertEqual(record["factor_snapshot"]["environment"]["score"], 80)
+        self.assertEqual(record["factor_snapshot"]["selection"]["participation_mode"], "attack_50_ready")
+        self.assertEqual(record["factor_snapshot"]["core_stocks"][0]["stock_name"], "大唐发电")
+
+    def test_loads_structured_candidate_trace_artifact(self):
+        conn = _FakeConnection()
+        conn.cursor_obj.row_batches = [
+            [
+                (
+                    "2026-05-29",
+                    1,
+                    "T0_T1_T2_T3",
+                    "2026-05-29T15:10:00+08:00",
+                    "reports/2026-05-29_A股日报_完整版.md",
+                    "replay",
+                )
+            ],
+            [
+                (
+                    "601991",
+                    "大唐发电",
+                    "T0",
+                    "电力",
+                    "电力",
+                    "进入 T0 条件观察",
+                    "电力核心",
+                    "站上8.80",
+                    "跌破8.20",
+                )
+            ],
+            [
+                ("601991", "key_inputs", "", None, None, "empty_list"),
+                ("601991", "checks", "", None, None, "empty_list"),
+                ("601991", "branch_path", "", None, None, "empty_list"),
+                ("601991", "missing_data", "", None, None, "empty_list"),
+            ],
+            [("主线不匹配", 2, "样本一、样本二", "保留观察")],
+        ]
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.load_candidate_trace_artifact("2026-05-29")
+
+        self.assertEqual(result["source_report"]["variant"], "replay")
+        self.assertEqual(result["traces"][0]["stock_code"], "601991")
+        self.assertEqual(result["traces"][0]["checks"], [])
+        self.assertEqual(result["traces"][0]["key_inputs"], [])
+        self.assertEqual(result["traces"][0]["missing_data"], [])
+        self.assertEqual(result["eliminated_summary"][0]["count"], 2)
+        self.assertEqual(result["eliminated_summary"][0]["representatives"], ["样本一", "样本二"])
 
 
 if __name__ == "__main__":

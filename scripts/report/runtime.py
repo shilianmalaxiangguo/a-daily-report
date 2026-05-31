@@ -4,6 +4,7 @@ from collections import Counter
 import os
 import json
 from pathlib import Path
+import re
 import time
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
@@ -774,6 +775,28 @@ def _read_decision_ledger_index_for_tracking(root_dir="."):
     index_path = Path(root_dir or ".") / "data" / "decision-ledger" / "index.json"
     if callable(reader):
         return reader(index_path)
+    postgres_configured = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip().startswith(("postgres://", "postgresql://"))
+    try:
+        service_cls = globals().get("DatabaseService")
+        if service_cls is None:
+            from storage.database_service import DatabaseService as service_cls
+
+        service = service_cls.from_environment(Path(root_dir or ".") / "data" / "cloudflare_free_daily.db")
+        checker = getattr(service, "is_postgres_backed", None)
+        if callable(checker) and checker():
+            db_index = service.read_decision_ledger_index()
+            if db_index:
+                return db_index
+            return {}
+        if postgres_configured:
+            raise RuntimeError("PostgreSQL decision ledger index storage is configured but DatabaseService did not select PostgreSQL")
+    except Exception:
+        if postgres_configured:
+            raise
     if not index_path.exists():
         return {}
     try:
@@ -787,6 +810,11 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
     globals()["_last_extreme_conviction_a_kill_mark_result"] = {"updated_count": 0, "updated_records": []}
     if not end_date:
         return []
+    postgres_configured = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip().startswith(("postgres://", "postgresql://"))
     query_rows = globals().get("query_extreme_conviction_mention_rows_for_tracking")
     if callable(query_rows):
         try:
@@ -839,6 +867,8 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
             or []
         )
     except Exception:
+        if postgres_configured:
+            raise
         return []
 
 
@@ -2310,6 +2340,45 @@ def _appendix_item_is_flat_heat_only(item):
     return -2 <= change_pct <= 2 or "震荡整理" in pattern or "普通形态" in pattern
 
 
+def _appendix_stock_codes_in_text(text):
+    return set(re.findall(r"(?<!\d)(\d{6})(?!\d)", str(text or "")))
+
+
+def _appendix_crossline_codes_from_context(execution_stage_context):
+    execution_stage_context = execution_stage_context or {}
+    text_parts = []
+    for key in (
+        "special_probe_text",
+        "front_follow_action_text",
+        "front_structure_layer_text",
+        "watch_anchor_type",
+    ):
+        value = execution_stage_context.get(key)
+        if isinstance(value, str) and value.strip():
+            text_parts.append(value)
+    for key in ("watch_anchor", "selected_position_candidate", "best_stock", "runner_up"):
+        item = execution_stage_context.get(key)
+        if not isinstance(item, dict):
+            continue
+        for text_key in ("watch_anchor_note", "summary_text", "reason", "why_watch", "current_interpretation"):
+            value = item.get(text_key)
+            if isinstance(value, str) and value.strip():
+                text_parts.append(value)
+
+    crossline_texts = [text for text in text_parts if "跨线对象" in text]
+    crossline_codes = set()
+    for text in crossline_texts:
+        crossline_codes.update(_appendix_stock_codes_in_text(text))
+
+    anchor = execution_stage_context.get("watch_anchor")
+    if isinstance(anchor, dict):
+        anchor_code = str(_appendix_stock_code(anchor) or "").strip()
+        anchor_name = str(_appendix_stock_name(anchor) or "").strip()
+        if anchor_code and any(anchor_code in text or (anchor_name and anchor_name in text) for text in crossline_texts):
+            crossline_codes.add(anchor_code)
+    return crossline_codes
+
+
 def _appendix_monitoring_labels(item, source_pool, mainline_name):
     if _appendix_item_is_limit_down(item):
         return "风险回避", "跌停/接近跌停，取消明日参与", "跌停/接近跌停，不是明日核心"
@@ -2341,16 +2410,18 @@ def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_cont
     monitoring_index_by_key = {}
     monitoring_pool = []
     lifecycle_records = []
+    crossline_codes = _appendix_crossline_codes_from_context(execution_stage_context)
     for key, source_pool in pool_specs:
         for item in execution_stage_context.get(key, []) or []:
             code = _appendix_stock_code(item)
             dedupe_key = code or _appendix_stock_name(item)
+            item_source_pool = "跨线观察" if source_pool == "主线核心" and code in crossline_codes else source_pool
             if dedupe_key in seen_codes:
                 if source_pool == "跨线观察" and dedupe_key in monitoring_index_by_key:
                     existing_index = monitoring_index_by_key[dedupe_key]
                     display_source_pool, current_action, forced_interpretation = _appendix_monitoring_labels(
                         item,
-                        source_pool,
+                        item_source_pool,
                         mainline_name,
                     )
                     monitoring_pool[existing_index]["source_pool"] = display_source_pool
@@ -2361,7 +2432,7 @@ def _build_appendix_c_continuity_payload(*, target_date="", execution_stage_cont
                 continue
             seen_codes.add(dedupe_key)
             monitoring_index_by_key[dedupe_key] = len(monitoring_pool)
-            display_source_pool, current_action, forced_interpretation = _appendix_monitoring_labels(item, source_pool, mainline_name)
+            display_source_pool, current_action, forced_interpretation = _appendix_monitoring_labels(item, item_source_pool, mainline_name)
             interpretation = (
                 forced_interpretation
                 or item.get("current_interpretation")

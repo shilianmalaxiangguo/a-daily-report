@@ -260,6 +260,139 @@ POSTGRES_SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS strategy_performance_ledger (
+        mode TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        action_type TEXT NOT NULL DEFAULT '',
+        anchor_type TEXT NOT NULL DEFAULT '',
+        position_level TEXT NOT NULL DEFAULT '',
+        operation_state TEXT NOT NULL DEFAULT '',
+        execution_status TEXT NOT NULL DEFAULT '',
+        can_new_entry BOOLEAN NOT NULL DEFAULT false,
+        final_action TEXT NOT NULL DEFAULT '',
+        mainline_name TEXT NOT NULL DEFAULT '',
+        stock_code TEXT NOT NULL DEFAULT '',
+        stock_name TEXT NOT NULL DEFAULT '',
+        stock_sector TEXT NOT NULL DEFAULT '',
+        factor_snapshot_path TEXT NOT NULL DEFAULT '',
+        version TEXT NOT NULL DEFAULT '',
+        updated_at_text TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (mode, report_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_performance_record_fields (
+        mode TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        field_name TEXT NOT NULL,
+        value_text TEXT NOT NULL DEFAULT '',
+        value_number DOUBLE PRECISION,
+        value_bool BOOLEAN,
+        value_kind TEXT NOT NULL DEFAULT 'text',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (mode, report_date, field_name)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_factor_snapshots (
+        mode TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        version TEXT NOT NULL DEFAULT '',
+        market_branch TEXT NOT NULL DEFAULT '',
+        source_policy TEXT NOT NULL DEFAULT '',
+        saved_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (mode, report_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_factor_snapshot_fields (
+        mode TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        field_path TEXT NOT NULL,
+        value_text TEXT NOT NULL DEFAULT '',
+        value_number DOUBLE PRECISION,
+        value_bool BOOLEAN,
+        value_kind TEXT NOT NULL DEFAULT 'text',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (mode, report_date, field_path)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS strategy_factor_snapshot_pool_items (
+        mode TEXT NOT NULL,
+        report_date DATE NOT NULL,
+        pool_name TEXT NOT NULL,
+        ordinal INTEGER NOT NULL DEFAULT 0,
+        stock_code TEXT NOT NULL DEFAULT '',
+        stock_name TEXT NOT NULL DEFAULT '',
+        sector_name TEXT NOT NULL DEFAULT '',
+        action_type TEXT NOT NULL DEFAULT '',
+        participation_mode TEXT NOT NULL DEFAULT '',
+        position_pct INTEGER NOT NULL DEFAULT 0,
+        setup_signal_id TEXT NOT NULL DEFAULT '',
+        setup_signal_label TEXT NOT NULL DEFAULT '',
+        follow_state TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        final_action TEXT NOT NULL DEFAULT '',
+        trigger_text TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (mode, report_date, pool_name, ordinal)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS candidate_trace_artifacts (
+        trade_date DATE PRIMARY KEY,
+        artifact_version INTEGER NOT NULL DEFAULT 0,
+        visible_scope TEXT NOT NULL DEFAULT '',
+        generated_at TEXT NOT NULL DEFAULT '',
+        source_report_path TEXT NOT NULL DEFAULT '',
+        source_report_variant TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS candidate_trace_rows (
+        trade_date DATE NOT NULL,
+        stock_code TEXT NOT NULL,
+        stock_name TEXT NOT NULL DEFAULT '',
+        tier TEXT NOT NULL DEFAULT '',
+        mainline TEXT NOT NULL DEFAULT '',
+        sector_name TEXT NOT NULL DEFAULT '',
+        final_action TEXT NOT NULL DEFAULT '',
+        visible_summary TEXT NOT NULL DEFAULT '',
+        trigger_condition TEXT NOT NULL DEFAULT '',
+        failure_condition TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, stock_code)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS candidate_trace_eliminated_groups (
+        trade_date DATE NOT NULL,
+        reason TEXT NOT NULL,
+        count_value INTEGER NOT NULL DEFAULT 0,
+        representatives_text TEXT NOT NULL DEFAULT '',
+        treatment TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, reason)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS candidate_trace_row_fields (
+        trade_date DATE NOT NULL,
+        stock_code TEXT NOT NULL,
+        field_name TEXT NOT NULL,
+        value_text TEXT NOT NULL DEFAULT '',
+        value_number DOUBLE PRECISION,
+        value_bool BOOLEAN,
+        value_kind TEXT NOT NULL DEFAULT 'text',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, stock_code, field_name)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS extreme_conviction_cases (
         case_id TEXT PRIMARY KEY,
         trade_date DATE NOT NULL,
@@ -440,6 +573,172 @@ def _row_dict(row, columns):
     return dict(zip(columns, row))
 
 
+def _typed_value(value):
+    if isinstance(value, bool):
+        return ("", None, value, "bool")
+    if isinstance(value, dict):
+        return ("", None, None, "empty_dict")
+    if isinstance(value, (list, tuple)):
+        return ("", None, None, "empty_list")
+    if isinstance(value, int) and not isinstance(value, bool):
+        return ("", float(value), None, "number")
+    if isinstance(value, float):
+        return ("", float(value), None, "number")
+    if value is None:
+        return ("", None, None, "none")
+    return (_text(value), None, None, "text")
+
+
+def _restore_typed_value(row):
+    value_kind = _text((row or {}).get("value_kind"))
+    if value_kind == "bool":
+        return bool((row or {}).get("value_bool"))
+    if value_kind == "number":
+        number = (row or {}).get("value_number")
+        if number is None:
+            return 0
+        try:
+            number = float(number)
+        except (TypeError, ValueError):
+            return 0
+        return int(number) if number.is_integer() else number
+    if value_kind == "none":
+        return None
+    if value_kind == "empty_dict":
+        return {}
+    if value_kind == "empty_list":
+        return []
+    return _text((row or {}).get("value_text"))
+
+
+def _iter_structured_scalar_fields(value, *, prefix="", max_depth=5):
+    if max_depth < 0:
+        return
+    if isinstance(value, dict):
+        if not value and prefix:
+            yield prefix, {}
+            return
+        for key in sorted(value.keys()):
+            key_text = _text(key)
+            if not key_text:
+                continue
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            yield from _iter_structured_scalar_fields(value.get(key), prefix=path, max_depth=max_depth - 1)
+        return
+    if isinstance(value, (list, tuple)):
+        if not value and prefix:
+            yield prefix, []
+            return
+        for index, item in enumerate(value):
+            path = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            yield from _iter_structured_scalar_fields(item, prefix=path, max_depth=max_depth - 1)
+        return
+    if isinstance(value, set):
+        return
+    yield prefix, value
+
+
+def _parse_structured_field_path(path):
+    path = _text(path)
+    parts = []
+    token = ""
+    index = 0
+    while index < len(path):
+        char = path[index]
+        if char == ".":
+            if token:
+                parts.append(token)
+                token = ""
+            index += 1
+            continue
+        if char == "[":
+            if token:
+                parts.append(token)
+                token = ""
+            close_index = path.find("]", index)
+            if close_index < 0:
+                token += char
+                index += 1
+                continue
+            try:
+                parts.append(int(path[index + 1:close_index]))
+            except ValueError:
+                parts.append(path[index + 1:close_index])
+            index = close_index + 1
+            continue
+        token += char
+        index += 1
+    if token:
+        parts.append(token)
+    return parts
+
+
+def _structured_container_for(next_part):
+    return [] if isinstance(next_part, int) else {}
+
+
+def _set_nested_value(target, path, value):
+    parts = _parse_structured_field_path(path)
+    if not parts:
+        return
+    current = target
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        next_part = None if is_last else parts[index + 1]
+        if isinstance(part, int):
+            if not isinstance(current, list):
+                return
+            while len(current) <= part:
+                current.append(None if is_last else _structured_container_for(next_part))
+            if is_last:
+                current[part] = value
+                return
+            expected = _structured_container_for(next_part)
+            if not isinstance(current[part], type(expected)):
+                current[part] = expected
+            current = current[part]
+            continue
+        if is_last:
+            current[part] = value
+            return
+        expected = _structured_container_for(next_part)
+        if not isinstance(current.get(part), type(expected)):
+            current[part] = expected
+        current = current[part]
+
+
+def _set_nested_list(target, path, value):
+    parts = _parse_structured_field_path(path)
+    if not parts:
+        return
+    current = target
+    for part in parts[:-1]:
+        if isinstance(part, int):
+            return
+        next_value = current.get(part)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[part] = next_value
+        current = next_value
+    last = parts[-1]
+    if isinstance(last, int):
+        return
+    existing = current.get(last)
+    if isinstance(existing, list):
+        merged = []
+        for index, item in enumerate(value or []):
+            existing_item = existing[index] if index < len(existing) and isinstance(existing[index], dict) else {}
+            if isinstance(item, dict):
+                merged.append({**existing_item, **item})
+            else:
+                merged.append(item)
+        if len(existing) > len(merged):
+            merged.extend(existing[len(merged):])
+        current[last] = merged
+        return
+    current[last] = value
+
+
 def _market_capacity_phase(window_state, mainline_regime, turnover_quality):
     window_state = _text(window_state)
     mainline_regime = _text(mainline_regime)
@@ -492,6 +791,147 @@ class PostgresDailyFactDb:
 
     def is_postgres_backed(self):
         return True
+
+    def _a_kill_row_to_record(self, row):
+        row = row or {}
+        return {
+            "code": _text(row.get("stock_code")),
+            "name": _text(row.get("stock_name")),
+            "sector": _text(row.get("sector_name")),
+            "a_kill_date": _text(row.get("a_kill_date")),
+            "ban_until": _text(row.get("ban_until")),
+            "reason": _text(row.get("reason")),
+        }
+
+    def _strategy_ledger_row_to_record(self, row):
+        row = row or {}
+        return {
+            "report_date": _text(row.get("report_date")),
+            "action_type": _text(row.get("action_type")),
+            "anchor_type": _text(row.get("anchor_type")),
+            "position_level": _text(row.get("position_level")),
+            "operation_state": _text(row.get("operation_state")),
+            "execution_status": _text(row.get("execution_status")),
+            "can_new_entry": bool(row.get("can_new_entry")),
+            "final_action": _text(row.get("final_action")),
+            "mainline_name": _text(row.get("mainline_name")),
+            "stock_code": _text(row.get("stock_code")),
+            "stock_name": _text(row.get("stock_name")),
+            "stock_sector": _text(row.get("stock_sector")),
+            "factor_snapshot_path": _text(row.get("factor_snapshot_path")),
+        }
+
+    def _strategy_record_scalar_rows(self, mode, report_date, record):
+        rows = []
+        excluded = {"report_date", "factor_snapshot", "simulation", "attribution"}
+        for field_name, value in sorted((record or {}).items()):
+            if field_name in excluded or isinstance(value, (dict, list, tuple, set)):
+                continue
+            value_text, value_number, value_bool, value_kind = _typed_value(value)
+            rows.append((mode, report_date, _text(field_name), value_text, value_number, value_bool, value_kind))
+        return rows
+
+    def _strategy_factor_field_rows(self, mode, report_date, snapshot):
+        rows = []
+        for field_path, value in _iter_structured_scalar_fields(snapshot or {}):
+            if not field_path:
+                continue
+            value_text, value_number, value_bool, value_kind = _typed_value(value)
+            rows.append((mode, report_date, field_path, value_text, value_number, value_bool, value_kind))
+        return rows
+
+    def _strategy_factor_pool_rows(self, mode, report_date, snapshot):
+        pool_paths = (
+            ("core_stocks", ("core_stocks",)),
+            ("secondary_stocks", ("secondary_stocks",)),
+            ("crossline_observation_stocks", ("crossline_observation_stocks",)),
+            ("gem_observation_stocks", ("gem_observation_stocks",)),
+            ("generic_watch_stocks", ("generic_watch_stocks",)),
+            ("candidate_stack.execute_candidates", ("candidate_stack", "execute_candidates")),
+        )
+        rows = []
+        for pool_name, path in pool_paths:
+            value = snapshot or {}
+            for part in path:
+                value = value.get(part) if isinstance(value, dict) else None
+            if not isinstance(value, list):
+                continue
+            for ordinal, item in enumerate(value):
+                if not isinstance(item, dict):
+                    continue
+                rows.append(
+                    (
+                        mode,
+                        report_date,
+                        pool_name,
+                        ordinal,
+                        _stock_code(item),
+                        _stock_name(item),
+                        _sector_name(item),
+                        _text(item.get("action_type")),
+                        _text(item.get("participation_mode")),
+                        _safe_int(item.get("position_pct")),
+                        _first_text(item, "setup_signal_id", "abnormal_setup_signal_id"),
+                        _first_text(item, "setup_signal_label", "abnormal_setup_signal_label"),
+                        _first_text(item, "follow_state", "abnormal_follow_state"),
+                        _first_text(item, "reason", "why_watch", "summary_text"),
+                        _text(item.get("final_action")),
+                        _first_text(item, "trigger_text", "trigger_condition", "entry_condition"),
+                    )
+                )
+        return rows
+
+    def _candidate_trace_field_rows(self, trade_date, trace):
+        code = _stock_code(trace)
+        if not code:
+            return []
+        excluded = {
+            "stock_code",
+            "code",
+            "stock_name",
+            "name",
+            "tier",
+            "mainline",
+            "sector",
+            "sector_name",
+            "final_action",
+            "visible_summary",
+            "summary",
+            "trigger_condition",
+            "entry_condition",
+            "failure_condition",
+            "invalidation",
+        }
+        rows = []
+        for field_name, value in sorted((trace or {}).items()):
+            if field_name in excluded:
+                continue
+            value_text, value_number, value_bool, value_kind = _typed_value(value)
+            rows.append((trade_date, code, _text(field_name), value_text, value_number, value_bool, value_kind))
+        return rows
+
+    def _strategy_factor_pool_row_to_item(self, row):
+        row = row or {}
+        return {
+            "code": _text(row.get("stock_code")),
+            "stock_code": _text(row.get("stock_code")),
+            "name": _text(row.get("stock_name")),
+            "stock_name": _text(row.get("stock_name")),
+            "sector": _text(row.get("sector_name")),
+            "sector_name": _text(row.get("sector_name")),
+            "action_type": _text(row.get("action_type")),
+            "participation_mode": _text(row.get("participation_mode")),
+            "position_pct": _safe_int(row.get("position_pct")),
+            "setup_signal_id": _text(row.get("setup_signal_id")),
+            "setup_signal_label": _text(row.get("setup_signal_label")),
+            "abnormal_setup_signal_id": _text(row.get("setup_signal_id")),
+            "abnormal_setup_signal_label": _text(row.get("setup_signal_label")),
+            "follow_state": _text(row.get("follow_state")),
+            "abnormal_follow_state": _text(row.get("follow_state")),
+            "reason": _text(row.get("reason")),
+            "final_action": _text(row.get("final_action")),
+            "trigger_text": _text(row.get("trigger_text")),
+        }
 
     def upsert_market_daily_total(self, row):
         row = row or {}
@@ -1566,6 +2006,781 @@ class PostgresDailyFactDb:
                     )
             conn.commit()
         return len(rows)
+
+    def query_a_kill_cooling_records(self):
+        columns = ("stock_code", "stock_name", "sector_name", "a_kill_date", "ban_until", "reason")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT stock_code, stock_name, sector_name, a_kill_date, ban_until, reason
+                    FROM a_kill_cooling_items
+                    ORDER BY a_kill_date ASC, stock_code ASC
+                    """
+                )
+                rows = cursor.fetchall()
+        return [self._a_kill_row_to_record(_row_dict(row, columns)) for row in rows or []]
+
+    def query_active_a_kill_cooling_records(self, target_date):
+        target = _date_or_none(target_date)
+        columns = ("stock_code", "stock_name", "sector_name", "a_kill_date", "ban_until", "reason")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT stock_code, stock_name, sector_name, a_kill_date, ban_until, reason
+                    FROM a_kill_cooling_items
+                    WHERE a_kill_date <= %s AND ban_until > %s
+                    ORDER BY ban_until ASC, stock_name ASC
+                    """,
+                    (target, target),
+                )
+                rows = cursor.fetchall()
+        records = []
+        target_dt = None
+        try:
+            target_dt = _dt.datetime.strptime(_text(target)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            target_dt = None
+        for row in rows or []:
+            record = self._a_kill_row_to_record(_row_dict(row, columns))
+            if target_dt and record.get("a_kill_date"):
+                try:
+                    record_dt = _dt.datetime.strptime(record["a_kill_date"][:10], "%Y-%m-%d").date()
+                    ban_dt = _dt.datetime.strptime(record.get("ban_until", "")[:10], "%Y-%m-%d").date()
+                    record["days_passed"] = (target_dt - record_dt).days
+                    record["remaining_days"] = max((ban_dt - target_dt).days, 0)
+                except ValueError:
+                    pass
+            records.append(record)
+        return records
+
+    def replace_a_kill_cooling_records(self, records):
+        rows = []
+        for record in records or []:
+            if not isinstance(record, dict):
+                continue
+            code = _stock_code(record)
+            if not code:
+                continue
+            rows.append(
+                (
+                    code,
+                    _stock_name(record),
+                    _sector_name(record),
+                    _date_or_none(record.get("a_kill_date")),
+                    _date_or_none(record.get("ban_until")),
+                    _first_text(record, "reason", "note", "sector"),
+                )
+            )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM a_kill_cooling_items")
+                if rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO a_kill_cooling_items(
+                            stock_code, stock_name, sector_name, a_kill_date, ban_until, reason
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (stock_code) DO UPDATE SET
+                            stock_name=EXCLUDED.stock_name,
+                            sector_name=EXCLUDED.sector_name,
+                            a_kill_date=EXCLUDED.a_kill_date,
+                            ban_until=EXCLUDED.ban_until,
+                            reason=EXCLUDED.reason,
+                            updated_at=now()
+                        """,
+                        rows,
+                    )
+            conn.commit()
+        return len(rows)
+
+    def load_strategy_performance_ledger(self, mode="frozen"):
+        columns = (
+            "mode",
+            "report_date",
+            "action_type",
+            "anchor_type",
+            "position_level",
+            "operation_state",
+            "execution_status",
+            "can_new_entry",
+            "final_action",
+            "mainline_name",
+            "stock_code",
+            "stock_name",
+            "stock_sector",
+            "factor_snapshot_path",
+            "version",
+            "updated_at_text",
+        )
+        field_columns = (
+            "report_date",
+            "field_name",
+            "value_text",
+            "value_number",
+            "value_bool",
+            "value_kind",
+        )
+        snapshot_field_columns = (
+            "report_date",
+            "field_path",
+            "value_text",
+            "value_number",
+            "value_bool",
+            "value_kind",
+        )
+        pool_columns = (
+            "report_date",
+            "pool_name",
+            "ordinal",
+            "stock_code",
+            "stock_name",
+            "sector_name",
+            "action_type",
+            "participation_mode",
+            "position_pct",
+            "setup_signal_id",
+            "setup_signal_label",
+            "follow_state",
+            "reason",
+            "final_action",
+            "trigger_text",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT mode, report_date, action_type, anchor_type, position_level,
+                           operation_state, execution_status, can_new_entry,
+                           final_action, mainline_name, stock_code, stock_name,
+                           stock_sector, factor_snapshot_path, version, updated_at_text
+                    FROM strategy_performance_ledger
+                    WHERE mode = %s
+                    ORDER BY report_date ASC
+                    """,
+                    (_text(mode) or "frozen",),
+                )
+                rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT report_date, field_name, value_text, value_number, value_bool, value_kind
+                    FROM strategy_performance_record_fields
+                    WHERE mode = %s
+                    ORDER BY report_date ASC, field_name ASC
+                    """,
+                    (_text(mode) or "frozen",),
+                )
+                field_rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT report_date, field_path, value_text, value_number, value_bool, value_kind
+                    FROM strategy_factor_snapshot_fields
+                    WHERE mode = %s
+                    ORDER BY report_date ASC, field_path ASC
+                    """,
+                    (_text(mode) or "frozen",),
+                )
+                snapshot_field_rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT report_date, pool_name, ordinal, stock_code, stock_name,
+                           sector_name, action_type, participation_mode, position_pct,
+                           setup_signal_id, setup_signal_label, follow_state, reason,
+                           final_action, trigger_text
+                    FROM strategy_factor_snapshot_pool_items
+                    WHERE mode = %s
+                    ORDER BY report_date ASC, pool_name ASC, ordinal ASC
+                    """,
+                    (_text(mode) or "frozen",),
+                )
+                pool_rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT mode, report_date, version, market_branch, source_policy, saved_at
+                    FROM strategy_factor_snapshots
+                    WHERE mode = %s
+                    ORDER BY report_date ASC
+                    """,
+                    (_text(mode) or "frozen",),
+                )
+                snapshot_meta_rows = cursor.fetchall()
+        fields_by_date = {}
+        for row in field_rows or []:
+            item = _row_dict(row, field_columns)
+            report_date = _text(item.get("report_date"))
+            if not report_date:
+                continue
+            fields_by_date.setdefault(report_date, {})[_text(item.get("field_name"))] = _restore_typed_value(item)
+
+        snapshots_by_date = {}
+        for row in snapshot_meta_rows or []:
+            item = _row_dict(row, ("mode", "report_date", "version", "market_branch", "source_policy", "saved_at"))
+            report_date = _text(item.get("report_date"))
+            if not report_date:
+                continue
+            snapshot = snapshots_by_date.setdefault(report_date, {})
+            snapshot["version"] = _text(item.get("version"))
+            snapshot["report_date"] = report_date
+            if _text(item.get("market_branch")):
+                snapshot["market_branch"] = _text(item.get("market_branch"))
+            if _text(item.get("source_policy")):
+                snapshot["source_policy"] = _text(item.get("source_policy"))
+
+        for row in snapshot_field_rows or []:
+            item = _row_dict(row, snapshot_field_columns)
+            report_date = _text(item.get("report_date"))
+            if not report_date:
+                continue
+            snapshot = snapshots_by_date.setdefault(report_date, {"report_date": report_date})
+            _set_nested_value(snapshot, item.get("field_path"), _restore_typed_value(item))
+
+        pool_groups = {}
+        for row in pool_rows or []:
+            item = _row_dict(row, pool_columns)
+            report_date = _text(item.get("report_date"))
+            pool_name = _text(item.get("pool_name"))
+            if not report_date or not pool_name:
+                continue
+            pool_groups.setdefault((report_date, pool_name), []).append(item)
+        for (report_date, pool_name), items in pool_groups.items():
+            snapshot = snapshots_by_date.setdefault(report_date, {"report_date": report_date})
+            pool_items = [self._strategy_factor_pool_row_to_item(item) for item in items]
+            _set_nested_list(snapshot, pool_name, pool_items)
+            snapshots_by_date[report_date] = snapshot
+        records = []
+        version = ""
+        updated_at = ""
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            version = _text(item.get("version")) or version
+            updated_at = _text(item.get("updated_at_text")) or updated_at
+            report_date = _text(item.get("report_date"))
+            record = self._strategy_ledger_row_to_record(item)
+            record.update(fields_by_date.get(report_date, {}))
+            if report_date in snapshots_by_date:
+                record["factor_snapshot"] = snapshots_by_date[report_date]
+            records.append(record)
+        return {
+            "version": version,
+            "updated_at": updated_at,
+            "mode": _text(mode) or "frozen",
+            "records": records,
+        }
+
+    def save_strategy_performance_ledger(self, ledger, mode="frozen"):
+        ledger = dict(ledger or {})
+        mode = _text(mode) or "frozen"
+        records = list(ledger.get("records") or [])
+        rows = []
+        field_rows = []
+        snapshot_rows = []
+        snapshot_field_rows = []
+        pool_rows = []
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            report_date = _date_or_none(record.get("report_date") or record.get("date") or ledger.get("report_date"))
+            if not report_date:
+                continue
+            selected = record.get("selected_target") if isinstance(record.get("selected_target"), dict) else {}
+            factor_snapshot = record.get("factor_snapshot") if isinstance(record.get("factor_snapshot"), dict) else {}
+            rows.append(
+                (
+                    mode,
+                    report_date,
+                    _text(record.get("action_type")),
+                    _text(record.get("anchor_type")),
+                    _text(record.get("position_level")),
+                    _text(record.get("operation_state")),
+                    _text(record.get("execution_status")),
+                    bool(record.get("can_new_entry")),
+                    _text(record.get("final_action") or record.get("action")),
+                    _text(record.get("mainline_name") or record.get("mainline")),
+                    _stock_code(selected or record),
+                    _stock_name(selected or record),
+                    _sector_name(selected or record),
+                    _text(record.get("factor_snapshot_path")),
+                    _text(ledger.get("version")),
+                    _text(ledger.get("updated_at")),
+                )
+            )
+            field_rows.extend(self._strategy_record_scalar_rows(mode, report_date, record))
+            if factor_snapshot:
+                snapshot_rows.append(
+                    (
+                        mode,
+                        report_date,
+                        _text(factor_snapshot.get("version") or ledger.get("version")),
+                        _text(factor_snapshot.get("market_branch") or (factor_snapshot.get("mainline") or {}).get("name")),
+                        _text(factor_snapshot.get("source_policy") or factor_snapshot.get("source")),
+                    )
+                )
+                snapshot_field_rows.extend(self._strategy_factor_field_rows(mode, report_date, factor_snapshot))
+                pool_rows.extend(self._strategy_factor_pool_rows(mode, report_date, factor_snapshot))
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM strategy_performance_ledger WHERE mode = %s", (mode,))
+                cursor.execute("DELETE FROM strategy_performance_record_fields WHERE mode = %s", (mode,))
+                cursor.execute("DELETE FROM strategy_factor_snapshots WHERE mode = %s", (mode,))
+                cursor.execute("DELETE FROM strategy_factor_snapshot_fields WHERE mode = %s", (mode,))
+                cursor.execute("DELETE FROM strategy_factor_snapshot_pool_items WHERE mode = %s", (mode,))
+                if rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_performance_ledger(
+                            mode, report_date, action_type, anchor_type, position_level,
+                            operation_state, execution_status, can_new_entry,
+                            final_action, mainline_name, stock_code, stock_name,
+                            stock_sector, factor_snapshot_path, version, updated_at_text
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date) DO UPDATE SET
+                            action_type=EXCLUDED.action_type,
+                            anchor_type=EXCLUDED.anchor_type,
+                            position_level=EXCLUDED.position_level,
+                            operation_state=EXCLUDED.operation_state,
+                            execution_status=EXCLUDED.execution_status,
+                            can_new_entry=EXCLUDED.can_new_entry,
+                            final_action=EXCLUDED.final_action,
+                            mainline_name=EXCLUDED.mainline_name,
+                            stock_code=EXCLUDED.stock_code,
+                            stock_name=EXCLUDED.stock_name,
+                            stock_sector=EXCLUDED.stock_sector,
+                            factor_snapshot_path=EXCLUDED.factor_snapshot_path,
+                            version=EXCLUDED.version,
+                            updated_at_text=EXCLUDED.updated_at_text,
+                            updated_at=now()
+                        """,
+                        rows,
+                    )
+                if field_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_performance_record_fields(
+                            mode, report_date, field_name, value_text, value_number, value_bool, value_kind
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date, field_name) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            updated_at=now()
+                        """,
+                        field_rows,
+                    )
+                if snapshot_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_factor_snapshots(
+                            mode, report_date, version, market_branch, source_policy
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date) DO UPDATE SET
+                            version=EXCLUDED.version,
+                            market_branch=EXCLUDED.market_branch,
+                            source_policy=EXCLUDED.source_policy,
+                            updated_at=now()
+                        """,
+                        snapshot_rows,
+                    )
+                if snapshot_field_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_factor_snapshot_fields(
+                            mode, report_date, field_path, value_text, value_number, value_bool, value_kind
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date, field_path) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            updated_at=now()
+                        """,
+                        snapshot_field_rows,
+                    )
+                if pool_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_factor_snapshot_pool_items(
+                            mode, report_date, pool_name, ordinal, stock_code, stock_name,
+                            sector_name, action_type, participation_mode, position_pct,
+                            setup_signal_id, setup_signal_label, follow_state, reason,
+                            final_action, trigger_text
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date, pool_name, ordinal) DO UPDATE SET
+                            stock_code=EXCLUDED.stock_code,
+                            stock_name=EXCLUDED.stock_name,
+                            sector_name=EXCLUDED.sector_name,
+                            action_type=EXCLUDED.action_type,
+                            participation_mode=EXCLUDED.participation_mode,
+                            position_pct=EXCLUDED.position_pct,
+                            setup_signal_id=EXCLUDED.setup_signal_id,
+                            setup_signal_label=EXCLUDED.setup_signal_label,
+                            follow_state=EXCLUDED.follow_state,
+                            reason=EXCLUDED.reason,
+                            final_action=EXCLUDED.final_action,
+                            trigger_text=EXCLUDED.trigger_text,
+                            updated_at=now()
+                        """,
+                        pool_rows,
+                    )
+            conn.commit()
+        return f"postgresql://strategy_performance/{mode}"
+
+    def save_factor_snapshot(self, target_date, factor_snapshot, mode="frozen"):
+        snapshot = dict(factor_snapshot or {})
+        if not snapshot:
+            return {"path": "", "mode": mode, "saved": False}
+        mode = _text(mode) or "frozen"
+        report_date = _date_or_none(target_date or snapshot.get("report_date"))
+        snapshot.setdefault("report_date", report_date)
+        saved_at = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        snapshot_field_rows = self._strategy_factor_field_rows(mode, report_date, snapshot)
+        pool_rows = self._strategy_factor_pool_rows(mode, report_date, snapshot)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO strategy_factor_snapshots(
+                        mode, report_date, version, market_branch, source_policy, saved_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (mode, report_date) DO UPDATE SET
+                        version=EXCLUDED.version,
+                        market_branch=EXCLUDED.market_branch,
+                        source_policy=EXCLUDED.source_policy,
+                        saved_at=EXCLUDED.saved_at,
+                        updated_at=now()
+                    """,
+                    (
+                        mode,
+                        report_date,
+                        _text(snapshot.get("version")),
+                        _text(snapshot.get("market_branch")),
+                        _text(snapshot.get("source_policy") or snapshot.get("source")),
+                        saved_at,
+                    ),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_factor_snapshot_fields WHERE mode = %s AND report_date = %s",
+                    (mode, report_date),
+                )
+                cursor.execute(
+                    "DELETE FROM strategy_factor_snapshot_pool_items WHERE mode = %s AND report_date = %s",
+                    (mode, report_date),
+                )
+                if snapshot_field_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_factor_snapshot_fields(
+                            mode, report_date, field_path, value_text, value_number, value_bool, value_kind
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date, field_path) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            updated_at=now()
+                        """,
+                        snapshot_field_rows,
+                    )
+                if pool_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO strategy_factor_snapshot_pool_items(
+                            mode, report_date, pool_name, ordinal, stock_code, stock_name,
+                            sector_name, action_type, participation_mode, position_pct,
+                            setup_signal_id, setup_signal_label, follow_state, reason,
+                            final_action, trigger_text
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (mode, report_date, pool_name, ordinal) DO UPDATE SET
+                            stock_code=EXCLUDED.stock_code,
+                            stock_name=EXCLUDED.stock_name,
+                            sector_name=EXCLUDED.sector_name,
+                            action_type=EXCLUDED.action_type,
+                            participation_mode=EXCLUDED.participation_mode,
+                            position_pct=EXCLUDED.position_pct,
+                            setup_signal_id=EXCLUDED.setup_signal_id,
+                            setup_signal_label=EXCLUDED.setup_signal_label,
+                            follow_state=EXCLUDED.follow_state,
+                            reason=EXCLUDED.reason,
+                            final_action=EXCLUDED.final_action,
+                            trigger_text=EXCLUDED.trigger_text,
+                            updated_at=now()
+                        """,
+                        pool_rows,
+                    )
+            conn.commit()
+        return {
+            "path": f"postgresql://factor-snapshots/{report_date}",
+            "mode": mode,
+            "saved": True,
+            "saved_at": saved_at,
+            "version": _text(snapshot.get("version")),
+        }
+
+    def replace_candidate_trace_artifact(self, payload):
+        payload = dict(payload or {})
+        trade_date = _date_or_none(payload.get("trade_date"))
+        source_report = payload.get("source_report") if isinstance(payload.get("source_report"), dict) else {}
+        traces = [trace for trace in payload.get("traces") or [] if isinstance(trace, dict)]
+        eliminated = [item for item in payload.get("eliminated_summary") or [] if isinstance(item, dict)]
+        trace_field_rows = []
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM candidate_trace_rows WHERE trade_date = %s", (trade_date,))
+                cursor.execute("DELETE FROM candidate_trace_eliminated_groups WHERE trade_date = %s", (trade_date,))
+                cursor.execute("DELETE FROM candidate_trace_row_fields WHERE trade_date = %s", (trade_date,))
+                cursor.execute(
+                    """
+                    INSERT INTO candidate_trace_artifacts(
+                        trade_date, artifact_version, visible_scope, generated_at,
+                        source_report_path, source_report_variant
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (trade_date) DO UPDATE SET
+                        artifact_version=EXCLUDED.artifact_version,
+                        visible_scope=EXCLUDED.visible_scope,
+                        generated_at=EXCLUDED.generated_at,
+                        source_report_path=EXCLUDED.source_report_path,
+                        source_report_variant=EXCLUDED.source_report_variant,
+                        updated_at=now()
+                    """,
+                    (
+                        trade_date,
+                        _safe_int(payload.get("artifact_version")),
+                        _text(payload.get("visible_scope")),
+                        _text(payload.get("generated_at")),
+                        _text(source_report.get("path")),
+                        _text(source_report.get("variant")),
+                    ),
+                )
+                trace_rows = []
+                for trace in traces:
+                    code = _stock_code(trace)
+                    if not code:
+                        continue
+                    trace_field_rows.extend(self._candidate_trace_field_rows(trade_date, trace))
+                    trace_rows.append(
+                        (
+                            trade_date,
+                            code,
+                            _stock_name(trace),
+                            _text(trace.get("tier")),
+                            _text(trace.get("mainline")),
+                            _sector_name(trace),
+                            _text(trace.get("final_action")),
+                            _first_text(trace, "visible_summary", "summary"),
+                            _first_text(trace, "trigger_condition", "entry_condition"),
+                            _first_text(trace, "failure_condition", "invalidation"),
+                        )
+                    )
+                if trace_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO candidate_trace_rows(
+                            trade_date, stock_code, stock_name, tier, mainline,
+                            sector_name, final_action, visible_summary,
+                            trigger_condition, failure_condition
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, stock_code) DO UPDATE SET
+                            stock_name=EXCLUDED.stock_name,
+                            tier=EXCLUDED.tier,
+                            mainline=EXCLUDED.mainline,
+                            sector_name=EXCLUDED.sector_name,
+                            final_action=EXCLUDED.final_action,
+                            visible_summary=EXCLUDED.visible_summary,
+                            trigger_condition=EXCLUDED.trigger_condition,
+                            failure_condition=EXCLUDED.failure_condition,
+                            updated_at=now()
+                        """,
+                        trace_rows,
+                    )
+                if trace_field_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO candidate_trace_row_fields(
+                            trade_date, stock_code, field_name, value_text, value_number, value_bool, value_kind
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, stock_code, field_name) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            updated_at=now()
+                        """,
+                        trace_field_rows,
+                    )
+                eliminated_rows = []
+                for item in eliminated:
+                    reason = _text(item.get("reason"))
+                    if not reason:
+                        continue
+                    representatives = item.get("representatives") or []
+                    if isinstance(representatives, (list, tuple)):
+                        representatives_text = "、".join(_text(value) for value in representatives if _text(value))
+                    else:
+                        representatives_text = _text(representatives)
+                    eliminated_rows.append(
+                        (
+                            trade_date,
+                            reason,
+                            _safe_int(item.get("count") or item.get("count_value")),
+                            representatives_text,
+                            _text(item.get("treatment")),
+                        )
+                    )
+                if eliminated_rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO candidate_trace_eliminated_groups(
+                            trade_date, reason, count_value, representatives_text, treatment
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, reason) DO UPDATE SET
+                            count_value=EXCLUDED.count_value,
+                            representatives_text=EXCLUDED.representatives_text,
+                            treatment=EXCLUDED.treatment,
+                            updated_at=now()
+                        """,
+                        eliminated_rows,
+                    )
+            conn.commit()
+        return {
+            "artifact_path": f"postgresql://candidate-traces/{trade_date}",
+            "trace_count": len(trace_rows),
+            "eliminated_group_count": len(eliminated_rows),
+        }
+
+    def load_candidate_trace_artifact(self, trade_date):
+        trade_date = _date_or_none(trade_date)
+        meta_columns = (
+            "trade_date",
+            "artifact_version",
+            "visible_scope",
+            "generated_at",
+            "source_report_path",
+            "source_report_variant",
+        )
+        trace_columns = (
+            "stock_code",
+            "stock_name",
+            "tier",
+            "mainline",
+            "sector_name",
+            "final_action",
+            "visible_summary",
+            "trigger_condition",
+            "failure_condition",
+        )
+        trace_field_columns = (
+            "stock_code",
+            "field_name",
+            "value_text",
+            "value_number",
+            "value_bool",
+            "value_kind",
+        )
+        eliminated_columns = ("reason", "count_value", "representatives_text", "treatment")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, artifact_version, visible_scope, generated_at,
+                           source_report_path, source_report_variant
+                    FROM candidate_trace_artifacts
+                    WHERE trade_date = %s
+                    """,
+                    (trade_date,),
+                )
+                meta_row = cursor.fetchone()
+                if not meta_row:
+                    return {}
+                cursor.execute(
+                    """
+                    SELECT stock_code, stock_name, tier, mainline, sector_name,
+                           final_action, visible_summary, trigger_condition, failure_condition
+                    FROM candidate_trace_rows
+                    WHERE trade_date = %s
+                    ORDER BY tier ASC, stock_code ASC
+                    """,
+                    (trade_date,),
+                )
+                trace_rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT stock_code, field_name, value_text, value_number, value_bool, value_kind
+                    FROM candidate_trace_row_fields
+                    WHERE trade_date = %s
+                    ORDER BY stock_code ASC, field_name ASC
+                    """,
+                    (trade_date,),
+                )
+                trace_field_rows = cursor.fetchall()
+                cursor.execute(
+                    """
+                    SELECT reason, count_value, representatives_text, treatment
+                    FROM candidate_trace_eliminated_groups
+                    WHERE trade_date = %s
+                    ORDER BY reason ASC
+                    """,
+                    (trade_date,),
+                )
+                eliminated_rows = cursor.fetchall()
+        meta = _row_dict(meta_row, meta_columns)
+        trace_extra_fields = {}
+        for row in trace_field_rows or []:
+            item = _row_dict(row, trace_field_columns)
+            code = _text(item.get("stock_code"))
+            field_name = _text(item.get("field_name"))
+            if not code or not field_name:
+                continue
+            trace_extra_fields.setdefault(code, {})[field_name] = _restore_typed_value(item)
+        return {
+            "artifact_version": _safe_int(meta.get("artifact_version")),
+            "trade_date": _text(meta.get("trade_date")),
+            "visible_scope": _text(meta.get("visible_scope")),
+            "generated_at": _text(meta.get("generated_at")),
+            "source_report": {
+                "path": _text(meta.get("source_report_path")),
+                "variant": _text(meta.get("source_report_variant")),
+            },
+            "traces": [
+                {
+                    **trace_extra_fields.get(_text(item.get("stock_code")), {}),
+                    "stock_code": _text(item.get("stock_code")),
+                    "stock_name": _text(item.get("stock_name")),
+                    "tier": _text(item.get("tier")),
+                    "mainline": _text(item.get("mainline")),
+                    "sector_name": _text(item.get("sector_name")),
+                    "final_action": _text(item.get("final_action")),
+                    "visible_summary": _text(item.get("visible_summary")),
+                    "trigger_condition": _text(item.get("trigger_condition")),
+                    "failure_condition": _text(item.get("failure_condition")),
+                }
+                for item in (_row_dict(row, trace_columns) for row in trace_rows or [])
+            ],
+            "eliminated_summary": [
+                {
+                    "reason": _text(item.get("reason")),
+                    "count": _safe_int(item.get("count_value")),
+                    "representatives": [
+                        part for part in _text(item.get("representatives_text")).split("、") if part
+                    ],
+                    "treatment": _text(item.get("treatment")),
+                }
+                for item in (_row_dict(row, eliminated_columns) for row in eliminated_rows or [])
+            ],
+        }
 
     def replace_decision_ledger_snapshot(self, snapshot):
         snapshot = snapshot or {}

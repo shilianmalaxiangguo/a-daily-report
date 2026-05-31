@@ -4,6 +4,11 @@ import os
 
 from daily_report_snapshot_io import _make_serializable
 
+try:
+    from storage.database_service import DatabaseService
+except Exception:  # pragma: no cover - optional runtime path
+    DatabaseService = None
+
 __all__ = [
     "get_factor_snapshot_path",
     "get_strategy_performance_path",
@@ -35,9 +40,39 @@ def _restore_runtime_bindings(previous):
             module_globals[key] = value
 
 
+def _postgres_database_configured():
+    database_url = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+    return database_url.startswith(("postgres://", "postgresql://"))
+
+
+def _configured_postgres_service():
+    service_cls = globals().get("DatabaseService")
+    if not _postgres_database_configured():
+        return None
+    if service_cls is None:
+        raise RuntimeError("PostgreSQL strategy tracking storage is configured but DatabaseService is unavailable")
+    service = service_cls.from_environment()
+    checker = getattr(service, "is_postgres_backed", None)
+    if not callable(checker) or not checker():
+        raise RuntimeError("PostgreSQL strategy tracking storage is configured but DatabaseService did not select PostgreSQL")
+    return service
+
+
 def load_strategy_performance_ledger(*, mode="frozen", helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        service = _configured_postgres_service()
+        if service is not None:
+            reader = getattr(service, "load_strategy_performance_ledger", None)
+            if callable(reader):
+                result = reader(mode=mode)
+                if isinstance(result, dict):
+                    return result
+            raise RuntimeError("PostgreSQL strategy performance ledger reader is unavailable")
         return _load_strategy_performance_ledger_legacy_body(mode=mode)
     finally:
         _restore_runtime_bindings(previous)
@@ -46,6 +81,12 @@ def load_strategy_performance_ledger(*, mode="frozen", helpers=None):
 def save_strategy_performance_ledger(ledger, *, mode="frozen", helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        service = _configured_postgres_service()
+        if service is not None:
+            writer = getattr(service, "save_strategy_performance_ledger", None)
+            if callable(writer):
+                return writer(ledger, mode=mode)
+            raise RuntimeError("PostgreSQL strategy performance ledger writer is unavailable")
         return _save_strategy_performance_ledger_legacy_body(ledger, mode=mode)
     finally:
         _restore_runtime_bindings(previous)
@@ -54,6 +95,12 @@ def save_strategy_performance_ledger(ledger, *, mode="frozen", helpers=None):
 def save_factor_snapshot(target_date, factor_snapshot, *, mode="frozen", helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
+        service = _configured_postgres_service()
+        if service is not None:
+            writer = getattr(service, "save_factor_snapshot", None)
+            if callable(writer):
+                return writer(target_date, factor_snapshot, mode=mode)
+            raise RuntimeError("PostgreSQL strategy factor snapshot writer is unavailable")
         return _save_factor_snapshot_legacy_body(target_date, factor_snapshot, mode=mode)
     finally:
         _restore_runtime_bindings(previous)
