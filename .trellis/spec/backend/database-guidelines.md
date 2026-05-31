@@ -52,6 +52,19 @@ from the node result and merge it into `data`; then
   `import_daily_report_data_to_postgres()`, not only
   `save_daily_report_data_to_postgres()`, so dedicated structured tables are
   refreshed after the report runtime computes new facts.
+- PostgreSQL-only runtime must not read historical snapshot archives for
+  backfill. Both `daily_report_snapshot_io.load_data_snapshot()` and direct
+  replay snapshot readers must reject `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1`.
+  If PostgreSQL history is short or stale, return the available structured rows
+  or an empty list; do not rebuild by scanning `snapshots/*.json` or
+  `snapshots/replay/*_replay.json`.
+- JSON archives are allowed only as one-time import seeds, official replay
+  archives, or explicit manual repair inputs. They are not a daily report hot
+  path once PostgreSQL facts exist.
+- When saving a replay snapshot over an existing official snapshot,
+  `_save_data_snapshot()` may preserve `supplementary_perspective`, but it must
+  read only compact metadata from the existing file rather than `json.load()` the
+  full archive.
 - Report table labels use semantic context plus non-placeholder table rows, not
   dynamic `T-xxx` ids. A rendered label may move to a different table id after
   upstream sections change; implementation must not key on that id.
@@ -69,6 +82,14 @@ from the node result and merge it into `data`; then
 
 - Missing PostgreSQL URL in PostgreSQL-only mode -> stop generation with a clear
   data-missing error.
+- PostgreSQL-only runtime attempts any `load_data_snapshot()` or replay snapshot
+  JSON read -> raise immediately with the target date and stack, then fix the
+  caller to read PostgreSQL or degrade to missing history.
+- PostgreSQL-only history helper has fewer rows than requested -> return those
+  rows; do not backfill by scanning archive JSON.
+- Existing official snapshot is hundreds of MB and `_save_data_snapshot()` needs
+  only `supplementary_perspective` -> read tail metadata only; do not parse the
+  full archive.
 - Report table has a PostgreSQL semantic heading but only placeholder rows such
   as `数据暂缺` / `待累计` -> render plain `T-xxx`, without `（PSQL）`.
 - Runtime-computed diffusion facts present only at top level while
@@ -84,6 +105,10 @@ from the node result and merge it into `data`; then
   pools, tracking memory, candidate traces, and extreme conviction tables.
 - Base: a populated cycle table is rendered as `T-xxx（PSQL）` because its semantic
   heading and table body are durable facts.
+- Base: `--postgres-only` with incomplete `mainline_daily` history renders using
+  the available PostgreSQL rows and never calls the snapshot index rebuild.
+- Bad: `_save_data_snapshot()` reads a 700 MB official snapshot with
+  `json.load()` only to preserve `supplementary_perspective`.
 - Bad: a placeholder `主线成交额占比趋势` row is rendered as `T-xxx（PSQL）` only
   because the heading matched.
 - Bad: `--postgres-only` prints PostgreSQL sync success after only saving generic
@@ -93,6 +118,12 @@ from the node result and merge it into `data`; then
 
 - Unit test table numbering with PostgreSQL-only mode, dynamic ids, adjacent table
   contamination, populated structured tables, and placeholder tables.
+- Unit test PostgreSQL-only history helpers with short/stale database history:
+  snapshot readers and daily metric index rebuilds must not be called.
+- Unit test replay snapshot direct readers under
+  `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1`.
+- Unit test `_save_data_snapshot()` preserving `supplementary_perspective`
+  without invoking `json.load()` on an existing official snapshot.
 - Unit test runtime sector exports from `market_activity` into
   `sector_internal_analysis`.
 - Unit test `import_daily_report_facts()` writes runtime
@@ -122,6 +153,27 @@ if args.postgres_only:
 ```
 
 This refreshes both dedicated structured tables and curated generic fact fields.
+
+#### Wrong
+
+```python
+if db_history and _history_is_short(db_history, lookback_days):
+    ensure_daily_metric_history_index(...)
+```
+
+In PostgreSQL-only runtime this can scan hundreds of MB from historical JSON.
+
+#### Correct
+
+```python
+if db_history and postgres_only:
+    return db_history
+if postgres_only:
+    return []
+```
+
+PostgreSQL-only runtime accepts the structured facts already present and keeps
+archive JSON out of the report generation path.
 
 ---
 

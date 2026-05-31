@@ -1,13 +1,22 @@
+import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class DailyMetricHistoryIndexTest(unittest.TestCase):
+    def test_replay_snapshot_loader_blocks_postgres_only_json_read(self):
+        from domains.market_state import daily_metric_history_index as index
+
+        with patch.dict(os.environ, {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}):
+            with self.assertRaisesRegex(RuntimeError, "2026-05-29"):
+                index._load_replay_snapshot_data("2026-05-29")
+
     def test_ensure_daily_metric_history_index_rebuilds_t25_metrics_from_snapshots(self):
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
         from storage.database_service import DatabaseService

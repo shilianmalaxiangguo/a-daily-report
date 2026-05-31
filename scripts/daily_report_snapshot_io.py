@@ -129,6 +129,40 @@ def _snapshot_payload(data: Any, target_date: str, mode: str, existing_perspecti
     }
 
 
+def _decode_json_string_field_from_text(text: str, field_name: str) -> str:
+    marker = json.dumps(str(field_name), ensure_ascii=False)
+    index = text.rfind(marker)
+    if index < 0:
+        return ""
+    colon_index = text.find(":", index + len(marker))
+    if colon_index < 0:
+        return ""
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[colon_index + 1 :].lstrip())
+    except Exception:
+        return ""
+    return str(value or "") if isinstance(value, str) else ""
+
+
+def _load_existing_supplementary_perspective(snapshot_path: Path) -> str:
+    """Read only the tail metadata needed from very large historical snapshots."""
+    try:
+        file_size = snapshot_path.stat().st_size
+    except OSError:
+        return ""
+    if file_size <= 0:
+        return ""
+
+    tail_size = min(file_size, 4 * 1024 * 1024)
+    try:
+        with snapshot_path.open("rb") as file_obj:
+            file_obj.seek(max(file_size - tail_size, 0))
+            tail_text = file_obj.read(tail_size).decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return _decode_json_string_field_from_text(tail_text, "supplementary_perspective")
+
+
 def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FROZEN) -> str:
     """Persist a snapshot.
 
@@ -142,13 +176,7 @@ def _save_data_snapshot(data: Any, target_date: str, mode: str = LEDGER_MODE_FRO
 
     existing_perspective = ""
     if os.path.exists(snapshot_path):
-        try:
-            with open(snapshot_path, "r", encoding="utf-8") as f:
-                existing = json.load(f)
-            if isinstance(existing, dict):
-                existing_perspective = str(existing.get("supplementary_perspective", "") or "")
-        except Exception:
-            existing_perspective = ""
+        existing_perspective = _load_existing_supplementary_perspective(Path(snapshot_path))
 
     payload = _snapshot_payload(data, target_date, mode, existing_perspective=existing_perspective)
 

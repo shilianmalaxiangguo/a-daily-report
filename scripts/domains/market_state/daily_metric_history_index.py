@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import re
+import traceback
 from pathlib import Path
 
 from daily_report_snapshot_io import load_data_snapshot
@@ -110,6 +112,12 @@ def _leading_sectors_from_summary(summary):
 
 
 def _load_replay_snapshot_data(target_date):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        stack = "".join(traceback.format_stack(limit=12))
+        raise RuntimeError(
+            "PostgreSQL-only runtime attempted to read replay JSON snapshot "
+            f"for {target_date}.\n{stack}"
+        )
     path = _repo_root() / "snapshots" / "replay" / f"{target_date}_replay.json"
     if not path.exists():
         return None
