@@ -255,6 +255,28 @@ class DatabaseService:
             return {}
         return reader(trade_date)
 
+    def save_daily_report_snapshot(self, trade_date, data):
+        writer = getattr(self.repository, "save_daily_report_facts", None)
+        if not callable(writer):
+            writer = getattr(self.repository, "save_daily_report_snapshot", None)
+        if not callable(writer):
+            return {"source": "", "field_count": 0}
+        return writer(trade_date, data)
+
+    def load_daily_report_snapshot(self, trade_date):
+        reader = getattr(self.repository, "load_daily_report_facts", None)
+        if not callable(reader):
+            reader = getattr(self.repository, "load_daily_report_snapshot", None)
+        if not callable(reader):
+            return {}
+        return reader(trade_date)
+
+    def import_daily_report_facts(self, trade_date, data):
+        writer = getattr(self.repository, "import_daily_report_facts", None)
+        if not callable(writer):
+            return self.save_daily_report_snapshot(trade_date, data)
+        return writer(trade_date, data)
+
     def upsert_monthly_account_ledger(self, row):
         return self.repository.upsert_monthly_account_ledger(row)
 

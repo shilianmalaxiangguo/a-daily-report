@@ -102,6 +102,10 @@ def ensure_daily_metric_history_index(**kwargs):
     return {"indexed_count": 0, "dates": []}
 
 
+def _postgres_only_runtime():
+    return bool(globals().get("postgres_only_runtime"))
+
+
 def _payload_total_turnover(payload, inherited_total_turnover=0.0):
     if not isinstance(payload, dict):
         return _safe_float(inherited_total_turnover)
@@ -350,7 +354,12 @@ def _load_recent_sector_turnover_history_from_fact_db(target_date, sector_name, 
     if service_cls is None:
         return []
     try:
-        if hasattr(service_cls, "from_environment"):
+        if _postgres_only_runtime() and hasattr(service_cls, "from_environment"):
+            service = service_cls.from_environment(db_path)
+            checker = getattr(service, "is_postgres_backed", None)
+            if not callable(checker) or not checker():
+                return []
+        elif hasattr(service_cls, "from_environment"):
             service = service_cls.from_environment(db_path)
         else:
             service = service_cls.sqlite_d1_compatible(db_path)
@@ -392,12 +401,17 @@ def _history_is_short(history, lookback_days):
 def load_recent_sector_turnover_history(target_date, sector_name, lookback_days=25, max_scan_days=60, *, helpers=None):
     previous = _install_runtime_bindings(helpers or {})
     try:
-        if globals().get("DatabaseService") is not None:
+        if globals().get("DatabaseService") is None:
+            if _postgres_only_runtime():
+                return []
+        else:
             db_history = _load_recent_sector_turnover_history_from_fact_db(
                 target_date,
                 sector_name,
                 lookback_days=lookback_days,
             )
+            if db_history and _postgres_only_runtime():
+                return db_history
             if (
                 db_history
                 and (
@@ -415,9 +429,11 @@ def load_recent_sector_turnover_history(target_date, sector_name, lookback_days=
                     target_date,
                     sector_name,
                     lookback_days=lookback_days,
-                )
+            )
             if db_history:
                 return db_history
+            if _postgres_only_runtime():
+                return []
 
         history = []
         cursor = _normalize_kline_date_str(target_date)

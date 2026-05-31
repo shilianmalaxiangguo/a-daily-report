@@ -85,6 +85,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "candidate_trace_rows",
             "candidate_trace_eliminated_groups",
             "candidate_trace_row_fields",
+            "daily_report_fact_fields",
             "extreme_conviction_cases",
             "extreme_conviction_mentions",
             "planned_participation_steps",
@@ -238,6 +239,33 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(saved["sector_competition_records"], 2)
         self.assertEqual(saved["market_capacity_evolution_records"], 1)
         self.assertGreater(conn.commit_count, 0)
+
+    def test_market_cycle_context_without_attack_rows_does_not_clear_existing_attack_evidence(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved = db.replace_market_cycle_context(
+            "2026-05-29",
+            {
+                "mainline_turnover_summary": {
+                    "mainline_attack_evidence_summary": {
+                        "attack_state": "chaotic_rotation",
+                        "candidate_lines": ["电力"],
+                    }
+                }
+            },
+        )
+
+        delete_attack_calls = [
+            call for call in conn.cursor_obj.calls
+            if call[0] == "execute" and "DELETE FROM sector_attack_evidence_daily" in call[1]
+        ]
+        self.assertEqual(delete_attack_calls, [])
+        self.assertEqual(saved["sector_attack_records"], 0)
 
     def test_replaces_observation_pool_items_and_tracking_memory_structurally(self):
         conn = _FakeConnection()
@@ -677,6 +705,16 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("INSERT INTO candidate_trace_rows", sql)
         self.assertIn("INSERT INTO candidate_trace_row_fields", sql)
         self.assertIn("INSERT INTO candidate_trace_eliminated_groups", sql)
+        candidate_field_rows = [
+            row
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO candidate_trace_row_fields" in call[1]
+            for row in call[2]
+        ]
+        candidate_field_names = {row[2] for row in candidate_field_rows}
+        self.assertIn("key_inputs[0].field", candidate_field_names)
+        self.assertIn("checks[0].result", candidate_field_names)
+        self.assertIn("branch_path[1]", candidate_field_names)
         self.assertEqual(a_kill_count, 1)
         self.assertEqual(ledger_result, "postgresql://strategy_performance/frozen")
         self.assertTrue(snapshot_result["saved"])
@@ -781,10 +819,15 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 )
             ],
             [
-                ("601991", "key_inputs", "", None, None, "empty_list"),
-                ("601991", "checks", "", None, None, "empty_list"),
-                ("601991", "branch_path", "", None, None, "empty_list"),
-                ("601991", "missing_data", "", None, None, "empty_list"),
+                ("601991", "key_inputs[0].field", "账户适配", None, None, "text"),
+                ("601991", "key_inputs[0].value", "实际可买", None, None, "text"),
+                ("601991", "key_inputs[0].source", "account_context", None, None, "text"),
+                ("601991", "checks[0].label", "市场条件", None, None, "text"),
+                ("601991", "checks[0].result", "满足", None, None, "text"),
+                ("601991", "checks[0].evidence", "电力承接", None, None, "text"),
+                ("601991", "branch_path[0]", "市场条件满足", None, None, "text"),
+                ("601991", "branch_path[1]", "进入 T0 条件观察", None, None, "text"),
+                ("601991", "missing_data[0]", "account_context", None, None, "text"),
             ],
             [("主线不匹配", 2, "样本一、样本二", "保留观察")],
         ]
@@ -798,11 +841,278 @@ class PostgresDailyFactDbTest(unittest.TestCase):
 
         self.assertEqual(result["source_report"]["variant"], "replay")
         self.assertEqual(result["traces"][0]["stock_code"], "601991")
-        self.assertEqual(result["traces"][0]["checks"], [])
-        self.assertEqual(result["traces"][0]["key_inputs"], [])
-        self.assertEqual(result["traces"][0]["missing_data"], [])
+        self.assertEqual(
+            result["traces"][0]["checks"],
+            [{"label": "市场条件", "result": "满足", "evidence": "电力承接"}],
+        )
+        self.assertEqual(
+            result["traces"][0]["key_inputs"],
+            [{"field": "账户适配", "value": "实际可买", "source": "account_context"}],
+        )
+        self.assertEqual(result["traces"][0]["branch_path"], ["市场条件满足", "进入 T0 条件观察"])
+        self.assertEqual(result["traces"][0]["missing_data"], ["account_context"])
         self.assertEqual(result["eliminated_summary"][0]["count"], 2)
         self.assertEqual(result["eliminated_summary"][0]["representatives"], ["样本一", "样本二"])
+
+    def test_saves_and_loads_daily_report_fact_projection(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved = db.save_daily_report_snapshot(
+            "2026-05-29",
+            {
+                "data_status": {"两市成交额": True, "中证全指": True},
+                "total_turnover": 33408.58,
+                "turnover_rank": [
+                    {
+                        "code": "601991",
+                        "name": "大唐发电",
+                        "amount": 12.3,
+                        "raw_detail": {"skip": True},
+                        "debug_payload": {"skip": True},
+                    },
+                ],
+                "extreme_conviction_list": [
+                    {
+                        "code": "601991",
+                        "name": "大唐发电",
+                        "sector": "电力",
+                        "conviction_reason": "趋势强化",
+                        "recent_bars": [{"close": 1}],
+                        "risk_reward_plan": "只在窗口内观察",
+                    }
+                ],
+                "market_stats": {"up_count": 1542, "down_count": 3884},
+                "concept_fund_flow": {"rows": [{"name": "火力发电", "net_inflow": 3.2, "raw_detail": {"skip": True}}]},
+                "sector_fund_flow": {
+                    "inflow": [{"name": "电力", "zljlr": 18.2, "net_buy_amount": 20, "net_sell_amount": 1}],
+                    "outflow": [{"name": "半导体", "zljlr": -6.5, "net_buy_amount": 1, "net_sell_amount": 7}],
+                },
+                "indices": {"000001.SH": {"name": "上证指数", "price": 4068.57}},
+                "exchange_monitor_today": [
+                    {
+                        "code": "000001",
+                        "name": "异动一号",
+                        "trigger_pct": 5.0,
+                        "raw_notice": {"skip": True},
+                    }
+                ],
+                "exchange_monitor_nextday": [
+                    {
+                        "code": "000002",
+                        "name": "次日一号",
+                        "trigger_pct": 4.0,
+                        "payload": {"skip": True},
+                    }
+                ],
+                "xuangubao_data": {"xuangubao_news": [{"title": "raw news"}], "diagnostics": {"raw": "skip"}},
+                "new_high_feedback": {
+                    "available": True,
+                    "status": "success",
+                    "new_high_count": 157,
+                    "all_a_share_pct": 2.85,
+                    "leading_sectors": "元器件",
+                    "sector_distribution": [{"sector": "元器件", "new_high_count": 11, "representative_stocks": ["A"]}],
+                    "top_stocks": [{"code": "000001", "name": "样本", "recent_bars": [{"close": 1}]}],
+                    "trend_rows": [{"trade_date": "2026-05-29", "new_high_count": 157, "top_stocks": [{"code": "skip"}]}],
+                },
+                "margin_pressure": {
+                    "status": "success",
+                    "latest_pressure_label": "中性",
+                    "latest_data_date": "2026-05-28",
+                    "latest_margin_turnover_ratio_pct": 98.4,
+                    "rows": [{"trade_date": "2026-05-28", "margin_turnover_ratio_pct": 98.4}],
+                    "calibration_rows": [{"trade_date": "2025-01-01", "margin_turnover_ratio_pct": 80.0}],
+                },
+                "sector_quadrant": {"quadrants": {"highStrong": [{"sector": "电力", "stocks": [{"code": "raw"}]}]}},
+                "sector_ai_analysis": {"sector_tree": {"电力": {"raw": "skip"}}, "sector_count": 148},
+                "entry_cycle_calibration": {"cases": [{"code": "000001", "day_rows": [{"date": "raw"}]}]},
+                "step_status": {"request.foo": {"status": "success"}},
+                "request_diagnostics": [{"request": "foo", "payload": "skip"}],
+                "module_logs": [{"step": "runtime.cache", "details": {"payload": "skip"}}],
+                "appendix_b": {"rendered_tail": "skip"},
+                "appendix_c": {"rendered_tail": "skip"},
+                "decision_ledger_artifacts": {"index": {"by_stock_code": {"000001": [{"case_id": "skip"}]}}},
+                "candidate_trace_artifact": {
+                    "artifact_path": "postgresql://candidate-traces/2026-05-29",
+                    "trace_count": 1,
+                    "payload": {"traces": [{"stock_code": "601991", "raw": "skip"}]},
+                },
+                "recent_extreme_conviction_mentions": [
+                    {
+                        "record_id": "2026-05-12:601991",
+                        "stock_code": "601991",
+                        "stock_name": "大唐发电",
+                        "rank_no": 1,
+                        "payload": {"stock_code": "601991", "raw": "skip"},
+                        "payload_json": "{\"raw\":\"skip\"}",
+                    }
+                ],
+                "mainline_turnover_summary": {
+                    "date": "2026-05-29",
+                    "conclusion": "主线待确认",
+                    "mainline_attack_evidence_summary": {
+                        "sector_evidence_rows": [
+                            {"sector_name": "电力", "net_inflow_amount": 18.2, "extra": "kept-out"},
+                        ],
+                    },
+                    "turnover_share_trend_rows": [
+                        {"date": "2026-05-28", "cycle_mainline": "电力", "mainline_turnover": "300亿", "raw": {"skip": True}},
+                    ],
+                },
+                "market_research_snapshot": {
+                    "cycle_calendar_rows": [{"weekday": "skip"}],
+                    "large_rendered_context": "skip",
+                    "mainline_turnover_summary": {
+                        "mainline_attack_evidence_summary": {
+                            "sector_evidence_rows": [
+                                {"sector_name": "电力", "net_inflow_amount": 18.2, "extra": "kept-out"},
+                            ],
+                        },
+                    },
+                },
+                "execution_stage_context": {
+                    "data": {"huge_cache": "skip"},
+                    "market_research_snapshot": {"duplicate": "skip"},
+                    "market_research_bundle": {"market_research_snapshot": {"duplicate": "skip"}},
+                    "step2_bundle": {"huge_cache": "skip"},
+                    "step3_bundle": {"huge_cache": "skip"},
+                    "core_stocks": [{"code": "000539", "recent_bars": [{"x": 1}]}],
+                    "selected_position_candidate": {"code": "000539", "name": "粤电力A", "recent_bars": [{"x": 1}]},
+                    "watch_anchor": {"code": "000539", "name": "粤电力A", "recent_bars": [{"x": 1}]},
+                    "special_probe_verdict": {"probe_candidate": {"code": "000539", "recent_bars": [{"x": 1}]}},
+                },
+            },
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO daily_report_fact_fields", sql)
+        inserted = next(call[2] for call in conn.cursor_obj.calls if call[0] == "executemany")
+        field_paths = {row[1] for row in inserted}
+        self.assertTrue(any("000001.SH" in path for path in field_paths))
+        self.assertFalse(any("huge_cache" in str(row) for row in inserted))
+        self.assertFalse(any("runtime.cache" in str(row) for row in inserted))
+        self.assertFalse(any("appendix_b" in str(row) for row in inserted))
+        self.assertFalse(any("decision_ledger_artifacts" in str(row) for row in inserted))
+        self.assertFalse(any("case_id" in str(row) for row in inserted))
+        self.assertFalse(any("payload_json" in str(row) for row in inserted))
+        self.assertFalse(any("candidate_trace_artifact" in row[1] and "raw" in str(row) for row in inserted))
+        self.assertFalse(any("candidate_trace_artifact" in row[1] and "payload" in row[1] for row in inserted))
+        self.assertFalse(any("large_rendered_context" in str(row) for row in inserted))
+        self.assertFalse(any("duplicate" in str(row) for row in inserted))
+        self.assertFalse(any("step_status" in str(row) for row in inserted))
+        self.assertFalse(any("request_diagnostics" in str(row) for row in inserted))
+        self.assertFalse(any("xuangubao_news" in str(row) for row in inserted))
+        self.assertFalse(any("raw_detail" in str(row) for row in inserted))
+        self.assertFalse(any("raw_notice" in str(row) for row in inserted))
+        self.assertFalse(any("debug_payload" in str(row) for row in inserted))
+        self.assertFalse(any("payload" in str(row) and "candidate_trace_artifact" not in str(row) for row in inserted))
+        self.assertFalse(any("calibration_rows" in str(row) for row in inserted))
+        self.assertFalse(any("sector_tree" in str(row) for row in inserted))
+        self.assertFalse(any("quadrants" in str(row) for row in inserted))
+        self.assertFalse(any("day_rows" in str(row) for row in inserted))
+        self.assertFalse(any("recent_bars" in str(row) for row in inserted))
+        self.assertFalse(any("net_buy_amount" in str(row) for row in inserted))
+        self.assertFalse(any("sector_evidence_rows" in str(row) for row in inserted))
+        self.assertTrue(any("new_high_feedback/k:14:new_high_count" in path for path in field_paths))
+        self.assertTrue(any("margin_pressure/k:21:latest_pressure_label" in path for path in field_paths))
+        self.assertTrue(any("extreme_conviction_list" in path and "risk_reward_plan" in path for path in field_paths))
+        self.assertTrue(any("candidate_trace_artifact" in path and "trace_count" in path for path in field_paths))
+        self.assertTrue(any("recent_extreme_conviction_mentions" in path and "stock_code" in path for path in field_paths))
+        self.assertTrue(any("sector_fund_flow" in path and "net_inflow_yi" in path for path in field_paths))
+        self.assertTrue(any("exchange_monitor_today" in path for path in field_paths))
+        self.assertTrue(any("exchange_monitor_nextday" in path for path in field_paths))
+        self.assertEqual(saved["source"], "postgresql://daily-report-facts/2026-05-29")
+
+        conn.cursor_obj.rows = [
+            ("k:11:data_status/k:5:两市成交额", "", None, True, "bool"),
+            ("k:11:data_status/k:4:中证全指", "", None, True, "bool"),
+            ("k:14:total_turnover", "", 33408.58, None, "number"),
+            ("k:13:turnover_rank/#0/k:4:code", "601991", None, None, "text"),
+            ("k:13:turnover_rank/#0/k:4:name", "大唐发电", None, None, "text"),
+            ("k:13:turnover_rank/#0/k:6:amount", "", 12.3, None, "number"),
+            ("k:12:market_stats/k:8:up_count", "", 1542.0, None, "number"),
+            ("k:12:market_stats/k:10:down_count", "", 3884.0, None, "number"),
+            ("k:17:concept_fund_flow/k:4:rows/#0/k:4:name", "火力发电", None, None, "text"),
+            ("k:17:concept_fund_flow/k:4:rows/#0/k:10:net_inflow", "", 3.2, None, "number"),
+            ("k:7:indices/k:9:000001.SH/k:5:price", "", 4068.57, None, "number"),
+            ("k:22:exchange_monitor_today/#0/k:4:code", "000001", None, None, "text"),
+            ("k:24:exchange_monitor_nextday/#0/k:4:code", "000002", None, None, "text"),
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-05-29")
+
+        self.assertEqual(loaded["source"], "postgresql://daily-report-facts/2026-05-29")
+        self.assertEqual(loaded["data"]["total_turnover"], 33408.58)
+        self.assertEqual(loaded["data"]["turnover_rank"][0]["code"], "601991")
+        self.assertEqual(loaded["data"]["market_stats"]["up_count"], 1542)
+        self.assertEqual(loaded["data"]["indices"]["000001.SH"]["price"], 4068.57)
+        self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
+        self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
+        self.assertEqual(loaded["field_count"], 13)
+
+    def test_import_daily_report_facts_populates_structured_market_and_sector_tables(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "total_turnover": 33408.58,
+                "market_stats": {"up_count": 1542, "down_count": 3884},
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "电力", "zljlr": 18.2, "data_source": "tushare.moneyflow_ind_ths"},
+                    ],
+                    "outflow": [
+                        {"name": "半导体", "zljlr": -6.5, "data_source": "tushare.moneyflow_ind_ths"},
+                    ],
+                },
+                "market_research_snapshot": {
+                    "mainline_turnover_summary": {
+                        "mainline_attack_evidence_summary": {
+                            "sector_evidence_rows": [
+                                {"sector_name": "电力", "net_inflow_rank": 1, "net_inflow_amount": 18.2},
+                            ],
+                        },
+                    },
+                    "diffusion_quality": {
+                        "sectors": [
+                            {"sector_name": "电力", "total_score": 76, "level": "强扩散"},
+                        ],
+                    },
+                },
+                "candidate_trace_artifact": {
+                    "artifact_version": 1,
+                    "trade_date": "2026-05-29",
+                    "visible_scope": "T0_T1_T2_T3",
+                    "payload": {
+                        "trade_date": "2026-05-29",
+                        "traces": [{"stock_code": "601991", "stock_name": "大唐发电"}],
+                    },
+                },
+            },
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO market_daily_totals", sql)
+        self.assertIn("INSERT INTO sector_fund_flow_daily", sql)
+        self.assertIn("INSERT INTO sector_attack_evidence_daily", sql)
+        self.assertIn("INSERT INTO sector_diffusion_score_daily", sql)
+        self.assertIn("INSERT INTO candidate_trace_rows", sql)
+        self.assertEqual(result["structured_counts"]["market_daily_total"], 1)
+        self.assertEqual(result["structured_counts"]["sector_fund_flow"], 2)
+        self.assertEqual(result["structured_counts"]["market_cycle"]["sector_attack_records"], 1)
+        self.assertEqual(result["structured_counts"]["market_cycle"]["sector_diffusion_records"], 1)
+        self.assertEqual(result["structured_counts"]["candidate_trace"]["trace_count"], 1)
 
 
 if __name__ == "__main__":

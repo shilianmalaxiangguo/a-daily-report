@@ -393,6 +393,19 @@ POSTGRES_SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS daily_report_fact_fields (
+        trade_date DATE NOT NULL,
+        field_path TEXT NOT NULL,
+        value_text TEXT NOT NULL DEFAULT '',
+        value_number DOUBLE PRECISION,
+        value_bool BOOLEAN,
+        value_kind TEXT NOT NULL DEFAULT 'text',
+        source_policy TEXT NOT NULL DEFAULT 'postgresql.daily_report_facts',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, field_path)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS extreme_conviction_cases (
         case_id TEXT PRIMARY KEY,
         trade_date DATE NOT NULL,
@@ -638,6 +651,182 @@ def _iter_structured_scalar_fields(value, *, prefix="", max_depth=5):
     yield prefix, value
 
 
+def _encode_fact_path_part(part):
+    if isinstance(part, int):
+        return f"#{part}"
+    text = _text(part)
+    return f"k:{len(text)}:{text}"
+
+
+def _decode_fact_path(path):
+    text = _text(path)
+    parts = []
+    index = 0
+    while index < len(text):
+        if text[index] == "#":
+            end = text.find("/", index)
+            token = text[index + 1:] if end < 0 else text[index + 1:end]
+            try:
+                parts.append(int(token))
+            except ValueError:
+                parts.append(token)
+            index = len(text) if end < 0 else end + 1
+            continue
+        if not text.startswith("k:", index):
+            end = text.find("/", index)
+            token = text[index:] if end < 0 else text[index:end]
+            if token:
+                parts.append(token)
+            index = len(text) if end < 0 else end + 1
+            continue
+        length_start = index + 2
+        length_end = text.find(":", length_start)
+        if length_end < 0:
+            break
+        try:
+            key_length = int(text[length_start:length_end])
+        except ValueError:
+            break
+        key_start = length_end + 1
+        key = text[key_start:key_start + key_length]
+        parts.append(key)
+        index = key_start + key_length
+        if index < len(text) and text[index] == "/":
+            index += 1
+    return parts
+
+
+def _iter_safe_fact_fields(value, *, parts=(), max_depth=8):
+    if max_depth < 0:
+        return
+    if isinstance(value, dict):
+        if not value and parts:
+            yield "/".join(_encode_fact_path_part(part) for part in parts), {}
+            return
+        for key in sorted(value.keys(), key=lambda item: _text(item)):
+            key_text = _text(key)
+            if not key_text:
+                continue
+            yield from _iter_safe_fact_fields(
+                value.get(key),
+                parts=parts + (key_text,),
+                max_depth=max_depth - 1,
+            )
+        return
+    if isinstance(value, (list, tuple)):
+        if not value and parts:
+            yield "/".join(_encode_fact_path_part(part) for part in parts), []
+            return
+        for item_index, item in enumerate(value):
+            yield from _iter_safe_fact_fields(
+                item,
+                parts=parts + (item_index,),
+                max_depth=max_depth - 1,
+            )
+        return
+    if isinstance(value, set):
+        return
+    yield "/".join(_encode_fact_path_part(part) for part in parts), value
+
+
+_LOW_VALUE_FACT_KEYS = {
+    "appendix_b",
+    "appendix_c",
+    "calibration_rows",
+    "candidate_trace_payload",
+    "day_rows",
+    "debug_payload",
+    "decision_ledger_artifacts",
+    "details_payload",
+    "duplicate",
+    "huge_cache",
+    "large_rendered_context",
+    "market_research_snapshot",
+    "module_logs",
+    "payload",
+    "payload_json",
+    "raw",
+    "raw_detail",
+    "raw_notice",
+    "recent_bars",
+    "rendered_tail",
+    "request_diagnostics",
+    "sector_evidence_rows",
+    "sector_tree",
+    "step2_bundle",
+    "step3_bundle",
+    "step_status",
+}
+
+
+def _is_low_value_fact_key(key):
+    key = _text(key)
+    key_lower = key.lower()
+    if key_lower in _LOW_VALUE_FACT_KEYS:
+        return True
+    if key_lower.startswith(("raw_", "debug_", "cache_")):
+        return True
+    if key_lower.endswith(("_payload", "_json", "_raw", "_cache")):
+        return True
+    return False
+
+
+def _sanitize_fact_value(value, *, max_depth=8):
+    if max_depth < 0:
+        return None
+    if isinstance(value, dict):
+        result = {}
+        for key in sorted(value.keys(), key=lambda item: _text(item)):
+            if _is_low_value_fact_key(key):
+                continue
+            sanitized = _sanitize_fact_value(value.get(key), max_depth=max_depth - 1)
+            if sanitized in (None, "", [], {}):
+                continue
+            result[_text(key)] = sanitized
+        return result
+    if isinstance(value, (list, tuple)):
+        result = []
+        for item in value:
+            sanitized = _sanitize_fact_value(item, max_depth=max_depth - 1)
+            if sanitized in (None, "", [], {}):
+                continue
+            result.append(sanitized)
+        return result
+    if isinstance(value, set):
+        return None
+    return value
+
+
+def _set_nested_fact_value(target, path, value):
+    parts = _decode_fact_path(path)
+    if not parts:
+        return
+    current = target
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        next_part = None if is_last else parts[index + 1]
+        if isinstance(part, int):
+            if not isinstance(current, list):
+                return
+            while len(current) <= part:
+                current.append(None if is_last else _structured_container_for(next_part))
+            if is_last:
+                current[part] = value
+                return
+            expected = _structured_container_for(next_part)
+            if not isinstance(current[part], type(expected)):
+                current[part] = expected
+            current = current[part]
+            continue
+        if is_last:
+            current[part] = value
+            return
+        expected = _structured_container_for(next_part)
+        if not isinstance(current.get(part), type(expected)):
+            current[part] = expected
+        current = current[part]
+
+
 def _parse_structured_field_path(path):
     path = _text(path)
     parts = []
@@ -737,6 +926,978 @@ def _set_nested_list(target, path, value):
         current[last] = merged
         return
     current[last] = value
+
+
+_DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
+    "total_turnover",
+    "turnover_data",
+    "indices",
+    "wind_a_alternative",
+    "turnover_rank",
+    "market_stats",
+    "hot_rank_top50",
+    "hot_rank_top30",
+    "integrated_hot_list",
+    "calendar_events",
+    "xuangubao_data",
+    "wanzhu_top10",
+    "lianban_data",
+    "new_high_feedback",
+    "top50_turnover_share_series",
+    "etf_turnover_series",
+    "concept_fund_flow",
+    "sector_fund_flow",
+    "sector_change_up",
+    "sector_change_down",
+    "hot_plates",
+    "margin_pressure",
+    "lhb_analysis",
+    "lhb_net_buy_top10",
+    "lhb_net_sell_top10",
+    "xueqiu_hot_rank_top100",
+    "xueqiu_hot_stock_arguments",
+    "data_status",
+    "zt_pool",
+    "dt_pool",
+    "zt_pool_by_sector",
+    "dt_pool_by_sector",
+    "limit_up_codes",
+    "limit_down_codes",
+    "market_research_snapshot",
+    "mainline_turnover_summary",
+    "current_mainline_history_record",
+    "recent_mainline_history",
+    "current_sector_turnover_snapshot",
+    "recent_sector_turnover_history",
+    "market_structure_judgement",
+    "sector_ai_analysis",
+    "sector_quadrant",
+    "realtime_tag_evidence_snapshot",
+    "exchange_monitor_today",
+    "exchange_monitor_nextday",
+    "new_stock_research_pool",
+    "new_stock_candidate_upgrades",
+    "dragon_rebound_watch_pool",
+    "entry_cycle_calibration",
+    "candidate_trace_artifact",
+    "recent_extreme_conviction_mentions",
+    "recent_extreme_conviction_mentions_for_review",
+    "extreme_conviction_list",
+    "execution_stage_context",
+    "personal_position_context",
+    "position_context_provided",
+    "selected_position_candidate",
+)
+
+_EXECUTION_CONTEXT_FACT_KEYS = (
+    "final_gate",
+    "position_decision",
+    "position_reason",
+    "market_state_snapshot",
+    "core_stocks",
+    "secondary_stocks",
+    "crossline_observation_stocks",
+    "gem_observation_stocks",
+    "generic_watch_stocks",
+    "waiting_stocks",
+    "focus_group",
+    "keep_group",
+    "delete_group",
+    "abnormal_watch_pool",
+    "abnormal_watch_pool_all",
+    "leader_memory_bank",
+    "tracking_memory_status",
+    "candidate_traces",
+    "candidate_trace_artifact",
+    "extreme_conviction_list",
+    "recent_extreme_conviction_mentions",
+    "special_probe_verdict",
+    "watch_anchor",
+    "selected_position_candidate",
+    "monthly_context",
+    "today_predictions",
+    "nextday_predictions",
+)
+
+_MARKET_RESEARCH_BUNDLE_FACT_KEYS = (
+    "step0_plan",
+    "main_sectors_info",
+    "secondary_sectors_info",
+    "sector_trend_snapshot",
+    "abnormal_watch_pool",
+    "leader_memory_bank",
+    "tracking_memory_status",
+    "mainline_competition_snapshot",
+)
+
+_MARKET_RESEARCH_FACT_KEYS = (
+    "market_branch",
+    "final_gate",
+    "front_page_final_gate",
+    "position_decision",
+    "selected_position_candidate",
+    "state_machine",
+    "cycle_calendar_rows",
+    "cycle_interpretation_rows",
+    "pivot_mainline_rows",
+    "mainline_turnover_summary",
+    "current_mainline_history_record",
+    "recent_mainline_history",
+    "current_sector_turnover_snapshot",
+    "recent_sector_turnover_history",
+    "mainline_competition_snapshot",
+    "sector_attack_evidence_rows",
+    "diffusion_quality",
+    "sector_diffusion_quality",
+    "sector_internal_analysis",
+    "realtime_tag_evidence_snapshot",
+    "candidate_snapshot",
+    "observation",
+    "extreme_conviction_list",
+)
+
+
+def _bounded_list(items, limit):
+    if not isinstance(items, list):
+        return items
+    result = []
+    for item in items[: max(int(limit or 0), 0)]:
+        sanitized = _sanitize_fact_value(item)
+        if sanitized in (None, "", [], {}):
+            continue
+        result.append(sanitized)
+    return result
+
+
+def _compact_concept_fund_flow(snapshot, limit=80):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {}
+    for key, value in snapshot.items():
+        if _is_low_value_fact_key(key):
+            continue
+        if key in {"rows", "concepts", "items", "top_rows"} and isinstance(value, list):
+            result[key] = _bounded_list(value, limit)
+            continue
+        sanitized = _sanitize_fact_value(value)
+        if sanitized not in (None, "", [], {}):
+            result[key] = sanitized
+    return result
+
+
+def _compact_stock_item(item):
+    if not isinstance(item, dict):
+        return item
+    keys = (
+        "code",
+        "stock_code",
+        "name",
+        "stock_name",
+        "sector",
+        "sector_name",
+        "industry",
+        "score",
+        "rank",
+        "rank_no",
+        "status",
+        "source",
+        "source_tier",
+        "pattern",
+        "reason",
+        "tomorrow_expectation",
+        "follow_state",
+        "action_rule",
+        "action_text",
+        "final_action",
+        "participation_mode",
+        "participation_window",
+        "setup_signal_id",
+        "setup_signal_label",
+        "watch_anchor_type",
+        "watch_anchor_note",
+        "change",
+        "change_pct",
+        "pct_chg",
+        "close",
+        "high",
+        "volume",
+        "turnover",
+        "amount_yi",
+        "topdays",
+        "remember_score",
+        "remember_reason",
+        "invalidation",
+        "buy_window",
+        "planned_window",
+    )
+    return {key: item.get(key) for key in keys if key in item and item.get(key) not in (None, "")}
+
+
+def _compact_stock_list(items, limit=80):
+    if not isinstance(items, list):
+        return items
+    return [_compact_stock_item(item) for item in items[: max(int(limit or 0), 0)]]
+
+
+def _compact_extreme_conviction_item(item):
+    if not isinstance(item, dict):
+        return item
+    keys = (
+        "code",
+        "stock_code",
+        "name",
+        "stock_name",
+        "sector",
+        "sector_name",
+        "source_tier",
+        "score",
+        "conviction_score",
+        "conviction_reason",
+        "conviction_rule",
+        "reason",
+        "tomorrow_expectation",
+        "core_level",
+        "core_identity",
+        "core_identity_label",
+        "candidate_layer",
+        "execution_eligibility",
+        "participation_window",
+        "planned_window",
+        "buy_window",
+        "attack_state",
+        "auction_script",
+        "first_minutes_script",
+        "board_script",
+        "reseal_script",
+        "missed_action",
+        "invalid_condition",
+        "invalidation",
+        "participation_window_type",
+        "required_steps",
+        "fallback_state",
+        "participation_basis",
+        "decision_reason_basis",
+        "risk_reward_min_ratio",
+        "risk_reward_ratio",
+        "risk_reward_state",
+        "risk_reward_plan",
+        "support_price",
+        "branch_20cm",
+        "ma20_invalidation",
+        "limit_up_inertia_level",
+        "limit_up_inertia_score",
+        "next_day_limit_probability_band",
+        "limit_up_inertia_reason",
+        "change",
+        "change_pct",
+        "close",
+        "volume",
+    )
+    return {key: item.get(key) for key in keys if key in item and item.get(key) not in (None, "", [], {})}
+
+
+def _compact_extreme_conviction_list(items, limit=80):
+    if not isinstance(items, list):
+        return items
+    return [_compact_extreme_conviction_item(item) for item in items[: max(int(limit or 0), 0)]]
+
+
+def _compact_extreme_conviction_mention(item):
+    if not isinstance(item, dict):
+        return item
+    keys = (
+        "record_id",
+        "case_id",
+        "mention_trade_date",
+        "stock_code",
+        "stock_name",
+        "rank",
+        "rank_no",
+        "sector_candidate",
+        "buy_window",
+        "planned_window",
+        "review_status",
+        "next_action",
+        "invalidation",
+        "reason",
+        "source_section",
+        "is_a_kill_eliminated",
+        "updated_at",
+    )
+    return {key: item.get(key) for key in keys if key in item and item.get(key) not in (None, "", [], {})}
+
+
+def _compact_extreme_conviction_mentions(items, limit=80):
+    if not isinstance(items, list):
+        return items
+    return [_compact_extreme_conviction_mention(item) for item in items[: max(int(limit or 0), 0)]]
+
+
+def _compact_candidate_trace_artifact(artifact):
+    if not isinstance(artifact, dict):
+        return {}
+    payload = artifact.get("payload") if isinstance(artifact.get("payload"), dict) else {}
+    trace_count = artifact.get("trace_count")
+    if trace_count in (None, ""):
+        trace_count = len(artifact.get("traces") or payload.get("traces") or [])
+    eliminated_count = artifact.get("eliminated_group_count")
+    if eliminated_count in (None, ""):
+        eliminated_count = len(artifact.get("eliminated_summary") or payload.get("eliminated_summary") or [])
+    result = {
+        "artifact_path": _text(artifact.get("artifact_path")),
+        "trace_count": _safe_int(trace_count),
+        "eliminated_group_count": _safe_int(eliminated_count),
+        "trade_date": _text(artifact.get("trade_date") or payload.get("trade_date")),
+        "visible_scope": _text(artifact.get("visible_scope") or payload.get("visible_scope")),
+        "artifact_version": _safe_int(artifact.get("artifact_version") or payload.get("artifact_version")),
+    }
+    source_report = artifact.get("source_report") if isinstance(artifact.get("source_report"), dict) else payload.get("source_report")
+    if isinstance(source_report, dict):
+        result["source_report"] = {
+            key: source_report.get(key)
+            for key in ("path", "variant")
+            if source_report.get(key) not in (None, "")
+        }
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+
+
+def _compact_sector_fund_flow(snapshot, limit=50):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {}
+    for direction in ("inflow", "outflow"):
+        rows = []
+        for item in snapshot.get(direction) or []:
+            if not isinstance(item, dict):
+                continue
+            net_inflow = item.get("net_inflow_yi")
+            if net_inflow in (None, ""):
+                net_inflow = item.get("zljlr")
+            if net_inflow in (None, ""):
+                net_inflow = item.get("net_inflow")
+            rows.append(
+                {
+                    key: value
+                    for key, value in {
+                        "name": _text(item.get("name") or item.get("sector_name")),
+                        "code": _text(item.get("code")),
+                        "net_inflow_yi": _safe_float(net_inflow),
+                        "change_pct": _safe_float(item.get("change_pct", item.get("zdf"))),
+                        "turnover_yi": _safe_float(item.get("turnover_yi")),
+                        "stock_count": _safe_int(item.get("stock_count")),
+                        "matched_stock_count": _safe_int(item.get("matched_stock_count")),
+                        "data_source": _text(item.get("data_source") or item.get("source")),
+                        "trade_date": _text(item.get("trade_date")),
+                        "source_date": _text(item.get("source_date")),
+                        "query_date": _text(item.get("query_date")),
+                    }.items()
+                    if value not in (None, "", [], {})
+                }
+            )
+        if rows:
+            result[direction] = rows[: max(int(limit or 0), 0)]
+    return result
+
+
+def _compact_mainline_attack_summary(summary):
+    if not isinstance(summary, dict):
+        return {}
+    return {
+        key: summary.get(key)
+        for key in (
+            "attack_state",
+            "primary_line",
+            "candidate_lines",
+            "background_lines",
+            "relationship_hint",
+            "evidence_labels",
+            "confirmation_evidence",
+            "evidence_gaps",
+        )
+        if key in summary and summary.get(key) not in (None, "", [], {})
+    }
+
+
+def _compact_turnover_share_trend_rows(rows, limit=25):
+    compacted = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        compacted.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "date",
+                    "cycle_mainline",
+                    "daily_attack_line",
+                    "mainline_turnover",
+                    "market_turnover",
+                    "share",
+                    "share_change",
+                    "interpretation",
+                )
+                if key in row and row.get(key) not in (None, "")
+            }
+        )
+    return compacted[-max(int(limit or 0), 0):]
+
+
+def _compact_mainline_turnover_summary(summary):
+    if not isinstance(summary, dict):
+        return {}
+    result = {
+        key: summary.get(key)
+        for key in (
+            "date",
+            "label",
+            "current_mainline",
+            "previous_mainline",
+            "share_trend_label",
+            "conclusion",
+            "data_text",
+            "action_text",
+            "turnover_share_trend_summary",
+        )
+        if key in summary and summary.get(key) not in (None, "")
+    }
+    for key in (
+        "double_mainline_summary",
+        "mainline_capacity_regime_summary",
+        "overtake_window_summary",
+        "trading_arena_fit_summary",
+    ):
+        value = summary.get(key)
+        if isinstance(value, dict):
+            result[key] = {
+                sub_key: sub_value
+                for sub_key, sub_value in value.items()
+                if not isinstance(sub_value, (dict, list, tuple, set)) and sub_value not in (None, "")
+            }
+    attack_summary = _compact_mainline_attack_summary(summary.get("mainline_attack_evidence_summary"))
+    if attack_summary:
+        result["mainline_attack_evidence_summary"] = attack_summary
+    trend_rows = _compact_turnover_share_trend_rows(summary.get("turnover_share_trend_rows"), limit=25)
+    if trend_rows:
+        result["turnover_share_trend_rows"] = trend_rows
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+
+
+def _compact_tracking_memory_status(status):
+    if not isinstance(status, dict):
+        return status
+    result = {}
+    for key, value in status.items():
+        if key.endswith("_count") or not isinstance(value, list):
+            result[key] = value
+            continue
+        result[key] = [_compact_stock_item(item) for item in value[:80]]
+    return result
+
+
+def _compact_xuangubao_data(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    diagnostics = snapshot.get("diagnostics") if isinstance(snapshot.get("diagnostics"), dict) else {}
+    return {
+        "news_count": len(snapshot.get("xuangubao_news") or []),
+        "plate_count": len(snapshot.get("xuangubao_plates") or []),
+        "limit_up_reason_count": len(snapshot.get("xuangubao_limit_up_reasons") or []),
+        "diagnostics_status": _text(diagnostics.get("status") or diagnostics.get("source_status")),
+        "diagnostics_error": _text(diagnostics.get("error"))[:200],
+    }
+
+
+def _compact_new_high_feedback(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {
+        key: snapshot.get(key)
+        for key in (
+            "available",
+            "status",
+            "source",
+            "new_high_count",
+            "all_a_share_pct",
+            "leading_sectors",
+            "summary",
+            "requested_trade_date",
+            "factor_trade_date",
+        )
+        if key in snapshot and snapshot.get(key) not in (None, "")
+    }
+    sector_distribution = []
+    for item in snapshot.get("sector_distribution") or []:
+        if not isinstance(item, dict):
+            continue
+        representatives = item.get("representative_stocks") or []
+        if isinstance(representatives, list):
+            representatives = representatives[:8]
+        sector_distribution.append(
+            {
+                key: value
+                for key, value in {
+                    "sector": _text(item.get("sector") or item.get("sector_name")),
+                    "new_high_count": _safe_int(item.get("new_high_count")),
+                    "amount_yi": _safe_float(item.get("amount_yi")),
+                    "share_pct": _safe_float(item.get("share_pct")),
+                    "representative_stocks": representatives,
+                }.items()
+                if value not in (None, "", [], {})
+            }
+        )
+    if sector_distribution:
+        result["sector_distribution"] = sector_distribution[:40]
+    top_stocks = _compact_stock_list(snapshot.get("top_stocks"), limit=40)
+    if top_stocks:
+        result["top_stocks"] = top_stocks
+    trend_rows = []
+    for row in snapshot.get("trend_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        trend_rows.append(
+            {
+                key: row.get(key)
+                for key in ("trade_date", "new_high_count", "all_a_share_pct", "leading_sectors", "change_text")
+                if key in row and row.get(key) not in (None, "")
+            }
+        )
+    if trend_rows:
+        result["trend_rows"] = trend_rows[-25:]
+    return result
+
+
+def _compact_margin_pressure(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {
+        key: snapshot.get(key)
+        for key in (
+            "available",
+            "status",
+            "source",
+            "latest_pressure_label",
+            "latest_data_date",
+            "target_date",
+            "is_stale_for_target",
+            "latest_margin_turnover_ratio_pct",
+            "latest_pressure_diff_pct",
+            "summary",
+            "usage_note",
+        )
+        if key in snapshot and snapshot.get(key) not in (None, "")
+    }
+    if isinstance(snapshot.get("calibration"), dict):
+        result["calibration"] = {
+            key: snapshot["calibration"].get(key)
+            for key in ("sample_days", "latest_percentile", "low_ratio_pct", "mid_ratio_pct", "high_ratio_pct")
+            if key in snapshot["calibration"]
+        }
+    rows = []
+    for row in snapshot.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        rows.append(
+            {
+                key: row.get(key)
+                for key in (
+                    "trade_date",
+                    "margin_balance_yi",
+                    "short_selling_balance_yi",
+                    "margin_trading_balance_yi",
+                    "market_turnover_yi",
+                    "margin_turnover_ratio_pct",
+                    "pressure_diff_pct",
+                    "pressure_label",
+                    "exchange_count",
+                    "source_policy",
+                    "is_market_level_margin_balance",
+                    "change_text",
+                )
+                if key in row and row.get(key) not in (None, "")
+            }
+        )
+    if rows:
+        result["rows"] = rows[-25:]
+    return result
+
+
+def _compact_sector_quadrant(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    analysis = snapshot.get("high_strong_analysis") if isinstance(snapshot.get("high_strong_analysis"), dict) else {}
+    result = {"provider": _text(snapshot.get("provider"))}
+    for key in (
+        "total",
+        "tier1_count",
+        "tier2_count",
+        "tier3_count",
+        "tier4_count",
+        "tier1_best",
+        "tier2_good",
+        "tier3_normal",
+        "tier4_edge",
+    ):
+        if key in analysis:
+            result[key] = analysis.get(key)
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+
+
+def _compact_sector_ai_analysis(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    realtime = snapshot.get("realtime_tag_evidence_snapshot")
+    result = {
+        "sector_count": _safe_int(snapshot.get("sector_count")),
+        "standard_count": _safe_int(snapshot.get("standard_count")),
+    }
+    if isinstance(realtime, dict):
+        result["realtime_tag_evidence_snapshot"] = {
+            key: realtime.get(key)
+            for key in ("adopted_labels", "summary_text")
+            if key in realtime and realtime.get(key) not in (None, "", [], {})
+        }
+        groups = realtime.get("groups")
+        if isinstance(groups, list):
+            result["realtime_tag_evidence_snapshot"]["group_count"] = len(groups)
+    return {key: value for key, value in result.items() if value not in (None, "", [], {})}
+
+
+def _compact_entry_cycle_calibration(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {
+        key: snapshot.get(key)
+        for key in ("as_of_date", "source_status", "source_error")
+        if key in snapshot and snapshot.get(key) not in (None, "")
+    }
+    cases = []
+    for item in snapshot.get("cases") or []:
+        if not isinstance(item, dict):
+            continue
+        case = {
+            key: value
+            for key, value in item.items()
+            if key != "day_rows" and not isinstance(value, (dict, list, tuple, set)) and value not in (None, "")
+        }
+        if case:
+            cases.append(case)
+    if cases:
+        result["cases"] = cases[:20]
+    return result
+
+
+def _compact_special_probe_verdict(snapshot):
+    if not isinstance(snapshot, dict):
+        return snapshot
+    result = {
+        key: snapshot.get(key)
+        for key in (
+            "code",
+            "label",
+            "summary_text",
+            "action",
+            "probe_state",
+            "allows_attack_50_ready",
+            "allows_execute_50",
+        )
+        if key in snapshot and snapshot.get(key) not in (None, "")
+    }
+    for key in ("probe_candidate", "selected_candidate", "watch_anchor"):
+        if isinstance(snapshot.get(key), dict):
+            compacted = _compact_stock_item(snapshot.get(key))
+            if compacted:
+                result[key] = compacted
+    return result
+
+
+def _compact_market_research_snapshot(snapshot):
+    if not isinstance(snapshot, dict):
+        return {}
+    result = {}
+    for key in _MARKET_RESEARCH_FACT_KEYS:
+        if key not in snapshot:
+            continue
+        value = snapshot.get(key)
+        if key in {
+            "recent_mainline_history",
+            "recent_sector_turnover_history",
+            "mainline_competition_snapshot",
+            "cycle_calendar_rows",
+            "cycle_interpretation_rows",
+            "pivot_mainline_rows",
+        }:
+            result[key] = _bounded_list(value, 80)
+            continue
+        if key == "mainline_turnover_summary":
+            result[key] = _compact_mainline_turnover_summary(value)
+            continue
+        if key == "extreme_conviction_list":
+            result[key] = _compact_extreme_conviction_list(value, limit=80)
+            continue
+        if key == "candidate_snapshot" and isinstance(value, dict):
+            result[key] = {
+                "extreme_conviction_list": _compact_extreme_conviction_list(value.get("extreme_conviction_list"), limit=80),
+                "selected_position_candidate": _compact_stock_item(value.get("selected_position_candidate")),
+            }
+            result[key] = {sub_key: sub_value for sub_key, sub_value in result[key].items() if sub_value}
+            continue
+        if key == "observation" and isinstance(value, dict):
+            result[key] = {
+                "abnormal_watch_pool": _compact_stock_list(value.get("abnormal_watch_pool"), limit=80),
+                "leader_memory_bank": _compact_stock_list(value.get("leader_memory_bank"), limit=80),
+                "tracking_memory_status": _compact_tracking_memory_status(value.get("tracking_memory_status")),
+                "mainline_competition_snapshot": _bounded_list(value.get("mainline_competition_snapshot"), 80),
+            }
+            result[key] = {sub_key: sub_value for sub_key, sub_value in result[key].items() if sub_value}
+            continue
+        if key in {"selected_position_candidate", "position_decision"}:
+            result[key] = _compact_stock_item(value) if isinstance(value, dict) else value
+            continue
+        if key == "special_probe_verdict":
+            result[key] = _compact_special_probe_verdict(value)
+            continue
+        if key == "sector_ai_analysis":
+            result[key] = _compact_sector_ai_analysis(value)
+            continue
+        if key == "sector_internal_analysis" and isinstance(value, dict):
+            result[key] = {
+                "diffusion_quality": value.get("diffusion_quality"),
+                "summary": value.get("summary"),
+            }
+            result[key] = {sub_key: sub_value for sub_key, sub_value in result[key].items() if sub_value}
+            continue
+        result[key] = value
+    return result
+
+
+def _compact_execution_context(context):
+    if not isinstance(context, dict):
+        return {}
+    result = {}
+    for key in _EXECUTION_CONTEXT_FACT_KEYS:
+        if key not in context:
+            continue
+        value = context.get(key)
+        if key == "data":
+            continue
+        if key == "market_research_bundle" and isinstance(value, dict):
+            result[key] = {sub_key: value.get(sub_key) for sub_key in _MARKET_RESEARCH_BUNDLE_FACT_KEYS if sub_key in value}
+            continue
+        if key == "tracking_memory_status":
+            result[key] = _compact_tracking_memory_status(value)
+            continue
+        if key in {"selected_position_candidate", "watch_anchor"}:
+            result[key] = _compact_stock_item(value) if isinstance(value, dict) else value
+            continue
+        if key == "special_probe_verdict":
+            result[key] = _compact_special_probe_verdict(value)
+            continue
+        if key in {
+            "core_stocks",
+            "secondary_stocks",
+            "crossline_observation_stocks",
+            "gem_observation_stocks",
+            "generic_watch_stocks",
+            "waiting_stocks",
+            "focus_group",
+            "keep_group",
+            "delete_group",
+            "abnormal_watch_pool",
+            "abnormal_watch_pool_all",
+            "leader_memory_bank",
+            "candidate_traces",
+        }:
+            result[key] = _compact_stock_list(value)
+            continue
+        if key == "extreme_conviction_list":
+            result[key] = _compact_extreme_conviction_list(value, limit=80)
+            continue
+        if key == "recent_extreme_conviction_mentions":
+            result[key] = _compact_extreme_conviction_mentions(value, limit=80)
+            continue
+        if key == "candidate_trace_artifact":
+            result[key] = _compact_candidate_trace_artifact(value)
+            continue
+        result[key] = value
+    return result
+
+
+def _build_daily_report_fact_projection(data):
+    data = data or {}
+    projection = {}
+    for key in _DAILY_REPORT_FACT_TOP_LEVEL_KEYS:
+        if key not in data:
+            continue
+        if key == "market_research_snapshot":
+            projection[key] = _compact_market_research_snapshot(data.get(key))
+            continue
+        if key == "execution_stage_context":
+            projection[key] = _compact_execution_context(data.get(key))
+            continue
+        if key == "xuangubao_data":
+            projection[key] = _compact_xuangubao_data(data.get(key))
+            continue
+        if key == "new_high_feedback":
+            projection[key] = _compact_new_high_feedback(data.get(key))
+            continue
+        if key == "margin_pressure":
+            projection[key] = _compact_margin_pressure(data.get(key))
+            continue
+        if key == "sector_quadrant":
+            projection[key] = _compact_sector_quadrant(data.get(key))
+            continue
+        if key == "sector_ai_analysis":
+            projection[key] = _compact_sector_ai_analysis(data.get(key))
+            continue
+        if key == "sector_fund_flow":
+            projection[key] = _compact_sector_fund_flow(data.get(key), limit=50)
+            continue
+        if key == "concept_fund_flow":
+            projection[key] = _compact_concept_fund_flow(data.get(key), limit=80)
+            continue
+        if key == "mainline_turnover_summary":
+            projection[key] = _compact_mainline_turnover_summary(data.get(key))
+            continue
+        if key == "entry_cycle_calibration":
+            projection[key] = _compact_entry_cycle_calibration(data.get(key))
+            continue
+        if key == "selected_position_candidate":
+            projection[key] = _compact_stock_item(data.get(key))
+            continue
+        if key == "extreme_conviction_list":
+            projection[key] = _compact_extreme_conviction_list(data.get(key), limit=80)
+            continue
+        if key in {"recent_extreme_conviction_mentions", "recent_extreme_conviction_mentions_for_review"}:
+            projection[key] = _compact_extreme_conviction_mentions(data.get(key), limit=120)
+            continue
+        if key == "candidate_trace_artifact":
+            projection[key] = _compact_candidate_trace_artifact(data.get(key))
+            continue
+        if key in {
+            "hot_rank_top50",
+            "hot_rank_top30",
+            "integrated_hot_list",
+            "turnover_rank",
+            "zt_pool",
+            "dt_pool",
+            "lianban_data",
+            "xueqiu_hot_rank_top100",
+            "xueqiu_hot_stock_arguments",
+            "exchange_monitor_today",
+            "exchange_monitor_nextday",
+            "new_stock_research_pool",
+            "new_stock_candidate_upgrades",
+            "dragon_rebound_watch_pool",
+        }:
+            projection[key] = _bounded_list(data.get(key), 120)
+            continue
+        projection[key] = data.get(key)
+    projection["postgres_only"] = True
+    return projection
+
+
+def _observation_pools_from_data(data):
+    data = data or {}
+    ctx = data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {}
+    market = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+    observation = market.get("observation") if isinstance(market.get("observation"), dict) else {}
+    pools = {}
+    sources = (
+        ("core_stocks", ctx.get("core_stocks")),
+        ("secondary_stocks", ctx.get("secondary_stocks")),
+        ("crossline_observation_stocks", ctx.get("crossline_observation_stocks")),
+        ("gem_observation_stocks", ctx.get("gem_observation_stocks")),
+        ("generic_watch_stocks", ctx.get("generic_watch_stocks")),
+        ("waiting_stocks", ctx.get("waiting_stocks")),
+        ("focus_group", ctx.get("focus_group")),
+        ("keep_group", ctx.get("keep_group")),
+        ("abnormal_watch_pool", ctx.get("abnormal_watch_pool") or observation.get("abnormal_watch_pool")),
+        ("leader_memory_bank", ctx.get("leader_memory_bank") or observation.get("leader_memory_bank")),
+        ("tracking_today_validated", (ctx.get("tracking_memory_status") or {}).get("today_validated_items") or (observation.get("tracking_memory_status") or {}).get("today_validated_items")),
+        ("tracking_today_tentative", (ctx.get("tracking_memory_status") or {}).get("today_tentative_items") or (observation.get("tracking_memory_status") or {}).get("today_tentative_items")),
+    )
+    for key, items in sources:
+        if isinstance(items, list) and items:
+            pools[key] = [_compact_stock_item(item) for item in items if isinstance(item, dict)]
+    return pools
+
+
+def _tracking_memory_state_from_data(data):
+    data = data or {}
+    ctx = data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {}
+    market = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+    observation = market.get("observation") if isinstance(market.get("observation"), dict) else {}
+    status = ctx.get("tracking_memory_status") or observation.get("tracking_memory_status") or {}
+    if not isinstance(status, dict):
+        return {}
+    items = status.get("total_items") or []
+    if not isinstance(items, list):
+        items = []
+    return {"updated_at": data.get("date") or data.get("target_date") or "", "items": items}
+
+
+def _market_daily_total_from_data(trade_date, data):
+    data = data or {}
+    total_turnover = data.get("total_turnover")
+    turnover_data = data.get("turnover_data") if isinstance(data.get("turnover_data"), dict) else {}
+    if total_turnover in (None, ""):
+        total_turnover = turnover_data.get("total_turnover_yi") or turnover_data.get("total_turnover") or turnover_data.get("amount_yi")
+    market_stats = data.get("market_stats") if isinstance(data.get("market_stats"), dict) else {}
+    if total_turnover in (None, ""):
+        total_turnover = market_stats.get("total_turnover") or market_stats.get("total_amount_yi") or market_stats.get("amount_yi")
+    total_amount_yi = _safe_float(total_turnover)
+    if total_amount_yi <= 0:
+        return {}
+    stock_count = _safe_int(market_stats.get("stock_count"))
+    if not stock_count:
+        stock_count = _safe_int(market_stats.get("up_count")) + _safe_int(market_stats.get("down_count"))
+    return {
+        "trade_date": trade_date,
+        "market_scope": "all_a",
+        "total_amount_yi": total_amount_yi,
+        "stock_count": stock_count,
+        "source_policy": "daily_report_facts.total_turnover",
+    }
+
+
+def _sector_fund_flow_records_from_data(trade_date, data):
+    data = data or {}
+    sector_fund_flow = data.get("sector_fund_flow")
+    if not isinstance(sector_fund_flow, dict):
+        return []
+    records = []
+    seen = set()
+    for direction, sign in (("inflow", 1), ("outflow", -1)):
+        for row in sector_fund_flow.get(direction) or []:
+            if not isinstance(row, dict):
+                continue
+            sector_name = _text(row.get("sector_name") or row.get("name") or row.get("板块"))
+            if not sector_name:
+                continue
+            raw_value = row.get("net_inflow_yi")
+            if raw_value in (None, ""):
+                raw_value = row.get("zljlr")
+            if raw_value in (None, ""):
+                raw_value = row.get("net_inflow")
+            if raw_value in (None, ""):
+                raw_value = row.get("inflow")
+            value = _safe_float(raw_value)
+            if direction == "outflow":
+                value = -abs(value)
+            elif value < 0:
+                value = abs(value) * sign
+            if sector_name in seen:
+                continue
+            seen.add(sector_name)
+            records.append(
+                {
+                    "trade_date": trade_date,
+                    "sector_name": sector_name,
+                    "net_inflow_yi": value,
+                    "source_policy": _text(row.get("data_source") or row.get("source")) or "daily_report_facts.sector_fund_flow",
+                }
+            )
+    return records
 
 
 def _market_capacity_phase(window_state, mainline_regime, turnover_quality):
@@ -905,6 +2066,13 @@ class PostgresDailyFactDb:
         rows = []
         for field_name, value in sorted((trace or {}).items()):
             if field_name in excluded:
+                continue
+            if isinstance(value, (dict, list, tuple)):
+                for field_path, scalar_value in _iter_structured_scalar_fields(value, prefix=_text(field_name), max_depth=5):
+                    if not field_path:
+                        continue
+                    value_text, value_number, value_bool, value_kind = _typed_value(scalar_value)
+                    rows.append((trade_date, code, _text(field_path), value_text, value_number, value_bool, value_kind))
                 continue
             value_text, value_number, value_bool, value_kind = _typed_value(value)
             rows.append((trade_date, code, _text(field_name), value_text, value_number, value_bool, value_kind))
@@ -1538,9 +2706,19 @@ class PostgresDailyFactDb:
         counts["turnover_records"] = len(normalized)
 
     def _replace_sector_attack_records(self, cursor, trade_date, snapshot, counts):
-        cursor.execute("DELETE FROM sector_attack_evidence_daily WHERE trade_date = %s", (trade_date,))
+        attack_summary = snapshot.get("mainline_attack_evidence_summary")
+        if not isinstance(attack_summary, dict):
+            turnover_summary = snapshot.get("mainline_turnover_summary") if isinstance(snapshot.get("mainline_turnover_summary"), dict) else {}
+            attack_summary = turnover_summary.get("mainline_attack_evidence_summary") if isinstance(turnover_summary.get("mainline_attack_evidence_summary"), dict) else {}
         rows = []
-        for row in snapshot.get("sector_attack_evidence_rows") or []:
+        source_rows = snapshot.get("sector_attack_evidence_rows")
+        if source_rows is None and isinstance(attack_summary, dict):
+            source_rows = attack_summary.get("sector_evidence_rows")
+        if source_rows is None:
+            counts["sector_attack_records"] = 0
+            return
+        cursor.execute("DELETE FROM sector_attack_evidence_daily WHERE trade_date = %s", (trade_date,))
+        for row in source_rows or []:
             if not isinstance(row, dict):
                 continue
             sector = _sector_name(row)
@@ -2661,6 +3839,129 @@ class PostgresDailyFactDb:
             "eliminated_group_count": len(eliminated_rows),
         }
 
+    def save_daily_report_snapshot(self, trade_date, data):
+        trade_date = _date_or_none(trade_date)
+        if not trade_date:
+            return {"field_count": 0, "source": ""}
+        projected = _build_daily_report_fact_projection(data or {})
+        rows = []
+        for field_path, value in _iter_safe_fact_fields(projected, max_depth=12):
+            if not field_path:
+                continue
+            value_text, value_number, value_bool, value_kind = _typed_value(value)
+            rows.append(
+                (
+                    trade_date,
+                    _text(field_path),
+                    value_text,
+                    value_number,
+                    value_bool,
+                    value_kind,
+                    "postgresql.daily_report_facts",
+                )
+            )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("DELETE FROM daily_report_fact_fields WHERE trade_date = %s", (trade_date,))
+                if rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO daily_report_fact_fields(
+                            trade_date, field_path, value_text, value_number,
+                            value_bool, value_kind, source_policy
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, field_path) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            source_policy=EXCLUDED.source_policy,
+                            updated_at=now()
+                        """,
+                        rows,
+                    )
+            conn.commit()
+        return {
+            "source": f"postgresql://daily-report-facts/{trade_date}",
+            "field_count": len(rows),
+        }
+
+    def save_daily_report_facts(self, trade_date, data):
+        return self.save_daily_report_snapshot(trade_date, data)
+
+    def import_daily_report_facts(self, trade_date, data):
+        trade_date = _date_or_none(trade_date)
+        data = data or {}
+        structured_counts = {}
+        market_snapshot = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+        structured_counts["market_cycle"] = self.replace_market_cycle_context(trade_date, market_snapshot or data)
+        market_total = _market_daily_total_from_data(trade_date, data)
+        if market_total:
+            self.upsert_market_daily_total(market_total)
+            structured_counts["market_daily_total"] = 1
+        else:
+            structured_counts["market_daily_total"] = 0
+        sector_flow_records = _sector_fund_flow_records_from_data(trade_date, data)
+        for row in sector_flow_records:
+            self.upsert_sector_fund_flow_daily(row)
+        structured_counts["sector_fund_flow"] = len(sector_flow_records)
+        pools = _observation_pools_from_data(data)
+        structured_counts["observation_pools"] = self.replace_observation_pool_items_for_trade_date(trade_date, pools)
+        tracking_state = _tracking_memory_state_from_data(data)
+        if tracking_state:
+            tracking_state["updated_at"] = trade_date
+            structured_counts["tracking_memory"] = self.save_tracking_memory_state(tracking_state)
+        decision = data.get("decision_ledger_artifacts") if isinstance(data.get("decision_ledger_artifacts"), dict) else {}
+        decision_snapshot = decision.get("snapshot") if isinstance(decision.get("snapshot"), dict) else {}
+        if decision_snapshot:
+            structured_counts["decision_ledger"] = self.replace_decision_ledger_snapshot(decision_snapshot)
+        candidate_trace = data.get("candidate_trace_artifact") if isinstance(data.get("candidate_trace_artifact"), dict) else {}
+        if candidate_trace.get("traces"):
+            structured_counts["candidate_trace"] = self.replace_candidate_trace_artifact(candidate_trace)
+        elif isinstance(candidate_trace.get("payload"), dict) and candidate_trace["payload"].get("traces"):
+            structured_counts["candidate_trace"] = self.replace_candidate_trace_artifact(candidate_trace["payload"])
+        execution_context = data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {}
+        factor_snapshot = _compact_execution_context(execution_context)
+        if factor_snapshot:
+            factor_snapshot["report_date"] = trade_date
+            factor_snapshot["source_policy"] = "postgresql.daily_report_facts"
+            structured_counts["factor_snapshot"] = self.save_factor_snapshot(trade_date, factor_snapshot, mode="frozen")
+        fact_result = self.save_daily_report_snapshot(trade_date, data)
+        fact_result["structured_counts"] = structured_counts
+        return fact_result
+
+    def load_daily_report_snapshot(self, trade_date):
+        trade_date = _date_or_none(trade_date)
+        columns = ("field_path", "value_text", "value_number", "value_bool", "value_kind")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT field_path, value_text, value_number, value_bool, value_kind
+                    FROM daily_report_fact_fields
+                    WHERE trade_date = %s
+                    ORDER BY field_path ASC
+                    """,
+                    (trade_date,),
+                )
+                rows = cursor.fetchall()
+        data = {}
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            _set_nested_fact_value(data, item.get("field_path"), _restore_typed_value(item))
+        if isinstance(data, dict):
+            data.setdefault("postgres_source", f"postgresql://daily-report-facts/{trade_date}")
+            data.setdefault("postgres_only", True)
+        return {
+            "source": f"postgresql://daily-report-facts/{trade_date}",
+            "field_count": len(rows or []),
+            "data": data,
+        }
+
+    def load_daily_report_facts(self, trade_date):
+        return self.load_daily_report_snapshot(trade_date)
+
     def load_candidate_trace_artifact(self, trade_date):
         trade_date = _date_or_none(trade_date)
         meta_columns = (
@@ -2744,7 +4045,15 @@ class PostgresDailyFactDb:
             field_name = _text(item.get("field_name"))
             if not code or not field_name:
                 continue
-            trace_extra_fields.setdefault(code, {})[field_name] = _restore_typed_value(item)
+            extras = trace_extra_fields.setdefault(code, {})
+            if "." in field_name or "[" in field_name:
+                parts = _parse_structured_field_path(field_name)
+                root_key = _text(parts[0]) if parts else ""
+                if len(parts) > 1 and isinstance(parts[1], int) and not isinstance(extras.get(root_key), list):
+                    extras[root_key] = []
+                _set_nested_value(extras, field_name, _restore_typed_value(item))
+            else:
+                extras[field_name] = _restore_typed_value(item)
         return {
             "artifact_version": _safe_int(meta.get("artifact_version")),
             "trade_date": _text(meta.get("trade_date")),

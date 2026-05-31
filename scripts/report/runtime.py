@@ -714,13 +714,18 @@ def _maybe_persist_decision_ledger(
         sector_relationship_state=_resolve_decision_ledger_sector_relationship(execution_stage_context),
         source_report=(data or {}).get("source_report") or {},
     )
+    postgres_only = bool(globals().get("decision_ledger_postgres_only", False))
+    write_kwargs = {
+        "root_dir": globals().get("decision_ledger_root_dir", "."),
+        "write_json_archive": not postgres_only,
+    }
+    if postgres_only:
+        write_kwargs["review_market_facts_by_stock_code"] = {}
     try:
-        result = write_artifacts(
-            snapshot,
-            root_dir=globals().get("decision_ledger_root_dir", "."),
-            write_json_archive=not bool(globals().get("decision_ledger_postgres_only", False)),
-        )
+        result = write_artifacts(snapshot, **write_kwargs)
     except TypeError as exc:
+        if postgres_only:
+            raise
         if "write_json_archive" not in str(exc):
             raise
         result = write_artifacts(
@@ -764,6 +769,7 @@ def _maybe_persist_candidate_traces(
         eliminated_summary=execution_stage_context.get("candidate_trace_eliminated_summary", []) or [],
         root_dir=globals().get("candidate_trace_root_dir", "."),
         source_report=(data or {}).get("source_report") or _build_default_candidate_trace_source_report(target_date, run_mode),
+        postgres_only=bool((data or {}).get("postgres_only") or globals().get("decision_ledger_postgres_only", False)),
     )
     if isinstance(data, dict):
         data["candidate_trace_artifact"] = result
@@ -2370,6 +2376,21 @@ def _appendix_crossline_codes_from_context(execution_stage_context):
     for text in crossline_texts:
         crossline_codes.update(_appendix_stock_codes_in_text(text))
 
+    for key in ("observation_candidates", "display_observation_candidates"):
+        for item in execution_stage_context.get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            item_texts = []
+            for text_key in ("watch_anchor_note", "summary_text", "reason", "why_watch", "current_interpretation"):
+                value = item.get(text_key)
+                if isinstance(value, str) and value.strip():
+                    item_texts.append(value)
+            if not any("跨线对象" in text for text in item_texts):
+                continue
+            code = str(_appendix_stock_code(item) or "").strip()
+            if code:
+                crossline_codes.add(code)
+
     anchor = execution_stage_context.get("watch_anchor")
     if isinstance(anchor, dict):
         anchor_code = str(_appendix_stock_code(anchor) or "").strip()
@@ -3184,10 +3205,10 @@ def _render_markdown_report_legacy_body(
         enabled_stage_keys=["environment_follow", "watch_pool", "candidate_selection", "risk_review", "entry_plan", "pk_decision"],
     )
     root_dir = globals().get("decision_ledger_root_dir") or str(Path(__file__).resolve().parents[1])
-    monthly_context = _merge_monthly_account_context(
-        data.get("monthly_context") or {},
-        _query_monthly_account_context(root_dir=root_dir, target_date=target_date),
-    )
+    account_context = {}
+    if not bool((data or {}).get("postgres_only")):
+        account_context = _query_monthly_account_context(root_dir=root_dir, target_date=target_date)
+    monthly_context = _merge_monthly_account_context(data.get("monthly_context") or {}, account_context)
     data["monthly_context"] = monthly_context
     _load_recent_extreme_conviction_mentions_for_selection(
         data,

@@ -15,6 +15,7 @@ from orchestrator.pipeline_runner import run_pipeline
 
 
 def build_report(request):
+    request = request or {}
     hooks = [
         ("input.hot_rank", run_hot_rank),
         ("infer.market_phase", run_market_phase),
@@ -27,7 +28,12 @@ def build_report(request):
         ("report.stages", run_report_stages),
         ("report.sections", run_report_sections),
         ("report.markdown_document", run_markdown_document),
-        ("persist.snapshot", run_snapshot_persistence),
-        ("publish.snap_ui_public_data", run_snap_ui_public_data_publish),
     ]
+    if not request.get("postgres_only"):
+        hooks.extend(
+            [
+                ("persist.snapshot", run_snapshot_persistence),
+                ("publish.snap_ui_public_data", run_snap_ui_public_data_publish),
+            ]
+        )
     return run_pipeline(request=request, hooks=hooks)

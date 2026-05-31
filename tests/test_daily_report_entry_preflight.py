@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -247,6 +248,158 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
 
         self.assertTrue(build_mock.call_args.kwargs["has_personal_positions"])
         self.assertTrue(data["position_context_provided"])
+
+    def test_main_postgres_only_reads_postgres_snapshot_and_skips_json_snapshot_write(self):
+        import daily_report_entry_demo
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "postgresql.daily_report_facts"},
+            "turnover_rank": [{"code": "000001", "data_source": "postgresql.daily_report_facts"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "hot_rank_top50": [{"code": f"{index:06d}"} for index in range(50)],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data) as load_mock, \
+             patch.object(daily_report_entry_demo, "get_daily_data") as get_daily_mock, \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot") as replay_mock, \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot") as save_snapshot_mock, \
+             patch.object(daily_report_entry_demo, "save_daily_report_data_to_postgres") as save_pg_mock, \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            daily_report_entry_demo.main()
+
+        load_mock.assert_called_once_with("2026-05-29")
+        get_daily_mock.assert_not_called()
+        replay_mock.assert_not_called()
+        save_snapshot_mock.assert_not_called()
+        save_pg_mock.assert_called_once()
+        self.assertFalse(daily_report_entry_demo._POSTGRES_ONLY_RUNTIME)
+        self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
+
+    def test_main_postgres_only_rejects_replay_mode(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--postgres-only", "--replay"]):
+            with self.assertRaises(ReportCriticalDataMissingError) as error:
+                daily_report_entry_demo.main()
+
+        self.assertIn("PostgreSQL-only", str(error.exception))
+
+    def test_main_postgres_only_rejects_snap_ui_publish(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--postgres-only", "--publish-snap-ui"]):
+            with self.assertRaises(ReportCriticalDataMissingError) as error:
+                daily_report_entry_demo.main()
+
+        self.assertIn("PostgreSQL-only", str(error.exception))
+
+    def test_build_sh_index_chanlun_html_for_audit_disables_minute_cache_in_postgres_only_runtime(self):
+        import daily_report_entry_demo
+
+        captured = {}
+
+        def fake_runner(target_date, index_code, fetch_minute_bars=None):
+            captured["fetch_minute_bars"] = fetch_minute_bars
+            payload = fetch_minute_bars(index_code, "60")
+            captured["minute_payload"] = payload
+            return {"success": True, "signal": {}}, []
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True):
+            html = daily_report_entry_demo._build_sh_index_chanlun_html_for_audit(
+                "2026-05-29",
+                runner=fake_runner,
+            )
+
+        self.assertIn("<!doctype html>", html.lower())
+        self.assertTrue(callable(captured["fetch_minute_bars"]))
+        self.assertFalse(captured["minute_payload"]["success"])
+        self.assertEqual(captured["minute_payload"]["source"], "postgres_only.no_minute_json_cache")
+
+    def test_build_sh_index_chanlun_html_for_audit_does_not_retry_without_postgres_only_minute_guard(self):
+        import daily_report_entry_demo
+
+        captured = {"unguarded_retry": 0}
+
+        def fake_runner(target_date, index_code, fetch_minute_bars=None):
+            if fetch_minute_bars is None:
+                captured["unguarded_retry"] += 1
+                return {"success": True, "signal": {}}, []
+            raise TypeError("internal runner error")
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True):
+            with self.assertRaisesRegex(TypeError, "internal runner error"):
+                daily_report_entry_demo._build_sh_index_chanlun_html_for_audit(
+                    "2026-05-29",
+                    runner=fake_runner,
+                )
+
+        self.assertEqual(captured["unguarded_retry"], 0)
+
+    def test_postgres_only_runtime_snapshot_reader_uses_postgres_facts(self):
+        import daily_report_entry_demo
+
+        class FakeService:
+            def __init__(self):
+                self.loaded_dates = []
+
+            def is_postgres_backed(self):
+                return True
+
+            def load_daily_report_snapshot(self, target_date):
+                self.loaded_dates.append(target_date)
+                return {
+                    "source": f"postgresql://daily-report-facts/{target_date}",
+                    "field_count": 1,
+                    "data": {
+                        "concept_fund_flow": {
+                            "rows": [{"name": "电力", "net_inflow": 9.2}],
+                            "provider": "postgresql.daily_report_facts",
+                        }
+                    },
+                }
+
+        service = FakeService()
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True), \
+             patch.object(daily_report_entry_demo, "_postgres_daily_report_service", return_value=service), \
+             patch.object(daily_report_entry_demo, "load_data_snapshot") as json_reader:
+            result = daily_report_entry_demo.get_concept_fund_flow_from_snapshot("2026-05-29")
+
+        json_reader.assert_not_called()
+        self.assertEqual(service.loaded_dates, ["2026-05-29"])
+        self.assertEqual(result["rows"][0]["name"], "电力")
+        self.assertEqual(result["provider"], "postgresql.daily_report_facts")
+
+    def test_postgres_only_snapshot_guard_blocks_json_snapshot_reads(self):
+        import daily_report_snapshot_io
+
+        with patch.dict(os.environ, {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}):
+            with self.assertRaisesRegex(RuntimeError, "2026-05-28"):
+                daily_report_snapshot_io.load_data_snapshot("2026-05-28")
 
     def test_main_aborts_when_existing_official_report_fails_audit(self):
         import daily_report_entry_demo

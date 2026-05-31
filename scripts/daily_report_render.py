@@ -33,8 +33,8 @@ CRITICAL_REPORT_DATA_FIELDS = (
     ("热度前50个股", "hot_rank_top50"),
 )
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
-    "wind_a_alternative": ("tushare.",),
-    "turnover_rank": ("tushare.",),
+    "wind_a_alternative": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
+    "turnover_rank": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
 }
 DECISION_CRITICAL_REPORT_DATA_FIELDS = (
     ("整合热榜", "整合热榜获取", ("request.integrated_hot_rank",), "integrated_hot_list", False),
@@ -241,6 +241,16 @@ def _provider_for_steps(data, steps):
     return ",".join(unique)
 
 
+def _xuangubao_summary_count(payload):
+    if not isinstance(payload, dict):
+        return 0
+    return (
+        int(_safe_float(payload.get("news_count"), 0))
+        + int(_safe_float(payload.get("plate_count"), 0))
+        + int(_safe_float(payload.get("limit_up_reason_count"), 0))
+    )
+
+
 def _row_count_for_step(data, step, payload_key):
     for log in (data.get("module_logs") or []):
         if not isinstance(log, dict) or log.get("step") != step:
@@ -276,6 +286,10 @@ def _row_count_for_steps(data, steps, payload_key):
         return len(payload.get("rows") or []) or (1 if payload else 0)
     if payload_key == "etf_turnover_series" and isinstance(payload, dict):
         return len(payload.get("rows") or []) or (1 if payload else 0)
+    if payload_key == "xuangubao_data" and isinstance(payload, dict):
+        summary_count = _xuangubao_summary_count(payload)
+        if summary_count:
+            return summary_count
     if isinstance(payload, (list, tuple)):
         return len(payload)
     if isinstance(payload, dict):
@@ -290,6 +304,8 @@ def _decision_payload_valid(data, payload_key, allow_empty):
     if payload_key == "xuangubao_data":
         if not isinstance(payload, dict):
             return False
+        if _xuangubao_summary_count(payload) > 0:
+            return True
         return any(
             payload.get(key)
             for key in ("xuangubao_news", "xuangubao_plates", "xuangubao_limit_up_reasons")
@@ -649,15 +665,21 @@ def _render_report_with_display_mode(
     candidate_trace_root_dir: str | None = None,
     emit_helper_diagnostics: bool = True,
     shared_runtime_cache: dict | None = None,
+    postgres_only: bool = False,
 ) -> str:
     import daily_report_entry_demo as _demo
 
     original_display_mode = getattr(_demo, "DISPLAY_MVP_MODE", False)
     original_emit_helper_diagnostics = getattr(_demo, "EMIT_HELPER_DIAGNOSTICS", True)
     original_runtime_cache = getattr(_demo, "REPORT_RUNTIME_CACHE", None)
+    original_postgres_only_runtime = getattr(_demo, "_POSTGRES_ONLY_RUNTIME", False)
+    previous_postgres_only_guard = os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME")
     _demo.DISPLAY_MVP_MODE = bool(display_mvp_mode)
     _demo.EMIT_HELPER_DIAGNOSTICS = bool(emit_helper_diagnostics)
     _demo.REPORT_RUNTIME_CACHE = shared_runtime_cache
+    if postgres_only:
+        _demo._POSTGRES_ONLY_RUNTIME = True
+        os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
     try:
         return _demo.generate_markdown_report(
             data,
@@ -670,11 +692,18 @@ def _render_report_with_display_mode(
             decision_ledger_root_dir=decision_ledger_root_dir,
             persist_candidate_traces=persist_candidate_traces,
             candidate_trace_root_dir=candidate_trace_root_dir,
+            postgres_only=postgres_only,
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
         _demo.EMIT_HELPER_DIAGNOSTICS = original_emit_helper_diagnostics
         _demo.REPORT_RUNTIME_CACHE = original_runtime_cache
+        _demo._POSTGRES_ONLY_RUNTIME = original_postgres_only_runtime
+        if postgres_only:
+            if previous_postgres_only_guard is None:
+                os.environ.pop("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", None)
+            else:
+                os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = previous_postgres_only_guard
 
 
 def _sanitize_report_section_lines(lines):
@@ -740,6 +769,7 @@ def generate_markdown_report(
     persist_strategy_tracking: bool = True,
     persist_candidate_traces: bool = False,
     candidate_trace_root_dir: str | None = None,
+    postgres_only: bool = False,
 ) -> str:
     """Render the default report text.
 
@@ -765,6 +795,7 @@ def generate_markdown_report(
         persist_strategy_tracking=persist_strategy_tracking,
         persist_candidate_traces=persist_candidate_traces,
         candidate_trace_root_dir=candidate_trace_root_dir,
+        postgres_only=postgres_only,
     )
 
 
@@ -783,6 +814,7 @@ def build_report_outputs(
             print(line)
     _raise_if_critical_data_missing(data, target_date, preflight=preflight)
     shared_runtime_cache = {}
+    postgres_only = bool((data or {}).get("postgres_only"))
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -797,6 +829,7 @@ def build_report_outputs(
         candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
+        postgres_only=postgres_only,
     )
     summary_report = _render_report_with_display_mode(
         True,
@@ -812,6 +845,7 @@ def build_report_outputs(
         candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=False,
         shared_runtime_cache=shared_runtime_cache,
+        postgres_only=postgres_only,
     )
 
     return {
@@ -852,6 +886,7 @@ def save_report_outputs(
     mode: str = LEDGER_MODE_FROZEN,
     output_dir: str | None = None,
     overwrite_existing: bool = False,
+    postgres_only: bool = False,
 ):
     saved_paths = {}
     for variant, report_text in (report_outputs or {}).items():
@@ -876,11 +911,16 @@ def save_report_outputs(
                 overwrite_existing=overwrite_existing,
             )
     if mode == LEDGER_MODE_REPLAY:
-        _sync_replay_decision_ledger_from_full_report(saved_paths, target_date, output_dir=output_dir)
+        _sync_replay_decision_ledger_from_full_report(
+            saved_paths,
+            target_date,
+            output_dir=output_dir,
+            postgres_only=postgres_only,
+        )
     return saved_paths
 
 
-def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str, *, output_dir: str | None = None):
+def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str, *, output_dir: str | None = None, postgres_only: bool = False):
     full_report_path = (saved_paths or {}).get(REPORT_VARIANT_FULL)
     if not full_report_path:
         return None
@@ -893,6 +933,8 @@ def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str,
         market_branch="回放正文重建",
         sector_relationship_state="以最终报告重点观察名单为准",
         root_dir=root_dir,
+        write_json_archive=not bool(postgres_only),
+        review_market_facts_by_stock_code={} if postgres_only else None,
     )
     if result.get("skipped_empty_markdown"):
         print(f"🧾 replay 决策台账保留已有结构化样本: {result.get('case_count', 0)} 个样本")

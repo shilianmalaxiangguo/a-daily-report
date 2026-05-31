@@ -160,6 +160,7 @@ def run_analysis(
     index_code: str,
     *,
     sse_loader: Callable[..., list[dict[str, Any]]] = _load_sse_index_rows,
+    fetch_minute_bars: Callable[..., dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     import pandas as pd
     from decision.zhongshu_runtime import analyze_market_zhongshu, split_zhongshu_history_and_today, _load_iwencai_index_dataframe
@@ -201,6 +202,7 @@ def run_analysis(
         recent_days=STRUCTURAL_BASE_DAILY_BARS,
         target_date=target_date,
         fetch_dataframe=lambda **_: (frame, data_source),
+        fetch_minute_bars=fetch_minute_bars,
         print_fn=lambda *_args, **_kwargs: None,
     )
     try:

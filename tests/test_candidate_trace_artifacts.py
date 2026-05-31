@@ -109,6 +109,24 @@ class CandidateTraceArtifactsTest(unittest.TestCase):
             json_path = Path(tempdir) / "data" / "candidate-traces" / "2026-05-26.json"
             self.assertFalse(json_path.exists())
 
+    def test_postgres_only_runtime_without_postgres_does_not_write_json(self):
+        trace = build_candidate_trace({"name": "华天科技", "code": "002185", "tier": "T0"})
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only"):
+                    write_candidate_trace_artifact(
+                        trade_date="2026-05-26",
+                        traces=[trace],
+                        eliminated_summary=[],
+                        root_dir=Path(tempdir),
+                        generated_at="2026-05-27T00:00:00+08:00",
+                        source_report={"path": "reports/2026-05-26_A股日报_完整版.md", "variant": "full"},
+                    )
+
+            json_path = Path(tempdir) / "data" / "candidate-traces" / "2026-05-26.json"
+            self.assertFalse(json_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

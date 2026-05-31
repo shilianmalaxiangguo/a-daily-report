@@ -1403,6 +1403,43 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(captured["monthly_context"]["month_return_pct"], 6.8)
         self.assertEqual(captured["monthly_context"]["month_return_source"], "manual_review")
 
+    def test_postgres_only_runtime_keeps_monthly_context_without_local_account_lookup(self):
+        class _MonthlyContextCaptured(RuntimeError):
+            pass
+
+        captured = {}
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            captured["monthly_context"] = dict((stage_context or {}).get("monthly_context") or {})
+            raise _MonthlyContextCaptured("captured")
+
+        def fail_query(**kwargs):
+            raise AssertionError("local monthly account lookup should not run")
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            query_monthly_account_context=fail_query,
+        )
+
+        with self.assertRaises(_MonthlyContextCaptured):
+            report_runtime.render_markdown_report_runtime(
+                {
+                    "postgres_only": True,
+                    "monthly_context": {
+                        "month_return_pct": 3.2,
+                        "month_return_source": "postgresql.daily_report_facts",
+                    },
+                    "exchange_monitor_today": [],
+                    "exchange_monitor_nextday": [],
+                },
+                "2026-05-20",
+                helpers=helpers,
+                config={},
+            )
+
+        self.assertEqual(captured["monthly_context"]["month_return_pct"], 3.2)
+        self.assertEqual(captured["monthly_context"]["month_return_source"], "postgresql.daily_report_facts")
+
     def test_front_page_position_decision_keeps_zero_context_for_extreme_candidate(self):
         position_decision = report_runtime._build_front_page_position_decision(
             position_decision={
@@ -1781,6 +1818,62 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(len([item for item in pool if item["stock_code"] == "600726"]), 1)
         self.assertEqual(pool[0]["source_pool"], "跨线观察")
         self.assertNotEqual(pool[0]["source_pool"], "主线核心")
+
+    def test_appendix_c_relabels_core_item_when_crossline_context_names_it(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-05-29",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "core_stocks": [
+                    {
+                        "name": "金房能源",
+                        "code": "001210",
+                        "sector": "电力",
+                        "current_action": "只观察承接",
+                    }
+                ],
+                "observation_candidates": [
+                    {
+                        "name": "金房能源",
+                        "code": "001210",
+                        "watch_anchor_note": "跨线对象（电力），只用于观察强弱，不代表主攻线切换",
+                    }
+                ],
+            },
+        )
+
+        pool = payload["current_stock_monitoring_pool"]
+
+        self.assertEqual(pool[0]["stock_code"], "001210")
+        self.assertEqual(pool[0]["source_pool"], "跨线观察")
+
+    def test_appendix_c_keeps_core_identity_when_observation_text_is_not_crossline(self):
+        payload = report_runtime._build_appendix_c_continuity_payload(
+            target_date="2026-05-29",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "core_stocks": [
+                    {
+                        "name": "金房能源",
+                        "code": "001210",
+                        "sector": "电力",
+                        "current_action": "只观察承接",
+                    }
+                ],
+                "observation_candidates": [
+                    {
+                        "name": "金房能源",
+                        "code": "001210",
+                        "watch_anchor_note": "电力核心观察，等待承接确认",
+                    }
+                ],
+            },
+        )
+
+        pool = payload["current_stock_monitoring_pool"]
+
+        self.assertEqual(pool[0]["stock_code"], "001210")
+        self.assertEqual(pool[0]["source_pool"], "主线核心")
 
     def test_render_markdown_report_runtime_rebuilds_appendix_c_when_snapshot_has_stale_pool(self):
         class _ExecutionAppendixCaptured(RuntimeError):
@@ -3477,6 +3570,38 @@ def _runtime_binding_probe(
         self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "601991")
         self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
 
+    def test_runtime_decision_ledger_postgres_only_disables_json_archive_and_local_review_files(self):
+        captured = {}
+
+        def _fake_build_snapshot(**kwargs):
+            return {"trade_date": kwargs["trade_date"], "cases": []}
+
+        def _fake_write_snapshot(snapshot, **kwargs):
+            captured["write"] = kwargs
+            return {"snapshot_path": "postgresql://decision-ledger/2026-05-12", "index": {}}
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_decision_ledger": True,
+                "decision_ledger_postgres_only": True,
+                "decision_ledger_root_dir": "/tmp/decision-ledger-root",
+                "build_decision_ledger_snapshot": _fake_build_snapshot,
+                "write_decision_ledger_artifacts": _fake_write_snapshot,
+            }
+        )
+        try:
+            report_runtime._maybe_persist_decision_ledger(
+                data={},
+                target_date="2026-05-12",
+                execution_stage_context={"extreme_conviction_list": []},
+                market_research_snapshot={},
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertFalse(captured["write"]["write_json_archive"])
+        self.assertEqual(captured["write"]["review_market_facts_by_stock_code"], {})
+
     def test_runtime_candidate_trace_hook_writes_when_enabled(self):
         captured = {}
 
@@ -3545,6 +3670,35 @@ def _runtime_binding_probe(
             captured["write"]["source_report"],
             {"path": "reports/replay/2026-05-12_A股日报_完整版_replay.md", "variant": "full"},
         )
+
+    def test_runtime_candidate_trace_hook_marks_postgres_only(self):
+        captured = {}
+
+        def _fake_write_candidate_trace_artifact(**kwargs):
+            captured["write"] = kwargs
+            return {"artifact_path": "postgresql://candidate-traces/2026-05-12"}
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_candidate_traces": True,
+                "candidate_trace_root_dir": "/tmp/candidate-trace-root",
+                "write_candidate_trace_artifact": _fake_write_candidate_trace_artifact,
+            }
+        )
+        try:
+            report_runtime._maybe_persist_candidate_traces(
+                data={"postgres_only": True},
+                target_date="2026-05-12",
+                execution_stage_context={
+                    "candidate_traces": [{"stock_code": "002185", "tier": "T0"}],
+                    "candidate_trace_eliminated_summary": [],
+                },
+                run_mode="replay",
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertTrue(captured["write"]["postgres_only"])
 
     def test_runtime_loads_recent_extreme_mentions_before_candidate_selection(self):
         captured = {}

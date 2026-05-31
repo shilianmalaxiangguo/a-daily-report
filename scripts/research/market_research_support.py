@@ -488,6 +488,48 @@ def _build_market_research_snapshot_legacy_body(
     observation_snapshot=None,
     target_date="",
 ):
+    postgres_only = bool(globals().get("postgres_only_runtime") or (data or {}).get("postgres_only"))
+
+    def _load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20):
+        if not postgres_only:
+            try:
+                return load_recent_mainline_history_runtime(
+                    target_date,
+                    lookback_days=lookback_days,
+                    max_scan_days=max_scan_days,
+                )
+            except TypeError:
+                return load_recent_mainline_history_runtime(target_date, lookback_days=lookback_days)
+        return load_recent_mainline_history_runtime(
+            target_date,
+            lookback_days=lookback_days,
+            max_scan_days=max_scan_days,
+            helpers={"postgres_only_runtime": True} if postgres_only else None,
+        )
+
+    def _load_recent_sector_turnover_history(target_date, sector_name, lookback_days=25, max_scan_days=60):
+        if not postgres_only:
+            try:
+                return load_recent_sector_turnover_history_runtime(
+                    target_date,
+                    sector_name,
+                    lookback_days=lookback_days,
+                    max_scan_days=max_scan_days,
+                )
+            except TypeError:
+                return load_recent_sector_turnover_history_runtime(
+                    target_date,
+                    sector_name,
+                    lookback_days=lookback_days,
+                )
+        return load_recent_sector_turnover_history_runtime(
+            target_date,
+            sector_name,
+            lookback_days=lookback_days,
+            max_scan_days=max_scan_days,
+            helpers={"postgres_only_runtime": True} if postgres_only else None,
+        )
+
     return build_market_research_snapshot_contract(
         data,
         final_gate,
@@ -505,11 +547,11 @@ def _build_market_research_snapshot_legacy_body(
         build_dialectical_decision_snapshot=_build_dialectical_decision_snapshot,
         build_mainline_turnover_summary=build_mainline_turnover_summary_runtime,
         build_mainline_history_record=build_mainline_history_record_runtime,
-        load_recent_mainline_history=load_recent_mainline_history_runtime,
+        load_recent_mainline_history=_load_recent_mainline_history,
         get_market_total_turnover_from_fact_db=get_market_total_turnover_from_fact_db_runtime,
         get_sector_turnover_snapshot_from_tencent_fund_flow=get_sector_turnover_snapshot_from_tencent_fund_flow_runtime,
         get_sector_turnover_snapshot_from_ths=get_sector_turnover_snapshot_from_ths_runtime,
-        load_recent_sector_turnover_history=load_recent_sector_turnover_history_runtime,
+        load_recent_sector_turnover_history=_load_recent_sector_turnover_history,
         save_market_cycle_context=save_market_cycle_context_runtime,
     )
 

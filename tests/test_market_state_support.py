@@ -605,6 +605,46 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result, [{"date": "2026-05-21", "turnover": 29246.59}])
         self.assertEqual(snapshot_calls, [])
 
+    def test_postgres_only_market_turnover_history_uses_environment_database_without_snapshot_scan(self):
+        support = self._load_module()
+        calls = []
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+                calls.append(("query", trade_date, market_scope))
+                if trade_date == "2026-05-21":
+                    return {"trade_date": "2026-05-21", "total_amount_yi": 29246.59}
+                return {}
+
+        class FakeDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                calls.append(("from_environment", db_path))
+                return FakeService()
+
+        result = support.load_recent_market_turnover_history(
+            "2026-05-22",
+            lookback_days=1,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-22": "2026-05-21",
+                    "2026-05-21": "",
+                }.get(value, ""),
+                "load_data_snapshot": lambda cursor: (_ for _ in ()).throw(
+                    AssertionError(f"postgres-only must not scan JSON snapshot {cursor}")
+                ),
+                "postgres_only_runtime": True,
+            },
+        )
+
+        self.assertEqual(result, [{"date": "2026-05-21", "turnover": 29246.59}])
+        self.assertEqual(calls, [("from_environment", None), ("query", "2026-05-21", "all_a")])
+
     def test_market_state_support_loads_recent_sector_flow_history_from_database_before_snapshots(self):
         support = self._load_module()
         snapshot_calls = []
@@ -637,6 +677,45 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result, [{"date": "2026-05-21", "inflow": 12.34}])
         self.assertEqual(snapshot_calls, [])
         self.assertEqual(calls, [("2026-05-21", "半导体", 1)])
+
+    def test_postgres_only_sector_flow_history_uses_environment_database_without_snapshot_scan(self):
+        support = self._load_module()
+        calls = []
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_sector_fund_flow_series(self, end_date, sector_name, *, window_days=8):
+                calls.append(("query", end_date, sector_name, window_days))
+                return [{"date": "2026-05-21", "sector_name": "半导体", "inflow": 12.34}]
+
+        class FakeDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                calls.append(("from_environment", db_path))
+                return FakeService()
+
+        result = support.load_recent_sector_flow_history(
+            "2026-05-22",
+            "半导体",
+            lookback_days=1,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "_normalize_kline_date_str": lambda value: str(value),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-22": "2026-05-21",
+                    "2026-05-21": "",
+                }.get(value, ""),
+                "load_data_snapshot": lambda cursor: (_ for _ in ()).throw(
+                    AssertionError(f"postgres-only must not scan JSON snapshot {cursor}")
+                ),
+                "postgres_only_runtime": True,
+            },
+        )
+
+        self.assertEqual(result, [{"date": "2026-05-21", "inflow": 12.34}])
+        self.assertEqual(calls, [("from_environment", None), ("query", "2026-05-21", "半导体", 1)])
 
     def test_market_state_support_history_helpers_use_runtime_defaults_when_omitted(self):
         support = self._load_module()
