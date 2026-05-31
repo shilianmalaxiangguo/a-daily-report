@@ -2214,6 +2214,48 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
         self.assertIn("database unavailable", result["fact_db_sync"]["error"])
 
+    def test_writer_can_use_structured_database_without_daily_archive_files(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-29",
+            extreme_conviction_list=[
+                {"code": "601991", "name": "大唐发电", "sector": "电力", "conviction_reason": "趋势强化"},
+            ],
+            market_branch="电力主攻",
+            sector_relationship_state="电力扩散",
+        )
+
+        class StubService:
+            def __init__(self):
+                self.saved_snapshot = None
+
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                self.saved_snapshot = payload
+                return {"cases": len(payload.get("cases") or []), "mentions": 1}
+
+        service = StubService()
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            result = write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=root,
+                database_service=service,
+                write_json_archive=False,
+            )
+
+            self.assertFalse((root / "data" / "decision-ledger" / "2026-05-29.json").exists())
+            self.assertFalse((root / "data" / "decision-ledger" / "index.json").exists())
+
+        self.assertEqual(service.saved_snapshot["trade_date"], "2026-05-29")
+        self.assertEqual(service.saved_snapshot["cases"][0]["stock_code"], "601991")
+        self.assertEqual(result["fact_db_sync"]["status"], "success")
+        self.assertEqual(result["fact_db_sync"]["rows"], 1)
+
     def test_backtest_rows_dedupe_repeated_mentions_for_same_stock_and_date(self):
         index = {
             "by_stock_code": {

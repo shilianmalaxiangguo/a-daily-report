@@ -411,7 +411,10 @@ def ensure_daily_metric_history_index(
     database_service_cls = database_service_cls or DatabaseService
     if database_service_cls is None:
         return {"indexed_count": 0, "dates": []}
-    service = database_service_cls.sqlite_d1_compatible(db_path)
+    if hasattr(database_service_cls, "from_environment"):
+        service = database_service_cls.from_environment(db_path)
+    else:
+        service = database_service_cls.sqlite_d1_compatible(db_path)
     load_snapshot_fn = load_snapshot_fn or load_data_snapshot
     load_replay_snapshot_fn = load_replay_snapshot_fn or _load_replay_snapshot_data
     load_report_markdown_fn = load_report_markdown_fn or _load_report_markdown

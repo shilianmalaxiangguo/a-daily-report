@@ -217,6 +217,7 @@ def build_market_research_context_bundle_contract(
     build_market_observation_snapshot,
     build_market_research_snapshot,
     derive_step0_follow_plan,
+    save_observation_pools=None,
 ):
     """构建 Step0/Step1 共用的市场研究上下文，供日报与单票诊断复用。"""
     logs = []
@@ -577,6 +578,19 @@ def build_market_research_context_bundle_contract(
         tracking_memory_status=tracking_memory_status,
         mainline_competition_snapshot=mainline_competition_snapshot,
     )
+    if callable(save_observation_pools):
+        save_observation_pools(
+            target_date,
+            {
+                "watchlist": watchlist,
+                "abnormal_watch_pool": abnormal_watch_pool,
+                "abnormal_watch_pool_all": abnormal_watch_pool_all,
+                "leader_memory_bank": leader_memory_bank,
+                "tracking_memory_status": tracking_memory_status.get("total_items", []),
+                "gem_observation_stocks": gem_observation_stocks,
+                "filtered_by_a_kill": [item[0] for item in filtered_by_a_kill],
+            },
+        )
     market_research_snapshot = build_market_research_snapshot(
         data,
         final_gate,

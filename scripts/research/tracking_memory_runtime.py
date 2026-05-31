@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 from pathlib import Path
 
 import daily_report_analysis_utils as analysis_utils
+
+try:
+    from storage.database_service import DatabaseService
+except Exception:  # pragma: no cover - optional runtime path
+    DatabaseService = None
 
 __all__ = ["refresh_tracking_memory"]
 
@@ -146,6 +152,32 @@ def _save_tracking_memory_state(state):
     path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _postgres_database_configured():
+    database_url = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+    return database_url.startswith(("postgres://", "postgresql://"))
+
+
+def _configured_tracking_memory_store():
+    service_cls = globals().get("DatabaseService")
+    if service_cls is None or not _postgres_database_configured():
+        return None
+    try:
+        service = service_cls.from_environment()
+    except Exception:
+        return None
+    if not callable(getattr(service, "is_postgres_backed", None)) or not service.is_postgres_backed():
+        return None
+    if not callable(getattr(service, "load_tracking_memory_state", None)):
+        return None
+    if not callable(getattr(service, "save_tracking_memory_state", None)):
+        return None
+    return service
+
+
 def refresh_tracking_memory(
     target_date,
     watchlist,
@@ -164,6 +196,11 @@ def refresh_tracking_memory(
     promote_confirmations=TRACKING_MEMORY_PROMOTE_CONFIRMATIONS,
 ):
     """跨日维护跟踪记忆簿。"""
+    if load_state is None and save_state is None:
+        store = _configured_tracking_memory_store()
+        if store is not None:
+            load_state = store.load_tracking_memory_state
+            save_state = store.save_tracking_memory_state
     load_state = load_state or _load_tracking_memory_state
     save_state = save_state or _save_tracking_memory_state
     normalize_code = normalize_code or analysis_utils.normalize_stock_code

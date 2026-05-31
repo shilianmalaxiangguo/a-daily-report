@@ -713,10 +713,19 @@ def _maybe_persist_decision_ledger(
         sector_relationship_state=_resolve_decision_ledger_sector_relationship(execution_stage_context),
         source_report=(data or {}).get("source_report") or {},
     )
-    result = write_artifacts(
-        snapshot,
-        root_dir=globals().get("decision_ledger_root_dir", "."),
-    )
+    try:
+        result = write_artifacts(
+            snapshot,
+            root_dir=globals().get("decision_ledger_root_dir", "."),
+            write_json_archive=not bool(globals().get("decision_ledger_postgres_only", False)),
+        )
+    except TypeError as exc:
+        if "write_json_archive" not in str(exc):
+            raise
+        result = write_artifacts(
+            snapshot,
+            root_dir=globals().get("decision_ledger_root_dir", "."),
+        )
     tracking_lines = _build_decision_ledger_tracking_lines(result)
     if isinstance(result, dict):
         result["tracking_lines"] = tracking_lines
@@ -806,7 +815,11 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
     try:
         from storage.database_service import DatabaseService
 
-        service = DatabaseService.sqlite_d1_compatible(Path(root_dir or ".") / "data" / "cloudflare_free_daily.db")
+        db_path = Path(root_dir or ".") / "data" / "cloudflare_free_daily.db"
+        if hasattr(DatabaseService, "from_environment"):
+            service = DatabaseService.from_environment(db_path)
+        else:
+            service = DatabaseService.sqlite_d1_compatible(db_path)
         mark_result = service.mark_a_kill_shape_extreme_conviction_mentions(
             end_date,
             window_days=window_days,

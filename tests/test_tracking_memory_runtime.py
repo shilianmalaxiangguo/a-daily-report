@@ -1,14 +1,64 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from research import tracking_memory_runtime as runtime
 from research.tracking_memory_runtime import refresh_tracking_memory
 
 
 class TrackingMemoryRuntimeTest(unittest.TestCase):
+    def test_refresh_tracking_memory_uses_configured_database_state_store(self):
+        saved = {}
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def load_tracking_memory_state(self):
+                return {
+                    "items": [
+                        {
+                            "code": "601991",
+                            "name": "大唐发电",
+                            "sector": "电力",
+                            "status": "tentative",
+                            "first_seen_date": "2026-05-28",
+                            "last_seen_date": "2026-05-28",
+                            "confirmations": 1,
+                            "failures": 0,
+                            "appearances": 1,
+                        }
+                    ]
+                }
+
+            def save_tracking_memory_state(self, state):
+                saved.update(state)
+                return len(state.get("items") or [])
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with patch.object(runtime, "DatabaseService", StubDatabaseService, create=True):
+            with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+                result = refresh_tracking_memory(
+                    "2026-05-29",
+                    watchlist=[{"code": "601991", "name": "大唐发电", "sector": "电力"}],
+                    leader_memory_bank=[
+                        {"code": "601991", "name": "大唐发电", "sector": "电力", "remember_score": 90}
+                    ],
+                    abnormal_watch_pool=[],
+                )
+
+        self.assertEqual(result["today_validated_items"][0]["code"], "601991")
+        self.assertEqual(saved["updated_at"], "2026-05-29")
+        self.assertEqual(saved["items"][0]["code"], "601991")
+
     def test_refresh_tracking_memory_promotes_confirmed_items_and_drops_failed_ones(self):
         saved = {}
 

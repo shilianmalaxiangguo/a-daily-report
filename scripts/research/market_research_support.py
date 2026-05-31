@@ -134,7 +134,7 @@ def get_market_total_turnover_from_fact_db_runtime(target_date, *, market_scope=
 
 def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="all_a", db_path=None):
     try:
-        service = DatabaseService.sqlite_d1_compatible(db_path)
+        service = DatabaseService.from_environment(db_path)
         row = service.query_market_daily_total(target_date, market_scope=market_scope)
     except Exception:
         return {}
@@ -143,7 +143,7 @@ def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="al
 
 def get_market_breadth_from_fact_db_runtime(target_date, *, db_path=None):
     try:
-        service = DatabaseService.sqlite_d1_compatible(db_path)
+        service = DatabaseService.from_environment(db_path)
         row = service.query_market_breadth_counts(target_date)
     except Exception:
         return {}
@@ -152,7 +152,7 @@ def get_market_breadth_from_fact_db_runtime(target_date, *, db_path=None):
 
 def get_turnover_rank_from_fact_db_runtime(target_date, *, limit=50, rank_scope="all_a", db_path=None):
     try:
-        service = DatabaseService.sqlite_d1_compatible(db_path)
+        service = DatabaseService.from_environment(db_path)
         rows = service.query_turnover_rank_rows(target_date, limit=limit, rank_scope=rank_scope)
     except Exception:
         return []
@@ -179,6 +179,22 @@ def get_turnover_rank_from_fact_db_runtime(target_date, *, limit=50, rank_scope=
             }
         )
     return ranked
+
+
+def save_market_cycle_context_runtime(target_date, snapshot, *, db_path=None):
+    try:
+        service = DatabaseService.from_environment(db_path)
+        return service.replace_market_cycle_context(target_date, snapshot)
+    except Exception:
+        return {}
+
+
+def save_observation_pools_runtime(target_date, pools, *, db_path=None):
+    try:
+        service = DatabaseService.from_environment(db_path)
+        return service.replace_observation_pool_items_for_trade_date(target_date, pools)
+    except Exception:
+        return 0
 
 
 def _install_runtime_bindings(bindings):
@@ -494,6 +510,7 @@ def _build_market_research_snapshot_legacy_body(
         get_sector_turnover_snapshot_from_tencent_fund_flow=get_sector_turnover_snapshot_from_tencent_fund_flow_runtime,
         get_sector_turnover_snapshot_from_ths=get_sector_turnover_snapshot_from_ths_runtime,
         load_recent_sector_turnover_history=load_recent_sector_turnover_history_runtime,
+        save_market_cycle_context=save_market_cycle_context_runtime,
     )
 
 
@@ -1308,4 +1325,5 @@ def _build_market_research_context_bundle_legacy_body(
         build_market_observation_snapshot=build_market_observation_snapshot,
         build_market_research_snapshot=build_market_research_snapshot,
         derive_step0_follow_plan=derive_step0_follow_plan,
+        save_observation_pools=save_observation_pools_runtime,
     )

@@ -1459,6 +1459,35 @@ class MarketResearchRuntimeTest(unittest.TestCase):
         old_misleading_attitude = "资金没有完全确认主线，" + "先看是否轮动"
         self.assertNotEqual(result["capital_conclusion"]["mainline_attitude"], old_misleading_attitude)
 
+    def test_build_market_research_snapshot_contract_saves_cycle_context_when_callback_is_available(self):
+        saved = []
+        kwargs = self._minimal_snapshot_kwargs("电力")
+        kwargs["target_date"] = "2026-05-29"
+        kwargs["data"] = {
+            "recent_mainline_history": [
+                {"date": "2026-05-27", "primary_mainline": "电力", "market_state": "主导"},
+                {"date": "2026-05-28", "primary_mainline": "电力", "market_state": "强化"},
+            ],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-29",
+                "sector_name": "电力",
+                "sector_turnover": 320,
+                "total_turnover": 10000,
+                "turnover_share_pct": 3.2,
+            },
+        }
+
+        result = build_market_research_snapshot_contract(
+            **kwargs,
+            save_market_cycle_context=lambda trade_date, snapshot: saved.append((trade_date, snapshot)),
+        )
+
+        self.assertEqual(saved[0][0], "2026-05-29")
+        self.assertEqual(saved[0][1]["current_mainline_history_record"]["primary_mainline"], "电力")
+        self.assertEqual(saved[0][1]["cycle_interpretation_rows"][-1]["cycle_label"], "当前周期")
+        self.assertEqual(saved[0][1]["cycle_calendar_rows"][0]["week_label"], "05-25当周")
+        self.assertEqual(result["cycle_interpretation_rows"][-1]["attack_line"], "电力")
+
 
 if __name__ == "__main__":
     unittest.main()

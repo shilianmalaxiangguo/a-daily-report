@@ -1,4 +1,5 @@
 from report.market_fit_calibration import build_market_fit_calibration
+from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
 from domains.market_state.mainline_capacity.node_runtime import run_mainline_capacity_summary_node
 import daily_report_analysis_utils as analysis_utils
 
@@ -816,6 +817,7 @@ def build_market_research_snapshot_contract(
     get_sector_turnover_snapshot_from_tencent_fund_flow=None,
     get_sector_turnover_snapshot_from_ths=None,
     load_recent_sector_turnover_history=None,
+    save_market_cycle_context=None,
 ):
     observation_snapshot = observation_snapshot or {}
     sector_ai_analysis = data.get("sector_ai_analysis", {}) or {}
@@ -906,6 +908,35 @@ def build_market_research_snapshot_contract(
         or state_machine_snapshot.get("leading_line", "")
         or ""
     ).strip()
+    if (
+        current_mainline_name
+        and not (
+            (current_mainline_history_record or {}).get("primary_mainline")
+            or (current_mainline_history_record or {}).get("leading_line")
+        )
+    ):
+        current_mainline_history_record = dict(current_mainline_history_record or {})
+        current_mainline_history_record.update(
+            {
+                "date": str(current_mainline_history_record.get("date") or target_date or "").strip(),
+                "primary_mainline": current_mainline_name,
+                "leading_line": current_mainline_name,
+                "market_state": str(
+                    current_mainline_history_record.get("market_state")
+                    or state_machine_snapshot.get("energy_state")
+                    or ""
+                ).strip(),
+                "state_code": str(
+                    current_mainline_history_record.get("state_code")
+                    or state_machine_snapshot.get("state_code")
+                    or ""
+                ).strip(),
+                "source": str(
+                    current_mainline_history_record.get("source")
+                    or "market_research_snapshot.state_machine"
+                ).strip(),
+            }
+        )
 
     if not recent_mainline_history and callable(load_recent_mainline_history):
         recent_mainline_history = _load_recent_mainline_history_for_cycle_calendar(
@@ -1030,8 +1061,7 @@ def build_market_research_snapshot_contract(
         capital_conclusion,
     )
     dragon_pullback_review = _derive_dragon_pullback_review(data, current_mainline_name)
-
-    return {
+    result = {
         "observation": observation_snapshot,
         "style_switch": style_switch_snapshot,
         "state_machine": state_machine_snapshot,
@@ -1055,6 +1085,22 @@ def build_market_research_snapshot_contract(
         "final_gate": final_gate,
         "module_logs": logs,
     }
+    cycle_layer = derive_market_research_cycle_layer(result, state_machine_snapshot)
+    result.update(cycle_layer)
+    if callable(save_market_cycle_context):
+        try:
+            save_market_cycle_context(target_date, result)
+            _append_log(logs, "save.market_cycle_context", "success", "已保存周期和板块事实")
+        except Exception as exc:
+            _append_log(
+                logs,
+                "save.market_cycle_context",
+                "failed",
+                "周期和板块事实保存失败",
+                error_type=type(exc).__name__,
+                error=str(exc),
+            )
+    return result
 
 
 def derive_step0_follow_plan_contract(market_research_snapshot, final_gate, position_level):

@@ -4196,6 +4196,53 @@ def _runtime_binding_probe(
         self.assertEqual(rows, [])
         self.assertEqual(raw_rows[0]["is_a_kill_eliminated"], True)
 
+    def test_runtime_extreme_mention_tracking_uses_configured_database_service(self):
+        class StubService:
+            def __init__(self):
+                self.marked = []
+                self.queries = []
+
+            def mark_a_kill_shape_extreme_conviction_mentions(self, end_date, *, window_days=25, return_details=False):
+                self.marked.append((end_date, window_days, return_details))
+                return {"updated_count": 0, "updated_records": []}
+
+            def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+                self.queries.append((end_date, window_days, include_a_kill))
+                return [
+                    {
+                        "mention_trade_date": "2026-05-29",
+                        "stock_code": "601991",
+                        "stock_name": "大唐发电",
+                    }
+                ]
+
+        class StubDatabaseService:
+            service = StubService()
+            sqlite_called = False
+
+            @classmethod
+            def from_environment(cls, db_path=None):
+                cls.db_path = db_path
+                return cls.service
+
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                cls.sqlite_called = True
+                return cls.service
+
+        with patch.dict("sys.modules", {"storage.database_service": types.SimpleNamespace(DatabaseService=StubDatabaseService)}):
+            rows = report_runtime._query_extreme_conviction_mention_rows_for_tracking(
+                root_dir="/tmp/daily-report",
+                end_date="2026-05-29",
+                window_days=25,
+                include_a_kill=True,
+            )
+
+        self.assertFalse(StubDatabaseService.sqlite_called)
+        self.assertEqual(rows[0]["stock_code"], "601991")
+        self.assertEqual(StubDatabaseService.service.marked, [("2026-05-29", 25, True)])
+        self.assertEqual(StubDatabaseService.service.queries, [("2026-05-29", 25, True)])
+
     def test_runtime_records_a_kill_shape_mark_details_for_tracking_query(self):
         captured = {}
 

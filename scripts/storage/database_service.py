@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+
 from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
+from storage.postgres_daily_fact_db import PostgresDailyFactDb
 
 __all__ = [
     "DatabaseService",
@@ -20,6 +23,25 @@ class DatabaseService:
     @classmethod
     def sqlite_d1_compatible(cls, db_path=None):
         return cls(CloudflareFreeDailyDb(db_path))
+
+    @classmethod
+    def postgres(cls, database_url):
+        return cls(PostgresDailyFactDb(database_url))
+
+    @classmethod
+    def from_environment(cls, db_path=None):
+        database_url = (
+            os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+            or os.environ.get("DATABASE_URL")
+            or ""
+        ).strip()
+        if database_url.startswith(("postgres://", "postgresql://")):
+            return cls(PostgresDailyFactDb(database_url))
+        return cls.sqlite_d1_compatible(db_path)
+
+    def is_postgres_backed(self):
+        checker = getattr(self.repository, "is_postgres_backed", None)
+        return bool(callable(checker) and checker())
 
     def save_provider_source_run(self, run):
         return self.repository.save_provider_source_run(run)
@@ -148,6 +170,42 @@ class DatabaseService:
                 return {"updated_count": 0, "updated_records": []}
             return 0
         return marker(end_date, window_days=window_days, return_details=return_details)
+
+    def replace_market_cycle_context(self, trade_date, snapshot):
+        writer = getattr(self.repository, "replace_market_cycle_context", None)
+        if not callable(writer):
+            return {}
+        return writer(trade_date, snapshot)
+
+    def replace_observation_pool_items_for_trade_date(self, trade_date, pools):
+        writer = getattr(self.repository, "replace_observation_pool_items_for_trade_date", None)
+        if not callable(writer):
+            return 0
+        return writer(trade_date, pools)
+
+    def load_tracking_memory_state(self):
+        reader = getattr(self.repository, "load_tracking_memory_state", None)
+        if not callable(reader):
+            return {}
+        return reader()
+
+    def save_tracking_memory_state(self, state):
+        writer = getattr(self.repository, "save_tracking_memory_state", None)
+        if not callable(writer):
+            return 0
+        return writer(state)
+
+    def replace_decision_ledger_snapshot(self, snapshot):
+        writer = getattr(self.repository, "replace_decision_ledger_snapshot", None)
+        if not callable(writer):
+            return {}
+        return writer(snapshot)
+
+    def read_decision_ledger_index(self, end_date=None, window_days=25):
+        reader = getattr(self.repository, "read_decision_ledger_index", None)
+        if not callable(reader):
+            return {}
+        return reader(end_date=end_date, window_days=window_days)
 
     def upsert_monthly_account_ledger(self, row):
         return self.repository.upsert_monthly_account_ledger(row)

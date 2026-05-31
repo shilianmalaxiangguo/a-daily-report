@@ -2,12 +2,27 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class DatabaseServiceTest(unittest.TestCase):
+    def test_database_service_selects_postgres_from_environment(self):
+        from storage.database_service import DatabaseService
+
+        class StubPostgresRepository:
+            def __init__(self, database_url):
+                self.database_url = database_url
+
+        with patch.dict("os.environ", {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
+            with patch("storage.database_service.PostgresDailyFactDb", StubPostgresRepository):
+                service = DatabaseService.from_environment()
+
+        self.assertIsInstance(service.repository, StubPostgresRepository)
+        self.assertEqual(service.repository.database_url, "postgresql://unit/report")
+
     def test_database_service_wraps_cloudflare_free_repository(self):
         from storage.database_service import DatabaseService
 

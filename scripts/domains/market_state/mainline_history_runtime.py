@@ -249,7 +249,10 @@ def _load_recent_mainline_history_from_fact_db(target_date, lookback_days=25, *,
     if service_cls is None:
         return []
     try:
-        service = service_cls.sqlite_d1_compatible(db_path)
+        if hasattr(service_cls, "from_environment"):
+            service = service_cls.from_environment(db_path)
+        else:
+            service = service_cls.sqlite_d1_compatible(db_path)
         rows = service.query_mainline_daily_series(
             _normalize_kline_date_str(target_date) or target_date,
             window_days=lookback_days,

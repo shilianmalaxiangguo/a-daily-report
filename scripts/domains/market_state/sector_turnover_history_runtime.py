@@ -74,7 +74,10 @@ def get_market_total_turnover_from_fact_db(target_date, *, market_scope="all_a",
     if DatabaseService is None:
         return 0.0
     try:
-        service = DatabaseService.sqlite_d1_compatible(db_path)
+        if hasattr(DatabaseService, "from_environment"):
+            service = DatabaseService.from_environment(db_path)
+        else:
+            service = DatabaseService.sqlite_d1_compatible(db_path)
         row = service.query_market_daily_total(target_date, market_scope=market_scope)
     except Exception:
         return 0.0
@@ -347,7 +350,10 @@ def _load_recent_sector_turnover_history_from_fact_db(target_date, sector_name, 
     if service_cls is None:
         return []
     try:
-        service = service_cls.sqlite_d1_compatible(db_path)
+        if hasattr(service_cls, "from_environment"):
+            service = service_cls.from_environment(db_path)
+        else:
+            service = service_cls.sqlite_d1_compatible(db_path)
         rows = service.query_mainline_turnover_series(
             _normalize_kline_date_str(target_date) or target_date,
             sector_name,

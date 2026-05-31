@@ -2470,14 +2470,38 @@ def _apply_participation_reviews_to_previous_index(previous_index, trade_date, r
     return updated_index
 
 
-def write_decision_ledger_artifacts(snapshot, *, root_dir=".", review_market_facts_by_stock_code=None):
+def write_decision_ledger_artifacts(
+    snapshot,
+    *,
+    root_dir=".",
+    review_market_facts_by_stock_code=None,
+    database_service=None,
+    write_json_archive=True,
+):
     root = Path(root_dir)
     snapshot = _sanitize_decision_ledger_snapshot(snapshot or {})
     trade_date = snapshot.get("trade_date")
     ledger_dir = root / "data" / "decision-ledger"
     snapshot_path = ledger_dir / f"{trade_date}.json"
     index_path = ledger_dir / "index.json"
-    previous_index = _sanitize_decision_ledger_index(_read_json_if_exists(index_path))
+    previous_index = {}
+    service = database_service
+    if service is None:
+        try:
+            from storage.database_service import DatabaseService
+
+            service = DatabaseService.from_environment(root / "data" / "cloudflare_free_daily.db")
+        except Exception:
+            service = None
+    if (
+        service is not None
+        and callable(getattr(service, "is_postgres_backed", None))
+        and service.is_postgres_backed()
+        and callable(getattr(service, "read_decision_ledger_index", None))
+    ):
+        previous_index = _sanitize_decision_ledger_index(service.read_decision_ledger_index(end_date=trade_date, window_days=25))
+    else:
+        previous_index = _sanitize_decision_ledger_index(_read_json_if_exists(index_path))
     if review_market_facts_by_stock_code is None:
         review_market_facts_by_stock_code = _load_review_market_facts(root, trade_date, previous_index)
     previous_index = _apply_participation_reviews_to_previous_index(
@@ -2489,21 +2513,31 @@ def write_decision_ledger_artifacts(snapshot, *, root_dir=".", review_market_fac
     previous_index = _prune_replaced_same_day_records(previous_index, snapshot)
     merged_snapshot = _sanitize_decision_ledger_snapshot(merge_snapshot_with_previous_index(snapshot, previous_index))
     index = build_decision_ledger_index(merged_snapshot, previous_index=previous_index)
-    _write_json(snapshot_path, merged_snapshot)
-    _write_json(index_path, index)
+    if write_json_archive:
+        _write_json(snapshot_path, merged_snapshot)
+        _write_json(index_path, index)
     fact_db_sync = {"status": "not_run", "rows": 0}
     try:
-        from storage.database_service import DatabaseService
+        if service is None:
+            from storage.database_service import DatabaseService
 
-        service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
-        current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
-        recent_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=25, exclude_a_kill=False)
-        service.replace_extreme_conviction_mentions_for_trade_date(
-            trade_date,
-            current_rows,
-        )
-        service.upsert_extreme_conviction_mentions(recent_rows)
-        fact_db_sync = {"status": "success", "rows": len(recent_rows)}
+            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
+        if callable(getattr(service, "is_postgres_backed", None)) and service.is_postgres_backed():
+            structured_result = service.replace_decision_ledger_snapshot(merged_snapshot)
+            fact_db_sync = {
+                "status": "success",
+                "rows": int(structured_result.get("mentions") or 0),
+                "cases": int(structured_result.get("cases") or 0),
+            }
+        else:
+            current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
+            recent_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=25, exclude_a_kill=False)
+            service.replace_extreme_conviction_mentions_for_trade_date(
+                trade_date,
+                current_rows,
+            )
+            service.upsert_extreme_conviction_mentions(recent_rows)
+            fact_db_sync = {"status": "success", "rows": len(recent_rows)}
     except Exception as exc:
         fact_db_sync = {
             "status": "failed",
