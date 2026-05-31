@@ -324,6 +324,71 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
         self.assertEqual([item["primary_mainline"] for item in result], ["电力", "半导体"])
         self.assertEqual(calls, [("db", None), ("query", "2026-05-20", 2)])
 
+    def test_postgres_only_mainline_history_returns_database_rows_without_snapshot_scan(self):
+        runtime = self._load_module()
+        calls = []
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_mainline_daily_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [
+                    {
+                        "date": "2026-05-19",
+                        "primary_mainline": "电力",
+                        "leading_line": "电力",
+                        "source": "postgresql.mainline_daily",
+                    }
+                ]
+
+        class FakeDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                calls.append(("from_environment", db_path))
+                return FakeService()
+
+        def fail_snapshot_scan(target_date):
+            raise AssertionError(f"postgres-only must not scan JSON snapshot {target_date}")
+
+        def fail_index_rebuild(**kwargs):
+            raise AssertionError("postgres-only must not rebuild history from JSON snapshots")
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            max_scan_days=60,
+            helpers={
+                "DatabaseService": FakeDatabaseService,
+                "ensure_daily_metric_history_index": fail_index_rebuild,
+                "load_data_snapshot": fail_snapshot_scan,
+                "postgres_only_runtime": True,
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-19"])
+        self.assertEqual(calls, [("from_environment", None), ("query", "2026-05-20", 2)])
+
+    def test_postgres_only_mainline_history_returns_empty_when_database_service_missing(self):
+        runtime = self._load_module()
+
+        def fail_snapshot_scan(target_date):
+            raise AssertionError(f"postgres-only must not scan JSON snapshot {target_date}")
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-20",
+            lookback_days=2,
+            max_scan_days=60,
+            helpers={
+                "DatabaseService": None,
+                "load_data_snapshot": fail_snapshot_scan,
+                "postgres_only_runtime": True,
+            },
+        )
+
+        self.assertEqual(result, [])
+
     def test_load_recent_mainline_history_rebuilds_fact_db_when_index_is_stale(self):
         runtime = self._load_module()
         calls = []

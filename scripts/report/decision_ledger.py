@@ -2634,6 +2634,8 @@ def write_decision_ledger_artifacts_from_markdown_report(
     sector_relationship_state,
     root_dir=".",
     generated_at=None,
+    write_json_archive=True,
+    review_market_facts_by_stock_code=None,
 ):
     report_file = Path(report_path)
     root = Path(root_dir)
@@ -2648,7 +2650,7 @@ def write_decision_ledger_artifacts_from_markdown_report(
         },
         generated_at=generated_at,
     )
-    if not snapshot.get("cases"):
+    if write_json_archive and not snapshot.get("cases"):
         ledger_dir = root / "data" / "decision-ledger"
         snapshot_path = ledger_dir / f"{trade_date}.json"
         existing_snapshot = _read_json_if_exists(snapshot_path)
@@ -2661,7 +2663,12 @@ def write_decision_ledger_artifacts_from_markdown_report(
                 "skipped_empty_markdown": True,
                 "fact_db_sync": {"status": "skipped", "rows": 0},
             }
-    return write_decision_ledger_artifacts(snapshot, root_dir=root)
+    return write_decision_ledger_artifacts(
+        snapshot,
+        root_dir=root,
+        write_json_archive=write_json_archive,
+        review_market_facts_by_stock_code=review_market_facts_by_stock_code,
+    )
 
 
 def build_decision_ledger_snapshot(

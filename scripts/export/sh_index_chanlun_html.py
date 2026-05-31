@@ -465,8 +465,12 @@ def save_sh_index_chanlun_html_report(
     index_code: str = DEFAULT_INDEX_CODE,
     runner: Callable[[str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = run_analysis,
     tomorrow_decision: dict[str, Any] | None = None,
+    fetch_minute_bars: Callable[..., dict[str, Any]] | None = None,
 ) -> Path:
-    market_zhongshu, rows = runner(target_date, index_code)
+    if fetch_minute_bars is not None:
+        market_zhongshu, rows = runner(target_date, index_code, fetch_minute_bars=fetch_minute_bars)
+    else:
+        market_zhongshu, rows = runner(target_date, index_code)
     payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
     if tomorrow_decision:
         payload["tomorrow_decision"] = dict(tomorrow_decision)

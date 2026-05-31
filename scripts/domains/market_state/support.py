@@ -227,11 +227,29 @@ def _resolve_database_service_cls():
     return service_cls
 
 
-def _create_database_service():
+def _postgres_only_runtime(helpers=None):
+    return bool((helpers or {}).get("postgres_only_runtime") or globals().get("postgres_only_runtime"))
+
+
+def _create_database_service(*, postgres_only=False):
     service_cls = _resolve_database_service_cls()
     if service_cls is None:
         return None
-    factory = getattr(service_cls, "sqlite_d1_compatible", None)
+    if postgres_only:
+        factory = getattr(service_cls, "from_environment", None)
+        if not callable(factory):
+            return None
+        try:
+            service = factory()
+        except Exception:
+            return None
+        checker = getattr(service, "is_postgres_backed", None)
+        if not callable(checker) or not checker():
+            return None
+        return service
+    factory = getattr(service_cls, "from_environment", None)
+    if not callable(factory):
+        factory = getattr(service_cls, "sqlite_d1_compatible", None)
     if not callable(factory):
         return None
     try:
@@ -241,6 +259,8 @@ def _create_database_service():
 
 
 def _should_skip_fact_db(helpers):
+    if _postgres_only_runtime(helpers):
+        return False
     if helpers and "DatabaseService" in helpers:
         return helpers.get("DatabaseService") is None
     return load_data_snapshot is not _DEFAULT_LOAD_DATA_SNAPSHOT
@@ -455,6 +475,7 @@ def normalize_flow_to_yi(value, *, helpers=None):
 
 
 def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, max_scan_days=8, *, helpers=None):
+    postgres_only = _postgres_only_runtime(helpers)
     skip_fact_db = _should_skip_fact_db(helpers)
     previous = _install_runtime_bindings(helpers or {})
     try:
@@ -463,9 +484,12 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
                 target_date,
                 sector_name,
                 lookback_days=lookback_days,
+                postgres_only=postgres_only,
             )
             if history is not None:
                 return history
+        if postgres_only:
+            return []
         return _load_recent_sector_flow_history_legacy_body(
             target_date,
             sector_name,
@@ -477,6 +501,7 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
 
 
 def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_days=8, *, helpers=None):
+    postgres_only = _postgres_only_runtime(helpers)
     skip_fact_db = _should_skip_fact_db(helpers)
     previous = _install_runtime_bindings(helpers or {})
     try:
@@ -485,9 +510,12 @@ def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_d
                 target_date,
                 lookback_days=lookback_days,
                 max_scan_days=max_scan_days,
+                postgres_only=postgres_only,
             )
             if history is not None:
                 return history
+        if postgres_only:
+            return []
         return _load_recent_market_turnover_history_legacy_body(
             target_date,
             lookback_days=lookback_days,
@@ -737,8 +765,8 @@ def _extract_sector_signed_flow(snapshot_data, sector_name):
     return 0.0
 
 
-def _load_recent_sector_flow_history_from_fact_db(target_date, sector_name, lookback_days=2):
-    service = _create_database_service()
+def _load_recent_sector_flow_history_from_fact_db(target_date, sector_name, lookback_days=2, *, postgres_only=False):
+    service = _create_database_service(postgres_only=postgres_only)
     if service is None:
         return None
     end_date = get_previous_date_str(_normalize_kline_date_str(target_date) or target_date)
@@ -792,8 +820,8 @@ def _load_recent_sector_flow_history_legacy_body(target_date, sector_name, lookb
     return history
 
 
-def _load_recent_market_turnover_history_from_fact_db(target_date, lookback_days=2, max_scan_days=8):
-    service = _create_database_service()
+def _load_recent_market_turnover_history_from_fact_db(target_date, lookback_days=2, max_scan_days=8, *, postgres_only=False):
+    service = _create_database_service(postgres_only=postgres_only)
     if service is None:
         return None
     history = []

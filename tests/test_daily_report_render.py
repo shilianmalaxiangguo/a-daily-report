@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import sys
 import types
 import unittest
@@ -75,6 +76,13 @@ class DailyReportRenderTest(unittest.TestCase):
             ROOT.resolve(),
         )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
+
+    def test_build_report_outputs_forwards_postgres_only_runtime_config(self):
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
+            build_report_outputs({"postgres_only": True}, "2026-05-29", emit_preflight=False)
+
+        self.assertTrue(render_mock.call_args_list[0].kwargs["postgres_only"])
+        self.assertTrue(render_mock.call_args_list[1].kwargs["postgres_only"])
 
     def test_build_report_outputs_persists_decision_ledger_before_replay_full_render(self):
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
@@ -234,6 +242,7 @@ class DailyReportRenderTest(unittest.TestCase):
                 decision_ledger_root_dir="/tmp/decision-ledger-root",
                 persist_candidate_traces=True,
                 candidate_trace_root_dir="/tmp/candidate-trace-root",
+                postgres_only=True,
             )
 
         self.assertEqual(rendered, "# report")
@@ -241,6 +250,57 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertEqual(captured["decision_ledger_root_dir"], "/tmp/decision-ledger-root")
         self.assertTrue(captured["persist_candidate_traces"])
         self.assertEqual(captured["candidate_trace_root_dir"], "/tmp/candidate-trace-root")
+        self.assertTrue(captured["postgres_only"])
+        self.assertFalse(fake_demo._POSTGRES_ONLY_RUNTIME)
+
+    def test_render_report_with_display_mode_sets_postgres_only_runtime_on_demo_module(self):
+        fake_demo = types.ModuleType("daily_report_entry_demo")
+        fake_demo.DISPLAY_MVP_MODE = False
+        fake_demo.EMIT_HELPER_DIAGNOSTICS = True
+        fake_demo.REPORT_RUNTIME_CACHE = None
+        fake_demo._POSTGRES_ONLY_RUNTIME = False
+
+        def _fake_generate_markdown_report(*args, **kwargs):
+            self.assertTrue(fake_demo._POSTGRES_ONLY_RUNTIME)
+            return "# report"
+
+        fake_demo.generate_markdown_report = _fake_generate_markdown_report
+
+        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}):
+            rendered = _render_report_with_display_mode(
+                False,
+                {"postgres_only": True},
+                "2026-05-29",
+                postgres_only=True,
+            )
+
+        self.assertEqual(rendered, "# report")
+        self.assertFalse(fake_demo._POSTGRES_ONLY_RUNTIME)
+
+    def test_render_report_with_display_mode_sets_postgres_only_env_guard(self):
+        fake_demo = types.ModuleType("daily_report_entry_demo")
+        fake_demo.DISPLAY_MVP_MODE = False
+        fake_demo.EMIT_HELPER_DIAGNOSTICS = True
+        fake_demo.REPORT_RUNTIME_CACHE = None
+        fake_demo._POSTGRES_ONLY_RUNTIME = False
+
+        def _fake_generate_markdown_report(*args, **kwargs):
+            self.assertEqual(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"), "1")
+            return "# report"
+
+        fake_demo.generate_markdown_report = _fake_generate_markdown_report
+
+        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}), \
+             patch.dict(os.environ, {}, clear=True):
+            rendered = _render_report_with_display_mode(
+                False,
+                {"postgres_only": True},
+                "2026-05-29",
+                postgres_only=True,
+            )
+
+        self.assertEqual(rendered, "# report")
+        self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
 
     def test_build_report_outputs_can_suppress_preflight_output(self):
         data = {
@@ -1132,6 +1192,26 @@ class DailyReportRenderTest(unittest.TestCase):
 
         xgb_check = next(check for check in preflight["decision_checks"] if check["label"] == "选股通盘中异动")
         self.assertEqual(xgb_check["row_count"], 1)
+
+    def test_decision_preflight_accepts_postgres_xuangubao_summary_counts(self):
+        data = {
+            "data_status": {"选股通盘中异动": True},
+            "step_status": {"选股通盘中异动获取": True},
+            "postgres_only": True,
+            "xuangubao_data": {
+                "news_count": 0,
+                "plate_count": 1,
+                "limit_up_reason_count": 0,
+                "diagnostics_status": "success",
+            },
+        }
+
+        preflight = build_report_preflight(data, "2026-05-29")
+
+        xgb_check = next(check for check in preflight["decision_checks"] if check["label"] == "选股通盘中异动")
+        self.assertEqual(xgb_check["status"], "success")
+        self.assertEqual(xgb_check["row_count"], 1)
+        self.assertNotIn("选股通盘中异动", preflight["failures"])
 
     def test_generate_markdown_report_from_sections_deduplicates_no_trade_and_filters_draft_explanations(self):
         rendered = generate_markdown_report_from_sections(

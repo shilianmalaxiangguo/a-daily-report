@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import traceback
 import types
 from enum import Enum
 from pathlib import Path
@@ -178,6 +179,12 @@ def load_data_snapshot(target_date: str) -> Tuple[Any, str]:
     Returns (data, supplementary_perspective). If the file does not exist,
     returns (None, None).
     """
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        stack = "".join(traceback.format_stack(limit=12))
+        raise RuntimeError(
+            "PostgreSQL-only runtime attempted to read JSON snapshot "
+            f"for {target_date}.\n{stack}"
+        )
     snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN))
     if not snapshot_path.exists():
         return None, None

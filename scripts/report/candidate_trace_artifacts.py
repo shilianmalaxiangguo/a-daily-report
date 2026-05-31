@@ -26,6 +26,10 @@ def _postgres_database_configured():
     return database_url.startswith(("postgres://", "postgresql://"))
 
 
+def _postgres_only_runtime():
+    return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+
+
 def _configured_postgres_service():
     service_cls = globals().get("DatabaseService")
     if not _postgres_database_configured():
@@ -47,6 +51,7 @@ def write_candidate_trace_artifact(
     root_dir=".",
     generated_at=None,
     source_report=None,
+    postgres_only=False,
 ):
     root = Path(root_dir)
     payload = build_candidate_trace_artifact_payload(
@@ -62,11 +67,10 @@ def write_candidate_trace_artifact(
         if callable(writer):
             result = writer(payload)
             if isinstance(result, dict):
-                return {
-                    **result,
-                    "payload": payload,
-                }
+                return result
         raise RuntimeError("PostgreSQL candidate trace writer is unavailable")
+    if postgres_only or _postgres_only_runtime():
+        raise RuntimeError("PostgreSQL-only candidate trace storage requires PostgreSQL")
     artifact_path = root / "data" / "candidate-traces" / f"{trade_date}.json"
     _write_json(artifact_path, payload)
     return {

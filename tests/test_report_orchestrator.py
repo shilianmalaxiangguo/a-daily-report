@@ -185,3 +185,23 @@ class ReportOrchestratorTest(unittest.TestCase):
             hook_names.index("publish.snap_ui_public_data"),
             hook_names.index("persist.snapshot"),
         )
+
+    def test_postgres_only_request_skips_json_snapshot_and_snap_ui_publish_hooks(self):
+        with patch("orchestrator.report_orchestrator.run_hot_rank", stub_hot_rank), patch(
+            "orchestrator.report_orchestrator.run_market_phase", stub_market_phase
+        ), patch("orchestrator.report_orchestrator.run_mainline_analysis", stub_mainline), patch(
+            "orchestrator.report_orchestrator.run_execution_permission", stub_execution_permission
+        ), patch(
+            "orchestrator.report_orchestrator.run_markdown_document", stub_markdown_document
+        ), patch(
+            "orchestrator.report_orchestrator.run_snapshot_persistence", side_effect=stub_snapshot
+        ) as snapshot_mock, patch(
+            "orchestrator.report_orchestrator.run_snap_ui_public_data_publish", side_effect=stub_snap_ui_publish
+        ) as publish_mock:
+            ctx = build_report({"target_date": "2026-04-21", "postgres_only": True})
+
+        hook_names = [item["hook_name"] for item in ctx["runtime"]["module_logs"]]
+        self.assertNotIn("persist.snapshot", hook_names)
+        self.assertNotIn("publish.snap_ui_public_data", hook_names)
+        snapshot_mock.assert_not_called()
+        publish_mock.assert_not_called()

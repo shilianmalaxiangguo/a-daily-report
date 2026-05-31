@@ -20,6 +20,8 @@ if hasattr(sys.stderr, 'reconfigure'):
 else:
     sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
 
+_POSTGRES_ONLY_RUNTIME = False
+
 """
 A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-03-31重写版）
 
@@ -468,6 +470,7 @@ from report.strategy_tracking_support import (
     resolve_probe_role_family as run_resolve_probe_role_family,
     summarize_ev_signal_review as run_summarize_ev_signal_review,
 )
+from storage.database_service import DatabaseService
 from report.strategy_tracking_ev import (
     build_strategy_ev_calibration as run_build_strategy_ev_calibration,
     estimate_signal_type_ev as run_estimate_signal_type_ev,
@@ -873,8 +876,22 @@ def get_daily_data(target_date=None):
     )
 
 
+def _load_runtime_data_snapshot(target_date):
+    if not _POSTGRES_ONLY_RUNTIME:
+        return load_data_snapshot(str(target_date or ""))
+    service = _postgres_daily_report_service()
+    result = service.load_daily_report_snapshot(str(target_date or ""))
+    data = result.get("data") if isinstance(result, dict) else {}
+    if not isinstance(data, dict) or not data:
+        return {}, result.get("source", "") if isinstance(result, dict) else ""
+    data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
+    data["postgres_field_count"] = result.get("field_count", 0)
+    data["postgres_only"] = True
+    return data, data.get("postgres_source", "")
+
+
 def get_concept_fund_flow_from_snapshot(target_date=None):
-    snapshot_data, _ = load_data_snapshot(str(target_date or ""))
+    snapshot_data, _ = _load_runtime_data_snapshot(str(target_date or ""))
     if not isinstance(snapshot_data, dict):
         return {}
     concept_flow = snapshot_data.get("concept_fund_flow")
@@ -1123,9 +1140,10 @@ def load_recent_sector_flow_history(target_date, sector_name, lookback_days=2, m
         helpers={
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": load_data_snapshot,
+            "load_data_snapshot": _load_runtime_data_snapshot,
             "sector_name_matches": sector_name_matches,
             "_safe_float": _safe_float,
+            "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
     )
 
@@ -1138,8 +1156,9 @@ def load_recent_market_turnover_history(target_date, lookback_days=2, max_scan_d
         helpers={
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": load_data_snapshot,
+            "load_data_snapshot": _load_runtime_data_snapshot,
             "_safe_float": _safe_float,
+            "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
     )
 
@@ -1207,10 +1226,11 @@ def _build_market_style_switch_snapshot(target_date, data, observation_snapshot=
             "_round_or_none": _round_or_none,
             "_normalize_kline_date_str": _normalize_kline_date_str,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": load_data_snapshot,
+            "load_data_snapshot": _load_runtime_data_snapshot,
             "_parse_status_board_count": _parse_status_board_count,
             "_count_keyword_hits_in_mapping": _count_keyword_hits_in_mapping,
             "normalize_stock_code": normalize_stock_code,
+            "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
     )
 
@@ -1224,8 +1244,9 @@ def _build_unified_sector_strength_rows(data):
             "_score_to_star_rank": _score_to_star_rank,
             "stock_matches_sector": stock_matches_sector,
             "get_previous_date_str": get_previous_date_str,
-            "load_data_snapshot": load_data_snapshot,
+            "load_data_snapshot": _load_runtime_data_snapshot,
             "sector_name_matches": sector_name_matches,
+            "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
     )
 
@@ -2997,6 +3018,7 @@ def _build_market_research_snapshot(data, final_gate, position_level, exit_analy
             "_build_special_probe_verdict": _build_special_probe_verdict,
             "_build_follow_verdict": _build_follow_verdict,
             "_build_dialectical_decision_snapshot": _build_dialectical_decision_snapshot,
+            "postgres_only_runtime": _POSTGRES_ONLY_RUNTIME,
         },
     )
 
@@ -3606,6 +3628,7 @@ def generate_markdown_report(
     decision_ledger_root_dir=None,
     persist_candidate_traces=False,
     candidate_trace_root_dir=None,
+    postgres_only=False,
 ):
     runtime_result = render_markdown_report_runtime(
         data,
@@ -3624,6 +3647,7 @@ def generate_markdown_report(
             "decision_ledger_root_dir": decision_ledger_root_dir or str(Path(__file__).resolve().parents[1]),
             "persist_candidate_traces": persist_candidate_traces,
             "candidate_trace_root_dir": candidate_trace_root_dir or str(Path(__file__).resolve().parents[1]),
+            "decision_ledger_postgres_only": postgres_only,
             "ENABLE_REMOTE_CALENDAR_LLM": _resolve_remote_calendar_llm_enabled(),
         },
     )
@@ -3675,6 +3699,35 @@ def replay_from_snapshot(target_date, refresh_sources=None):
         },
     )
     return result.get('data'), result.get('target_date', target_date)
+
+
+def _postgres_daily_report_service():
+    service = DatabaseService.from_environment()
+    if not service.is_postgres_backed():
+        raise ReportCriticalDataMissingError("PostgreSQL-only 需要 A_DAILY_REPORT_DATABASE_URL 或 DATABASE_URL 指向 PostgreSQL")
+    return service
+
+
+def load_daily_report_data_from_postgres(target_date):
+    service = _postgres_daily_report_service()
+    result = service.load_daily_report_snapshot(target_date)
+    data = result.get("data") if isinstance(result, dict) else {}
+    if not isinstance(data, dict) or not data:
+        raise ReportCriticalDataMissingError(f"{target_date} PostgreSQL 日报事实缺失，停止生成")
+    data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
+    data["postgres_field_count"] = result.get("field_count", 0)
+    data["postgres_only"] = True
+    return data
+
+
+def save_daily_report_data_to_postgres(target_date, data):
+    service = _postgres_daily_report_service()
+    return service.save_daily_report_snapshot(target_date, data or {})
+
+
+def import_daily_report_data_to_postgres(target_date, data):
+    service = _postgres_daily_report_service()
+    return service.import_daily_report_facts(target_date, data or {})
 
 
 def resolve_single_stock_snapshot(data, stock_code, stock_name='', market_research_bundle=None, step2_bundle=None):
@@ -3739,7 +3792,22 @@ def _build_sh_index_chanlun_html_for_audit(
     tomorrow_decision=None,
     runner=run_sh_index_chanlun_analysis,
 ):
-    market_zhongshu, rows = runner(target_date, index_code)
+    def _postgres_only_no_minute_json_cache(*_args, **_kwargs):
+        return {
+            "success": False,
+            "status": "postgres_only_disabled",
+            "source": "postgres_only.no_minute_json_cache",
+            "bars": [],
+        }
+
+    if _POSTGRES_ONLY_RUNTIME:
+        market_zhongshu, rows = runner(
+            target_date,
+            index_code,
+            fetch_minute_bars=_postgres_only_no_minute_json_cache,
+        )
+    else:
+        market_zhongshu, rows = runner(target_date, index_code)
     payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
     if tomorrow_decision:
         payload["tomorrow_decision"] = dict(tomorrow_decision)
@@ -3786,6 +3854,10 @@ def main():
                        help='持仓信息，格式: "我的仓位是股票1 仓位1%% 股票2 仓位2%% ..."')
     parser.add_argument('--replay', action='store_true',
                        help='复盘模式：从快照读数据，只重新拉财联社日历，用最新skill生成报告')
+    parser.add_argument('--postgres-only', action='store_true',
+                       help='PostgreSQL-only 模式：从 PostgreSQL 读取日报事实，不读取 JSON 快照主来源')
+    parser.add_argument('--import-json-to-postgres', action='store_true',
+                       help='把指定日期的历史快照筛选为复盘取证事实后导入 PostgreSQL，不生成日报')
     parser.add_argument('--stock', type=str, default=None,
                        help='生成单票诊断，输入股票代码，如 002364')
     parser.add_argument('--stock-name', type=str, default='',
@@ -3805,105 +3877,153 @@ def main():
         yesterday = today - _dt.timedelta(days=1)
         target_date = yesterday.strftime("%Y-%m-%d")
 
-    if args.replay:
-        data, target_date = replay_from_snapshot(target_date)
-    else:
-        print(f"📅 获取数据: {target_date}")
-        data = get_daily_data(target_date)
-    if data:
-        report_preflight = build_report_preflight(data, target_date)
-        for line in render_report_preflight_lines(report_preflight):
-            print(line)
-        if report_preflight.get("failures"):
-            raise ReportCriticalDataMissingError(
-                "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
-                    target_date,
-                    "、".join(report_preflight.get("failures") or []),
-                    "\n".join(render_report_preflight_lines(report_preflight)),
-                )
-            )
-    run_mode = LEDGER_MODE_REPLAY if args.replay else LEDGER_MODE_FROZEN
-    if run_mode == LEDGER_MODE_FROZEN and not args.overwrite_official:
-        official_ledger = load_strategy_performance_ledger(mode=LEDGER_MODE_FROZEN)
-        official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
-        official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
-        if official_record or os.path.exists(official_report_path):
-            _audit_existing_official_report_or_raise(target_date, official_report_path)
-            run_mode = LEDGER_MODE_REPLAY
-            print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
-    
-    # 生成日报（除非指定不生成）
-    if not args.no_report and data:
-        positions = []
-        if args.position:
-            print(f"\n📊 解析持仓信息...")
-            positions = parse_position_string(args.position)
-            if positions:
-                print(f"   ✅ 解析到 {len(positions)} 只持仓股票")
-                data["personal_position_context"] = build_personal_position_context(data, positions)
-            else:
-                print(f"   ⚠️ 持仓信息解析失败，请检查格式")
+    if args.postgres_only and args.replay:
+        raise ReportCriticalDataMissingError("PostgreSQL-only 不能与 --replay 同时使用")
+    if args.postgres_only and args.publish_snap_ui:
+        raise ReportCriticalDataMissingError("PostgreSQL-only 不发布 snap-ui 静态数据")
+    if args.import_json_to_postgres and (args.postgres_only or args.replay):
+        raise ReportCriticalDataMissingError("--import-json-to-postgres 不能与 --postgres-only 或 --replay 同时使用")
+
+    if args.import_json_to_postgres:
+        snapshot_data, _ = load_data_snapshot(target_date)
+        if not isinstance(snapshot_data, dict) or not snapshot_data:
+            raise ReportCriticalDataMissingError(f"{target_date} 历史快照缺失，无法导入 PostgreSQL")
+        result = import_daily_report_data_to_postgres(target_date, snapshot_data)
+        print(f"🐘 PostgreSQL 复盘取证事实已导入: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+        print(f"   structured={result.get('structured_counts', {})}")
+        return 0
+
+    global _POSTGRES_ONLY_RUNTIME
+    _POSTGRES_ONLY_RUNTIME = bool(args.postgres_only)
+    previous_postgres_only_guard = os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME")
+    if args.postgres_only:
+        os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
+
+    try:
+        if args.postgres_only:
+            print(f"📅 从 PostgreSQL 读取日报事实: {target_date}")
+            data = load_daily_report_data_from_postgres(target_date)
+        elif args.replay:
+            data, target_date = replay_from_snapshot(target_date)
         else:
-            data["position_context_provided"] = False
+            print(f"📅 获取数据: {target_date}")
+            data = get_daily_data(target_date)
+        if data:
+            report_preflight = build_report_preflight(data, target_date)
+            for line in render_report_preflight_lines(report_preflight):
+                print(line)
+            if report_preflight.get("failures"):
+                raise ReportCriticalDataMissingError(
+                    "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
+                        target_date,
+                        "、".join(report_preflight.get("failures") or []),
+                        "\n".join(render_report_preflight_lines(report_preflight)),
+                    )
+                )
 
-        has_personal_positions = bool(positions) or _has_existing_position_context(data)
-        if has_personal_positions:
-            data["position_context_provided"] = True
+        run_mode = LEDGER_MODE_REPLAY if args.replay else LEDGER_MODE_FROZEN
+        if run_mode == LEDGER_MODE_FROZEN and not args.overwrite_official:
+            official_ledger = load_strategy_performance_ledger(mode=LEDGER_MODE_FROZEN)
+            official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
+            official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
+            if official_record or os.path.exists(official_report_path):
+                _audit_existing_official_report_or_raise(target_date, official_report_path)
+                run_mode = LEDGER_MODE_REPLAY
+                print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
 
-        report_outputs = build_report_outputs(
-            data,
-            target_date,
-            supplementary_perspective="",
-            has_personal_positions=has_personal_positions,
-            run_mode=run_mode,
-            position_report_text="",
-        )
-        tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
-        chanlun_html = _build_sh_index_chanlun_html_for_audit(
-            target_date,
-            tomorrow_decision=tomorrow_decision,
-        )
-        _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
-        save_report_outputs(
-            report_outputs,
-            target_date,
-            mode=run_mode,
-            overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
-        )
-        chanlun_html_path = save_sh_index_chanlun_html_report(
-            target_date,
-            root=Path(__file__).resolve().parents[1],
-            tomorrow_decision=tomorrow_decision,
-        )
-        print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
-        if positions:
-            position_strategy_report = render_position_strategy_report(
+        # 生成日报（除非指定不生成）
+        if not args.no_report and data:
+            positions = []
+            if args.position:
+                print(f"\n📊 解析持仓信息...")
+                positions = parse_position_string(args.position)
+                if positions:
+                    print(f"   ✅ 解析到 {len(positions)} 只持仓股票")
+                    data["personal_position_context"] = build_personal_position_context(data, positions)
+                else:
+                    print(f"   ⚠️ 持仓信息解析失败，请检查格式")
+            else:
+                data["position_context_provided"] = False
+
+            has_personal_positions = bool(positions) or _has_existing_position_context(data)
+            if has_personal_positions:
+                data["position_context_provided"] = True
+
+            report_outputs = build_report_outputs(
                 data,
                 target_date,
-                positions,
-                source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
+                supplementary_perspective="",
+                has_personal_positions=has_personal_positions,
+                run_mode=run_mode,
+                position_report_text="",
             )
-            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
+            tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
+            chanlun_html = _build_sh_index_chanlun_html_for_audit(
+                target_date,
+                tomorrow_decision=tomorrow_decision,
+            )
+            _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
+            save_report_outputs(
+                report_outputs,
+                target_date,
+                mode=run_mode,
+                overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
+                postgres_only=bool(args.postgres_only),
+            )
+            chanlun_html_path = save_sh_index_chanlun_html_report(
+                target_date,
+                root=Path(__file__).resolve().parents[1],
+                tomorrow_decision=tomorrow_decision,
+                fetch_minute_bars=(
+                    (lambda *_args, **_kwargs: {
+                        "success": False,
+                        "status": "postgres_only_disabled",
+                        "source": "postgres_only.no_minute_json_cache",
+                        "bars": [],
+                    })
+                    if args.postgres_only
+                    else None
+                ),
+            )
+            print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
+            if positions:
+                position_strategy_report = render_position_strategy_report(
+                    data,
+                    target_date,
+                    positions,
+                    source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
+                )
+                save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
 
-    if args.stock and data:
-        stock_report = generate_single_stock_diagnostic_markdown(
-            data,
-            target_date,
-            stock_code=args.stock,
-            stock_name=args.stock_name,
-            run_mode=run_mode,
-        )
-        save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
-    
-    # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
-    if data:
-        _save_data_snapshot(data, target_date, mode=run_mode)
-        if args.publish_snap_ui:
-            publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
+        if args.stock and data:
+            stock_report = generate_single_stock_diagnostic_markdown(
+                data,
+                target_date,
+                stock_code=args.stock,
+                stock_name=args.stock_name,
+                run_mode=run_mode,
+            )
+            save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
+
+        # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
+        if data:
+            if args.postgres_only:
+                result = save_daily_report_data_to_postgres(target_date, data)
+                print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+            else:
+                _save_data_snapshot(data, target_date, mode=run_mode)
+            if args.publish_snap_ui:
+                publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
+            else:
+                print("ℹ️ 已跳过 snap-ui 静态数据发布；如需维护前端数据，请显式传入 --publish-snap-ui。")
+
+        return 0
+    finally:
+        _POSTGRES_ONLY_RUNTIME = False
+        if previous_postgres_only_guard is None:
+            os.environ.pop("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", None)
         else:
-            print("ℹ️ 已跳过 snap-ui 静态数据发布；如需维护前端数据，请显式传入 --publish-snap-ui。")
-    
-    return 0
+            os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = previous_postgres_only_guard
 
 
 if __name__ == "__main__":
