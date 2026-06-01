@@ -13,6 +13,7 @@ class ExecutionChainOverviewNodesTest(unittest.TestCase):
         lines = render_execution_chain_overview_section(
             {
                 "csci_change": 1.23,
+                "csi1000_change": 1.56,
                 "market_trend": "强分歧修复",
                 "primary_mainline": "军工",
                 "enabled_node_keys": ["header", "market_summary"],
@@ -22,7 +23,7 @@ class ExecutionChainOverviewNodesTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("## 十三、统一执行链（狙击手视角）", rendered)
         self.assertIn("### 总-市场整体判断", rendered)
-        self.assertIn("- **基准指数**: 中证全指涨跌幅+1.23%", rendered)
+        self.assertIn("- **基准指数**: 中证全指涨跌幅+1.23%，中证1000涨跌幅+1.56%", rendered)
         self.assertNotIn("### 分-六步决策路径", rendered)
 
     def test_render_execution_chain_overview_section_does_not_call_primary_mainline_when_attack_evidence_is_chaotic(self):

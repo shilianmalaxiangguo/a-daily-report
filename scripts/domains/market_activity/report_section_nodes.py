@@ -90,6 +90,18 @@ def _first_positive_float(*values):
     return 0.0
 
 
+def _broad_index_change_pct(data):
+    values = []
+    for key in ("wind_a_alternative", "csi1000_index"):
+        payload = (data or {}).get(key) or {}
+        if not isinstance(payload, dict):
+            continue
+        value = payload.get("涨跌幅", payload.get("change_pct"))
+        if value not in (None, ""):
+            values.append(_safe_float(value))
+    return min(values) if values else 0.0
+
+
 def _build_quote_lookup(context):
     data = _data(context)
     return build_market_quote_lookup(
@@ -321,7 +333,7 @@ def build_sector_fund_inflow_node(context, node_meta=None, node_lookup=None):
             zt_pool=data.get("zt_pool") or [],
             lianban_data=data.get("lianban_data") or [],
             market_data={
-                "index_change_pct": _safe_float(data.get("wind_a_alternative", {}).get("change_pct")),
+                "index_change_pct": _broad_index_change_pct(data),
                 "up_ratio": _safe_float(data.get("market_stats", {}).get("up_count")) / max(_safe_float(data.get("market_stats", {}).get("total_count"), 1), 1) * 100,
                 "top50_turnover_share_pct": _safe_float(data.get("top50_turnover_share_pct")),
             },

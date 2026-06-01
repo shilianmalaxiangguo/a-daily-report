@@ -27,9 +27,15 @@ def build_execution_chain_market_summary_node(context, node_meta=None, node_look
     turnover_summary = context.get("mainline_turnover_summary") or {}
     attack_summary = resolve_mainline_attack_evidence_summary(context)
     csci_change = float(context.get("csci_change", 0) or 0)
-    lines = [f"- **基准指数**: 中证全指涨跌幅{csci_change:+.2f}%"]
+    csi1000_change_raw = context.get("csi1000_change")
+    csi1000_change = None if csi1000_change_raw in (None, "") else float(csi1000_change_raw or 0)
+    index_line = f"- **基准指数**: 中证全指涨跌幅{csci_change:+.2f}%"
+    if csi1000_change is not None:
+        index_line = f"{index_line}，中证1000涨跌幅{csi1000_change:+.2f}%"
+    lines = [index_line]
+    broad_selloff_change = min(csci_change, csi1000_change) if csi1000_change is not None else csci_change
     if str(turnover_summary.get("share_trend_label") or "").strip() == "逆势试攻" or (
-        _looks_like_broad_selloff(market_trend, csci_change)
+        _looks_like_broad_selloff(market_trend, broad_selloff_change)
         and attack_summary
         and attack_summary.get("attack_state") == "confirmed_attack"
     ):

@@ -345,8 +345,10 @@ from input.iwencai_runtime import (
     get_total_turnover_from_iwencai,
     get_turnover_rank_from_iwencai,
     get_wind_a_from_iwencai,
+    get_csi1000_from_iwencai,
 )
 from input.tushare_runtime import (
+    get_csi1000_from_tushare_first,
     get_margin_pressure_from_tushare_first,
     get_etf_turnover_series_from_sina_first,
     get_hot_concept_fund_flow_from_tushare_first,
@@ -3715,6 +3717,14 @@ def load_daily_report_data_from_postgres(target_date):
     data = result.get("data") if isinstance(result, dict) else {}
     if not isinstance(data, dict) or not data:
         raise ReportCriticalDataMissingError(f"{target_date} PostgreSQL 日报事实缺失，停止生成")
+    csi1000 = data.get("csi1000_index") or {}
+    if isinstance(csi1000, dict) and _safe_float(csi1000.get("price", csi1000.get("点位", 0))) > 0:
+        data_status = data.setdefault("data_status", {})
+        if isinstance(data_status, dict):
+            data_status["中证1000"] = True
+        step_status = data.setdefault("step_status", {})
+        if isinstance(step_status, dict):
+            step_status["中证1000获取"] = True
     data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True

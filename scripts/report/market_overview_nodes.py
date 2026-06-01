@@ -694,6 +694,9 @@ def _index_risk_is_weak(data):
     wind_a = data.get("wind_a_alternative") or {}
     if wind_a:
         values.append(_safe_float(wind_a.get("涨跌幅", wind_a.get("change_pct"))))
+    csi1000 = data.get("csi1000_index") or {}
+    if csi1000:
+        values.append(_safe_float(csi1000.get("涨跌幅", csi1000.get("change_pct"))))
     return any(value <= -1.5 for value in values)
 
 
@@ -848,6 +851,12 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
         change = wa.get("涨跌幅", wa.get("change_pct", 0))
         trend = _index_trend_label(wa, change)
         lines.append(f"| 中证全指 | {point:.2f} | {change:+.2f}% | {trend} |")
+    if data.get("csi1000_index"):
+        csi1000 = data["csi1000_index"]
+        point = csi1000.get("点位", csi1000.get("price", 0))
+        change = csi1000.get("涨跌幅", csi1000.get("change_pct", 0))
+        trend = _index_trend_label(csi1000, change)
+        lines.append(f"| 中证1000 | {point:.2f} | {change:+.2f}% | {trend} |")
     turnover = float(data.get("total_turnover", 0) or 0)
     zt_count = len(data.get("zt_pool", []))
     dt_count = len(data.get("dt_pool", []))

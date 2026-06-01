@@ -458,6 +458,19 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("**T-002**", numbered)
         self.assertNotIn("（PSQL）", "\n".join(numbered))
 
+    def test_number_report_tables_does_not_mark_no_sample_observation_pool(self):
+        lines = [
+            "### 龙回头观察池",
+            "| 标的 | 状态 | 观察说明 |",
+            "|------|------|----------|",
+            "| 暂无 | 无龙回头样本 | 今天没有单独观察对象 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001**")
+        self.assertNotIn("（PSQL）", "\n".join(numbered))
+
     def test_number_report_tables_marks_sector_turnover_trend_context(self):
         lines = [
             "### 板块成交占比趋势 (近5日)",

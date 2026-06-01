@@ -114,6 +114,33 @@ class MarketStructureJudgementTest(unittest.TestCase):
         self.assertTrue(any("上涨家数偏弱" in item for item in judgement["fact_basis"]))
         self.assertTrue(any("32600.00亿" in item for item in judgement["fact_basis"]))
 
+    def test_uses_csi1000_as_fallback_index_when_all_share_is_missing(self):
+        judgement = build_market_structure_judgement(
+            data={
+                "csi1000_index": {"change_pct": -2.1},
+                "market_stats": {"up_count": 947, "down_count": 4300},
+                "total_turnover": 32600.0,
+            },
+            market_research_snapshot={},
+        )
+
+        self.assertIn("同时偏弱", judgement["index_profit_relation"])
+        self.assertTrue(any("-2.10%" in item for item in judgement["fact_basis"]))
+
+    def test_uses_weaker_csi1000_when_all_share_is_milder(self):
+        judgement = build_market_structure_judgement(
+            data={
+                "wind_a_alternative": {"change_pct": -0.3},
+                "csi1000_index": {"change_pct": -2.1},
+                "market_stats": {"up_count": 947, "down_count": 4300},
+                "total_turnover": 32600.0,
+            },
+            market_research_snapshot={},
+        )
+
+        self.assertIn("同时偏弱", judgement["index_profit_relation"])
+        self.assertTrue(any("-2.10%" in item for item in judgement["fact_basis"]))
+
     def test_no_section_when_inputs_are_empty(self):
         judgement = build_market_structure_judgement(data={}, market_research_snapshot={})
 

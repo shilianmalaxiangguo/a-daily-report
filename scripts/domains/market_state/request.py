@@ -188,6 +188,54 @@ def collect_market_state_request_bundle(
             error=str(error),
         )
 
+    step_status["中证1000获取"] = False
+    emit("  3.5️⃣ 获取中证1000（Tushare 优先）...")
+    try:
+        csi1000 = request_registry["csi1000"](target_date=target_date)
+        results["csi1000_index"] = csi1000
+        csi1000_price = csi1000.get("price", csi1000.get("点位", 0))
+        csi1000_change = csi1000.get("change_pct", csi1000.get("涨跌幅", 0))
+        if csi1000_price > 0:
+            data_status["中证1000"] = True
+            step_status["中证1000获取"] = True
+            elapsed, _ = timer.record("中证1000获取", "3.5")
+            emit(f"   ✅ 中证1000: {csi1000_price:.2f}点 ({csi1000_change:+.2f}%) [⏱ {elapsed:.2f}s]")
+            _append_log(
+                module_logs,
+                "request.csi1000",
+                "success",
+                "已获取中证1000",
+                provider=_provider_from_payload(csi1000, "tushare-first"),
+                target_keys=["csi1000_index"],
+                price=csi1000_price,
+                change_pct=csi1000_change,
+            )
+        else:
+            data_status["中证1000"] = False
+            elapsed, _ = timer.record("中证1000获取(失败)", "3.5")
+            emit(f"   ❌ 中证1000获取失败 [⏱ {elapsed:.2f}s]")
+            _append_log(
+                module_logs,
+                "request.csi1000",
+                "degraded",
+                "中证1000为空或无效",
+                provider="tushare-first",
+                target_keys=["csi1000_index"],
+            )
+    except Exception as error:
+        data_status["中证1000"] = False
+        elapsed, _ = timer.record("中证1000获取(失败)", "3.5")
+        emit(f"   ❌ 中证1000获取异常: {error} [⏱ {elapsed:.2f}s]")
+        _append_log(
+            module_logs,
+            "request.csi1000",
+            "error",
+            "中证1000请求失败",
+            provider="tushare-first",
+            target_keys=["csi1000_index"],
+            error=str(error),
+        )
+
     return {
         "results": results,
         "data_status": data_status,

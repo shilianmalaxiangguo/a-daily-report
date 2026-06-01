@@ -172,6 +172,69 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             companion_html=html_text,
         )
 
+    def test_generated_report_audit_ignores_position_context_from_chanlun_companion(self):
+        import daily_report_entry_demo
+
+        full_report = "# full\n"
+        companion_html = "<h2>明日抉择</h2><table><tr><td>T0对象</td><td>无昨日持仓，不涉及T0</td></tr></table>"
+        captured = {}
+
+        def capture_audit(markdown, companion_html=None):
+            captured["markdown"] = markdown
+            captured["companion_html"] = companion_html
+            return {"passed": True, "findings": []}
+
+        with patch.object(daily_report_entry_demo, "audit_report_markdown", side_effect=capture_audit):
+            result = daily_report_entry_demo._audit_generated_report_with_chanlun_html(
+                {daily_report_entry_demo.REPORT_VARIANT_FULL: full_report},
+                companion_html=companion_html,
+            )
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(captured["markdown"], full_report)
+        self.assertEqual(captured["companion_html"], companion_html)
+
+    def test_main_treats_snapshot_position_context_as_existing_position(self):
+        import daily_report_entry_demo
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "personal_position_context": {
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有京能电力(600578)，500股；先处理旧仓",
+                }
+            },
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--replay"]), \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-05-29")), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "_save_data_snapshot"), \
+             patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+            daily_report_entry_demo.main()
+
+        self.assertTrue(build_mock.call_args.kwargs["has_personal_positions"])
+        self.assertTrue(data["position_context_provided"])
+
     def test_main_does_not_save_report_when_generated_report_audit_fails(self):
         import daily_report_entry_demo
         from daily_report_render import ReportCriticalDataMissingError
@@ -453,6 +516,32 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertEqual(service.loaded_dates, ["2026-05-29"])
         self.assertEqual(result["rows"][0]["name"], "电力")
         self.assertEqual(result["provider"], "postgresql.daily_report_facts")
+
+    def test_postgres_only_load_marks_csi1000_status_when_fact_exists(self):
+        import daily_report_entry_demo
+
+        class FakeService:
+            def load_daily_report_snapshot(self, target_date):
+                return {
+                    "source": f"postgresql://daily-report-facts/{target_date}",
+                    "field_count": 6,
+                    "data": {
+                        "data_status": {"中证1000": False},
+                        "step_status": {"中证1000获取": False},
+                        "csi1000_index": {
+                            "price": 8408.7357,
+                            "change_pct": -2.6512,
+                            "data_source": "tushare.index_daily",
+                        }
+                    },
+                }
+
+        with patch.object(daily_report_entry_demo, "_postgres_daily_report_service", return_value=FakeService()):
+            data = daily_report_entry_demo.load_daily_report_data_from_postgres("2026-05-29")
+
+        self.assertTrue(data["data_status"]["中证1000"])
+        self.assertTrue(data["step_status"]["中证1000获取"])
+        self.assertTrue(data["postgres_only"])
 
     def test_postgres_only_snapshot_guard_blocks_json_snapshot_reads(self):
         import daily_report_snapshot_io

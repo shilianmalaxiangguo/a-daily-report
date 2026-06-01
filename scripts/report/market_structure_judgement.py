@@ -30,15 +30,21 @@ def _first_index_change(data, market_research_snapshot):
     explicit = _market_structure_inputs(data, market_research_snapshot)
     if explicit.get("index_change_pct") not in (None, ""):
         return _safe_float(explicit.get("index_change_pct"))
+    candidates = []
     indices = (data or {}).get("indices") or {}
-    for name in ("创业板指", "创业板", "中证全指", "上证指数"):
+    for name in ("创业板指", "创业板", "中证全指", "中证1000", "上证指数"):
         item = indices.get(name) or {}
-        if isinstance(item, dict) and item.get("涨跌幅") not in (None, ""):
-            return _safe_float(item.get("涨跌幅"))
+        if isinstance(item, dict) and (
+            item.get("涨跌幅") not in (None, "") or item.get("change_pct") not in (None, "")
+        ):
+            candidates.append(_safe_float(item.get("涨跌幅"), item.get("change_pct")))
     wind_all = (data or {}).get("wind_a_alternative") or {}
-    if isinstance(wind_all, dict):
-        return _safe_float(wind_all.get("涨跌幅"))
-    return 0.0
+    if isinstance(wind_all, dict) and wind_all:
+        candidates.append(_safe_float(wind_all.get("涨跌幅"), wind_all.get("change_pct")))
+    csi1000 = (data or {}).get("csi1000_index") or {}
+    if isinstance(csi1000, dict) and csi1000:
+        candidates.append(_safe_float(csi1000.get("涨跌幅"), csi1000.get("change_pct")))
+    return min(candidates) if candidates else 0.0
 
 
 def _market_counts(data, market_research_snapshot):

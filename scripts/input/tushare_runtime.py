@@ -44,6 +44,7 @@ __all__ = [
     "get_total_turnover_from_tushare_first",
     "get_major_indices_from_tushare_first",
     "get_wind_a_from_tushare_first",
+    "get_csi1000_from_tushare_first",
     "get_turnover_rank_from_tushare_first",
     "get_stock_hot_rank_from_tushare_first",
     "get_limit_pool_snapshot_from_tushare_first",
@@ -2107,6 +2108,187 @@ def _rank_sector_change_rows(rows, *, rank_type="up", limit=10):
     return ranked
 
 
+def _safe_load_noarg(fetcher):
+    try:
+        return fetcher() if callable(fetcher) else {}
+    except Exception:
+        return {}
+
+
+def _stock_row_codes(row):
+    row = row or {}
+    codes = []
+    ts_code = str(_pick(row, "ts_code", "fs_code", default="")).strip().upper()
+    stock_code = _clean_code(_pick(row, "stock_code", "code", "ts_code", default=""))
+    for code in (stock_code, ts_code):
+        if code and code not in codes:
+            codes.append(code)
+    if ts_code and "." in ts_code:
+        compact = _clean_code(ts_code)
+        if compact and compact not in codes:
+            codes.append(compact)
+    return codes
+
+
+def _industry_from_stock_row(row, *, industry_map=None, basic_map=None):
+    row_industry = _clean_text(_pick(row, "industry", "所属行业", "sector", default=""))
+    if _is_valid_sector_label(row_industry):
+        return row_industry
+    for code in _stock_row_codes(row):
+        industry = _clean_text((industry_map or {}).get(code))
+        if _is_valid_sector_label(industry):
+            return industry
+        basic_item = (basic_map or {}).get(code)
+        if isinstance(basic_item, dict):
+            industry = _clean_text(basic_item.get("industry"))
+            if _is_valid_sector_label(industry):
+                return industry
+    return ""
+
+
+def _stock_daily_amount_yi(row):
+    row = row or {}
+    for key in ("amount_yi", "turnover_yi", "turnover"):
+        if row.get(key) not in (None, ""):
+            return _safe_float(row.get(key))
+    if row.get("amount_raw_qianyuan") not in (None, ""):
+        return _safe_float(row.get("amount_raw_qianyuan")) / 100000.0
+    if row.get("amount") not in (None, ""):
+        return _safe_float(row.get("amount")) / 100000.0
+    return 0.0
+
+
+def _stock_daily_change_pct(row):
+    return _safe_float(_pick(row, "pct_chg", "pct_change", "change_pct", "zdf", default=0.0))
+
+
+def _aggregate_stock_daily_change_by_industry(target_date, daily_rows, *, industry_map=None, basic_map=None):
+    trade_date = normalize_kline_date_str(target_date)
+    buckets = {}
+    for row in daily_rows or []:
+        industry = _industry_from_stock_row(row, industry_map=industry_map, basic_map=basic_map)
+        if not industry:
+            continue
+        amount_yi = _stock_daily_amount_yi(row)
+        weight = amount_yi if amount_yi > 0 else 1.0
+        change_pct = _stock_daily_change_pct(row)
+        bucket = buckets.setdefault(
+            industry,
+            {
+                "change_weighted_sum": 0.0,
+                "change_weight": 0.0,
+                "turnover_yi": 0.0,
+                "stock_count": 0,
+                "up_count": 0,
+                "down_count": 0,
+            },
+        )
+        bucket["change_weighted_sum"] += change_pct * weight
+        bucket["change_weight"] += weight
+        bucket["turnover_yi"] += max(amount_yi, 0.0)
+        bucket["stock_count"] += 1
+        if change_pct > 0:
+            bucket["up_count"] += 1
+        elif change_pct < 0:
+            bucket["down_count"] += 1
+
+    rows = []
+    for industry, bucket in buckets.items():
+        weight = bucket.get("change_weight") or 1.0
+        change_pct = bucket.get("change_weighted_sum", 0.0) / weight
+        rows.append(
+            {
+                "name": industry,
+                "code": "",
+                "change_pct": round(change_pct, 6),
+                "zdf": round(change_pct, 6),
+                "turnover_yi": round(bucket.get("turnover_yi", 0.0), 6),
+                "stock_count": int(bucket.get("stock_count", 0)),
+                "up_count": int(bucket.get("up_count", 0)),
+                "down_count": int(bucket.get("down_count", 0)),
+                "data_source": "tushare.daily.industry_aggregate",
+                "trade_date": trade_date,
+                "source_date": trade_date,
+                "query_date": trade_date,
+            }
+        )
+    return rows
+
+
+def _moneyflow_value_for_stock_row(stock_moneyflow, row):
+    missing = object()
+    for code in _stock_row_codes(row):
+        value = (stock_moneyflow or {}).get(code, missing)
+        if value is not missing and value not in (None, ""):
+            return _safe_float(value)
+    return None
+
+
+def _aggregate_stock_moneyflow_by_industry(target_date, stock_moneyflow, daily_rows, *, industry_map=None, basic_map=None):
+    trade_date = normalize_kline_date_str(target_date)
+    buckets = {}
+    for row in daily_rows or []:
+        industry = _industry_from_stock_row(row, industry_map=industry_map, basic_map=basic_map)
+        if not industry:
+            continue
+        net_inflow = _moneyflow_value_for_stock_row(stock_moneyflow, row)
+        if net_inflow is None:
+            continue
+        amount_yi = _stock_daily_amount_yi(row)
+        weight = amount_yi if amount_yi > 0 else 1.0
+        change_pct = _stock_daily_change_pct(row)
+        bucket = buckets.setdefault(
+            industry,
+            {
+                "net_amount": 0.0,
+                "positive_amount": 0.0,
+                "negative_amount": 0.0,
+                "change_weighted_sum": 0.0,
+                "change_weight": 0.0,
+                "turnover_yi": 0.0,
+                "stock_count": 0,
+                "matched_stock_count": 0,
+            },
+        )
+        bucket["net_amount"] += net_inflow
+        if net_inflow >= 0:
+            bucket["positive_amount"] += net_inflow
+        else:
+            bucket["negative_amount"] += abs(net_inflow)
+        bucket["change_weighted_sum"] += change_pct * weight
+        bucket["change_weight"] += weight
+        bucket["turnover_yi"] += max(amount_yi, 0.0)
+        bucket["stock_count"] += 1
+        bucket["matched_stock_count"] += 1
+
+    rows = []
+    for industry, bucket in buckets.items():
+        weight = bucket.get("change_weight") or 1.0
+        change_pct = bucket.get("change_weighted_sum", 0.0) / weight
+        net_amount = bucket.get("net_amount", 0.0)
+        rows.append(
+            {
+                "name": industry,
+                "code": "",
+                "zljlr": round(net_amount, 6),
+                "net_amount": round(net_amount, 6),
+                "net_inflow": round(net_amount, 6),
+                "change_pct": round(change_pct, 6),
+                "zdf": round(change_pct, 6),
+                "net_buy_amount": round(bucket.get("positive_amount", 0.0), 6),
+                "net_sell_amount": round(bucket.get("negative_amount", 0.0), 6),
+                "turnover_yi": round(bucket.get("turnover_yi", 0.0), 6),
+                "stock_count": int(bucket.get("stock_count", 0)),
+                "matched_stock_count": int(bucket.get("matched_stock_count", 0)),
+                "data_source": "tushare.moneyflow+daily.industry_aggregate",
+                "trade_date": trade_date,
+                "source_date": trade_date,
+                "query_date": trade_date,
+            }
+        )
+    return rows
+
+
 def get_sector_change_rank_from_tushare_first(
     target_date=None,
     *,
@@ -2114,6 +2296,9 @@ def get_sector_change_rank_from_tushare_first(
     limit=10,
     fetch_tushare_ths_daily_fn=None,
     fetch_tushare_ths_index_map_fn=None,
+    fetch_stock_daily_turnover_records_fn=None,
+    fetch_stock_basic_map_fn=None,
+    fetch_stock_industry_map_fn=None,
     legacy_get_sector_change_fn=None,
 ):
     daily_fetcher = fetch_tushare_ths_daily_fn or fetch_tushare_ths_daily
@@ -2141,6 +2326,23 @@ def get_sector_change_rank_from_tushare_first(
                 rank_type=rank_type,
                 limit=limit,
             )
+
+    daily_stock_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    try:
+        daily_rows = daily_stock_fetcher(target_date) if callable(daily_stock_fetcher) else []
+    except Exception:
+        daily_rows = []
+    if daily_rows:
+        basic_map = _safe_load_noarg(fetch_stock_basic_map_fn or fetch_stock_basic_map)
+        industry_map = _safe_load_noarg(fetch_stock_industry_map_fn) if fetch_stock_industry_map_fn else {}
+        aggregate_rows = _aggregate_stock_daily_change_by_industry(
+            target_date,
+            daily_rows,
+            industry_map=industry_map,
+            basic_map=basic_map,
+        )
+        if aggregate_rows:
+            return _rank_sector_change_rows(aggregate_rows, rank_type=rank_type, limit=limit)
 
     if callable(legacy_get_sector_change_fn):
         return legacy_get_sector_change_fn(rank_type=rank_type, limit=limit, target_date=target_date) or []
@@ -2174,6 +2376,10 @@ def get_sector_fund_flow_from_tushare_first(
     *,
     limit=50,
     fetch_tushare_sector_flow_fn=None,
+    fetch_stock_moneyflow_map_fn=None,
+    fetch_stock_daily_turnover_records_fn=None,
+    fetch_stock_basic_map_fn=None,
+    fetch_stock_industry_map_fn=None,
     legacy_get_sector_fund_flow_fn=None,
 ):
     fetcher = fetch_tushare_sector_flow_fn or fetch_tushare_sector_flow
@@ -2195,6 +2401,40 @@ def get_sector_fund_flow_from_tushare_first(
             }
     except Exception:
         pass
+
+    moneyflow_fetcher = fetch_stock_moneyflow_map_fn or fetch_stock_moneyflow_map
+    daily_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    try:
+        stock_moneyflow = moneyflow_fetcher(target_date) if callable(moneyflow_fetcher) else {}
+    except Exception:
+        stock_moneyflow = {}
+    try:
+        daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
+    except Exception:
+        daily_rows = []
+    if stock_moneyflow and daily_rows:
+        basic_map = _safe_load_noarg(fetch_stock_basic_map_fn or fetch_stock_basic_map)
+        industry_map = _safe_load_noarg(fetch_stock_industry_map_fn) if fetch_stock_industry_map_fn else {}
+        rows = _aggregate_stock_moneyflow_by_industry(
+            target_date,
+            stock_moneyflow,
+            daily_rows,
+            industry_map=industry_map,
+            basic_map=basic_map,
+        )
+        if rows:
+            inflow = sorted(rows, key=lambda item: (_safe_float(item.get("net_amount")), item.get("name") or ""), reverse=True)
+            outflow = sorted(rows, key=lambda item: (_safe_float(item.get("net_amount")), item.get("name") or ""))
+            cap = max(int(limit or 50), 1)
+            return {
+                "inflow": inflow[:cap],
+                "outflow": outflow[:cap],
+                "provider": "tushare.moneyflow+daily.industry_aggregate",
+                "fallback_used": True,
+                "trade_date": normalize_kline_date_str(target_date),
+                "source_date": normalize_kline_date_str(target_date),
+                "query_date": normalize_kline_date_str(target_date),
+            }
 
     if callable(legacy_get_sector_fund_flow_fn):
         fallback = legacy_get_sector_fund_flow_fn(target_date=target_date, limit=limit) or {}
@@ -2490,6 +2730,23 @@ def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None):
     }
 
 
+def _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows):
+    fallback = dict(fallback or {})
+    fallback_stats = dict(fallback.get("market_stats") or {})
+    daily_stats = _market_stats_from_daily_rows(
+        daily_rows or [],
+        fallback_stats.get("zt_count", len(fallback.get("zt_pool") or [])),
+        fallback_stats.get("dt_count", len(fallback.get("dt_pool") or [])),
+    )
+    if daily_stats.get("up_count") > 0 and daily_stats.get("down_count") > 0:
+        fallback_stats["up_count"] = daily_stats["up_count"]
+        fallback_stats["down_count"] = daily_stats["down_count"]
+        fallback_stats.setdefault("zt_count", daily_stats["zt_count"])
+        fallback_stats.setdefault("dt_count", daily_stats["dt_count"])
+    fallback["market_stats"] = fallback_stats
+    return fallback
+
+
 def get_limit_pool_snapshot_from_tushare_first(
     target_date=None,
     *,
@@ -2501,6 +2758,7 @@ def get_limit_pool_snapshot_from_tushare_first(
 ):
     limit_fetcher = fetch_tushare_limit_rows_fn or fetch_tushare_limit_rows
     daily_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
+    daily_rows = []
     try:
         rows = limit_fetcher(target_date) or []
         if not rows:
@@ -2536,12 +2794,36 @@ def get_limit_pool_snapshot_from_tushare_first(
 
     if callable(legacy_get_limit_pool_snapshot_fn):
         fallback = legacy_get_limit_pool_snapshot_fn(target_date=target_date) or {}
+        if not daily_rows:
+            try:
+                daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
+            except Exception:
+                daily_rows = []
+        fallback = _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows)
         return {
             **fallback,
             "provider": "legacy.limit_pool_snapshot",
             "fallback_used": True,
             "source_status": "fallback",
             "source_error": fallback.get("source_error", "") if isinstance(fallback, dict) else "",
+        }
+    if not daily_rows:
+        try:
+            daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
+        except Exception:
+            daily_rows = []
+    daily_stats = _market_stats_from_daily_rows(daily_rows or [], 0, 0)
+    if daily_stats.get("up_count") > 0 and daily_stats.get("down_count") > 0:
+        return {
+            "zt_pool": [],
+            "dt_pool": [],
+            "limit_up_codes": set(),
+            "limit_down_codes": set(),
+            "market_stats": daily_stats,
+            "provider": "tushare.daily",
+            "fallback_used": True,
+            "source_status": "daily_breadth_only",
+            "source_error": "limit_pool_empty",
         }
     return {
         "zt_pool": [],
@@ -2640,25 +2922,57 @@ def get_major_indices_from_tushare_first(
     return fallback or {}
 
 
-def get_wind_a_from_tushare_first(
+def _get_single_index_from_tushare_first(
+    name,
+    code,
     target_date=None,
     *,
     fetch_daily_price_bars_fn=None,
-    legacy_get_wind_a_fn=None,
+    legacy_get_index_fn=None,
 ):
     fetcher = fetch_daily_price_bars_fn or fetch_daily_price_bars
     start_date, end_date = _index_query_window(target_date)
 
     try:
         payload = _latest_index_payload(
-            "中证全指",
-            "000985",
-            fetcher("000985", start_date, end_date, is_index=True),
+            name,
+            code,
+            fetcher(code, start_date, end_date, is_index=True),
         )
         if payload and _safe_float(payload.get("price")) > 0:
             return payload
     except Exception:
         pass
 
-    fallback = _fallback_call(legacy_get_wind_a_fn, target_date)
+    fallback = _fallback_call(legacy_get_index_fn, target_date)
     return fallback or {"price": 0, "change_pct": 0}
+
+
+def get_wind_a_from_tushare_first(
+    target_date=None,
+    *,
+    fetch_daily_price_bars_fn=None,
+    legacy_get_wind_a_fn=None,
+):
+    return _get_single_index_from_tushare_first(
+        "中证全指",
+        "000985",
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        legacy_get_index_fn=legacy_get_wind_a_fn,
+    )
+
+
+def get_csi1000_from_tushare_first(
+    target_date=None,
+    *,
+    fetch_daily_price_bars_fn=None,
+    legacy_get_csi1000_fn=None,
+):
+    return _get_single_index_from_tushare_first(
+        "中证1000",
+        "000852",
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        legacy_get_index_fn=legacy_get_csi1000_fn,
+    )

@@ -1143,6 +1143,7 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "turnover_data",
     "indices",
     "wind_a_alternative",
+    "csi1000_index",
     "turnover_rank",
     "market_stats",
     "hot_rank_top50",

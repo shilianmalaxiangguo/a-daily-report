@@ -261,6 +261,36 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("quant_environment", exported)
         self.assertIn("### 板块成交占比趋势 (近5日)", "\n".join(result["lines"]))
 
+    def test_sector_fund_flow_quant_environment_uses_weaker_csi1000_rhythm(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [{"name": "电力一号", "code": "000001", "sector": "电力"}],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "电力", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [],
+                },
+                "lianban_data": [{"name": "电力一号", "code": "000001", "sector": "电力", "height": 3}],
+                "market_stats": {"up_count": 1000, "total_count": 5000},
+                "top50_turnover_share_pct": 22.5,
+                "wind_a_alternative": {"change_pct": 1.5},
+                "csi1000_index": {"change_pct": -2.1},
+            },
+            target_date="2026-05-29",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "电力",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow"],
+        )
+
+        exported = result["exports"]["sector_internal_analysis"]["quant_environment"]
+
+        self.assertFalse(exported["is_quant_dominant"])
+        self.assertNotIn("窄池子进攻", [item["mode"] for item in exported["modes"]])
+
     def test_build_market_activity_report_sections_can_render_lhb_buy_without_sell(self):
         result = build_market_activity_report_sections(
             data={

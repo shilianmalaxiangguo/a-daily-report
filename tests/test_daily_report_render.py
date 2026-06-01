@@ -307,6 +307,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 12345.67,
@@ -358,6 +359,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "整合热榜": False,
             },
@@ -390,6 +392,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "大盘涨跌统计": True,
             },
@@ -420,6 +423,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "热度前50个股": False,
             },
@@ -455,6 +459,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 12345.67,
@@ -473,6 +478,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "step_status": {"连板梯队提取": True},
@@ -497,6 +503,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "整合热榜": True,
                 "预期日历": True,
@@ -616,6 +623,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 12345.67,
@@ -650,6 +658,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 29170.74,
@@ -684,6 +693,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "创新高趋势反馈": False,
             },
@@ -718,6 +728,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "创新高趋势反馈": True,
             },
@@ -784,6 +795,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "Top50成交额占比趋势": False,
             },
@@ -814,6 +826,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "融资承接压力": False,
             },
@@ -844,6 +857,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "ETF两市成交额趋势": False,
             },
@@ -874,6 +888,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "step_status": {"龙虎榜数据获取": False},
@@ -904,6 +919,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "概念资金流向": False,
             },
@@ -934,6 +950,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "雪球A股24小时热榜": False,
             },
@@ -968,6 +985,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "雪球热榜AI解释": False,
             },
@@ -1002,6 +1020,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
                 "价格带风格趋势": False,
             },
@@ -1032,6 +1051,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "step_status": {"龙虎榜数据获取": True},
@@ -1062,6 +1082,7 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 12345.67,
@@ -1110,10 +1131,12 @@ class DailyReportRenderTest(unittest.TestCase):
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
+                "中证1000": True,
                 "成交额排名": True,
             },
             "total_turnover": 12345.67,
             "wind_a_alternative": {"price": 6686.86, "change_pct": 1.2, "data_source": "tushare.index_daily"},
+            "csi1000_index": {"price": 6123.45, "change_pct": 1.1, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"} for _ in range(50)],
             "module_logs": [
                 {
@@ -1125,6 +1148,11 @@ class DailyReportRenderTest(unittest.TestCase):
                     "step": "request.wind_a",
                     "status": "success",
                     "details": {"provider": "tushare.index_daily", "price": 6686.86},
+                },
+                {
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "details": {"provider": "tushare.index_daily", "price": 6123.45},
                 },
                 {
                     "step": "request.turnover_rank",
@@ -1141,6 +1169,7 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertIn("日报关键数据 preflight: success", lines[0])
         self.assertTrue(any("两市成交额" in line and "tushare.daily" in line and "12345.67" in line for line in lines))
         self.assertTrue(any("中证全指" in line and "tushare.index_daily" in line and "6686.86" in line for line in lines))
+        self.assertTrue(any("中证1000" in line and "tushare.index_daily" in line and "6123.45" in line for line in lines))
         self.assertTrue(any("成交额排名" in line and "tushare.daily" in line and "50" in line for line in lines))
 
     def test_decision_preflight_counts_xuangubao_plates_when_news_count_is_zero(self):

@@ -21,6 +21,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
                     "创业板指": {"点位": 2123.45, "涨跌幅": -1.35},
                 },
                 "wind_a_alternative": {"点位": 5432.1, "涨跌幅": 0.31},
+                "csi1000_index": {"点位": 6123.4, "涨跌幅": 1.10},
                 "total_turnover": 16888.0,
                 "zt_pool": [{"code": "000001"}] * 35,
                 "dt_pool": [{"code": "000002"}] * 3,
@@ -34,6 +35,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("### 1. 指数与市场底色", rendered)
         self.assertIn("| 指标 | 数值 | 涨跌幅 | 解读 |", rendered)
         self.assertIn("| 上证指数 | 3200.12 | +0.52% |", rendered)
+        self.assertIn("| 中证1000 | 6123.40 | +1.10% |", rendered)
         self.assertIn("| 两市成交额 | 16888.00亿 | - |", rendered)
         self.assertIn("| 涨停 / 跌停 | 35 / 3 | - |", rendered)
         self.assertIn("### 2. 市场状态结论", rendered)

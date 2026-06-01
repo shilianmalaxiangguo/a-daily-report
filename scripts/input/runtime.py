@@ -890,6 +890,9 @@ def _run_input_runtime_legacy_body(target_date=None):
         if results.get('wind_a_alternative'):
             wa = results['wind_a_alternative']
             print(f"🌐 中证全指(Wind全A平替): {wa.get('点位', wa.get('price', 0)):.2f}点 ({wa.get('涨跌幅', wa.get('change_pct', 0)):+.2f}%)")
+        if results.get('csi1000_index'):
+            csi1000 = results['csi1000_index']
+            print(f"🌐 中证1000: {csi1000.get('点位', csi1000.get('price', 0)):.2f}点 ({csi1000.get('涨跌幅', csi1000.get('change_pct', 0)):+.2f}%)")
         
         if results.get('hot_rank_top30'):
             print(f"🔥 热度前50: {len(results['hot_rank_top30'])} 只")

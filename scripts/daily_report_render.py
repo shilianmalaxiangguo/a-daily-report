@@ -28,12 +28,14 @@ REPORT_VARIANT_SUMMARY = "summary"
 CRITICAL_REPORT_DATA_FIELDS = (
     ("两市成交额", "total_turnover"),
     ("中证全指", "wind_a_alternative"),
+    ("中证1000", "csi1000_index"),
     ("成交额排名", "turnover_rank"),
     ("大盘涨跌统计", "market_stats"),
     ("热度前50个股", "hot_rank_top50"),
 )
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
     "wind_a_alternative": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
+    "csi1000_index": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
     "turnover_rank": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
 }
 DECISION_CRITICAL_REPORT_DATA_FIELDS = (
@@ -137,8 +139,10 @@ def _critical_payload_valid(data, payload_key):
     data = data or {}
     if payload_key == "total_turnover":
         return _safe_float(data.get("total_turnover")) > 0
-    if payload_key == "wind_a_alternative":
+    if payload_key in {"wind_a_alternative", "csi1000_index"}:
         payload = data.get("wind_a_alternative") or {}
+        if payload_key == "csi1000_index":
+            payload = data.get("csi1000_index") or {}
         if not isinstance(payload, dict):
             return False
         return _safe_float(payload.get("price", payload.get("点位", 0))) > 0
@@ -522,8 +526,8 @@ def _build_registered_status_failure_checks(data, known_labels=None):
 def _critical_value(data, payload_key):
     if payload_key == "total_turnover":
         return round(_safe_float(data.get("total_turnover")), 2)
-    if payload_key == "wind_a_alternative":
-        payload = data.get("wind_a_alternative") or {}
+    if payload_key in {"wind_a_alternative", "csi1000_index"}:
+        payload = data.get(payload_key) or {}
         if isinstance(payload, dict):
             return round(_safe_float(payload.get("price", payload.get("点位", 0))), 2)
         return 0.0
@@ -551,6 +555,7 @@ def build_report_preflight(data, target_date):
     step_by_payload_key = {
         "total_turnover": "request.total_turnover",
         "wind_a_alternative": "request.wind_a",
+        "csi1000_index": "request.csi1000",
         "turnover_rank": "request.turnover_rank",
         "market_stats": "request.market_stats",
         "hot_rank_top50": "request.hot_rank.primary",

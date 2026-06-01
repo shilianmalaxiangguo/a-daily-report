@@ -1183,6 +1183,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     "outflow": [{"name": "半导体", "zljlr": -6.5, "net_buy_amount": 1, "net_sell_amount": 7}],
                 },
                 "indices": {"000001.SH": {"name": "上证指数", "price": 4068.57}},
+                "csi1000_index": {"name": "中证1000", "code": "000852", "price": 6123.4, "change_pct": 1.1},
                 "exchange_monitor_today": [
                     {
                         "code": "000001",
@@ -1302,6 +1303,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         )
         field_paths = {row[1] for row in inserted}
         self.assertTrue(any("000001.SH" in path for path in field_paths))
+        self.assertTrue(any("csi1000_index" in path and "price" in path for path in field_paths))
         self.assertFalse(any("huge_cache" in str(row) for row in inserted))
         self.assertFalse(any("runtime.cache" in str(row) for row in inserted))
         self.assertFalse(any("appendix_b" in str(row) for row in inserted))
@@ -1356,6 +1358,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ("k:17:concept_fund_flow/k:4:rows/#0/k:4:name", "火力发电", None, None, "text"),
             ("k:17:concept_fund_flow/k:4:rows/#0/k:10:net_inflow", "", 3.2, None, "number"),
             ("k:7:indices/k:9:000001.SH/k:5:price", "", 4068.57, None, "number"),
+            ("k:13:csi1000_index/k:4:name", "中证1000", None, None, "text"),
+            ("k:13:csi1000_index/k:5:price", "", 6123.4, None, "number"),
             ("k:22:exchange_monitor_today/#0/k:4:code", "000001", None, None, "text"),
             ("k:24:exchange_monitor_nextday/#0/k:4:code", "000002", None, None, "text"),
         ], [], []]
@@ -1367,9 +1371,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["turnover_rank"][0]["code"], "601991")
         self.assertEqual(loaded["data"]["market_stats"]["up_count"], 1542)
         self.assertEqual(loaded["data"]["indices"]["000001.SH"]["price"], 4068.57)
+        self.assertEqual(loaded["data"]["csi1000_index"]["price"], 6123.4)
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
-        self.assertEqual(loaded["field_count"], 13)
+        self.assertEqual(loaded["field_count"], 15)
 
     def test_load_daily_report_snapshot_enriches_hot_sector_history_from_structured_tables(self):
         conn = _FakeConnection()

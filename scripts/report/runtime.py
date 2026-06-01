@@ -281,6 +281,7 @@ _PSQL_STRUCTURED_TABLE_CELL_PLACEHOLDERS = {
     "待验证",
     "待二次验证",
     "待确认",
+    "暂无",
     "主线待确认",
     "主线待累计",
     "暂无确认主线",
@@ -294,6 +295,11 @@ _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS = (
     "数据暂缺",
     "后续日报自动累计",
     "暂无请求日志",
+    "暂无样本",
+    "无观察样本",
+    "无跟踪样本",
+    "无龙回头样本",
+    "没有单独观察对象",
     "今天开始记录",
     "数据不足",
     "关键数据不完整",
@@ -356,8 +362,12 @@ def _table_row_has_structured_fact(row):
         r"[+-]?\d+(?:\.\d+)?(?:亿|万|pct|日|分)",
     )
     has_factual_marker = any(re.search(pattern, joined) for pattern in factual_markers)
-    if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS) and not has_factual_marker:
-        return False
+    if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS):
+        no_sample_markers = ("暂无样本", "无观察样本", "无跟踪样本", "无龙回头样本", "没有单独观察对象")
+        if any(marker in joined for marker in no_sample_markers):
+            return False
+        if not has_factual_marker:
+            return False
     if has_factual_marker:
         return True
     meaningful_cells = [
@@ -3424,6 +3434,9 @@ def _render_markdown_report_legacy_body(
     csci_change = 0
     if data.get('wind_a_alternative'):
         csci_change = data['wind_a_alternative'].get('涨跌幅', data['wind_a_alternative'].get('change_pct', 0))
+    csi1000_change = None
+    if data.get('csi1000_index'):
+        csi1000_change = data['csi1000_index'].get('涨跌幅', data['csi1000_index'].get('change_pct', 0))
     
     # 主线退出分析和最终执行条件已在前面构建，最终前台口径会在执行候选确定后统一。
     print(f"   ✅ 龙头股票: {len(dragon_stocks)} 只")
@@ -3437,6 +3450,7 @@ def _render_markdown_report_legacy_body(
         render_execution_chain_overview_section(
             {
                 "csci_change": csci_change,
+                "csi1000_change": csi1000_change,
                 "market_trend": market_trend,
                 "primary_mainline": primary_mainline,
                 "mainline_turnover_summary": data.get("mainline_turnover_summary", {}) or {},

@@ -28,6 +28,7 @@ from input.tushare_runtime import (
     get_top50_turnover_share_series_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
+    get_csi1000_from_tushare_first,
 )
 from market_data.tushare_service import fetch_daily_price_bars
 
@@ -50,6 +51,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_tushare_first": lambda *, target_date: calls.append("tushare_total") or 100.0,
             "get_major_indices_from_tushare_first": lambda *, target_date: calls.append("tushare_indices") or {},
             "get_wind_a_from_tushare_first": lambda *, target_date: calls.append("tushare_wind_a") or {},
+            "get_csi1000_from_tushare_first": lambda *, target_date: calls.append("tushare_csi1000") or {},
             "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_turnover_rank") or [],
             "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_hot_rank") or [],
             "get_limit_pool_snapshot_from_tushare_first": lambda *, target_date: calls.append("tushare_limit_pool") or {},
@@ -68,6 +70,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_iwencai": lambda *, target_date: calls.append("legacy_total") or 0.0,
             "get_major_indices_from_iwencai": lambda *, target_date: calls.append("legacy_indices") or {},
             "get_wind_a_from_iwencai": lambda *, target_date: calls.append("legacy_wind_a") or {},
+            "get_csi1000_from_iwencai": lambda *, target_date: calls.append("legacy_csi1000") or {},
             "get_turnover_rank_from_iwencai": lambda *, target_date, limit=50: calls.append("legacy_turnover_rank") or [],
             "fetch_ths_hot_stock": lambda num=50: calls.append("legacy_ths_hot") or [],
             "get_legacy_limit_pool_snapshot": lambda target_date=None: calls.append("legacy_limit_pool") or {},
@@ -82,6 +85,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(registry["total_turnover"](target_date="2026-05-13"), 100.0)
         registry["major_indices"](target_date="2026-05-13")
         registry["wind_a"](target_date="2026-05-13")
+        registry["csi1000"](target_date="2026-05-13")
         registry["turnover_rank"](target_date="2026-05-13", limit=50)
         registry["stock_hot_rank"](target_date="2026-05-13", limit=50)
         registry["limit_pool_snapshot"](target_date="2026-05-13")
@@ -104,6 +108,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 "tushare_total",
                 "tushare_indices",
                 "tushare_wind_a",
+                "tushare_csi1000",
                 "tushare_turnover_rank",
                 "tushare_hot_rank",
                 "tushare_limit_pool",
@@ -133,6 +138,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_tushare_first": lambda *, target_date: 100.0,
             "get_major_indices_from_tushare_first": lambda *, target_date: {},
             "get_wind_a_from_tushare_first": lambda *, target_date: {},
+            "get_csi1000_from_tushare_first": lambda *, target_date: {},
             "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: [],
             "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=30: [],
             "get_limit_pool_snapshot_from_tushare_first": lambda *, target_date: {},
@@ -1813,6 +1819,56 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(calls[0][0], "000985.CSI")
         self.assertEqual(rows[0]["data_source"], "tushare.index_daily")
 
+    def test_tushare_index_daily_uses_sh_code_for_csi1000(self):
+        calls = []
+
+        class FakePro:
+            def index_daily(self, ts_code="", start_date="", end_date=""):
+                calls.append((ts_code, start_date, end_date))
+                return [
+                    {
+                        "trade_date": "20260513",
+                        "open": 6100,
+                        "high": 6200,
+                        "low": 6090,
+                        "close": 6181,
+                        "vol": 100,
+                    }
+                ]
+
+        rows = fetch_daily_price_bars(
+            "000852",
+            "2026-05-13",
+            "2026-05-13",
+            is_index=True,
+            ts_module=object(),
+            pro=FakePro(),
+        )
+
+        self.assertEqual(calls[0][0], "000852.SH")
+        self.assertEqual(rows[0]["data_source"], "tushare.index_daily")
+
+    def test_csi1000_uses_tushare_index_daily_primary(self):
+        calls = []
+
+        result = get_csi1000_from_tushare_first(
+            "2026-05-13",
+            fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: calls.append(
+                (code, start_date, end_date, is_index)
+            )
+            or [
+                {"date": "2026-05-12", "close": 6120.0},
+                {"date": "2026-05-13", "close": 6181.2},
+            ],
+        )
+
+        self.assertEqual(calls[0][0], "000852")
+        self.assertTrue(calls[0][3])
+        self.assertEqual(result["name"], "中证1000")
+        self.assertEqual(result["code"], "000852")
+        self.assertEqual(result["data_source"], "tushare.index_daily")
+        self.assertAlmostEqual(result["change_pct"], 1.0)
+
     def test_turnover_rank_uses_tushare_daily_before_legacy_fallback(self):
         fallback_calls = []
 
@@ -2035,6 +2091,41 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["zt_pool"][0]["名称"], "旧涨停")
         self.assertEqual(fallback_calls, ["2026-05-13"])
 
+    def test_limit_pool_snapshot_keeps_daily_market_breadth_when_limit_pool_falls_back(self):
+        result = get_limit_pool_snapshot_from_tushare_first(
+            "2026-05-29",
+            fetch_tushare_limit_rows_fn=lambda trade_date: [],
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"stock_code": "000001", "pct_chg": 2.5},
+                {"stock_code": "000002", "pct_chg": 0.0},
+                {"stock_code": "000003", "pct_chg": -1.2},
+            ],
+            legacy_get_limit_pool_snapshot_fn=lambda target_date=None: {
+                "zt_pool": [{"代码": "000001", "名称": "旧涨停"}],
+                "dt_pool": [{"代码": "000003", "名称": "旧跌停"}],
+                "market_stats": {"zt_count": 1, "dt_count": 1},
+            },
+            retry_sleep_fn=lambda seconds: None,
+        )
+
+        self.assertEqual(result["provider"], "legacy.limit_pool_snapshot")
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(result["market_stats"], {"up_count": 1, "down_count": 1, "zt_count": 1, "dt_count": 1})
+
+    def test_limit_pool_snapshot_returns_daily_market_breadth_when_no_fallback_is_bound(self):
+        result = get_limit_pool_snapshot_from_tushare_first(
+            "2026-05-29",
+            fetch_tushare_limit_rows_fn=lambda trade_date: [],
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"stock_code": "000001", "pct_chg": 2.5},
+                {"stock_code": "000002", "pct_chg": -1.2},
+            ],
+            retry_sleep_fn=lambda seconds: None,
+        )
+
+        self.assertEqual(result["market_stats"], {"up_count": 1, "down_count": 1, "zt_count": 0, "dt_count": 0})
+        self.assertEqual(result["source_status"], "daily_breadth_only")
+
     def test_limit_pool_snapshot_retries_once_when_tushare_rows_are_empty(self):
         fetch_calls = []
 
@@ -2157,6 +2248,37 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(down[0]["data_source"], "tushare.ths_daily")
         self.assertEqual(fallback_calls, [])
 
+    def test_sector_change_rank_falls_back_to_stock_daily_industry_aggregate(self):
+        fallback_calls = []
+
+        result = get_sector_change_rank_from_tushare_first(
+            "2026-05-29",
+            rank_type="up",
+            limit=2,
+            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(RuntimeError("no ths_daily permission")),
+            fetch_tushare_ths_index_map_fn=lambda: {},
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"stock_code": "600011", "ts_code": "600011.SH", "pct_chg": 2.0, "amount_yi": 100.0},
+                {"stock_code": "000001", "ts_code": "000001.SZ", "pct_chg": -1.0, "amount_yi": 200.0},
+                {"stock_code": "000002", "ts_code": "000002.SZ", "pct_chg": 4.0, "amount_yi": 50.0},
+            ],
+            fetch_stock_basic_map_fn=lambda: {
+                "600011": {"industry": "电力", "name": "华能国际"},
+                "600011.SH": {"industry": "电力", "name": "华能国际"},
+                "000001": {"industry": "银行", "name": "平安银行"},
+                "000002": {"industry": "电力", "name": "万科A"},
+            },
+            legacy_get_sector_change_fn=lambda rank_type="up", limit=10, target_date=None: fallback_calls.append(rank_type) or [],
+        )
+
+        self.assertEqual([item["name"] for item in result], ["电力", "银行"])
+        self.assertAlmostEqual(result[0]["change_pct"], 2.666667)
+        self.assertEqual(result[0]["turnover_yi"], 150.0)
+        self.assertEqual(result[0]["stock_count"], 2)
+        self.assertEqual(result[0]["data_source"], "tushare.daily.industry_aggregate")
+        self.assertEqual(result[0]["trade_date"], "2026-05-29")
+        self.assertEqual(fallback_calls, [])
+
     def test_sector_fund_flow_uses_tushare_moneyflow_ind_before_tencent_fallback(self):
         fallback_calls = []
 
@@ -2175,6 +2297,43 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual([item["name"] for item in result["outflow"]], ["工业金属", "证券"])
         self.assertEqual(result["inflow"][0]["data_source"], "tushare.moneyflow_ind_ths")
         self.assertEqual(result["provider"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(fallback_calls, [])
+
+    def test_sector_fund_flow_falls_back_to_stock_moneyflow_industry_aggregate(self):
+        fallback_calls = []
+
+        result = get_sector_fund_flow_from_tushare_first(
+            "2026-05-29",
+            limit=2,
+            fetch_tushare_sector_flow_fn=lambda trade_date: [],
+            fetch_stock_moneyflow_map_fn=lambda trade_date: {
+                "600011": 1.2,
+                "600011.SH": 1.2,
+                "000001": -0.5,
+                "000002": 0.3,
+            },
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"stock_code": "600011", "ts_code": "600011.SH", "pct_chg": 2.0, "amount_yi": 100.0},
+                {"stock_code": "000001", "ts_code": "000001.SZ", "pct_chg": -1.0, "amount_yi": 200.0},
+                {"stock_code": "000002", "ts_code": "000002.SZ", "pct_chg": 4.0, "amount_yi": 50.0},
+            ],
+            fetch_stock_basic_map_fn=lambda: {
+                "600011": {"industry": "电力", "name": "华能国际"},
+                "600011.SH": {"industry": "电力", "name": "华能国际"},
+                "000001": {"industry": "银行", "name": "平安银行"},
+                "000002": {"industry": "电力", "name": "万科A"},
+            },
+            legacy_get_sector_fund_flow_fn=lambda target_date=None, limit=50: fallback_calls.append(target_date) or {},
+        )
+
+        self.assertEqual([item["name"] for item in result["inflow"]], ["电力", "银行"])
+        self.assertEqual([item["name"] for item in result["outflow"]], ["银行", "电力"])
+        self.assertAlmostEqual(result["inflow"][0]["net_amount"], 1.5)
+        self.assertAlmostEqual(result["inflow"][0]["change_pct"], 2.666667)
+        self.assertEqual(result["inflow"][0]["turnover_yi"], 150.0)
+        self.assertEqual(result["inflow"][0]["data_source"], "tushare.moneyflow+daily.industry_aggregate")
+        self.assertEqual(result["provider"], "tushare.moneyflow+daily.industry_aggregate")
+        self.assertTrue(result["fallback_used"])
         self.assertEqual(fallback_calls, [])
 
     def test_hot_concept_fund_flow_aggregates_members_from_stock_moneyflow(self):
