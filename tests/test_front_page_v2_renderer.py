@@ -1652,6 +1652,59 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
         self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct |", rendered)
 
+    def test_turnover_share_lines_split_hot_sector_watch_by_sector(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-29",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "hot_sector_turnover_watch_summary": "近期热点板块成交额连续跟踪：变化只按同一板块自身历史计算。",
+                        "hot_sector_turnover_watch_rows": [
+                            {
+                                "date": "2026-05-28",
+                                "sector_name": "光通信/CPO",
+                                "sector_turnover": "8841.18亿",
+                                "market_turnover": "29873.26亿",
+                                "share": "29.6%",
+                                "share_change": "待累计",
+                                "sample_status": "待累计",
+                                "interpretation": "光通信/CPO只记录本板块当日点位",
+                            },
+                            {
+                                "date": "2026-05-29",
+                                "sector_name": "通信设备",
+                                "sector_turnover": "3062.15亿",
+                                "market_turnover": "33408.58亿",
+                                "share": "9.2%",
+                                "share_change": "待累计",
+                                "sample_status": "待累计",
+                                "interpretation": "通信设备只记录本板块当日点位",
+                            },
+                            {
+                                "date": "2026-05-29",
+                                "sector_name": "国产芯片替代",
+                                "sector_turnover": "10183.06亿",
+                                "market_turnover": "33408.58亿",
+                                "share": "30.5%",
+                                "share_change": "+7.9pct",
+                                "sample_status": "同板块连续",
+                                "interpretation": "国产芯片替代同板块成交占比抬升",
+                            },
+                        ],
+                    },
+                },
+            )
+        )
+
+        turnover_section = rendered[rendered.index("### 5. 主线成交额占比趋势") :]
+        self.assertIn("#### 近期热点板块成交额连续跟踪：国产芯片替代", turnover_section)
+        self.assertIn("#### 近期热点板块成交额连续跟踪：通信设备", turnover_section)
+        self.assertIn("#### 近期热点板块成交额连续跟踪：光通信/CPO", turnover_section)
+        self.assertIn("| 日期 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |", turnover_section)
+        self.assertIn("| 2026-05-29 | 3062.15亿 | 33408.58亿 | 9.2% | 待累计 | 待累计 | 通信设备只记录本板块当日点位 |", turnover_section)
+        self.assertNotIn("| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |", turnover_section)
+
     def test_turnover_share_lines_preserve_trend_table_labels_when_current_attack_unconfirmed(self):
         rendered = "\n".join(
             render_front_page_v2(

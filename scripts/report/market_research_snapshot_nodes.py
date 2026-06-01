@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 from report.mainline_turnover_summary_support import (
     normalize_display_text_by_tag_pool,
+    render_hot_sector_turnover_watch_grouped_lines,
     resolve_hot_sector_turnover_watch_rows,
     resolve_hot_sector_turnover_watch_summary,
     resolve_mainline_attack_evidence_summary,
@@ -540,19 +541,7 @@ def _build_turnover_share_trend_table_lines(context):
         if hot_summary:
             lines.append(f"> {hot_summary}")
             lines.append("")
-        lines.extend(
-            [
-                "| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
-                "|------|------|------------|------------|------|------------|----------|------|",
-            ]
-        )
-        for row in _display_latest_first(hot_rows):
-            lines.append(
-                "| {date} | {sector_name} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(
-                    **row
-                )
-            )
-        lines.append("")
+        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows))
     if not rows:
         return lines
     lines.append("#### 主线切换成交额记录")

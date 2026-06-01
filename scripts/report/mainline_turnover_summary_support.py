@@ -671,6 +671,68 @@ def resolve_hot_sector_turnover_watch_rows(context=None):
     return normalized
 
 
+def _watch_share_number(row):
+    text = str((row or {}).get("share") or "").strip().replace("%", "")
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def group_hot_sector_turnover_watch_rows(rows=None):
+    groups_by_sector = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        sector = str(row.get("sector_name") or "").strip()
+        if not sector or sector == "-":
+            continue
+        groups_by_sector.setdefault(sector, []).append(row)
+
+    groups = []
+    for sector, sector_rows in groups_by_sector.items():
+        display_rows = sorted(
+            sector_rows,
+            key=lambda item: str((item or {}).get("date") or ""),
+            reverse=True,
+        )
+        latest = display_rows[0] if display_rows else {}
+        groups.append(
+            {
+                "sector_name": sector,
+                "latest_date": str((latest or {}).get("date") or ""),
+                "latest_share": _watch_share_number(latest),
+                "rows": display_rows,
+            }
+        )
+    return sorted(
+        groups,
+        key=lambda item: (item.get("latest_date") or "", item.get("latest_share") or 0.0, item.get("sector_name") or ""),
+        reverse=True,
+    )
+
+
+def render_hot_sector_turnover_watch_grouped_lines(rows=None, *, heading_prefix="####"):
+    groups = group_hot_sector_turnover_watch_rows(rows)
+    lines = []
+    for group in groups:
+        lines.append(f"{heading_prefix} 近期热点板块成交额连续跟踪：{group['sector_name']}")
+        lines.extend(
+            [
+                "| 日期 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
+                "|------|------------|------------|------|------------|----------|------|",
+            ]
+        )
+        for row in group["rows"]:
+            lines.append(
+                "| {date} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(
+                    **row
+                )
+            )
+        lines.append("")
+    return lines
+
+
 def resolve_hot_sector_turnover_watch_summary(context=None):
     context = context or {}
     summary = str(context.get("hot_sector_turnover_watch_summary") or "").strip()

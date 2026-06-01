@@ -223,6 +223,9 @@ archive JSON out of the report generation path.
   sector turnover tracking. It must include at least `date`, `sector_name`,
   `sector_turnover`, `total_turnover`, `share`, `share_change`,
   `sample_status`, and `interpretation`.
+- Renderers must split `hot_sector_turnover_watch_rows` into sector-scoped
+  tables headed like `近期热点板块成交额连续跟踪：<sector_name>`. Do not render all
+  sectors in one mixed watch table.
 - `share_change` must be calculated only against the previous row for the same
   `sector_name`. If no prior same-sector point exists, render `待累计`.
 - Daily selected-mainline turnover rows may still render as
@@ -251,7 +254,8 @@ archive JSON out of the report generation path.
 ### 5. Good/Base/Bad Cases
 
 - Good: 2026-05-29 shows 通信设备, 国产芯片替代, 半导体, 电力, and other current hot
-  sectors as separate rows, with changes only against each sector's own history.
+  sectors as separate sector tables, with changes only against each sector's own
+  history.
 - Base: 光通信/CPO has a 2026-05-28 point but no 2026-05-29 same-concept point;
   it remains `待累计` and is not compared to 新型电力.
 - Bad: rendering `29.6% -> 0.9%` as a continuous turnover-share fall when the
@@ -262,6 +266,8 @@ archive JSON out of the report generation path.
 ### 6. Tests Required
 
 - Unit test same-sector share deltas and cross-sector `待累计` behavior.
+- Unit test renderer output splits hot-sector watch rows into sector-scoped
+  tables and avoids a single mixed-sector watch table.
 - Unit test mixed selected-mainline summary text does not use cross-sector arrow
   trends or cross-sector percentage ranges.
 - Unit test PostgreSQL schema contains turnover amount, market amount, and source

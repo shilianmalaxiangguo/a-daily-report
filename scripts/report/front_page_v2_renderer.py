@@ -12,6 +12,7 @@ from report.market_research_snapshot_nodes import (
 )
 from report.front_summary_renderer import sanitize_front_page_text
 from report.mainline_turnover_summary_support import (
+    render_hot_sector_turnover_watch_grouped_lines,
     resolve_hot_sector_turnover_watch_rows,
     resolve_hot_sector_turnover_watch_summary,
     resolve_double_mainline_summary,
@@ -784,20 +785,18 @@ def _turnover_share_lines(snapshot):
     if hot_summary_text:
         lines.append(f"> {hot_summary_text}")
         lines.append("")
-    lines.extend(
-        [
-            "| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
-            "|------|------|------------|------------|------|------------|----------|------|",
-        ]
-    )
     if hot_rows:
-        for row in _display_latest_first(hot_rows):
-            lines.append(
-                "| {date} | {sector_name} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(**row)
-            )
+        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows))
     else:
-        lines.append("| 今日 | - | 数据暂缺 | - | 待累计 | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |")
-    lines.append("")
+        lines.append("#### 近期热点板块成交额连续跟踪：暂无板块")
+        lines.extend(
+            [
+                "| 日期 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
+                "|------|------------|------------|------|------------|----------|------|",
+            ]
+        )
+        lines.append("| 今日 | 数据暂缺 | - | 待累计 | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |")
+        lines.append("")
     if rows:
         lines.append("#### 主线切换成交额记录")
         if summary_text:
