@@ -5,7 +5,40 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from storage.postgres_daily_fact_db import POSTGRES_SCHEMA_STATEMENTS, PostgresDailyFactDb
+from storage.postgres_daily_fact_db import (
+    POSTGRES_SCHEMA_STATEMENTS,
+    PostgresDailyFactDb,
+    _recent_replay_min_trade_date,
+)
+
+
+_RECENT_25_TRADING_DATES_THROUGH_2026_05_29 = [
+    "2026-04-22",
+    "2026-04-23",
+    "2026-04-24",
+    "2026-04-27",
+    "2026-04-28",
+    "2026-04-29",
+    "2026-04-30",
+    "2026-05-06",
+    "2026-05-07",
+    "2026-05-08",
+    "2026-05-11",
+    "2026-05-12",
+    "2026-05-13",
+    "2026-05-14",
+    "2026-05-15",
+    "2026-05-18",
+    "2026-05-19",
+    "2026-05-20",
+    "2026-05-21",
+    "2026-05-22",
+    "2026-05-25",
+    "2026-05-26",
+    "2026-05-27",
+    "2026-05-28",
+    "2026-05-29",
+]
 
 
 class _FakeCursor:
@@ -231,7 +264,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("INSERT INTO sector_diffusion_score_components", sql)
         self.assertIn("INSERT INTO sector_competition_daily", sql)
         self.assertIn("INSERT INTO market_capacity_evolution_daily", sql)
-        self.assertEqual(saved["cycle_days"], 1)
+        self.assertEqual(saved["cycle_days"], 2)
         self.assertEqual(saved["cycle_periods"], 1)
         self.assertEqual(saved["mainline_records"], 2)
         self.assertEqual(saved["turnover_records"], 2)
@@ -241,6 +274,40 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(saved["sector_competition_records"], 2)
         self.assertEqual(saved["market_capacity_evolution_records"], 1)
         self.assertGreater(conn.commit_count, 0)
+
+    def test_market_cycle_context_fills_target_day_from_mainline_record_when_calendar_missing(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved = db.replace_market_cycle_context(
+            "2026-05-27",
+            {
+                "cycle_calendar_rows": [],
+                "current_mainline_history_record": {
+                    "trade_date": "2026-05-27",
+                    "primary_mainline": "电力",
+                    "daily_attack_line": "电力",
+                    "rotation_label": "支线轮动",
+                    "market_state": "支线轮动",
+                    "source_policy": "market_research_snapshot",
+                },
+            },
+        )
+
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO market_cycle_days" in call[1]
+        )
+        self.assertEqual(saved["cycle_days"], 1)
+        self.assertEqual(inserted[0][0], "2026-05-27")
+        self.assertEqual(inserted[0][1], "05-25当周")
+        self.assertEqual(inserted[0][2], "wednesday")
+        self.assertEqual(inserted[0][3], "电力")
 
     def test_market_cycle_context_without_attack_rows_does_not_clear_existing_attack_evidence(self):
         conn = _FakeConnection()
@@ -268,6 +335,168 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         ]
         self.assertEqual(delete_attack_calls, [])
         self.assertEqual(saved["sector_attack_records"], 0)
+
+    def test_import_daily_report_facts_prunes_before_recent_25_day_window(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        trend_dates = ["2026-04-21", *_RECENT_25_TRADING_DATES_THROUGH_2026_05_29]
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "new_high_feedback": {
+                    "trend_rows": [{"trade_date": trade_date} for trade_date in trend_dates],
+                },
+                "market_research_snapshot": {
+                    "recent_mainline_history": [
+                        {"trade_date": "2026-04-21", "primary_mainline": "旧主线"},
+                        {"trade_date": "2026-04-22", "primary_mainline": "电力"},
+                    ],
+                    "current_mainline_history_record": {
+                        "trade_date": "2026-05-29",
+                        "primary_mainline": "电力",
+                    },
+                    "recent_sector_turnover_history": [
+                        {
+                            "trade_date": "2026-04-21",
+                            "sector_name": "旧主线",
+                            "sector_turnover": 100,
+                            "total_turnover": 10000,
+                            "turnover_share_pct": 1,
+                        },
+                        {
+                            "trade_date": "2026-04-22",
+                            "sector_name": "电力",
+                            "sector_turnover": 200,
+                            "total_turnover": 10000,
+                            "turnover_share_pct": 2,
+                        },
+                    ],
+                },
+            },
+        )
+
+        self.assertEqual(result["structured_counts"]["recent_replay_min_trade_date"], "2026-04-22")
+        mainline_batches = [
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO mainline_daily" in call[1]
+        ]
+        self.assertTrue(mainline_batches)
+        inserted_mainline_dates = {row[0] for row in mainline_batches[0]}
+        self.assertNotIn("2026-04-21", inserted_mainline_dates)
+        self.assertIn("2026-04-22", inserted_mainline_dates)
+        self.assertIn("2026-05-29", inserted_mainline_dates)
+        self.assertTrue(
+            any(
+                call[0] == "execute"
+                and call[1] == "DELETE FROM mainline_daily WHERE trade_date < %s"
+                and call[2] == ("2026-04-22",)
+                for call in conn.cursor_obj.calls
+            )
+        )
+        self.assertTrue(
+            any(
+                call[0] == "execute"
+                and call[1] == "DELETE FROM a_kill_cooling_items WHERE a_kill_date < %s"
+                and call[2] == ("2026-04-22",)
+                for call in conn.cursor_obj.calls
+            )
+        )
+        self.assertFalse(
+            any(
+                call[0] == "execute"
+                and call[1] == "DELETE FROM a_kill_cooling_items WHERE trade_date < %s"
+                for call in conn.cursor_obj.calls
+            )
+        )
+        self.assertFalse(
+            any(
+                call[0] == "execute"
+                and "daily_report_snapshot_fields" in call[1]
+                for call in conn.cursor_obj.calls
+            )
+        )
+        self.assertTrue(
+            any(
+                call[0] == "execute"
+                and "DELETE FROM extreme_conviction_hypotheses" in call[1]
+                for call in conn.cursor_obj.calls
+            )
+        )
+        self.assertTrue(
+            any(
+                call[0] == "execute"
+                and "DELETE FROM observation_pool_lifecycle" in call[1]
+                and call[2] == ("2026-04-22",)
+                for call in conn.cursor_obj.calls
+            )
+        )
+
+    def test_import_daily_report_facts_reports_insufficient_recent_window_without_pruning(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "new_high_feedback": {
+                    "trend_rows": [
+                        {"trade_date": "2026-05-28"},
+                        {"trade_date": "2026-05-29"},
+                    ],
+                },
+                "market_research_snapshot": {
+                    "current_mainline_history_record": {
+                        "trade_date": "2026-05-29",
+                        "primary_mainline": "新型电力",
+                    },
+                },
+            },
+        )
+
+        window_status = result["structured_counts"]["recent_replay_window_status"]
+        self.assertEqual(window_status["status"], "insufficient")
+        self.assertEqual(window_status["available_days"], 2)
+        self.assertEqual(window_status["min_trade_date"], "2026-05-28")
+        self.assertEqual(window_status["max_trade_date"], "2026-05-29")
+        self.assertEqual(window_status["required_days"], 25)
+        self.assertFalse(
+            any(
+                call[0] == "execute"
+                and call[1] == "DELETE FROM mainline_daily WHERE trade_date < %s"
+                for call in conn.cursor_obj.calls
+            )
+        )
+
+    def test_recent_replay_min_trade_date_handles_cyclic_context(self):
+        trend_dates = ["2026-04-21", *_RECENT_25_TRADING_DATES_THROUGH_2026_05_29]
+        cyclic = {"trade_date": "2026-05-29"}
+        cyclic["self"] = cyclic
+
+        min_trade_date = _recent_replay_min_trade_date(
+            "2026-05-29",
+            {
+                "new_high_feedback": {
+                    "trend_rows": [{"trade_date": trade_date} for trade_date in trend_dates],
+                },
+                "calendar_events": [
+                    {"date": "2026-06-06"},
+                    {"date": "2026-06-07"},
+                ],
+                "cyclic_context": cyclic,
+            },
+        )
+
+        self.assertEqual(min_trade_date, "2026-04-22")
 
     def test_replaces_observation_pool_items_and_tracking_memory_structurally(self):
         conn = _FakeConnection()
@@ -888,7 +1117,12 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                         "risk_reward_plan": "只在窗口内观察",
                     }
                 ],
-                "market_stats": {"up_count": 1542, "down_count": 3884},
+                "market_stats": {
+                    "up_count": 1542,
+                    "down_count": 3884,
+                    "raw_payload": {"skip": True},
+                    "cache_snapshot": {"skip": True},
+                },
                 "concept_fund_flow": {"rows": [{"name": "火力发电", "net_inflow": 3.2, "raw_detail": {"skip": True}}]},
                 "sector_fund_flow": {
                     "inflow": [{"name": "电力", "zljlr": 18.2, "net_buy_amount": 20, "net_sell_amount": 1}],
@@ -1031,6 +1265,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertFalse(any("diagnostics_status" in str(row) for row in inserted))
         self.assertFalse(any("diagnostics_error" in str(row) for row in inserted))
         self.assertFalse(any("raw_detail" in str(row) for row in inserted))
+        self.assertFalse(any("raw_payload" in str(row) for row in inserted))
+        self.assertFalse(any("cache_snapshot" in str(row) for row in inserted))
         self.assertFalse(any("raw_notice" in str(row) for row in inserted))
         self.assertFalse(any("debug_payload" in str(row) for row in inserted))
         self.assertFalse(any("payload" in str(row) and "candidate_trace_artifact" not in str(row) for row in inserted))
@@ -1094,6 +1330,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 ("k:30:recent_sector_turnover_history/#0/k:11:sector_name", "光通信/CPO", None, None, "text"),
                 ("k:30:recent_sector_turnover_history/#0/k:18:turnover_share_pct", "", 29.6, None, "number"),
                 ("k:32:current_sector_turnover_snapshot/k:11:sector_name", "新型电力", None, None, "text"),
+                ("k:27:sector_attack_evidence_rows/#0/k:11:sector_name", "陈旧电力", None, None, "text"),
+                ("k:27:sector_attack_evidence_rows/#0/k:19:sector_turnover", "", 296.49, None, "number"),
+                ("k:34:recent_hot_sector_turnover_history/#0/k:4:date", "2026-05-29", None, None, "text"),
+                ("k:34:recent_hot_sector_turnover_history/#0/k:11:sector_name", "新型电力", None, None, "text"),
+                ("k:34:recent_hot_sector_turnover_history/#0/k:18:turnover_share_pct", "", 0.89, None, "number"),
             ],
             [
                 (
@@ -1124,6 +1365,58 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         history = loaded["data"]["recent_hot_sector_turnover_history"]
         self.assertEqual([row["sector_name"] for row in history], ["光通信/CPO", "通信设备"])
         self.assertEqual(history[1]["turnover_share_pct"], 9.17)
+
+    def test_load_daily_report_snapshot_enriches_candidate_trace_from_structured_tables(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [],
+            [],
+            [("2026-05-29", 1, "public", "2026-05-29T15:30:00", "reports/replay.md", "full")],
+            [("601991", "大唐发电", "T0", "新型电力", "电力", "继续观察", "结构化轨迹完整", "触发条件", "失败条件")],
+            [],
+            [],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-05-29")
+
+        artifact = loaded["data"]["candidate_trace_artifact"]
+        self.assertEqual(artifact["trade_date"], "2026-05-29")
+        self.assertEqual(artifact["traces"][0]["stock_code"], "601991")
+        self.assertEqual(artifact["traces"][0]["mainline"], "新型电力")
+        self.assertEqual(artifact["traces"][0]["visible_summary"], "结构化轨迹完整")
+
+    def test_hot_sector_history_keeps_power_concepts_separate_and_skips_empty_points(self):
+        cursor = _FakeCursor()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: _FakeConnection(),
+            ensure_schema=False,
+        )
+        cursor.rows = [
+            ("2026-05-29", "电力储能", 0, 33408.58, 0, "sector_attack_evidence_daily"),
+            ("2026-05-29", "新型电力", 296.49, 33408.58, 0.89, "mainline_turnover_daily"),
+            ("2026-05-29", "电力", 296.49, 33408.58, 0.89, "sector_attack_evidence_daily"),
+        ]
+
+        history = db._load_recent_hot_sector_turnover_history(
+            cursor,
+            "2026-05-29",
+            ["电力", "新型电力"],
+            window_days=25,
+        )
+
+        query_params = cursor.calls[0][2]
+        self.assertIn("新型电力", query_params[3])
+        self.assertIn("电力", query_params[3])
+        self.assertEqual(len(history), 2)
+        by_sector = {row["sector_name"]: row for row in history}
+        self.assertEqual(by_sector["新型电力"]["sector_turnover"], 296.49)
+        self.assertEqual(by_sector["电力"]["sector_turnover"], 296.49)
 
     def test_saves_postgres_xuangubao_summary_without_zeroing_counts(self):
         conn = _FakeConnection()

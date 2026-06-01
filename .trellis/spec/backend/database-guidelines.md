@@ -297,3 +297,151 @@ previous_share_by_sector[sector_name] = current_share
 ```
 
 Same-sector history is the only valid basis for turnover-share change.
+
+---
+
+## Scenario: Recent 25-Day Replay Fact Migration
+
+### 1. Scope / Trigger
+
+- Trigger: importing historical report facts from JSON seeds into PostgreSQL, or
+  changing the PostgreSQL-only replay path after such an import.
+
+### 2. Signatures
+
+- CLI:
+  `.generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py <YYYY-MM-DD> --postgres-only`
+- Import API:
+  `DatabaseService.from_environment().import_daily_report_facts(trade_date, data)`
+- Load API:
+  `DatabaseService.from_environment().load_daily_report_data(trade_date)`
+- Lookback rule: import the recent 25 trading days needed for replay and
+  comparison; older JSON archives are not runtime inputs after the import.
+
+### 3. Contracts
+
+- JSON snapshots may seed a one-time 25-trading-day import. After import, the
+  report runtime must read PostgreSQL facts and must not scan old JSON archives
+  to answer daily report history questions.
+- The 25-day cutoff must come from explicit trading-day series, such as
+  `new_high_feedback.trend_rows`, `top50_turnover_share_series.rows`,
+  `etf_turnover_series.rows`, or `margin_pressure.rows`; do not derive it from
+  arbitrary nested `date` / `query_date` / `source_date` fields.
+- Only replay-worthy facts belong in PostgreSQL: market totals, market cycle
+  rows, mainline/capacity records, sector flow, sector attack evidence,
+  same-sector turnover watch rows, observation pools, tracking memory,
+  candidate traces, extreme-conviction cases/mentions, planned participation
+  steps, and compact scalar/list summaries.
+- Large payloads, cache files, diagnostics, render logs, raw service response
+  trees, minute-bar blobs, and duplicated nested payload fields must stay out of
+  PostgreSQL.
+- `market_cycle_days` must have a target-day row when `current_mainline_history_record`
+  or `recent_mainline_history` contains that day, even if
+  `cycle_calendar_rows` is missing the row.
+- Hot-sector turnover tracking must keep exact board/concept names as grouping
+  keys. `电力`, `新型电力`, `绿色电力`, and `绿电` may be related in narrative
+  analysis, but they must not be merged into one same-sector turnover series.
+- If a generic compact summary contains same-day hot-sector watch rows with the
+  same sector turnover, market turnover, and share but different `sector_name`
+  values, treat it as stale generic contamination. Preserve the row that records
+  the exact current concept as `待累计` and reject the false same-sector
+  continuity row before rendering or writing the refreshed compact facts.
+- Structured PostgreSQL rows should overwrite stale generic fact-field rows
+  during PostgreSQL-only enrichment. Do not keep a generic JSON-shaped value
+  when a dedicated table has a cleaner replay row for the same concept.
+- When the explicit replay series has fewer than 25 trading days, import must
+  record `structured_counts.recent_replay_window_status` with `status`,
+  `available_days`, `required_days`, `min_trade_date`, and `max_trade_date`.
+  Do not silently skip the pruning decision, and do not widen into archive JSON.
+- Candidate action traces should prefer the richer contract-generated trace over
+  an incomplete generic trace. Missing account context is not required when an
+  earlier market or mainline condition has already decided `继续不参与`.
+
+### 4. Validation & Error Matrix
+
+- Import range has fewer than 25 trading days -> report the actual date range
+  and row counts; do not silently widen to stale archives.
+- A non-trading-day calendar event, source date, or query date appears inside
+  the report object -> ignore it for the replay pruning cutoff.
+- PostgreSQL-only runtime attempts to open archive JSON for history -> stop and
+  fix the caller to use PostgreSQL or accept missing history.
+- Replay series has fewer than 25 trading days -> return an explicit
+  `recent_replay_window_status` in the PostgreSQL import result and leave pruning
+  off for that import.
+- A target date has current mainline history but no cycle calendar row -> derive
+  one `market_cycle_days` row from the mainline record with date, weekday, week
+  label, mainline, and phase when available.
+- Hot-sector rows contain related power concept names -> render/query separate
+  sector tables, unless the source itself uses the exact same sector name.
+- Hot-sector rows contain same-day identical turnover/share metrics under two
+  different sector names -> keep the exact current concept point and drop the
+  pseudo-continuity row from the refreshed report facts.
+- Candidate trace has placeholders such as `暂无` or `数据缺失` but another
+  structured source has the field -> fill the placeholder before rendering and
+  before PostgreSQL import.
+- Candidate trace dedicated rows exist for the target date -> PostgreSQL-only
+  load must hydrate `candidate_trace_artifact.traces` from those rows, even if a
+  compact generic artifact also exists.
+- `daily_report_fact_fields` contains paths with `payload`, `raw`, `cache`,
+  `module_logs`, or `request_diagnostics` as path components -> reject the
+  projection and filter those fields.
+
+### 5. Good/Base/Bad Cases
+
+- Good: 2026-05-29 replay uses PostgreSQL-only data, shows `T-xxx（PSQL）` on
+  structured cycle, sector, candidate, and extreme-conviction tables, and SQL
+  queries can inspect the same facts by table.
+- Base: 2026-05-27 has no official snapshot but has a replay seed; the one-time
+  import may use that seed, while later generation still reads PostgreSQL.
+- Base: a mixed `电力` / `新型电力` history renders and queries as separate
+  rows/tables, so same-sector deltas are never calculated across them.
+- Bad: broadening the import to every historical JSON file because a 25-day
+  comparison helper found a short table.
+- Bad: keeping a 700 MB JSON archive as the report history source after the
+  recent 25-day import has populated PostgreSQL.
+
+### 6. Tests Required
+
+- Unit test `import_daily_report_facts()` filters low-value paths from generic
+  fact fields while preserving dedicated structured rows.
+- Unit test replay cutoff uses a known 25-trading-day series and ignores
+  unrelated calendar/source dates.
+- Unit test insufficient replay series reports
+  `structured_counts.recent_replay_window_status` and does not prune.
+- Unit test PostgreSQL load enrichment overwrites stale generic
+  `recent_hot_sector_turnover_history` with structured rows.
+- Unit test PostgreSQL load enrichment overwrites stale generic
+  `sector_attack_evidence_rows` and hydrates `candidate_trace_artifact` from the
+  dedicated trace tables.
+- Unit test related hot-sector concept names stay separate in both loader and
+  runtime summary paths.
+- Unit test self-conflicted hot-sector watch rows: same date + same turnover
+  metrics + different sector names must remove the false continuous row while
+  preserving unrelated current hot-sector rows.
+- Unit test `market_cycle_days` target-day fallback from current or recent
+  mainline history.
+- Unit test candidate trace enrichment fills placeholders and keeps no-action
+  traces complete when account context is irrelevant.
+- Integration verification for a replay date must run `--postgres-only`, inspect
+  PSQL-labeled tables in the rendered report, and query row counts from the
+  dedicated PostgreSQL tables.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+rows = load_recent_json_snapshots(lookback_days=25)
+return build_turnover_history(rows)
+```
+
+This keeps old JSON archives on the replay path after the PostgreSQL import.
+
+#### Correct
+
+```python
+rows = db.load_recent_hot_sector_turnover_history(trade_date, lookback_days=25)
+return build_turnover_history(rows)
+```
+
+The 25-day import is only the seed; PostgreSQL is the replay source after that.

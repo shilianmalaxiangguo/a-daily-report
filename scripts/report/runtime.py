@@ -225,6 +225,8 @@ _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
     "历史重点观察样本去向",
     "候选追踪",
     "候选链路",
+    "候选主表",
+    "候选选股轨迹",
     "候选选股轨迹明细",
     "极度看好",
     "明日极度看好近25日跟踪表",
@@ -346,8 +348,6 @@ def _table_row_has_structured_fact(row):
     joined = " ".join(cell for cell in cells if cell)
     if not joined:
         return False
-    if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS):
-        return False
     factual_markers = (
         r"\d{4}-\d{2}-\d{2}",
         r"\d{2}-\d{2}",
@@ -355,7 +355,10 @@ def _table_row_has_structured_fact(row):
         r"\d+(?:\.\d+)?%",
         r"[+-]?\d+(?:\.\d+)?(?:亿|万|pct|日|分)",
     )
-    if any(re.search(pattern, joined) for pattern in factual_markers):
+    has_factual_marker = any(re.search(pattern, joined) for pattern in factual_markers)
+    if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS) and not has_factual_marker:
+        return False
+    if has_factual_marker:
         return True
     meaningful_cells = [
         cell
@@ -702,23 +705,176 @@ def _prefer_structured_mainline_turnover_summary(primary_summary, fallback_summa
     primary_summary = primary_summary or {}
     fallback_summary = fallback_summary or {}
 
+    def _hot_watch_metric_signature(row):
+        row = row or {}
+        date = str(row.get("date") or "").strip()
+        sector_turnover = str(row.get("sector_turnover") or "").strip()
+        total_turnover = str(row.get("total_turnover") or row.get("market_turnover") or "").strip()
+        share = str(row.get("share") or row.get("turnover_share_pct") or "").strip()
+        if not (date and sector_turnover and total_turnover and share):
+            return ()
+        return (date, sector_turnover, total_turnover, share)
+
+    def _hot_watch_conflict_score(rows):
+        sectors_by_metric = {}
+        conflicts = 0
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            sector = str(row.get("sector_name") or "").strip()
+            signature = _hot_watch_metric_signature(row)
+            if not sector or not signature:
+                continue
+            sectors = sectors_by_metric.setdefault(signature, set())
+            if sectors and sector not in sectors:
+                conflicts += 1
+            sectors.add(sector)
+        return conflicts
+
+    def _hot_watch_exact_key(row):
+        row = row or {}
+        date = str(row.get("date") or "").strip()
+        sector = str(row.get("sector_name") or "").strip()
+        return (date, sector) if date and sector else ()
+
+    def _sanitize_update_hot_watch_rows(base_rows, update_rows):
+        sectors_by_base_metric = {}
+        for row in base_rows or []:
+            if not isinstance(row, dict):
+                continue
+            sector = str(row.get("sector_name") or "").strip()
+            signature = _hot_watch_metric_signature(row)
+            if sector and signature:
+                sectors_by_base_metric.setdefault(signature, set()).add(sector)
+
+        result = []
+        result_keys = set()
+        for row in update_rows or []:
+            if not isinstance(row, dict):
+                continue
+            sector = str(row.get("sector_name") or "").strip()
+            signature = _hot_watch_metric_signature(row)
+            if signature in sectors_by_base_metric and sector not in sectors_by_base_metric[signature]:
+                continue
+            result.append(row)
+            exact_key = _hot_watch_exact_key(row)
+            if exact_key:
+                result_keys.add(exact_key)
+
+        for row in base_rows or []:
+            if not isinstance(row, dict):
+                continue
+            exact_key = _hot_watch_exact_key(row)
+            if exact_key and exact_key not in result_keys:
+                result.append(row)
+                result_keys.add(exact_key)
+        return result
+
+    def _sanitize_conflicting_hot_watch_rows(rows):
+        indexed_rows = [(index, row) for index, row in enumerate(rows or []) if isinstance(row, dict)]
+        grouped_indexes = {}
+        for index, row in indexed_rows:
+            signature = _hot_watch_metric_signature(row)
+            sector = str(row.get("sector_name") or "").strip()
+            if signature and sector:
+                grouped_indexes.setdefault(signature, []).append(index)
+
+        keep_indexes = {index for index, _row in indexed_rows}
+        rows_by_index = {index: row for index, row in indexed_rows}
+        for indexes in grouped_indexes.values():
+            sectors = {
+                str((rows_by_index[index] or {}).get("sector_name") or "").strip()
+                for index in indexes
+            }
+            if len(sectors) <= 1:
+                continue
+            preferred_indexes = [
+                index
+                for index in indexes
+                if str((rows_by_index[index] or {}).get("sample_status") or "").strip() != "同板块连续"
+                or str((rows_by_index[index] or {}).get("share_change") or "").strip() in ("", "-", "待累计")
+            ]
+            if not preferred_indexes:
+                continue
+            for index in indexes:
+                if index not in preferred_indexes:
+                    keep_indexes.discard(index)
+        return [row for index, row in indexed_rows if index in keep_indexes]
+
+    def _hot_watch_share_number(row):
+        text = str((row or {}).get("share") or (row or {}).get("turnover_share_pct") or "").strip().replace("%", "")
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _rebuild_hot_watch_summary(rows, fallback_summary=""):
+        rows = [row for row in rows or [] if isinstance(row, dict)]
+        if not rows:
+            return str(fallback_summary or "").strip()
+        latest_date = max(str((row or {}).get("date") or "") for row in rows)
+        latest_rows = [row for row in rows if str(row.get("date") or "") == latest_date]
+        latest_rows = sorted(latest_rows, key=_hot_watch_share_number, reverse=True)
+        leader = latest_rows[0] if latest_rows else rows[-1]
+        leader_text = f"{leader.get('sector_name', '-')} {leader.get('share', '待累计')}"
+        continuous_rows = [row for row in rows if str(row.get("sample_status") or "") == "同板块连续"]
+        if continuous_rows:
+            return (
+                f"近期热点板块成交额连续跟踪：当前{latest_date}记录{len(latest_rows)}个热点板块，"
+                f"{leader_text}居前；变化只按同一板块自身历史计算。"
+            )
+        return (
+            f"近期热点板块成交额连续跟踪：当前{latest_date}记录{len(latest_rows)}个热点板块，"
+            f"{leader_text}居前；同板块历史仍待累计，不跨板块解释涨跌。"
+        )
+
+    def _select_hot_watch_rows(base_rows, update_rows):
+        if not update_rows:
+            return None, False
+        if not base_rows:
+            return _sanitize_conflicting_hot_watch_rows(update_rows), True
+        base_conflicts = _hot_watch_conflict_score(base_rows)
+        update_conflicts = _hot_watch_conflict_score(update_rows)
+        if update_conflicts > base_conflicts:
+            sanitized_rows = _sanitize_update_hot_watch_rows(base_rows, update_rows)
+            if sanitized_rows:
+                return _sanitize_conflicting_hot_watch_rows(sanitized_rows), True
+            return base_rows, False
+        if base_conflicts > update_conflicts:
+            return _sanitize_conflicting_hot_watch_rows(update_rows), True
+        return _sanitize_conflicting_hot_watch_rows(update_rows), True
+
     def _with_turnover_watch_updates(base, updates):
-        if not (
-            isinstance(base, dict)
-            and isinstance(updates, dict)
-            and updates.get("hot_sector_turnover_watch_rows")
-        ):
+        if not isinstance(base, dict):
             return base
         merged = dict(base)
+        if not (isinstance(updates, dict) and updates.get("hot_sector_turnover_watch_rows")):
+            if merged.get("hot_sector_turnover_watch_rows"):
+                merged["hot_sector_turnover_watch_rows"] = _sanitize_conflicting_hot_watch_rows(
+                    merged.get("hot_sector_turnover_watch_rows")
+                )
+                merged["hot_sector_turnover_watch_summary"] = _rebuild_hot_watch_summary(
+                    merged.get("hot_sector_turnover_watch_rows"),
+                    merged.get("hot_sector_turnover_watch_summary"),
+                )
+            return merged
         for key in (
             "data_text",
             "turnover_share_trend_summary",
             "turnover_share_trend_rows",
-            "hot_sector_turnover_watch_summary",
-            "hot_sector_turnover_watch_rows",
         ):
             if updates.get(key) not in (None, "", [], {}):
                 merged[key] = updates.get(key)
+        selected_rows, selected_from_updates = _select_hot_watch_rows(
+            merged.get("hot_sector_turnover_watch_rows"),
+            updates.get("hot_sector_turnover_watch_rows"),
+        )
+        if selected_rows not in (None, [], {}):
+            merged["hot_sector_turnover_watch_rows"] = selected_rows
+            merged["hot_sector_turnover_watch_summary"] = _rebuild_hot_watch_summary(
+                selected_rows,
+                updates.get("hot_sector_turnover_watch_summary") if selected_from_updates else merged.get("hot_sector_turnover_watch_summary"),
+            )
         return merged
 
     primary_label = str(primary_summary.get("share_trend_label") or "").strip()
@@ -997,16 +1153,28 @@ def _maybe_persist_candidate_traces(
     return result
 
 
-def _read_decision_ledger_index_for_tracking(root_dir="."):
-    reader = globals().get("read_decision_ledger_index")
-    index_path = Path(root_dir or ".") / "data" / "decision-ledger" / "index.json"
-    if callable(reader):
-        return reader(index_path)
-    postgres_configured = (
+def _postgres_database_configured():
+    return (
         os.environ.get("A_DAILY_REPORT_DATABASE_URL")
         or os.environ.get("DATABASE_URL")
         or ""
     ).strip().startswith(("postgres://", "postgresql://"))
+
+
+def _postgres_storage_required():
+    return bool(
+        globals().get("decision_ledger_postgres_only", False)
+        or os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+        or _postgres_database_configured()
+    )
+
+
+def _read_decision_ledger_index_for_tracking(root_dir="."):
+    postgres_required = _postgres_storage_required()
+    reader = globals().get("read_decision_ledger_index")
+    index_path = Path(root_dir or ".") / "data" / "decision-ledger" / "index.json"
+    if callable(reader) and not postgres_required:
+        return reader(index_path)
     try:
         service_cls = globals().get("DatabaseService")
         if service_cls is None:
@@ -1019,10 +1187,10 @@ def _read_decision_ledger_index_for_tracking(root_dir="."):
             if db_index:
                 return db_index
             return {}
-        if postgres_configured:
-            raise RuntimeError("PostgreSQL decision ledger index storage is configured but DatabaseService did not select PostgreSQL")
+        if postgres_required:
+            raise RuntimeError("PostgreSQL decision ledger index storage requires PostgreSQL")
     except Exception:
-        if postgres_configured:
+        if postgres_required:
             raise
     if not index_path.exists():
         return {}
@@ -1037,13 +1205,9 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
     globals()["_last_extreme_conviction_a_kill_mark_result"] = {"updated_count": 0, "updated_records": []}
     if not end_date:
         return []
-    postgres_configured = (
-        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or ""
-    ).strip().startswith(("postgres://", "postgresql://"))
+    postgres_required = _postgres_storage_required()
     query_rows = globals().get("query_extreme_conviction_mention_rows_for_tracking")
-    if callable(query_rows):
+    if callable(query_rows) and not postgres_required:
         try:
             result = query_rows(
                 root_dir=root_dir,
@@ -1055,7 +1219,13 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
             try:
                 result = query_rows(root_dir=root_dir, end_date=end_date, window_days=window_days) or []
             except Exception:
+                if postgres_required:
+                    raise
                 return []
+        except Exception:
+            if postgres_required:
+                raise
+            return []
         try:
             if isinstance(result, dict):
                 mark_result = {
@@ -1066,12 +1236,21 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
                 return list(result.get("rows") or [])
             return list(result or [])
         except Exception:
+            if postgres_required:
+                raise
             return []
     try:
         from storage.database_service import DatabaseService
 
         db_path = Path(root_dir or ".") / "data" / "cloudflare_free_daily.db"
-        if hasattr(DatabaseService, "from_environment"):
+        if postgres_required:
+            if not hasattr(DatabaseService, "from_environment"):
+                raise RuntimeError("PostgreSQL extreme conviction storage requires DatabaseService.from_environment")
+            service = DatabaseService.from_environment(db_path)
+            checker = getattr(service, "is_postgres_backed", None)
+            if not callable(checker) or not checker():
+                raise RuntimeError("PostgreSQL extreme conviction storage requires PostgreSQL")
+        elif hasattr(DatabaseService, "from_environment"):
             service = DatabaseService.from_environment(db_path)
         else:
             service = DatabaseService.sqlite_d1_compatible(db_path)
@@ -1094,7 +1273,7 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
             or []
         )
     except Exception:
-        if postgres_configured:
+        if postgres_required:
             raise
         return []
 

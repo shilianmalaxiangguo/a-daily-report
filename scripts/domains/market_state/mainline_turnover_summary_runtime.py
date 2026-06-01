@@ -955,6 +955,15 @@ def _is_directional_sector_label(value):
     return bool(label and label not in {"-", "暂无", "无主线", "混沌轮动", "未知", "未归类"})
 
 
+def _hot_sector_alias_key(value):
+    return str(value or "").strip()
+
+
+def _hot_sector_display_name(value):
+    key = _hot_sector_alias_key(value)
+    return key or str(value or "").strip()
+
+
 def _watch_row_sector_name(item, fallback=""):
     item = item or {}
     return str(
@@ -969,8 +978,9 @@ def _watch_row_sector_name(item, fallback=""):
 
 def _append_unique_sector_name(items, value):
     value = str(value or "").strip()
-    if _is_directional_sector_label(value) and value not in items:
-        items.append(value)
+    alias_key = _hot_sector_alias_key(value)
+    if _is_directional_sector_label(value) and alias_key not in {_hot_sector_alias_key(item) for item in items}:
+        items.append(_hot_sector_display_name(value))
 
 
 def _hot_sector_candidate_names(
@@ -1007,7 +1017,7 @@ def _hot_sector_candidate_names(
 def _hot_sector_row_key(item):
     return (
         str((item or {}).get("date") or (item or {}).get("trade_date") or "").strip(),
-        _watch_row_sector_name(item),
+        _hot_sector_alias_key(_watch_row_sector_name(item)),
     )
 
 
@@ -1049,7 +1059,7 @@ def _attack_evidence_row_to_hot_sector_row(row, *, target_date="", total_turnove
         sector_turnover = round(total_turnover * share / 100, 2)
     return {
         "date": str(row.get("date") or row.get("trade_date") or target_date or "").strip(),
-        "sector_name": sector_name,
+        "sector_name": _hot_sector_display_name(sector_name),
         "sector_turnover": sector_turnover,
         "total_turnover": total_turnover,
         "turnover_share_pct": share,
@@ -1071,7 +1081,7 @@ def _normalize_hot_sector_source_row(row, *, fallback_date="", fallback_total_tu
         sector_turnover = round(total_turnover * share / 100, 2)
     return {
         "date": str(row.get("date") or row.get("trade_date") or fallback_date or "").strip(),
-        "sector_name": sector_name,
+        "sector_name": _hot_sector_display_name(sector_name),
         "sector_turnover": sector_turnover,
         "total_turnover": total_turnover,
         "turnover_share_pct": share,
@@ -1271,7 +1281,7 @@ def _snapshot_from_attack_evidence(current_snapshot, attack_evidence_summary, ta
 def _sector_names_equal(left, right):
     left = str(left or "").strip()
     right = str(right or "").strip()
-    return bool(left and right and (left == right or left in right or right in left))
+    return bool(left and right and _hot_sector_alias_key(left) == _hot_sector_alias_key(right))
 
 
 def build_mainline_turnover_summary(

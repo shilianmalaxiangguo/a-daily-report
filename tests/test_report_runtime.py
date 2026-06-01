@@ -470,6 +470,36 @@ class ReportRuntimeTest(unittest.TestCase):
 
         self.assertEqual(numbered[1], "**T-001（PSQL）**")
 
+    def test_number_report_tables_marks_candidate_trace_rows_with_missing_reason_as_psql(self):
+        lines = [
+            "##### 候选主表",
+            "| 候选 | 账户状态 | 观察上限 | 新增参与动作 |",
+            "|------|----------|----------|--------------|",
+            "| 粤电力Ａ(000539) | 仅观察 | 观察 | 只观察，不新增参与 |",
+            "",
+            "##### 候选选股轨迹明细",
+            "| 层级 | 候选 | 主线/板块 | 未满足/缺失 | 分支结果 | 明日动作 |",
+            "|------|------|-----------|-------------|----------|----------|",
+            "|  | 粤电力Ａ(000539) | 电力 | 市场条件：数据缺失 | 关键数据不完整，停止生成动作 | 关键数据不完整，停止生成动作 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+        self.assertIn("**T-002（PSQL）**", numbered)
+
+    def test_number_report_tables_marks_compact_candidate_trace_context(self):
+        lines = [
+            "##### 候选选股轨迹",
+            "| 层级 | 候选 | 主线/板块 | 为什么进入这一层 | 卡点 | 明日动作 |",
+            "|------|------|-----------|------------------|------|----------|",
+            "| T0 | 粤电力Ａ(000539) | 电力 | 市场条件未满足 | 市场条件未满足 | 条件未满足，继续不参与 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001（PSQL）**")
+
     def test_number_report_tables_does_not_mark_ordinary_tables_in_postgres_only(self):
         lines = [
             "### 周期解读",
@@ -1761,6 +1791,121 @@ class ReportRuntimeTest(unittest.TestCase):
             )["share_trend_label"],
             "逆势试攻",
         )
+
+    def test_prefer_mainline_turnover_summary_keeps_clean_hot_sector_rows_over_conflicted_fallback(self):
+        clean_summary = {
+            "current_mainline": "新型电力",
+            "share_trend_label": "切换",
+            "hot_sector_turnover_watch_rows": [
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "新型电力",
+                    "sector_turnover": "296.49亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "0.9%",
+                    "share_change": "待累计",
+                    "sample_status": "待累计",
+                },
+                {
+                    "date": "2026-05-19",
+                    "sector_name": "电力",
+                    "sector_turnover": "665.00亿",
+                    "market_turnover": "29089.77亿",
+                    "total_turnover": "29089.77亿",
+                    "share": "2.3%",
+                    "share_change": "待累计",
+                    "sample_status": "待累计",
+                },
+            ],
+        }
+        stale_fallback = {
+            "current_mainline": "新型电力",
+            "share_trend_label": "切换",
+            "hot_sector_turnover_watch_rows": [
+                clean_summary["hot_sector_turnover_watch_rows"][0],
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "电力",
+                    "sector_turnover": "296.49亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "0.9%",
+                    "share_change": "-1.4pct",
+                    "sample_status": "同板块连续",
+                },
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "通信设备",
+                    "sector_turnover": "3062.15亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "9.2%",
+                    "share_change": "待累计",
+                    "sample_status": "待累计",
+                },
+            ],
+        }
+
+        merged = report_runtime._prefer_structured_mainline_turnover_summary(
+            clean_summary,
+            stale_fallback,
+        )
+
+        rows = merged["hot_sector_turnover_watch_rows"]
+        self.assertTrue(any(row["sector_name"] == "新型电力" and row["date"] == "2026-05-29" for row in rows))
+        self.assertTrue(any(row["sector_name"] == "通信设备" and row["date"] == "2026-05-29" for row in rows))
+        self.assertFalse(any(row["sector_name"] == "电力" and row["date"] == "2026-05-29" for row in rows))
+
+    def test_prefer_mainline_turnover_summary_sanitizes_self_conflicted_hot_sector_rows(self):
+        conflicted_summary = {
+            "share_trend_label": "分化",
+            "hot_sector_turnover_watch_summary": "近期热点板块成交额连续跟踪：当前2026-05-29记录3个热点板块，通信设备 9.2%居前；变化只按同一板块自身历史计算。",
+            "hot_sector_turnover_watch_rows": [
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "新型电力",
+                    "sector_turnover": "296.49亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "0.9%",
+                    "share_change": "待累计",
+                    "sample_status": "待累计",
+                },
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "电力",
+                    "sector_turnover": "296.49亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "0.9%",
+                    "share_change": "-1.4pct",
+                    "sample_status": "同板块连续",
+                },
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "通信设备",
+                    "sector_turnover": "3062.15亿",
+                    "market_turnover": "33408.58亿",
+                    "total_turnover": "33408.58亿",
+                    "share": "9.2%",
+                    "share_change": "+2.3pct",
+                    "sample_status": "同板块连续",
+                },
+            ],
+        }
+
+        merged = report_runtime._prefer_structured_mainline_turnover_summary(
+            conflicted_summary,
+            {},
+        )
+
+        rows = merged["hot_sector_turnover_watch_rows"]
+        self.assertTrue(any(row["sector_name"] == "新型电力" and row["date"] == "2026-05-29" for row in rows))
+        self.assertTrue(any(row["sector_name"] == "通信设备" and row["date"] == "2026-05-29" for row in rows))
+        self.assertFalse(any(row["sector_name"] == "电力" and row["date"] == "2026-05-29" for row in rows))
+        self.assertIn("记录2个热点板块", merged["hot_sector_turnover_watch_summary"])
+        self.assertNotIn("记录3个热点板块", merged["hot_sector_turnover_watch_summary"])
 
     def test_render_markdown_report_runtime_derives_appendix_continuity_inputs(self):
         class _ExecutionAppendixCaptured(RuntimeError):
@@ -3791,7 +3936,25 @@ def _runtime_binding_probe(
 
         def _fake_write_snapshot(snapshot, **kwargs):
             captured["write"] = kwargs
-            return {"snapshot_path": "postgresql://decision-ledger/2026-05-12", "index": {}}
+            return {
+                "snapshot_path": "postgresql://decision-ledger/2026-05-12",
+                "index": {"latest_trade_date": "2026-05-12", "by_stock_code": {}},
+            }
+
+        class PostgresService:
+            def is_postgres_backed(self):
+                return True
+
+            def mark_a_kill_shape_extreme_conviction_mentions(self, end_date, *, window_days=25, return_details=False):
+                return {"updated_count": 0, "updated_records": []}
+
+            def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+                return []
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return PostgresService()
 
         previous = report_runtime._install_runtime_bindings(
             {
@@ -3803,12 +3966,13 @@ def _runtime_binding_probe(
             }
         )
         try:
-            report_runtime._maybe_persist_decision_ledger(
-                data={},
-                target_date="2026-05-12",
-                execution_stage_context={"extreme_conviction_list": []},
-                market_research_snapshot={},
-            )
+            with patch.dict("sys.modules", {"storage.database_service": types.SimpleNamespace(DatabaseService=StubDatabaseService)}):
+                report_runtime._maybe_persist_decision_ledger(
+                    data={},
+                    target_date="2026-05-12",
+                    execution_stage_context={"extreme_conviction_list": []},
+                    market_research_snapshot={},
+                )
         finally:
             report_runtime._restore_runtime_bindings(previous)
 
@@ -4465,6 +4629,86 @@ def _runtime_binding_probe(
                     with self.assertRaisesRegex(RuntimeError, "database unavailable"):
                         report_runtime._read_decision_ledger_index_for_tracking(tempdir)
 
+    def test_postgres_only_decision_ledger_tracking_rejects_non_postgres_without_json_fallback(self):
+        class NonPostgresService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            sqlite_called = False
+
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return NonPostgresService()
+
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                cls.sqlite_called = True
+                return NonPostgresService()
+
+        previous = getattr(report_runtime, "decision_ledger_postgres_only", None)
+        with TemporaryDirectory() as tempdir:
+            ledger_dir = Path(tempdir) / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            (ledger_dir / "index.json").write_text(
+                '{"by_stock_code":{"000001":[{"stock_code":"000001","stock_name":"JSON样本"}]}}',
+                encoding="utf-8",
+            )
+            try:
+                report_runtime.decision_ledger_postgres_only = True
+                with patch.object(report_runtime, "DatabaseService", StubDatabaseService, create=True):
+                    with patch.dict("os.environ", {}, clear=True):
+                        with self.assertRaisesRegex(RuntimeError, "PostgreSQL decision ledger index storage"):
+                            report_runtime._read_decision_ledger_index_for_tracking(tempdir)
+            finally:
+                if previous is None:
+                    delattr(report_runtime, "decision_ledger_postgres_only")
+                else:
+                    report_runtime.decision_ledger_postgres_only = previous
+
+        self.assertFalse(StubDatabaseService.sqlite_called)
+
+    def test_postgres_only_decision_ledger_tracking_ignores_injected_json_reader(self):
+        captured = {"reader_called": False}
+
+        def injected_reader(_path):
+            captured["reader_called"] = True
+            return {"by_stock_code": {"000001": [{"stock_code": "000001", "stock_name": "JSON样本"}]}}
+
+        class PostgresService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self):
+                return {"by_stock_code": {"601991": [{"stock_code": "601991", "stock_name": "大唐发电"}]}}
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return PostgresService()
+
+        previous_reader = getattr(report_runtime, "read_decision_ledger_index", None)
+        previous_postgres_only = getattr(report_runtime, "decision_ledger_postgres_only", None)
+        try:
+            report_runtime.read_decision_ledger_index = injected_reader
+            report_runtime.decision_ledger_postgres_only = True
+            with patch.object(report_runtime, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {}, clear=True):
+                    index = report_runtime._read_decision_ledger_index_for_tracking("/tmp/daily-report")
+        finally:
+            if previous_reader is None:
+                delattr(report_runtime, "read_decision_ledger_index")
+            else:
+                report_runtime.read_decision_ledger_index = previous_reader
+            if previous_postgres_only is None:
+                delattr(report_runtime, "decision_ledger_postgres_only")
+            else:
+                report_runtime.decision_ledger_postgres_only = previous_postgres_only
+
+        self.assertFalse(captured["reader_called"])
+        self.assertIn("601991", index["by_stock_code"])
+        self.assertNotIn("000001", index["by_stock_code"])
+
     def test_runtime_extreme_mention_tracking_prefers_fact_db_rows_for_crud_review(self):
         from storage.database_service import DatabaseService
 
@@ -4672,6 +4916,91 @@ def _runtime_binding_probe(
                         end_date="2026-05-29",
                         window_days=25,
                     )
+
+    def test_postgres_only_extreme_mention_tracking_rejects_non_postgres_without_sqlite_fallback(self):
+        class NonPostgresService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            sqlite_called = False
+
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return NonPostgresService()
+
+            @classmethod
+            def sqlite_d1_compatible(cls, db_path=None):
+                cls.sqlite_called = True
+                return NonPostgresService()
+
+        previous = getattr(report_runtime, "decision_ledger_postgres_only", None)
+        try:
+            report_runtime.decision_ledger_postgres_only = True
+            with patch.dict("sys.modules", {"storage.database_service": types.SimpleNamespace(DatabaseService=StubDatabaseService)}):
+                with patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL extreme conviction storage"):
+                        report_runtime._query_extreme_conviction_mention_rows_for_tracking(
+                            root_dir="/tmp/daily-report",
+                            end_date="2026-05-29",
+                            window_days=25,
+                        )
+        finally:
+            if previous is None:
+                delattr(report_runtime, "decision_ledger_postgres_only")
+            else:
+                report_runtime.decision_ledger_postgres_only = previous
+
+        self.assertFalse(StubDatabaseService.sqlite_called)
+
+    def test_postgres_only_extreme_mention_tracking_ignores_injected_query_reader(self):
+        captured = {"query_called": False}
+
+        def query_rows(**kwargs):
+            captured["query_called"] = True
+            return [{"stock_code": "000001", "stock_name": "SQLite样本"}]
+
+        class PostgresService:
+            def is_postgres_backed(self):
+                return True
+
+            def mark_a_kill_shape_extreme_conviction_mentions(self, end_date, *, window_days=25, return_details=False):
+                return {"updated_count": 0, "updated_records": []}
+
+            def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+                return [{"stock_code": "601991", "stock_name": "大唐发电"}]
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls, db_path=None):
+                return PostgresService()
+
+        previous_query = report_runtime.query_extreme_conviction_mention_rows_for_tracking if hasattr(
+            report_runtime, "query_extreme_conviction_mention_rows_for_tracking"
+        ) else None
+        previous_postgres_only = getattr(report_runtime, "decision_ledger_postgres_only", None)
+        try:
+            report_runtime.query_extreme_conviction_mention_rows_for_tracking = query_rows
+            report_runtime.decision_ledger_postgres_only = True
+            with patch.dict("sys.modules", {"storage.database_service": types.SimpleNamespace(DatabaseService=StubDatabaseService)}):
+                with patch.dict("os.environ", {}, clear=True):
+                    rows = report_runtime._query_extreme_conviction_mention_rows_for_tracking(
+                        root_dir="/tmp/daily-report",
+                        end_date="2026-05-29",
+                        window_days=25,
+                    )
+        finally:
+            if previous_query is None:
+                delattr(report_runtime, "query_extreme_conviction_mention_rows_for_tracking")
+            else:
+                report_runtime.query_extreme_conviction_mention_rows_for_tracking = previous_query
+            if previous_postgres_only is None:
+                delattr(report_runtime, "decision_ledger_postgres_only")
+            else:
+                report_runtime.decision_ledger_postgres_only = previous_postgres_only
+
+        self.assertFalse(captured["query_called"])
+        self.assertEqual(rows[0]["stock_code"], "601991")
 
     def test_runtime_records_a_kill_shape_mark_details_for_tracking_query(self):
         captured = {}

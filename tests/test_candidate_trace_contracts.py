@@ -153,6 +153,25 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, trace["key_inputs"])
         self.assertIn("account_context", trace["missing_data"])
 
+    def test_account_context_not_required_when_market_condition_already_blocks_new_entry(self):
+        trace = build_candidate_trace(
+            {
+                "name": "市场不支持样本",
+                "code": "000001",
+                "tier": "T2",
+                "mainline": "电力",
+                "sector": "电力",
+                "market_fit": "未满足",
+                "mainline_fit": "满足",
+                "stock_structure_fit": "部分满足",
+            }
+        )
+
+        self.assertIn({"field": "账户适配", "value": "数据缺失", "source": "account_context"}, trace["key_inputs"])
+        self.assertNotIn("account_context", trace["missing_data"])
+        self.assertEqual(trace["final_action"], "")
+        self.assertIn("条件未满足，继续不参与", trace["branch_path"])
+
     def test_exported_constants_and_all_are_contractual(self):
         self.assertEqual(ARTIFACT_VERSION, 1)
         self.assertEqual(VISIBLE_SCOPE, "T0_T1_T2_T3")

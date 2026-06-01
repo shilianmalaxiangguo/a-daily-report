@@ -165,7 +165,8 @@ def build_candidate_trace(candidate):
     for key, check in (("market_fit", checks[0]), ("mainline_fit", checks[1]), ("stock_structure_fit", checks[2])):
         if check["result"] == "数据缺失":
             missing_data.append(key)
-    if account_missing:
+    decisive_non_participation = any(check["result"] == "未满足" for check in checks)
+    if account_missing and not decisive_non_participation:
         missing_data.append("account_context")
 
     final_action = _clean_text(candidate.get("final_action") or candidate.get("最终动作"))

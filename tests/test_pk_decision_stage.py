@@ -1005,6 +1005,46 @@ class PkDecisionStageTest(unittest.TestCase):
             ["603005", "000672"],
         )
 
+    def test_action_plan_context_enriches_daily_candidates_for_trace_contracts(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "二档（防守档）",
+                "step0_prediction": "NEUTRAL",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "mainline_name": "电力",
+                "has_personal_positions": False,
+                "best_stock": None,
+                "watch_anchor": None,
+                "display_observation_candidates": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "mainline": "暂无",
+                        "sector": "电力",
+                        "stock_structure_fit": "数据缺失",
+                        "reason": "主线内核 / 板块锚定龙 / 4连板 / 趋势审美 / 平台呼吸",
+                    }
+                ],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+            }
+        )
+
+        sample = result["exports"]["candidate_quality_samples"][0]
+        self.assertEqual(sample["mainline"], "电力")
+        self.assertEqual(sample["sector"], "电力")
+        self.assertEqual(sample["tier"], "T2")
+        self.assertIn("display_observation_candidates", sample["source_pools"])
+        self.assertEqual(sample["market_fit"], "未满足")
+        self.assertEqual(sample["mainline_fit"], "满足")
+        self.assertEqual(sample["stock_structure_fit"], "部分满足")
+        self.assertTrue(sample["trigger_condition"])
+        self.assertTrue(sample["failure_condition"])
+
     def test_action_plan_context_clears_backup_candidate_when_same_as_primary(self):
         result = build_pk_decision_action_plan_context_node(
             {

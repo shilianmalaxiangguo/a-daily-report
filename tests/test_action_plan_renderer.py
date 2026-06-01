@@ -267,6 +267,47 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertEqual(lines["exports"]["candidate_traces"][0]["stock_code"], "002185")
         self.assertEqual(lines["exports"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
 
+    def test_candidate_quality_node_prefers_richer_contract_trace_over_incomplete_existing_trace(self):
+        lines = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线活跃",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "tier": "T0",
+                        "source_pools": ["观察池"],
+                        "mainline": "电力",
+                        "sector": "电力",
+                        "market_fit": "部分满足",
+                        "mainline_fit": "满足",
+                        "stock_structure_fit": "部分满足",
+                        "trigger_condition": "固定交易窗口内承接确认",
+                        "failure_condition": "板块承接转弱",
+                    }
+                ],
+                "candidate_traces": [
+                    {
+                        "stock_code": "600726",
+                        "stock_name": "华电能源",
+                        "sector": "电力",
+                        "final_action": "关键数据不完整，停止生成动作",
+                    }
+                ],
+                "render_candidate_trace_tables": True,
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        trace = lines["exports"]["candidate_traces"][0]
+        self.assertEqual(trace["stock_code"], "600726")
+        self.assertEqual(trace["tier"], "T0")
+        self.assertEqual(trace["mainline"], "电力")
+        self.assertEqual(trace["trigger_condition"], "固定交易窗口内承接确认")
+
     def test_render_action_plan_result_exposes_candidate_trace_exports(self):
         context = {
             "candidate_quality_panel_fields": {

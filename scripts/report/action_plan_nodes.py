@@ -38,6 +38,38 @@ def _incomplete_trace_codes(traces):
     return codes
 
 
+def _trace_structured_score(trace):
+    trace = trace or {}
+    score = 0
+    for key in ("tier", "mainline", "sector", "sector_name", "trigger_condition", "failure_condition"):
+        if str(trace.get(key) or "").strip():
+            score += 1
+    checks = trace.get("checks") or []
+    if isinstance(checks, list):
+        score += sum(
+            1
+            for check in checks
+            if isinstance(check, dict) and str(check.get("result") or "").strip() not in {"", "数据缺失"}
+        )
+    return score
+
+
+def _trace_collection_score(traces):
+    return sum(_trace_structured_score(trace) for trace in traces or [] if isinstance(trace, dict))
+
+
+def _select_candidate_traces(existing_traces, contract_traces):
+    existing_traces = list(existing_traces or [])
+    contract_traces = list(contract_traces or [])
+    if not existing_traces:
+        return contract_traces
+    if not contract_traces:
+        return existing_traces
+    if _trace_collection_score(contract_traces) > _trace_collection_score(existing_traces):
+        return contract_traces
+    return existing_traces
+
+
 def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
     section_title = str(context.get("section_title", "") or "明日操作计划").strip() or "明日操作计划"
     return {
@@ -75,7 +107,7 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
         for contract in contracts
         if isinstance(contract, dict) and contract.get("trace")
     ]
-    traces = list(context.get("candidate_traces") or []) or contract_traces
+    traces = _select_candidate_traces(context.get("candidate_traces") or [], contract_traces)
     return {
         "lines": render_candidate_quality_section(
             panel,

@@ -514,6 +514,66 @@ POSTGRES_SCHEMA_STATEMENTS = [
 ]
 
 _WEEKDAY_FIELDS = ("monday", "tuesday", "wednesday", "thursday", "friday")
+_WEEKDAY_NAME_BY_INDEX = dict(enumerate(_WEEKDAY_FIELDS, start=1))
+_RECENT_REPLAY_FACT_DATE_COLUMNS = (
+    ("daily_report_fact_fields", "trade_date"),
+    ("market_cycle_days", "trade_date"),
+    ("market_cycle_periods", "trade_date"),
+    ("mainline_daily", "trade_date"),
+    ("mainline_switch_events", "trade_date"),
+    ("mainline_turnover_daily", "trade_date"),
+    ("market_daily_totals", "trade_date"),
+    ("sector_fund_flow_daily", "trade_date"),
+    ("sector_attack_evidence_daily", "trade_date"),
+    ("sector_diffusion_score_daily", "trade_date"),
+    ("sector_diffusion_score_components", "trade_date"),
+    ("sector_competition_daily", "trade_date"),
+    ("market_capacity_evolution_daily", "trade_date"),
+    ("zhongshu_mainline_records", "trade_date"),
+    ("daily_observation_pool_items", "trade_date"),
+    ("leader_memory_items", "trade_date"),
+    ("tracking_memory_daily_status", "trade_date"),
+    ("a_kill_cooling_items", "a_kill_date"),
+    ("strategy_performance_ledger", "report_date"),
+    ("strategy_performance_record_fields", "report_date"),
+    ("strategy_factor_snapshots", "report_date"),
+    ("strategy_factor_snapshot_fields", "report_date"),
+    ("strategy_factor_snapshot_pool_items", "report_date"),
+    ("candidate_trace_artifacts", "trade_date"),
+    ("candidate_trace_rows", "trade_date"),
+    ("candidate_trace_eliminated_groups", "trade_date"),
+    ("candidate_trace_row_fields", "trade_date"),
+    ("extreme_conviction_cases", "trade_date"),
+    ("extreme_conviction_mentions", "mention_trade_date"),
+    ("participation_reviews", "review_trade_date"),
+)
+_RECENT_REPLAY_FACT_ORPHAN_DELETES = (
+    (
+        "planned_participation_steps",
+        "record_id",
+        "extreme_conviction_mentions",
+        "record_id",
+    ),
+    (
+        "planned_participations",
+        "record_id",
+        "extreme_conviction_mentions",
+        "record_id",
+    ),
+    ("trend_fates", "case_id", "extreme_conviction_cases", "case_id"),
+    ("cycle_acceptance_reviews", "case_id", "extreme_conviction_cases", "case_id"),
+    ("extreme_conviction_hypotheses", "case_id", "extreme_conviction_cases", "case_id"),
+    ("participation_reviews", "case_id", "extreme_conviction_cases", "case_id"),
+)
+_RECENT_REPLAY_FACT_RANGE_DELETES = (
+    ("observation_pool_lifecycle", "last_seen_date", "first_seen_date"),
+)
+_RECENT_REPLAY_WINDOW_SERIES_PATHS = (
+    ("new_high_feedback", "trend_rows"),
+    ("top50_turnover_share_series", "rows"),
+    ("etf_turnover_series", "rows"),
+    ("margin_pressure", "rows"),
+)
 
 
 def _text(value):
@@ -549,6 +609,120 @@ def _date_or_none(value):
         return _dt.datetime.strptime(text[:10], "%Y-%m-%d").date().isoformat()
     except ValueError:
         return text
+
+
+def _date_obj_or_none(value):
+    text = _date_or_none(value)
+    if not text:
+        return None
+    try:
+        return _dt.datetime.strptime(str(text)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _weekday_name_for_date(value):
+    date_obj = _date_obj_or_none(value)
+    if not date_obj:
+        return ""
+    return _WEEKDAY_NAME_BY_INDEX.get(date_obj.isoweekday(), "")
+
+
+def _week_label_for_date(value):
+    date_obj = _date_obj_or_none(value)
+    if not date_obj:
+        return ""
+    week_start = date_obj - _dt.timedelta(days=date_obj.weekday())
+    return week_start.strftime("%m-%d当周")
+
+
+def _rows_at_path(data, path):
+    current = data
+    for key in path:
+        if not isinstance(current, dict):
+            return []
+        current = current.get(key)
+    if isinstance(current, list):
+        return current
+    return []
+
+
+def _replay_window_series_dates(data, path):
+    dates = []
+    for row in _rows_at_path(data or {}, path):
+        if not isinstance(row, dict):
+            continue
+        date_obj = _date_obj_or_none(row.get("trade_date") or row.get("date"))
+        if date_obj:
+            dates.append(date_obj.isoformat())
+    return sorted(set(dates))
+
+
+def _recent_replay_min_trade_date(trade_date, data, *, window_days=25):
+    target = _date_obj_or_none(trade_date)
+    if not target:
+        return None
+    target_text = target.isoformat()
+    window_days = max(_safe_int(window_days, 25), 1)
+    series_candidates = []
+    for path in _RECENT_REPLAY_WINDOW_SERIES_PATHS:
+        dates = [date for date in _replay_window_series_dates(data, path) if date <= target_text]
+        if len(dates) >= window_days:
+            if target_text in dates:
+                return dates[-window_days]
+            series_candidates.append(dates[-window_days])
+    if not series_candidates:
+        return None
+    return max(series_candidates)
+
+
+def _recent_replay_window_status(trade_date, data, *, window_days=25):
+    target = _date_obj_or_none(trade_date)
+    if not target:
+        return {
+            "status": "invalid_target_date",
+            "available_days": 0,
+            "required_days": max(_safe_int(window_days, 25), 1),
+            "min_trade_date": "",
+            "max_trade_date": "",
+        }
+    target_text = target.isoformat()
+    dates = sorted(
+        {
+            date
+            for path in _RECENT_REPLAY_WINDOW_SERIES_PATHS
+            for date in _replay_window_series_dates(data, path)
+            if date <= target_text
+        }
+    )
+    required_days = max(_safe_int(window_days, 25), 1)
+    return {
+        "status": "ready" if len(dates) >= required_days else "insufficient",
+        "available_days": len(dates),
+        "required_days": required_days,
+        "min_trade_date": dates[0] if dates else "",
+        "max_trade_date": dates[-1] if dates else "",
+    }
+
+
+def _is_before_min_trade_date(value, min_trade_date):
+    if not min_trade_date:
+        return False
+    row_date = _date_or_none(value)
+    return bool(row_date and row_date < min_trade_date)
+
+
+def _hot_sector_alias_key(value):
+    return _text(value)
+
+
+def _hot_sector_query_names(values):
+    expanded = []
+    for value in values or []:
+        text = _text(value)
+        if text and text not in expanded:
+            expanded.append(text)
+    return expanded
 
 
 def _stock_code(item):
@@ -702,6 +876,16 @@ def _decode_fact_path(path):
         if index < len(text) and text[index] == "/":
             index += 1
     return parts
+
+
+def _field_path_has_low_value_component(field_path):
+    parts = _decode_fact_path(field_path)
+    for index, part in enumerate(parts):
+        if index == 0 and _text(part) in _DAILY_REPORT_FACT_TOP_LEVEL_KEYS:
+            continue
+        if _is_low_value_fact_key(part):
+            return True
+    return False
 
 
 def _iter_safe_fact_fields(value, *, parts=(), max_depth=8):
@@ -2511,8 +2695,9 @@ class PostgresDailyFactDb:
             for item in (_row_dict(row, columns) for row in reversed(rows or []))
         ]
 
-    def replace_market_cycle_context(self, trade_date, snapshot):
+    def replace_market_cycle_context(self, trade_date, snapshot, *, min_trade_date=None):
         trade_date = _date_or_none(trade_date)
+        min_trade_date = _date_or_none(min_trade_date)
         snapshot = snapshot or {}
         counts = {
             "cycle_days": 0,
@@ -2528,10 +2713,10 @@ class PostgresDailyFactDb:
         }
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                self._replace_market_cycle_days(cursor, trade_date, snapshot, counts)
+                self._replace_market_cycle_days(cursor, trade_date, snapshot, counts, min_trade_date=min_trade_date)
                 self._replace_market_cycle_periods(cursor, trade_date, snapshot, counts)
-                self._replace_mainline_records(cursor, trade_date, snapshot, counts)
-                self._replace_turnover_records(cursor, trade_date, snapshot, counts)
+                self._replace_mainline_records(cursor, trade_date, snapshot, counts, min_trade_date=min_trade_date)
+                self._replace_turnover_records(cursor, trade_date, snapshot, counts, min_trade_date=min_trade_date)
                 self._replace_sector_attack_records(cursor, trade_date, snapshot, counts)
                 self._replace_sector_diffusion_records(cursor, trade_date, snapshot, counts)
                 self._replace_sector_competition_records(cursor, trade_date, snapshot, counts)
@@ -2540,9 +2725,10 @@ class PostgresDailyFactDb:
             conn.commit()
         return counts
 
-    def _replace_market_cycle_days(self, cursor, trade_date, snapshot, counts):
+    def _replace_market_cycle_days(self, cursor, trade_date, snapshot, counts, *, min_trade_date=None):
         cursor.execute("DELETE FROM market_cycle_days WHERE trade_date = %s", (trade_date,))
         rows = []
+        row_keys = set()
         cycle_by_mainline = {
             _text(row.get("mainline")): row for row in snapshot.get("cycle_interpretation_rows") or [] if isinstance(row, dict)
         }
@@ -2561,6 +2747,9 @@ class PostgresDailyFactDb:
                     if not short_date or not mainline or mainline == "-":
                         continue
                     row_date = _date_from_short(trade_date, short_date)
+                    if _is_before_min_trade_date(row_date, min_trade_date):
+                        continue
+                    row_keys.add((row_date, weekday_name))
                     cycle = cycle_by_mainline.get(mainline, {})
                     rows.append(
                         (
@@ -2577,6 +2766,40 @@ class PostgresDailyFactDb:
                             _text(cycle.get("interpretation")),
                         )
                     )
+        target_date = _date_or_none(trade_date)
+        if target_date and not any(row_date == target_date for row_date, _weekday in row_keys):
+            fallback_rows = []
+            current = snapshot.get("current_mainline_history_record")
+            if isinstance(current, dict):
+                fallback_rows.append(current)
+            fallback_rows.extend(row for row in snapshot.get("recent_mainline_history") or [] if isinstance(row, dict))
+            for row in fallback_rows:
+                row_date = _date_or_none(row.get("trade_date") or row.get("date") or trade_date)
+                if row_date != target_date:
+                    continue
+                if _is_before_min_trade_date(row_date, min_trade_date):
+                    continue
+                weekday_name = _weekday_name_for_date(row_date)
+                mainline = _text(row.get("primary_mainline") or row.get("mainline") or row.get("leading_line"))
+                if not weekday_name or not mainline or mainline == "-":
+                    continue
+                cycle = cycle_by_mainline.get(mainline, {})
+                rows.append(
+                    (
+                        row_date,
+                        _text(row.get("week_label")) or _week_label_for_date(row_date),
+                        weekday_name,
+                        mainline,
+                        _text(row.get("daily_attack_line") or cycle.get("attack_line") or mainline),
+                        _text(row.get("market_state") or row.get("state") or cycle.get("market_state")),
+                        _text(cycle.get("cycle_label")),
+                        _text(cycle.get("cycle_stage")),
+                        _text(cycle.get("transfer_state")),
+                        _text(cycle.get("tomorrow_validation")),
+                        _text(row.get("rotation_summary") or cycle.get("interpretation")),
+                    )
+                )
+                break
         if rows:
             cursor.executemany(
                 """
@@ -2648,7 +2871,7 @@ class PostgresDailyFactDb:
             )
         counts["cycle_periods"] = len(rows)
 
-    def _replace_mainline_records(self, cursor, trade_date, snapshot, counts):
+    def _replace_mainline_records(self, cursor, trade_date, snapshot, counts, *, min_trade_date=None):
         rows = []
         for row in snapshot.get("recent_mainline_history") or []:
             if isinstance(row, dict):
@@ -2662,6 +2885,8 @@ class PostgresDailyFactDb:
             row_date = _date_or_none(row.get("trade_date") or row.get("date") or trade_date)
             mainline = _text(row.get("primary_mainline") or row.get("mainline") or row.get("leading_line"))
             if not row_date or not mainline or row_date in seen_dates:
+                continue
+            if _is_before_min_trade_date(row_date, min_trade_date):
                 continue
             seen_dates.add(row_date)
             normalized.append(
@@ -2709,7 +2934,7 @@ class PostgresDailyFactDb:
             )
         counts["mainline_records"] = len(normalized)
 
-    def _replace_turnover_records(self, cursor, trade_date, snapshot, counts):
+    def _replace_turnover_records(self, cursor, trade_date, snapshot, counts, *, min_trade_date=None):
         rows = []
         for row in snapshot.get("recent_sector_turnover_history") or []:
             if isinstance(row, dict):
@@ -2722,6 +2947,8 @@ class PostgresDailyFactDb:
             row_date = _date_or_none(row.get("trade_date") or row.get("date") or trade_date)
             mainline = _text(row.get("primary_mainline") or row.get("cycle_mainline") or row.get("sector_name"))
             if not row_date or not mainline:
+                continue
+            if _is_before_min_trade_date(row_date, min_trade_date):
                 continue
             scope_key = _text(row.get("turnover_scope_key")) or mainline
             normalized.append(
@@ -3923,6 +4150,8 @@ class PostgresDailyFactDb:
         for field_path, value in _iter_safe_fact_fields(projected, max_depth=12):
             if not field_path:
                 continue
+            if _field_path_has_low_value_component(field_path):
+                continue
             value_text, value_number, value_bool, value_kind = _typed_value(value)
             rows.append(
                 (
@@ -3965,6 +4194,44 @@ class PostgresDailyFactDb:
     def save_daily_report_facts(self, trade_date, data):
         return self.save_daily_report_snapshot(trade_date, data)
 
+    def prune_recent_replay_fact_tables(self, min_trade_date):
+        min_trade_date = _date_or_none(min_trade_date)
+        if not min_trade_date:
+            return 0
+        removed = 0
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                for table_name, column_name in _RECENT_REPLAY_FACT_DATE_COLUMNS:
+                    cursor.execute(
+                        f"DELETE FROM {table_name} WHERE {column_name} < %s",
+                        (min_trade_date,),
+                    )
+                    rowcount = getattr(cursor, "rowcount", 0)
+                    if isinstance(rowcount, int) and rowcount > 0:
+                        removed += rowcount
+                for table_name, column_name, source_table, source_column in _RECENT_REPLAY_FACT_ORPHAN_DELETES:
+                    cursor.execute(
+                        f"""
+                        DELETE FROM {table_name}
+                        WHERE {column_name} NOT IN (
+                            SELECT {source_column} FROM {source_table}
+                        )
+                        """
+                    )
+                    rowcount = getattr(cursor, "rowcount", 0)
+                    if isinstance(rowcount, int) and rowcount > 0:
+                        removed += rowcount
+                for table_name, primary_column, fallback_column in _RECENT_REPLAY_FACT_RANGE_DELETES:
+                    cursor.execute(
+                        f"DELETE FROM {table_name} WHERE COALESCE({primary_column}, {fallback_column}) < %s",
+                        (min_trade_date,),
+                    )
+                    rowcount = getattr(cursor, "rowcount", 0)
+                    if isinstance(rowcount, int) and rowcount > 0:
+                        removed += rowcount
+            conn.commit()
+        return removed
+
     def import_daily_report_facts(self, trade_date, data):
         trade_date = _date_or_none(trade_date)
         data = data or {}
@@ -3981,7 +4248,16 @@ class PostgresDailyFactDb:
         if market_snapshot:
             data = dict(data)
             data["market_research_snapshot"] = market_snapshot
-        structured_counts["market_cycle"] = self.replace_market_cycle_context(trade_date, market_snapshot or data)
+        min_trade_date = _recent_replay_min_trade_date(trade_date, data)
+        if min_trade_date:
+            structured_counts["recent_replay_min_trade_date"] = min_trade_date
+        else:
+            structured_counts["recent_replay_window_status"] = _recent_replay_window_status(trade_date, data)
+        structured_counts["market_cycle"] = self.replace_market_cycle_context(
+            trade_date,
+            market_snapshot or data,
+            min_trade_date=min_trade_date,
+        )
         market_total = _market_daily_total_from_data(trade_date, data)
         if market_total:
             self.upsert_market_daily_total(market_total)
@@ -4014,6 +4290,8 @@ class PostgresDailyFactDb:
             factor_snapshot["source_policy"] = "postgresql.daily_report_facts"
             structured_counts["factor_snapshot"] = self.save_factor_snapshot(trade_date, factor_snapshot, mode="frozen")
         fact_result = self.save_daily_report_snapshot(trade_date, data)
+        if min_trade_date:
+            structured_counts["pruned_old_replay_rows"] = self.prune_recent_replay_fact_tables(min_trade_date)
         fact_result["structured_counts"] = structured_counts
         return fact_result
 
@@ -4111,11 +4389,18 @@ class PostgresDailyFactDb:
 
     def _hot_sector_candidates_from_loaded_data(self, data, current_attack_rows, *, limit=8):
         candidates = []
+        seen_alias_keys = set()
 
         def append(value):
             value = _text(value)
-            if value and value not in {"-", "暂无", "无主线", "混沌轮动"} and value not in candidates:
+            alias_key = _hot_sector_alias_key(value)
+            if (
+                value
+                and value not in {"-", "暂无", "无主线", "混沌轮动"}
+                and alias_key not in seen_alias_keys
+            ):
                 candidates.append(value)
+                seen_alias_keys.add(alias_key)
 
         for row in current_attack_rows or []:
             append((row or {}).get("sector_name"))
@@ -4137,6 +4422,12 @@ class PostgresDailyFactDb:
         sector_names = [_text(name) for name in sector_names or [] if _text(name)]
         if not sector_names:
             return []
+        query_names = _hot_sector_query_names(sector_names)
+        preferred_label_by_alias = {}
+        for name in sector_names:
+            alias_key = _hot_sector_alias_key(name)
+            if alias_key:
+                preferred_label_by_alias.setdefault(alias_key, alias_key)
         columns = (
             "trade_date",
             "sector_name",
@@ -4173,14 +4464,15 @@ class PostgresDailyFactDb:
                 trade_date,
                 trade_date,
                 max(_safe_int(window_days, 25), 1) * 3,
-                sector_names,
+                query_names,
                 trade_date,
                 trade_date,
                 max(_safe_int(window_days, 25), 1) * 3,
-                sector_names,
+                query_names,
             ),
         )
         rows = []
+        index_by_day_alias = {}
         for row in cursor.fetchall() or []:
             item = _row_dict(row, columns)
             sector_turnover = _safe_float(item.get("sector_turnover_yi"))
@@ -4188,23 +4480,34 @@ class PostgresDailyFactDb:
             share = _safe_float(item.get("turnover_share_pct"))
             if sector_turnover <= 0 and total_turnover > 0 and share > 0:
                 sector_turnover = round(total_turnover * share / 100, 2)
-            rows.append(
-                {
-                    "date": _text(item.get("trade_date")),
-                    "sector_name": _text(item.get("sector_name")),
-                    "sector_turnover": sector_turnover,
-                    "total_turnover": total_turnover,
-                    "turnover_share_pct": share,
-                    "source": _text(item.get("source_policy")),
-                }
-            )
+            if sector_turnover <= 0 and share <= 0:
+                continue
+            date_text = _text(item.get("trade_date"))
+            alias_key = _hot_sector_alias_key(item.get("sector_name"))
+            output = {
+                "date": date_text,
+                "sector_name": preferred_label_by_alias.get(alias_key, _text(item.get("sector_name"))),
+                "sector_turnover": sector_turnover,
+                "total_turnover": total_turnover,
+                "turnover_share_pct": share,
+                "source": _text(item.get("source_policy")),
+            }
+            row_key = (date_text, alias_key)
+            existing_index = index_by_day_alias.get(row_key)
+            if existing_index is None:
+                index_by_day_alias[row_key] = len(rows)
+                rows.append(output)
+                continue
+            existing = rows[existing_index]
+            if existing.get("sector_turnover", 0) <= 0 < output.get("sector_turnover", 0):
+                rows[existing_index] = output
         return [row for row in rows if row.get("sector_name")][-max(_safe_int(window_days, 25) * len(sector_names), 1):]
 
     def _enrich_loaded_report_data_from_structured_tables(self, cursor, trade_date, data):
         if not isinstance(data, dict):
             return data
         current_attack_rows = self._load_sector_attack_evidence_rows(cursor, trade_date)
-        if current_attack_rows and not data.get("sector_attack_evidence_rows"):
+        if current_attack_rows:
             data["sector_attack_evidence_rows"] = current_attack_rows
         candidate_names = self._hot_sector_candidates_from_loaded_data(data, current_attack_rows)
         recent_hot_rows = self._load_recent_hot_sector_turnover_history(
@@ -4213,8 +4516,11 @@ class PostgresDailyFactDb:
             candidate_names,
             window_days=25,
         )
-        if recent_hot_rows and not data.get("recent_hot_sector_turnover_history"):
+        if recent_hot_rows:
             data["recent_hot_sector_turnover_history"] = recent_hot_rows
+        candidate_trace_artifact = self.load_candidate_trace_artifact(trade_date)
+        if candidate_trace_artifact.get("traces"):
+            data["candidate_trace_artifact"] = candidate_trace_artifact
         return data
 
     def load_candidate_trace_artifact(self, trade_date):

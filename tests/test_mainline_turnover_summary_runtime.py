@@ -204,6 +204,12 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         communication = [row for row in watch_rows if row["sector_name"] == "通信设备"][0]
         cpo = [row for row in watch_rows if row["sector_name"] == "光通信/CPO"][0]
         new_power = [row for row in watch_rows if row["sector_name"] == "新型电力"][0]
+        self.assertFalse(
+            any(
+                row["sector_name"] == "电力" and row["date"] == "2026-05-29"
+                for row in watch_rows
+            )
+        )
         self.assertEqual(communication["date"], "2026-05-29")
         self.assertEqual(communication["share"], "9.2%")
         self.assertEqual(communication["total_turnover"], "33408.58亿")
@@ -211,6 +217,7 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(communication["sample_status"], "待累计")
         self.assertEqual(cpo["share"], "29.6%")
         self.assertEqual(new_power["share"], "0.9%")
+        self.assertEqual(new_power["sample_status"], "待累计")
         self.assertIn("不跨板块解释涨跌", result["hot_sector_turnover_watch_summary"])
 
     def test_build_mainline_turnover_summary_exports_turnover_share_table_rows_even_when_share_missing(self):
