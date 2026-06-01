@@ -647,6 +647,7 @@ LEDGER_MODE_FROZEN = "frozen"
 LEDGER_MODE_REPLAY = "replay"
 REPORT_VARIANT_FULL = "full"
 REPORT_VARIANT_SUMMARY = "summary"
+REPORT_VARIANT_RUN_LOG = "run_log"
 EV_SIGNAL_TYPE_PRIORS = {
     'sweet_zone': {
         'win_rate': 0.53,
@@ -3841,9 +3842,47 @@ def _audit_existing_official_report_or_raise(target_date, official_report_path):
     raise ReportCriticalDataMissingError(f"{target_date} 已有正式日报一致性检查未通过，停止生成")
 
 
+def _daily_report_data_path_label(args):
+    if getattr(args, "postgres_only", False):
+        return "PostgreSQL-only"
+    if getattr(args, "replay", False):
+        return "replay-json"
+    return "live"
+
+
+def _format_elapsed_seconds(elapsed_seconds):
+    return f"{max(0.0, float(elapsed_seconds)) + 1e-9:.2f}"
+
+
+def _append_daily_report_duration_log(saved_paths, *, target_date, elapsed_seconds, data_path_label, report_write_label):
+    elapsed_text = _format_elapsed_seconds(elapsed_seconds)
+    print(
+        f"⏱ 日报生成总耗时: {elapsed_text} 秒 | 日期: {target_date} | 数据路径: {data_path_label} | 报告: {report_write_label}"
+    )
+    run_log_path = (saved_paths or {}).get(REPORT_VARIANT_RUN_LOG)
+    if not run_log_path:
+        return None
+    path = Path(run_log_path)
+    append_text = (
+        "\n\n## 耗时统计\n\n"
+        f"- 开始到完成: {elapsed_text} 秒\n"
+        f"- 日期: {target_date}\n"
+        f"- 数据路径: {data_path_label}\n"
+        f"- 报告写入: {report_write_label}\n"
+    )
+    try:
+        current_text = path.read_text(encoding="utf-8")
+        path.write_text(f"{current_text.rstrip()}{append_text}", encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        print(f"⚠️ 耗时统计写入失败，已保留日报正文: {exc}")
+        return None
+    return str(path)
+
+
 def main():
     """主函数"""
     import argparse
+    report_started_at = time.perf_counter()
     
     parser = argparse.ArgumentParser(description='A股日报数据获取入口 - SKILL.md对齐版')
     parser.add_argument('date', nargs='?', default=None,
@@ -3899,6 +3938,7 @@ def main():
     if args.postgres_only:
         os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
 
+    saved_report_paths = {}
     try:
         if args.postgres_only:
             print(f"📅 从 PostgreSQL 读取日报事实: {target_date}")
@@ -3963,7 +4003,7 @@ def main():
                 tomorrow_decision=tomorrow_decision,
             )
             _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
-            save_report_outputs(
+            saved_report_paths = save_report_outputs(
                 report_outputs,
                 target_date,
                 mode=run_mode,
@@ -4016,6 +4056,15 @@ def main():
                 publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
             else:
                 print("ℹ️ 已跳过 snap-ui 静态数据发布；如需维护前端数据，请显式传入 --publish-snap-ui。")
+
+            elapsed_seconds = time.perf_counter() - report_started_at
+            _append_daily_report_duration_log(
+                saved_report_paths,
+                target_date=target_date,
+                elapsed_seconds=elapsed_seconds,
+                data_path_label=_daily_report_data_path_label(args),
+                report_write_label=run_mode if not args.no_report else "未生成",
+            )
 
         return 0
     finally:

@@ -1,5 +1,7 @@
 import os
+import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -298,6 +300,62 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         import_pg_mock.assert_called_once()
         self.assertFalse(daily_report_entry_demo._POSTGRES_ONLY_RUNTIME)
         self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
+
+    def test_main_postgres_only_logs_total_report_runtime(self):
+        import daily_report_entry_demo
+
+        data = {
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "postgresql.daily_report_facts"},
+            "turnover_rank": [{"code": "000001", "data_source": "postgresql.daily_report_facts"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "hot_rank_top50": [{"code": f"{index:06d}"} for index in range(50)],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
+        }
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0% / 不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_log_path = Path(tmpdir) / "run-log.md"
+            run_log_path.write_text("# log\n", encoding="utf-8")
+            saved_paths = {
+                daily_report_entry_demo.REPORT_VARIANT_FULL: str(Path(tmpdir) / "full.md"),
+                "run_log": str(run_log_path),
+            }
+            stdout = io.StringIO()
+
+            with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-29", "--postgres-only"]), \
+                 patch.object(sys, "stdout", stdout), \
+                 patch.object(daily_report_entry_demo.time, "perf_counter", side_effect=[100.0, 112.345]), \
+                 patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
+                 patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+                 patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+                 patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs), \
+                 patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2><table><tr><td>明日最大仓位</td><td>0%</td></tr></table>"), \
+                 patch.object(daily_report_entry_demo, "save_report_outputs", return_value=saved_paths), \
+                 patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report"), \
+                 patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+                 patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-05-29", "field_count": 1}), \
+                 patch.object(daily_report_entry_demo, "publish_snap_ui_public_data"):
+                daily_report_entry_demo.main()
+
+            output = stdout.getvalue()
+            self.assertIn("日报生成总耗时: 12.35 秒", output)
+            self.assertIn("数据路径: PostgreSQL-only", output)
+            run_log_text = run_log_path.read_text(encoding="utf-8")
+            self.assertIn("## 耗时统计", run_log_text)
+            self.assertIn("开始到完成: 12.35 秒", run_log_text)
+            self.assertIn("数据路径: PostgreSQL-only", run_log_text)
 
     def test_main_postgres_only_rejects_replay_mode(self):
         import daily_report_entry_demo
