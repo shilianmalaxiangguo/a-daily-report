@@ -12,6 +12,8 @@ from report.market_research_snapshot_nodes import (
 )
 from report.front_summary_renderer import sanitize_front_page_text
 from report.mainline_turnover_summary_support import (
+    resolve_hot_sector_turnover_watch_rows,
+    resolve_hot_sector_turnover_watch_summary,
     resolve_double_mainline_summary,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_attack_evidence_rows,
@@ -241,11 +243,16 @@ def _market_structure_judgement(snapshot):
 def _discipline_table(final_gate=None, position_level="", snapshot=None):
     final_gate = final_gate or {}
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    position_label = position_level or "先看市场底色"
     return [
         "## 一、交易纪律",
         "| 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |",
         "|----------|----------|----------|----------|----------|",
-        f"| {position_state['discipline']} | {SECOND_CONFIRM_WINDOW}窗口处理买卖 | 仅量化电风扇行情允许{TAIL_WINDOW}例外处理，次日高开兑现 | 单笔最晚-5%，不能大亏 | {position_level or '先看市场底色'}；先看周期主线，只在主线个股上做小亏小赚偶尔大赚 |",
+        f"| {position_state['discipline']} | T日只给T+1观察资格；普通候选只等{SECOND_CONFIRM_WINDOW} MA5回踩收回 | 强核心全天强且偏离MA5不大，{TAIL_WINDOW}最多25%试仓 | 当天新买不可卖；买点失败仓次日先处理 | {position_label}；先分普通候选、强核心、已有旧仓、失败仓和退潮警戒，再决定参与 |",
+        f"| 普通候选 | T+1 MA5回踩是基础入口；{OPENING_WINDOW}不抢，{SECOND_CONFIRM_WINDOW}确认站回MA5/VWAP/0轴才可做50% | 没有强核心身份时不做尾盘试仓 | 大高开远离MA5、大低开、收不回MA5或板块退潮都不做 | 分不清是不是强核心，退回MA5回踩，不用混合规则追高 |",
+        f"| 强核心 | T+1混合龙头只用于板块核心、高辨识度、承接强；优先MA5回踩，其次健康低开转强 | 全天强、偏离不大且没有舒服回踩，{TAIL_WINDOW}只允许25%试仓 | 秒板/一字无换手、偏离MA5过远、低开后继续下杀都放弃 | 龙头不给舒服买点也不能无条件追，只在三窗口确认后参与 |",
+        f"| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T；50%底仓跟随，50%机动仓只在确认后做T | 尾盘卖可卖旧仓，隔夜尽量回到50%底仓 | 今天新增仓不能当天卖；做T卖的是昨天以前的旧仓 | 做T先降风险，确认后买回，不用第二笔证明第一笔 |",
+        f"| 失败仓/退潮 | 当天MA5买入后收盘跌破MA5，次日先按买点失败仓处理 | 只给{SECOND_CONFIRM_WINDOW}一次站回MA5和分时均价的修复窗口 | 放量下杀、收盘低位、板块核心退潮或反抽不过线，优先处理可卖仓 | 退潮警戒切MA5清，必要时不新增参与，不继续套MA7容错 |",
         "",
     ]
 
@@ -373,6 +380,57 @@ def _monthly_rhythm_from_snapshot(snapshot):
     return rhythm if isinstance(rhythm, dict) else {}
 
 
+def _market_zero_stress_reason(snapshot=None, final_gate=None):
+    snapshot = snapshot or {}
+    final_gate = final_gate or {}
+    state_machine = snapshot.get("state_machine") or {}
+    if not isinstance(state_machine, dict):
+        state_machine = {}
+    monthly_rhythm = _monthly_rhythm_from_snapshot(snapshot)
+
+    if (
+        final_gate.get("market_ice_point")
+        or state_machine.get("market_ice_point")
+        or monthly_rhythm.get("market_ice_point")
+    ):
+        return "市场情绪冰点，可能未止跌，不继续参与"
+
+    operation_state = str(final_gate.get("operation_state") or state_machine.get("operation_state") or "").strip()
+    execution_bias = str(state_machine.get("execution_bias") or "").strip()
+    pulse_stage = str(state_machine.get("pulse_stage") or "").strip()
+    energy_state = str(state_machine.get("energy_state") or "").strip()
+    if (
+        operation_state == "撤退态"
+        or execution_bias == "avoid"
+        or pulse_stage in {"退潮", "踩踏", "恐慌"}
+        or energy_state == "收缩防守"
+    ):
+        return "市场情绪退潮未止跌，可能还在释放风险，不继续参与"
+
+    if monthly_rhythm.get("trend_invalid") or state_machine.get("trend_invalid"):
+        return "趋势失效或承接未修复，不继续参与"
+
+    return ""
+
+
+def _compose_zero_market_reason(snapshot=None, final_gate=None, detail_reason=""):
+    stress_reason = _market_zero_stress_reason(snapshot, final_gate)
+    detail_reason = str(detail_reason or "").strip()
+    if stress_reason and detail_reason and stress_reason not in detail_reason:
+        return f"{stress_reason}；{detail_reason}"
+    return detail_reason or stress_reason
+
+
+def _compose_zero_no_execution_reason(snapshot=None, final_gate=None, basis_reason=""):
+    stress_reason = _market_zero_stress_reason(snapshot, final_gate)
+    if stress_reason:
+        return f"{stress_reason}；指数图形与主攻线承接未修复，所以不给执行目标。"
+    basis_reason = str(basis_reason or "").strip()
+    if any(marker in basis_reason for marker in ("弱市场", "冰点", "趋势失效", "退潮", "未止跌")):
+        return "市场条件未修复，只保留观察锚，不给执行目标。"
+    return basis_reason
+
+
 def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_observation_target=False):
     snapshot = snapshot or {}
     final_gate = final_gate or {}
@@ -410,10 +468,13 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
     if branch_20cm.get("direct_ban"):
         reason = str(branch_20cm.get("reason") or "高波动样本当前禁做。").strip()
         return {"basis": reason, "reason": reason, "attribution": "市场问题", "strong": True}
+    monthly_reason = str(monthly_rhythm.get("reason") or decision.get("sizing_reason") or "").strip()
     if final_gate.get("should_reduce") and not expected_50_preview:
+        basis = _compose_zero_market_reason(snapshot, final_gate, monthly_reason) or "市场要求先降风险，不新增参与。"
+        reason = _compose_zero_no_execution_reason(snapshot, final_gate, basis)
         return {
-            "basis": "市场要求先降风险，不新增参与。",
-            "reason": "市场要求先降风险，只保留观察锚",
+            "basis": basis,
+            "reason": reason,
             "attribution": "市场问题",
             "strong": True,
         }
@@ -424,7 +485,6 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
             "attribution": "市场问题",
             "strong": True,
         }
-    monthly_reason = str(monthly_rhythm.get("reason") or decision.get("sizing_reason") or "").strip()
     monthly_zero = (
         monthly_rhythm.get("target_role") == "defense_0"
         or int(_safe_float(monthly_rhythm.get("max_position_pct"), 50)) <= 0
@@ -441,8 +501,9 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
         and not expected_50_preview
         and (market_zero or any(marker in monthly_reason for marker in ("弱市场", "冰点", "趋势失效")))
     ):
-        reason = monthly_reason or "弱市场、冰点或趋势失效时，只允许0%保护本金。"
-        return {"basis": reason, "reason": reason, "attribution": "市场问题", "strong": True}
+        basis = _compose_zero_market_reason(snapshot, final_gate, monthly_reason) or "弱市场、冰点或趋势失效时，只允许0%保护本金。"
+        reason = _compose_zero_no_execution_reason(snapshot, final_gate, basis)
+        return {"basis": basis, "reason": reason, "attribution": "市场问题", "strong": True}
     execution_bias = str(state_machine.get("execution_bias") or "").strip()
     if execution_bias == "reduce_only" and not expected_50_preview:
         return {
@@ -709,6 +770,8 @@ def _mainline_attack_evidence_lines(snapshot):
 
 
 def _turnover_share_lines(snapshot):
+    hot_rows = resolve_hot_sector_turnover_watch_rows(snapshot)
+    hot_summary_text = resolve_hot_sector_turnover_watch_summary(snapshot)
     rows = resolve_turnover_share_trend_rows(snapshot)
     summary_text = str(
         (snapshot or {}).get("turnover_share_trend_summary")
@@ -716,25 +779,41 @@ def _turnover_share_lines(snapshot):
         or ""
     ).strip()
     lines = [
-        "### 5. 主线成交额占比趋势",
+        "### 5. 主线成交额占比趋势（近期热点板块连续跟踪）",
     ]
-    if summary_text:
-        lines.append(f"> {summary_text}")
+    if hot_summary_text:
+        lines.append(f"> {hot_summary_text}")
         lines.append("")
     lines.extend(
         [
-            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-            "|------|----------|------------|------------|------------|------|----------|------|",
+            "| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
+            "|------|------|------------|------------|------|------------|----------|------|",
         ]
     )
+    if hot_rows:
+        for row in _display_latest_first(hot_rows):
+            lines.append(
+                "| {date} | {sector_name} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(**row)
+            )
+    else:
+        lines.append("| 今日 | - | 数据暂缺 | - | 待累计 | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |")
+    lines.append("")
     if rows:
+        lines.append("#### 主线切换成交额记录")
+        if summary_text:
+            lines.append(f"> {summary_text}")
+            lines.append("")
+        lines.extend(
+            [
+                "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+                "|------|----------|------------|------------|------------|------|----------|------|",
+            ]
+        )
         for row in _display_latest_first(rows):
             lines.append(
                 "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(**row)
             )
-    else:
-        lines.append("| 今日 | - | - | 数据暂缺 | - | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |")
-    lines.append("")
+        lines.append("")
     return lines
 
 
@@ -1159,12 +1238,17 @@ def _dedupe_top20_capacity_front_lines(lines):
 def _dedupe_repeated_front_long_cells(lines):
     deduped = []
     seen = set()
+    preserve_reason_labels = {"0%原因", "不参与依据", "无执行目标原因"}
     for line in list(lines or []):
         text = str(line or "")
         if not text.startswith("|"):
             deduped.append(text)
             continue
         raw_cells = text.strip().strip("|").split("|")
+        row_label = raw_cells[0].strip() if raw_cells else ""
+        if row_label in preserve_reason_labels:
+            deduped.append(text)
+            continue
         changed = False
         cells = []
         for cell in raw_cells:
@@ -1346,6 +1430,17 @@ def _account_status_lines(snapshot=None, final_gate=None):
     holding = _existing_position_summary(snapshot)
     main_target, main_role = _t0_main_target(snapshot, position_state)
     has_main_target = isinstance(main_target, dict) and bool(main_target.get("name") or main_target.get("code"))
+    zero_position_reason = ""
+    if position_state.get("grade") == "0":
+        zero_context = _zero_position_no_execution_context(
+            snapshot,
+            final_gate=final_gate,
+            has_observation_target=has_main_target or _has_selected_position_candidate(snapshot),
+        )
+        zero_position_reason = (
+            _market_zero_stress_reason(snapshot, final_gate)
+            or str(zero_context.get("basis") or zero_context.get("reason") or "").strip()
+        )
     capital_text = _account_capital_text(snapshot)
     account_profile = _account_profile(snapshot)
     account_hit = _knowledge_hit(snapshot, "account.unbuyable-core-anchor")
@@ -1421,13 +1516,19 @@ def _account_status_lines(snapshot=None, final_gate=None):
         "|------|------|",
         f"| 账户约束 | {account_constraint} |",
         f"| 明日仓位 | {position_label} |",
-        f"| 明日动作 | {tomorrow_action} |",
-        f"| {primary_row_label} | {main_label} |",
-        f"| {secondary_row_label} | {backup_label} |",
-        f"| 价格条件 | {price_condition} |",
-        f"| 新开仓上限 | {new_entry_limit} |",
-        "| 今日不看 | T1/T2/T3只放附录观察，不同时盯多只，不为多个名单分散资金 |",
     ]
+    if zero_position_reason:
+        lines.append(f"| 0%原因 | {zero_position_reason} |")
+    lines.extend(
+        [
+            f"| 明日动作 | {tomorrow_action} |",
+            f"| {primary_row_label} | {main_label} |",
+            f"| {secondary_row_label} | {backup_label} |",
+            f"| 价格条件 | {price_condition} |",
+            f"| 新开仓上限 | {new_entry_limit} |",
+            "| 今日不看 | T1/T2/T3只放附录观察，不同时盯多只，不为多个名单分散资金 |",
+        ]
+    )
     if knowledge_basis_label:
         lines.append(f"| 经验库依据 | {knowledge_basis_label} |")
     lines.append("")

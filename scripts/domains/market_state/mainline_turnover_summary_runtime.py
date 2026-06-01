@@ -99,6 +99,31 @@ def _format_share_series(series):
     return " -> ".join(f"{value:.1f}%" for value in series)
 
 
+def _build_share_point_text(recent_sector_turnover_history, current_snapshot):
+    rows = list(recent_sector_turnover_history or [])
+    if current_snapshot:
+        rows.append(current_snapshot)
+    points = []
+    for item in rows:
+        item = item or {}
+        share = round(_safe_float(item.get("turnover_share_pct")), 1)
+        if share <= 0:
+            continue
+        sector = str(
+            item.get("cycle_mainline")
+            or item.get("primary_mainline")
+            or item.get("daily_attack_line")
+            or item.get("sector_name")
+            or "未命名方向"
+        ).strip()
+        date = str(item.get("date") or item.get("trade_date") or "").strip()
+        point = f"{sector} {share:.1f}%"
+        if date:
+            point = f"{date} {point}"
+        points.append(point)
+    return "；".join(points[-3:])
+
+
 def _resolve_share_trend_label(current_mainline, previous_mainline, share_series):
     if current_mainline and previous_mainline and current_mainline != previous_mainline:
         return "切换"
@@ -842,7 +867,6 @@ def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_sna
     source_rows = list(recent_sector_turnover_history or []) + ([current_snapshot] if current_snapshot else [])
     rows = []
     previous_share_by_mainline = {}
-    previous_share_any_mainline = 0.0
     for item in _limit_turnover_share_source_rows(source_rows, current_mainline):
         row_mainline = _turnover_row_mainline(item, current_mainline)
         previous_same_mainline = previous_share_by_mainline.get(row_mainline, 0.0)
@@ -850,13 +874,12 @@ def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_sna
             item,
             fallback_mainline=current_mainline,
             daily_attack_line="",
-            previous_share=previous_same_mainline if previous_same_mainline > 0 else previous_share_any_mainline,
+            previous_share=previous_same_mainline,
         )
         rows.append(row)
         share = _safe_float((item or {}).get("turnover_share_pct"))
         if share > 0:
             previous_share_by_mainline[row_mainline] = share
-            previous_share_any_mainline = share
     return rows
 
 
@@ -869,6 +892,7 @@ def _share_points_from_source_rows(source_rows):
         points.append(
             {
                 "date": str((item or {}).get("date") or "").strip(),
+                "sector_name": _turnover_row_mainline(item),
                 "share": share,
             }
         )
@@ -894,7 +918,20 @@ def _build_turnover_share_trend_summary(recent_sector_turnover_history, current_
     current_share = shares[-1]
     low_share = min(shares)
     high_share = max(shares)
+    current_sector = str(points[-1].get("sector_name") or current_mainline or "当日主线").strip() or "当日主线"
+    unique_sectors = {
+        str(point.get("sector_name") or "").strip()
+        for point in points
+        if str(point.get("sector_name") or "").strip()
+    }
     window_label = f"近{len(limited_rows)}个交易日" if len(limited_rows) == 25 else f"近{len(points)}个有效交易日"
+    if len(unique_sectors) > 1:
+        return (
+            f"{window_label}主线切换成交额记录："
+            f"当前{current_sector}{current_share:.1f}%，"
+            f"样本包含{len(unique_sectors)}个不同方向；"
+            "这是每日被选中方向的记录，不作为同一板块涨跌判断。"
+        )
     recent_change_text = ""
     if len(shares) >= 5:
         direction_delta = current_share - shares[-5]
@@ -910,6 +947,291 @@ def _build_turnover_share_trend_summary(recent_sector_turnover_history, current_
         f"{recent_change_text}"
         f"区间{low_share:.1f}%-{high_share:.1f}%，"
         f"{_share_direction_text(direction_delta)}"
+    )
+
+
+def _is_directional_sector_label(value):
+    label = str(value or "").strip()
+    return bool(label and label not in {"-", "暂无", "无主线", "混沌轮动", "未知", "未归类"})
+
+
+def _watch_row_sector_name(item, fallback=""):
+    item = item or {}
+    return str(
+        item.get("cycle_mainline")
+        or item.get("primary_mainline")
+        or item.get("daily_attack_line")
+        or item.get("sector_name")
+        or fallback
+        or ""
+    ).strip()
+
+
+def _append_unique_sector_name(items, value):
+    value = str(value or "").strip()
+    if _is_directional_sector_label(value) and value not in items:
+        items.append(value)
+
+
+def _hot_sector_candidate_names(
+    *,
+    current_mainline="",
+    current_snapshot=None,
+    recent_sector_turnover_history=None,
+    sector_attack_evidence_rows=None,
+    recent_hot_sector_turnover_history=None,
+    max_sectors=8,
+):
+    candidates = []
+    _append_unique_sector_name(candidates, _watch_row_sector_name(current_snapshot, current_mainline))
+    _append_unique_sector_name(candidates, current_mainline)
+    for row in reversed(list(recent_sector_turnover_history or [])[-8:]):
+        _append_unique_sector_name(candidates, _watch_row_sector_name(row))
+    ranked_attack_rows = sorted(
+        [row for row in sector_attack_evidence_rows or [] if isinstance(row, dict)],
+        key=lambda row: (
+            _safe_float(row.get("turnover_share_pct")),
+            _safe_float(row.get("sector_turnover") or row.get("sector_turnover_yi")),
+            abs(_safe_float(row.get("net_inflow_amount"))),
+            _safe_float(row.get("limit_up_count")),
+        ),
+        reverse=True,
+    )
+    for row in ranked_attack_rows:
+        _append_unique_sector_name(candidates, _watch_row_sector_name(row))
+    for row in reversed(list(recent_hot_sector_turnover_history or [])):
+        _append_unique_sector_name(candidates, _watch_row_sector_name(row))
+    return candidates[: max(int(max_sectors or 0), 1)]
+
+
+def _hot_sector_row_key(item):
+    return (
+        str((item or {}).get("date") or (item or {}).get("trade_date") or "").strip(),
+        _watch_row_sector_name(item),
+    )
+
+
+def _row_has_better_turnover(candidate, existing):
+    candidate_turnover = _safe_float((candidate or {}).get("sector_turnover") or (candidate or {}).get("sector_turnover_yi"))
+    existing_turnover = _safe_float((existing or {}).get("sector_turnover") or (existing or {}).get("sector_turnover_yi"))
+    if candidate_turnover > 0 and existing_turnover <= 0:
+        return True
+    candidate_total = _safe_float((candidate or {}).get("total_turnover") or (candidate or {}).get("total_turnover_yi"))
+    existing_total = _safe_float((existing or {}).get("total_turnover") or (existing or {}).get("total_turnover_yi"))
+    return candidate_total > 0 and existing_total <= 0
+
+
+def _merge_hot_sector_source_row(existing, candidate):
+    if not existing:
+        return dict(candidate or {})
+    if _row_has_better_turnover(candidate, existing):
+        merged = dict(candidate or {})
+        for key, value in (existing or {}).items():
+            if key not in merged or merged.get(key) in (None, "", [], {}):
+                merged[key] = value
+        return merged
+    merged = dict(existing or {})
+    for key, value in (candidate or {}).items():
+        if key not in merged or merged.get(key) in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def _attack_evidence_row_to_hot_sector_row(row, *, target_date="", total_turnover=0.0):
+    row = dict(row or {})
+    sector_name = _watch_row_sector_name(row)
+    if not _is_directional_sector_label(sector_name):
+        return {}
+    share = _safe_float(row.get("turnover_share_pct"))
+    sector_turnover = _safe_float(row.get("sector_turnover") or row.get("sector_turnover_yi"))
+    total_turnover = _safe_float(row.get("total_turnover") or row.get("total_turnover_yi") or total_turnover)
+    if sector_turnover <= 0 and total_turnover > 0 and share > 0:
+        sector_turnover = round(total_turnover * share / 100, 2)
+    return {
+        "date": str(row.get("date") or row.get("trade_date") or target_date or "").strip(),
+        "sector_name": sector_name,
+        "sector_turnover": sector_turnover,
+        "total_turnover": total_turnover,
+        "turnover_share_pct": share,
+        "source": str(row.get("source") or row.get("source_policy") or "sector_attack_evidence").strip(),
+    }
+
+
+def _normalize_hot_sector_source_row(row, *, fallback_date="", fallback_total_turnover=0.0):
+    row = dict(row or {})
+    sector_name = _watch_row_sector_name(row)
+    if not _is_directional_sector_label(sector_name):
+        return {}
+    share = _safe_float(row.get("turnover_share_pct"))
+    sector_turnover = _safe_float(row.get("sector_turnover") or row.get("sector_turnover_yi"))
+    total_turnover = _safe_float(row.get("total_turnover") or row.get("total_turnover_yi") or fallback_total_turnover)
+    if share <= 0 and sector_turnover > 0 and total_turnover > 0:
+        share = round(sector_turnover / total_turnover * 100, 2)
+    if sector_turnover <= 0 and total_turnover > 0 and share > 0:
+        sector_turnover = round(total_turnover * share / 100, 2)
+    return {
+        "date": str(row.get("date") or row.get("trade_date") or fallback_date or "").strip(),
+        "sector_name": sector_name,
+        "sector_turnover": sector_turnover,
+        "total_turnover": total_turnover,
+        "turnover_share_pct": share,
+        "source": str(row.get("source") or row.get("source_policy") or "").strip(),
+    }
+
+
+def _build_hot_sector_source_rows(
+    *,
+    target_date="",
+    current_snapshot=None,
+    recent_sector_turnover_history=None,
+    sector_attack_evidence_rows=None,
+    recent_hot_sector_turnover_history=None,
+):
+    current_total_turnover = _safe_float((current_snapshot or {}).get("total_turnover"))
+    source_rows = []
+    for row in recent_hot_sector_turnover_history or []:
+        source_rows.append(_normalize_hot_sector_source_row(row))
+    for row in recent_sector_turnover_history or []:
+        source_rows.append(_normalize_hot_sector_source_row(row))
+    if current_snapshot:
+        source_rows.append(_normalize_hot_sector_source_row(current_snapshot, fallback_date=target_date))
+    for row in sector_attack_evidence_rows or []:
+        source_rows.append(
+            _attack_evidence_row_to_hot_sector_row(
+                row,
+                target_date=target_date,
+                total_turnover=current_total_turnover,
+            )
+        )
+
+    deduped = {}
+    for row in source_rows:
+        if not row:
+            continue
+        key = _hot_sector_row_key(row)
+        if not key[0] or not key[1]:
+            continue
+        deduped[key] = _merge_hot_sector_source_row(deduped.get(key), row)
+    return list(deduped.values())
+
+
+def _hot_sector_watch_interpretation(sector_name, share, previous_share):
+    if share <= 0:
+        return f"{sector_name}成交占比待累计，先不据此放大买入资格"
+    if previous_share <= 0:
+        return f"{sector_name}只记录本板块当日点位，等待同板块历史继续累计"
+    change = share - previous_share
+    if change >= 0.5:
+        return f"{sector_name}同板块成交占比抬升，资金容量扩张"
+    if change <= -0.5:
+        return f"{sector_name}同板块成交占比回落，先看承接能否修复"
+    return f"{sector_name}同板块成交占比横向震荡，继续观察方向选择"
+
+
+def _build_hot_sector_watch_row(item, previous_share=0.0):
+    item = item or {}
+    sector_name = _watch_row_sector_name(item) or "-"
+    share = _safe_float(item.get("turnover_share_pct"))
+    previous_share = _safe_float(previous_share)
+    total_turnover = _format_amount_yi(item.get("total_turnover"))
+    return {
+        "date": str(item.get("date") or "-").strip() or "-",
+        "sector_name": sector_name,
+        "sector_turnover": _format_amount_yi(item.get("sector_turnover")),
+        "market_turnover": total_turnover,
+        "total_turnover": total_turnover,
+        "share": _format_share_pct(share),
+        "share_change": _format_share_change(share, previous_share),
+        "sample_status": "同板块连续" if share > 0 and previous_share > 0 else "待累计",
+        "interpretation": _hot_sector_watch_interpretation(sector_name, share, previous_share),
+    }
+
+
+def _limit_hot_sector_watch_rows(rows, candidate_names, *, per_sector_limit=5, total_limit=30):
+    by_sector = {}
+    for row in rows or []:
+        sector = _watch_row_sector_name(row)
+        if not sector:
+            continue
+        by_sector.setdefault(sector, []).append(row)
+
+    limited = []
+    for sector in candidate_names or []:
+        sector_rows = sorted(
+            by_sector.get(sector, []),
+            key=lambda item: str((item or {}).get("date") or ""),
+        )
+        limited.extend(sector_rows[-max(int(per_sector_limit or 0), 1):])
+    limited.sort(key=lambda item: (str((item or {}).get("date") or ""), _watch_row_sector_name(item)))
+    return limited[-max(int(total_limit or 0), 1):]
+
+
+def _build_hot_sector_turnover_watch_rows(
+    *,
+    target_date="",
+    current_mainline="",
+    current_snapshot=None,
+    recent_sector_turnover_history=None,
+    sector_attack_evidence_rows=None,
+    recent_hot_sector_turnover_history=None,
+):
+    candidate_names = _hot_sector_candidate_names(
+        current_mainline=current_mainline,
+        current_snapshot=current_snapshot,
+        recent_sector_turnover_history=recent_sector_turnover_history,
+        sector_attack_evidence_rows=sector_attack_evidence_rows,
+        recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
+    )
+    if not candidate_names:
+        return []
+    source_rows = _build_hot_sector_source_rows(
+        target_date=target_date,
+        current_snapshot=current_snapshot,
+        recent_sector_turnover_history=recent_sector_turnover_history,
+        sector_attack_evidence_rows=sector_attack_evidence_rows,
+        recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
+    )
+    filtered_rows = [
+        row
+        for row in source_rows
+        if any(_sector_names_equal(_watch_row_sector_name(row), candidate) for candidate in candidate_names)
+    ]
+    limited_rows = _limit_hot_sector_watch_rows(filtered_rows, candidate_names)
+    previous_share_by_sector = {}
+    result = []
+    for item in limited_rows:
+        sector = _watch_row_sector_name(item)
+        previous_share = previous_share_by_sector.get(sector, 0.0)
+        result.append(_build_hot_sector_watch_row(item, previous_share=previous_share))
+        share = _safe_float(item.get("turnover_share_pct"))
+        if share > 0:
+            previous_share_by_sector[sector] = share
+    return result
+
+
+def _hot_sector_watch_share_float(row):
+    text = str((row or {}).get("share") or "").strip().replace("%", "")
+    return _safe_float(text)
+
+
+def _build_hot_sector_turnover_watch_summary(rows):
+    rows = [row for row in rows or [] if isinstance(row, dict)]
+    if not rows:
+        return "近期热点板块成交额连续跟踪：关键数据不完整，停止生成趋势判断。"
+    latest_date = max(str((row or {}).get("date") or "") for row in rows)
+    latest_rows = [row for row in rows if str(row.get("date") or "") == latest_date]
+    latest_rows = sorted(latest_rows, key=_hot_sector_watch_share_float, reverse=True)
+    continuous = [row for row in rows if str(row.get("sample_status") or "") == "同板块连续"]
+    leader = latest_rows[0] if latest_rows else rows[-1]
+    leader_text = f"{leader.get('sector_name', '-')} {leader.get('share', '待累计')}"
+    if continuous:
+        return (
+            f"近期热点板块成交额连续跟踪：当前{latest_date}记录{len(latest_rows)}个热点板块，"
+            f"{leader_text}居前；变化只按同一板块自身历史计算。"
+        )
+    return (
+        f"近期热点板块成交额连续跟踪：当前{latest_date}记录{len(latest_rows)}个热点板块，"
+        f"{leader_text}居前；同板块历史仍待累计，不跨板块解释涨跌。"
     )
 
 
@@ -959,6 +1281,7 @@ def build_mainline_turnover_summary(
     recent_mainline_history=None,
     current_sector_turnover_snapshot=None,
     recent_sector_turnover_history=None,
+    recent_hot_sector_turnover_history=None,
     sector_attack_evidence_rows=None,
     realtime_tag_evidence_snapshot=None,
 ):
@@ -997,7 +1320,17 @@ def build_mainline_turnover_summary(
         conclusion = _build_conclusion(current_mainline, previous_mainline, share_trend_label)
     mainline_path = _build_mainline_path_text(recent_mainline_history, current_mainline)
     share_path = _format_share_series(share_series)
-    data_text = f"最近{len(share_series)}日主线 {mainline_path}；成交额占比 {share_path}，节奏偏{share_trend_label}" if mainline_path and share_path else ""
+    mainline_path_parts = [part.strip() for part in mainline_path.split("->") if part.strip()]
+    has_mixed_mainline_path = len(set(mainline_path_parts)) > 1
+    if mainline_path and share_path and (share_trend_label == "切换" or has_mixed_mainline_path):
+        share_point_text = _build_share_point_text(recent_sector_turnover_history, current_snapshot)
+        data_text = (
+            f"近期被记录方向分列：{share_point_text}；这些是各自板块点位，不做连续涨跌判断"
+            if share_point_text
+            else f"最近{len(share_series)}日主线 {mainline_path}；成交额占比为各自板块点位，节奏偏切换"
+        )
+    else:
+        data_text = f"最近{len(share_series)}日主线 {mainline_path}；成交额占比 {share_path}，节奏偏{share_trend_label}" if mainline_path and share_path else ""
 
     action_text = _build_action_text(current_mainline, previous_mainline, share_trend_label)
     current_mainline_for_regime = evidence_primary_line if attack_evidence_summary else current_mainline
@@ -1032,6 +1365,14 @@ def build_mainline_turnover_summary(
         mainline_capacity_regime_summary=capacity_regime_summary,
         overtake_window_summary=overtake_window_summary,
     )
+    hot_sector_watch_rows = _build_hot_sector_turnover_watch_rows(
+        target_date=target_date,
+        current_mainline=current_mainline,
+        current_snapshot=current_snapshot,
+        recent_sector_turnover_history=recent_sector_turnover_history,
+        sector_attack_evidence_rows=sector_attack_evidence_rows,
+        recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
+    )
     return {
         "date": str(target_date or current_record.get("date") or current_snapshot.get("date") or "").strip(),
         "label": "主线更替与成交额占比",
@@ -1065,4 +1406,6 @@ def build_mainline_turnover_summary(
             current_snapshot,
             current_mainline,
         ),
+        "hot_sector_turnover_watch_summary": _build_hot_sector_turnover_watch_summary(hot_sector_watch_rows),
+        "hot_sector_turnover_watch_rows": hot_sector_watch_rows,
     }

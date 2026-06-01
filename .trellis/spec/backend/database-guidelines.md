@@ -193,3 +193,101 @@ archive JSON out of the report generation path.
   Verify the import path and SQL rows.
 - Using broad regexes such as `raw` against encoded field paths; this can match
   legitimate terms like `max_drawdown`. Match field path components instead.
+
+## Scenario: Hot Sector Turnover Watch
+
+### 1. Scope / Trigger
+
+- Trigger: changing mainline turnover summaries, sector attack evidence, or any
+  report section that compares sector turnover share across days.
+
+### 2. Signatures
+
+- Runtime API:
+  `build_mainline_turnover_summary(..., recent_hot_sector_turnover_history=None, sector_attack_evidence_rows=None)`
+- PostgreSQL import:
+  `PostgresDailyFactDb.import_daily_report_facts(trade_date, data)`
+- PostgreSQL load helpers:
+  `load_sector_attack_evidence_rows(trade_date)` and
+  `load_recent_hot_sector_turnover_history(trade_date, lookback_days=25)`
+- Dedicated table fields:
+  `sector_attack_evidence_daily.sector_turnover_yi`,
+  `sector_attack_evidence_daily.total_turnover_yi`,
+  `sector_attack_evidence_daily.turnover_share_pct`,
+  `sector_attack_evidence_daily.source_policy`,
+  `sector_attack_evidence_daily.source_run_id`
+
+### 3. Contracts
+
+- `hot_sector_turnover_watch_rows` is the replay-worthy table for recent hot
+  sector turnover tracking. It must include at least `date`, `sector_name`,
+  `sector_turnover`, `total_turnover`, `share`, `share_change`,
+  `sample_status`, and `interpretation`.
+- `share_change` must be calculated only against the previous row for the same
+  `sector_name`. If no prior same-sector point exists, render `待累计`.
+- Daily selected-mainline turnover rows may still render as
+  `主线切换成交额记录`, but they are switch records, not a same-sector trend.
+- When multiple sectors appear in the selected-mainline history, summary text
+  must not show a cross-sector percentage range as if it were a trend. Describe
+  it as different directions or split points instead.
+- `sector_attack_evidence_rows` must be stored in
+  `sector_attack_evidence_daily`, not duplicated into generic
+  `daily_report_fact_fields`.
+- A table label such as `T-018（PSQL）` is valid only because the semantic table
+  is PostgreSQL-backed; never key behavior on the dynamic `T-018` id.
+
+### 4. Validation & Error Matrix
+
+- A current hot sector has turnover and market total -> write both amounts and
+  derive `turnover_share_pct` if needed.
+- A current hot sector has share only -> derive sector turnover only when market
+  total is present; otherwise keep the amount missing.
+- No prior same-sector row -> `share_change=待累计`, not a cross-sector delta.
+- Selected-mainline history switches sector names -> render
+  `主线切换成交额记录` and avoid same-sector trend wording.
+- Generic fact projection contains `sector_attack_evidence_rows` -> fix the
+  projection filter; the dedicated table is the source of record.
+
+### 5. Good/Base/Bad Cases
+
+- Good: 2026-05-29 shows 通信设备, 国产芯片替代, 半导体, 电力, and other current hot
+  sectors as separate rows, with changes only against each sector's own history.
+- Base: 光通信/CPO has a 2026-05-28 point but no 2026-05-29 same-concept point;
+  it remains `待累计` and is not compared to 新型电力.
+- Bad: rendering `29.6% -> 0.9%` as a continuous turnover-share fall when the
+  first point is 光通信/CPO and the second point is 新型电力.
+- Bad: storing the same `sector_attack_evidence_rows` payload in both
+  `sector_attack_evidence_daily` and generic fact fields.
+
+### 6. Tests Required
+
+- Unit test same-sector share deltas and cross-sector `待累计` behavior.
+- Unit test mixed selected-mainline summary text does not use cross-sector arrow
+  trends or cross-sector percentage ranges.
+- Unit test PostgreSQL schema contains turnover amount, market amount, and source
+  fields for `sector_attack_evidence_daily`.
+- Unit test PostgreSQL import filters `sector_attack_evidence_rows` from generic
+  fact fields while preserving `hot_sector_turnover_watch_rows`.
+- Integration verification for replay dates must run `--postgres-only`, inspect
+  the rendered hot-sector watch table, and query dedicated PostgreSQL rows.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+previous_share = previous_share_any_mainline
+row["share_change"] = _format_share_change(current_share, previous_share)
+```
+
+This compares different sectors and can turn a switch record into a fake fall.
+
+#### Correct
+
+```python
+previous_share = previous_share_by_sector.get(sector_name, 0.0)
+row["share_change"] = _format_share_change(current_share, previous_share)
+previous_share_by_sector[sector_name] = current_share
+```
+
+Same-sector history is the only valid basis for turnover-share change.

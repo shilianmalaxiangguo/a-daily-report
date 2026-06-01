@@ -43,6 +43,33 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("跑过一段后再判断，对手过弯打滑", rendered.split("## 明日账户建议", 1)[0])
         self.assertLess(rendered.index("- **今日基调**"), rendered.index("## 一、交易纪律"))
 
+    def test_front_page_t002_renders_sniper_trade_scenarios(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-31",
+                market_research_snapshot={
+                    "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+                    "unique_action_target": {
+                        "name": "强核心",
+                        "code": "000001",
+                        "condition": "主线确认 + 承接",
+                    },
+                },
+                final_gate={"can_new_entry": True},
+                position_level="二档（防守档）",
+            )
+        )
+
+        discipline_section = rendered[rendered.index("## 一、交易纪律") : rendered.index("### 月度攻防与进攻仓位")]
+        self.assertIn("| 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |", discipline_section)
+        self.assertIn("T日只给T+1观察资格", discipline_section)
+        self.assertIn("| 普通候选 | T+1 MA5回踩是基础入口", discipline_section)
+        self.assertIn("| 强核心 | T+1混合龙头只用于板块核心、高辨识度、承接强", discipline_section)
+        self.assertIn("| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T", discipline_section)
+        self.assertIn("| 失败仓/退潮 | 当天MA5买入后收盘跌破MA5，次日先按买点失败仓处理", discipline_section)
+        self.assertIn("退潮警戒切MA5清", discipline_section)
+
     def test_front_page_surfaces_monthly_rhythm_position_grade_and_month_return(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -141,7 +168,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("竞价表态", rendered)
         self.assertIn("开盘前几分钟", rendered)
         self.assertIn("回封参与", rendered)
-        self.assertIn("09:50-10:10窗口处理买卖", rendered)
+        self.assertIn("T日只给T+1观察资格", rendered)
+        self.assertIn("普通候选只等09:50-10:10 MA5回踩收回", rendered)
+        self.assertIn("T+1混合龙头只用于板块核心、高辨识度、承接强", rendered)
         self.assertIn("09:50-10:10", rendered)
         self.assertIn("14:30-14:55", rendered)
         self.assertNotIn("买点等60分钟", rendered)
@@ -205,8 +234,8 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 观察锚 | 600578 京能电力（电力） |", rendered)
         self.assertIn("| 明日仓位 | 0%不参与 |", rendered)
         self.assertIn("| 执行目标 | 无 |", rendered)
-        self.assertIn("| 不参与依据 | 弱市场或趋势失效时，只允许0%保护本金。 |", rendered)
-        self.assertIn("| 无执行目标原因 | 弱市场或趋势失效时，只允许0%保护本金。 |", rendered)
+        self.assertIn("| 不参与依据 | 市场情绪冰点，可能未止跌，不继续参与；弱市场或趋势失效时，只允许0%保护本金。 |", rendered)
+        self.assertIn("| 无执行目标原因 | 市场情绪冰点，可能未止跌，不继续参与；指数图形与主攻线承接未修复，所以不给执行目标。 |", rendered)
         self.assertIn("| 责任归因 | 市场问题 |", rendered)
         self.assertIn("| 观察锚性质 | 强弱参照，不是执行目标 |", rendered)
         self.assertIn("| 恢复评估条件 | 主线承接 + 个股强弱重新确认 |", rendered)
@@ -217,6 +246,46 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("| 唯一对象 | 条件观察", rendered)
         self.assertNotIn("唯一对象是否", rendered)
         self.assertNotIn("| 执行目标 | 600578 京能电力（电力） |", rendered)
+
+    def test_front_page_zero_participation_should_reduce_names_market_drawdown_reason(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-29",
+                market_research_snapshot={
+                    "selected_position_candidate": {"name": "华锋股份", "code": "002806", "sector": "汽车零部"},
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                        "monthly_rhythm": {
+                            "max_position_pct": 0,
+                            "target_role": "observe",
+                            "trend_invalid": True,
+                            "reason": "当天是放量杀跌里的局部逆势活跃，先防踩踏，等指数图形与主攻线承接同时修复后再给参与资格。",
+                        },
+                    },
+                    "state_machine": {
+                        "operation_state": "撤退态",
+                        "execution_bias": "avoid",
+                        "pulse_stage": "退潮",
+                        "energy_state": "收缩防守",
+                        "rise_fall_ratio": 0.40,
+                    },
+                },
+                final_gate={"can_new_entry": False, "should_reduce": True},
+            )
+        )
+
+        self.assertIn("| 明日仓位 | 0%不参与 |", rendered)
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 0%原因 | 市场情绪退潮未止跌，可能还在释放风险，不继续参与", account_section)
+        self.assertIn("| 不参与依据 | 市场情绪退潮未止跌，可能还在释放风险，不继续参与", rendered)
+        self.assertIn("| 无执行目标原因 | 市场情绪退潮未止跌，可能还在释放风险，不继续参与", rendered)
+        self.assertIn("市场情绪退潮未止跌，可能还在释放风险，不继续参与", rendered)
+        self.assertIn("放量杀跌里的局部逆势活跃，先防踩踏", rendered)
+        self.assertIn("买点失败仓次日先处理", rendered)
+        self.assertNotIn("同类历史行说明同上，只看本行数值变化", rendered)
+        self.assertNotIn("市场要求先降风险，不新增参与", rendered)
 
     def test_front_page_promotes_selected_candidate_to_50_when_zero_has_no_strong_reason(self):
         rendered = "\n".join(
@@ -1544,7 +1613,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             rendered,
         )
 
-    def test_turnover_share_lines_compares_against_previous_day_when_mainline_switches(self):
+    def test_turnover_share_lines_does_not_compare_against_previous_day_when_mainline_switches(self):
         rendered = "\n".join(
             render_front_page_v2(
                 [],
@@ -1578,10 +1647,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         self.assertIn(
-            "| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct | 新主线刚切换，先累计半导体自身占比 |",
+            "| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | 待累计 | 新主线刚切换，先累计半导体自身占比 |",
             rendered,
         )
-        self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | 待累计 |", rendered)
+        self.assertNotIn("| 2026-04-24 | 半导体 | 半导体 | 2180.00亿 | 12834.00亿 | 18.1% | +2.3pct |", rendered)
 
     def test_turnover_share_lines_preserve_trend_table_labels_when_current_attack_unconfirmed(self):
         rendered = "\n".join(

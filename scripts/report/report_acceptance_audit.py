@@ -1111,7 +1111,10 @@ def _extract_all_table_rows_after_header(lines, header_line):
 def _has_recent_mainline_turnover_summary_near(lines, table_start):
     start = max(0, int(table_start or 0) - 4)
     nearby_text = "\n".join(list(lines)[start : int(table_start or 0)])
-    return "近25个交易日主线成交额占比趋势" in nearby_text
+    return (
+        "近25个交易日主线成交额占比趋势" in nearby_text
+        or "主线切换成交额记录" in nearby_text
+    )
 
 
 def _has_real_mainline_turnover_value(value):

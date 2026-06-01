@@ -113,12 +113,20 @@ POSTGRES_SCHEMA_STATEMENTS = [
         net_inflow_amount_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
         limit_up_count INTEGER NOT NULL DEFAULT 0,
         high_anchor_height INTEGER NOT NULL DEFAULT 0,
+        sector_turnover_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
+        total_turnover_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
         turnover_share_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
         turnover_share_change DOUBLE PRECISION NOT NULL DEFAULT 0,
+        source_policy TEXT NOT NULL DEFAULT '',
+        source_run_id BIGINT NOT NULL DEFAULT 0,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         PRIMARY KEY (trade_date, sector_name)
     )
     """,
+    "ALTER TABLE sector_attack_evidence_daily ADD COLUMN IF NOT EXISTS sector_turnover_yi DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE sector_attack_evidence_daily ADD COLUMN IF NOT EXISTS total_turnover_yi DOUBLE PRECISION NOT NULL DEFAULT 0",
+    "ALTER TABLE sector_attack_evidence_daily ADD COLUMN IF NOT EXISTS source_policy TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sector_attack_evidence_daily ADD COLUMN IF NOT EXISTS source_run_id BIGINT NOT NULL DEFAULT 0",
     """
     CREATE TABLE IF NOT EXISTS sector_diffusion_score_daily (
         trade_date DATE NOT NULL,
@@ -1344,6 +1352,36 @@ def _compact_turnover_share_trend_rows(rows, limit=25):
     return compacted[-max(int(limit or 0), 0):]
 
 
+def _compact_hot_sector_turnover_watch_rows(rows, limit=30):
+    compacted = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            key: row.get(key)
+            for key in (
+                "date",
+                "sector_name",
+                "sector_turnover",
+                "market_turnover",
+                "total_turnover",
+                "share",
+                "share_change",
+                "sample_status",
+                "interpretation",
+            )
+            if key in row and row.get(key) not in (None, "")
+        }
+        if item.get("market_turnover") and not item.get("total_turnover"):
+            item["total_turnover"] = item.get("market_turnover")
+        if item.get("total_turnover") and not item.get("market_turnover"):
+            item["market_turnover"] = item.get("total_turnover")
+        compacted.append(
+            item
+        )
+    return compacted[-max(int(limit or 0), 0):]
+
+
 def _compact_mainline_turnover_summary(summary):
     if not isinstance(summary, dict):
         return {}
@@ -1359,6 +1397,7 @@ def _compact_mainline_turnover_summary(summary):
             "data_text",
             "action_text",
             "turnover_share_trend_summary",
+            "hot_sector_turnover_watch_summary",
         )
         if key in summary and summary.get(key) not in (None, "")
     }
@@ -1381,6 +1420,9 @@ def _compact_mainline_turnover_summary(summary):
     trend_rows = _compact_turnover_share_trend_rows(summary.get("turnover_share_trend_rows"), limit=25)
     if trend_rows:
         result["turnover_share_trend_rows"] = trend_rows
+    hot_watch_rows = _compact_hot_sector_turnover_watch_rows(summary.get("hot_sector_turnover_watch_rows"), limit=30)
+    if hot_watch_rows:
+        result["hot_sector_turnover_watch_rows"] = hot_watch_rows
     return {key: value for key, value in result.items() if value not in (None, "", [], {})}
 
 
@@ -1674,6 +1716,8 @@ def _compact_market_research_snapshot(snapshot):
             }
             result[key] = {sub_key: sub_value for sub_key, sub_value in result[key].items() if sub_value}
             continue
+        if key == "sector_attack_evidence_rows":
+            continue
         result[key] = value
     return result
 
@@ -1762,6 +1806,8 @@ def _build_daily_report_fact_projection(data):
             continue
         if key == "concept_fund_flow":
             projection[key] = _compact_concept_fund_flow(data.get(key), limit=80)
+            continue
+        if key == "sector_attack_evidence_rows":
             continue
         if key == "mainline_turnover_summary":
             projection[key] = _compact_mainline_turnover_summary(data.get(key))
@@ -2726,12 +2772,24 @@ class PostgresDailyFactDb:
             counts["sector_attack_records"] = 0
             return
         cursor.execute("DELETE FROM sector_attack_evidence_daily WHERE trade_date = %s", (trade_date,))
+        current_snapshot = snapshot.get("current_sector_turnover_snapshot") if isinstance(snapshot.get("current_sector_turnover_snapshot"), dict) else {}
+        fallback_total_turnover = _safe_float(
+            current_snapshot.get("total_turnover_yi", current_snapshot.get("total_turnover"))
+            or snapshot.get("total_turnover")
+        )
         for row in source_rows or []:
             if not isinstance(row, dict):
                 continue
             sector = _sector_name(row)
             if not sector:
                 continue
+            share = _safe_float(row.get("turnover_share_pct"))
+            total_turnover = _safe_float(row.get("total_turnover_yi", row.get("total_turnover")))
+            if total_turnover <= 0:
+                total_turnover = fallback_total_turnover
+            sector_turnover = _safe_float(row.get("sector_turnover_yi", row.get("sector_turnover")))
+            if sector_turnover <= 0 and total_turnover > 0 and share > 0:
+                sector_turnover = round(total_turnover * share / 100, 2)
             rows.append(
                 (
                     trade_date,
@@ -2740,8 +2798,12 @@ class PostgresDailyFactDb:
                     _safe_float(row.get("net_inflow_amount")),
                     _safe_int(row.get("limit_up_count")),
                     _safe_int(row.get("high_anchor_height")),
-                    _safe_float(row.get("turnover_share_pct")),
+                    sector_turnover,
+                    total_turnover,
+                    share,
                     _safe_float(row.get("turnover_share_change")),
+                    _text(row.get("source_policy") or row.get("source")),
+                    _safe_int(row.get("source_run_id")),
                 )
             )
         if rows:
@@ -2749,17 +2811,22 @@ class PostgresDailyFactDb:
                 """
                 INSERT INTO sector_attack_evidence_daily(
                     trade_date, sector_name, net_inflow_rank, net_inflow_amount_yi,
-                    limit_up_count, high_anchor_height, turnover_share_pct,
-                    turnover_share_change
+                    limit_up_count, high_anchor_height, sector_turnover_yi,
+                    total_turnover_yi, turnover_share_pct, turnover_share_change,
+                    source_policy, source_run_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (trade_date, sector_name) DO UPDATE SET
                     net_inflow_rank=EXCLUDED.net_inflow_rank,
                     net_inflow_amount_yi=EXCLUDED.net_inflow_amount_yi,
                     limit_up_count=EXCLUDED.limit_up_count,
                     high_anchor_height=EXCLUDED.high_anchor_height,
+                    sector_turnover_yi=EXCLUDED.sector_turnover_yi,
+                    total_turnover_yi=EXCLUDED.total_turnover_yi,
                     turnover_share_pct=EXCLUDED.turnover_share_pct,
                     turnover_share_change=EXCLUDED.turnover_share_change,
+                    source_policy=EXCLUDED.source_policy,
+                    source_run_id=EXCLUDED.source_run_id,
                     updated_at=now()
                 """,
                 rows,
@@ -3970,6 +4037,9 @@ class PostgresDailyFactDb:
             item = _row_dict(row, columns)
             _set_nested_fact_value(data, item.get("field_path"), _restore_typed_value(item))
         if isinstance(data, dict):
+            with self._connect() as conn:
+                with conn.cursor() as cursor:
+                    data = self._enrich_loaded_report_data_from_structured_tables(cursor, trade_date, data)
             data.setdefault("postgres_source", f"postgresql://daily-report-facts/{trade_date}")
             data.setdefault("postgres_only", True)
         return {
@@ -3980,6 +4050,172 @@ class PostgresDailyFactDb:
 
     def load_daily_report_facts(self, trade_date):
         return self.load_daily_report_snapshot(trade_date)
+
+    def _load_sector_attack_evidence_rows(self, cursor, trade_date):
+        columns = (
+            "trade_date",
+            "sector_name",
+            "net_inflow_rank",
+            "net_inflow_amount_yi",
+            "limit_up_count",
+            "high_anchor_height",
+            "sector_turnover_yi",
+            "total_turnover_yi",
+            "turnover_share_pct",
+            "turnover_share_change",
+            "source_policy",
+            "source_run_id",
+        )
+        cursor.execute(
+            """
+            SELECT e.trade_date, e.sector_name, e.net_inflow_rank,
+                   e.net_inflow_amount_yi, e.limit_up_count,
+                   e.high_anchor_height, e.sector_turnover_yi,
+                   COALESCE(NULLIF(e.total_turnover_yi, 0), m.total_amount_yi, 0) AS total_turnover_yi,
+                   e.turnover_share_pct, e.turnover_share_change,
+                   e.source_policy, e.source_run_id
+            FROM sector_attack_evidence_daily e
+            LEFT JOIN market_daily_totals m
+              ON m.trade_date = e.trade_date
+             AND m.market_scope = 'all_a'
+            WHERE e.trade_date = %s
+            ORDER BY e.turnover_share_pct DESC, e.net_inflow_amount_yi DESC, e.sector_name ASC
+            """,
+            (trade_date,),
+        )
+        rows = []
+        for row in cursor.fetchall() or []:
+            item = _row_dict(row, columns)
+            sector_turnover = _safe_float(item.get("sector_turnover_yi"))
+            total_turnover = _safe_float(item.get("total_turnover_yi"))
+            share = _safe_float(item.get("turnover_share_pct"))
+            if sector_turnover <= 0 and total_turnover > 0 and share > 0:
+                sector_turnover = round(total_turnover * share / 100, 2)
+            rows.append(
+                {
+                    "date": _text(item.get("trade_date")),
+                    "sector_name": _text(item.get("sector_name")),
+                    "net_inflow_rank": _safe_int(item.get("net_inflow_rank")),
+                    "net_inflow_amount": _safe_float(item.get("net_inflow_amount_yi")),
+                    "limit_up_count": _safe_int(item.get("limit_up_count")),
+                    "high_anchor_height": _safe_int(item.get("high_anchor_height")),
+                    "sector_turnover": sector_turnover,
+                    "total_turnover": total_turnover,
+                    "turnover_share_pct": share,
+                    "turnover_share_change": _safe_float(item.get("turnover_share_change")),
+                    "source": _text(item.get("source_policy")) or "sector_attack_evidence_daily",
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                }
+            )
+        return [row for row in rows if row.get("sector_name")]
+
+    def _hot_sector_candidates_from_loaded_data(self, data, current_attack_rows, *, limit=8):
+        candidates = []
+
+        def append(value):
+            value = _text(value)
+            if value and value not in {"-", "暂无", "无主线", "混沌轮动"} and value not in candidates:
+                candidates.append(value)
+
+        for row in current_attack_rows or []:
+            append((row or {}).get("sector_name"))
+        current = data.get("current_sector_turnover_snapshot") if isinstance(data.get("current_sector_turnover_snapshot"), dict) else {}
+        append(current.get("sector_name"))
+        summary = data.get("mainline_turnover_summary") if isinstance(data.get("mainline_turnover_summary"), dict) else {}
+        for row in reversed(list(summary.get("turnover_share_trend_rows") or [])):
+            if isinstance(row, dict):
+                append(row.get("cycle_mainline") or row.get("daily_attack_line"))
+        for row in reversed(list(data.get("recent_sector_turnover_history") or [])):
+            if isinstance(row, dict):
+                append(row.get("sector_name") or row.get("cycle_mainline") or row.get("daily_attack_line"))
+        for row in reversed(list(data.get("recent_mainline_history") or [])):
+            if isinstance(row, dict):
+                append(row.get("primary_mainline") or row.get("leading_line"))
+        return candidates[: max(int(limit or 0), 1)]
+
+    def _load_recent_hot_sector_turnover_history(self, cursor, trade_date, sector_names, *, window_days=25):
+        sector_names = [_text(name) for name in sector_names or [] if _text(name)]
+        if not sector_names:
+            return []
+        columns = (
+            "trade_date",
+            "sector_name",
+            "sector_turnover_yi",
+            "total_turnover_yi",
+            "turnover_share_pct",
+            "source_policy",
+        )
+        cursor.execute(
+            """
+            SELECT e.trade_date, e.sector_name, e.sector_turnover_yi,
+                   COALESCE(NULLIF(e.total_turnover_yi, 0), m.total_amount_yi, 0) AS total_turnover_yi,
+                   e.turnover_share_pct,
+                   COALESCE(NULLIF(e.source_policy, ''), 'sector_attack_evidence_daily') AS source_policy
+            FROM sector_attack_evidence_daily e
+            LEFT JOIN market_daily_totals m
+              ON m.trade_date = e.trade_date
+             AND m.market_scope = 'all_a'
+            WHERE e.trade_date <= %s
+              AND e.trade_date >= (%s::date - (%s::int * INTERVAL '1 day'))
+              AND e.sector_name = ANY(%s)
+            UNION ALL
+            SELECT t.trade_date, t.primary_mainline AS sector_name,
+                   t.sector_turnover_yi, t.total_turnover_yi,
+                   t.turnover_share_pct,
+                   COALESCE(NULLIF(t.source_policy, ''), 'mainline_turnover_daily') AS source_policy
+            FROM mainline_turnover_daily t
+            WHERE t.trade_date <= %s
+              AND t.trade_date >= (%s::date - (%s::int * INTERVAL '1 day'))
+              AND t.primary_mainline = ANY(%s)
+            ORDER BY trade_date ASC, sector_name ASC
+            """,
+            (
+                trade_date,
+                trade_date,
+                max(_safe_int(window_days, 25), 1) * 3,
+                sector_names,
+                trade_date,
+                trade_date,
+                max(_safe_int(window_days, 25), 1) * 3,
+                sector_names,
+            ),
+        )
+        rows = []
+        for row in cursor.fetchall() or []:
+            item = _row_dict(row, columns)
+            sector_turnover = _safe_float(item.get("sector_turnover_yi"))
+            total_turnover = _safe_float(item.get("total_turnover_yi"))
+            share = _safe_float(item.get("turnover_share_pct"))
+            if sector_turnover <= 0 and total_turnover > 0 and share > 0:
+                sector_turnover = round(total_turnover * share / 100, 2)
+            rows.append(
+                {
+                    "date": _text(item.get("trade_date")),
+                    "sector_name": _text(item.get("sector_name")),
+                    "sector_turnover": sector_turnover,
+                    "total_turnover": total_turnover,
+                    "turnover_share_pct": share,
+                    "source": _text(item.get("source_policy")),
+                }
+            )
+        return [row for row in rows if row.get("sector_name")][-max(_safe_int(window_days, 25) * len(sector_names), 1):]
+
+    def _enrich_loaded_report_data_from_structured_tables(self, cursor, trade_date, data):
+        if not isinstance(data, dict):
+            return data
+        current_attack_rows = self._load_sector_attack_evidence_rows(cursor, trade_date)
+        if current_attack_rows and not data.get("sector_attack_evidence_rows"):
+            data["sector_attack_evidence_rows"] = current_attack_rows
+        candidate_names = self._hot_sector_candidates_from_loaded_data(data, current_attack_rows)
+        recent_hot_rows = self._load_recent_hot_sector_turnover_history(
+            cursor,
+            trade_date,
+            candidate_names,
+            window_days=25,
+        )
+        if recent_hot_rows and not data.get("recent_hot_sector_turnover_history"):
+            data["recent_hot_sector_turnover_history"] = recent_hot_rows
+        return data
 
     def load_candidate_trace_artifact(self, trade_date):
         trade_date = _date_or_none(trade_date)

@@ -1,6 +1,8 @@
 from report.front_summary_node_registry import build_front_summary_node_specs
 from report.front_summary_node_runtime import run_front_summary_nodes
 from report.mainline_turnover_summary_support import (
+    resolve_hot_sector_turnover_watch_rows,
+    resolve_hot_sector_turnover_watch_summary,
     resolve_mainline_attack_evidence_rows,
     resolve_mainline_capacity_regime_summary,
     resolve_turnover_share_trend_summary,
@@ -33,28 +35,48 @@ def _render_mainline_capacity_regime_table(context):
 
 
 def _render_turnover_share_trend_table(context):
+    hot_rows = resolve_hot_sector_turnover_watch_rows(context)
     rows = resolve_turnover_share_trend_rows(context)
-    if not rows:
+    if not hot_rows and not rows:
         return []
+    hot_summary = resolve_hot_sector_turnover_watch_summary(context)
     summary = resolve_turnover_share_trend_summary(context)
-    lines = [
-    ]
-    if summary:
-        lines.append(f"> {summary}")
-        lines.append("")
-    lines.extend(
-        [
-            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-            "|------|----------|------------|------------|------------|------|----------|------|",
-        ]
-    )
-    for row in _display_latest_first(rows):
-        lines.append(
-            "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
-                **row
-            )
+    lines = []
+    if hot_rows:
+        if hot_summary:
+            lines.append(f"> {hot_summary}")
+            lines.append("")
+        lines.extend(
+            [
+                "| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
+                "|------|------|------------|------------|------|------------|----------|------|",
+            ]
         )
-    lines.append("")
+        for row in _display_latest_first(hot_rows):
+            lines.append(
+                "| {date} | {sector_name} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(
+                    **row
+                )
+            )
+        lines.append("")
+    if rows:
+        lines.append("#### 主线切换成交额记录")
+        if summary:
+            lines.append(f"> {summary}")
+            lines.append("")
+        lines.extend(
+            [
+                "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+                "|------|----------|------------|------------|------------|------|----------|------|",
+            ]
+        )
+        for row in _display_latest_first(rows):
+            lines.append(
+                "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
+                    **row
+                )
+            )
+        lines.append("")
     return lines
 
 

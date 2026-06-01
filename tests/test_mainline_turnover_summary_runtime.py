@@ -103,12 +103,12 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["conclusion"], "主线切换为通信，旧主线军工退出中心")
         self.assertEqual(
             result["data_text"],
-            "最近3日主线 军工 -> 军工 -> 通信；成交额占比 14.2% -> 13.4% -> 9.6%，节奏偏切换",
+            "近期被记录方向分列：2026-04-22 军工 14.2%；2026-04-23 军工 13.4%；2026-04-24 通信 9.6%；这些是各自板块点位，不做连续涨跌判断",
         )
         self.assertEqual(result["action_text"], "只围绕新主线通信重新收缩，不对旧主线做回流预判")
         self.assertEqual(result["previous_mainline"], "军工")
         self.assertEqual(result["share_trend_label"], "切换")
-        self.assertEqual(result["turnover_share_trend_rows"][-1]["share_change"], "-3.8pct")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["share_change"], "待累计")
 
     def test_build_mainline_turnover_summary_keeps_previous_mainline_row_labeled_as_itself(self):
         runtime = self._load_module()
@@ -150,6 +150,68 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(rows[0]["daily_attack_line"], "电力")
         self.assertEqual(rows[-1]["cycle_mainline"], "半导体")
         self.assertEqual(rows[-1]["daily_attack_line"], "半导体")
+
+    def test_build_mainline_turnover_summary_tracks_recent_hot_sectors_without_cross_sector_delta(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-05-29",
+            current_mainline_history_record={"date": "2026-05-29", "primary_mainline": "新型电力"},
+            recent_mainline_history=[{"date": "2026-05-28", "primary_mainline": "光通信/CPO"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-05-29",
+                "sector_name": "新型电力",
+                "sector_turnover": 296.49,
+                "total_turnover": 33408.58,
+                "turnover_share_pct": 0.89,
+            },
+            recent_sector_turnover_history=[
+                {
+                    "date": "2026-05-28",
+                    "sector_name": "光通信/CPO",
+                    "sector_turnover": 8841.18,
+                    "total_turnover": 29873.26,
+                    "turnover_share_pct": 29.6,
+                }
+            ],
+            sector_attack_evidence_rows=[
+                {
+                    "sector_name": "通信设备",
+                    "net_inflow_amount": -44.56,
+                    "net_inflow_rank": 80,
+                    "limit_up_count": 0,
+                    "sector_turnover": 3062.15,
+                    "total_turnover": 33408.58,
+                    "turnover_share_pct": 9.17,
+                },
+                {
+                    "sector_name": "国产芯片替代",
+                    "net_inflow_amount": -624.79,
+                    "net_inflow_rank": 117,
+                    "limit_up_count": 10,
+                    "sector_turnover": 10182.94,
+                    "total_turnover": 33408.58,
+                    "turnover_share_pct": 30.48,
+                },
+            ],
+        )
+
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "新型电力")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["share"], "0.9%")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["share_change"], "待累计")
+        self.assertIn("不作为同一板块涨跌判断", result["turnover_share_trend_summary"])
+        watch_rows = result["hot_sector_turnover_watch_rows"]
+        communication = [row for row in watch_rows if row["sector_name"] == "通信设备"][0]
+        cpo = [row for row in watch_rows if row["sector_name"] == "光通信/CPO"][0]
+        new_power = [row for row in watch_rows if row["sector_name"] == "新型电力"][0]
+        self.assertEqual(communication["date"], "2026-05-29")
+        self.assertEqual(communication["share"], "9.2%")
+        self.assertEqual(communication["total_turnover"], "33408.58亿")
+        self.assertEqual(communication["market_turnover"], "33408.58亿")
+        self.assertEqual(communication["sample_status"], "待累计")
+        self.assertEqual(cpo["share"], "29.6%")
+        self.assertEqual(new_power["share"], "0.9%")
+        self.assertIn("不跨板块解释涨跌", result["hot_sector_turnover_watch_summary"])
 
     def test_build_mainline_turnover_summary_exports_turnover_share_table_rows_even_when_share_missing(self):
         runtime = self._load_module()
@@ -271,7 +333,8 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         rows = result["turnover_share_trend_rows"]
         self.assertEqual(len(rows), 25)
         self.assertEqual(rows[4]["mainline_turnover"], "数据暂缺")
-        self.assertIn("近25个交易日主线成交额占比趋势", result["turnover_share_trend_summary"])
+        self.assertIn("近25个交易日主线切换成交额记录", result["turnover_share_trend_summary"])
+        self.assertIn("不作为同一板块涨跌判断", result["turnover_share_trend_summary"])
 
     def test_build_mainline_turnover_summary_keeps_daily_cycle_mainline_labels_in_trend_rows(self):
         runtime = self._load_module()
@@ -648,8 +711,8 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         )
 
         summary = result["turnover_share_trend_summary"]
-        self.assertIn("近5日-9.6pct", summary)
-        self.assertIn("主线成交占比回落", summary)
+        self.assertIn("主线切换成交额记录", summary)
+        self.assertIn("不作为同一板块涨跌判断", summary)
         self.assertNotIn("资金聚焦度走强", summary)
 
     def test_build_mainline_turnover_summary_aligns_turnover_row_to_confirmed_attack_line(self):

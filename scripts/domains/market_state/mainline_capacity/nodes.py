@@ -26,6 +26,7 @@ def build_mainline_capacity_summary_node(context, node_meta=None, node_lookup=No
         recent_mainline_history=context.get("recent_mainline_history"),
         current_sector_turnover_snapshot=context.get("current_sector_turnover_snapshot"),
         recent_sector_turnover_history=context.get("recent_sector_turnover_history"),
+        recent_hot_sector_turnover_history=context.get("recent_hot_sector_turnover_history"),
         sector_attack_evidence_rows=context.get("sector_attack_evidence_rows"),
         realtime_tag_evidence_snapshot=context.get("realtime_tag_evidence_snapshot"),
     )
@@ -35,6 +36,8 @@ def build_mainline_capacity_summary_node(context, node_meta=None, node_lookup=No
     arena_fit_summary = dict(summary.get("trading_arena_fit_summary") or {})
     turnover_rows = list(summary.get("turnover_share_trend_rows") or [])
     turnover_trend_summary = str(summary.get("turnover_share_trend_summary") or "").strip()
+    hot_sector_watch_rows = list(summary.get("hot_sector_turnover_watch_rows") or [])
+    hot_sector_watch_summary = str(summary.get("hot_sector_turnover_watch_summary") or "").strip()
     snapshot = context.get("current_sector_turnover_snapshot") or {}
 
     exports = {
@@ -45,6 +48,8 @@ def build_mainline_capacity_summary_node(context, node_meta=None, node_lookup=No
         "trading_arena_fit_summary": arena_fit_summary,
         "turnover_share_trend_rows": turnover_rows,
         "turnover_share_trend_summary": turnover_trend_summary,
+        "hot_sector_turnover_watch_rows": hot_sector_watch_rows,
+        "hot_sector_turnover_watch_summary": hot_sector_watch_summary,
     }
     diagnostics = {
         "target_date": summary.get("date") or context.get("target_date") or "",
@@ -75,6 +80,10 @@ def build_mainline_capacity_summary_node(context, node_meta=None, node_lookup=No
             "mainline_turnover_share_trend": {
                 "summary": turnover_trend_summary,
                 "rows": turnover_rows,
+            },
+            "hot_sector_turnover_watch": {
+                "summary": hot_sector_watch_summary,
+                "rows": hot_sector_watch_rows,
             },
         },
         "diagnostics": diagnostics,

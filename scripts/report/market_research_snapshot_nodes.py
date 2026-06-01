@@ -2,6 +2,8 @@ from datetime import datetime, timedelta
 
 from report.mainline_turnover_summary_support import (
     normalize_display_text_by_tag_pool,
+    resolve_hot_sector_turnover_watch_rows,
+    resolve_hot_sector_turnover_watch_summary,
     resolve_mainline_attack_evidence_summary,
     resolve_mainline_capacity_regime_summary,
     resolve_overtake_window_rows,
@@ -526,13 +528,34 @@ def build_market_research_snapshot_risk_preference_node(context, node_meta=None,
 
 
 def _build_turnover_share_trend_table_lines(context):
+    hot_rows = resolve_hot_sector_turnover_watch_rows(context)
+    hot_summary = resolve_hot_sector_turnover_watch_summary(context)
     rows = resolve_turnover_share_trend_rows(context)
-    if not rows:
+    if not hot_rows and not rows:
         return []
     summary = resolve_turnover_share_trend_summary(context)
-    lines = [
-        "#### 主线成交额占比趋势",
-    ]
+    lines = []
+    if hot_rows:
+        lines.append("#### 近期热点板块成交额连续跟踪")
+        if hot_summary:
+            lines.append(f"> {hot_summary}")
+            lines.append("")
+        lines.extend(
+            [
+                "| 日期 | 板块 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",
+                "|------|------|------------|------------|------|------------|----------|------|",
+            ]
+        )
+        for row in _display_latest_first(hot_rows):
+            lines.append(
+                "| {date} | {sector_name} | {sector_turnover} | {market_turnover} | {share} | {share_change} | {sample_status} | {interpretation} |".format(
+                    **row
+                )
+            )
+        lines.append("")
+    if not rows:
+        return lines
+    lines.append("#### 主线切换成交额记录")
     if summary:
         lines.append(f"> {summary}")
         lines.append("")

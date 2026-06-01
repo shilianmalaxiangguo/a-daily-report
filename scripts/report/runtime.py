@@ -198,6 +198,8 @@ _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
     "换手占比",
     "换手趋势",
     "主线成交额占比趋势",
+    "近期热点板块成交额连续跟踪",
+    "主线切换成交额记录",
     "主线成交额占比完整历史",
     "板块成交占比趋势",
     "板块周",
@@ -565,6 +567,7 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         if "允许进入" in text and "继续观察复核" in text:
             text = text.replace("允许进入", "只进入")
         text = text.replace("继续继续观察复核", "继续观察复核")
+        text = text.replace("观察位失败仓", "买点失败仓")
         text = text.replace("新增参与0手", "新开仓0手")
         normalized.append(text)
     return normalized
@@ -698,15 +701,35 @@ def _prefer_confirmed_attack_mainline_history_record(
 def _prefer_structured_mainline_turnover_summary(primary_summary, fallback_summary):
     primary_summary = primary_summary or {}
     fallback_summary = fallback_summary or {}
+
+    def _with_turnover_watch_updates(base, updates):
+        if not (
+            isinstance(base, dict)
+            and isinstance(updates, dict)
+            and updates.get("hot_sector_turnover_watch_rows")
+        ):
+            return base
+        merged = dict(base)
+        for key in (
+            "data_text",
+            "turnover_share_trend_summary",
+            "turnover_share_trend_rows",
+            "hot_sector_turnover_watch_summary",
+            "hot_sector_turnover_watch_rows",
+        ):
+            if updates.get(key) not in (None, "", [], {}):
+                merged[key] = updates.get(key)
+        return merged
+
     primary_label = str(primary_summary.get("share_trend_label") or "").strip()
     fallback_label = str(fallback_summary.get("share_trend_label") or "").strip()
     if primary_label == "逆势试攻" and fallback_label != "逆势试攻":
-        return primary_summary
+        return _with_turnover_watch_updates(primary_summary, fallback_summary)
     if fallback_label == "逆势试攻" and primary_label != "逆势试攻":
-        return fallback_summary
+        return _with_turnover_watch_updates(fallback_summary, primary_summary)
     if _summary_has_attack_evidence(fallback_summary) and not _summary_has_attack_evidence(primary_summary):
-        return fallback_summary
-    return primary_summary or fallback_summary
+        return _with_turnover_watch_updates(fallback_summary, primary_summary)
+    return _with_turnover_watch_updates(primary_summary or fallback_summary, fallback_summary or primary_summary)
 
 
 def _mainline_name_from_turnover_summary(summary):

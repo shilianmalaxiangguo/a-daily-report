@@ -1,5 +1,7 @@
 from report.mainline_turnover_summary_support import (
     resolve_double_mainline_summary,
+    resolve_hot_sector_turnover_watch_rows,
+    resolve_hot_sector_turnover_watch_summary,
     resolve_mainline_capacity_regime_summary,
     resolve_overtake_opening_tone_text,
     resolve_turnover_share_trend_rows,
@@ -183,6 +185,8 @@ def render_core_mvp_digest_contract(
                 or ""
             ).strip(),
             "turnover_share_trend_rows": resolve_turnover_share_trend_rows(market_research_snapshot),
+            "hot_sector_turnover_watch_summary": resolve_hot_sector_turnover_watch_summary(market_research_snapshot),
+            "hot_sector_turnover_watch_rows": resolve_hot_sector_turnover_watch_rows(market_research_snapshot),
             "special_probe_text": special_probe_text,
             "philosophy_constraint_text": philosophy_constraint_text,
             "contract_logic_text": get_contract_logic_digest_text(),

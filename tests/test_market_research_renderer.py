@@ -304,7 +304,7 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 主线更替与成交额占比 | 主线未切换，通信仍是中心 |", rendered)
         self.assertIn("最近3日主线 通信 -> 通信 -> 通信；成交额占比 12.4% -> 15.8% -> 18.1%，节奏偏强化", rendered)
         self.assertIn("继续围绕通信做减法，不追支线分流", rendered)
-        self.assertIn("#### 主线成交额占比趋势", rendered)
+        self.assertIn("#### 主线切换成交额记录", rendered)
         self.assertIn("> 近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。", rendered)
         self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
         self.assertIn("| 2026-04-24 | 通信 | 通信 | 2180.00亿 | 12834.00亿 | 17.0% | +1.2pct | 主线占比继续抬升 |", rendered)

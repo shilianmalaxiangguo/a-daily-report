@@ -225,6 +225,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("INSERT INTO mainline_daily", sql)
         self.assertIn("INSERT INTO mainline_turnover_daily", sql)
         self.assertIn("INSERT INTO sector_attack_evidence_daily", sql)
+        self.assertIn("sector_turnover_yi", sql)
+        self.assertIn("total_turnover_yi", sql)
         self.assertIn("INSERT INTO sector_diffusion_score_daily", sql)
         self.assertIn("INSERT INTO sector_diffusion_score_components", sql)
         self.assertIn("INSERT INTO sector_competition_daily", sql)
@@ -963,6 +965,20 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     "turnover_share_trend_rows": [
                         {"date": "2026-05-28", "cycle_mainline": "电力", "mainline_turnover": "300亿", "raw": {"skip": True}},
                     ],
+                    "hot_sector_turnover_watch_summary": "近期热点板块成交额连续跟踪：电力待累计",
+                    "hot_sector_turnover_watch_rows": [
+                        {
+                            "date": "2026-05-29",
+                            "sector_name": "电力",
+                            "sector_turnover": "320.50亿",
+                            "market_turnover": "10500.00亿",
+                            "share": "3.1%",
+                            "share_change": "待累计",
+                            "sample_status": "待累计",
+                            "interpretation": "电力只记录本板块当日点位",
+                            "raw": {"skip": True},
+                        }
+                    ],
                 },
                 "market_research_snapshot": {
                     "cycle_calendar_rows": [{"weekday": "skip"}],
@@ -1025,17 +1041,20 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertFalse(any("recent_bars" in str(row) for row in inserted))
         self.assertFalse(any("net_buy_amount" in str(row) for row in inserted))
         self.assertFalse(any("sector_evidence_rows" in str(row) for row in inserted))
+        self.assertFalse(any("sector_attack_evidence_rows" in str(row) for row in inserted))
         self.assertTrue(any("new_high_feedback/k:14:new_high_count" in path for path in field_paths))
         self.assertTrue(any("margin_pressure/k:21:latest_pressure_label" in path for path in field_paths))
         self.assertTrue(any("extreme_conviction_list" in path and "risk_reward_plan" in path for path in field_paths))
         self.assertTrue(any("candidate_trace_artifact" in path and "trace_count" in path for path in field_paths))
         self.assertTrue(any("recent_extreme_conviction_mentions" in path and "stock_code" in path for path in field_paths))
         self.assertTrue(any("sector_fund_flow" in path and "net_inflow_yi" in path for path in field_paths))
+        self.assertTrue(any("hot_sector_turnover_watch_rows" in path and "sector_name" in path for path in field_paths))
+        self.assertTrue(any("hot_sector_turnover_watch_rows" in path and "total_turnover" in path for path in field_paths))
         self.assertTrue(any("exchange_monitor_today" in path for path in field_paths))
         self.assertTrue(any("exchange_monitor_nextday" in path for path in field_paths))
         self.assertEqual(saved["source"], "postgresql://daily-report-facts/2026-05-29")
 
-        conn.cursor_obj.rows = [
+        conn.cursor_obj.row_batches = [[
             ("k:11:data_status/k:5:两市成交额", "", None, True, "bool"),
             ("k:11:data_status/k:4:中证全指", "", None, True, "bool"),
             ("k:14:total_turnover", "", 33408.58, None, "number"),
@@ -1049,7 +1068,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ("k:7:indices/k:9:000001.SH/k:5:price", "", 4068.57, None, "number"),
             ("k:22:exchange_monitor_today/#0/k:4:code", "000001", None, None, "text"),
             ("k:24:exchange_monitor_nextday/#0/k:4:code", "000002", None, None, "text"),
-        ]
+        ], [], []]
 
         loaded = db.load_daily_report_snapshot("2026-05-29")
 
@@ -1061,6 +1080,50 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
         self.assertEqual(loaded["field_count"], 13)
+
+    def test_load_daily_report_snapshot_enriches_hot_sector_history_from_structured_tables(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [
+                ("k:30:recent_sector_turnover_history/#0/k:4:date", "2026-05-28", None, None, "text"),
+                ("k:30:recent_sector_turnover_history/#0/k:11:sector_name", "光通信/CPO", None, None, "text"),
+                ("k:30:recent_sector_turnover_history/#0/k:18:turnover_share_pct", "", 29.6, None, "number"),
+                ("k:32:current_sector_turnover_snapshot/k:11:sector_name", "新型电力", None, None, "text"),
+            ],
+            [
+                (
+                    "2026-05-29",
+                    "通信设备",
+                    80,
+                    -44.56,
+                    0,
+                    0,
+                    3062.15,
+                    33408.58,
+                    9.17,
+                    0.0,
+                    "sector_attack_evidence_daily",
+                    0,
+                )
+            ],
+            [
+                ("2026-05-28", "光通信/CPO", 8841.18, 29873.26, 29.6, "mainline_turnover_daily"),
+                ("2026-05-29", "通信设备", 3062.15, 33408.58, 9.17, "sector_attack_evidence_daily"),
+            ],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-05-29")
+
+        self.assertEqual(loaded["data"]["sector_attack_evidence_rows"][0]["sector_name"], "通信设备")
+        self.assertEqual(loaded["data"]["sector_attack_evidence_rows"][0]["sector_turnover"], 3062.15)
+        history = loaded["data"]["recent_hot_sector_turnover_history"]
+        self.assertEqual([row["sector_name"] for row in history], ["光通信/CPO", "通信设备"])
+        self.assertEqual(history[1]["turnover_share_pct"], 9.17)
 
     def test_saves_postgres_xuangubao_summary_without_zeroing_counts(self):
         conn = _FakeConnection()

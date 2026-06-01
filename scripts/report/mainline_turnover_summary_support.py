@@ -603,7 +603,7 @@ def _share_change_from_structured_history(row, context):
     if _is_degraded_turnover_item(previous_item) or previous_share is None or previous_share <= 0:
         return "待累计"
     if _turnover_item_mainline(previous_item) != row_mainline:
-        return None
+        return "待累计"
     return f"{row_share - previous_share:+.1f}pct"
 
 
@@ -641,4 +641,42 @@ def resolve_turnover_share_trend_summary(context=None):
     summary_source = context.get("mainline_turnover_summary") or {}
     if isinstance(summary_source, dict):
         return str(summary_source.get("turnover_share_trend_summary") or "").strip()
+    return ""
+
+
+def resolve_hot_sector_turnover_watch_rows(context=None):
+    context = context or {}
+    rows = context.get("hot_sector_turnover_watch_rows")
+    if rows is None:
+        rows = (context.get("mainline_turnover_summary") or {}).get("hot_sector_turnover_watch_rows")
+    normalized = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        market_turnover = str(row.get("market_turnover") or row.get("total_turnover") or "-").strip() or "-"
+        total_turnover = str(row.get("total_turnover") or row.get("market_turnover") or "-").strip() or "-"
+        normalized.append(
+            {
+                "date": str(row.get("date") or "-").strip() or "-",
+                "sector_name": str(row.get("sector_name") or "-").strip() or "-",
+                "sector_turnover": str(row.get("sector_turnover") or "-").strip() or "-",
+                "market_turnover": market_turnover,
+                "total_turnover": total_turnover,
+                "share": str(row.get("share") or "-").strip() or "-",
+                "share_change": str(row.get("share_change") or "-").strip() or "-",
+                "sample_status": str(row.get("sample_status") or "-").strip() or "-",
+                "interpretation": str(row.get("interpretation") or "-").strip() or "-",
+            }
+        )
+    return normalized
+
+
+def resolve_hot_sector_turnover_watch_summary(context=None):
+    context = context or {}
+    summary = str(context.get("hot_sector_turnover_watch_summary") or "").strip()
+    if summary:
+        return summary
+    summary_source = context.get("mainline_turnover_summary") or {}
+    if isinstance(summary_source, dict):
+        return str(summary_source.get("hot_sector_turnover_watch_summary") or "").strip()
     return ""

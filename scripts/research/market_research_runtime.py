@@ -63,6 +63,7 @@ def _run_mainline_capacity_summary(
     recent_mainline_history,
     current_sector_turnover_snapshot,
     recent_sector_turnover_history,
+    recent_hot_sector_turnover_history,
     sector_attack_evidence_rows,
     realtime_tag_evidence_snapshot,
     build_mainline_turnover_summary=None,
@@ -74,6 +75,7 @@ def _run_mainline_capacity_summary(
             recent_mainline_history=recent_mainline_history,
             current_sector_turnover_snapshot=current_sector_turnover_snapshot,
             recent_sector_turnover_history=recent_sector_turnover_history,
+            recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
             sector_attack_evidence_rows=sector_attack_evidence_rows,
             realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
         )
@@ -89,6 +91,7 @@ def _run_mainline_capacity_summary(
             "recent_mainline_history": recent_mainline_history,
             "current_sector_turnover_snapshot": current_sector_turnover_snapshot,
             "recent_sector_turnover_history": recent_sector_turnover_history,
+            "recent_hot_sector_turnover_history": recent_hot_sector_turnover_history,
             "sector_attack_evidence_rows": sector_attack_evidence_rows,
             "realtime_tag_evidence_snapshot": realtime_tag_evidence_snapshot,
         }
@@ -785,6 +788,9 @@ def _build_sector_attack_evidence_rows(
             sector_turnover = _flow_turnover_yi(flow_row)
             if sector_turnover is not None and sector_turnover > 0:
                 evidence_row["sector_turnover"] = round(sector_turnover, 2)
+            total_turnover = _safe_float(total_turnover)
+            if total_turnover > 0:
+                evidence_row["total_turnover"] = round(total_turnover, 2)
             previous_share = _sector_previous_share(recent_sector_turnover_history, sector_name)
             if previous_share > 0:
                 evidence_row["turnover_share_change"] = round(current_share - previous_share, 2)
@@ -885,6 +891,7 @@ def build_market_research_snapshot_contract(
     recent_mainline_history = data.get("recent_mainline_history") or []
     current_sector_turnover_snapshot = data.get("current_sector_turnover_snapshot") or {}
     recent_sector_turnover_history = data.get("recent_sector_turnover_history") or []
+    recent_hot_sector_turnover_history = data.get("recent_hot_sector_turnover_history") or []
 
     if not current_mainline_history_record and callable(build_mainline_history_record):
         current_mainline_history_record = build_mainline_history_record(
@@ -995,14 +1002,24 @@ def build_market_research_snapshot_contract(
         recent_sector_turnover_history,
         total_turnover,
     )
+    if not sector_attack_evidence_rows:
+        sector_attack_evidence_rows = [
+            dict(row)
+            for row in data.get("sector_attack_evidence_rows") or []
+            if isinstance(row, dict)
+        ] or None
     realtime_tag_evidence_snapshot = data.get("realtime_tag_evidence_snapshot") or {}
     should_rebuild_for_attack_evidence = bool(
         sector_attack_evidence_rows
         and not (mainline_turnover_summary or {}).get("mainline_attack_evidence_summary")
     )
+    should_rebuild_for_hot_sector_watch = bool(
+        sector_attack_evidence_rows or recent_hot_sector_turnover_history
+    )
 
     if (
         should_rebuild_for_attack_evidence
+        or should_rebuild_for_hot_sector_watch
         or _mainline_turnover_summary_conflicts_with_current_record(
             mainline_turnover_summary,
             current_mainline_history_record,
@@ -1018,6 +1035,7 @@ def build_market_research_snapshot_contract(
             recent_mainline_history=recent_mainline_history,
             current_sector_turnover_snapshot=current_sector_turnover_snapshot,
             recent_sector_turnover_history=recent_sector_turnover_history,
+            recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
             sector_attack_evidence_rows=sector_attack_evidence_rows,
             realtime_tag_evidence_snapshot=realtime_tag_evidence_snapshot,
             build_mainline_turnover_summary=build_mainline_turnover_summary,
