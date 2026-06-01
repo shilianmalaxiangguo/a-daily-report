@@ -8,6 +8,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+try:
+    from storage.database_service import DatabaseService
+except Exception:  # pragma: no cover - optional runtime path
+    DatabaseService = None
+
 __all__ = [
     "BaseLLMProvider",
     "DeepSeekHTTPProvider",
@@ -53,39 +58,66 @@ class EventAnalysisCache:
     CACHE_DURATION_SECONDS = CACHE_DURATION_DAYS * 24 * 60 * 60
 
     def __init__(self, cache_file: str | None = None):
-        if cache_file is None:
-            cache_dir = Path(__file__).resolve().parent.parent / "data"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            cache_file = str(cache_dir / "event_analysis_cache.json")
-        self.cache_file = cache_file
-        self.cache = self._load_cache()
+        self.cache_file = cache_file or str(Path(__file__).resolve().parent.parent / "data" / "event_analysis_cache.json")
+        self.cache: Dict[str, Any] = {}
+        self._service = self._runtime_cache_service()
 
-    def _load_cache(self) -> Dict[str, Any]:
-        path = Path(self.cache_file)
-        if not path.exists():
-            return {}
-        try:
-            cache = json.loads(path.read_text(encoding="utf-8"))
-            current_time = time.time()
-            expired_keys = [
-                key
-                for key, value in cache.items()
-                if current_time - float((value or {}).get("timestamp", 0)) > self.CACHE_DURATION_SECONDS
-            ]
-            for key in expired_keys:
-                cache.pop(key, None)
-            if expired_keys:
-                print(f"[EventCache] 清理 {len(expired_keys)} 个过期缓存条目")
-                self._save_cache(cache)
-            return cache if isinstance(cache, dict) else {}
-        except Exception as error:
-            print(f"[EventCache] 加载缓存失败: {error}")
-            return {}
+    def _postgres_database_url(self) -> str:
+        return (
+            os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+            or os.environ.get("DATABASE_URL")
+            or ""
+        ).strip()
 
-    def _save_cache(self, cache: Dict[str, Any] | None = None) -> None:
-        payload = cache if cache is not None else self.cache
+    def _postgres_only_runtime(self) -> bool:
+        return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", "").strip() == "1"
+
+    def _runtime_cache_service(self):
+        if DatabaseService is None:
+            return None
+        database_url = self._postgres_database_url()
+        if not database_url.startswith(("postgres://", "postgresql://")):
+            return None
+        service = DatabaseService.from_environment()
+        checker = getattr(service, "is_postgres_backed", None)
+        if callable(checker) and checker():
+            return service
+        return None
+
+    def _runtime_cache_key(self, event_title: str) -> str:
+        return self._make_key(event_title)
+
+    def _active_service_entry(self, event_title: str) -> Optional[Dict[str, Any]]:
+        if self._service is None:
+            return None
+        entry = self._service.get_runtime_cache_entry("llm_event_analysis", self._runtime_cache_key(event_title), "")
+        if not isinstance(entry, dict):
+            return None
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        if time.time() - float(payload.get("timestamp", 0) or 0) > self.CACHE_DURATION_SECONDS:
+            return None
+        result = payload.get("result")
+        return result if isinstance(result, dict) else None
+
+    def _store_active_service_entry(self, event_title: str, result: Dict[str, Any]) -> None:
+        if self._service is None:
+            return
+        payload = {
+            "timestamp": time.time(),
+            "title": event_title,
+            "result": result,
+        }
         try:
-            Path(self.cache_file).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._service.set_runtime_cache_entry(
+                "llm_event_analysis",
+                self._runtime_cache_key(event_title),
+                "",
+                payload,
+                source="llm_service",
+                ttl_seconds=self.CACHE_DURATION_SECONDS,
+            )
         except Exception as error:
             print(f"[EventCache] 保存缓存失败: {error}")
 
@@ -94,26 +126,34 @@ class EventAnalysisCache:
 
     def get(self, event_title: str) -> Optional[Dict[str, Any]]:
         key = self._make_key(event_title)
-        cached = self.cache.get(key)
-        if not cached:
-            return None
-        if time.time() - float(cached.get("timestamp", 0)) <= self.CACHE_DURATION_SECONDS:
-            result = cached.get("result")
-            return result if isinstance(result, dict) else None
-        self.cache.pop(key, None)
-        self._save_cache()
+        if key in self.cache:
+            cached = self.cache.get(key)
+            if cached and time.time() - float(cached.get("timestamp", 0)) <= self.CACHE_DURATION_SECONDS:
+                result = cached.get("result")
+                return result if isinstance(result, dict) else None
+            self.cache.pop(key, None)
+        service_result = self._active_service_entry(event_title)
+        if service_result is not None:
+            return service_result
         return None
 
     def set(self, event_title: str, result: Dict[str, Any]) -> None:
         key = self._make_key(event_title)
-        self.cache[key] = {
+        record = {
             "timestamp": time.time(),
             "title": event_title,
             "result": result,
         }
-        self._save_cache()
+        self.cache[key] = record
+        self._store_active_service_entry(event_title, result)
 
     def get_stats(self) -> Dict[str, int]:
+        if self._service is not None:
+            stats = self._service.get_runtime_cache_stats("llm_event_analysis", "")
+            return {
+                "total_entries": int(stats.get("count") or 0),
+                "cache_duration_days": self.CACHE_DURATION_DAYS,
+            }
         return {
             "total_entries": len(self.cache),
             "cache_duration_days": self.CACHE_DURATION_DAYS,
@@ -121,7 +161,6 @@ class EventAnalysisCache:
 
     def clear(self) -> None:
         self.cache = {}
-        self._save_cache()
         print("[EventCache] 缓存已清空")
 
 

@@ -80,6 +80,21 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
         load_json.assert_not_called()
         save_json.assert_not_called()
 
+    def test_postgres_only_runtime_without_database_rejects_json_state(self):
+        with patch.object(runtime, "_load_tracking_memory_state") as load_json:
+            with patch.object(runtime, "_save_tracking_memory_state") as save_json:
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only tracking memory storage"):
+                        refresh_tracking_memory(
+                            "2026-05-29",
+                            watchlist=[{"code": "601991", "name": "大唐发电", "sector": "电力"}],
+                            leader_memory_bank=[],
+                            abnormal_watch_pool=[],
+                        )
+
+        load_json.assert_not_called()
+        save_json.assert_not_called()
+
     def test_refresh_tracking_memory_promotes_confirmed_items_and_drops_failed_ones(self):
         saved = {}
 

@@ -24,16 +24,23 @@ def _postgres_database_configured():
     return database_url.startswith(("postgres://", "postgresql://"))
 
 
+def _postgres_only_runtime():
+    return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+
+
 def _configured_postgres_service():
     service_cls = globals().get("DatabaseService")
-    if not _postgres_database_configured():
+    postgres_required = _postgres_only_runtime() or _postgres_database_configured()
+    if not postgres_required:
         return None
+    if _postgres_only_runtime() and not _postgres_database_configured():
+        raise RuntimeError("PostgreSQL-only A-kill cooling storage requires PostgreSQL")
     if service_cls is None:
-        raise RuntimeError("PostgreSQL A-kill cooling storage is configured but DatabaseService is unavailable")
+        raise RuntimeError("PostgreSQL A-kill cooling storage requires DatabaseService")
     service = service_cls.from_environment()
     checker = getattr(service, "is_postgres_backed", None)
     if not callable(checker) or not checker():
-        raise RuntimeError("PostgreSQL A-kill cooling storage is configured but DatabaseService did not select PostgreSQL")
+        raise RuntimeError("PostgreSQL-only A-kill cooling storage requires PostgreSQL")
     return service
 
 

@@ -124,6 +124,70 @@ class LlmServiceEnvTest(unittest.TestCase):
         self.assertEqual(result, "OK")
         self.assertEqual(provider.calls, [64])
 
+    def test_event_analysis_cache_uses_postgres_runtime_cache_when_configured(self):
+        module = self._load_llm_service_module("llm_service_event_cache_test")
+
+        class StubService:
+            def __init__(self):
+                self.entries = {}
+                self.saved = []
+
+            def is_postgres_backed(self):
+                return True
+
+            def get_runtime_cache_entry(self, namespace, cache_key, target_date):
+                return self.entries.get((namespace, cache_key, target_date))
+
+            def set_runtime_cache_entry(self, namespace, cache_key, target_date, payload, *, source="", ttl_seconds=None):
+                self.saved.append((namespace, cache_key, target_date, payload, source, ttl_seconds))
+                self.entries[(namespace, cache_key, target_date)] = {
+                    "payload": dict(payload),
+                    "source": source,
+                }
+                return True
+
+        service = StubService()
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return service
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            module,
+            "DatabaseService",
+            StubDatabaseService,
+            create=True,
+        ), patch.dict(
+            os.environ,
+            {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"},
+            clear=True,
+        ):
+            cache = module.EventAnalysisCache(cache_file=str(Path(tmp_dir) / "event_analysis_cache.json"))
+            cache.set("重大事件", {"main_direction": "半导体", "confidence": "高"})
+            result = cache.get("重大事件")
+
+        self.assertEqual(result, {"main_direction": "半导体", "confidence": "高"})
+        self.assertEqual(service.saved[0][0], "llm_event_analysis")
+        self.assertEqual(service.saved[0][1], cache._make_key("重大事件"))
+        self.assertEqual(service.saved[0][3]["result"], {"main_direction": "半导体", "confidence": "高"})
+        self.assertEqual(list(Path(tmp_dir).glob("*.json")), [])
+
+    def test_event_analysis_cache_in_postgres_only_mode_does_not_write_local_json(self):
+        module = self._load_llm_service_module("llm_service_event_cache_postgres_only_test")
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.dict(
+            os.environ,
+            {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"},
+            clear=True,
+        ):
+            cache = module.EventAnalysisCache(cache_file=str(Path(tmp_dir) / "event_analysis_cache.json"))
+            cache.set("重大事件", {"main_direction": "半导体", "confidence": "高"})
+            result = cache.get("重大事件")
+
+        self.assertEqual(result, {"main_direction": "半导体", "confidence": "高"})
+        self.assertEqual(list(Path(tmp_dir).glob("*.json")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

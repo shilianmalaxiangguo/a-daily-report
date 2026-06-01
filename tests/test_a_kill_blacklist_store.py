@@ -156,6 +156,28 @@ class AKillBlacklistStoreTest(unittest.TestCase):
                         get_active_a_kill_records("2026-04-22", path=str(json_path))
             self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["records"][0]["name"], "json")
 
+    def test_postgres_only_runtime_without_database_rejects_json_reader(self):
+        with tempfile.TemporaryDirectory() as tempdir:
+            json_path = Path(tempdir) / "a_kill_blacklist.json"
+            json_path.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "code": "000001",
+                                "name": "json",
+                                "a_kill_date": "2026-04-20",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only A-kill cooling storage"):
+                    get_active_a_kill_records("2026-04-22", path=str(json_path))
+            self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["records"][0]["name"], "json")
+
 
 if __name__ == "__main__":
     unittest.main()

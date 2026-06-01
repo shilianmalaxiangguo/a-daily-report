@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import importlib
+import json
 from contextlib import contextmanager
 
 POSTGRES_SCHEMA_STATEMENTS = [
@@ -511,6 +512,21 @@ POSTGRES_SCHEMA_STATEMENTS = [
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS runtime_cache_entries (
+        namespace TEXT NOT NULL,
+        cache_key TEXT NOT NULL,
+        target_date TEXT NOT NULL DEFAULT '',
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        source TEXT NOT NULL DEFAULT '',
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (namespace, cache_key, target_date)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_runtime_cache_entries_expires_at ON runtime_cache_entries(expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_runtime_cache_entries_namespace_date ON runtime_cache_entries(namespace, target_date)",
 ]
 
 _WEEKDAY_FIELDS = ("monday", "tuesday", "wednesday", "thursday", "friday")
@@ -2190,6 +2206,113 @@ class PostgresDailyFactDb:
 
     def is_postgres_backed(self):
         return True
+
+    def get_runtime_cache_entry(self, namespace, cache_key, target_date=""):
+        columns = ("namespace", "cache_key", "target_date", "payload", "source", "expires_at", "updated_at")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT namespace, cache_key, target_date, payload, source, expires_at, updated_at
+                    FROM runtime_cache_entries
+                    WHERE namespace = %s
+                      AND cache_key = %s
+                      AND target_date = %s
+                      AND expires_at > now()
+                    """,
+                    (_text(namespace), _text(cache_key), _text(target_date)),
+                )
+                row = cursor.fetchone()
+        if not row:
+            return None
+        item = _row_dict(row, columns)
+        payload = item.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        return {
+            "namespace": _text(item.get("namespace")),
+            "cache_key": _text(item.get("cache_key")),
+            "target_date": _text(item.get("target_date")),
+            "payload": payload,
+            "source": _text(item.get("source")),
+            "expires_at": _text(item.get("expires_at")),
+            "updated_at": _text(item.get("updated_at")),
+        }
+
+    def set_runtime_cache_entry(
+        self,
+        namespace,
+        cache_key,
+        target_date,
+        payload,
+        *,
+        source="",
+        ttl_seconds=None,
+    ):
+        ttl = _safe_int(ttl_seconds, 7 * 86400)
+        if ttl <= 0:
+            ttl = 7 * 86400
+        payload_json = json.dumps(dict(payload or {}), ensure_ascii=False, sort_keys=True)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO runtime_cache_entries(
+                        namespace, cache_key, target_date, source, payload, expires_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb, now() + (%s * interval '1 second'))
+                    ON CONFLICT (namespace, cache_key, target_date) DO UPDATE SET
+                        source=EXCLUDED.source,
+                        payload=EXCLUDED.payload,
+                        expires_at=EXCLUDED.expires_at,
+                        updated_at=now()
+                    """,
+                    (
+                        _text(namespace),
+                        _text(cache_key),
+                        _text(target_date),
+                        _text(source),
+                        payload_json,
+                        ttl,
+                    ),
+                )
+            conn.commit()
+        return True
+
+    def delete_expired_runtime_cache_entries(self):
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    DELETE FROM runtime_cache_entries
+                    WHERE expires_at <= now()
+                    """
+                )
+            conn.commit()
+        return 0
+
+    def get_runtime_cache_stats(self, namespace, target_date=""):
+        columns = ("entry_count",)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS entry_count
+                    FROM runtime_cache_entries
+                    WHERE namespace = %s
+                      AND target_date = %s
+                      AND expires_at > now()
+                    """,
+                    (_text(namespace), _text(target_date)),
+                )
+                row = cursor.fetchone()
+        item = _row_dict(row, columns)
+        return {"count": _safe_int(item.get("entry_count")), "size_mb": 0.0}
 
     def _a_kill_row_to_record(self, row):
         row = row or {}

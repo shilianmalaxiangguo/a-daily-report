@@ -194,6 +194,107 @@ archive JSON out of the report generation path.
 - Using broad regexes such as `raw` against encoded field paths; this can match
   legitimate terms like `max_drawdown`. Match field path components instead.
 
+## Scenario: PostgreSQL Runtime Cache Entries
+
+### 1. Scope / Trigger
+
+- Trigger: changing any report helper that previously wrote local JSON cache
+  files, including price-history cache, minute-bar cache, reasoning-decision
+  cache, or LLM event-analysis cache.
+
+### 2. Signatures
+
+- DB table: `runtime_cache_entries(namespace, cache_key, target_date, payload, source, expires_at)`
+- Facade APIs:
+  - `DatabaseService.get_runtime_cache_entry(namespace, cache_key, target_date="")`
+  - `DatabaseService.set_runtime_cache_entry(namespace, cache_key, target_date, payload, source="", ttl_seconds=None)`
+  - `DatabaseService.delete_expired_runtime_cache_entries()`
+  - `DatabaseService.get_runtime_cache_stats(namespace, target_date="")`
+- Env:
+  - `A_DAILY_REPORT_DATABASE_URL` or `DATABASE_URL`
+  - `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1`
+
+### 3. Contracts
+
+- Runtime cache is not a durable replay fact. It may use compact JSONB payloads
+  only inside `runtime_cache_entries`, with `expires_at` required for every row.
+- PostgreSQL-only runtime must never read or write local JSON cache files. If a
+  helper cannot use PostgreSQL, it must either use process memory for that run or
+  report the missing PostgreSQL dependency, depending on whether the cache is
+  optional.
+- Cache namespaces must be explicit and stable, such as `history_cache`,
+  `minute_price`, `reasoning_decision`, and `llm_event_analysis`.
+- Durable report facts still belong in dedicated structured tables or curated
+  `daily_report_fact_fields`; do not put replay-worthy facts into
+  `runtime_cache_entries`.
+- Historical JSON cache files may be used once as a manual seed into
+  `runtime_cache_entries`, then the runtime must query PostgreSQL.
+
+### 4. Validation & Error Matrix
+
+- PostgreSQL URL configured -> helper reads/writes `runtime_cache_entries` and
+  does not create local `*.json` cache files.
+- `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1` without PostgreSQL and optional cache
+  -> use process memory only; do not touch local JSON.
+- `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1` without PostgreSQL and required
+  storage -> raise a clear PostgreSQL-required error before opening JSON files.
+- Expired row -> treat as cache miss; do not backfill from local JSON.
+- SQL low-value-field audit -> `daily_report_fact_fields` remains free of
+  `payload`, `raw`, `cache`, rendered markdown/html, module logs, and request
+  diagnostics.
+
+### 5. Good/Base/Bad Cases
+
+- Good: 2026-05-29 `--postgres-only` uses `llm_event_analysis` runtime cache for
+  calendar-event analysis and still reports full cache hits without reading
+  `data/event_analysis_cache.json`.
+- Base: minute price cache has no PostgreSQL entry; the helper can fetch live
+  bars and skip local file writes in PostgreSQL-only runtime.
+- Bad: a helper writes `scripts/cache/history_cache/<date>.json` or
+  `data/event_analysis_cache.json` during PostgreSQL-only report generation.
+- Bad: replay-worthy sector, pool, candidate, or cycle facts are stored only as a
+  runtime cache payload instead of structured tables.
+
+### 6. Tests Required
+
+- Unit test each migrated cache helper with PostgreSQL configured: assert service
+  `get_runtime_cache_entry` / `set_runtime_cache_entry` calls and no local JSON
+  file creation.
+- Unit test PostgreSQL-only mode without a PostgreSQL URL: required stores raise
+  before JSON access; optional caches use memory and do not write files.
+- Unit test `PostgresDailyFactDb` schema includes `runtime_cache_entries`,
+  TTL column, and namespace/date indexes.
+- Integration verification for a replay date must run `--postgres-only`, inspect
+  PSQL-labeled report tables, query `runtime_cache_entries` namespaces, and
+  confirm low-value fields are absent from `daily_report_fact_fields`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+cache_path = Path("data/event_analysis_cache.json")
+cache_path.write_text(json.dumps(cache), encoding="utf-8")
+```
+
+This keeps local JSON on the report runtime path.
+
+#### Correct
+
+```python
+service.set_runtime_cache_entry(
+    "llm_event_analysis",
+    event_hash,
+    "",
+    {"timestamp": time.time(), "title": title, "result": result},
+    source="llm_service",
+    ttl_seconds=5 * 86400,
+)
+```
+
+This keeps disposable cache separate from durable replay facts and lets
+PostgreSQL expire it.
+
 ## Scenario: Hot Sector Turnover Watch
 
 ### 1. Scope / Trigger

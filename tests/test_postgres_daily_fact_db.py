@@ -125,10 +125,64 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "participation_reviews",
             "trend_fates",
             "cycle_acceptance_reviews",
+            "runtime_cache_entries",
         ):
             self.assertIn(f"create table if not exists {table_name}", schema)
 
         self.assertNotIn("payload_json", schema)
+
+    def test_runtime_cache_entries_schema_has_ttl_and_namespace_key(self):
+        schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
+
+        self.assertIn("create table if not exists runtime_cache_entries", schema)
+        self.assertIn("namespace text not null", schema)
+        self.assertIn("cache_key text not null", schema)
+        self.assertIn("expires_at timestamptz not null", schema)
+        self.assertIn("primary key (namespace, cache_key, target_date)", schema)
+        self.assertIn("create index if not exists idx_runtime_cache_entries_expires_at", schema)
+
+    def test_runtime_cache_methods_round_trip_payload_and_stats(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved = db.set_runtime_cache_entry(
+            "history_cache",
+            "tushare:000001",
+            "2026-05-14",
+            {"data": [1.0, 2.0], "source": "tushare_full_window"},
+            source="tushare_full_window",
+            ttl_seconds=3600,
+        )
+
+        self.assertTrue(saved)
+        self.assertEqual(conn.commit_count, 1)
+        self.assertIn("insert into runtime_cache_entries", conn.cursor_obj.calls[0][1].lower())
+        self.assertEqual(conn.cursor_obj.calls[0][2][0:4], ("history_cache", "tushare:000001", "2026-05-14", "tushare_full_window"))
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "namespace": "history_cache",
+                    "cache_key": "tushare:000001",
+                    "target_date": "2026-05-14",
+                    "payload": {"data": [1.0, 2.0]},
+                    "source": "tushare_full_window",
+                }
+            ],
+            [{"entry_count": 1}],
+        ]
+
+        entry = db.get_runtime_cache_entry("history_cache", "tushare:000001", "2026-05-14")
+        stats = db.get_runtime_cache_stats("history_cache", "2026-05-14")
+
+        self.assertEqual(entry["payload"], {"data": [1.0, 2.0]})
+        self.assertEqual(entry["source"], "tushare_full_window")
+        self.assertEqual(stats["count"], 1)
+        self.assertEqual(stats["size_mb"], 0.0)
 
     def test_replaces_market_cycle_context_with_structured_rows(self):
         conn = _FakeConnection()

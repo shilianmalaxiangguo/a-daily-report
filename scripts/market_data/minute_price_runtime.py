@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
 from market_data.tushare_minute_service import fetch_tushare_minute_bars
+from storage.database_service import DatabaseService
 
 DEFAULT_MINUTE_CACHE_DIR = Path(__file__).resolve().parents[1] / "cache" / "minute_price"
 
@@ -90,9 +92,65 @@ def _write_cache(path, payload):
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _postgres_database_url():
+    return (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+
+
+def _postgres_only_runtime():
+    return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", "").strip() == "1"
+
+
+def _runtime_cache_service():
+    database_url = _postgres_database_url()
+    if not database_url.startswith(("postgres://", "postgresql://")):
+        return None
+    service = DatabaseService.from_environment()
+    return service if service.is_postgres_backed() else None
+
+
+def _runtime_cache_key(symbol, period):
+    return f"{symbol}:{period}"
+
+
+def _read_runtime_cache(service, symbol, period):
+    if service is None:
+        return None
+    entry = service.get_runtime_cache_entry("minute_price", _runtime_cache_key(symbol, period), "")
+    if not isinstance(entry, dict):
+        return None
+    payload = entry.get("payload")
+    if not isinstance(payload, dict) or not payload.get("bars"):
+        return None
+    cached = dict(payload)
+    cached["source"] = "cache"
+    return cached
+
+
+def _write_runtime_cache(service, symbol, period, payload):
+    if service is None:
+        return False
+    return service.set_runtime_cache_entry(
+        "minute_price",
+        _runtime_cache_key(symbol, period),
+        "",
+        dict(payload or {}),
+        source=str((payload or {}).get("source") or ""),
+        ttl_seconds=24 * 3600,
+    )
+
+
 def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DEFAULT_MINUTE_CACHE_DIR):
     symbol = normalize_index_minute_symbol(index_code)
-    path = _cache_path(cache_dir, symbol, period)
+    runtime_cache_service = _runtime_cache_service()
+    postgres_cache_only = runtime_cache_service is not None or _postgres_only_runtime()
+    path = None if postgres_cache_only else _cache_path(cache_dir, symbol, period)
+    runtime_cached = _read_runtime_cache(runtime_cache_service, symbol, str(period))
+    if runtime_cached and runtime_cached.get("bars"):
+        return runtime_cached
     cached = _read_cache(path)
     if cached and cached.get("bars"):
         cached["source"] = "cache"
@@ -109,7 +167,10 @@ def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DE
                 "bars": bars,
             }
             try:
-                _write_cache(path, payload)
+                if runtime_cache_service is not None:
+                    _write_runtime_cache(runtime_cache_service, symbol, str(period), payload)
+                else:
+                    _write_cache(path, payload)
             except Exception:
                 pass
             return payload
@@ -130,7 +191,10 @@ def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DE
         }
         if bars:
             try:
-                _write_cache(path, payload)
+                if runtime_cache_service is not None:
+                    _write_runtime_cache(runtime_cache_service, symbol, str(period), payload)
+                else:
+                    _write_cache(path, payload)
             except Exception:
                 pass
         return payload

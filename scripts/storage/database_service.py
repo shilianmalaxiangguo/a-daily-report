@@ -43,6 +43,37 @@ class DatabaseService:
         checker = getattr(self.repository, "is_postgres_backed", None)
         return bool(callable(checker) and checker())
 
+    def get_runtime_cache_entry(self, namespace, cache_key, target_date=""):
+        reader = getattr(self.repository, "get_runtime_cache_entry", None)
+        if not callable(reader):
+            return None
+        return reader(namespace, cache_key, target_date)
+
+    def set_runtime_cache_entry(self, namespace, cache_key, target_date, payload, *, source="", ttl_seconds=None):
+        writer = getattr(self.repository, "set_runtime_cache_entry", None)
+        if not callable(writer):
+            return False
+        return writer(
+            namespace,
+            cache_key,
+            target_date,
+            payload,
+            source=source,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def delete_expired_runtime_cache_entries(self):
+        deleter = getattr(self.repository, "delete_expired_runtime_cache_entries", None)
+        if not callable(deleter):
+            return 0
+        return deleter()
+
+    def get_runtime_cache_stats(self, namespace, target_date=""):
+        reader = getattr(self.repository, "get_runtime_cache_stats", None)
+        if not callable(reader):
+            return {"count": 0, "size_mb": 0.0}
+        return reader(namespace, target_date)
+
     def save_provider_source_run(self, run):
         return self.repository.save_provider_source_run(run)
 

@@ -161,15 +161,22 @@ def _postgres_database_configured():
     return database_url.startswith(("postgres://", "postgresql://"))
 
 
+def _postgres_only_runtime():
+    return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+
+
 def _configured_tracking_memory_store():
     service_cls = globals().get("DatabaseService")
-    if not _postgres_database_configured():
+    postgres_required = _postgres_only_runtime() or _postgres_database_configured()
+    if not postgres_required:
         return None
+    if _postgres_only_runtime() and not _postgres_database_configured():
+        raise RuntimeError("PostgreSQL-only tracking memory storage requires PostgreSQL")
     if service_cls is None:
-        raise RuntimeError("PostgreSQL tracking memory storage is configured but DatabaseService is unavailable")
+        raise RuntimeError("PostgreSQL tracking memory storage requires DatabaseService")
     service = service_cls.from_environment()
     if not callable(getattr(service, "is_postgres_backed", None)) or not service.is_postgres_backed():
-        raise RuntimeError("PostgreSQL tracking memory storage is configured but DatabaseService did not select PostgreSQL")
+        raise RuntimeError("PostgreSQL-only tracking memory storage requires PostgreSQL")
     if not callable(getattr(service, "load_tracking_memory_state", None)):
         raise RuntimeError("PostgreSQL tracking memory reader is unavailable")
     if not callable(getattr(service, "save_tracking_memory_state", None)):
