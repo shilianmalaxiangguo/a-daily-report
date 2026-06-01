@@ -2,6 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -11,6 +12,8 @@ from export.sh_index_chanlun_html import (
     render_sh_index_chanlun_html,
     save_sh_index_chanlun_html_report,
 )
+from export import zhongshu_visual_snapshot
+from daily_report_render import ReportCriticalDataMissingError
 
 
 def _sample_market_zhongshu():
@@ -304,6 +307,75 @@ class ShIndexChanlunHtmlTest(unittest.TestCase):
         self.assertIn("save_sh_index_chanlun_html_report,", source)
         self.assertIn("save_sh_index_chanlun_html_report(", source)
         self.assertIn("_resolve_chanlun_tomorrow_decision(data)", source)
+
+    def test_run_analysis_with_postgres_only_loader_does_not_fallback_to_live_sources(self):
+        def postgres_loader(index_code, target_date, recent_days):
+            self.assertEqual(index_code, "sh000001")
+            self.assertEqual(target_date, "2026-05-29")
+            self.assertEqual(recent_days, 250)
+            return [], "postgresql.index_daily_bars"
+
+        with patch(
+            "market_data.daily_price_runtime.fetch_daily_price_bars",
+            side_effect=AssertionError("live fallback must not run in PostgreSQL-only chanlun HTML"),
+        ):
+            result, rows = zhongshu_visual_snapshot.run_analysis(
+                "2026-05-29",
+                "sh000001",
+                sse_loader=postgres_loader,
+                allow_live_fallback=False,
+            )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["data_source"], "postgresql.index_daily_bars")
+        self.assertEqual(rows, [])
+
+    def test_save_html_rejects_missing_postgres_daily_bars_without_writing_empty_page(self):
+        def missing_postgres_runner(target_date, index_code, **kwargs):
+            self.assertFalse(kwargs.get("allow_live_fallback", True))
+            return {
+                "success": False,
+                "error": "PostgreSQL指数日K不足，停止缠论HTML生成",
+                "data_source": "postgresql.index_daily_bars",
+            }, []
+
+        with TemporaryDirectory() as tempdir:
+            with self.assertRaises(ReportCriticalDataMissingError):
+                save_sh_index_chanlun_html_report(
+                    "2026-05-29",
+                    root=tempdir,
+                    runner=missing_postgres_runner,
+                    allow_live_fallback=False,
+                )
+
+            self.assertFalse(build_sh_index_chanlun_html_path("2026-05-29", root=tempdir).exists())
+
+    def test_render_html_exposes_daily_bar_data_source(self):
+        payload = zhongshu_visual_snapshot.normalize_visual_payload(
+            {
+                "success": True,
+                "data_source": "postgresql.index_daily_bars",
+                "today_date": "2026-05-29",
+                "today_price": 4068.57,
+                "signal": {"status": "日线中枢内震荡"},
+            },
+            [
+                {
+                    "date": "2026-05-29",
+                    "open": 4060.0,
+                    "high": 4075.0,
+                    "low": 4050.0,
+                    "close": 4068.57,
+                }
+            ],
+            date="2026-05-29",
+            index_code="sh000001",
+        )
+
+        html = render_sh_index_chanlun_html(payload)
+
+        self.assertIn("日线数据源", html)
+        self.assertIn("postgresql.index_daily_bars", html)
 
 
 if __name__ == "__main__":

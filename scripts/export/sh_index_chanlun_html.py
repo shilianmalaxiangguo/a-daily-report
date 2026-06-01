@@ -9,6 +9,7 @@ from string import Template
 from typing import Any, Callable
 
 from export.zhongshu_visual_snapshot import normalize_visual_payload, run_analysis
+from daily_report_render import ReportCriticalDataMissingError
 
 DEFAULT_INDEX_CODE = "sh000001"
 INDEX_NAME_BY_CODE = {
@@ -162,6 +163,7 @@ def _summary_rows(payload: dict[str, Any]) -> list[list[Any]]:
         ["指数", f"{INDEX_NAME_BY_CODE.get(index_code, index_code)}（{index_code}）"],
         ["最新K线日期", market.get("today_date", payload.get("date", ""))],
         ["今日收盘", _number_text(market.get("today_price"))],
+        ["日线数据源", market.get("data_source", "-")],
         ["结构结论", _first_text(signal, "status", default="-")],
         ["信号类型", _first_text(signal, "signal_type", "signalType", default="-")],
         ["包络位置", _status_label(_first_text(signal, "comparison_state", "comparisonState", default="-"))],
@@ -466,11 +468,24 @@ def save_sh_index_chanlun_html_report(
     runner: Callable[[str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = run_analysis,
     tomorrow_decision: dict[str, Any] | None = None,
     fetch_minute_bars: Callable[..., dict[str, Any]] | None = None,
+    sse_loader: Callable[..., Any] | None = None,
+    allow_live_fallback: bool = True,
 ) -> Path:
+    runner_kwargs = {}
     if fetch_minute_bars is not None:
-        market_zhongshu, rows = runner(target_date, index_code, fetch_minute_bars=fetch_minute_bars)
+        runner_kwargs["fetch_minute_bars"] = fetch_minute_bars
+    if sse_loader is not None:
+        runner_kwargs["sse_loader"] = sse_loader
+    if not allow_live_fallback:
+        runner_kwargs["allow_live_fallback"] = False
+    if runner_kwargs:
+        market_zhongshu, rows = runner(target_date, index_code, **runner_kwargs)
     else:
         market_zhongshu, rows = runner(target_date, index_code)
+    if not allow_live_fallback and not (market_zhongshu or {}).get("success"):
+        raise ReportCriticalDataMissingError(
+            (market_zhongshu or {}).get("error") or f"{target_date} PostgreSQL指数结构缺失，停止生成缠论HTML"
+        )
     payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
     if tomorrow_decision:
         payload["tomorrow_decision"] = dict(tomorrow_decision)

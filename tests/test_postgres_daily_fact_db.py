@@ -102,6 +102,9 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "market_cycle_days",
             "market_cycle_periods",
             "mainline_switch_events",
+            "monthly_account_ledger",
+            "index_daily_bars",
+            "index_minute_bars",
             "sector_attack_evidence_daily",
             "sector_diffusion_score_daily",
             "daily_observation_pool_items",
@@ -140,6 +143,326 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("expires_at timestamptz not null", schema)
         self.assertIn("primary key (namespace, cache_key, target_date)", schema)
         self.assertIn("create index if not exists idx_runtime_cache_entries_expires_at", schema)
+
+    def test_monthly_account_ledger_schema_migrates_existing_cumulative_column(self):
+        schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
+
+        self.assertIn(
+            "alter table monthly_account_ledger add column if not exists simulated_cumulative_return_pct",
+            schema,
+        )
+
+    def test_monthly_account_ledger_round_trip_computes_simulated_cumulative_return(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "month_key": "2026-04",
+                    "trade_date": "2026-04-30",
+                    "month_return_pct": 2.4,
+                }
+            ]
+        ]
+
+        saved = db.upsert_monthly_account_ledger(
+            {
+                "trade_date": "2026-05-20",
+                "account_id": "main",
+                "month_key": "2026-05",
+                "month_return_pct": 6.8,
+                "equity": 106800.0,
+                "cash": 50000.0,
+                "position_market_value": 56800.0,
+                "source_policy": "manual_review",
+            }
+        )
+
+        self.assertEqual(saved["month_key"], "2026-05")
+        self.assertAlmostEqual(saved["simulated_cumulative_return_pct"], 9.3632, places=4)
+        self.assertEqual(conn.commit_count, 1)
+        self.assertIn("INSERT INTO monthly_account_ledger", "\n".join(call[1] for call in conn.cursor_obj.calls))
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "trade_date": "2026-05-20",
+                    "account_id": "main",
+                    "month_key": "2026-05",
+                    "month_return_pct": 6.8,
+                    "simulated_cumulative_return_pct": 9.3632,
+                    "equity": 106800.0,
+                    "cash": 50000.0,
+                    "position_market_value": 56800.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "max_drawdown_pct": -1.2,
+                    "planned_trade_count": 3,
+                    "unplanned_trade_count": 1,
+                    "note": "manual_review",
+                    "source_policy": "manual_review",
+                    "updated_at": "2026-05-20T00:00:00Z",
+                }
+            ],
+            [
+                {
+                    "month_key": "2026-04",
+                    "trade_date": "2026-04-30",
+                    "month_return_pct": 2.4,
+                },
+                {
+                    "month_key": "2026-05",
+                    "trade_date": "2026-05-20",
+                    "month_return_pct": 6.8,
+                },
+            ],
+        ]
+
+        queried = db.query_monthly_account_ledger("2026-05-20")
+
+        self.assertEqual(queried["trade_date"], "2026-05-20")
+        self.assertAlmostEqual(queried["simulated_cumulative_return_pct"], 9.3632, places=4)
+        self.assertEqual(queried["source_policy"], "manual_review")
+
+    def test_monthly_account_ledger_query_recomputes_after_out_of_order_backfill(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "trade_date": "2026-05-20",
+                    "account_id": "main",
+                    "month_key": "2026-05",
+                    "month_return_pct": 6.8,
+                    "simulated_cumulative_return_pct": 6.8,
+                    "equity": 106800.0,
+                    "cash": 50000.0,
+                    "position_market_value": 56800.0,
+                    "realized_pnl": 0.0,
+                    "unrealized_pnl": 0.0,
+                    "max_drawdown_pct": -1.2,
+                    "planned_trade_count": 3,
+                    "unplanned_trade_count": 1,
+                    "note": "manual_review",
+                    "source_policy": "manual_review",
+                    "updated_at": "2026-05-20T00:00:00Z",
+                }
+            ],
+            [
+                {
+                    "month_key": "2026-04",
+                    "trade_date": "2026-04-30",
+                    "month_return_pct": 2.4,
+                },
+                {
+                    "month_key": "2026-05",
+                    "trade_date": "2026-05-20",
+                    "month_return_pct": 6.8,
+                },
+            ],
+        ]
+
+        queried = db.query_monthly_account_ledger("2026-05-20")
+
+        self.assertAlmostEqual(queried["simulated_cumulative_return_pct"], 9.3632, places=4)
+
+    def test_index_bar_tables_are_structured_without_cache_payloads(self):
+        schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
+
+        self.assertIn("create table if not exists index_daily_bars", schema)
+        self.assertIn("primary key (index_code, trade_date)", schema)
+        self.assertIn("create table if not exists index_minute_bars", schema)
+        self.assertIn("primary key (index_code, trade_date, period, bar_time)", schema)
+        self.assertNotIn("index_daily_bars(\n        payload", schema)
+        self.assertNotIn("index_minute_bars(\n        payload", schema)
+
+    def test_index_daily_bars_round_trip_as_structured_rows(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved_count = db.upsert_index_daily_bars(
+            "sh.000001",
+            [
+                {
+                    "date": "2026-05-28",
+                    "open": 4050.0,
+                    "high": 4070.0,
+                    "low": 4040.0,
+                    "close": 4060.0,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                }
+            ],
+            source_policy="sse_index_dayk",
+        )
+
+        self.assertEqual(saved_count, 1)
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO index_daily_bars", sql)
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "index_code": "sh000001",
+                    "trade_date": "2026-05-29",
+                    "open": 4061.0,
+                    "high": 4080.0,
+                    "low": 4050.0,
+                    "close": 4075.0,
+                    "volume": 120.0,
+                    "amount": 1200.0,
+                    "source_policy": "sse_index_dayk",
+                    "source_run_id": 0,
+                },
+                {
+                    "index_code": "sh000001",
+                    "trade_date": "2026-05-28",
+                    "open": 4050.0,
+                    "high": 4070.0,
+                    "low": 4040.0,
+                    "close": 4060.0,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "source_policy": "sse_index_dayk",
+                    "source_run_id": 0,
+                },
+            ]
+        ]
+
+        rows = db.query_index_daily_bars("sh.000001", "2026-05-29", window_days=250)
+
+        self.assertEqual([row["date"] for row in rows], ["2026-05-28", "2026-05-29"])
+        self.assertEqual(rows[0]["close"], 4060.0)
+        self.assertEqual(rows[0]["data_source"], "postgresql.index_daily_bars")
+
+    def test_import_daily_report_facts_writes_current_index_daily_bars(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "total_turnover": 33408.58,
+                "indices": {
+                    "上证指数": {
+                        "trade_date": "2026-05-29",
+                        "code": "000001",
+                        "name": "上证指数",
+                        "open": 4110.52,
+                        "high": 4112.96,
+                        "low": 4055.89,
+                        "close": 4068.57,
+                        "turnover": 0,
+                        "data_source": "tushare.index_daily",
+                    }
+                },
+            },
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO index_daily_bars", sql)
+        self.assertEqual(result["structured_counts"]["index_daily_bars"], 1)
+
+    def test_import_daily_report_facts_reads_execution_position_monthly_rhythm(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-05-29",
+            {
+                "execution_stage_context": {
+                    "position_decision": {
+                        "monthly_rhythm": {
+                            "month_key": "2026-05",
+                            "month_return_pct": 6.8,
+                            "source_policy": "manual_review",
+                        },
+                    },
+                },
+            },
+        )
+
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO monthly_account_ledger", sql)
+        self.assertEqual(result["structured_counts"]["monthly_account_ledger"], 1)
+
+    def test_index_minute_bars_round_trip_as_structured_rows(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        saved_count = db.upsert_index_minute_bars(
+            "sh.000001",
+            "2026-05-29",
+            "60",
+            [
+                {
+                    "datetime": "2026-05-29 10:30:00",
+                    "date": "2026-05-29",
+                    "time": "10:30:00",
+                    "open": 4050.0,
+                    "high": 4070.0,
+                    "low": 4040.0,
+                    "close": 4060.0,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                }
+            ],
+            source_policy="tushare.stock_mins",
+        )
+
+        self.assertEqual(saved_count, 1)
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls)
+        self.assertIn("INSERT INTO index_minute_bars", sql)
+
+        conn.cursor_obj.row_batches = [
+            [
+                {
+                    "index_code": "sh000001",
+                    "trade_date": "2026-05-29",
+                    "period": "60",
+                    "bar_time": "10:30:00",
+                    "open": 4050.0,
+                    "high": 4070.0,
+                    "low": 4040.0,
+                    "close": 4060.0,
+                    "volume": 100.0,
+                    "amount": 1000.0,
+                    "source_policy": "tushare.stock_mins",
+                    "source_run_id": 0,
+                }
+            ]
+        ]
+
+        rows = db.query_index_minute_bars("sh.000001", "2026-05-29", period="60")
+
+        self.assertEqual(rows[0]["datetime"], "2026-05-29 10:30:00")
+        self.assertEqual(rows[0]["data_source"], "postgresql.index_minute_bars")
 
     def test_runtime_cache_methods_round_trip_payload_and_stats(self):
         conn = _FakeConnection()

@@ -96,6 +96,63 @@ POSTGRES_SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS monthly_account_ledger (
+        trade_date DATE NOT NULL,
+        account_id TEXT NOT NULL DEFAULT 'main',
+        month_key TEXT NOT NULL DEFAULT '',
+        month_return_pct DOUBLE PRECISION,
+        simulated_cumulative_return_pct DOUBLE PRECISION,
+        equity DOUBLE PRECISION,
+        cash DOUBLE PRECISION,
+        position_market_value DOUBLE PRECISION,
+        realized_pnl DOUBLE PRECISION,
+        unrealized_pnl DOUBLE PRECISION,
+        max_drawdown_pct DOUBLE PRECISION,
+        planned_trade_count INTEGER NOT NULL DEFAULT 0,
+        unplanned_trade_count INTEGER NOT NULL DEFAULT 0,
+        note TEXT NOT NULL DEFAULT '',
+        source_policy TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, account_id)
+    )
+    """,
+    "ALTER TABLE monthly_account_ledger ADD COLUMN IF NOT EXISTS simulated_cumulative_return_pct DOUBLE PRECISION",
+    "CREATE INDEX IF NOT EXISTS idx_monthly_account_ledger_account_month_date ON monthly_account_ledger(account_id, month_key, trade_date)",
+    """
+    CREATE TABLE IF NOT EXISTS index_daily_bars (
+        index_code TEXT NOT NULL,
+        trade_date DATE NOT NULL,
+        open DOUBLE PRECISION NOT NULL DEFAULT 0,
+        high DOUBLE PRECISION NOT NULL DEFAULT 0,
+        low DOUBLE PRECISION NOT NULL DEFAULT 0,
+        close DOUBLE PRECISION NOT NULL DEFAULT 0,
+        volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+        amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+        source_policy TEXT NOT NULL DEFAULT '',
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (index_code, trade_date)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS index_minute_bars (
+        index_code TEXT NOT NULL,
+        trade_date DATE NOT NULL,
+        period TEXT NOT NULL DEFAULT '60',
+        bar_time TEXT NOT NULL DEFAULT '',
+        open DOUBLE PRECISION NOT NULL DEFAULT 0,
+        high DOUBLE PRECISION NOT NULL DEFAULT 0,
+        low DOUBLE PRECISION NOT NULL DEFAULT 0,
+        close DOUBLE PRECISION NOT NULL DEFAULT 0,
+        volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+        amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+        source_policy TEXT NOT NULL DEFAULT '',
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (index_code, trade_date, period, bar_time)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS sector_fund_flow_daily (
         trade_date DATE NOT NULL,
         sector_name TEXT NOT NULL,
@@ -539,6 +596,7 @@ _RECENT_REPLAY_FACT_DATE_COLUMNS = (
     ("mainline_switch_events", "trade_date"),
     ("mainline_turnover_daily", "trade_date"),
     ("market_daily_totals", "trade_date"),
+    ("index_minute_bars", "trade_date"),
     ("sector_fund_flow_daily", "trade_date"),
     ("sector_attack_evidence_daily", "trade_date"),
     ("sector_diffusion_score_daily", "trade_date"),
@@ -596,6 +654,33 @@ def _text(value):
     return str(value or "").strip()
 
 
+def _normalize_index_code(value):
+    text = _text(value).lower().replace(".", "")
+    if not text:
+        return ""
+    if text.startswith(("sh", "sz", "bj")):
+        return text
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if not digits:
+        return text
+    digits = digits.zfill(6)
+    if digits.startswith("399"):
+        return f"sz{digits}"
+    return f"sh{digits}"
+
+
+def _normalize_month_key(*, trade_date="", month_key=""):
+    month_key = _text(month_key)
+    if month_key:
+        return month_key
+    trade_date = _text(trade_date)
+    if len(trade_date) >= 7 and trade_date[4] == "-":
+        return trade_date[:7]
+    if len(trade_date) >= 6 and trade_date[:6].isdigit():
+        return f"{trade_date[:4]}-{trade_date[4:6]}"
+    return ""
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -603,6 +688,36 @@ def _safe_float(value, default=0.0):
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _nullable_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compound_monthly_return_pct(values):
+    normalized = []
+    for value in values or []:
+        number = _nullable_float(value)
+        if number is None:
+            continue
+        normalized.append(number / 100.0)
+    if not normalized:
+        return None
+    try:
+        from report.strategy_tracking_support import compound_returns
+
+        compounded = compound_returns(normalized)
+    except Exception:
+        nav = 1.0
+        for value in normalized:
+            nav *= 1.0 + value
+        compounded = nav - 1.0
+    return round(compounded * 100.0, 4)
 
 
 def _safe_int(value, default=0):
@@ -2115,6 +2230,122 @@ def _market_daily_total_from_data(trade_date, data):
     }
 
 
+_INDEX_DAILY_BAR_SOURCE_KEYS = (
+    ("indices", "上证指数", "sh000001"),
+    ("indices", "深证成指", "sz399001"),
+    ("indices", "创业板指", "sz399006"),
+    ("wind_a_alternative", None, "sh000985"),
+    ("csi1000_index", None, "sh000852"),
+)
+
+
+def _index_daily_bar_records_from_data(trade_date, data):
+    data = data or {}
+    records = []
+    for container_key, nested_key, fallback_code in _INDEX_DAILY_BAR_SOURCE_KEYS:
+        container = data.get(container_key)
+        source = container.get(nested_key) if nested_key and isinstance(container, dict) else container
+        if not isinstance(source, dict):
+            continue
+        code = _normalize_index_code(source.get("code") or fallback_code)
+        row_date = _date_or_none(source.get("trade_date") or source.get("date") or trade_date)
+        close = _safe_float(source.get("close", source.get("price")))
+        if not code or not row_date or close <= 0:
+            continue
+        records.append(
+            (
+                code,
+                {
+                    "trade_date": row_date,
+                    "open": _safe_float(source.get("open"), close),
+                    "high": _safe_float(source.get("high"), close),
+                    "low": _safe_float(source.get("low"), close),
+                    "close": close,
+                    "volume": _safe_float(source.get("volume", source.get("vol"))),
+                    "amount": _safe_float(source.get("amount", source.get("turnover"))),
+                    "source_policy": _text(source.get("data_source") or source.get("source") or "daily_report_facts.index_daily"),
+                },
+            )
+        )
+    return records
+
+
+def _monthly_account_ledger_from_data(trade_date, data):
+    data = data or {}
+    market_snapshot = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+    execution_context = data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {}
+    position_decision = market_snapshot.get("position_decision") if isinstance(market_snapshot.get("position_decision"), dict) else {}
+    execution_position_decision = execution_context.get("position_decision") if isinstance(execution_context.get("position_decision"), dict) else {}
+    top_position_decision = data.get("position_decision") if isinstance(data.get("position_decision"), dict) else {}
+    monthly_rhythm = position_decision.get("monthly_rhythm") if isinstance(position_decision.get("monthly_rhythm"), dict) else {}
+    execution_monthly_rhythm = (
+        execution_position_decision.get("monthly_rhythm")
+        if isinstance(execution_position_decision.get("monthly_rhythm"), dict)
+        else {}
+    )
+    top_monthly_rhythm = (
+        top_position_decision.get("monthly_rhythm")
+        if isinstance(top_position_decision.get("monthly_rhythm"), dict)
+        else {}
+    )
+    context = {}
+    for source in (
+        monthly_rhythm,
+        execution_monthly_rhythm,
+        top_monthly_rhythm,
+        execution_context.get("monthly_context") if isinstance(execution_context.get("monthly_context"), dict) else {},
+        data.get("monthly_context") if isinstance(data.get("monthly_context"), dict) else {},
+    ):
+        if isinstance(source, dict):
+            context.update({key: value for key, value in source.items() if value not in (None, "")})
+    if not context:
+        return {}
+
+    account_profile = data.get("account_profile") if isinstance(data.get("account_profile"), dict) else {}
+    personal_context = data.get("personal_position_context") if isinstance(data.get("personal_position_context"), dict) else {}
+    personal_profile = personal_context.get("account_profile") if isinstance(personal_context.get("account_profile"), dict) else {}
+    row = {
+        "trade_date": trade_date,
+        "account_id": _text(
+            context.get("account_id")
+            or account_profile.get("account_id")
+            or personal_profile.get("account_id")
+            or "main"
+        )
+        or "main",
+        "month_key": _normalize_month_key(trade_date=trade_date, month_key=context.get("month_key")),
+        "month_return_pct": _nullable_float(context.get("month_return_pct", context.get("monthly_return_pct"))),
+        "simulated_cumulative_return_pct": _nullable_float(context.get("simulated_cumulative_return_pct")),
+        "equity": _nullable_float(context.get("equity")),
+        "cash": _nullable_float(context.get("cash")),
+        "position_market_value": _nullable_float(context.get("position_market_value")),
+        "realized_pnl": _nullable_float(context.get("realized_pnl")),
+        "unrealized_pnl": _nullable_float(context.get("unrealized_pnl")),
+        "max_drawdown_pct": _nullable_float(context.get("max_drawdown_pct")),
+        "planned_trade_count": _safe_int(context.get("planned_trade_count")),
+        "unplanned_trade_count": _safe_int(context.get("unplanned_trade_count")),
+        "note": _text(context.get("note") or context.get("reason")),
+        "source_policy": _text(context.get("source_policy") or context.get("month_return_source"))
+        or "postgresql.daily_report_facts",
+    }
+    if not row["trade_date"] or not row["account_id"] or not row["month_key"]:
+        return {}
+    has_account_fact = any(
+        row.get(key) is not None
+        for key in (
+            "month_return_pct",
+            "simulated_cumulative_return_pct",
+            "equity",
+            "cash",
+            "position_market_value",
+            "realized_pnl",
+            "unrealized_pnl",
+            "max_drawdown_pct",
+        )
+    ) or bool(row["note"])
+    return row if has_account_fact else {}
+
+
 def _sector_fund_flow_records_from_data(trade_date, data):
     data = data or {}
     sector_fund_flow = data.get("sector_fund_flow")
@@ -2207,6 +2438,237 @@ class PostgresDailyFactDb:
 
     def is_postgres_backed(self):
         return True
+
+    def _normalize_monthly_account_ledger(self, row):
+        row = row or {}
+        trade_date = _date_or_none(row.get("trade_date") or row.get("date"))
+        month_key = _normalize_month_key(trade_date=trade_date, month_key=row.get("month_key"))
+        return {
+            "trade_date": trade_date,
+            "account_id": _text(row.get("account_id")) or "main",
+            "month_key": month_key,
+            "month_return_pct": _nullable_float(row.get("month_return_pct", row.get("monthly_return_pct"))),
+            "simulated_cumulative_return_pct": _nullable_float(row.get("simulated_cumulative_return_pct")),
+            "equity": _nullable_float(row.get("equity")),
+            "cash": _nullable_float(row.get("cash")),
+            "position_market_value": _nullable_float(row.get("position_market_value")),
+            "realized_pnl": _nullable_float(row.get("realized_pnl")),
+            "unrealized_pnl": _nullable_float(row.get("unrealized_pnl")),
+            "max_drawdown_pct": _nullable_float(row.get("max_drawdown_pct")),
+            "planned_trade_count": _safe_int(row.get("planned_trade_count")),
+            "unplanned_trade_count": _safe_int(row.get("unplanned_trade_count")),
+            "note": _text(row.get("note")),
+            "source_policy": _text(row.get("source_policy") or row.get("source")),
+        }
+
+    def _monthly_return_by_month_until(self, end_date, *, account_id="main"):
+        columns = ("month_key", "trade_date", "month_return_pct")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT month_key, trade_date, month_return_pct
+                    FROM monthly_account_ledger
+                    WHERE account_id = %s
+                      AND trade_date <= %s
+                      AND month_return_pct IS NOT NULL
+                    ORDER BY month_key ASC, trade_date ASC
+                    """,
+                    (_text(account_id) or "main", _date_or_none(end_date)),
+                )
+                rows = list(cursor.fetchall() or [])
+        latest_by_month = {}
+        for row in rows:
+            item = _row_dict(row, columns)
+            month_key = _text(item.get("month_key"))
+            month_return_pct = _nullable_float(item.get("month_return_pct"))
+            if month_key and month_return_pct is not None:
+                latest_by_month[month_key] = month_return_pct
+        return latest_by_month
+
+    def _simulated_cumulative_return_pct_for_item(self, item):
+        item = item or {}
+        latest_by_month = self._monthly_return_by_month_until(
+            item.get("trade_date"),
+            account_id=item.get("account_id") or "main",
+        )
+        month_key = _text(item.get("month_key"))
+        month_return_pct = _nullable_float(item.get("month_return_pct"))
+        if month_key and month_return_pct is not None:
+            latest_by_month[month_key] = month_return_pct
+        values = [latest_by_month[key] for key in sorted(latest_by_month)]
+        return _compound_monthly_return_pct(values)
+
+    def _refresh_monthly_account_cumulative_returns(self, *, account_id="main"):
+        account_id = _text(account_id) or "main"
+        columns = ("trade_date", "account_id", "month_key", "month_return_pct")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, account_id, month_key, month_return_pct
+                    FROM monthly_account_ledger
+                    WHERE account_id = %s
+                      AND month_return_pct IS NOT NULL
+                    ORDER BY trade_date ASC, month_key ASC
+                    """,
+                    (account_id,),
+                )
+                rows = list(cursor.fetchall() or [])
+                latest_by_month = {}
+                updates = []
+                for row in rows:
+                    item = _row_dict(row, columns)
+                    trade_date = _date_or_none(item.get("trade_date"))
+                    month_key = _text(item.get("month_key"))
+                    month_return_pct = _nullable_float(item.get("month_return_pct"))
+                    if not trade_date or not month_key or month_return_pct is None:
+                        continue
+                    latest_by_month[month_key] = month_return_pct
+                    cumulative_return_pct = _compound_monthly_return_pct(
+                        [latest_by_month[key] for key in sorted(latest_by_month)]
+                    )
+                    if cumulative_return_pct is not None:
+                        updates.append((cumulative_return_pct, trade_date, account_id))
+                if updates:
+                    cursor.executemany(
+                        """
+                        UPDATE monthly_account_ledger
+                        SET simulated_cumulative_return_pct = %s,
+                            updated_at = now()
+                        WHERE trade_date = %s
+                          AND account_id = %s
+                        """,
+                        updates,
+                    )
+            if updates:
+                conn.commit()
+        return len(updates)
+
+    def upsert_monthly_account_ledger(self, row):
+        item = self._normalize_monthly_account_ledger(row)
+        if not item["trade_date"] or not item["account_id"] or not item["month_key"]:
+            return {}
+        if item["simulated_cumulative_return_pct"] is None:
+            item["simulated_cumulative_return_pct"] = self._simulated_cumulative_return_pct_for_item(item)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO monthly_account_ledger(
+                        trade_date, account_id, month_key, month_return_pct,
+                        simulated_cumulative_return_pct, equity, cash,
+                        position_market_value, realized_pnl, unrealized_pnl,
+                        max_drawdown_pct, planned_trade_count, unplanned_trade_count,
+                        note, source_policy
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (trade_date, account_id) DO UPDATE SET
+                        month_key=EXCLUDED.month_key,
+                        month_return_pct=EXCLUDED.month_return_pct,
+                        simulated_cumulative_return_pct=EXCLUDED.simulated_cumulative_return_pct,
+                        equity=EXCLUDED.equity,
+                        cash=EXCLUDED.cash,
+                        position_market_value=EXCLUDED.position_market_value,
+                        realized_pnl=EXCLUDED.realized_pnl,
+                        unrealized_pnl=EXCLUDED.unrealized_pnl,
+                        max_drawdown_pct=EXCLUDED.max_drawdown_pct,
+                        planned_trade_count=EXCLUDED.planned_trade_count,
+                        unplanned_trade_count=EXCLUDED.unplanned_trade_count,
+                        note=EXCLUDED.note,
+                        source_policy=EXCLUDED.source_policy,
+                        updated_at=now()
+                    """,
+                    (
+                        item["trade_date"],
+                        item["account_id"],
+                        item["month_key"],
+                        item["month_return_pct"],
+                        item["simulated_cumulative_return_pct"],
+                        item["equity"],
+                        item["cash"],
+                        item["position_market_value"],
+                        item["realized_pnl"],
+                        item["unrealized_pnl"],
+                        item["max_drawdown_pct"],
+                        item["planned_trade_count"],
+                        item["unplanned_trade_count"],
+                        item["note"],
+                        item["source_policy"],
+                    ),
+                )
+            conn.commit()
+        self._refresh_monthly_account_cumulative_returns(account_id=item["account_id"])
+        return item
+
+    def query_monthly_account_ledger(self, end_date, *, account_id="main"):
+        end_date = _date_or_none(end_date)
+        account_id = _text(account_id) or "main"
+        month_key = _normalize_month_key(trade_date=end_date)
+        if not end_date or not month_key:
+            return {}
+        columns = (
+            "trade_date",
+            "account_id",
+            "month_key",
+            "month_return_pct",
+            "simulated_cumulative_return_pct",
+            "equity",
+            "cash",
+            "position_market_value",
+            "realized_pnl",
+            "unrealized_pnl",
+            "max_drawdown_pct",
+            "planned_trade_count",
+            "unplanned_trade_count",
+            "note",
+            "source_policy",
+            "updated_at",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, account_id, month_key, month_return_pct,
+                           simulated_cumulative_return_pct, equity, cash,
+                           position_market_value, realized_pnl, unrealized_pnl,
+                           max_drawdown_pct, planned_trade_count, unplanned_trade_count,
+                           note, source_policy, updated_at
+                    FROM monthly_account_ledger
+                    WHERE account_id = %s
+                      AND month_key = %s
+                      AND trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT 1
+                    """,
+                    (account_id, month_key, end_date),
+                )
+                row = cursor.fetchone()
+        if not row:
+            return {}
+        item = _row_dict(row, columns)
+        result = {
+            "trade_date": _text(item.get("trade_date")),
+            "account_id": _text(item.get("account_id")) or account_id,
+            "month_key": _text(item.get("month_key")) or month_key,
+            "month_return_pct": _nullable_float(item.get("month_return_pct")),
+            "simulated_cumulative_return_pct": _nullable_float(item.get("simulated_cumulative_return_pct")),
+            "equity": _nullable_float(item.get("equity")),
+            "cash": _nullable_float(item.get("cash")),
+            "position_market_value": _nullable_float(item.get("position_market_value")),
+            "realized_pnl": _nullable_float(item.get("realized_pnl")),
+            "unrealized_pnl": _nullable_float(item.get("unrealized_pnl")),
+            "max_drawdown_pct": _nullable_float(item.get("max_drawdown_pct")),
+            "planned_trade_count": _safe_int(item.get("planned_trade_count")),
+            "unplanned_trade_count": _safe_int(item.get("unplanned_trade_count")),
+            "note": _text(item.get("note")),
+            "source_policy": _text(item.get("source_policy")),
+            "updated_at": _text(item.get("updated_at")),
+        }
+        computed_cumulative_return_pct = self._simulated_cumulative_return_pct_for_item(result)
+        if computed_cumulative_return_pct is not None:
+            result["simulated_cumulative_return_pct"] = computed_cumulative_return_pct
+        return result
 
     def get_runtime_cache_entry(self, namespace, cache_key, target_date=""):
         columns = ("namespace", "cache_key", "target_date", "payload", "source", "expires_at", "updated_at")
@@ -2528,6 +2990,227 @@ class PostgresDailyFactDb:
         if item:
             item["trade_date"] = _text(item.get("trade_date"))
         return item
+
+    def upsert_index_daily_bars(self, index_code, rows, *, source_policy="", source_run_id=0):
+        index_code = _normalize_index_code(index_code)
+        if not index_code:
+            return 0
+        items = []
+        for row in rows or []:
+            row = row or {}
+            trade_date = _date_or_none(row.get("trade_date") or row.get("date"))
+            if not trade_date:
+                continue
+            items.append(
+                (
+                    index_code,
+                    trade_date,
+                    _safe_float(row.get("open")),
+                    _safe_float(row.get("high")),
+                    _safe_float(row.get("low")),
+                    _safe_float(row.get("close")),
+                    _safe_float(row.get("volume", row.get("vol"))),
+                    _safe_float(row.get("amount")),
+                    _text(row.get("source_policy") or source_policy),
+                    _safe_int(row.get("source_run_id", source_run_id)),
+                )
+            )
+        if not items:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO index_daily_bars(
+                        index_code, trade_date, open, high, low, close,
+                        volume, amount, source_policy, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (index_code, trade_date) DO UPDATE SET
+                        open=EXCLUDED.open,
+                        high=EXCLUDED.high,
+                        low=EXCLUDED.low,
+                        close=EXCLUDED.close,
+                        volume=EXCLUDED.volume,
+                        amount=EXCLUDED.amount,
+                        source_policy=EXCLUDED.source_policy,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    items,
+                )
+            conn.commit()
+        return len(items)
+
+    def query_index_daily_bars(self, index_code, end_date, *, window_days=250):
+        index_code = _normalize_index_code(index_code)
+        if not index_code:
+            return []
+        limit = max(_safe_int(window_days, 250), 1)
+        columns = (
+            "index_code",
+            "trade_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "source_policy",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT index_code, trade_date, open, high, low, close,
+                           volume, amount, source_policy, source_run_id
+                    FROM index_daily_bars
+                    WHERE index_code = %s
+                      AND trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (index_code, _date_or_none(end_date), limit),
+                )
+                rows = list(cursor.fetchall() or [])
+        records = []
+        for row in reversed(rows):
+            item = _row_dict(row, columns)
+            trade_date = _text(item.get("trade_date"))
+            records.append(
+                {
+                    "date": trade_date,
+                    "open": _safe_float(item.get("open")),
+                    "high": _safe_float(item.get("high")),
+                    "low": _safe_float(item.get("low")),
+                    "close": _safe_float(item.get("close")),
+                    "volume": _safe_float(item.get("volume")),
+                    "amount": _safe_float(item.get("amount")),
+                    "data_source": "postgresql.index_daily_bars",
+                    "source": _text(item.get("source_policy")) or "postgresql.index_daily_bars",
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                }
+            )
+        return records
+
+    def upsert_index_minute_bars(self, index_code, trade_date, period, rows, *, source_policy="", source_run_id=0):
+        index_code = _normalize_index_code(index_code)
+        trade_date = _date_or_none(trade_date)
+        period = _text(period) or "60"
+        if not index_code or not trade_date:
+            return 0
+        items = []
+        for row in rows or []:
+            row = row or {}
+            bar_time = _text(row.get("time") or row.get("bar_time"))
+            if not bar_time:
+                datetime_text = _text(row.get("datetime") or row.get("day") or row.get("trade_time"))
+                bar_time = datetime_text[-8:] if len(datetime_text) >= 8 else ""
+            if not bar_time:
+                continue
+            items.append(
+                (
+                    index_code,
+                    trade_date,
+                    period,
+                    bar_time,
+                    _safe_float(row.get("open")),
+                    _safe_float(row.get("high")),
+                    _safe_float(row.get("low")),
+                    _safe_float(row.get("close")),
+                    _safe_float(row.get("volume", row.get("vol"))),
+                    _safe_float(row.get("amount")),
+                    _text(row.get("source_policy") or source_policy),
+                    _safe_int(row.get("source_run_id", source_run_id)),
+                )
+            )
+        if not items:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO index_minute_bars(
+                        index_code, trade_date, period, bar_time,
+                        open, high, low, close, volume, amount,
+                        source_policy, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (index_code, trade_date, period, bar_time) DO UPDATE SET
+                        open=EXCLUDED.open,
+                        high=EXCLUDED.high,
+                        low=EXCLUDED.low,
+                        close=EXCLUDED.close,
+                        volume=EXCLUDED.volume,
+                        amount=EXCLUDED.amount,
+                        source_policy=EXCLUDED.source_policy,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    items,
+                )
+            conn.commit()
+        return len(items)
+
+    def query_index_minute_bars(self, index_code, trade_date, *, period="60"):
+        index_code = _normalize_index_code(index_code)
+        trade_date = _date_or_none(trade_date)
+        period = _text(period) or "60"
+        if not index_code or not trade_date:
+            return []
+        columns = (
+            "index_code",
+            "trade_date",
+            "period",
+            "bar_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "source_policy",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT index_code, trade_date, period, bar_time,
+                           open, high, low, close, volume, amount,
+                           source_policy, source_run_id
+                    FROM index_minute_bars
+                    WHERE index_code = %s
+                      AND trade_date = %s
+                      AND period = %s
+                    ORDER BY bar_time ASC
+                    """,
+                    (index_code, trade_date, period),
+                )
+                rows = list(cursor.fetchall() or [])
+        records = []
+        for row in rows:
+            item = _row_dict(row, columns)
+            bar_time = _text(item.get("bar_time"))
+            date_text = _text(item.get("trade_date"))
+            records.append(
+                {
+                    "datetime": f"{date_text} {bar_time}".strip(),
+                    "date": date_text,
+                    "time": bar_time,
+                    "open": _safe_float(item.get("open")),
+                    "high": _safe_float(item.get("high")),
+                    "low": _safe_float(item.get("low")),
+                    "close": _safe_float(item.get("close")),
+                    "volume": _safe_float(item.get("volume")),
+                    "amount": _safe_float(item.get("amount")),
+                    "data_source": "postgresql.index_minute_bars",
+                    "source": _text(item.get("source_policy")) or "postgresql.index_minute_bars",
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                }
+            )
+        return records
 
     def upsert_mainline_daily(self, row):
         row = row or {}
@@ -4388,6 +5071,21 @@ class PostgresDailyFactDb:
             structured_counts["market_daily_total"] = 1
         else:
             structured_counts["market_daily_total"] = 0
+        index_daily_records = _index_daily_bar_records_from_data(trade_date, data)
+        index_daily_count = 0
+        for index_code, row in index_daily_records:
+            index_daily_count += self.upsert_index_daily_bars(
+                index_code,
+                [row],
+                source_policy=row.get("source_policy") or "daily_report_facts.index_daily",
+            )
+        structured_counts["index_daily_bars"] = index_daily_count
+        monthly_ledger = _monthly_account_ledger_from_data(trade_date, data)
+        if monthly_ledger:
+            saved_monthly_ledger = self.upsert_monthly_account_ledger(monthly_ledger)
+            structured_counts["monthly_account_ledger"] = 1 if saved_monthly_ledger else 0
+        else:
+            structured_counts["monthly_account_ledger"] = 0
         sector_flow_records = _sector_fund_flow_records_from_data(trade_date, data)
         for row in sector_flow_records:
             self.upsert_sector_fund_flow_daily(row)
@@ -4442,6 +5140,30 @@ class PostgresDailyFactDb:
             with self._connect() as conn:
                 with conn.cursor() as cursor:
                     data = self._enrich_loaded_report_data_from_structured_tables(cursor, trade_date, data)
+            monthly_context = data.get("monthly_context") if isinstance(data.get("monthly_context"), dict) else {}
+            monthly_ledger = self.query_monthly_account_ledger(trade_date, account_id=monthly_context.get("account_id") or "main")
+            if monthly_ledger:
+                merged_monthly_context = dict(monthly_context or {})
+                for key in (
+                    "trade_date",
+                    "account_id",
+                    "month_key",
+                    "month_return_pct",
+                    "simulated_cumulative_return_pct",
+                    "equity",
+                    "cash",
+                    "position_market_value",
+                    "realized_pnl",
+                    "unrealized_pnl",
+                    "max_drawdown_pct",
+                    "planned_trade_count",
+                    "unplanned_trade_count",
+                    "note",
+                ):
+                    if monthly_ledger.get(key) not in (None, ""):
+                        merged_monthly_context[key] = monthly_ledger.get(key)
+                merged_monthly_context["month_return_source"] = monthly_ledger.get("source_policy") or "monthly_account_ledger"
+                data["monthly_context"] = merged_monthly_context
             data.setdefault("postgres_source", f"postgresql://daily-report-facts/{trade_date}")
             data.setdefault("postgres_only", True)
         return {

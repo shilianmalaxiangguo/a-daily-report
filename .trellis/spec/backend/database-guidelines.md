@@ -28,6 +28,12 @@ from the node result and merge it into `data`; then
 - curated `daily_report_fact_fields` paths for structured facts that do not yet
   have dedicated tables, such as `market_research_snapshot.sector_internal_analysis.turnover_trend`.
 
+Monthly account continuity is stored separately in `monthly_account_ledger`.
+Use it for per-account monthly continuity, not `daily_report_fact_fields`.
+Persist `month_return_pct` together with a derived
+`simulated_cumulative_return_pct` so the report can render the current month and
+the compounded month series without defaulting missing returns to zero.
+
 ---
 
 ## Scenario: PostgreSQL-Only Daily Report Replay Facts
@@ -58,9 +64,20 @@ from the node result and merge it into `data`; then
   If PostgreSQL history is short or stale, return the available structured rows
   or an empty list; do not rebuild by scanning `snapshots/*.json` or
   `snapshots/replay/*_replay.json`.
+- Monthly account lookup should use `DatabaseService.from_environment()` when a
+  repository may be PostgreSQL-backed. Do not hard-code the local SQLite path
+  when the database URL is already configured.
 - JSON archives are allowed only as one-time import seeds, official replay
   archives, or explicit manual repair inputs. They are not a daily report hot
   path once PostgreSQL facts exist.
+- PostgreSQL-only market structure analysis must inject
+  `index_daily_bars` through `analyze_market_zhongshu(fetch_dataframe=...)` for
+  both the report body and the companion Chanlun HTML. Do not leave the report
+  body on the default live index loader while only the HTML uses PostgreSQL.
+- Chanlun HTML generated from PostgreSQL-only replay must pass the PostgreSQL
+  daily-bar loader, PostgreSQL minute-bar fetcher, and `allow_live_fallback=False`;
+  the summary table should expose the daily-bar source, such as
+  `postgresql.index_daily_bars`.
 - When saving a replay snapshot over an existing official snapshot,
   `_save_data_snapshot()` may preserve `supplementary_perspective`, but it must
   read only compact metadata from the existing file rather than `json.load()` the
@@ -68,6 +85,9 @@ from the node result and merge it into `data`; then
 - Report table labels use semantic context plus non-placeholder table rows, not
   dynamic `T-xxx` ids. A rendered label may move to a different table id after
   upstream sections change; implementation must not key on that id.
+- No-sample observation rows are placeholders even when their heading names a
+  durable table family. Rows such as `暂无 / 无龙回头样本 / 今天没有单独观察对象`
+  must render as plain `T-xxx`, not `T-xxx（PSQL）`.
 - Runtime-computed sector facts must flow as:
   `build_sector_fund_inflow_node().exports["sector_internal_analysis"]` ->
   `build_market_activity_report_sections().exports` ->
@@ -92,6 +112,8 @@ from the node result and merge it into `data`; then
   full archive.
 - Report table has a PostgreSQL semantic heading but only placeholder rows such
   as `数据暂缺` / `待累计` -> render plain `T-xxx`, without `（PSQL）`.
+- Observation-pool table has only no-sample rows such as `无龙回头样本` or
+  `没有单独观察对象` -> render plain `T-xxx`, without `（PSQL）`.
 - Runtime-computed diffusion facts present only at top level while
   `market_research_snapshot` also exists -> importer must merge them into the
   market snapshot before writing structured tables.
@@ -117,7 +139,8 @@ from the node result and merge it into `data`; then
 ### 6. Tests Required
 
 - Unit test table numbering with PostgreSQL-only mode, dynamic ids, adjacent table
-  contamination, populated structured tables, and placeholder tables.
+  contamination, populated structured tables, placeholder tables, and no-sample
+  observation-pool placeholders.
 - Unit test PostgreSQL-only history helpers with short/stale database history:
   snapshot readers and daily metric index rebuilds must not be called.
 - Unit test replay snapshot direct readers under
@@ -218,6 +241,9 @@ archive JSON out of the report generation path.
 
 - Runtime cache is not a durable replay fact. It may use compact JSONB payloads
   only inside `runtime_cache_entries`, with `expires_at` required for every row.
+- Index minute bars are replay-worthy structure, not disposable cache. Live
+  fetch helpers must write them to `index_minute_bars` when PostgreSQL is
+  configured.
 - PostgreSQL-only runtime must never read or write local JSON cache files. If a
   helper cannot use PostgreSQL, it must either use process memory for that run or
   report the missing PostgreSQL dependency, depending on whether the cache is
@@ -239,9 +265,15 @@ archive JSON out of the report generation path.
 - `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1` without PostgreSQL and required
   storage -> raise a clear PostgreSQL-required error before opening JSON files.
 - Expired row -> treat as cache miss; do not backfill from local JSON.
+- Live index-minute fetch succeeds but PostgreSQL write fails -> still return
+  the live bars, and include `postgres_write_status="failed"` plus
+  `postgres_write_error`; do not report a clean structured write.
 - SQL low-value-field audit -> `daily_report_fact_fields` remains free of
   `payload`, `raw`, `cache`, rendered markdown/html, module logs, and request
   diagnostics.
+- Run-log duration output -> append one compact Markdown table. Do not insert
+  blank lines between table rows, because that makes the runtime evidence hard
+  to scan.
 
 ### 5. Good/Base/Bad Cases
 
@@ -250,8 +282,12 @@ archive JSON out of the report generation path.
   `data/event_analysis_cache.json`.
 - Base: minute price cache has no PostgreSQL entry; the helper can fetch live
   bars and skip local file writes in PostgreSQL-only runtime.
+- Base: live minute fetch can continue after a PostgreSQL write failure only if
+  the returned payload exposes the failed write.
 - Bad: a helper writes `scripts/cache/history_cache/<date>.json` or
   `data/event_analysis_cache.json` during PostgreSQL-only report generation.
+- Bad: a helper returns `status="success"` for live minute bars while silently
+  dropping the failed `index_minute_bars` write.
 - Bad: replay-worthy sector, pool, candidate, or cycle facts are stored only as a
   runtime cache payload instead of structured tables.
 
@@ -262,6 +298,8 @@ archive JSON out of the report generation path.
   file creation.
 - Unit test PostgreSQL-only mode without a PostgreSQL URL: required stores raise
   before JSON access; optional caches use memory and do not write files.
+- Unit test live minute-bar fetch with a failing PostgreSQL write returns the
+  bars plus `postgres_write_status="failed"` and the error text.
 - Unit test `PostgresDailyFactDb` schema includes `runtime_cache_entries`,
   TTL column, and namespace/date indexes.
 - Integration verification for a replay date must run `--postgres-only`, inspect

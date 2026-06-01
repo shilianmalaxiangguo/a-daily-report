@@ -13,12 +13,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from daily_report_render import (
+    REPORT_VARIANT_EVIDENCE_APPENDIX,
     REPORT_VARIANT_FULL,
+    REPORT_VARIANT_LIGHTWEIGHT,
+    REPORT_VARIANT_RUN_LOG,
     REPORT_VARIANT_SUMMARY,
     ReportCriticalDataMissingError,
     _render_report_with_display_mode,
+    build_lightweight_report_text,
     build_report_outputs,
     build_report_preflight,
+    build_run_log_text,
+    finalize_run_log_text,
     render_report_preflight_lines,
     generate_markdown_report,
     generate_markdown_report_from_sections,
@@ -83,6 +89,220 @@ class DailyReportRenderTest(unittest.TestCase):
 
         self.assertTrue(render_mock.call_args_list[0].kwargs["postgres_only"])
         self.assertTrue(render_mock.call_args_list[1].kwargs["postgres_only"])
+
+    def test_build_report_outputs_returns_lightweight_evidence_and_run_log_variants(self):
+        data = {"sections": [{"title": "A股市场分析", "content": "正文"}]}
+        full_report = "# full\n\n正文\n\n## 八、详细附录\n\n附录正文"
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=[full_report, "# summary"]):
+            outputs = build_report_outputs(data, "2026-05-31", emit_preflight=False)
+
+        self.assertIn(REPORT_VARIANT_FULL, outputs)
+        self.assertIn(REPORT_VARIANT_SUMMARY, outputs)
+        self.assertIn(REPORT_VARIANT_LIGHTWEIGHT, outputs)
+        self.assertIn(REPORT_VARIANT_EVIDENCE_APPENDIX, outputs)
+        self.assertIn(REPORT_VARIANT_RUN_LOG, outputs)
+        self.assertIn("## 狙击手执行图", outputs[REPORT_VARIANT_LIGHTWEIGHT])
+        self.assertIn("普通候选", outputs[REPORT_VARIANT_LIGHTWEIGHT])
+        self.assertIn("强核心", outputs[REPORT_VARIANT_LIGHTWEIGHT])
+        self.assertIn("已有旧仓", outputs[REPORT_VARIANT_LIGHTWEIGHT])
+        self.assertIn("失败仓/退潮", outputs[REPORT_VARIANT_LIGHTWEIGHT])
+        self.assertIn("## 证据附录", outputs[REPORT_VARIANT_EVIDENCE_APPENDIX])
+        self.assertIn("A股日报运行日志", outputs[REPORT_VARIANT_RUN_LOG])
+        self.assertIn("## 运行概览", outputs[REPORT_VARIANT_RUN_LOG])
+        self.assertIn("| 项目 | 值 |", outputs[REPORT_VARIANT_RUN_LOG])
+
+    def test_finalize_run_log_text_marks_audit_result(self):
+        base = build_run_log_text({"status": "success", "target_date": "2026-05-31", "checks": [], "decision_checks": []}, "2026-05-31")
+        finalized = finalize_run_log_text(base, {"passed": True, "findings": []})
+
+        self.assertIn("## 日报一致性检查", finalized)
+        self.assertIn("| 正文一致性 | 已通过 | 日报一致性检查通过 |", finalized)
+
+    def test_build_run_log_text_compacts_long_detail_tables(self):
+        echo_lines = ["创新高近25个交易日:"]
+        for index in range(25):
+            day = index + 1
+            echo_lines.append(f"- 2026-05-{day:02d} {100 + day} {day:.2f}% +{day} 半导体")
+        run_log = build_run_log_text(
+            {
+                "status": "success",
+                "target_date": "2026-05-29",
+                "checks": [],
+                "decision_checks": [
+                    {
+                        "label": "创新高趋势反馈",
+                        "status": "success",
+                        "row_count": 25,
+                        "echo_lines": echo_lines,
+                    }
+                ],
+            },
+            "2026-05-29",
+        )
+
+        self.assertIn("| 2026-05-01 | 101 | 1.00% | +1 | 半导体 |", run_log)
+        self.assertIn("| 已省略 | 19 条 | 完整明细见对应数据表或报告正文 | - | - |", run_log)
+        self.assertIn("| 2026-05-25 | 125 | 25.00% | +25 | 半导体 |", run_log)
+        self.assertNotIn("2026-05-12", run_log)
+
+    def test_build_lightweight_report_text_keeps_actions_but_drops_heavy_sections(self):
+        full_report = """# 2026-05-29 a股市场分析
+
+- **今日基调**: 仅观察，不给新增参与资格
+
+## 明日账户建议
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+| 0%原因 | 市场情绪退潮未止跌，可能还在释放风险，不继续参与 |
+| 明日动作 | 先处理旧仓，不为新候选分散资金 |
+| T0主对象 | 持有京能电力(600578)，500股；持有华电辽能(600396)，200股；先处理旧仓 |
+
+## 一、交易纪律
+旧交易纪律大表不该进入轻量版
+
+### 月度攻防与进攻仓位
+月度攻防长表不该进入轻量版
+
+## 二、市场基底
+### 1. 指数与市场底色
+**T-004**
+| 指标 | 数值 | 涨跌幅 | 解读 |
+|------|------|--------|------|
+| 上证指数 | 4068.57 | -0.73% | 震荡调整 |
+| 涨停 / 跌停 | 49 / 50 | - | 活跃度还在，但亏钱端不轻 |
+
+**T-005**
+Top50长趋势表不该进入轻量版
+
+### 2. 市场状态结论
+**T-006**
+| 项目 | 结论 | 依据 |
+|------|------|------|
+| 市场情绪总状态 | 震荡偏风险 | 先看指数、涨跌家数、跌停扩散 |
+| 当前盈亏比 | 不值得主动参与 | 只观察主线、承接和个股结构是否同时修复 |
+
+### 3. 价格带风格
+价格带长表不该进入轻量版
+
+## 三、周期与主线
+周期长表不该进入轻量版
+
+## 四、资金意图
+资金长表不该进入轻量版
+
+## 五、个股解读
+### 1. 个股裁决
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+| 不参与依据 | 市场情绪退潮未止跌，可能还在释放风险，不继续参与 |
+
+## 六、明日执行计划
+**T-027**
+| 时间窗口 | 要看什么 | 观察资格 | 卖出/风控 | 结论 |
+|----------|----------|----------|-----------|------|
+| 09:50-10:10 | 观察市场底色、主线承接、观察锚强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |
+
+## 七、最终结论
+| 明日结论 | 一句话动作 |
+|----------|------------|
+| 0%不参与 | 盘前0%；不满足继续0% |
+
+## 八、详细附录
+附录长正文
+"""
+
+        text = build_lightweight_report_text(full_report, "")
+
+        self.assertIn("## 明日账户建议", text)
+        self.assertIn("## 狙击手执行图", text)
+        self.assertIn("## 今日市场底色", text)
+        self.assertIn("## 个股和持仓处理", text)
+        self.assertIn("## 明日三窗口", text)
+        self.assertIn("## 最终结论", text)
+        self.assertIn("0%原因", text)
+        self.assertIn("京能电力", text)
+        self.assertIn("华电辽能", text)
+        self.assertIn("市场情绪退潮未止跌", text)
+        self.assertIn("09:50-10:10", text)
+        self.assertIn("先处理旧仓 |\n\n## 狙击手执行图", text)
+        self.assertLess(text.index("## 狙击手执行图"), text.index("## 今日市场底色"))
+        self.assertNotIn("旧交易纪律大表不该进入轻量版", text)
+        self.assertNotIn("月度攻防长表不该进入轻量版", text)
+        self.assertNotIn("Top50长趋势表不该进入轻量版", text)
+        self.assertNotIn("价格带长表不该进入轻量版", text)
+        self.assertNotIn("周期长表不该进入轻量版", text)
+        self.assertNotIn("资金长表不该进入轻量版", text)
+
+    def test_build_lightweight_report_text_drops_top50_section_with_psql_table_label(self):
+        full_report = """# 2026-05-29 a股市场分析
+
+## 明日账户建议
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+
+## 二、市场基底
+### 1. 指数与市场底色
+**T-004（PSQL）**
+| 指标 | 数值 |
+|------|------|
+| 上证指数 | 4068.57 |
+
+**T-005（PSQL）**
+Top50长趋势表不该进入轻量版
+
+### 2. 市场状态结论
+| 项目 | 结论 |
+|------|------|
+| 市场情绪总状态 | 震荡偏风险 |
+"""
+
+        text = build_lightweight_report_text(full_report, "")
+
+        self.assertIn("上证指数", text)
+        self.assertIn("市场情绪总状态", text)
+        self.assertNotIn("Top50长趋势表不该进入轻量版", text)
+
+    def test_save_report_outputs_writes_split_variant_labels(self):
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            outputs = {
+                REPORT_VARIANT_FULL: "# full",
+                REPORT_VARIANT_SUMMARY: "# summary",
+                REPORT_VARIANT_LIGHTWEIGHT: "# light",
+                REPORT_VARIANT_EVIDENCE_APPENDIX: "# evidence",
+                REPORT_VARIANT_RUN_LOG: "# log",
+            }
+
+            saved = save_report_outputs(outputs, "2026-05-31", mode=LEDGER_MODE_REPLAY, output_dir=str(root))
+
+            self.assertTrue((root / "2026-05-31_A股日报_完整版_replay.md").exists())
+            self.assertTrue((root / "2026-05-31_A股日报_执行摘要_replay.md").exists())
+            self.assertTrue((root / "2026-05-31_A股日报_轻量版_replay.md").exists())
+            self.assertTrue((root / "2026-05-31_A股日报_证据附录_replay.md").exists())
+            self.assertTrue((root / "2026-05-31_A股日报_运行日志_replay.md").exists())
+            self.assertEqual(saved[REPORT_VARIANT_LIGHTWEIGHT], str(root / "2026-05-31_A股日报_轻量版_replay.md"))
+
+    def test_save_report_outputs_backfills_run_log_paths(self):
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            outputs = {
+                REPORT_VARIANT_FULL: "# full",
+                REPORT_VARIANT_SUMMARY: "# summary",
+                REPORT_VARIANT_LIGHTWEIGHT: "# light",
+                REPORT_VARIANT_EVIDENCE_APPENDIX: "# evidence",
+                REPORT_VARIANT_RUN_LOG: "# log\n\n## 生成文件路径\n\n| 报告 | 路径 |\n|------|------|\n| 待写入 | 保存路径将在写入后由主流程打印。 |\n",
+            }
+
+            saved = save_report_outputs(outputs, "2026-05-31", mode=LEDGER_MODE_REPLAY, output_dir=str(root))
+
+            run_log = Path(saved[REPORT_VARIANT_RUN_LOG]).read_text(encoding="utf-8")
+            self.assertIn("| 轻量版 |", run_log)
+            self.assertIn("2026-05-31_A股日报_轻量版_replay.md", run_log)
+            self.assertIn("| 证据附录 |", run_log)
+            self.assertNotIn("保存路径将在写入后由主流程打印", run_log)
 
     def test_build_report_outputs_persists_decision_ledger_before_replay_full_render(self):
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
@@ -312,12 +532,18 @@ class DailyReportRenderTest(unittest.TestCase):
             },
             "total_turnover": 12345.67,
             "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
+            "csi1000_index": {"price": 6123.45, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
             "module_logs": [
                 {
                     "step": "request.total_turnover",
                     "status": "success",
                     "details": {"provider": "tushare.daily", "total_turnover": 12345.67},
+                },
+                {
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "details": {"provider": "tushare.index_daily", "price": 6123.45},
                 },
             ],
         }
@@ -628,6 +854,7 @@ class DailyReportRenderTest(unittest.TestCase):
             },
             "total_turnover": 12345.67,
             "wind_a_alternative": {"price": 6686.86, "data_source": "akshare.stock_zh_index_daily_em"},
+            "csi1000_index": {"price": 6123.45, "data_source": "akshare.stock_zh_index_daily_em"},
             "turnover_rank": [{"code": "000001", "data_source": "eastmoney.push2.clist"}],
             "module_logs": [
                 {
@@ -641,6 +868,11 @@ class DailyReportRenderTest(unittest.TestCase):
                     "details": {"provider": "akshare.stock_zh_index_daily_em", "price": 6686.86},
                 },
                 {
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "details": {"provider": "akshare.stock_zh_index_daily_em", "price": 6123.45},
+                },
+                {
                     "step": "request.turnover_rank",
                     "status": "success",
                     "details": {"provider": "eastmoney.turnover_rank", "row_count": 50},
@@ -651,7 +883,7 @@ class DailyReportRenderTest(unittest.TestCase):
         preflight = build_report_preflight(data, "2026-05-13")
 
         self.assertEqual(preflight["status"], "failed")
-        self.assertEqual(preflight["failures"], ["中证全指", "成交额排名"])
+        self.assertEqual(preflight["failures"], ["中证全指", "中证1000", "成交额排名"])
 
     def test_report_preflight_accepts_positive_total_turnover_from_legacy_provider(self):
         data = {
@@ -663,6 +895,7 @@ class DailyReportRenderTest(unittest.TestCase):
             },
             "total_turnover": 29170.74,
             "wind_a_alternative": {"price": 6477.21, "data_source": "tushare.index_daily"},
+            "csi1000_index": {"price": 8408.73, "data_source": "tushare.index_daily"},
             "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
             "module_logs": [
                 {
@@ -674,6 +907,11 @@ class DailyReportRenderTest(unittest.TestCase):
                     "step": "request.wind_a",
                     "status": "success",
                     "details": {"provider": "tushare.index_daily", "price": 6477.21},
+                },
+                {
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "details": {"provider": "tushare.index_daily", "price": 8408.73},
                 },
                 {
                     "step": "request.turnover_rank",

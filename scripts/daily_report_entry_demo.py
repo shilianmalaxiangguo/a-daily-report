@@ -84,6 +84,7 @@ from daily_report_render import (
     _render_report_with_display_mode,
     build_report_outputs,
     build_report_preflight,
+    finalize_run_log_text,
     render_report_preflight_lines,
     ReportCriticalDataMissingError,
     save_report_output,
@@ -1676,10 +1677,15 @@ def merge_position_gate(position_level, exit_analysis):
 
 def build_market_phase_context(data, target_date, emit_logs=True):
     """构建日报/单票共用的市场环境上下文，避免不同入口各自推导。"""
+    zhongshu_analyzer = (
+        _postgres_only_analyze_market_zhongshu
+        if _POSTGRES_ONLY_RUNTIME
+        else analyze_market_zhongshu
+    )
     result = build_market_phase_context_contract(
         data,
         target_date,
-        analyze_market_zhongshu=analyze_market_zhongshu,
+        analyze_market_zhongshu=zhongshu_analyzer,
         analyze_market_and_sectors=analyze_market_and_sectors,
         resolve_market_mainline_context=_resolve_market_mainline_context,
         build_mainline_exit_analysis=build_mainline_exit_analysis,
@@ -3796,6 +3802,93 @@ def _has_existing_position_context(data):
     return bool(isinstance(summary, dict) and summary.get("has_position"))
 
 
+def _postgres_index_bar_service():
+    database_url = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+    if not database_url.startswith(("postgres://", "postgresql://")):
+        return None
+    service = DatabaseService.from_environment()
+    return service if service.is_postgres_backed() else None
+
+
+def _postgres_only_index_daily_loader(index_code, target_date, recent_days):
+    service = _postgres_index_bar_service()
+    if service is None:
+        return [], "postgresql.index_daily_bars"
+    rows = service.query_index_daily_bars(index_code, target_date, window_days=recent_days)
+    return rows, "postgresql.index_daily_bars"
+
+
+def _postgres_only_index_daily_dataframe_loader(
+    *,
+    index_code="sh.000001",
+    recent_days=250,
+    min_zhongshu_klines=None,
+    target_date=None,
+    **_kwargs,
+):
+    del min_zhongshu_klines
+    import pandas as pd
+
+    rows, source = _postgres_only_index_daily_loader(index_code, target_date, recent_days)
+    required_rows = max(int(recent_days or 0), 1)
+    if len(rows or []) < required_rows:
+        raise ReportCriticalDataMissingError(
+            f"{target_date} PostgreSQL指数日K不足：{len(rows or [])}/{required_rows}，停止生成"
+        )
+    return pd.DataFrame(rows or []), source
+
+
+def _postgres_only_index_minute_fetcher(*, index_code="sh.000001", period="60", target_date=None, **_kwargs):
+    service = _postgres_index_bar_service()
+    symbol = str(index_code or "").replace(".", "")
+    if service is None or not target_date:
+        return {
+            "success": False,
+            "status": "postgres_minute_missing",
+            "source": "postgresql.index_minute_bars",
+            "symbol": symbol,
+            "period": str(period),
+            "trade_date": str(target_date or ""),
+            "bars": [],
+        }
+    rows = service.query_index_minute_bars(index_code, target_date, period=str(period))
+    if rows:
+        return {
+            "success": True,
+            "status": "success",
+            "source": "postgresql.index_minute_bars",
+            "symbol": symbol,
+            "period": str(period),
+            "trade_date": str(target_date),
+            "bars": rows,
+        }
+    return {
+        "success": False,
+        "status": "postgres_minute_missing",
+        "source": "postgresql.index_minute_bars",
+        "symbol": symbol,
+        "period": str(period),
+        "trade_date": str(target_date or ""),
+        "bars": [],
+    }
+
+
+def _postgres_only_analyze_market_zhongshu(**kwargs):
+    kwargs = dict(kwargs or {})
+    kwargs["fetch_dataframe"] = _postgres_only_index_daily_dataframe_loader
+    kwargs["fetch_minute_bars"] = _postgres_only_index_minute_fetcher
+    result = analyze_market_zhongshu(**kwargs)
+    if not (result or {}).get("success"):
+        error_text = str((result or {}).get("error") or "")
+        if "PostgreSQL指数日K不足" in error_text:
+            raise ReportCriticalDataMissingError(error_text)
+    return result
+
+
 def _build_sh_index_chanlun_html_for_audit(
     target_date,
     *,
@@ -3803,22 +3896,20 @@ def _build_sh_index_chanlun_html_for_audit(
     tomorrow_decision=None,
     runner=run_sh_index_chanlun_analysis,
 ):
-    def _postgres_only_no_minute_json_cache(*_args, **_kwargs):
-        return {
-            "success": False,
-            "status": "postgres_only_disabled",
-            "source": "postgres_only.no_minute_json_cache",
-            "bars": [],
-        }
-
     if _POSTGRES_ONLY_RUNTIME:
         market_zhongshu, rows = runner(
             target_date,
             index_code,
-            fetch_minute_bars=_postgres_only_no_minute_json_cache,
+            sse_loader=_postgres_only_index_daily_loader,
+            fetch_minute_bars=_postgres_only_index_minute_fetcher,
+            allow_live_fallback=False,
         )
     else:
         market_zhongshu, rows = runner(target_date, index_code)
+    if _POSTGRES_ONLY_RUNTIME and not (market_zhongshu or {}).get("success"):
+        raise ReportCriticalDataMissingError(
+            (market_zhongshu or {}).get("error") or f"{target_date} PostgreSQL指数结构缺失，停止生成缠论HTML"
+        )
     payload = normalize_visual_payload(market_zhongshu, rows, date=target_date, index_code=index_code)
     if tomorrow_decision:
         payload["tomorrow_decision"] = dict(tomorrow_decision)
@@ -3873,16 +3964,21 @@ def _append_daily_report_duration_log(saved_paths, *, target_date, elapsed_secon
     if not run_log_path:
         return None
     path = Path(run_log_path)
-    append_text = (
-        "\n\n## 耗时统计\n\n"
-        f"- 开始到完成: {elapsed_text} 秒\n"
-        f"- 日期: {target_date}\n"
-        f"- 数据路径: {data_path_label}\n"
-        f"- 报告写入: {report_write_label}\n"
-    )
     try:
         current_text = path.read_text(encoding="utf-8")
-        path.write_text(f"{current_text.rstrip()}{append_text}", encoding="utf-8")
+        append_text = "\n".join(
+            [
+                "## 耗时统计",
+                "",
+                "| 项目 | 值 |",
+                "|------|------|",
+                f"| 开始到完成 | {elapsed_text} 秒 |",
+                f"| 日期 | {target_date} |",
+                f"| 数据路径 | {data_path_label} |",
+                f"| 报告写入 | {report_write_label} |",
+            ]
+        )
+        path.write_text(f"{current_text.rstrip()}\n\n{append_text}\n", encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         print(f"⚠️ 耗时统计写入失败，已保留日报正文: {exc}")
         return None
@@ -4012,7 +4108,11 @@ def main():
                 target_date,
                 tomorrow_decision=tomorrow_decision,
             )
-            _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
+            audit_result = _audit_generated_report_with_chanlun_html(report_outputs, companion_html=chanlun_html)
+            report_outputs[REPORT_VARIANT_RUN_LOG] = finalize_run_log_text(
+                report_outputs.get(REPORT_VARIANT_RUN_LOG, ""),
+                audit_result,
+            )
             saved_report_paths = save_report_outputs(
                 report_outputs,
                 target_date,
@@ -4024,16 +4124,9 @@ def main():
                 target_date,
                 root=Path(__file__).resolve().parents[1],
                 tomorrow_decision=tomorrow_decision,
-                fetch_minute_bars=(
-                    (lambda *_args, **_kwargs: {
-                        "success": False,
-                        "status": "postgres_only_disabled",
-                        "source": "postgres_only.no_minute_json_cache",
-                        "bars": [],
-                    })
-                    if args.postgres_only
-                    else None
-                ),
+                fetch_minute_bars=_postgres_only_index_minute_fetcher if args.postgres_only else None,
+                sse_loader=_postgres_only_index_daily_loader if args.postgres_only else None,
+                allow_live_fallback=not args.postgres_only,
             )
             print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
             if positions:

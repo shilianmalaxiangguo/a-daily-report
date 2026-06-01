@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import pandas as pd
+
+from market_data.kline_dates import normalize_kline_date_str
 from market_data.tushare_minute_service import fetch_tushare_minute_bars
 from storage.database_service import DatabaseService
 
@@ -70,28 +71,6 @@ def normalize_minute_bars(frame) -> list[dict]:
     return bars
 
 
-def _cache_path(cache_dir, symbol, period):
-    if cache_dir in (None, ""):
-        return None
-    return Path(cache_dir) / f"{symbol}_{period}m.json"
-
-
-def _read_cache(path):
-    if not path or not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _write_cache(path, payload):
-    if not path:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 def _postgres_database_url():
     return (
         os.environ.get("A_DAILY_REPORT_DATABASE_URL")
@@ -104,7 +83,7 @@ def _postgres_only_runtime():
     return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", "").strip() == "1"
 
 
-def _runtime_cache_service():
+def _runtime_service():
     database_url = _postgres_database_url()
     if not database_url.startswith(("postgres://", "postgresql://")):
         return None
@@ -112,91 +91,119 @@ def _runtime_cache_service():
     return service if service.is_postgres_backed() else None
 
 
-def _runtime_cache_key(symbol, period):
-    return f"{symbol}:{period}"
+def _structured_payload(index_code, period, bars, source, *, status="success"):
+    return {
+        "success": bool(bars),
+        "status": status if bars else "minute_fetch_failed",
+        "source": source,
+        "symbol": normalize_index_minute_symbol(index_code),
+        "period": str(period),
+        "bars": bars or [],
+    }
 
 
-def _read_runtime_cache(service, symbol, period):
-    if service is None:
-        return None
-    entry = service.get_runtime_cache_entry("minute_price", _runtime_cache_key(symbol, period), "")
-    if not isinstance(entry, dict):
-        return None
-    payload = entry.get("payload")
-    if not isinstance(payload, dict) or not payload.get("bars"):
-        return None
-    cached = dict(payload)
-    cached["source"] = "cache"
-    return cached
-
-
-def _write_runtime_cache(service, symbol, period, payload):
-    if service is None:
-        return False
-    return service.set_runtime_cache_entry(
-        "minute_price",
-        _runtime_cache_key(symbol, period),
-        "",
-        dict(payload or {}),
-        source=str((payload or {}).get("source") or ""),
-        ttl_seconds=24 * 3600,
-    )
-
-
-def fetch_index_minute_bars(index_code="sh.000001", period="60", *, cache_dir=DEFAULT_MINUTE_CACHE_DIR):
-    symbol = normalize_index_minute_symbol(index_code)
-    runtime_cache_service = _runtime_cache_service()
-    postgres_cache_only = runtime_cache_service is not None or _postgres_only_runtime()
-    path = None if postgres_cache_only else _cache_path(cache_dir, symbol, period)
-    runtime_cached = _read_runtime_cache(runtime_cache_service, symbol, str(period))
-    if runtime_cached and runtime_cached.get("bars"):
-        return runtime_cached
-    cached = _read_cache(path)
-    if cached and cached.get("bars"):
-        cached["source"] = "cache"
-        return cached
+def _try_upsert_index_minute_bars(service, symbol, target_date, period, bars, source_policy):
+    if service is None or not target_date or not bars:
+        return {}
     try:
-        bars = fetch_tushare_minute_bars(index_code, period=str(period), is_index=True, target_date=None)
-        if bars:
-            payload = {
-                "success": True,
-                "status": "success",
-                "source": "tushare.stock_mins",
+        saved_count = service.upsert_index_minute_bars(
+            symbol,
+            target_date,
+            str(period),
+            bars,
+            source_policy=source_policy,
+        )
+        return {
+            "postgres_write_status": "success",
+            "postgres_write_rows": int(saved_count or 0),
+        }
+    except Exception as error:
+        return {
+            "postgres_write_status": "failed",
+            "postgres_write_error": str(error),
+        }
+
+
+def _filter_bars_to_target_date(bars, target_date):
+    normalized_target = normalize_kline_date_str(target_date)
+    if not normalized_target:
+        return list(bars or [])
+    filtered = []
+    for bar in bars or []:
+        if not isinstance(bar, dict):
+            continue
+        bar_date = normalize_kline_date_str(bar.get("date") or str(bar.get("datetime") or "")[:10])
+        if bar_date == normalized_target:
+            filtered.append(bar)
+    return filtered
+
+
+def fetch_index_minute_bars(index_code="sh.000001", period="60", *, target_date=None, cache_dir=DEFAULT_MINUTE_CACHE_DIR):
+    del cache_dir
+    symbol = normalize_index_minute_symbol(index_code)
+    service = _runtime_service()
+    if service is not None and target_date:
+        cached_rows = service.query_index_minute_bars(symbol, target_date, period=str(period))
+        if cached_rows:
+            return _structured_payload(index_code, period, cached_rows, "postgresql.index_minute_bars")
+        if _postgres_only_runtime():
+            return {
+                "success": False,
+                "status": "postgres_minute_missing",
+                "source": "postgresql.index_minute_bars",
                 "symbol": symbol,
                 "period": str(period),
-                "bars": bars,
+                "trade_date": str(target_date),
+                "bars": [],
             }
-            try:
-                if runtime_cache_service is not None:
-                    _write_runtime_cache(runtime_cache_service, symbol, str(period), payload)
-                else:
-                    _write_cache(path, payload)
-            except Exception:
-                pass
+    elif _postgres_only_runtime():
+        return {
+            "success": False,
+            "status": "postgres_minute_missing",
+            "source": "postgresql.index_minute_bars",
+            "symbol": symbol,
+            "period": str(period),
+            "trade_date": str(target_date or ""),
+            "bars": [],
+        }
+
+    try:
+        bars = _filter_bars_to_target_date(
+            fetch_tushare_minute_bars(index_code, period=str(period), is_index=True, target_date=target_date),
+            target_date,
+        )
+        if bars:
+            payload = _structured_payload(index_code, period, bars, "tushare.stock_mins")
+            payload.update(
+                _try_upsert_index_minute_bars(
+                    service,
+                    symbol,
+                    target_date,
+                    period,
+                    bars,
+                    "tushare.stock_mins",
+                )
+            )
             return payload
     except Exception:
         pass
+
     try:
         import akshare as ak
 
         frame = ak.stock_zh_a_minute(symbol=symbol, period=str(period), adjust="")
-        bars = normalize_minute_bars(frame)
-        payload = {
-            "success": bool(bars),
-            "status": "success" if bars else "empty",
-            "source": "akshare.stock_zh_a_minute",
-            "symbol": symbol,
-            "period": str(period),
-            "bars": bars,
-        }
-        if bars:
-            try:
-                if runtime_cache_service is not None:
-                    _write_runtime_cache(runtime_cache_service, symbol, str(period), payload)
-                else:
-                    _write_cache(path, payload)
-            except Exception:
-                pass
+        bars = _filter_bars_to_target_date(normalize_minute_bars(frame), target_date)
+        payload = _structured_payload(index_code, period, bars, "akshare.stock_zh_a_minute", status="success" if bars else "empty")
+        payload.update(
+            _try_upsert_index_minute_bars(
+                service,
+                symbol,
+                target_date,
+                period,
+                bars,
+                "akshare.stock_zh_a_minute",
+            )
+        )
         return payload
     except Exception as error:
         return {

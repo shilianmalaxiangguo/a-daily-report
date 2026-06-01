@@ -96,6 +96,37 @@ class DatabaseService:
             market_scope=market_scope,
         )
 
+    def upsert_index_daily_bars(self, index_code, rows, *, source_policy="", source_run_id=0):
+        writer = getattr(self.repository, "upsert_index_daily_bars", None)
+        if not callable(writer):
+            return 0
+        return writer(index_code, rows, source_policy=source_policy, source_run_id=source_run_id)
+
+    def query_index_daily_bars(self, index_code, end_date, *, window_days=250):
+        reader = getattr(self.repository, "query_index_daily_bars", None)
+        if not callable(reader):
+            return []
+        return reader(index_code, end_date, window_days=window_days)
+
+    def upsert_index_minute_bars(self, index_code, trade_date, period, rows, *, source_policy="", source_run_id=0):
+        writer = getattr(self.repository, "upsert_index_minute_bars", None)
+        if not callable(writer):
+            return 0
+        return writer(
+            index_code,
+            trade_date,
+            period,
+            rows,
+            source_policy=source_policy,
+            source_run_id=source_run_id,
+        )
+
+    def query_index_minute_bars(self, index_code, trade_date, *, period="60"):
+        reader = getattr(self.repository, "query_index_minute_bars", None)
+        if not callable(reader):
+            return []
+        return reader(index_code, trade_date, period=period)
+
     def query_market_breadth_counts(self, trade_date):
         return self.repository.query_market_breadth_counts(trade_date)
 

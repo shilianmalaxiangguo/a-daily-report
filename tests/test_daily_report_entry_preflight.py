@@ -417,8 +417,9 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             self.assertIn("数据路径: PostgreSQL-only", output)
             run_log_text = run_log_path.read_text(encoding="utf-8")
             self.assertIn("## 耗时统计", run_log_text)
-            self.assertIn("开始到完成: 12.35 秒", run_log_text)
-            self.assertIn("数据路径: PostgreSQL-only", run_log_text)
+            self.assertIn("| 项目 | 值 |\n|------|------|\n| 开始到完成 | 12.35 秒 |", run_log_text)
+            self.assertIn("| 开始到完成 | 12.35 秒 |", run_log_text)
+            self.assertIn("| 数据路径 | PostgreSQL-only |", run_log_text)
 
     def test_main_postgres_only_rejects_replay_mode(self):
         import daily_report_entry_demo
@@ -440,14 +441,20 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
 
         self.assertIn("PostgreSQL-only", str(error.exception))
 
-    def test_build_sh_index_chanlun_html_for_audit_disables_minute_cache_in_postgres_only_runtime(self):
+    def test_build_sh_index_chanlun_html_for_audit_uses_postgres_structured_loaders_in_postgres_only_runtime(self):
         import daily_report_entry_demo
 
         captured = {}
 
-        def fake_runner(target_date, index_code, fetch_minute_bars=None):
+        def fake_runner(target_date, index_code, **kwargs):
+            captured["kwargs"] = kwargs
+            daily_loader = kwargs.get("sse_loader")
+            self.assertTrue(callable(daily_loader))
+            loaded = daily_loader(index_code, target_date, 250)
+            captured["daily_loader"] = loaded
+            fetch_minute_bars = kwargs.get("fetch_minute_bars")
             captured["fetch_minute_bars"] = fetch_minute_bars
-            payload = fetch_minute_bars(index_code, "60")
+            payload = fetch_minute_bars(index_code=index_code, period="60", target_date=target_date)
             captured["minute_payload"] = payload
             return {"success": True, "signal": {}}, []
 
@@ -458,17 +465,19 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             )
 
         self.assertIn("<!doctype html>", html.lower())
-        self.assertTrue(callable(captured["fetch_minute_bars"]))
+        self.assertTrue(callable(captured["kwargs"]["fetch_minute_bars"]))
+        self.assertFalse(captured["kwargs"].get("allow_live_fallback", True))
+        self.assertEqual(captured["daily_loader"][1], "postgresql.index_daily_bars")
         self.assertFalse(captured["minute_payload"]["success"])
-        self.assertEqual(captured["minute_payload"]["source"], "postgres_only.no_minute_json_cache")
+        self.assertEqual(captured["minute_payload"]["source"], "postgresql.index_minute_bars")
 
     def test_build_sh_index_chanlun_html_for_audit_does_not_retry_without_postgres_only_minute_guard(self):
         import daily_report_entry_demo
 
         captured = {"unguarded_retry": 0}
 
-        def fake_runner(target_date, index_code, fetch_minute_bars=None):
-            if fetch_minute_bars is None:
+        def fake_runner(target_date, index_code, **kwargs):
+            if not kwargs:
                 captured["unguarded_retry"] += 1
                 return {"success": True, "signal": {}}, []
             raise TypeError("internal runner error")
@@ -481,6 +490,135 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
                 )
 
         self.assertEqual(captured["unguarded_retry"], 0)
+
+    def test_build_sh_index_chanlun_html_for_audit_rejects_missing_postgres_daily_bars(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        def missing_runner(target_date, index_code, **kwargs):
+            self.assertFalse(kwargs.get("allow_live_fallback", True))
+            return {
+                "success": False,
+                "error": "PostgreSQL指数日K不足，停止缠论HTML生成",
+                "data_source": "postgresql.index_daily_bars",
+            }, []
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True):
+            with self.assertRaises(ReportCriticalDataMissingError):
+                daily_report_entry_demo._build_sh_index_chanlun_html_for_audit(
+                    "2026-05-29",
+                    runner=missing_runner,
+                )
+
+    def test_market_phase_context_uses_postgres_index_bars_in_postgres_only_runtime(self):
+        import daily_report_entry_demo
+
+        captured = {}
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_index_daily_bars(self, index_code, target_date, *, window_days=250):
+                captured["daily_query"] = (index_code, target_date, window_days)
+                return [
+                    {
+                        "date": f"2026-05-{(index % 28) + 1:02d}",
+                        "open": 4060.0,
+                        "high": 4075.0,
+                        "low": 4050.0,
+                        "close": 4068.0,
+                        "volume": 100.0,
+                        "amount": 1200.0,
+                    }
+                    for index in range(250)
+                ]
+
+            def query_index_minute_bars(self, index_code, target_date, *, period="60"):
+                captured["minute_query"] = (index_code, target_date, period)
+                return [
+                    {
+                        "datetime": "2026-05-29 10:30:00",
+                        "date": "2026-05-29",
+                        "time": "10:30:00",
+                        "open": 4060.0,
+                        "high": 4070.0,
+                        "low": 4055.0,
+                        "close": 4066.0,
+                        "volume": 10.0,
+                        "amount": 20.0,
+                    }
+                ]
+
+        def fake_analyze_market_zhongshu(**kwargs):
+            captured["analyze_kwargs"] = kwargs
+            frame, source = kwargs["fetch_dataframe"](
+                index_code=kwargs["index_code"],
+                recent_days=kwargs["recent_days"],
+                min_zhongshu_klines=kwargs["min_zhongshu_klines"],
+                target_date=kwargs["target_date"],
+            )
+            captured["data_source"] = source
+            captured["frame_rows"] = len(frame)
+            captured["minute_payload"] = kwargs["fetch_minute_bars"](
+                index_code=kwargs["index_code"],
+                period="60",
+                target_date=kwargs["target_date"],
+            )
+            return {"success": True, "data_source": source}
+
+        def fake_contract(data, target_date, *, analyze_market_zhongshu, **_kwargs):
+            market_zhongshu = analyze_market_zhongshu(
+                index_code="sh.000001",
+                recent_days=250,
+                min_zhongshu_klines=20,
+                target_date=target_date,
+            )
+            return {"market_zhongshu": market_zhongshu, "module_logs": []}
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True), \
+             patch.object(daily_report_entry_demo, "_postgres_index_bar_service", return_value=FakeService()), \
+             patch.object(daily_report_entry_demo, "analyze_market_zhongshu", side_effect=fake_analyze_market_zhongshu), \
+             patch.object(daily_report_entry_demo, "build_market_phase_context_contract", side_effect=fake_contract):
+            result = daily_report_entry_demo.build_market_phase_context({}, "2026-05-29", emit_logs=False)
+
+        self.assertEqual(result["market_zhongshu"]["data_source"], "postgresql.index_daily_bars")
+        self.assertEqual(captured["daily_query"], ("sh.000001", "2026-05-29", 250))
+        self.assertEqual(captured["minute_query"], ("sh.000001", "2026-05-29", "60"))
+        self.assertEqual(captured["frame_rows"], 250)
+        self.assertEqual(captured["minute_payload"]["source"], "postgresql.index_minute_bars")
+        self.assertIn("fetch_dataframe", captured["analyze_kwargs"])
+        self.assertIn("fetch_minute_bars", captured["analyze_kwargs"])
+
+    def test_market_phase_context_rejects_missing_postgres_index_bars_in_postgres_only_runtime(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        class FakeService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_index_daily_bars(self, index_code, target_date, *, window_days=250):
+                return []
+
+        def fake_contract(data, target_date, *, analyze_market_zhongshu, **_kwargs):
+            return {
+                "market_zhongshu": analyze_market_zhongshu(
+                    index_code="sh.000001",
+                    recent_days=250,
+                    min_zhongshu_klines=20,
+                    target_date=target_date,
+                ),
+                "module_logs": [],
+            }
+
+        with patch.object(daily_report_entry_demo, "_POSTGRES_ONLY_RUNTIME", True), \
+             patch.object(daily_report_entry_demo, "_postgres_index_bar_service", return_value=FakeService()), \
+             patch.object(daily_report_entry_demo, "build_market_phase_context_contract", side_effect=fake_contract):
+            with self.assertRaises(ReportCriticalDataMissingError) as error:
+                daily_report_entry_demo.build_market_phase_context({}, "2026-05-29", emit_logs=False)
+
+        self.assertIn("PostgreSQL指数日K不足", str(error.exception))
 
     def test_postgres_only_runtime_snapshot_reader_uses_postgres_facts(self):
         import daily_report_entry_demo

@@ -11,6 +11,7 @@ switching, report variants, and persistence.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict
 import types
@@ -25,6 +26,9 @@ except ImportError:  # pragma: no cover - local compatibility shim for this repo
 
 REPORT_VARIANT_FULL = "full"
 REPORT_VARIANT_SUMMARY = "summary"
+REPORT_VARIANT_LIGHTWEIGHT = "lightweight"
+REPORT_VARIANT_EVIDENCE_APPENDIX = "evidence_appendix"
+REPORT_VARIANT_RUN_LOG = "run_log"
 CRITICAL_REPORT_DATA_FIELDS = (
     ("两市成交额", "total_turnover"),
     ("中证全指", "wind_a_alternative"),
@@ -68,6 +72,9 @@ class ReportCriticalDataMissingError(RuntimeError):
 __all__ = [
     "REPORT_VARIANT_FULL",
     "REPORT_VARIANT_SUMMARY",
+    "REPORT_VARIANT_LIGHTWEIGHT",
+    "REPORT_VARIANT_EVIDENCE_APPENDIX",
+    "REPORT_VARIANT_RUN_LOG",
     "ReportCriticalDataMissingError",
     "_get_report_output_path",
     "_get_stock_diagnostic_output_path",
@@ -102,13 +109,24 @@ def _ensure_parent_dir(path: str | Path) -> Path:
     return path
 
 
+def _report_variant_label(variant: str) -> str:
+    labels = {
+        REPORT_VARIANT_FULL: "完整版",
+        REPORT_VARIANT_SUMMARY: "执行摘要",
+        REPORT_VARIANT_LIGHTWEIGHT: "轻量版",
+        REPORT_VARIANT_EVIDENCE_APPENDIX: "证据附录",
+        REPORT_VARIANT_RUN_LOG: "运行日志",
+    }
+    return labels.get(variant, str(variant or "报告"))
+
+
 def _get_report_output_path(target_date: str, mode: str = LEDGER_MODE_FROZEN, variant: str = REPORT_VARIANT_FULL) -> str:
     reports_dir = _reports_root()
     if mode == LEDGER_MODE_REPLAY:
         reports_dir = reports_dir / "replay"
     reports_dir.mkdir(parents=True, exist_ok=True)
     suffix = "_replay" if mode == LEDGER_MODE_REPLAY else ""
-    variant_label = "完整版" if variant == REPORT_VARIANT_FULL else "执行摘要"
+    variant_label = _report_variant_label(variant)
     return str(reports_dir / f"{target_date}_A股日报_{variant_label}{suffix}.md")
 
 
@@ -642,6 +660,383 @@ def render_report_preflight_lines(preflight):
     return lines
 
 
+SNIPER_ASCII_FLOW = """```text
+T日收盘候选
+    |
+    v
+先分型
+    |
+    +-- 普通候选
+    |      -> T+1等MA5回踩
+    |      -> 09:50-10:10收回MA5/VWAP/0轴
+    |      -> 成立50%，不成立不做
+    |
+    +-- 强核心
+    |      -> 优先MA5回踩
+    |      -> 健康低开转强可50%
+    |      -> 全天强且偏离不大，尾盘最多25%
+    |
+    +-- 已有旧仓
+    |      -> 先处理可卖旧仓
+    |      -> 强势周期MA5入/MA7清/MA5T
+    |
+    +-- 失败仓/退潮
+           -> 买点失败仓先处理
+           -> 只给一次修复窗口
+           -> 不修复就降风险
+```"""
+
+
+def _section_before(text: str, marker: str) -> str:
+    text = str(text or "")
+    if marker in text:
+        return text.split(marker, 1)[0].rstrip()
+    return text.strip()
+
+
+def _section_from(text: str, marker: str) -> str:
+    text = str(text or "")
+    if marker in text:
+        return text.split(marker, 1)[1].strip()
+    return ""
+
+
+def _markdown_heading_level(line: str) -> int | None:
+    stripped = str(line or "").strip()
+    if not stripped.startswith("#"):
+        return None
+    level = len(stripped) - len(stripped.lstrip("#"))
+    if level <= 0 or level >= len(stripped) or stripped[level] != " ":
+        return None
+    return level
+
+
+def _extract_markdown_section(text: str, heading: str) -> str:
+    lines = str(text or "").splitlines()
+    target = str(heading or "").strip()
+    if not target:
+        return ""
+    target_level = _markdown_heading_level(target)
+    if target_level is None:
+        return ""
+
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == target:
+            start = index
+            break
+    if start is None:
+        return ""
+
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        level = _markdown_heading_level(lines[index])
+        if level is not None and level <= target_level:
+            end = index
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _strip_first_markdown_heading(section: str) -> str:
+    lines = str(section or "").splitlines()
+    if lines and _markdown_heading_level(lines[0]) is not None:
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _rename_markdown_section(section: str, heading: str) -> str:
+    body = _strip_first_markdown_heading(section)
+    if not body:
+        return ""
+    return f"{heading}\n{body}"
+
+
+def _section_before_any(text: str, markers: tuple[str, ...]) -> str:
+    result = str(text or "")
+    for marker in markers:
+        if marker in result:
+            result = result.split(marker, 1)[0].rstrip()
+    return result.strip()
+
+
+def _build_lightweight_market_section(full_report: str) -> str:
+    market_section = _extract_markdown_section(full_report, "## 二、市场基底")
+    index_section = _extract_markdown_section(market_section, "### 1. 指数与市场底色")
+    index_section = _section_before_any(
+        index_section,
+        (
+            "\n> 近25个交易日Top50成交额占比趋势",
+            "\n**T-005**",
+            "\n**T-005（PSQL）**",
+        ),
+    )
+    status_section = _extract_markdown_section(market_section, "### 2. 市场状态结论")
+    body = "\n\n".join(part for part in (index_section, status_section) if part.strip())
+    if not body.strip():
+        return ""
+    return f"## 今日市场底色\n{body.strip()}"
+
+
+def build_lightweight_report_text(full_report: str, summary_report: str = "") -> str:
+    full_report = str(full_report or "")
+    intro = _section_before(full_report, "## 明日账户建议").strip() if "## 明日账户建议" in full_report else ""
+    account_section = _extract_markdown_section(full_report, "## 明日账户建议")
+    market_section = _build_lightweight_market_section(full_report)
+    stock_section = _rename_markdown_section(
+        _extract_markdown_section(full_report, "## 五、个股解读"),
+        "## 个股和持仓处理",
+    )
+    execution_section = _rename_markdown_section(
+        _extract_markdown_section(full_report, "## 六、明日执行计划"),
+        "## 明日三窗口",
+    )
+    conclusion_section = _rename_markdown_section(
+        _extract_markdown_section(full_report, "## 七、最终结论"),
+        "## 最终结论",
+    )
+
+    extracted_sections = [
+        part
+        for part in (
+            intro,
+            account_section,
+            market_section,
+            stock_section,
+            execution_section,
+            conclusion_section,
+        )
+        if part.strip()
+    ]
+    sniper_section = f"## 狙击手执行图\n{SNIPER_ASCII_FLOW}"
+    if extracted_sections:
+        parts = [*extracted_sections[:2], sniper_section, *extracted_sections[2:]]
+    else:
+        base = _section_before(full_report, "## 八、详细附录")
+        if not base.strip():
+            base = str(summary_report or full_report or "").strip()
+        parts = [base.rstrip(), sniper_section]
+    parts.append(
+        "## 证据与运行文件\n"
+        "- 证据附录：同目录下 `A股日报_证据附录` 文件。\n"
+        "- 运行日志：同目录下 `A股日报_运行日志` 文件。"
+    )
+    return "\n\n".join(part.strip() for part in parts if str(part).strip()).strip() + "\n"
+
+
+def build_evidence_appendix_text(full_report: str, target_date: str = "") -> str:
+    appendix = _section_from(full_report, "## 八、详细附录")
+    if appendix:
+        body = appendix
+    else:
+        body = "完整版未找到详细附录，保留原始报告供复盘检查。\n\n" + str(full_report or "").strip()
+    title = f"# {target_date} A股日报证据附录".strip()
+    return f"{title}\n\n## 证据附录\n\n{body.strip()}\n"
+
+
+RUN_LOG_SAVED_PATH_PLACEHOLDER = "保存路径将在写入后由主流程打印。"
+RUN_LOG_DETAIL_HEAD_ROWS = 5
+
+
+def _run_log_cell(value) -> str:
+    if value is None or value == "":
+        return "-"
+    text = str(value).replace("\n", "<br>")
+    return text.replace("|", "\\|")
+
+
+def _run_log_status(value) -> str:
+    if value is True:
+        return "是"
+    if value is False:
+        return "否"
+    status = str(value or "").strip()
+    return {
+        "success": "成功",
+        "failed": "失败",
+        "unknown": "未知",
+    }.get(status, status or "-")
+
+
+def _markdown_table(headers, rows):
+    headers = [str(header) for header in headers]
+    lines = [
+        "| " + " | ".join(_run_log_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows or []:
+        values = list(row)
+        if len(values) < len(headers):
+            values.extend([""] * (len(headers) - len(values)))
+        lines.append("| " + " | ".join(_run_log_cell(value) for value in values[: len(headers)]) + " |")
+    return lines
+
+
+def _preflight_failures_text(preflight):
+    failures = preflight.get("failures") or []
+    return "、".join(failures) if failures else "无"
+
+
+def _render_run_log_overview_table(preflight, target_date):
+    return _markdown_table(
+        ["项目", "值"],
+        [
+            ("日期", target_date),
+            ("关键数据检查", _run_log_status(preflight.get("status", "unknown"))),
+            ("失败字段", _preflight_failures_text(preflight)),
+        ],
+    )
+
+
+def _render_run_log_key_data_table(preflight):
+    rows = []
+    for check in preflight.get("checks") or []:
+        rows.append(
+            (
+                check.get("label", ""),
+                _run_log_status(check.get("status", "")),
+                check.get("provider", "unknown"),
+                check.get("value", ""),
+                check.get("row_count", ""),
+                _run_log_status(check.get("data_status")),
+            )
+        )
+    if not rows:
+        rows.append(("无", "-", "-", "-", "-", "-"))
+    return _markdown_table(["指标", "状态", "provider", "数值", "行数", "data_status"], rows)
+
+
+def _decision_check_note(check):
+    echo_lines = check.get("echo_lines") or []
+    if not echo_lines:
+        return "-"
+    first_line = str(echo_lines[0] or "").strip().rstrip(":：")
+    detail_count = max(len(echo_lines) - 1, 0)
+    if first_line and detail_count:
+        return f"{first_line} {detail_count} 条"
+    if first_line:
+        return first_line
+    return f"{len(echo_lines)} 条明细"
+
+
+def _render_run_log_decision_data_table(preflight):
+    rows = []
+    for check in preflight.get("decision_checks") or []:
+        rows.append(
+            (
+                check.get("label", ""),
+                _run_log_status(check.get("status", "")),
+                check.get("provider", "unknown"),
+                check.get("row_count", ""),
+                _run_log_status(check.get("step_status")),
+                _decision_check_note(check),
+            )
+        )
+    if not rows:
+        rows.append(("无", "-", "-", "-", "-", "-"))
+    return _markdown_table(["指标", "状态", "provider", "行数", "步骤状态", "备注"], rows)
+
+
+def _parse_dash_detail_line(line):
+    text = str(line or "").strip()
+    if text.startswith("- "):
+        text = text[2:].strip()
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)$", text)
+    if not match:
+        return None
+    return match.groups()
+
+
+def _compact_run_log_detail_rows(rows, *, head_rows=RUN_LOG_DETAIL_HEAD_ROWS):
+    rows = list(rows or [])
+    if len(rows) <= head_rows + 1:
+        return rows
+    omitted_count = len(rows) - head_rows - 1
+    column_count = len(rows[0]) if rows and isinstance(rows[0], (list, tuple)) else 1
+    omitted_row = ["已省略", f"{omitted_count} 条", "完整明细见对应数据表或报告正文"]
+    if column_count > len(omitted_row):
+        omitted_row.extend(["-"] * (column_count - len(omitted_row)))
+    return [*rows[:head_rows], tuple(omitted_row[:column_count]), rows[-1]]
+
+
+def _render_run_log_echo_tables(preflight):
+    lines = []
+    for check in preflight.get("decision_checks") or []:
+        echo_lines = [str(line or "").strip() for line in (check.get("echo_lines") or []) if str(line or "").strip()]
+        if not echo_lines:
+            continue
+        label = str(check.get("label") or "明细")
+        title = echo_lines[0].rstrip(":：") or label
+        detail_lines = echo_lines[1:] if len(echo_lines) > 1 else echo_lines
+        parsed_rows = [_parse_dash_detail_line(line) for line in detail_lines]
+        lines.extend(["", f"### {label}明细", ""])
+        if parsed_rows and all(row is not None for row in parsed_rows):
+            lines.extend(_markdown_table(["日期", "数量", "占比", "变化", "领先方向"], _compact_run_log_detail_rows(parsed_rows)))
+        else:
+            detail_rows = [(line.lstrip("- ").strip(),) for line in detail_lines]
+            lines.extend(_markdown_table([title], _compact_run_log_detail_rows(detail_rows)))
+    return lines
+
+
+def _run_log_saved_path_rows(saved_paths):
+    if not saved_paths:
+        return [("待写入", RUN_LOG_SAVED_PATH_PLACEHOLDER)]
+    return [(_report_variant_label(variant), saved_path) for variant, saved_path in (saved_paths or {}).items()]
+
+
+def _render_run_log_saved_paths_table(saved_paths):
+    return _markdown_table(["报告", "路径"], _run_log_saved_path_rows(saved_paths))
+
+
+def build_run_log_text(preflight: dict, target_date: str, saved_paths: dict | None = None) -> str:
+    preflight = preflight or {}
+    lines = [
+        f"# {target_date} A股日报运行日志",
+        "",
+        "## 运行概览",
+        "",
+        *_render_run_log_overview_table(preflight, target_date),
+        "",
+        "## 关键数据检查",
+        "",
+        *_render_run_log_key_data_table(preflight),
+        "",
+        "## 决策与辅助数据检查",
+        "",
+        *_render_run_log_decision_data_table(preflight),
+        *_render_run_log_echo_tables(preflight),
+        "",
+        "## 日报一致性检查",
+        "",
+        *_markdown_table(["项目", "状态", "说明"], [("正文一致性", "待完成", "待主流程完成后以终端输出为准。")]),
+        "",
+        "## 生成文件路径",
+        "",
+        *_render_run_log_saved_paths_table(saved_paths),
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def finalize_run_log_text(run_log_text: str, audit_result: dict | None = None) -> str:
+    passed = bool((audit_result or {}).get("passed"))
+    findings = (audit_result or {}).get("findings") or []
+    status = "已通过" if passed else "未通过"
+    if passed:
+        note = "日报一致性检查通过"
+    elif findings:
+        note = "；".join(
+            str(finding.get("message") or finding.get("code") or "检查未通过")
+            for finding in findings
+            if isinstance(finding, dict)
+        )
+    else:
+        note = "检查结果待确认"
+    old_table = "\n".join(
+        _markdown_table(["项目", "状态", "说明"], [("正文一致性", "待完成", "待主流程完成后以终端输出为准。")])
+    )
+    new_table = "\n".join(_markdown_table(["项目", "状态", "说明"], [("正文一致性", status, note)]))
+    return str(run_log_text or "").replace(old_table, new_table, 1)
+
+
 def _raise_if_critical_data_missing(data, target_date, preflight=None):
     preflight = preflight or build_report_preflight(data, target_date)
     failures = preflight.get("failures") or []
@@ -856,6 +1251,9 @@ def build_report_outputs(
     return {
         REPORT_VARIANT_FULL: _inject_report_variant_banner(full_report, REPORT_VARIANT_FULL),
         REPORT_VARIANT_SUMMARY: _inject_report_variant_banner(summary_report, REPORT_VARIANT_SUMMARY),
+        REPORT_VARIANT_LIGHTWEIGHT: build_lightweight_report_text(full_report, summary_report),
+        REPORT_VARIANT_EVIDENCE_APPENDIX: build_evidence_appendix_text(full_report, target_date),
+        REPORT_VARIANT_RUN_LOG: build_run_log_text(preflight, target_date),
     }
 
 
@@ -896,7 +1294,7 @@ def save_report_outputs(
     saved_paths = {}
     for variant, report_text in (report_outputs or {}).items():
         if output_dir:
-            variant_label = "完整版" if variant == REPORT_VARIANT_FULL else "执行摘要"
+            variant_label = _report_variant_label(variant)
             suffix = "_replay" if mode == LEDGER_MODE_REPLAY else ""
             custom_path = Path(output_dir) / f"{target_date}_A股日报_{variant_label}{suffix}.md"
             saved_paths[variant] = save_report_output(
@@ -915,6 +1313,7 @@ def save_report_outputs(
                 variant=variant,
                 overwrite_existing=overwrite_existing,
             )
+    _backfill_run_log_saved_paths(saved_paths)
     if mode == LEDGER_MODE_REPLAY:
         _sync_replay_decision_ledger_from_full_report(
             saved_paths,
@@ -923,6 +1322,32 @@ def save_report_outputs(
             postgres_only=postgres_only,
         )
     return saved_paths
+
+
+def _backfill_run_log_saved_paths(saved_paths):
+    run_log_path = (saved_paths or {}).get(REPORT_VARIANT_RUN_LOG)
+    if not run_log_path:
+        return None
+    path = Path(run_log_path)
+    if not path.exists():
+        return None
+    text = path.read_text(encoding="utf-8")
+    table = "\n".join(_render_run_log_saved_paths_table(saved_paths))
+    marker = "## 生成文件路径"
+    if marker in text:
+        lines = text.splitlines()
+        start = next((index for index, line in enumerate(lines) if line.strip() == marker), None)
+        if start is not None:
+            end = len(lines)
+            for index in range(start + 1, len(lines)):
+                if lines[index].startswith("## "):
+                    end = index
+                    break
+            text = "\n".join([*lines[:start], marker, "", *table.splitlines(), *lines[end:]]).strip() + "\n"
+        elif RUN_LOG_SAVED_PATH_PLACEHOLDER in text:
+            text = text.replace(RUN_LOG_SAVED_PATH_PLACEHOLDER, "", 1)
+    path.write_text(text, encoding="utf-8")
+    return str(path)
 
 
 def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str, *, output_dir: str | None = None, postgres_only: bool = False):

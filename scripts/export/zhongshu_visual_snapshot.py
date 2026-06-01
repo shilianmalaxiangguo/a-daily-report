@@ -159,17 +159,30 @@ def run_analysis(
     target_date: str,
     index_code: str,
     *,
-    sse_loader: Callable[..., list[dict[str, Any]]] = _load_sse_index_rows,
+    sse_loader: Callable[..., Any] = _load_sse_index_rows,
     fetch_minute_bars: Callable[..., dict[str, Any]] | None = None,
+    allow_live_fallback: bool = True,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     import pandas as pd
     from decision.zhongshu_runtime import analyze_market_zhongshu, split_zhongshu_history_and_today, _load_iwencai_index_dataframe
     from market_data.kline_dates import normalize_kline_date_str
     from market_data.daily_price_runtime import fetch_daily_price_bars
 
-    bars = sse_loader(index_code, target_date, STRUCTURAL_BASE_DAILY_BARS)
+    loaded = sse_loader(index_code, target_date, STRUCTURAL_BASE_DAILY_BARS)
+    if isinstance(loaded, tuple):
+        bars, data_source = loaded
+    else:
+        bars = loaded
+        data_source = "sse_index_dayk" if len(bars or []) >= STRUCTURAL_BASE_DAILY_BARS else "market_data.daily_price_runtime.fetch_daily_price_bars"
     frame = pd.DataFrame(bars or [])
-    data_source = "sse_index_dayk" if len(frame) >= STRUCTURAL_BASE_DAILY_BARS else "market_data.daily_price_runtime.fetch_daily_price_bars"
+    if len(frame) < STRUCTURAL_BASE_DAILY_BARS and not allow_live_fallback:
+        return {
+            "success": False,
+            "error": "PostgreSQL指数日K不足，停止缠论HTML生成",
+            "data_source": data_source,
+            "available_bars": len(frame),
+            "required_bars": STRUCTURAL_BASE_DAILY_BARS,
+        }, []
     if len(frame) < STRUCTURAL_BASE_DAILY_BARS:
         bars = fetch_daily_price_bars(
             _index_to_bs_code(index_code),
