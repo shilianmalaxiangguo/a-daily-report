@@ -2024,6 +2024,18 @@ def _case_index_record(case, snapshot_path, trade_date):
     hypothesis = case.get("hypothesis") or {}
     if isinstance(hypothesis, dict) and hypothesis:
         record["hypothesis"] = dict(hypothesis)
+    validation = case.get("validation") or {}
+    if isinstance(validation, dict) and validation:
+        record["validation"] = dict(validation)
+    cycle_acceptance = case.get("cycle_acceptance") or {}
+    if isinstance(cycle_acceptance, dict) and cycle_acceptance:
+        record["cycle_acceptance"] = dict(cycle_acceptance)
+    selection_result = case.get("selection_result") or {}
+    if isinstance(selection_result, dict) and selection_result:
+        record["selection_result"] = dict(selection_result)
+    judgment_reviews = case.get("judgment_reviews") or []
+    if isinstance(judgment_reviews, list) and judgment_reviews:
+        record["judgment_reviews"] = [dict(item) for item in judgment_reviews if isinstance(item, dict)]
     participation_review = case.get("participation_review") or {}
     if isinstance(participation_review, dict) and participation_review:
         record["participation_review_status"] = participation_review.get("status")

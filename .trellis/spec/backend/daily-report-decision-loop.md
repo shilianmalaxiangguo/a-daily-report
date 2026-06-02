@@ -163,6 +163,34 @@ Use this contract when changing:
 }
 ```
 
+#### `five_judgment_statistics.v1`
+
+```python
+{
+    "schema_version": "five_judgment_statistics.v1",
+    "sample_count": "int >= 0",
+    "missing_fact_count": "int >= 0",
+    "start_date": "YYYY-MM-DD | None",
+    "end_date": "YYYY-MM-DD | None",
+    "rows": [
+        {
+            "judgment_type": "market_state | mainline | core_candidate | participation_rehearsal | cancellation_condition",
+            "label": "str",
+            "metric_definition": "str",
+            "sample_count": "int >= 0",
+            "correct_count": "int >= 0",
+            "wrong_count": "int >= 0",
+            "missing_fact_count": "int >= 0",
+            "accuracy_pct": "float 0..100 | None",
+            "start_date": "YYYY-MM-DD | None",
+            "end_date": "YYYY-MM-DD | None",
+            "latest_mistake": "str",
+            "missing_fields": ["str"]
+        }
+    ]
+}
+```
+
 ### 3. Contracts
 
 - Final action must be easier to find than process evidence.
@@ -175,6 +203,10 @@ Use this contract when changing:
 - Every tracking, backtest, statistics, or probability surface must carry `sample_count`, `start_date`, and `end_date` or explicitly mark coverage as missing.
 - A long-window label such as 60-day or 120-day is valid only when source facts and decision-ledger settlement rows cover that window.
 - If runtime renders recent rows from a database query, coverage metadata must still be computed from the full decision-ledger index, not from the displayed row subset.
+- Five-judgment statistics must render exactly five rows: market state, mainline, core candidate, participation rehearsal, and cancellation condition.
+- Five-judgment statistics must read explicit `judgment_reviews` first. Limited fallback is allowed only from auditable ledger fields: `validation` for mainline continuation, `selection_result` for core candidate visibility, and `participation_review` for participation rehearsal plus cancellation condition.
+- Missing facts must not count as correct or wrong. If a row has no settlement evidence, keep `accuracy_pct` null and render it as `待补事实`.
+- Market-state accuracy requires explicit market-state settlement evidence. Do not infer it from `market_branch` wording alone.
 
 ### 4. Validation & Error Matrix
 
@@ -190,6 +222,9 @@ Use this contract when changing:
 | Statistics text claims 60/120 days but coverage is shorter | Render the true coverage or mark the long window as a target only |
 | Coverage has reports but no snapshots for a date | Keep the date in report coverage but record missing snapshot facts |
 | Runtime displays only database recent rows | Render the display window and the full covered sample separately |
+| Five-judgment row has missing settlement fields | Exclude it from the accuracy denominator and increment missing facts |
+| Five-judgment table has more or fewer than five rows | Treat as a contract violation |
+| Market-state row has only a qualitative report label | Keep it as `待补事实`; do not infer correctness |
 
 ### 5. Good / Base / Bad Cases
 
@@ -200,8 +235,11 @@ Use this contract when changing:
 | Good missed-entry review | core target unavailable, fallback plan worked | `错过后方案命中` |
 | Good short coverage label | 36 replay reports available | Render "current covered sample: 36 trading days" or equivalent |
 | Good database recent rows | 41 covered ledger rows, 25 rows displayed from database | Render 41 covered rows/date range and state the table displays the recent 25-day cycle |
+| Good five-judgment table | explicit `judgment_reviews` plus participation review rows | Render five rows with independent accuracy and mistake text |
+| Base five-judgment table | no market-state settlement evidence | Market-state row renders `待补事实` and does not affect accuracy |
 | Bad fake precision | report shows 0.00% or exact metric without source date | metric removed or marked missing |
 | Bad language-only judgment | strong wording exists but no fields | no performance credit until fieldized |
+| Bad five-judgment inference | market state inferred from `market_branch` text | keep missing until settlement evidence exists |
 | Bad long-window claim | only 42 official reports available but text says 120-day review | replace with true coverage and mark 120-day as expansion target |
 
 ### 6. Tests Required
@@ -215,6 +253,8 @@ When implementation changes this contract, add or update tests that assert:
 - performance windows use 1-day, 3-day, and 5-day target-date price data,
 - missing fields remain visible instead of becoming fake numeric values,
 - statistics and tracking surfaces render the true covered sample count and date range,
+- five-judgment statistics render exactly five rows with missing facts outside the accuracy denominator,
+- decision-ledger index records preserve `validation`, `selection_result`, and `judgment_reviews` when present,
 - database-backed tracking rows still render coverage from the full ledger index,
 - 60/120-day wording is not rendered until coverage supports it.
 

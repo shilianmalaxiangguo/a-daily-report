@@ -4808,6 +4808,70 @@ def _runtime_binding_probe(
         self.assertIn("**重点观察历史回测表**", result["report"])
         self.assertIn("| 京能电力 | 600578 | D2/25 |", result["report"])
 
+    def test_runtime_appends_five_judgment_statistics_table_from_ledger_index(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {"lines": [], "module_logs": [], "context": {}}
+
+        def _fake_load_index(path):
+            return {
+                "by_stock_code": {
+                    "600578": [
+                        {
+                            "stock_code": "600578",
+                            "stock_name": "京能电力",
+                            "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:30-09:35"},
+                            "mentions": [{"mention_trade_date": "2026-05-11", "source_section": "极度看好名单"}],
+                            "judgment_reviews": [
+                                {
+                                    "judgment_type": "market_state",
+                                    "report_date": "2026-05-11",
+                                    "is_correct": True,
+                                },
+                                {
+                                    "judgment_type": "mainline",
+                                    "report_date": "2026-05-11",
+                                    "is_correct": False,
+                                    "mistake": "资金次日没有继续选择电力",
+                                },
+                            ],
+                        }
+                    ]
+                }
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=_fake_load_index,
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-05-12",
+            helpers=helpers,
+            config={},
+        )
+
+        report = result["report"]
+        self.assertIn("**五项判断复盘统计表**", report)
+        self.assertIn("| 市场状态判断 | 进攻/退潮/修复/混沌/冰点是否被次日走势验证 |", report)
+        self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 1 | 0 | 1 | 0 | 0.00% | 资金次日没有继续选择电力 |", report)
+
     def test_postgres_configured_decision_ledger_tracking_reads_database_not_json(self):
         class StubService:
             def is_postgres_backed(self):

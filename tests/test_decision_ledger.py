@@ -968,6 +968,46 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(state["status"], "真正失败")
         self.assertIn("结构", state["failure_reason"])
 
+    def test_index_record_preserves_judgment_review_fields_for_statistics(self):
+        snapshot = {
+            "trade_date": "2026-05-12",
+            "selection_input_hash": "hash",
+            "cases": [
+                {
+                    "case_id": "2026-05-12-600578-01",
+                    "stock_code": "600578",
+                    "stock_name": "京能电力",
+                    "first_seen_trade_date": "2026-05-12",
+                    "cycle_start_trade_date": "2026-05-12",
+                    "cycle_day": 1,
+                    "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:30-09:35"},
+                    "mentions": [{"mention_trade_date": "2026-05-12", "source_section": "极度看好名单"}],
+                    "validation": {
+                        "status": "市场选择确认",
+                        "sector_selection_evidence": "电力方向成交额占比抬升",
+                    },
+                    "selection_result": {
+                        "status": "识别成功",
+                        "evidence": "京能电力进入资金视野",
+                    },
+                    "judgment_reviews": [
+                        {
+                            "judgment_type": "market_state",
+                            "report_date": "2026-05-12",
+                            "is_correct": True,
+                        }
+                    ],
+                }
+            ],
+        }
+
+        index = build_decision_ledger_index(snapshot)
+        record = index["by_stock_code"]["600578"][0]
+
+        self.assertEqual(record["validation"]["status"], "市场选择确认")
+        self.assertEqual(record["selection_result"]["status"], "识别成功")
+        self.assertEqual(record["judgment_reviews"][0]["judgment_type"], "market_state")
+
     def test_cycle_acceptance_labels_cover_controlled_outcomes(self):
         samples = [
             (

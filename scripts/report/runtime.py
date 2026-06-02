@@ -30,6 +30,10 @@ from report.decision_ledger import (
     render_extreme_conviction_tracking_lines as _default_render_extreme_conviction_tracking_lines,
     write_decision_ledger_artifacts as _default_write_decision_ledger_artifacts,
 )
+from report.decision_statistics import (
+    build_five_judgment_statistics as _default_build_five_judgment_statistics,
+    render_five_judgment_statistics_lines as _default_render_five_judgment_statistics_lines,
+)
 from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
@@ -1398,6 +1402,14 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
         globals().get("build_decision_coverage_summary")
         or _default_build_decision_coverage_summary
     )
+    build_five_judgment_statistics = (
+        globals().get("build_five_judgment_statistics")
+        or _default_build_five_judgment_statistics
+    )
+    render_five_judgment_statistics_lines = (
+        globals().get("render_five_judgment_statistics_lines")
+        or _default_render_five_judgment_statistics_lines
+    )
     if not callable(render_tracking_lines):
         return []
     index = (decision_ledger_result or {}).get("index") or _read_decision_ledger_index_for_tracking(
@@ -1428,6 +1440,9 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
         lines.extend(list(render_mention_lines(index) or []))
     if callable(render_backtest_lines):
         lines.extend(list(render_backtest_lines(index) or []))
+    if callable(build_five_judgment_statistics) and callable(render_five_judgment_statistics_lines):
+        statistics = build_five_judgment_statistics(index)
+        lines.extend(list(render_five_judgment_statistics_lines(statistics) or []))
     return lines
 
 
