@@ -207,6 +207,9 @@ Use this contract when changing:
 - Five-judgment statistics must read explicit `judgment_reviews` first. Limited fallback is allowed only from auditable ledger fields: `validation` for mainline continuation, `selection_result` for core candidate visibility, and `participation_review` for participation rehearsal plus cancellation condition.
 - Missing facts must not count as correct or wrong. If a row has no settlement evidence, keep `accuracy_pct` null and render it as `待补事实`.
 - Market-state accuracy requires explicit market-state settlement evidence. Do not infer it from `market_branch` wording alone.
+- The report front page must separate the daily decision loop into three surfaces: recent five settled trading days accuracy, previous trading day settlement, and current trading day judgment. For a `2026-06-01` replay, the previous settlement date is `2026-05-29`; the `2026-06-01` judgments wait for the next trading day before they can enter the accuracy denominator.
+- Current trading day judgment rows may state today's market state, mainline, core candidates, participation rehearsal, and cancellation condition, but they must not be counted as correct or wrong until settlement facts exist.
+- Cancellation-condition settlement may use same-next-day participation facts. Later 3-day or 5-day return gaps must not block judging whether "do not buy / stay empty / do not chase" avoided an invalid participation.
 
 ### 4. Validation & Error Matrix
 
@@ -225,6 +228,9 @@ Use this contract when changing:
 | Five-judgment row has missing settlement fields | Exclude it from the accuracy denominator and increment missing facts |
 | Five-judgment table has more or fewer than five rows | Treat as a contract violation |
 | Market-state row has only a qualitative report label | Keep it as `待补事实`; do not infer correctness |
+| Report date has a previous trading day | Render the previous trading day's five judgment settlement before today's new five judgment rows |
+| Current trading day judgment has no next-day facts yet | Render the judgment and verification point, but do not count it in accuracy |
+| Cancellation trigger is confirmed but 3-day/5-day return facts are missing | Settle the cancellation condition from the next-day invalidation facts and keep later performance fields out of this accuracy denominator |
 
 ### 5. Good / Base / Bad Cases
 
@@ -254,6 +260,7 @@ When implementation changes this contract, add or update tests that assert:
 - missing fields remain visible instead of becoming fake numeric values,
 - statistics and tracking surfaces render the true covered sample count and date range,
 - five-judgment statistics render exactly five rows with missing facts outside the accuracy denominator,
+- front-page daily judgment panel renders recent five settled trading days, previous trading day settlement, and current trading day judgment separately,
 - decision-ledger index records preserve `validation`, `selection_result`, and `judgment_reviews` when present,
 - database-backed tracking rows still render coverage from the full ledger index,
 - 60/120-day wording is not rendered until coverage supports it.

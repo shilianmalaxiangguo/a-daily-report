@@ -4872,6 +4872,102 @@ def _runtime_binding_probe(
         self.assertIn("| 市场状态判断 | 进攻/退潮/修复/混沌/冰点是否被次日走势验证 |", report)
         self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 1 | 0 | 1 | 0 | 0.00% | 资金次日没有继续选择电力 |", report)
 
+    def test_runtime_inserts_daily_judgment_panel_at_front_before_account_advice(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "混沌"},
+                    "mainline_turnover_summary": {"current_mainline": "新型电力"},
+                    "extreme_conviction_list": [
+                        {
+                            "stock_name": "粤电力Ａ",
+                            "stock_code": "000539",
+                            "planned_participation": {
+                                "buy_window": "09:30-09:35",
+                                "cancellation": "竞价表态、开盘承接、板块同步任一失败，按0%不参与",
+                            },
+                        }
+                    ],
+                    "position_decision": {"target_position_pct": 100, "signal_grade": "100%核心进攻"},
+                },
+            }
+
+        def _fake_load_index(path):
+            return {
+                "available_trade_dates": ["2026-05-28", "2026-05-29", "2026-06-01"],
+                "by_stock_code": {
+                    "002806": [
+                        {
+                            "stock_code": "002806",
+                            "stock_name": "华锋股份",
+                            "mentions": [
+                                {
+                                    "mention_trade_date": "2026-05-29",
+                                    "source_section": "极度看好名单",
+                                    "participation_review": {
+                                        "status": "预演作废",
+                                        "reason": "作废条件出现，原参与方案不再成立。",
+                                        "fact_inputs": {"cancellation_triggered": True},
+                                    },
+                                }
+                            ],
+                            "judgment_reviews": [
+                                {
+                                    "judgment_type": "market_state",
+                                    "report_date": "2026-05-29",
+                                    "is_correct": False,
+                                    "mistake": "混沌判断偏乐观",
+                                }
+                            ],
+                        }
+                    ],
+                    "000539": [
+                        {
+                            "stock_code": "000539",
+                            "stock_name": "粤电力Ａ",
+                            "mentions": [{"mention_trade_date": "2026-06-01", "source_section": "极度看好名单"}],
+                        }
+                    ],
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=_fake_load_index,
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front", "", "## 明日账户建议", "| 项目 | 结论 |"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-06-01",
+            helpers=helpers,
+            config={},
+        )
+
+        report = result["report"]
+        self.assertIn("## 判断纠偏与今日五项结论", report)
+        self.assertIn("结算上一交易日：2026-05-29", report)
+        self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", report)
+        self.assertLess(report.index("## 判断纠偏与今日五项结论"), report.index("## 明日账户建议"))
+        self.assertIn("| 核心候选判断 | 粤电力Ａ(000539) | 下一交易日验证是否进入资金视野 |", report)
+
     def test_postgres_configured_decision_ledger_tracking_reads_database_not_json(self):
         class StubService:
             def is_postgres_backed(self):

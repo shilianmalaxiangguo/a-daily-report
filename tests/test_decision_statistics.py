@@ -6,7 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.decision_statistics import (
+    build_daily_judgment_review_panel,
     build_five_judgment_statistics,
+    render_daily_judgment_review_panel_lines,
     render_five_judgment_statistics_lines,
 )
 
@@ -352,6 +354,134 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["core_candidate"]["correct_count"], 1)
         self.assertEqual(rows["core_candidate"]["wrong_count"], 1)
         self.assertEqual(rows["core_candidate"]["latest_mistake"], "个股没有进入资金视野")
+
+    def test_daily_panel_separates_previous_settlement_today_judgment_and_recent_window(self):
+        index = {
+            "available_trade_dates": [
+                "2026-05-25",
+                "2026-05-26",
+                "2026-05-27",
+                "2026-05-28",
+                "2026-05-29",
+                "2026-06-01",
+            ],
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "mentions": [{"mention_trade_date": "2026-05-25", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {"judgment_type": "market_state", "report_date": "2026-05-25", "is_correct": True},
+                            {"judgment_type": "mainline", "report_date": "2026-05-25", "is_correct": True},
+                        ],
+                    },
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "mentions": [{"mention_trade_date": "2026-05-26", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {"judgment_type": "market_state", "report_date": "2026-05-26", "is_correct": False, "mistake": "退潮判断偏晚"},
+                            {"judgment_type": "mainline", "report_date": "2026-05-26", "is_correct": True},
+                        ],
+                    },
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "mentions": [{"mention_trade_date": "2026-05-27", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {"judgment_type": "market_state", "report_date": "2026-05-27", "is_correct": True},
+                            {"judgment_type": "mainline", "report_date": "2026-05-27", "is_correct": False, "mistake": "资金没有继续选择电力"},
+                        ],
+                    },
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "mentions": [{"mention_trade_date": "2026-05-28", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {"judgment_type": "market_state", "report_date": "2026-05-28", "is_correct": True},
+                            {"judgment_type": "mainline", "report_date": "2026-05-28", "is_correct": True},
+                        ],
+                    },
+                ],
+                "002806": [
+                    {
+                        "stock_code": "002806",
+                        "stock_name": "华锋股份",
+                        "latest_trade_date": "2026-06-01",
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-29",
+                                "source_section": "极度看好名单",
+                                "participation_review": {
+                                    "status": "预演作废",
+                                    "reason": "作废条件出现，原参与方案不再成立。",
+                                    "missing_fields": ["return_3d_pct", "return_5d_pct"],
+                                    "fact_inputs": {"cancellation_triggered": True},
+                                },
+                            }
+                        ],
+                        "judgment_reviews": [
+                            {"judgment_type": "market_state", "report_date": "2026-05-29", "is_correct": False, "mistake": "混沌判断偏乐观"},
+                            {"judgment_type": "mainline", "report_date": "2026-05-29", "is_correct": True},
+                            {"judgment_type": "core_candidate", "report_date": "2026-05-29", "is_correct": True},
+                        ],
+                    }
+                ],
+                "000539": [
+                    {
+                        "stock_code": "000539",
+                        "stock_name": "粤电力Ａ",
+                        "mentions": [{"mention_trade_date": "2026-06-01", "source_section": "极度看好名单"}],
+                        "planned_participation": {
+                            "buy_window": "09:30-09:35",
+                            "cancellation": "竞价表态、开盘承接、板块同步任一失败，按0%不参与",
+                        },
+                    }
+                ],
+            },
+        }
+        context = {
+            "market_state": "混沌",
+            "mainline": "新型电力",
+            "core_candidates": [{"stock_name": "粤电力Ａ", "stock_code": "000539"}],
+            "participation_rehearsal": "09:30-09:35看竞价、开盘承接、回封质量",
+            "cancellation_condition": "竞价表态、开盘承接、板块同步任一失败，按0%不参与",
+        }
+
+        panel = build_daily_judgment_review_panel(index, "2026-06-01", current_context=context, recent_days=5)
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+
+        self.assertEqual(panel["previous_trade_date"], "2026-05-29")
+        self.assertEqual(panel["recent_start_date"], "2026-05-25")
+        self.assertEqual(panel["recent_end_date"], "2026-05-29")
+        previous_rows = {row["judgment_type"]: row for row in panel["previous_rows"]}
+        self.assertEqual(previous_rows["participation_rehearsal"]["wrong_count"], 1)
+        self.assertEqual(previous_rows["cancellation_condition"]["correct_count"], 1)
+        today_rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+        self.assertIn("粤电力Ａ(000539)", today_rows["core_candidate"]["today_judgment"])
+        self.assertNotIn("华锋股份", today_rows["core_candidate"]["today_judgment"])
+        self.assertIn("近5个已结算交易日正确率", rendered)
+        self.assertIn("结算上一交易日：2026-05-29", rendered)
+        self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", rendered)
+        self.assertIn("| 市场状态判断 | 混沌 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |", rendered)
+
+    def test_daily_panel_normalizes_empty_today_mainline_to_chaotic_market_state(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {},
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "", "mainline": "暂无"},
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["market_state"]["today_judgment"], "混沌")
+        self.assertEqual(rows["mainline"]["today_judgment"], "无确认主线")
 
 
 if __name__ == "__main__":

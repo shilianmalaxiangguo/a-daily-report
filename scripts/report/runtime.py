@@ -31,7 +31,9 @@ from report.decision_ledger import (
     write_decision_ledger_artifacts as _default_write_decision_ledger_artifacts,
 )
 from report.decision_statistics import (
+    build_daily_judgment_review_panel as _default_build_daily_judgment_review_panel,
     build_five_judgment_statistics as _default_build_five_judgment_statistics,
+    render_daily_judgment_review_panel_lines as _default_render_daily_judgment_review_panel_lines,
     render_five_judgment_statistics_lines as _default_render_five_judgment_statistics_lines,
 )
 from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
@@ -1444,6 +1446,133 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
         statistics = build_five_judgment_statistics(index)
         lines.extend(list(render_five_judgment_statistics_lines(statistics) or []))
     return lines
+
+
+def _first_runtime_text(*values):
+    for value in values:
+        if isinstance(value, dict):
+            continue
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _runtime_stock_label(item):
+    if not isinstance(item, dict):
+        return ""
+    name = str(item.get("stock_name") or item.get("name") or "").strip()
+    code = str(item.get("stock_code") or item.get("code") or "").strip()
+    if name and code:
+        return f"{name}({code})"
+    return name or code
+
+
+def _build_current_judgment_context_for_panel(
+    *,
+    index=None,
+    target_date="",
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    market_state_snapshot=None,
+    mainline_turnover_summary=None,
+    selected_position_candidate=None,
+    extreme_conviction_list=None,
+):
+    execution_stage_context = execution_stage_context or {}
+    market_research_snapshot = market_research_snapshot or {}
+    market_state_snapshot = market_state_snapshot or {}
+    mainline_turnover_summary = mainline_turnover_summary or {}
+    market_state = _first_runtime_text(
+        market_state_snapshot.get("market_state"),
+        market_state_snapshot.get("market_status"),
+        market_state_snapshot.get("sentiment_state"),
+        market_research_snapshot.get("market_state"),
+        execution_stage_context.get("market_state"),
+    )
+    current_mainline_record = execution_stage_context.get("current_mainline_history_record") or {}
+    mainline = _first_runtime_text(
+        mainline_turnover_summary.get("current_mainline"),
+        mainline_turnover_summary.get("primary_mainline"),
+        current_mainline_record.get("primary_mainline"),
+        execution_stage_context.get("mainline_name"),
+        market_research_snapshot.get("mainline_name"),
+    )
+    core_candidates = []
+    for item in [selected_position_candidate] + list(extreme_conviction_list or []):
+        if isinstance(item, dict):
+            label = _runtime_stock_label(item)
+            if label and label not in {_runtime_stock_label(existing) for existing in core_candidates}:
+                core_candidates.append(item)
+    participation_rehearsal = ""
+    cancellation_condition = ""
+    for item in [selected_position_candidate] + list(extreme_conviction_list or []):
+        if not isinstance(item, dict):
+            continue
+        planned = item.get("planned_participation") if isinstance(item.get("planned_participation"), dict) else {}
+        if not participation_rehearsal and planned:
+            window = _first_runtime_text(planned.get("buy_window"), planned.get("participation_window"), planned.get("window"))
+            steps = " / ".join(str(step).strip() for step in list(planned.get("required_steps") or []) if str(step).strip())
+            if window and steps:
+                participation_rehearsal = f"{window}看{steps}"
+            elif window:
+                participation_rehearsal = f"{window}看竞价、开盘承接、回封质量"
+        if not cancellation_condition and planned:
+            cancellation_condition = _first_runtime_text(
+                planned.get("cancellation"),
+                planned.get("cancel_condition"),
+                planned.get("ma20_invalidation"),
+            )
+    return {
+        "market_state": market_state,
+        "mainline": mainline,
+        "core_candidates": core_candidates,
+        "selected_position_candidate": selected_position_candidate,
+        "participation_rehearsal": participation_rehearsal,
+        "cancellation_condition": cancellation_condition,
+    }
+
+
+def _build_daily_judgment_front_panel_lines(
+    index=None,
+    *,
+    target_date="",
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    market_state_snapshot=None,
+    mainline_turnover_summary=None,
+    selected_position_candidate=None,
+    extreme_conviction_list=None,
+):
+    build_panel = globals().get("build_daily_judgment_review_panel") or _default_build_daily_judgment_review_panel
+    render_panel = globals().get("render_daily_judgment_review_panel_lines") or _default_render_daily_judgment_review_panel_lines
+    if not index or not callable(build_panel) or not callable(render_panel):
+        return []
+    current_context = _build_current_judgment_context_for_panel(
+        index=index,
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        market_state_snapshot=market_state_snapshot,
+        mainline_turnover_summary=mainline_turnover_summary,
+        selected_position_candidate=selected_position_candidate,
+        extreme_conviction_list=extreme_conviction_list,
+    )
+    panel = build_panel(index, target_date, current_context=current_context, recent_days=5)
+    return list(render_panel(panel) or [])
+
+
+def _insert_daily_judgment_front_panel(report_lines, panel_lines):
+    report_lines = list(report_lines or [])
+    panel_lines = list(panel_lines or [])
+    if not panel_lines:
+        return report_lines
+    insert_at = 0
+    if report_lines and str(report_lines[0]).startswith("#"):
+        insert_at = 1
+        while insert_at < len(report_lines) and str(report_lines[insert_at]).strip() == "":
+            insert_at += 1
+    return report_lines[:insert_at] + [""] + panel_lines + report_lines[insert_at:]
 
 
 def _normalize_runtime_stock_code(value):
@@ -4411,6 +4540,18 @@ def _render_markdown_report_legacy_body(
         final_gate=front_page_final_gate,
         position_level=position_level,
     )
+    daily_judgment_front_panel_lines = _build_daily_judgment_front_panel_lines(
+        (decision_ledger_result or {}).get("index")
+        or _read_decision_ledger_index_for_tracking(globals().get("decision_ledger_root_dir", ".")),
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        market_state_snapshot=market_state_snapshot,
+        mainline_turnover_summary=mainline_turnover_summary,
+        selected_position_candidate=selected_position_candidate,
+        extreme_conviction_list=extreme_conviction_list,
+    )
+    front_page_lines = _insert_daily_judgment_front_panel(front_page_lines, daily_judgment_front_panel_lines)
     if DISPLAY_MVP_MODE:
         report = front_page_lines
     else:
