@@ -14,7 +14,7 @@ JUDGMENT_TYPES = (
     {
         "judgment_type": "core_candidate",
         "label": "核心候选判断",
-        "metric_definition": "选出的票是否进入资金视野",
+        "metric_definition": "首选主目标是否被次日承接验证，备用不抵消主目标失败",
     },
     {
         "judgment_type": "participation_rehearsal",
@@ -134,6 +134,86 @@ def _mistake_text(item, default=""):
     return default
 
 
+def _split_expected_actual_from_reason(text):
+    text = _clean_text(text)
+    if not text:
+        return "", ""
+    markers = (
+        ("预判", "，次日实际为"),
+        ("预判", "，实际为"),
+        ("预期", "，实际"),
+        ("预期", "实际"),
+    )
+    for expected_marker, actual_marker in markers:
+        if expected_marker not in text or actual_marker not in text:
+            continue
+        expected_part = text.split(expected_marker, 1)[1].split(actual_marker, 1)[0]
+        actual_part = text.split(actual_marker, 1)[1]
+        for separator in ("；", "，", "。", "、"):
+            actual_part = actual_part.split(separator, 1)[0]
+        return _clean_text(expected_part), _clean_text(actual_part)
+    return "", ""
+
+
+def _distinct_review_reason(judgment_type, correctness, actual, reason, *, default_reason=""):
+    actual_text = _clean_text(actual)
+    reason_text = _clean_text(reason)
+    if not actual_text or not reason_text or actual_text != reason_text or len(reason_text) < 40:
+        return reason_text
+    if judgment_type == "core_candidate" and correctness is True:
+        return "候选进入次日资金视野，判断成立"
+    if correctness is True:
+        return "实际反馈证明判断成立"
+    if correctness is False:
+        return _clean_text(default_reason, "实际反馈与预期不一致")
+    return "实际反馈已列在实际列，原因待复盘补充"
+
+
+def _review_detail_fields(item, correctness=None, *, default_reason=""):
+    item = item or {}
+    mistake = _mistake_text(item)
+    expected = _first_text(
+        item.get("expected"),
+        item.get("expectation"),
+        item.get("prediction"),
+        item.get("predicted"),
+        item.get("today_judgment"),
+        item.get("planned"),
+    )
+    actual = _first_text(
+        item.get("actual"),
+        item.get("actual_result"),
+        item.get("actual_judgment"),
+        item.get("review_result"),
+        item.get("outcome"),
+    )
+    if not expected or not actual:
+        inferred_expected, inferred_actual = _split_expected_actual_from_reason(mistake)
+        expected = expected or inferred_expected
+        actual = actual or inferred_actual
+    reason = _first_text(
+        item.get("reason"),
+        item.get("review_reason"),
+        item.get("evidence"),
+        mistake,
+        default_reason,
+    )
+    if correctness is True and not reason:
+        reason = "符合预期"
+    reason = _distinct_review_reason(
+        _clean_text(item.get("judgment_type") or item.get("type") or item.get("key")),
+        correctness,
+        actual,
+        reason,
+        default_reason=default_reason,
+    )
+    return {
+        "expected": expected,
+        "actual": actual,
+        "reason": reason,
+    }
+
+
 def _normalize_judgment_review(item, record=None, mention=None):
     if not isinstance(item, dict):
         return None
@@ -149,12 +229,17 @@ def _normalize_judgment_review(item, record=None, mention=None):
     correctness = None if missing_fields or _is_missing_correctness(raw_correct) else _bool_correctness(raw_correct)
     if correctness is None and not missing_fields:
         missing_fields = _merge_missing_fields(missing_fields, ["review_fact"])
+    mistake = "" if correctness is not False else _mistake_text(item, "判断未被次日事实验证")
+    detail = _review_detail_fields(item, correctness, default_reason=mistake)
     return {
         "judgment_type": judgment_type,
         "date": _review_date(item, record, mention),
         "is_correct": correctness,
         "missing_fields": missing_fields,
-        "mistake": "" if correctness is not False else _mistake_text(item, "判断未被次日事实验证"),
+        "mistake": mistake,
+        "expected": detail["expected"],
+        "actual": detail["actual"],
+        "reason": detail["reason"],
     }
 
 
@@ -240,6 +325,9 @@ def _fallback_reviews_from_participation(record):
                 "is_correct": is_correct,
                 "missing_fields": missing,
                 "mistake": mistake,
+                "expected": _clean_text((review or {}).get("expected") or "预演路径按计划展开"),
+                "actual": _clean_text((review or {}).get("actual") or status),
+                "reason": _clean_text((review or {}).get("reason") or mistake or status),
             }
         )
         if fact_inputs.get("cancellation_triggered") is True:
@@ -252,6 +340,9 @@ def _fallback_reviews_from_participation(record):
                     "is_correct": cancellation_correct,
                     "missing_fields": cancellation_missing,
                     "mistake": "" if cancellation_correct in {True, None} else "取消条件出现但复盘未确认避免错误参与",
+                    "expected": "取消条件出现时回到0%不参与",
+                    "actual": status,
+                    "reason": _clean_text((review or {}).get("reason") or status),
                 }
             )
     return rows
@@ -289,12 +380,26 @@ def _fallback_mainline_review(record):
             or validation.get("selection_confirmed_evidence"),
             "资金第二天没有继续选择这条线",
         )
+    expected = _clean_text(
+        record.get("mainline")
+        or ((record.get("hypothesis") or {}).get("sector_candidate") if isinstance(record.get("hypothesis"), dict) else "")
+        or "预判方向延续"
+    )
+    actual = _clean_text(
+        validation.get("actual")
+        or validation.get("status")
+        or validation.get("sector_selection_evidence")
+        or record.get("status")
+    )
     return {
         "judgment_type": "mainline",
         "date": _review_date({}, record),
         "is_correct": correctness,
         "missing_fields": missing_fields,
         "mistake": mistake,
+        "expected": expected,
+        "actual": actual,
+        "reason": mistake or _clean_text(validation.get("sector_selection_evidence") or validation.get("selection_confirmed_evidence")),
     }
 
 
@@ -336,12 +441,28 @@ def _fallback_core_candidate_review(record):
             or validation.get("stock_acceptance_evidence"),
             "选出的票没有进入资金视野",
         )
+    expected = _clean_text(
+        result.get("expected")
+        or record.get("stock_name")
+        or record.get("stock_code")
+        or "预判候选进入资金视野"
+    )
+    actual = _clean_text(result.get("actual") or result.get("evidence") or validation.get("stock_acceptance_evidence") or status)
+    if correctness is True:
+        reason = "候选进入次日资金视野，判断成立"
+    elif correctness is False:
+        reason = mistake or "候选没有进入次日资金视野"
+    else:
+        reason = actual
     return {
         "judgment_type": "core_candidate",
         "date": _review_date(result, record),
         "is_correct": correctness,
         "missing_fields": missing_fields,
         "mistake": mistake,
+        "expected": expected,
+        "actual": actual,
+        "reason": reason,
     }
 
 
@@ -352,6 +473,9 @@ def _fallback_market_state_review(record):
         "is_correct": None,
         "missing_fields": ["market_state_review"],
         "mistake": "",
+        "expected": "",
+        "actual": "",
+        "reason": "缺少市场状态复盘事实",
     }
 
 
@@ -455,6 +579,60 @@ def _summary_rows_for_dates(rows, dates):
     ]
 
 
+def _detail_from_group(group_rows, *, date="", judgment_type=""):
+    group_rows = list(group_rows or [])
+    sample_rows = [row for row in group_rows if row.get("is_correct") is not None]
+    wrong_rows = [row for row in sample_rows if row.get("is_correct") is False]
+    missing_rows = [row for row in group_rows if row.get("is_correct") is None]
+    if wrong_rows:
+        selected = wrong_rows[0]
+        result = "错误"
+    elif sample_rows:
+        selected = sample_rows[0]
+        result = "正确"
+    elif missing_rows:
+        selected = missing_rows[0]
+        result = "待补事实"
+    else:
+        selected = {}
+        result = "待补事实"
+    missing_fields = _merge_missing_fields(selected.get("missing_fields"))
+    reason = _first_text(
+        selected.get("reason"),
+        selected.get("mistake"),
+        selected.get("evidence"),
+        f"缺少事实：{'、'.join(missing_fields)}" if missing_fields else "",
+        "符合预期" if result == "正确" else "",
+    )
+    return {
+        "date": _clean_text(date or selected.get("date")),
+        "judgment_type": judgment_type or _clean_text(selected.get("judgment_type")),
+        "result": result,
+        "expected": _first_text(selected.get("expected"), "-"),
+        "actual": _first_text(selected.get("actual"), "-"),
+        "reason": reason or "-",
+    }
+
+
+def _detail_rows_for_dates(rows, dates):
+    filtered = _rows_for_dates(rows, dates)
+    grouped = {}
+    for row in filtered:
+        date = _clean_text((row or {}).get("date"))
+        judgment_type = _clean_text((row or {}).get("judgment_type"))
+        if not date or judgment_type not in JUDGMENT_TYPE_KEYS:
+            continue
+        grouped.setdefault((date, judgment_type), []).append(row)
+    details = []
+    for date in [_clean_text(item) for item in dates if _clean_text(item)]:
+        for judgment in JUDGMENT_TYPES:
+            key = (date, judgment["judgment_type"])
+            if key not in grouped:
+                continue
+            details.append({**judgment, **_detail_from_group(grouped[key], date=date, judgment_type=judgment["judgment_type"])})
+    return details
+
+
 def _summarize_rows(rows, *, judgment_type=""):
     daily_groups = {}
     for idx, row in enumerate(list(rows or [])):
@@ -469,8 +647,10 @@ def _summarize_rows(rows, *, judgment_type=""):
     missing_fact_count = 0
     wrong_rows = []
     missing_fields = []
+    detail_groups = []
     for group in daily_groups.values():
         group_rows = list(group["rows"])
+        detail_groups.append(_detail_from_group(group_rows, date=group.get("date"), judgment_type=judgment_type))
         sample_rows = [row for row in group_rows if row.get("is_correct") is not None]
         missing_rows = [row for row in group_rows if row.get("is_correct") is None]
         if sample_rows:
@@ -493,6 +673,13 @@ def _summarize_rows(rows, *, judgment_type=""):
         latest_mistake = _clean_text(row.get("mistake"))
         if latest_mistake:
             break
+    latest_detail = {}
+    for detail in sorted(detail_groups, key=lambda item: _clean_text(item.get("date")), reverse=True):
+        if detail.get("result") in {"正确", "错误"}:
+            latest_detail = detail
+            break
+    if not latest_detail and detail_groups:
+        latest_detail = sorted(detail_groups, key=lambda item: _clean_text(item.get("date")), reverse=True)[0]
     return {
         "sample_count": sample_count,
         "correct_count": correct_count,
@@ -503,6 +690,10 @@ def _summarize_rows(rows, *, judgment_type=""):
         "end_date": dates[-1] if dates else None,
         "latest_mistake": latest_mistake,
         "missing_fields": missing_fields,
+        "latest_result": latest_detail.get("result", "待补事实"),
+        "latest_expected": latest_detail.get("expected", "-"),
+        "latest_actual": latest_detail.get("actual", "-"),
+        "latest_reason": latest_detail.get("reason", latest_mistake or "-"),
     }
 
 
@@ -540,17 +731,55 @@ def _target_date_records(index, target_date):
     return records
 
 
+def _is_core_judgment_candidate(item):
+    if not isinstance(item, dict):
+        return True
+    nested_reversal = item.get("anchor_reversal") if isinstance(item.get("anchor_reversal"), dict) else {}
+    decision = _first_text(item.get("anchor_reversal_decision"), nested_reversal.get("anchor_reversal_decision"))
+    sniper_role = _clean_text(item.get("sniper_role"))
+    if bool(item.get("primary_buy_candidate")) or bool(item.get("backup_buy_candidate")):
+        return True
+    if decision in {"可作为主对象", "可作为补位"}:
+        return True
+    if sniper_role in {"明日主买对象", "明日补位对象"}:
+        return True
+    if decision in {"降级观察", "不参与"}:
+        return False
+    if "候选观察" in sniper_role or "修复观察" in sniper_role:
+        return False
+    has_anchor_payload = any(
+        _clean_text(item.get(key))
+        for key in (
+            "sector_anchor",
+            "candidate_role",
+            "relationship_to_anchor",
+            "repair_priority",
+        )
+    )
+    return not has_anchor_payload
+
+
 def _current_core_candidates(index, target_date, current_context):
     candidates = []
+    current_items = []
     for item in list((current_context or {}).get("core_candidates") or []):
+        if isinstance(item, dict) and _stock_label(item):
+            current_items.append(item)
+    for key in ("selected_candidate", "selected_position_candidate", "best_stock"):
+        item = (current_context or {}).get(key)
+        if isinstance(item, dict) and _stock_label(item):
+            current_items.append(item)
+    for item in current_items:
+        if not _is_core_judgment_candidate(item):
+            continue
         label = _stock_label(item)
         if label and label not in candidates:
             candidates.append(label)
-    for key in ("selected_candidate", "selected_position_candidate", "best_stock"):
-        label = _stock_label((current_context or {}).get(key))
-        if label and label not in candidates:
-            candidates.append(label)
+    if current_items:
+        return candidates[:5]
     for record in _target_date_records(index, target_date):
+        if not _is_core_judgment_candidate(record):
+            continue
         label = _stock_label(record)
         if label and label not in candidates:
             candidates.append(label)
@@ -666,6 +895,7 @@ def build_daily_judgment_review_panel(index, target_date, current_context=None, 
         "recent_end_date": recent_dates[-1] if recent_dates else None,
         "recent_days": len(recent_dates),
         "recent_rows": _summary_rows_for_dates(review_rows, recent_dates),
+        "recent_detail_rows": _detail_rows_for_dates(review_rows, recent_dates),
         "previous_rows": _summary_rows_for_dates(review_rows, [previous_date] if previous_date else []),
         "today_rows": _today_judgment_rows(index, target_date, current_context=current_context),
     }
@@ -715,6 +945,54 @@ def _format_settlement_result(row):
     return "待补事实"
 
 
+def _strip_stock_code_suffix(text):
+    text = _clean_text(text)
+    for left in ("(", "（"):
+        if left in text:
+            return _clean_text(text.split(left, 1)[0])
+    return text
+
+
+def _first_signed_pct_segment(text):
+    text = _clean_text(text)
+    positions = [index for index in (text.find("+"), text.find("-")) if index >= 0]
+    if not positions:
+        return ""
+    return text[min(positions) :].split("，", 1)[0]
+
+
+def _compact_core_primary_actual(text):
+    primary_part = text.split("；", 1)[0]
+    primary_tail = primary_part.removeprefix("主目标")
+    primary_name = _strip_stock_code_suffix(primary_tail.split("次日", 1)[0])
+    primary_pct = _first_signed_pct_segment(primary_tail)
+    leader_part = ""
+    for part in text.split("；"):
+        if part.startswith("更强同方向："):
+            leader_part = part.split("：", 1)[1]
+            break
+    leader_name = _strip_stock_code_suffix(leader_part)
+    leader_pct = _first_signed_pct_segment(leader_part)
+    if primary_name and primary_pct and leader_name and leader_pct:
+        return f"主目标{primary_name}{primary_pct} / {leader_name}{leader_pct}"
+    if primary_name and primary_pct:
+        return f"主目标{primary_name}{primary_pct}"
+    return text
+
+
+def _compact_review_actual(judgment_type, actual):
+    text = _clean_text(actual)
+    if len(text) < 40:
+        return text
+    if judgment_type == "core_candidate":
+        if "主目标" in text:
+            return _compact_core_primary_actual(text)
+        if "未进入资金视野" in text:
+            return "未进入资金视野"
+        return "候选进入次日资金视野"
+    return text
+
+
 def _has_settlement(row):
     return int(row.get("correct_count") or 0) > 0 or int(row.get("wrong_count") or 0) > 0
 
@@ -729,18 +1007,38 @@ def render_daily_judgment_review_panel_lines(panel):
         lines.append(f"### 近{recent_days}个已结算交易日正确率（{recent_start}至{recent_end}）")
     else:
         lines.append("### 近5个已结算交易日正确率")
-    lines.append("| 判断项 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 最近错因 |")
-    lines.append("|--------|------|------|------|----------|--------|----------|")
+    lines.append("| 判断项 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |")
+    lines.append("|--------|--------|----------|------|------|------|")
     for row in list(panel.get("recent_rows") or []):
         lines.append(
-            "| {label} | {sample_count} | {correct_count} | {wrong_count} | {missing_fact_count} | {accuracy_pct} | {latest_mistake} |".format(
+            "| {label} | {accuracy_pct} | {latest_result} | {expected} | {actual} | {reason} |".format(
                 label=_clean_markdown_cell(row.get("label")),
-                sample_count=int(row.get("sample_count") or 0),
-                correct_count=int(row.get("correct_count") or 0),
-                wrong_count=int(row.get("wrong_count") or 0),
-                missing_fact_count=int(row.get("missing_fact_count") or 0),
                 accuracy_pct=_clean_markdown_cell(_format_accuracy(row.get("accuracy_pct"))),
-                latest_mistake=_clean_markdown_cell(row.get("latest_mistake"), "-"),
+                latest_result=_clean_markdown_cell(row.get("latest_result"), "待补事实"),
+                expected=_clean_markdown_cell(row.get("latest_expected"), "-"),
+                actual=_clean_markdown_cell(
+                    _compact_review_actual(row.get("judgment_type"), row.get("latest_actual")),
+                    "-",
+                ),
+                reason=_clean_markdown_cell(row.get("latest_reason"), "-"),
+            )
+        )
+    detail_rows = list(panel.get("recent_detail_rows") or [])
+    lines.append("")
+    lines.append("### 最近5日判断明细")
+    lines.append("| 日期 | 判断项 | 结论 | 预期 | 实际 | 原因 |")
+    lines.append("|------|--------|------|------|------|------|")
+    if not detail_rows:
+        lines.append("| 待补事实 | 暂无已结算项 | 待补事实 | - | - | - |")
+    for row in detail_rows:
+        lines.append(
+            "| {date} | {label} | {result} | {expected} | {actual} | {reason} |".format(
+                date=_clean_markdown_cell(row.get("date"), "待补事实"),
+                label=_clean_markdown_cell(row.get("label")),
+                result=_clean_markdown_cell(row.get("result"), "待补事实"),
+                expected=_clean_markdown_cell(row.get("expected"), "-"),
+                actual=_clean_markdown_cell(row.get("actual"), "-"),
+                reason=_clean_markdown_cell(row.get("reason"), "-"),
             )
         )
     previous_date = _clean_text(panel.get("previous_trade_date"))
@@ -750,32 +1048,33 @@ def render_daily_judgment_review_panel_lines(panel):
     unresolved_previous_rows = [
         row for row in list(panel.get("previous_rows") or []) if int(row.get("missing_fact_count") or 0) > 0
     ]
-    lines.append("| 判断项 | 样本 | 正确 | 错误 | 结算 | 错在哪 |")
-    lines.append("|--------|------|------|------|------|--------|")
+    lines.append("| 判断项 | 结论 | 预期 | 实际 | 原因 |")
+    lines.append("|--------|------|------|------|------|")
     if not resolved_previous_rows:
-        lines.append("| 暂无已结算项 | 0 | 0 | 0 | 未结算 | - |")
+        lines.append("| 暂无已结算项 | 未结算 | - | - | - |")
     for row in resolved_previous_rows:
         lines.append(
-            "| {label} | {sample_count} | {correct_count} | {wrong_count} | {result} | {latest_mistake} |".format(
+            "| {label} | {result} | {expected} | {actual} | {reason} |".format(
                 label=_clean_markdown_cell(row.get("label")),
-                sample_count=int(row.get("sample_count") or 0),
-                correct_count=int(row.get("correct_count") or 0),
-                wrong_count=int(row.get("wrong_count") or 0),
                 result=_format_settlement_result(row),
-                latest_mistake=_clean_markdown_cell(row.get("latest_mistake"), "-"),
+                expected=_clean_markdown_cell(row.get("latest_expected"), "-"),
+                actual=_clean_markdown_cell(
+                    _compact_review_actual(row.get("judgment_type"), row.get("latest_actual")),
+                    "-",
+                ),
+                reason=_clean_markdown_cell(row.get("latest_reason"), "-"),
             )
         )
     if unresolved_previous_rows:
         lines.append("")
         lines.append("### 上一交易日未完成结算")
-        lines.append("| 判断项 | 待补数量 | 缺少事实 |")
-        lines.append("|--------|----------|----------|")
+        lines.append("| 判断项 | 状态 | 缺少事实 |")
+        lines.append("|--------|------|----------|")
         for row in unresolved_previous_rows:
             missing_fields = "、".join(row.get("missing_fields") or []) or "review_fact"
             lines.append(
-                "| {label} | {missing_fact_count} | {missing_fields} |".format(
+                "| {label} | 待补事实 | {missing_fields} |".format(
                     label=_clean_markdown_cell(row.get("label")),
-                    missing_fact_count=int(row.get("missing_fact_count") or 0),
                     missing_fields=_clean_markdown_cell(missing_fields),
                 )
             )
@@ -800,30 +1099,40 @@ def render_five_judgment_statistics_lines(stats):
     stats = stats or {}
     rows = list(stats.get("rows") or [])
     lines = ["**五项判断复盘统计表**:"]
-    sample_count = int(stats.get("sample_count") or 0)
     start_date = _clean_text(stats.get("start_date"))
     end_date = _clean_text(stats.get("end_date"))
-    if sample_count and start_date and end_date:
-        lines.append(f"- 当前可复盘样本：{sample_count}条，覆盖{start_date}至{end_date}。")
+    if start_date and end_date:
+        lines.append(f"- 统计范围：{start_date}至{end_date}。")
     else:
-        lines.append("- 当前可复盘样本：待补事实。")
+        lines.append("- 统计范围：待补事实。")
     lines.append("> 历史复盘只统计过去判断，不作为明日新增参与依据。")
     lines.append("")
-    lines.append("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |")
-    lines.append("|--------|----------|------|------|------|----------|--------|--------|")
+    lines.append("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |")
+    lines.append("|--------|----------|--------|----------|------|------|------|")
     if not rows:
         rows = [{**item, **_summarize_rows([])} for item in JUDGMENT_TYPES]
     for row in rows:
+        result = _clean_text(row.get("latest_result")) or _format_settlement_result(row)
+        missing_fields = "、".join(row.get("missing_fields") or [])
+        reason = _first_text(
+            row.get("latest_reason"),
+            row.get("latest_mistake"),
+            f"缺少事实：{missing_fields}" if missing_fields else "",
+            "符合预期" if result == "正确" else "",
+            "-",
+        )
         lines.append(
-            "| {label} | {metric_definition} | {sample_count} | {correct_count} | {wrong_count} | {missing_fact_count} | {accuracy_pct} | {latest_mistake} |".format(
+            "| {label} | {metric_definition} | {accuracy_pct} | {latest_result} | {expected} | {actual} | {reason} |".format(
                 label=_clean_markdown_cell(row.get("label")),
                 metric_definition=_clean_markdown_cell(row.get("metric_definition")),
-                sample_count=int(row.get("sample_count") or 0),
-                correct_count=int(row.get("correct_count") or 0),
-                wrong_count=int(row.get("wrong_count") or 0),
-                missing_fact_count=int(row.get("missing_fact_count") or 0),
                 accuracy_pct=_clean_markdown_cell(_format_accuracy(row.get("accuracy_pct"))),
-                latest_mistake=_clean_markdown_cell(row.get("latest_mistake"), "-"),
+                latest_result=_clean_markdown_cell(result, "待补事实"),
+                expected=_clean_markdown_cell(row.get("latest_expected"), "-"),
+                actual=_clean_markdown_cell(
+                    _compact_review_actual(row.get("judgment_type"), row.get("latest_actual")),
+                    "-",
+                ),
+                reason=_clean_markdown_cell(reason, "-"),
             )
         )
     lines.append("")

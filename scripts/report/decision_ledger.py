@@ -75,6 +75,10 @@ _CANDIDATE_VISIBILITY_FIELDS = (
     "lianban_data",
     "turnover_rank",
 )
+_CORE_CANDIDATE_MISS_STATUSES = {"预演作废", "预演过早", "主目标不可成交"}
+_CORE_CANDIDATE_HIT_STATUSES = {"预演命中", "错过后方案命中"}
+_CORE_CANDIDATE_NEGATIVE_RETURN_PCT = -3.0
+_CORE_CANDIDATE_HARD_DRAWDOWN_PCT = -8.0
 
 
 def _normalize_stock_code(value):
@@ -3136,26 +3140,335 @@ def _stock_item_name(item):
     return _clean_text((item or {}).get("name") or (item or {}).get("stock_name") or (item or {}).get("名称"))
 
 
+def _candidate_code(candidate):
+    return _normalize_stock_code((candidate or {}).get("stock_code") or (candidate or {}).get("code"))
+
+
+def _candidate_name(candidate):
+    return _clean_text((candidate or {}).get("stock_name") or (candidate or {}).get("name"))
+
+
+def _candidate_label(candidate):
+    candidate = candidate or {}
+    label = _clean_text(candidate.get("label"))
+    if label:
+        return label
+    code = _candidate_code(candidate)
+    name = _candidate_name(candidate)
+    return f"{name}({code})" if name and code else name or code
+
+
+def _stock_item_matches_candidate(item, candidate):
+    code = _stock_item_code(item)
+    name = _stock_item_name(item)
+    candidate_code = _candidate_code(candidate)
+    candidate_name = _candidate_name(candidate)
+    return bool(
+        (code and candidate_code and code == candidate_code)
+        or (name and candidate_name and name == candidate_name)
+    )
+
+
 def _collect_visible_candidate_labels(snapshot_data, snapshot, candidates):
-    target_codes = {
-        _normalize_stock_code(item.get("stock_code"))
-        for item in list(candidates or [])
-        if _normalize_stock_code(item.get("stock_code"))
-    }
-    target_names = {_clean_text(item.get("stock_name")) for item in list(candidates or []) if _clean_text(item.get("stock_name"))}
     labels = []
     fact_available = False
     for item in _iter_stock_visibility_items(snapshot_data, snapshot):
         fact_available = True
         code = _stock_item_code(item)
         name = _stock_item_name(item)
-        if (code and code in target_codes) or (name and name in target_names):
+        if any(_stock_item_matches_candidate(item, candidate) for candidate in list(candidates or [])):
             label = f"{name}({code})" if name and code else name or code
             source = _clean_text(item.get("source"))
             text = f"{label}进入{source}" if source else f"{label}进入资金视野"
             if text not in labels:
                 labels.append(text)
     return labels, fact_available
+
+
+def _candidate_review_fact(candidate, review_market_facts_by_stock_code=None):
+    code = _candidate_code(candidate)
+    normalized_facts = {
+        _normalize_stock_code(key): dict(value or {})
+        for key, value in (review_market_facts_by_stock_code or {}).items()
+        if _normalize_stock_code(key) and isinstance(value, dict)
+    }
+    if code and code in normalized_facts:
+        return normalized_facts[code]
+    name = _candidate_name(candidate)
+    for fact in normalized_facts.values():
+        fact_name = _clean_text(fact.get("stock_name") or fact.get("name"))
+        if name and fact_name == name:
+            return fact
+    return {}
+
+
+def _existing_participation_review_facts_by_stock_code(previous_index, previous_date, trade_date):
+    facts = {}
+    for code, records in (previous_index or {}).get("by_stock_code", {}).items():
+        normalized_code = _normalize_stock_code(code)
+        if not normalized_code:
+            continue
+        for record in list(records or []):
+            stock_name = _clean_text((record or {}).get("stock_name"))
+            for mention in list((record or {}).get("mentions") or []):
+                if _clean_text((mention or {}).get("mention_trade_date")) != _clean_text(previous_date):
+                    continue
+                review = (mention or {}).get("participation_review")
+                if not isinstance(review, dict) or not review:
+                    continue
+                review_trade_date = _clean_text(review.get("review_trade_date"))
+                if review_trade_date and review_trade_date != _clean_text(trade_date):
+                    continue
+                facts[normalized_code] = {
+                    "stock_code": normalized_code,
+                    "stock_name": stock_name,
+                    "participation_review": dict(review),
+                    "status": review.get("status"),
+                    "performance": review.get("performance"),
+                    "missing_fields": review.get("missing_fields"),
+                }
+    return facts
+
+
+def _merge_candidate_review_facts(existing_facts, review_market_facts_by_stock_code=None):
+    facts = {
+        _normalize_stock_code(code): dict(fact or {})
+        for code, fact in (existing_facts or {}).items()
+        if _normalize_stock_code(code) and isinstance(fact, dict)
+    }
+    for code, fact in (review_market_facts_by_stock_code or {}).items():
+        normalized_code = _normalize_stock_code(code)
+        if normalized_code and isinstance(fact, dict):
+            facts[normalized_code] = dict(fact)
+    return facts
+
+
+def _performance_from_candidate_fact(fact):
+    fact = fact or {}
+    review = fact.get("participation_review") if isinstance(fact.get("participation_review"), dict) else {}
+    if review:
+        return _normalize_performance_payload(review.get("performance"))
+    performance, _source_dates, _missing_fields = _review_performance_from_market_fact(
+        fact,
+        prev_close=_safe_float(fact.get("prev_close")),
+        close_price=_safe_float(fact.get("close")),
+        low_price=_safe_float(fact.get("low")),
+    )
+    return performance
+
+
+def _core_candidate_primary_outcome(candidate, review_market_facts_by_stock_code=None):
+    fact = _candidate_review_fact(candidate, review_market_facts_by_stock_code)
+    if not fact:
+        return {"fact_available": False}
+    review = fact.get("participation_review") if isinstance(fact.get("participation_review"), dict) else {}
+    status = _clean_text(
+        fact.get("status")
+        or fact.get("review_status")
+        or fact.get("participation_review_status")
+        or review.get("status")
+        or review.get("review_status")
+    )
+    performance = _performance_from_candidate_fact({**fact, **review} if review else fact)
+    return_1d = performance.get("return_1d_pct")
+    drawdown = performance.get("max_drawdown_5d_pct")
+    failed = bool(
+        status in _CORE_CANDIDATE_MISS_STATUSES
+        or (_safe_float(return_1d) is not None and _safe_float(return_1d) <= _CORE_CANDIDATE_NEGATIVE_RETURN_PCT)
+        or (_safe_float(drawdown) is not None and _safe_float(drawdown) <= _CORE_CANDIDATE_HARD_DRAWDOWN_PCT)
+    )
+    supported = bool(status in _CORE_CANDIDATE_HIT_STATUSES or (_safe_float(return_1d) is not None and _safe_float(return_1d) >= 0))
+    return {
+        "fact_available": True,
+        "status": status,
+        "return_1d_pct": return_1d,
+        "max_drawdown_5d_pct": drawdown,
+        "failed": failed,
+        "supported": supported,
+    }
+
+
+def _format_signed_pct(value):
+    number = _safe_float(value)
+    return "" if number is None else f"{number:+.2f}%"
+
+
+def _format_primary_candidate_outcome(candidate, outcome):
+    label = _candidate_label(candidate)
+    if not outcome.get("fact_available"):
+        return ""
+    parts = [f"主目标{label}"]
+    return_1d = _format_signed_pct(outcome.get("return_1d_pct"))
+    drawdown = _format_signed_pct(outcome.get("max_drawdown_5d_pct"))
+    if return_1d:
+        parts.append(f"次日{return_1d}")
+    if drawdown:
+        parts.append(f"最低{drawdown}")
+    status = _clean_text(outcome.get("status"))
+    if status and not return_1d and not drawdown:
+        parts.append(status)
+    if len(parts) == 1:
+        parts.append("次日表现待补事实")
+    return parts[0] + "，".join(parts[1:])
+
+
+def _stock_item_rank(item):
+    rank = _safe_float((item or {}).get("rank") or (item or {}).get("排名"))
+    return int(rank) if rank is not None else None
+
+
+def _stock_item_change_pct(item):
+    for key in ("change_pct", "pct_chg", "涨跌幅"):
+        value = _safe_float((item or {}).get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _stock_item_tags(item):
+    item = item or {}
+    tags = []
+    for key in ("concepts", "tags", "status_tags", "related_plates", "plates"):
+        value = item.get(key)
+        if isinstance(value, list):
+            tags.extend(_clean_text(entry) for entry in value if _clean_text(entry))
+        elif _clean_text(value):
+            tags.append(_clean_text(value))
+    for key in ("sector", "plate_name", "concept", "concept_name"):
+        value = _clean_text(item.get(key))
+        if value:
+            tags.append(value)
+    return {tag for tag in tags if tag and tag not in _NON_SECTOR_LABELS}
+
+
+def _candidate_visibility_profile(snapshot_data, snapshot, candidate):
+    ranks = []
+    tags = set()
+    for item in _iter_stock_visibility_items(snapshot_data, snapshot):
+        if not _stock_item_matches_candidate(item, candidate):
+            continue
+        rank = _stock_item_rank(item)
+        if rank is not None:
+            ranks.append(rank)
+        tags.update(_stock_item_tags(item))
+    return {"rank": min(ranks) if ranks else None, "tags": tags}
+
+
+def _iter_nested_stock_items(value):
+    if isinstance(value, dict):
+        if _stock_item_code(value) or _stock_item_name(value):
+            yield value
+        for child in value.values():
+            yield from _iter_nested_stock_items(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _iter_nested_stock_items(item)
+
+
+def _stock_change_pct_from_snapshot(snapshot_data, code, trade_date):
+    code = _normalize_stock_code(code)
+    if not code:
+        return None
+    dated = []
+    undated = []
+    for item in _iter_nested_stock_items(snapshot_data):
+        if _stock_item_code(item) != code:
+            continue
+        change_pct = _stock_item_change_pct(item)
+        if change_pct is None:
+            continue
+        item_date = _clean_text(item.get("trade_date") or item.get("source_date") or item.get("query_date"))
+        if item_date == _clean_text(trade_date):
+            dated.append(change_pct)
+        else:
+            undated.append(change_pct)
+    values = dated or undated
+    return max(values, key=lambda number: abs(number)) if values else None
+
+
+def _find_stronger_same_theme_leader(snapshot_data, snapshot, primary_candidate, candidates, trade_date):
+    primary_profile = _candidate_visibility_profile(snapshot_data, snapshot, primary_candidate)
+    primary_rank = primary_profile.get("rank")
+    primary_tags = primary_profile.get("tags") or set()
+    if primary_rank is None or not primary_tags:
+        return {}
+    candidate_codes = {_candidate_code(candidate) for candidate in list(candidates or []) if _candidate_code(candidate)}
+    best = None
+    for item in _iter_stock_visibility_items(snapshot_data, snapshot):
+        code = _stock_item_code(item)
+        rank = _stock_item_rank(item)
+        tags = _stock_item_tags(item)
+        if not code or code in candidate_codes or rank is None or rank >= primary_rank:
+            continue
+        if not (tags & primary_tags):
+            continue
+        change_pct = _stock_item_change_pct(item)
+        if change_pct is None:
+            change_pct = _stock_change_pct_from_snapshot(snapshot_data, code, trade_date)
+        candidate = {
+            "code": code,
+            "name": _stock_item_name(item),
+            "rank": rank,
+            "change_pct": change_pct,
+        }
+        if best is None or rank < best.get("rank", 999999):
+            best = candidate
+    return best or {}
+
+
+def _format_stronger_leader(leader):
+    if not leader:
+        return ""
+    label = f"{leader.get('name')}({leader.get('code')})" if leader.get("name") and leader.get("code") else leader.get("name") or leader.get("code")
+    change_pct = _format_signed_pct(leader.get("change_pct"))
+    rank = leader.get("rank")
+    rank_text = f"，热榜第{rank}" if rank is not None else ""
+    return f"更强同方向：{label}{change_pct}{rank_text}"
+
+
+def _build_core_candidate_review(candidates, visible_labels, snapshot_data, snapshot, previous_date, trade_date, review_market_facts_by_stock_code=None):
+    primary = candidates[0] if candidates else {}
+    primary_label = _candidate_label(primary)
+    primary_visible_labels, _primary_visibility_available = _collect_visible_candidate_labels(snapshot_data, snapshot, [primary])
+    primary_outcome = _core_candidate_primary_outcome(primary, review_market_facts_by_stock_code)
+    leader = _find_stronger_same_theme_leader(snapshot_data, snapshot, primary, candidates, trade_date)
+    actual_parts = []
+    primary_outcome_text = _format_primary_candidate_outcome(primary, primary_outcome)
+    if primary_outcome_text:
+        actual_parts.append(primary_outcome_text)
+    elif primary_visible_labels:
+        actual_parts.append("、".join(primary_visible_labels))
+    elif primary_label:
+        actual_parts.append(f"{primary_label}未进入资金视野")
+    leader_text = _format_stronger_leader(leader)
+    if leader_text:
+        actual_parts.append(leader_text)
+    if visible_labels:
+        actual_parts.append("可见候选：" + "、".join(visible_labels))
+    actual = "；".join(actual_parts) if actual_parts else "待补事实"
+    expected = "、".join(_candidate_label(item) for item in candidates if item)
+    if primary_outcome.get("failed"):
+        is_correct = False
+        evidence = "主目标次日承接失败，备用/跟风进入资金视野不能抵消核心候选错误"
+        mistake = evidence
+    elif primary_visible_labels:
+        is_correct = True
+        evidence = "主目标进入次日资金视野，判断成立"
+        mistake = ""
+    else:
+        is_correct = False
+        evidence = "主目标没有进入次日资金视野，备用/跟风不能抵消核心候选错误"
+        mistake = evidence
+    return _resolved_judgment_review(
+        "core_candidate",
+        previous_date,
+        trade_date,
+        expected,
+        actual,
+        is_correct,
+        evidence=evidence,
+        mistake=mistake,
+    )
 
 
 def _mainline_judgment_correct(expected, actual):
@@ -3188,7 +3501,7 @@ def _resolved_judgment_review(judgment_type, previous_date, trade_date, expected
     return review
 
 
-def _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, previous_date, trade_date):
+def _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, previous_date, trade_date, review_market_facts_by_stock_code=None):
     reviews = []
 
     expected_market = _normalize_market_state_bucket(previous_judgments.get("market_state"))
@@ -3229,18 +3542,15 @@ def _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, p
     candidates = list(core_payload.get("candidates") or [])
     visible_labels, visibility_fact_available = _collect_visible_candidate_labels(snapshot_data, snapshot, candidates)
     if candidates and visibility_fact_available:
-        expected = "、".join(item.get("label") or item.get("stock_name") or item.get("stock_code") for item in candidates if item)
-        actual = "、".join(visible_labels) if visible_labels else "未进入资金视野"
         reviews.append(
-            _resolved_judgment_review(
-                "core_candidate",
+            _build_core_candidate_review(
+                candidates,
+                visible_labels,
+                snapshot_data,
+                snapshot,
                 previous_date,
                 trade_date,
-                expected,
-                actual,
-                bool(visible_labels),
-                evidence=actual,
-                mistake="候选没有进入次日资金视野",
+                review_market_facts_by_stock_code=review_market_facts_by_stock_code,
             )
         )
 
@@ -3272,26 +3582,28 @@ def _has_resolved_judgment_review(record, judgment_type, report_date):
     return False
 
 
+def _same_judgment_review_slot(item, review):
+    return (
+        _clean_text((item or {}).get("judgment_type")) == _clean_text((review or {}).get("judgment_type"))
+        and _review_report_date(item) == _clean_text((review or {}).get("report_date"))
+    )
+
+
 def _merge_judgment_reviews(record, reviews):
     existing = [dict(item) for item in list((record or {}).get("judgment_reviews") or []) if isinstance(item, dict)]
     merged = []
     for item in existing:
-        should_replace = any(
-            _clean_text(item.get("judgment_type")) == review.get("judgment_type")
-            and _review_report_date(item) == review.get("report_date")
-            and not _has_resolved_judgment_review({"judgment_reviews": [item]}, review.get("judgment_type"), review.get("report_date"))
-            for review in reviews
-        )
+        should_replace = any(_same_judgment_review_slot(item, review) for review in reviews)
         if not should_replace:
             merged.append(item)
     for review in reviews:
-        if _has_resolved_judgment_review({"judgment_reviews": merged}, review.get("judgment_type"), review.get("report_date")):
+        if any(_same_judgment_review_slot(item, review) for item in merged):
             continue
         merged.append(dict(review))
     return merged
 
 
-def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, root, snapshot):
+def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, root, snapshot, review_market_facts_by_stock_code=None):
     previous_index = previous_index or {}
     previous_date = _previous_trade_date_from_index(previous_index, trade_date)
     if not previous_date:
@@ -3302,7 +3614,18 @@ def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, 
     snapshot_data = _load_snapshot_data_for_trade_date(root, trade_date)
     if not snapshot_data:
         return previous_index
-    reviews = _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, previous_date, trade_date)
+    candidate_review_facts = _merge_candidate_review_facts(
+        _existing_participation_review_facts_by_stock_code(previous_index, previous_date, trade_date),
+        review_market_facts_by_stock_code,
+    )
+    reviews = _build_daily_judgment_reviews(
+        previous_judgments,
+        snapshot_data,
+        snapshot,
+        previous_date,
+        trade_date,
+        review_market_facts_by_stock_code=candidate_review_facts,
+    )
     if not reviews:
         return previous_index
 
@@ -3472,6 +3795,7 @@ def write_decision_ledger_artifacts(
         trade_date,
         root,
         snapshot,
+        review_market_facts_by_stock_code=review_market_facts_by_stock_code,
     )
     previous_index = _apply_participation_reviews_to_previous_index(
         previous_index,
@@ -3668,6 +3992,20 @@ def build_decision_ledger_snapshot(
         core_identity = normalized_item.get("core_identity")
         if isinstance(core_identity, dict) and core_identity:
             case["core_identity"] = core_identity
+        for key in (
+            "sniper_role",
+            "primary_buy_candidate",
+            "backup_buy_candidate",
+            "anchor_reversal_decision",
+            "anchor_reversal_reason",
+            "sector_anchor",
+            "candidate_role",
+            "relationship_to_anchor",
+            "repair_priority",
+        ):
+            value = normalized_item.get(key)
+            if value not in (None, ""):
+                case[key] = value
         planned_participation = _build_planned_participation(normalized_item)
         if planned_participation:
             planned_participation = _enrich_planned_participation_contract(planned_participation)

@@ -207,6 +207,9 @@ Use this contract when changing:
 - Five-judgment statistics must read explicit `judgment_reviews` first. Limited fallback is allowed only from auditable ledger fields: `validation` for mainline continuation, `selection_result` for core candidate visibility, and `participation_review` for participation rehearsal plus cancellation condition.
 - Missing facts must not count as correct or wrong. If a row has no settlement evidence, keep `accuracy_pct` null and render it as `待补事实`.
 - Market-state accuracy requires explicit market-state settlement evidence. Do not infer it from `market_branch` wording alone.
+- Core-candidate settlement must use the ordered first candidate as the primary target. Backup, catch-up, or follower visibility may appear in `actual`, but it cannot make the row correct when the primary target fails, is absent from next-day attention, or has a failed participation review.
+- Core-candidate settlement must read both newly loaded next-day price facts and existing `participation_review` facts for the primary target. Re-running settlement for the same `report_date` and `judgment_type` must replace stale resolved rows instead of preserving a previously wrong result.
+- Core-candidate summary tables may compact long `actual` text, but the settled detail row must keep the primary target outcome, stronger same-theme leader when detectable, and visible backup/follower facts separated from the reason column.
 - The report front page must separate the daily decision loop into three surfaces: recent five settled trading days accuracy, previous trading day settlement, and current trading day judgment. For a `2026-06-01` replay, the previous settlement date is `2026-05-29`; the `2026-06-01` judgments wait for the next trading day before they can enter the accuracy denominator.
 - The previous trading day settlement table must contain only resolved correct/wrong rows. Rows still missing settlement facts must move to a separate unresolved section so the settlement table never mixes completed correction with missing evidence.
 - Current trading day judgment rows may state today's market state, mainline, core candidates, participation rehearsal, and cancellation condition, but they must not be counted as correct or wrong until settlement facts exist.
@@ -229,6 +232,8 @@ Use this contract when changing:
 | Five-judgment row has missing settlement fields | Exclude it from the accuracy denominator and increment missing facts |
 | Five-judgment table has more or fewer than five rows | Treat as a contract violation |
 | Market-state row has only a qualitative report label | Keep it as `待补事实`; do not infer correctness |
+| Core-candidate first target fails while backup/follower enters attention | Mark core candidate wrong; put backup/follower visibility in `actual`, not in correctness |
+| Core-candidate row already has a stale resolved result | Recompute and replace the same `report_date` plus `judgment_type` row from latest auditable facts |
 | Report date has a previous trading day | Render the previous trading day's five judgment settlement before today's new five judgment rows |
 | Previous trading day has only partial settlement facts | Render resolved rows in the settlement table and missing rows in a separate unresolved section |
 | Current trading day judgment has no next-day facts yet | Render the judgment and verification point, but do not count it in accuracy |

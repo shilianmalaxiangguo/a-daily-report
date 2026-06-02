@@ -128,6 +128,10 @@ class DecisionStatisticsTest(unittest.TestCase):
                     "missing_fact_count": 0,
                     "accuracy_pct": 50.0,
                     "latest_mistake": "资金次日没有继续选择电力",
+                    "latest_result": "错误",
+                    "latest_expected": "电力",
+                    "latest_actual": "通信设备",
+                    "latest_reason": "资金次日没有继续选择电力",
                 },
                 {
                     "judgment_type": "core_candidate",
@@ -150,6 +154,10 @@ class DecisionStatisticsTest(unittest.TestCase):
                     "missing_fact_count": 0,
                     "accuracy_pct": 0.0,
                     "latest_mistake": "竞价命中但开盘承接断档",
+                    "latest_result": "错误",
+                    "latest_expected": "竞价命中",
+                    "latest_actual": "开盘承接断档",
+                    "latest_reason": "竞价命中但开盘承接断档",
                 },
                 {
                     "judgment_type": "cancellation_condition",
@@ -169,10 +177,12 @@ class DecisionStatisticsTest(unittest.TestCase):
         rendered = "\n".join(lines)
 
         self.assertIn("**五项判断复盘统计表**", rendered)
-        self.assertIn("当前可复盘样本：2条，覆盖2026-05-11至2026-05-12", rendered)
-        self.assertIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |", rendered)
-        self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 2 | 1 | 1 | 0 | 50.00% | 资金次日没有继续选择电力 |", rendered)
-        self.assertIn("| 参与预演判断 | 竞价、开盘、回封、分歧路径是否命中 | 1 | 0 | 1 | 0 | 0.00% | 竞价命中但开盘承接断档 |", rendered)
+        self.assertIn("统计范围：2026-05-11至2026-05-12", rendered)
+        self.assertNotIn("当前可复盘样本", rendered)
+        self.assertIn("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |", rendered)
+        self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 50.00% | 错误 | 电力 | 通信设备 | 资金次日没有继续选择电力 |", rendered)
+        self.assertIn("| 参与预演判断 | 竞价、开盘、回封、分歧路径是否命中 | 0.00% | 错误 | 竞价命中 | 开盘承接断档 | 竞价命中但开盘承接断档 |", rendered)
         self.assertIn("历史复盘只统计过去判断，不作为明日新增参与依据。", rendered)
 
     def test_falls_back_to_participation_and_cancellation_reviews(self):
@@ -448,6 +458,32 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["core_candidate"]["wrong_count"], 1)
         self.assertEqual(rows["core_candidate"]["latest_mistake"], "个股没有进入资金视野")
 
+    def test_core_candidate_fallback_reason_does_not_duplicate_actual_evidence(self):
+        evidence = "京能电力次日进入资金视野，进入hot_rank_top50，进入integrated_hot_list"
+        index = {
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "report_date": "2026-05-11",
+                        "selection_result": {
+                            "status": "识别成功",
+                            "evidence": evidence,
+                        },
+                        "mentions": [{"mention_trade_date": "2026-05-11", "source_section": "极度看好名单"}],
+                    }
+                ]
+            }
+        }
+
+        result = build_five_judgment_statistics(index)
+        row = {item["judgment_type"]: item for item in result["rows"]}["core_candidate"]
+
+        self.assertEqual(row["latest_actual"], evidence)
+        self.assertEqual(row["latest_reason"], "候选进入次日资金视野，判断成立")
+        self.assertNotEqual(row["latest_actual"], row["latest_reason"])
+
     def test_daily_panel_separates_previous_settlement_today_judgment_and_recent_window(self):
         index = {
             "available_trade_dates": [
@@ -559,6 +595,196 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", rendered)
         self.assertIn("| 市场状态判断 | 混沌 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |", rendered)
 
+    def test_daily_panel_renders_recent_rows_as_expected_actual_reason(self):
+        index = {
+            "available_trade_dates": ["2026-05-28", "2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {
+                                "judgment_type": "market_state",
+                                "report_date": "2026-05-29",
+                                "expected": "混沌",
+                                "actual": "退潮",
+                                "is_correct": False,
+                                "mistake": "预判混沌，次日实际为退潮",
+                            },
+                            {
+                                "judgment_type": "mainline",
+                                "report_date": "2026-05-29",
+                                "expected": "无确认主线",
+                                "actual": "无确认主线",
+                                "is_correct": True,
+                                "evidence": "次日主线仍无确认主线",
+                            },
+                            {
+                                "judgment_type": "core_candidate",
+                                "report_date": "2026-05-29",
+                                "expected": "京能电力(600578)",
+                                "actual": "京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list",
+                                "is_correct": True,
+                                "evidence": "京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list",
+                            },
+                        ],
+                    }
+                ]
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+
+        self.assertIn("| 判断项 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertNotIn("| 判断项 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 最近错因 |", rendered)
+        self.assertIn("| 市场状态判断 | 0.00% | 错误 | 混沌 | 退潮 | 预判混沌，次日实际为退潮 |", rendered)
+        self.assertIn(
+            "| 核心候选判断 | 100.00% | 正确 | 京能电力(600578) | 候选进入次日资金视野 | 候选进入次日资金视野，判断成立 |",
+            rendered,
+        )
+        self.assertIn("### 最近5日判断明细", rendered)
+        self.assertIn("| 日期 | 判断项 | 结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertIn("| 2026-05-29 | 市场状态判断 | 错误 | 混沌 | 退潮 | 预判混沌，次日实际为退潮 |", rendered)
+        self.assertIn("| 2026-05-29 | 主线判断 | 正确 | 无确认主线 | 无确认主线 | 次日主线仍无确认主线 |", rendered)
+        self.assertIn(
+            "| 2026-05-29 | 核心候选判断 | 正确 | 京能电力(600578) | 京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list | 候选进入次日资金视野，判断成立 |",
+            rendered,
+        )
+        self.assertNotIn(
+            "| 京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list | 京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list |",
+            rendered,
+        )
+
+    def test_daily_panel_keeps_observation_candidates_out_of_core_judgment(self):
+        panel = build_daily_judgment_review_panel(
+            {"available_trade_dates": ["2026-05-29", "2026-06-01"], "by_stock_code": {}},
+            "2026-06-01",
+            current_context={
+                "market_state": "混沌",
+                "mainline": "通信设备",
+                "core_candidates": [
+                    {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                    },
+                    {
+                        "name": "亨通光电",
+                        "code": "600487",
+                        "sniper_role": "候选观察",
+                        "anchor_reversal_decision": "降级观察",
+                    },
+                    {
+                        "name": "中天科技",
+                        "code": "600522",
+                        "sniper_role": "候选观察补充",
+                        "anchor_reversal_decision": "降级观察",
+                    },
+                ],
+            },
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["core_candidate"]["today_judgment"], "工业富联(601138)")
+        self.assertNotIn("亨通光电", rows["core_candidate"]["today_judgment"])
+        self.assertNotIn("中天科技", rows["core_candidate"]["today_judgment"])
+
+    def test_daily_panel_filters_target_date_ledger_observation_records(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "601138": [
+                    {
+                        "stock_name": "工业富联",
+                        "stock_code": "601138",
+                        "report_date": "2026-06-01",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                    }
+                ],
+                "600487": [
+                    {
+                        "stock_name": "亨通光电",
+                        "stock_code": "600487",
+                        "report_date": "2026-06-01",
+                        "sniper_role": "候选观察",
+                        "anchor_reversal_decision": "降级观察",
+                    }
+                ],
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "通信设备"},
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["core_candidate"]["today_judgment"], "工业富联(601138)")
+        self.assertNotIn("亨通光电", rows["core_candidate"]["today_judgment"])
+
+    def test_daily_panel_prefers_current_primary_over_stale_same_day_ledger_records(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "601138": [
+                    {
+                        "stock_name": "工业富联",
+                        "stock_code": "601138",
+                        "report_date": "2026-06-01",
+                    }
+                ],
+                "600487": [
+                    {
+                        "stock_name": "亨通光电",
+                        "stock_code": "600487",
+                        "report_date": "2026-06-01",
+                    }
+                ],
+                "600522": [
+                    {
+                        "stock_name": "中天科技",
+                        "stock_code": "600522",
+                        "report_date": "2026-06-01",
+                    }
+                ],
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={
+                "market_state": "混沌",
+                "mainline": "通信设备",
+                "core_candidates": [
+                    {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                    }
+                ],
+            },
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["core_candidate"]["today_judgment"], "工业富联(601138)")
+        self.assertNotIn("亨通光电", rows["core_candidate"]["today_judgment"])
+        self.assertNotIn("中天科技", rows["core_candidate"]["today_judgment"])
+
     def test_daily_panel_normalizes_empty_today_mainline_to_chaotic_market_state(self):
         index = {
             "available_trade_dates": ["2026-05-29", "2026-06-01"],
@@ -624,7 +850,7 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(previous_rows["market_state"]["missing_fact_count"], 1)
         self.assertEqual(previous_rows["mainline"]["missing_fact_count"], 1)
         self.assertEqual(previous_rows["core_candidate"]["missing_fact_count"], 1)
-        self.assertIn("| 市场状态判断 | 1 | market_state_review |", rendered)
+        self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
         self.assertNotIn("| 市场状态判断 | 3 | market_state_review |", rendered)
 
     def test_previous_day_settlement_table_only_renders_resolved_items(self):
@@ -664,10 +890,16 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertNotIn("市场状态判断", settlement_block)
         self.assertNotIn("主线判断", settlement_block)
         self.assertNotIn("核心候选判断", settlement_block)
-        self.assertIn("| 参与预演判断 | 1 | 0 | 1 | 错误 |", settlement_block)
-        self.assertIn("| 取消条件判断 | 1 | 1 | 0 | 正确 |", settlement_block)
+        self.assertIn(
+            "| 参与预演判断 | 错误 | 预演路径按计划展开 | 预演作废 | 作废条件出现，原参与方案不再成立。 |",
+            settlement_block,
+        )
+        self.assertIn(
+            "| 取消条件判断 | 正确 | 取消条件出现时回到0%不参与 | 预演作废 | 作废条件出现，原参与方案不再成立。 |",
+            settlement_block,
+        )
         self.assertIn("### 上一交易日未完成结算", rendered)
-        self.assertIn("| 市场状态判断 | 1 | market_state_review |", rendered)
+        self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
 
     def test_previous_day_mixed_settlement_keeps_missing_part_separate(self):
         index = {
@@ -704,9 +936,9 @@ class DecisionStatisticsTest(unittest.TestCase):
         settlement_block = rendered.split("### 结算上一交易日：2026-05-29", 1)[1].split("### 上一交易日未完成结算", 1)[0]
         unresolved_block = rendered.split("### 上一交易日未完成结算", 1)[1].split("### 今日判断", 1)[0]
 
-        self.assertIn("| 主线判断 | 1 | 1 | 0 | 正确 |", settlement_block)
+        self.assertIn("| 主线判断 | 正确 | - | - | 符合预期 |", settlement_block)
         self.assertNotIn("部分正确", settlement_block)
-        self.assertIn("| 主线判断 | 1 | mainline_review |", unresolved_block)
+        self.assertIn("| 主线判断 | 待补事实 | mainline_review |", unresolved_block)
 
 
 if __name__ == "__main__":

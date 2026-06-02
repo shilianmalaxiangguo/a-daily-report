@@ -3330,9 +3330,163 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(reviews["market_state"]["actual"], "退潮")
         self.assertTrue(reviews["mainline"]["is_correct"])
         self.assertEqual(reviews["mainline"]["actual"], "无确认主线")
-        self.assertTrue(reviews["core_candidate"]["is_correct"])
-        self.assertIn("香江控股", reviews["core_candidate"]["evidence"])
+        self.assertFalse(reviews["core_candidate"]["is_correct"])
+        self.assertIn("华锋股份(002806)未进入资金视野", reviews["core_candidate"]["actual"])
+        self.assertIn("香江控股", reviews["core_candidate"]["actual"])
+        self.assertEqual(
+            reviews["core_candidate"]["evidence"],
+            "主目标没有进入次日资金视野，备用/跟风不能抵消核心候选错误",
+        )
+        self.assertNotEqual(reviews["core_candidate"]["actual"], reviews["core_candidate"]["evidence"])
         self.assertNotIn("missing_fields", reviews["market_state"])
+
+    def test_core_candidate_primary_failure_is_not_rescued_by_backup_visibility(self):
+        previous_report = """# 2026-06-01 a股市场分析
+
+### 今日判断（2026-06-01，等待下一交易日验证）
+| 判断项 | 今日结论 | 下一交易日验证点 |
+|--------|----------|------------------|
+| 市场状态判断 | 退潮 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |
+| 主线判断 | 无确认主线 | 下一交易日验证资金是否继续选择这条线 |
+| 核心候选判断 | 粤电力Ａ(000539)、冠捷科技(000727)、节能铁汉(300197) | 下一交易日验证是否进入资金视野 |
+"""
+        first = build_decision_ledger_snapshot(
+            trade_date="2026-06-01",
+            extreme_conviction_list=[
+                {"code": "000539", "name": "粤电力Ａ", "sector": "电力", "conviction_reason": "主线内核"},
+                {"code": "000727", "name": "冠捷科技", "sector": "消费电子", "conviction_reason": "补涨观察"},
+                {"code": "300197", "name": "节能铁汉", "sector": "工程咨询", "conviction_reason": "低位补涨"},
+            ],
+            market_branch="回放正文重建",
+            sector_relationship_state="以最终报告重点观察名单为准",
+        )
+        second = build_decision_ledger_snapshot(
+            trade_date="2026-06-02",
+            extreme_conviction_list=[],
+            market_branch="回放正文重建",
+            sector_relationship_state="以最终报告重点观察名单为准",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            report_dir = root / "reports" / "replay"
+            report_dir.mkdir(parents=True)
+            (report_dir / "2026-06-01_A股日报_完整版_replay.md").write_text(previous_report, encoding="utf-8")
+            snapshot_dir = root / "snapshots" / "replay"
+            snapshot_dir.mkdir(parents=True)
+            (snapshot_dir / "2026-06-02_replay.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-06-02",
+                        "data": {
+                            "market_state_snapshot": {
+                                "energy_state": "收缩防守",
+                                "pulse_stage": "退潮",
+                            },
+                            "mainline_turnover_summary": {
+                                "current_mainline": "国产芯片替代",
+                                "mainline_attack_evidence_summary": {"attack_state": "line_confirmed"},
+                            },
+                            "hot_rank_top50": [
+                                {
+                                    "rank": 1,
+                                    "code": "601991",
+                                    "name": "大唐发电",
+                                    "concepts": ["绿色电力", "风电"],
+                                },
+                                {
+                                    "rank": 18,
+                                    "code": "000539",
+                                    "name": "粤电力A",
+                                    "concepts": ["超超临界发电", "绿色电力"],
+                                },
+                            ],
+                            "integrated_hot_list": [
+                                {
+                                    "rank": 1,
+                                    "code": "601991",
+                                    "name": "大唐发电",
+                                    "tags": ["绿色电力", "风电"],
+                                },
+                                {
+                                    "rank": 18,
+                                    "code": "000539",
+                                    "name": "粤电力A",
+                                    "tags": ["超超临界发电", "绿色电力"],
+                                },
+                            ],
+                            "zt_pool": [
+                                {"code": "300197", "name": "节能铁汉"},
+                            ],
+                            "turnover_rank": [
+                                {
+                                    "rank": 32,
+                                    "code": "601991",
+                                    "name": "大唐发电",
+                                    "change_pct": 9.6774,
+                                    "sector": "火力发电",
+                                    "trade_date": "2026-06-02",
+                                }
+                            ],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            write_decision_ledger_artifacts(first, root_dir=root, review_market_facts_by_stock_code={})
+            stale_index_path = root / "data" / "decision-ledger" / "index.json"
+            stale_index = json.loads(stale_index_path.read_text(encoding="utf-8"))
+            for records in stale_index["by_stock_code"].values():
+                for record in records:
+                    record["judgment_reviews"] = [
+                        {
+                            "judgment_type": "core_candidate",
+                            "report_date": "2026-06-01",
+                            "review_trade_date": "2026-06-02",
+                            "expected": "粤电力Ａ(000539)、冠捷科技(000727)、节能铁汉(300197)",
+                            "actual": "粤电力A(000539)进入hot_rank_top50、节能铁汉(300197)进入zt_pool",
+                            "is_correct": True,
+                            "evidence": "候选进入次日资金视野，判断成立",
+                        }
+                    ]
+                    if record.get("stock_code") == "000539":
+                        record["mentions"][0]["participation_review"] = {
+                            "status": "预演作废",
+                            "review_trade_date": "2026-06-02",
+                            "performance": {
+                                "return_1d_pct": -6.55,
+                                "return_3d_pct": None,
+                                "return_5d_pct": None,
+                                "max_drawdown_5d_pct": -10.03,
+                            },
+                            "missing_fields": ["return_3d_pct", "return_5d_pct"],
+                        }
+            stale_index_path.write_text(json.dumps(stale_index, ensure_ascii=False, indent=2), encoding="utf-8")
+            write_decision_ledger_artifacts(second, root_dir=root, review_market_facts_by_stock_code={})
+            index = json.loads((root / "data" / "decision-ledger" / "index.json").read_text(encoding="utf-8"))
+
+        reviews = {
+            item["judgment_type"]: item
+            for item in index["by_stock_code"]["000539"][0]["judgment_reviews"]
+            if item.get("report_date") == "2026-06-01"
+        }
+
+        self.assertFalse(reviews["core_candidate"]["is_correct"])
+        self.assertEqual(
+            reviews["core_candidate"]["expected"],
+            "粤电力Ａ(000539)、冠捷科技(000727)、节能铁汉(300197)",
+        )
+        self.assertIn("主目标粤电力Ａ(000539)次日-6.55%", reviews["core_candidate"]["actual"])
+        self.assertIn("最低-10.03%", reviews["core_candidate"]["actual"])
+        self.assertIn("更强同方向：大唐发电(601991)+9.68%，热榜第1", reviews["core_candidate"]["actual"])
+        self.assertIn("节能铁汉(300197)进入zt_pool", reviews["core_candidate"]["actual"])
+        self.assertEqual(
+            reviews["core_candidate"]["evidence"],
+            "主目标次日承接失败，备用/跟风进入资金视野不能抵消核心候选错误",
+        )
+        self.assertIn("备用/跟风", reviews["core_candidate"]["mistake"])
 
 
 if __name__ == "__main__":
