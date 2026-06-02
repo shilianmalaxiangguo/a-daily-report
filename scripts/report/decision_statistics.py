@@ -658,6 +658,10 @@ def _format_settlement_result(row):
     return "待补事实"
 
 
+def _has_settlement(row):
+    return int(row.get("correct_count") or 0) > 0 or int(row.get("wrong_count") or 0) > 0
+
+
 def render_daily_judgment_review_panel_lines(panel):
     panel = panel or {}
     lines = ["## 判断纠偏与今日五项结论"]
@@ -685,20 +689,37 @@ def render_daily_judgment_review_panel_lines(panel):
     previous_date = _clean_text(panel.get("previous_trade_date"))
     lines.append("")
     lines.append(f"### 结算上一交易日：{previous_date or '待补事实'}")
-    lines.append("| 判断项 | 样本 | 正确 | 错误 | 待补事实 | 结算 | 错在哪 |")
-    lines.append("|--------|------|------|------|----------|------|--------|")
-    for row in list(panel.get("previous_rows") or []):
+    resolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if _has_settlement(row)]
+    unresolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if not _has_settlement(row)]
+    lines.append("| 判断项 | 样本 | 正确 | 错误 | 结算 | 错在哪 |")
+    lines.append("|--------|------|------|------|------|--------|")
+    if not resolved_previous_rows:
+        lines.append("| 暂无已结算项 | 0 | 0 | 0 | 未结算 | - |")
+    for row in resolved_previous_rows:
         lines.append(
-            "| {label} | {sample_count} | {correct_count} | {wrong_count} | {missing_fact_count} | {result} | {latest_mistake} |".format(
+            "| {label} | {sample_count} | {correct_count} | {wrong_count} | {result} | {latest_mistake} |".format(
                 label=_clean_markdown_cell(row.get("label")),
                 sample_count=int(row.get("sample_count") or 0),
                 correct_count=int(row.get("correct_count") or 0),
                 wrong_count=int(row.get("wrong_count") or 0),
-                missing_fact_count=int(row.get("missing_fact_count") or 0),
                 result=_format_settlement_result(row),
                 latest_mistake=_clean_markdown_cell(row.get("latest_mistake"), "-"),
             )
         )
+    if unresolved_previous_rows:
+        lines.append("")
+        lines.append("### 上一交易日未完成结算")
+        lines.append("| 判断项 | 待补数量 | 缺少事实 |")
+        lines.append("|--------|----------|----------|")
+        for row in unresolved_previous_rows:
+            missing_fields = "、".join(row.get("missing_fields") or []) or "review_fact"
+            lines.append(
+                "| {label} | {missing_fact_count} | {missing_fields} |".format(
+                    label=_clean_markdown_cell(row.get("label")),
+                    missing_fact_count=int(row.get("missing_fact_count") or 0),
+                    missing_fields=_clean_markdown_cell(missing_fields),
+                )
+            )
     target_date = _clean_text(panel.get("target_date"))
     lines.append("")
     lines.append(f"### 今日判断（{target_date or '待补事实'}，等待下一交易日验证）")

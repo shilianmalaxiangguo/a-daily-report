@@ -483,6 +483,48 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["market_state"]["today_judgment"], "混沌")
         self.assertEqual(rows["mainline"]["today_judgment"], "无确认主线")
 
+    def test_previous_day_settlement_table_only_renders_resolved_items(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "002806": [
+                    {
+                        "stock_code": "002806",
+                        "stock_name": "华锋股份",
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-29",
+                                "source_section": "极度看好名单",
+                                "participation_review": {
+                                    "status": "预演作废",
+                                    "reason": "作废条件出现，原参与方案不再成立。",
+                                    "fact_inputs": {"cancellation_triggered": True},
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+        settlement_block = rendered.split("### 结算上一交易日：2026-05-29", 1)[1].split("### 上一交易日未完成结算", 1)[0]
+
+        self.assertNotIn("待补事实", settlement_block)
+        self.assertNotIn("市场状态判断", settlement_block)
+        self.assertNotIn("主线判断", settlement_block)
+        self.assertNotIn("核心候选判断", settlement_block)
+        self.assertIn("| 参与预演判断 | 1 | 0 | 1 | 错误 |", settlement_block)
+        self.assertIn("| 取消条件判断 | 1 | 1 | 0 | 正确 |", settlement_block)
+        self.assertIn("### 上一交易日未完成结算", rendered)
+        self.assertIn("| 市场状态判断 | 1 | market_state_review |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
