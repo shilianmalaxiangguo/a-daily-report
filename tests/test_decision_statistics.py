@@ -576,6 +576,17 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["market_state"]["today_judgment"], "混沌")
         self.assertEqual(rows["mainline"]["today_judgment"], "无确认主线")
 
+    def test_daily_panel_normalizes_defensive_market_state_to_retreat_bucket(self):
+        panel = build_daily_judgment_review_panel(
+            {"available_trade_dates": ["2026-05-29", "2026-06-01"], "by_stock_code": {}},
+            "2026-06-01",
+            current_context={"market_state": "收缩防守", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["market_state"]["today_judgment"], "退潮")
+
     def test_daily_panel_counts_one_unresolved_daily_judgment_per_trade_date(self):
         index = {
             "available_trade_dates": ["2026-05-29", "2026-06-01"],

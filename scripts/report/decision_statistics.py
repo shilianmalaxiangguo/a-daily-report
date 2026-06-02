@@ -33,6 +33,7 @@ DAILY_JUDGMENT_TYPE_KEYS = {"market_state", "mainline", "core_candidate"}
 _HIT_REVIEW_STATUSES = {"预演命中", "错过后方案命中"}
 _MISS_REVIEW_STATUSES = {"预演作废", "预演过早", "主目标不可成交"}
 _WAITING_REVIEW_STATUSES = {"", "等待复盘", "等待窗口复盘", "等待事实", "待补事实"}
+_MARKET_STATE_BUCKETS = {"进攻", "退潮", "修复", "混沌", "冰点"}
 _OPTIONAL_PERFORMANCE_FIELDS = {
     "return_1d_pct",
     "return_3d_pct",
@@ -50,6 +51,25 @@ def _clean_text(value, default=""):
 def _clean_markdown_cell(value, default="-"):
     text = _clean_text(value, default)
     return text.replace("|", "｜")
+
+
+def _normalize_market_state_bucket(value):
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if text in _MARKET_STATE_BUCKETS:
+        return text
+    if "冰点" in text:
+        return "冰点"
+    if any(token in text for token in ("退潮", "撤退", "收缩防守", "防守", "风险释放", "禁止参与")):
+        return "退潮"
+    if "修复" in text:
+        return "修复"
+    if any(token in text for token in ("进攻", "爆发", "主升", "扩张", "expand")):
+        return "进攻"
+    if any(token in text for token in ("混沌", "轮动", "无确认主线", "多方向")):
+        return "混沌"
+    return text
 
 
 def _merge_missing_fields(*values):
@@ -604,6 +624,8 @@ def _today_judgment_rows(index, target_date, current_context=None):
         mainline = "无确认主线"
     if not market_state:
         market_state = "混沌" if mainline == "无确认主线" else "待补事实"
+    else:
+        market_state = _normalize_market_state_bucket(market_state)
     core_candidates = _current_core_candidates(index, target_date, current_context)
     participation = _current_participation_text(index, target_date, current_context)
     cancellation = _current_cancellation_text(index, target_date, current_context)

@@ -1143,6 +1143,27 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("09:50-10:10窗口", ordinary_hit["matched_steps"])
         self.assertEqual(ordinary_waiting["status"], "等待复盘")
 
+    def test_open_core_review_cancels_when_auction_and_first_minutes_fail(self):
+        review = classify_planned_participation_review(
+            {
+                "participation_window": "竞价表态 + 回封观察",
+                "participation_window_type": "auction_reseal",
+                "auction_required": True,
+                "first_minutes_required": True,
+                "board_or_reseal_required": True,
+            },
+            auction_matched=False,
+            first_minutes_accepted=False,
+            board_sealed=False,
+            reseal_success=False,
+            sector_supported=True,
+            cancellation_triggered=False,
+            evidence="开盘-1.43%，最高+9.68%，最低-10.04%，收盘+4.66%",
+        )
+
+        self.assertEqual(review["status"], "预演作废")
+        self.assertIn("竞价", review["reason"])
+
     def test_planned_participation_review_does_not_count_unavailable_limit_as_hit(self):
         planned = {
             "participation_window": "竞价表态 + 回封参与",
@@ -3230,6 +3251,88 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual((mentions[0]["participation_review"] or {})["review_trade_date"], "2026-05-13")
         self.assertEqual((mentions[1]["participation_review"] or {})["review_trade_date"], "2026-05-14")
         self.assertEqual((mentions[1]["participation_review"] or {})["status"], "主目标不可成交")
+
+    def test_writer_settles_previous_daily_judgments_from_next_day_facts(self):
+        previous_report = """# 2026-05-29 a股市场分析
+
+### 今日判断（2026-05-29，等待下一交易日验证）
+| 判断项 | 今日结论 | 下一交易日验证点 |
+|--------|----------|------------------|
+| 市场状态判断 | 混沌 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |
+| 主线判断 | 无确认主线 | 下一交易日验证资金是否继续选择这条线 |
+| 核心候选判断 | 华锋股份(002806)、香江控股(600162) | 下一交易日验证是否进入资金视野 |
+"""
+        first = build_decision_ledger_snapshot(
+            trade_date="2026-05-29",
+            extreme_conviction_list=[
+                {"code": "002806", "name": "华锋股份", "sector": "汽车零部", "conviction_reason": "板块锚定龙"},
+                {"code": "600162", "name": "香江控股", "sector": "房地产开", "conviction_reason": "情绪龙头"},
+            ],
+            market_branch="回放正文重建",
+            sector_relationship_state="以最终报告重点观察名单为准",
+        )
+        second = build_decision_ledger_snapshot(
+            trade_date="2026-06-01",
+            extreme_conviction_list=[
+                {"code": "000539", "name": "粤电力Ａ", "sector": "电力", "conviction_reason": "主线内核"},
+            ],
+            market_branch="回放正文重建",
+            sector_relationship_state="以最终报告重点观察名单为准",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            report_dir = root / "reports" / "replay"
+            report_dir.mkdir(parents=True)
+            (report_dir / "2026-05-29_A股日报_完整版_replay.md").write_text(previous_report, encoding="utf-8")
+            snapshot_dir = root / "snapshots" / "replay"
+            snapshot_dir.mkdir(parents=True)
+            (snapshot_dir / "2026-06-01_replay.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-06-01",
+                        "data": {
+                            "market_state_snapshot": {
+                                "energy_state": "收缩防守",
+                                "pulse_stage": "退潮",
+                            },
+                            "mainline_turnover_summary": {
+                                "current_mainline": "",
+                                "conclusion": "主线待确认，暂不输出成交额占比结论",
+                                "mainline_attack_evidence_summary": {
+                                    "attack_state": "chaotic_rotation",
+                                    "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                                },
+                            },
+                            "hot_rank_top50": [
+                                {"code": "600162", "name": "香江控股", "query_date": "2026-06-01"},
+                            ],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            write_decision_ledger_artifacts(first, root_dir=root, review_market_facts_by_stock_code={})
+            write_decision_ledger_artifacts(second, root_dir=root, review_market_facts_by_stock_code={})
+            index = json.loads((root / "data" / "decision-ledger" / "index.json").read_text(encoding="utf-8"))
+
+        record = index["by_stock_code"]["002806"][0]
+        reviews = {
+            item["judgment_type"]: item
+            for item in record["judgment_reviews"]
+            if item.get("report_date") == "2026-05-29"
+        }
+
+        self.assertEqual(set(reviews), {"market_state", "mainline", "core_candidate"})
+        self.assertFalse(reviews["market_state"]["is_correct"])
+        self.assertEqual(reviews["market_state"]["actual"], "退潮")
+        self.assertTrue(reviews["mainline"]["is_correct"])
+        self.assertEqual(reviews["mainline"]["actual"], "无确认主线")
+        self.assertTrue(reviews["core_candidate"]["is_correct"])
+        self.assertIn("香江控股", reviews["core_candidate"]["evidence"])
+        self.assertNotIn("missing_fields", reviews["market_state"])
 
 
 if __name__ == "__main__":

@@ -56,6 +56,25 @@ _QUANT_ANCHOR_FIELDS = (
 _SOURCE_DATE_FIELDS = ("snapshot_date", "refill_date", "price_source_date")
 _PERFORMANCE_FIELDS = ("return_1d_pct", "return_3d_pct", "return_5d_pct", "max_drawdown_5d_pct")
 _WAITING_REVIEW_STATUSES = {"等待复盘", "等待窗口复盘", "等待事实", ""}
+_MARKET_STATE_BUCKETS = {"进攻", "退潮", "修复", "混沌", "冰点"}
+_NO_CONFIRMED_MAINLINE_LABELS = {"无确认主线", "暂无明确主线", "暂无", "无", "-", "待确认", "主线待确认"}
+_JUDGMENT_LABEL_TO_TYPE = {
+    "市场状态判断": "market_state",
+    "主线判断": "mainline",
+    "核心候选判断": "core_candidate",
+}
+_CANDIDATE_VISIBILITY_FIELDS = (
+    "extreme_conviction_list",
+    "selected_position_candidate",
+    "hot_rank_top50",
+    "hot_rank_top30",
+    "integrated_hot_list",
+    "wanzhu_top10",
+    "xueqiu_hot_rank_top100",
+    "zt_pool",
+    "lianban_data",
+    "turnover_rank",
+)
 
 
 def _normalize_stock_code(value):
@@ -1027,6 +1046,24 @@ def classify_planned_participation_review(
                 "status": "错过后方案命中",
                 "reason": "核心目标不可得，但错过后动作沿原趋势比价链生效。",
                 "evidence": _clean_text(missed_action_evidence, base["evidence"] or "错过后动作获得验证"),
+            }
+        )
+        return _finalize_participation_review(base)
+
+    auction_required = bool(planned.get("auction_required")) or participation_window_type == "auction_reseal"
+    if (
+        participation_window_type == "auction_reseal"
+        and auction_required
+        and not auction_matched
+        and entry_decision not in {"window_confirm_buy", "waiting_window_review"}
+        and not window_confirmed
+    ):
+        base["fact_inputs"]["cancellation_triggered"] = True
+        base.update(
+            {
+                "status": "预演作废",
+                "reason": "竞价表态未成立，原参与方案不再成立。",
+                "evidence": base["evidence"] or "竞价表态未成立",
             }
         )
         return _finalize_participation_review(base)
@@ -2889,6 +2926,406 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
     return lines
 
 
+def _previous_trade_date_from_index(index, trade_date):
+    dates = [
+        _clean_text(item)
+        for item in list((index or {}).get("available_trade_dates") or [])
+        if _clean_text(item) and _clean_text(item) < _clean_text(trade_date)
+    ]
+    return max(dates) if dates else ""
+
+
+def _report_paths_for_trade_date(root, trade_date):
+    return [
+        root / "reports" / "replay" / f"{trade_date}_A股日报_完整版_replay.md",
+        root / "reports" / f"{trade_date}_A股日报_完整版.md",
+    ]
+
+
+def _load_markdown_text(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _parse_stock_labels_from_text(text):
+    candidates = []
+    for part in re.split(r"[、,，/]+", str(text or "")):
+        part = _clean_text(part)
+        if not part or part == "待补事实":
+            continue
+        match = re.search(r"(.+?)[(（]\s*(\d{6})\s*[)）]", part)
+        if match:
+            name = _clean_text(match.group(1))
+            code = _normalize_stock_code(match.group(2))
+            candidates.append({"stock_name": name, "stock_code": code, "label": f"{name}({code})"})
+        else:
+            candidates.append({"stock_name": part, "stock_code": "", "label": part})
+    return candidates
+
+
+def _parse_today_judgments_from_markdown(markdown):
+    lines = str(markdown or "").splitlines()
+    result = {}
+    in_today_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("### ") and "今日判断" in stripped:
+            in_today_section = True
+            continue
+        if in_today_section and stripped.startswith("### "):
+            break
+        if not in_today_section or not stripped.startswith("|"):
+            continue
+        cells = _split_markdown_row(stripped)
+        if len(cells) < 2 or cells[0] == "判断项" or set(cells[0]) <= {"-"}:
+            continue
+        judgment_type = _JUDGMENT_LABEL_TO_TYPE.get(cells[0])
+        if not judgment_type:
+            continue
+        value = _clean_text(cells[1])
+        if judgment_type == "core_candidate":
+            result[judgment_type] = {"raw": value, "candidates": _parse_stock_labels_from_text(value)}
+        else:
+            result[judgment_type] = value
+    return result
+
+
+def _load_previous_today_judgments(root, previous_date):
+    for path in _report_paths_for_trade_date(root, previous_date):
+        parsed = _parse_today_judgments_from_markdown(_load_markdown_text(path))
+        if parsed:
+            return parsed
+    return {}
+
+
+def _snapshot_paths_for_trade_date(root, trade_date):
+    return [
+        root / "snapshots" / "replay" / f"{trade_date}_replay.json",
+        root / "snapshots" / f"{trade_date}.json",
+    ]
+
+
+def _load_snapshot_data_for_trade_date(root, trade_date):
+    for path in _snapshot_paths_for_trade_date(root, trade_date):
+        payload = _read_json_if_exists(path)
+        if not payload:
+            continue
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def _normalize_market_state_bucket(value):
+    text = _clean_text(value)
+    if not text:
+        return ""
+    if text in _MARKET_STATE_BUCKETS:
+        return text
+    if "冰点" in text:
+        return "冰点"
+    if any(token in text for token in ("退潮", "撤退", "收缩防守", "防守", "风险释放", "禁止参与")):
+        return "退潮"
+    if "修复" in text:
+        return "修复"
+    if any(token in text for token in ("进攻", "爆发", "主升", "扩张", "expand")):
+        return "进攻"
+    if any(token in text for token in ("混沌", "轮动", "无确认主线", "多方向")):
+        return "混沌"
+    return ""
+
+
+def _is_no_confirmed_mainline(value):
+    text = _clean_text(value)
+    if not text:
+        return True
+    if text in _NO_CONFIRMED_MAINLINE_LABELS:
+        return True
+    return any(token in text for token in ("无确认主线", "暂无明确主线", "主线待确认", "资金未明显胜出", "多方向局部活跃"))
+
+
+def _normalize_mainline_judgment(value):
+    text = _clean_text(value)
+    return "无确认主线" if _is_no_confirmed_mainline(text) else text
+
+
+def _snapshot_mainline_summary(snapshot_data):
+    market_research = snapshot_data.get("market_research_snapshot") if isinstance(snapshot_data.get("market_research_snapshot"), dict) else {}
+    summary = snapshot_data.get("mainline_turnover_summary") if isinstance(snapshot_data.get("mainline_turnover_summary"), dict) else {}
+    if not summary and isinstance(market_research.get("mainline_turnover_summary"), dict):
+        summary = market_research.get("mainline_turnover_summary")
+    return summary or {}
+
+
+def _actual_mainline_from_snapshot_data(snapshot_data):
+    snapshot_data = snapshot_data or {}
+    summary = _snapshot_mainline_summary(snapshot_data)
+    attack = summary.get("mainline_attack_evidence_summary") if isinstance(summary.get("mainline_attack_evidence_summary"), dict) else {}
+    current = _clean_text(summary.get("current_mainline") or summary.get("primary_mainline") or attack.get("primary_line"))
+    if current:
+        return current
+    attack_state = _clean_text(attack.get("attack_state"))
+    summary_text = "；".join(
+        _clean_text(summary.get(key))
+        for key in ("conclusion", "data_text", "action_text")
+        if _clean_text(summary.get(key))
+    )
+    if attack_state in {"chaotic_rotation", "no_mainline"} or _is_no_confirmed_mainline(summary_text):
+        return "无确认主线"
+    market_research = snapshot_data.get("market_research_snapshot") if isinstance(snapshot_data.get("market_research_snapshot"), dict) else {}
+    record = (
+        snapshot_data.get("current_mainline_history_record")
+        if isinstance(snapshot_data.get("current_mainline_history_record"), dict)
+        else market_research.get("current_mainline_history_record")
+        if isinstance(market_research.get("current_mainline_history_record"), dict)
+        else {}
+    )
+    return _clean_text(record.get("primary_mainline") or record.get("leading_line"))
+
+
+def _actual_market_state_from_snapshot_data(snapshot_data):
+    snapshot_data = snapshot_data or {}
+    market_research = snapshot_data.get("market_research_snapshot") if isinstance(snapshot_data.get("market_research_snapshot"), dict) else {}
+    state_snapshot = snapshot_data.get("market_state_snapshot") if isinstance(snapshot_data.get("market_state_snapshot"), dict) else {}
+    state_machine = market_research.get("state_machine") if isinstance(market_research.get("state_machine"), dict) else {}
+    for value in (
+        state_snapshot.get("pulse_stage"),
+        state_snapshot.get("energy_state"),
+        state_snapshot.get("operation_state"),
+        state_machine.get("pulse_stage"),
+        state_machine.get("energy_state"),
+        state_machine.get("operation_state"),
+        snapshot_data.get("market_state"),
+        market_research.get("market_state"),
+    ):
+        bucket = _normalize_market_state_bucket(value)
+        if bucket:
+            return bucket
+    summary = _snapshot_mainline_summary(snapshot_data)
+    attack = summary.get("mainline_attack_evidence_summary") if isinstance(summary.get("mainline_attack_evidence_summary"), dict) else {}
+    if _clean_text(attack.get("attack_state")) == "chaotic_rotation":
+        return "混沌"
+    return ""
+
+
+def _iter_stock_visibility_items(snapshot_data, snapshot):
+    snapshot_data = snapshot_data or {}
+    for case in list((snapshot or {}).get("cases") or []):
+        if isinstance(case, dict):
+            yield {"code": case.get("stock_code"), "name": case.get("stock_name"), "source": "今日核心候选"}
+    market_research = snapshot_data.get("market_research_snapshot") if isinstance(snapshot_data.get("market_research_snapshot"), dict) else {}
+    for container in (snapshot_data, market_research):
+        for field in _CANDIDATE_VISIBILITY_FIELDS:
+            value = container.get(field) if isinstance(container, dict) else None
+            if isinstance(value, dict):
+                items = [value]
+            else:
+                items = list(value or []) if isinstance(value, list) else []
+            for item in items:
+                if isinstance(item, dict):
+                    yield {**item, "source": field}
+
+
+def _stock_item_code(item):
+    return _normalize_stock_code((item or {}).get("code") or (item or {}).get("stock_code") or (item or {}).get("代码"))
+
+
+def _stock_item_name(item):
+    return _clean_text((item or {}).get("name") or (item or {}).get("stock_name") or (item or {}).get("名称"))
+
+
+def _collect_visible_candidate_labels(snapshot_data, snapshot, candidates):
+    target_codes = {
+        _normalize_stock_code(item.get("stock_code"))
+        for item in list(candidates or [])
+        if _normalize_stock_code(item.get("stock_code"))
+    }
+    target_names = {_clean_text(item.get("stock_name")) for item in list(candidates or []) if _clean_text(item.get("stock_name"))}
+    labels = []
+    fact_available = False
+    for item in _iter_stock_visibility_items(snapshot_data, snapshot):
+        fact_available = True
+        code = _stock_item_code(item)
+        name = _stock_item_name(item)
+        if (code and code in target_codes) or (name and name in target_names):
+            label = f"{name}({code})" if name and code else name or code
+            source = _clean_text(item.get("source"))
+            text = f"{label}进入{source}" if source else f"{label}进入资金视野"
+            if text not in labels:
+                labels.append(text)
+    return labels, fact_available
+
+
+def _mainline_judgment_correct(expected, actual):
+    expected = _normalize_mainline_judgment(expected)
+    actual = _normalize_mainline_judgment(actual)
+    if not expected or not actual:
+        return None
+    if _is_no_confirmed_mainline(expected) or _is_no_confirmed_mainline(actual):
+        return _is_no_confirmed_mainline(expected) and _is_no_confirmed_mainline(actual)
+    return expected == actual or expected in actual or actual in expected
+
+
+def _resolved_judgment_review(judgment_type, previous_date, trade_date, expected, actual, is_correct, evidence="", mistake=""):
+    review = {
+        "judgment_type": judgment_type,
+        "report_date": previous_date,
+        "review_trade_date": trade_date,
+        "expected": expected,
+        "actual": actual,
+        "is_correct": bool(is_correct),
+        "evidence": evidence,
+        "source_dates": {
+            "snapshot_date": previous_date,
+            "refill_date": trade_date,
+            "price_source_date": trade_date,
+        },
+    }
+    if not is_correct:
+        review["mistake"] = mistake or "判断未被次日事实验证"
+    return review
+
+
+def _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, previous_date, trade_date):
+    reviews = []
+
+    expected_market = _normalize_market_state_bucket(previous_judgments.get("market_state"))
+    actual_market = _actual_market_state_from_snapshot_data(snapshot_data)
+    if expected_market and actual_market:
+        reviews.append(
+            _resolved_judgment_review(
+                "market_state",
+                previous_date,
+                trade_date,
+                expected_market,
+                actual_market,
+                expected_market == actual_market,
+                evidence=f"次日市场状态归一为{actual_market}",
+                mistake=f"预判{expected_market}，次日实际为{actual_market}",
+            )
+        )
+
+    expected_mainline = _normalize_mainline_judgment(previous_judgments.get("mainline"))
+    actual_mainline = _actual_mainline_from_snapshot_data(snapshot_data)
+    mainline_correct = _mainline_judgment_correct(expected_mainline, actual_mainline)
+    if mainline_correct is not None:
+        normalized_actual = _normalize_mainline_judgment(actual_mainline)
+        reviews.append(
+            _resolved_judgment_review(
+                "mainline",
+                previous_date,
+                trade_date,
+                expected_mainline,
+                normalized_actual,
+                mainline_correct,
+                evidence=f"次日主线结论：{normalized_actual}",
+                mistake="资金第二天没有继续选择预判方向",
+            )
+        )
+
+    core_payload = previous_judgments.get("core_candidate") if isinstance(previous_judgments.get("core_candidate"), dict) else {}
+    candidates = list(core_payload.get("candidates") or [])
+    visible_labels, visibility_fact_available = _collect_visible_candidate_labels(snapshot_data, snapshot, candidates)
+    if candidates and visibility_fact_available:
+        expected = "、".join(item.get("label") or item.get("stock_name") or item.get("stock_code") for item in candidates if item)
+        actual = "、".join(visible_labels) if visible_labels else "未进入资金视野"
+        reviews.append(
+            _resolved_judgment_review(
+                "core_candidate",
+                previous_date,
+                trade_date,
+                expected,
+                actual,
+                bool(visible_labels),
+                evidence=actual,
+                mistake="候选没有进入次日资金视野",
+            )
+        )
+
+    return reviews
+
+
+def _record_has_extreme_mention_on_date(record, trade_date):
+    planned = _record_planned_participation(record)
+    for mention in list((record or {}).get("mentions") or []):
+        if _clean_text((mention or {}).get("mention_trade_date")) != _clean_text(trade_date):
+            continue
+        if _mention_source_tier(mention or {}, planned) == "extreme_conviction":
+            return True
+    return False
+
+
+def _review_report_date(review):
+    return _clean_text((review or {}).get("report_date") or (review or {}).get("date"))
+
+
+def _has_resolved_judgment_review(record, judgment_type, report_date):
+    for item in list((record or {}).get("judgment_reviews") or []):
+        if _clean_text((item or {}).get("judgment_type")) != judgment_type:
+            continue
+        if _review_report_date(item) != _clean_text(report_date):
+            continue
+        if item.get("is_correct") is not None and not item.get("missing_fields"):
+            return True
+    return False
+
+
+def _merge_judgment_reviews(record, reviews):
+    existing = [dict(item) for item in list((record or {}).get("judgment_reviews") or []) if isinstance(item, dict)]
+    merged = []
+    for item in existing:
+        should_replace = any(
+            _clean_text(item.get("judgment_type")) == review.get("judgment_type")
+            and _review_report_date(item) == review.get("report_date")
+            and not _has_resolved_judgment_review({"judgment_reviews": [item]}, review.get("judgment_type"), review.get("report_date"))
+            for review in reviews
+        )
+        if not should_replace:
+            merged.append(item)
+    for review in reviews:
+        if _has_resolved_judgment_review({"judgment_reviews": merged}, review.get("judgment_type"), review.get("report_date")):
+            continue
+        merged.append(dict(review))
+    return merged
+
+
+def _apply_daily_judgment_reviews_to_previous_index(previous_index, trade_date, root, snapshot):
+    previous_index = previous_index or {}
+    previous_date = _previous_trade_date_from_index(previous_index, trade_date)
+    if not previous_date:
+        return previous_index
+    previous_judgments = _load_previous_today_judgments(root, previous_date)
+    if not previous_judgments:
+        return previous_index
+    snapshot_data = _load_snapshot_data_for_trade_date(root, trade_date)
+    if not snapshot_data:
+        return previous_index
+    reviews = _build_daily_judgment_reviews(previous_judgments, snapshot_data, snapshot, previous_date, trade_date)
+    if not reviews:
+        return previous_index
+
+    updated_index = dict(previous_index)
+    updated_by_stock_code = {}
+    for code, records in (previous_index.get("by_stock_code") or {}).items():
+        updated_records = []
+        for record in list(records or []):
+            if _record_has_extreme_mention_on_date(record, previous_date):
+                updated_records.append(
+                    {
+                        **record,
+                        "latest_trade_date": trade_date,
+                        "judgment_reviews": _merge_judgment_reviews(record, reviews),
+                    }
+                )
+            else:
+                updated_records.append(record)
+        updated_by_stock_code[code] = updated_records
+    updated_index["by_stock_code"] = updated_by_stock_code
+    return updated_index
+
+
 def _attach_review_to_latest_prior_mention(record, trade_date, review):
     mentions = [dict(item) for item in list((record or {}).get("mentions") or [])]
     compact_review = _compact_participation_review_for_index(review)
@@ -3030,6 +3467,12 @@ def write_decision_ledger_artifacts(
         previous_index = _sanitize_decision_ledger_index(_read_json_if_exists(index_path))
     if review_market_facts_by_stock_code is None:
         review_market_facts_by_stock_code = _load_review_market_facts(root, trade_date, previous_index)
+    previous_index = _apply_daily_judgment_reviews_to_previous_index(
+        previous_index,
+        trade_date,
+        root,
+        snapshot,
+    )
     previous_index = _apply_participation_reviews_to_previous_index(
         previous_index,
         trade_date,

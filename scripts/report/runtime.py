@@ -1484,10 +1484,21 @@ def _build_current_judgment_context_for_panel(
     market_research_snapshot = market_research_snapshot or {}
     market_state_snapshot = market_state_snapshot or {}
     mainline_turnover_summary = mainline_turnover_summary or {}
+    market_state_machine = (
+        market_research_snapshot.get("state_machine")
+        if isinstance(market_research_snapshot.get("state_machine"), dict)
+        else {}
+    )
     market_state = _first_runtime_text(
         market_state_snapshot.get("market_state"),
         market_state_snapshot.get("market_status"),
         market_state_snapshot.get("sentiment_state"),
+        market_state_snapshot.get("pulse_stage"),
+        market_state_snapshot.get("energy_state"),
+        market_state_snapshot.get("operation_state"),
+        market_state_machine.get("pulse_stage"),
+        market_state_machine.get("energy_state"),
+        market_state_machine.get("operation_state"),
         market_research_snapshot.get("market_state"),
         execution_stage_context.get("market_state"),
     )
@@ -1693,6 +1704,24 @@ def _front_page_candidate_from_extreme_item(item):
         "condition": plan.get("condition") or default_condition,
         "planned_participation": dict(plan),
     }
+    for key in (
+        "sniper_role",
+        "primary_buy_candidate",
+        "backup_buy_candidate",
+        "candidate_layer",
+        "execution_eligibility",
+        "anchor_reversal_decision",
+        "anchor_reversal_reason",
+        "sector_anchor",
+        "candidate_role",
+        "relationship_to_anchor",
+        "why_not_anchor",
+        "repair_priority",
+        "anchor_reversal",
+    ):
+        value = item.get(key)
+        if value not in (None, ""):
+            candidate[key] = value
     for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
         value = item.get(key)
         if value in (None, ""):
@@ -2078,7 +2107,36 @@ def _front_page_candidate_has_fallback_condition(candidate):
     return any(marker in joined for marker in fallback_markers)
 
 
+def _front_page_candidate_reversal_blocks_execution(candidate):
+    if not isinstance(candidate, dict):
+        return False
+    nested = candidate.get("anchor_reversal") if isinstance(candidate.get("anchor_reversal"), dict) else {}
+    decision = str(
+        candidate.get("anchor_reversal_decision")
+        or nested.get("anchor_reversal_decision")
+        or ""
+    ).strip()
+    if decision in {"降级观察", "不参与", "可作为补位"}:
+        return True
+    sniper_role = str(candidate.get("sniper_role") or "").strip()
+    if sniper_role in {"候选观察", "候选观察补充", "明日补位对象"}:
+        return True
+    if candidate.get("primary_buy_candidate") is False and candidate.get("backup_buy_candidate") is True:
+        return True
+    candidate_layer = str(candidate.get("candidate_layer") or "").strip()
+    execution_eligibility = str(candidate.get("execution_eligibility") or "").strip()
+    if candidate_layer == "watch_sample":
+        return True
+    return execution_eligibility in {
+        "anchor_reversal_observation",
+        "anchor_failed_no_participation",
+        "observation_only",
+    }
+
+
 def _front_page_candidate_has_execution_qualification(candidate):
+    if _front_page_candidate_reversal_blocks_execution(candidate):
+        return False
     return bool(
         _front_page_candidate_position_pct(candidate) >= 50
         and _front_page_candidate_has_execution_window(candidate)
