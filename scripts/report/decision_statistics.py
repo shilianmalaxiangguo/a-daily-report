@@ -29,6 +29,7 @@ JUDGMENT_TYPES = (
 )
 
 JUDGMENT_TYPE_KEYS = {item["judgment_type"] for item in JUDGMENT_TYPES}
+DAILY_JUDGMENT_TYPE_KEYS = {"market_state", "mainline", "core_candidate"}
 _HIT_REVIEW_STATUSES = {"预演命中", "错过后方案命中"}
 _MISS_REVIEW_STATUSES = {"预演作废", "预演过早", "主目标不可成交"}
 _WAITING_REVIEW_STATUSES = {"", "等待复盘", "等待窗口复盘", "等待事实", "待补事实"}
@@ -409,6 +410,18 @@ def _rows_for_dates(rows, dates):
     return [row for row in rows if _clean_text(row.get("date")) in date_set]
 
 
+def _rows_before_target_date(rows, target_date):
+    target_date = _clean_text(target_date)
+    if not target_date:
+        return list(rows or [])
+    filtered = []
+    for row in list(rows or []):
+        row_date = _clean_text((row or {}).get("date"))
+        if row_date and row_date < target_date:
+            filtered.append(row)
+    return filtered
+
+
 def _summary_rows_for_dates(rows, dates):
     filtered = _rows_for_dates(rows, dates)
     grouped = {item["judgment_type"]: [] for item in JUDGMENT_TYPES}
@@ -416,31 +429,55 @@ def _summary_rows_for_dates(rows, dates):
         judgment_type = row.get("judgment_type")
         if judgment_type in grouped:
             grouped[judgment_type].append(row)
-    return [{**item, **_summarize_rows(grouped[item["judgment_type"]])} for item in JUDGMENT_TYPES]
+    return [
+        {**item, **_summarize_rows(grouped[item["judgment_type"]], judgment_type=item["judgment_type"])}
+        for item in JUDGMENT_TYPES
+    ]
 
 
-def _summarize_rows(rows):
-    dates = sorted({_clean_text(row.get("date")) for row in rows if _clean_text(row.get("date"))})
-    sample_rows = [row for row in rows if row.get("is_correct") is not None]
-    correct_rows = [row for row in sample_rows if row.get("is_correct") is True]
-    wrong_rows = [row for row in sample_rows if row.get("is_correct") is False]
-    missing_rows = [row for row in rows if row.get("is_correct") is None]
+def _summarize_rows(rows, *, judgment_type=""):
+    daily_groups = {}
+    for idx, row in enumerate(list(rows or [])):
+        row_date = _clean_text((row or {}).get("date"))
+        group_key = row_date if judgment_type in DAILY_JUDGMENT_TYPE_KEYS and row_date else f"__row_{idx}"
+        daily_groups.setdefault(group_key, {"date": row_date, "rows": []})["rows"].append(row)
+
+    dates = sorted({group["date"] for group in daily_groups.values() if group["date"]})
+    sample_count = 0
+    correct_count = 0
+    wrong_count = 0
+    missing_fact_count = 0
+    wrong_rows = []
+    missing_fields = []
+    for group in daily_groups.values():
+        group_rows = list(group["rows"])
+        sample_rows = [row for row in group_rows if row.get("is_correct") is not None]
+        missing_rows = [row for row in group_rows if row.get("is_correct") is None]
+        if sample_rows:
+            sample_count += 1
+            group_wrong_rows = [row for row in sample_rows if row.get("is_correct") is False]
+            if group_wrong_rows:
+                wrong_count += 1
+                wrong_rows.extend(group_wrong_rows)
+            else:
+                correct_count += 1
+        if missing_rows:
+            missing_fact_count += 1
+            for row in missing_rows:
+                missing_fields = _merge_missing_fields(missing_fields, row.get("missing_fields"))
     accuracy = None
-    if sample_rows:
-        accuracy = round(len(correct_rows) / len(sample_rows) * 100, 2)
+    if sample_count:
+        accuracy = round(correct_count / sample_count * 100, 2)
     latest_mistake = ""
     for row in sorted(wrong_rows, key=lambda item: _clean_text(item.get("date")), reverse=True):
         latest_mistake = _clean_text(row.get("mistake"))
         if latest_mistake:
             break
-    missing_fields = []
-    for row in missing_rows:
-        missing_fields = _merge_missing_fields(missing_fields, row.get("missing_fields"))
     return {
-        "sample_count": len(sample_rows),
-        "correct_count": len(correct_rows),
-        "wrong_count": len(wrong_rows),
-        "missing_fact_count": len(missing_rows),
+        "sample_count": sample_count,
+        "correct_count": correct_count,
+        "wrong_count": wrong_count,
+        "missing_fact_count": missing_fact_count,
         "accuracy_pct": accuracy,
         "start_date": dates[0] if dates else None,
         "end_date": dates[-1] if dates else None,
@@ -612,9 +649,9 @@ def build_daily_judgment_review_panel(index, target_date, current_context=None, 
     }
 
 
-def build_five_judgment_statistics(index):
+def build_five_judgment_statistics(index, target_date=None):
     grouped = {item["judgment_type"]: [] for item in JUDGMENT_TYPES}
-    for row in _iter_review_rows(index):
+    for row in _rows_before_target_date(list(_iter_review_rows(index)), target_date):
         judgment_type = row.get("judgment_type")
         if judgment_type in grouped:
             grouped[judgment_type].append(row)
@@ -625,7 +662,7 @@ def build_five_judgment_statistics(index):
     total_missing = 0
     for item in JUDGMENT_TYPES:
         rows = grouped[item["judgment_type"]]
-        summary = _summarize_rows(rows)
+        summary = _summarize_rows(rows, judgment_type=item["judgment_type"])
         all_dates.extend([date for date in (summary.get("start_date"), summary.get("end_date")) if date])
         total_samples += int(summary.get("sample_count") or 0)
         total_missing += int(summary.get("missing_fact_count") or 0)
@@ -652,8 +689,6 @@ def _format_settlement_result(row):
     if int(row.get("wrong_count") or 0) > 0:
         return "错误"
     if int(row.get("correct_count") or 0) > 0:
-        if int(row.get("missing_fact_count") or 0) > 0:
-            return "部分正确"
         return "正确"
     return "待补事实"
 
@@ -690,7 +725,9 @@ def render_daily_judgment_review_panel_lines(panel):
     lines.append("")
     lines.append(f"### 结算上一交易日：{previous_date or '待补事实'}")
     resolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if _has_settlement(row)]
-    unresolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if not _has_settlement(row)]
+    unresolved_previous_rows = [
+        row for row in list(panel.get("previous_rows") or []) if int(row.get("missing_fact_count") or 0) > 0
+    ]
     lines.append("| 判断项 | 样本 | 正确 | 错误 | 结算 | 错在哪 |")
     lines.append("|--------|------|------|------|------|--------|")
     if not resolved_previous_rows:

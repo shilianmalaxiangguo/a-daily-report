@@ -208,6 +208,59 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["cancellation_condition"]["sample_count"], 1)
         self.assertEqual(rows["cancellation_condition"]["correct_count"], 1)
 
+    def test_same_day_participation_and_cancellation_reviews_remain_separate_samples(self):
+        index = {
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-29",
+                                "source_section": "极度看好名单",
+                                "participation_review": {
+                                    "status": "预演命中",
+                                    "fact_inputs": {
+                                        "auction_matched": True,
+                                        "first_minutes_accepted": True,
+                                        "cancellation_triggered": True,
+                                    },
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "002806": [
+                    {
+                        "stock_code": "002806",
+                        "stock_name": "华锋股份",
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-29",
+                                "source_section": "极度看好名单",
+                                "participation_review": {
+                                    "status": "预演作废",
+                                    "reason": "作废条件出现，原参与方案不再成立。",
+                                    "fact_inputs": {"cancellation_triggered": True},
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        }
+
+        result = build_five_judgment_statistics(index, target_date="2026-06-01")
+        rows = {row["judgment_type"]: row for row in result["rows"]}
+
+        self.assertEqual(rows["participation_rehearsal"]["sample_count"], 2)
+        self.assertEqual(rows["participation_rehearsal"]["correct_count"], 1)
+        self.assertEqual(rows["participation_rehearsal"]["wrong_count"], 1)
+        self.assertEqual(rows["cancellation_condition"]["sample_count"], 2)
+        self.assertEqual(rows["cancellation_condition"]["correct_count"], 1)
+        self.assertEqual(rows["cancellation_condition"]["wrong_count"], 1)
+
     def test_missing_fields_keep_explicit_correctness_out_of_accuracy_denominator(self):
         index = {
             "by_stock_code": {
@@ -235,6 +288,46 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(market_row["correct_count"], 0)
         self.assertEqual(market_row["missing_fact_count"], 1)
         self.assertIsNone(market_row["accuracy_pct"])
+
+    def test_target_date_is_not_counted_in_historical_statistics(self):
+        index = {
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {
+                                "judgment_type": "mainline",
+                                "report_date": "2026-05-29",
+                                "is_correct": True,
+                            }
+                        ],
+                    },
+                    {
+                        "stock_code": "600578",
+                        "mentions": [{"mention_trade_date": "2026-06-01", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {
+                                "judgment_type": "mainline",
+                                "report_date": "2026-06-01",
+                                "is_correct": False,
+                                "mistake": "当天判断还没有次日验证",
+                            }
+                        ],
+                    },
+                ]
+            }
+        }
+
+        result = build_five_judgment_statistics(index, target_date="2026-06-01")
+        mainline_row = result["rows"][1]
+
+        self.assertEqual(mainline_row["sample_count"], 1)
+        self.assertEqual(mainline_row["correct_count"], 1)
+        self.assertEqual(mainline_row["wrong_count"], 0)
+        self.assertEqual(mainline_row["end_date"], "2026-05-29")
+        self.assertEqual(mainline_row["latest_mistake"], "")
 
     def test_participation_review_status_alias_counts_spec_review_rows(self):
         index = {
@@ -483,6 +576,46 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertEqual(rows["market_state"]["today_judgment"], "混沌")
         self.assertEqual(rows["mainline"]["today_judgment"], "无确认主线")
 
+    def test_daily_panel_counts_one_unresolved_daily_judgment_per_trade_date(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "000001": [
+                    {
+                        "stock_code": "000001",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                    }
+                ],
+                "000002": [
+                    {
+                        "stock_code": "000002",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                    }
+                ],
+                "000003": [
+                    {
+                        "stock_code": "000003",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                    }
+                ],
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+        previous_rows = {row["judgment_type"]: row for row in panel["previous_rows"]}
+
+        self.assertEqual(previous_rows["market_state"]["missing_fact_count"], 1)
+        self.assertEqual(previous_rows["mainline"]["missing_fact_count"], 1)
+        self.assertEqual(previous_rows["core_candidate"]["missing_fact_count"], 1)
+        self.assertIn("| 市场状态判断 | 1 | market_state_review |", rendered)
+        self.assertNotIn("| 市场状态判断 | 3 | market_state_review |", rendered)
+
     def test_previous_day_settlement_table_only_renders_resolved_items(self):
         index = {
             "available_trade_dates": ["2026-05-29", "2026-06-01"],
@@ -524,6 +657,45 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("| 取消条件判断 | 1 | 1 | 0 | 正确 |", settlement_block)
         self.assertIn("### 上一交易日未完成结算", rendered)
         self.assertIn("| 市场状态判断 | 1 | market_state_review |", rendered)
+
+    def test_previous_day_mixed_settlement_keeps_missing_part_separate(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "mentions": [{"mention_trade_date": "2026-05-29", "source_section": "极度看好名单"}],
+                        "judgment_reviews": [
+                            {
+                                "judgment_type": "mainline",
+                                "report_date": "2026-05-29",
+                                "is_correct": True,
+                            },
+                            {
+                                "judgment_type": "mainline",
+                                "report_date": "2026-05-29",
+                                "missing_fields": ["mainline_review"],
+                            },
+                        ],
+                    }
+                ]
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+        settlement_block = rendered.split("### 结算上一交易日：2026-05-29", 1)[1].split("### 上一交易日未完成结算", 1)[0]
+        unresolved_block = rendered.split("### 上一交易日未完成结算", 1)[1].split("### 今日判断", 1)[0]
+
+        self.assertIn("| 主线判断 | 1 | 1 | 0 | 正确 |", settlement_block)
+        self.assertNotIn("部分正确", settlement_block)
+        self.assertIn("| 主线判断 | 1 | mainline_review |", unresolved_block)
 
 
 if __name__ == "__main__":

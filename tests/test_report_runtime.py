@@ -4835,7 +4835,22 @@ def _runtime_binding_probe(
                                 },
                             ],
                         }
-                    ]
+                    ],
+                    "002806": [
+                        {
+                            "stock_code": "002806",
+                            "stock_name": "华锋股份",
+                            "mentions": [{"mention_trade_date": "2026-05-12", "source_section": "极度看好名单"}],
+                            "judgment_reviews": [
+                                {
+                                    "judgment_type": "mainline",
+                                    "report_date": "2026-05-12",
+                                    "is_correct": False,
+                                    "mistake": "当天判断等待下一交易日验证",
+                                },
+                            ],
+                        }
+                    ],
                 }
             }
 

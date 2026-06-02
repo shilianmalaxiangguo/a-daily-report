@@ -1174,7 +1174,7 @@ def _maybe_persist_decision_ledger(
             snapshot,
             root_dir=globals().get("decision_ledger_root_dir", "."),
         )
-    tracking_lines = _build_decision_ledger_tracking_lines(result)
+    tracking_lines = _build_decision_ledger_tracking_lines(result, target_date=target_date)
     if isinstance(result, dict):
         result["tracking_lines"] = tracking_lines
     if isinstance(data, dict):
@@ -1383,7 +1383,7 @@ def _decision_ledger_tracking_end_date(index, decision_ledger_result=None):
     return ""
 
 
-def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
+def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target_date=""):
     render_tracking_lines = (
         globals().get("render_extreme_conviction_tracking_lines")
         or _default_render_extreme_conviction_tracking_lines
@@ -1443,7 +1443,8 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
     if callable(render_backtest_lines):
         lines.extend(list(render_backtest_lines(index) or []))
     if callable(build_five_judgment_statistics) and callable(render_five_judgment_statistics_lines):
-        statistics = build_five_judgment_statistics(index)
+        cutoff_date = str(target_date or _decision_ledger_tracking_end_date(index, decision_ledger_result) or "").strip()
+        statistics = build_five_judgment_statistics(index, target_date=cutoff_date)
         lines.extend(list(render_five_judgment_statistics_lines(statistics) or []))
     return lines
 
@@ -2554,7 +2555,7 @@ def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_resul
     pruned_index = prune_mentions(index, trade_date=target_date, current_codes=current_codes)
     updated = dict(decision_ledger_result)
     updated["index"] = pruned_index
-    updated["tracking_lines"] = _build_decision_ledger_tracking_lines(updated)
+    updated["tracking_lines"] = _build_decision_ledger_tracking_lines(updated, target_date=target_date)
     return updated
 
 
@@ -4097,7 +4098,7 @@ def _render_markdown_report_legacy_body(
         execution_stage_context["candidate_trace_artifact"] = candidate_trace_result
     decision_ledger_tracking_lines = list(
         (decision_ledger_result or {}).get("tracking_lines")
-        or _build_decision_ledger_tracking_lines(decision_ledger_result)
+        or _build_decision_ledger_tracking_lines(decision_ledger_result, target_date=target_date)
     )
     if market_research_snapshot:
         data["market_research_snapshot"] = market_research_snapshot
