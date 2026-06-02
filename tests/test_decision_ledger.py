@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.decision_ledger import (
+    build_decision_coverage_summary,
     build_participation_review_facts_from_market_fact,
     build_decision_ledger_index,
     build_decision_ledger_snapshot,
@@ -1603,6 +1604,265 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows[1]["buy_point_quality"], "主目标不可成交")
         self.assertIn("2:1", rows[1]["risk_reward"])
 
+    def test_review_facts_expose_followup_performance_with_source_boundaries(self):
+        planned = {
+            "source_tier": "extreme_conviction",
+            "participation_window": "09:50-10:10窗口",
+            "participation_window_type": "structure_confirm",
+            "entry_timing": "ten_confirm",
+            "buy_window": "09:50-10:10",
+            "attack_state": "50%",
+        }
+
+        facts = build_participation_review_facts_from_market_fact(
+            planned,
+            {
+                "review_trade_date": "2026-05-15",
+                "prev_close": 10.0,
+                "open": 10.2,
+                "high": 11.0,
+                "low": 10.1,
+                "close": 11.0,
+                "source_dates": {
+                    "snapshot_date": "2026-05-14",
+                    "price_source_date": "2026-05-15",
+                },
+            },
+        )
+
+        self.assertEqual(facts["performance"]["return_1d_pct"], 10.0)
+        self.assertIsNone(facts["performance"]["return_3d_pct"])
+        self.assertIsNone(facts["performance"]["return_5d_pct"])
+        self.assertEqual(facts["source_dates"]["snapshot_date"], "2026-05-14")
+        self.assertEqual(facts["source_dates"]["price_source_date"], "2026-05-15")
+        self.assertIn("return_3d_pct", facts["missing_fields"])
+        self.assertIn("return_5d_pct", facts["missing_fields"])
+
+        review = classify_planned_participation_review(planned, **facts)
+
+        self.assertEqual(review["schema_version"], "participation_review.v1")
+        self.assertEqual(review["performance"]["return_1d_pct"], 10.0)
+        self.assertIn("return_5d_pct", review["missing_fields"])
+        self.assertEqual(review["source_dates"]["price_source_date"], "2026-05-15")
+        self.assertEqual(review["fact_inputs"]["first_minutes_accepted"], facts["first_minutes_accepted"])
+
+    def test_index_and_backtest_rows_preserve_decision_loop_metadata(self):
+        source_report_path = "reports/replay/2026-05-14_A股日报_完整版_replay.md"
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-14",
+            source_report={"path": source_report_path},
+            extreme_conviction_list=[
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "conviction_reason": "板块锚定龙",
+                    "participation_window": "09:50-10:10窗口",
+                    "attack_state": "50%",
+                    "invalid_condition": "竞价量价背离或开盘跌回昨日强承接区",
+                    "source_dates": {
+                        "snapshot_date": "2026-05-14",
+                        "refill_date": None,
+                    },
+                    "missing_fields": ["sector_supported"],
+                    "participation_review_facts": {
+                        "review_trade_date": "2026-05-15",
+                        "prev_close": 10.0,
+                        "open": 10.2,
+                        "high": 11.0,
+                        "low": 10.1,
+                        "close": 11.0,
+                        "source_dates": {
+                            "snapshot_date": "2026-05-14",
+                            "price_source_date": "2026-05-15",
+                        },
+                        "performance": {
+                            "return_3d_pct": 12.5,
+                        },
+                        "missing_fields": ["return_5d_pct"],
+                    },
+                }
+            ],
+            market_branch="主线爆发",
+            sector_relationship_state="电力主攻",
+        )
+
+        case = snapshot["cases"][0]
+        index = build_decision_ledger_index(snapshot)
+        record = index["by_stock_code"]["600578"][0]
+        row = build_extreme_conviction_backtest_rows(index, max_rows=1)[0]
+
+        self.assertEqual(case["schema_version"], "decision_ledger_record.v1")
+        self.assertEqual(case["report_date"], "2026-05-14")
+        self.assertEqual(case["source_report_path"], source_report_path)
+        self.assertEqual(case["position_plan_pct"], 50)
+        self.assertIn("竞价量价背离", case["cancellation_conditions"][0])
+        self.assertEqual(case["source_dates"]["snapshot_date"], "2026-05-14")
+        self.assertIn("sector_supported", case["missing_fields"])
+        self.assertEqual(record["source_report_path"], source_report_path)
+        self.assertEqual(record["position_plan_pct"], 50)
+        self.assertIn("return_5d_pct", record["participation_review"]["missing_fields"])
+        self.assertEqual(row["return_1d_pct"], 10.0)
+        self.assertEqual(row["return_3d_pct"], 12.5)
+        self.assertIsNone(row["return_5d_pct"])
+        self.assertEqual(row["source_dates"]["price_source_date"], "2026-05-15")
+        self.assertIn("return_5d_pct", row["missing_fields"])
+
+    def test_backtest_render_shows_followup_performance_as_historical_evidence(self):
+        index = {
+            "by_stock_code": {
+                "600578": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "participation_window": "09:50-10:10窗口",
+                            "buy_window": "09:50-10:10",
+                            "risk_reward_ratio": 2.5,
+                        },
+                        "participation_review": {
+                            "status": "预演命中",
+                            "entry_decision": "ten_confirm_buy",
+                            "same_day_action": "按09:50-10:10承接成立参与",
+                            "performance": {
+                                "return_1d_pct": 10.0,
+                                "return_3d_pct": 12.5,
+                                "return_5d_pct": None,
+                            },
+                            "source_dates": {
+                                "price_source_date": "2026-05-15",
+                            },
+                            "missing_fields": ["return_5d_pct"],
+                        },
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-14",
+                                "rank": 1,
+                                "source_section": "极度看好名单",
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+        rendered = "\n".join(render_extreme_conviction_backtest_lines(index, max_rows=1))
+
+        self.assertIn("历史回测表仅记录过去预演，不作为明日新增参与依据", rendered)
+        self.assertIn("后续1日", rendered)
+        self.assertIn("后续3日", rendered)
+        self.assertIn("后续5日", rendered)
+        self.assertIn("+10.00%", rendered)
+        self.assertIn("+12.50%", rendered)
+        self.assertIn("待补事实", rendered)
+        self.assertIn("return_5d_pct", rendered)
+
+    def test_coverage_summary_uses_all_auditable_extreme_mentions(self):
+        by_stock_code = {}
+        for day in range(1, 31):
+            trade_date = f"2026-05-{day:02d}"
+            code = f"60{day:04d}"
+            by_stock_code[code] = [
+                {
+                    "stock_code": code,
+                    "stock_name": f"样本{day}",
+                    "planned_participation": {
+                        "source_tier": "extreme_conviction",
+                        "buy_window": "09:50-10:10",
+                    },
+                    "mentions": [
+                        {
+                            "mention_trade_date": trade_date,
+                            "rank": 1,
+                            "source_section": "极度看好名单",
+                        }
+                    ],
+                }
+            ]
+        index = {"by_stock_code": by_stock_code}
+
+        summary = build_decision_coverage_summary(index, surface="tracking")
+
+        self.assertEqual(summary["schema_version"], "decision_coverage_summary.v1")
+        self.assertEqual(summary["surface"], "tracking")
+        self.assertEqual(summary["sample_count"], 30)
+        self.assertEqual(summary["start_date"], "2026-05-01")
+        self.assertEqual(summary["end_date"], "2026-05-30")
+        self.assertEqual(summary["coverage_status"], "partial")
+        self.assertEqual(summary["target_window_days"], None)
+
+    def test_mention_tracking_render_separates_recent_cycle_from_current_covered_sample(self):
+        by_stock_code = {}
+        for day in range(1, 31):
+            trade_date = f"2026-05-{day:02d}"
+            code = f"60{day:04d}"
+            by_stock_code[code] = [
+                {
+                    "stock_code": code,
+                    "stock_name": f"样本{day}",
+                    "hypothesis": {"sector_candidate": "电力"},
+                    "planned_participation": {
+                        "source_tier": "extreme_conviction",
+                        "buy_window": "09:50-10:10",
+                    },
+                    "mentions": [
+                        {
+                            "mention_trade_date": trade_date,
+                            "rank": 1,
+                            "source_section": "极度看好名单",
+                        }
+                    ],
+                }
+            ]
+        index = {"by_stock_code": by_stock_code}
+
+        rendered = "\n".join(render_extreme_conviction_mention_tracking_lines(index, end_date="2026-05-30"))
+
+        self.assertIn("近25日跟踪表", rendered)
+        self.assertIn("当前可复盘样本：30条，覆盖2026-05-01至2026-05-30", rendered)
+        self.assertIn("本表展示最近25个交易日周期内样本", rendered)
+        self.assertNotIn("| 2026-05-01 | 样本1 |", rendered)
+        self.assertIn("| 2026-05-30 | 样本30 |", rendered)
+
+    def test_backtest_render_states_current_covered_sample_when_rows_are_limited(self):
+        by_stock_code = {}
+        for day in range(1, 31):
+            trade_date = f"2026-05-{day:02d}"
+            code = f"60{day:04d}"
+            by_stock_code[code] = [
+                {
+                    "stock_code": code,
+                    "stock_name": f"样本{day}",
+                    "hypothesis": {"sector_candidate": "电力"},
+                    "planned_participation": {
+                        "source_tier": "extreme_conviction",
+                        "buy_window": "09:50-10:10",
+                    },
+                    "participation_review": {
+                        "status": "待补事实",
+                        "missing_fields": ["price_source_date"],
+                    },
+                    "mentions": [
+                        {
+                            "mention_trade_date": trade_date,
+                            "rank": 1,
+                            "source_section": "极度看好名单",
+                        }
+                    ],
+                }
+            ]
+        index = {"by_stock_code": by_stock_code}
+
+        rendered = "\n".join(render_extreme_conviction_backtest_lines(index, max_rows=12))
+
+        self.assertIn("当前可复盘样本：30条，覆盖2026-05-01至2026-05-30", rendered)
+        self.assertIn("本表展示最近12条历史样本", rendered)
+        self.assertNotIn("| 2026-05-01 | 样本1 |", rendered)
+        self.assertIn("| 2026-05-30 | 样本30 |", rendered)
+        self.assertNotIn("60日", rendered)
+        self.assertNotIn("120日", rendered)
+
     def test_selection_result_preserves_success_sample_when_execution_is_skipped(self):
         index = {
             "latest_trade_date": "2026-05-28",
@@ -1678,7 +1938,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows_by_code["000636"]["review_status"], "预演作废")
         self.assertIn("高辨识度", rows_by_code["000636"]["selection_result_evidence"])
         self.assertEqual(rows_by_code["300721"]["selection_result_status"], "识别成功")
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |", rendered)
         self.assertIn("| 2026-05-22 | 风华高科 | 000636 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
         self.assertIn("| 2026-05-15 | 怡达股份 | 300721 | 高惯性 / 高于普通上涨样本 | 识别成功", rendered)
 
@@ -1975,7 +2235,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertEqual(rows[0]["sector_candidate"], "电力")
         self.assertEqual(rows[0]["buy_window"], "09:50-10:10")
         self.assertEqual(rows[0]["review_status"], "等待复盘")
-        self.assertEqual(rows[0]["buy_point_quality"], "等待事实")
+        self.assertEqual(rows[0]["buy_point_quality"], "待补事实")
         self.assertEqual(rows[1]["rank"], 2)
         self.assertEqual(rows[1]["reason"], "板块锚定龙 / 首波先锋")
         self.assertEqual(rows[1]["buy_window"], "09:30-09:35")
@@ -2384,7 +2644,7 @@ class DecisionLedgerTest(unittest.TestCase):
 
         self.assertIn("**重点观察历史回测表**", rendered)
         self.assertIn("历史回测表仅记录过去预演，不作为明日新增参与依据", rendered)
-        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |", rendered)
+        self.assertIn("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |", rendered)
         self.assertIn("观察位成立", rendered)
         self.assertNotIn("买点质量", rendered)
         self.assertNotIn("买点成立", rendered)

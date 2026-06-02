@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Verify front-page final action, cancellation conditions, and prior review behavior."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify report quality and action-plan contracts."}
+{"file": "references/report-contract.md", "reason": "Verify user-facing report sections remain contract-compliant."}
+{"file": "wiki/交易思想/日报术语契约.md", "reason": "Verify user-visible wording avoids banned engineering terms."}

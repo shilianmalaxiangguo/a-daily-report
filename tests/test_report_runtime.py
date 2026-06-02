@@ -439,6 +439,19 @@ class ReportRuntimeTest(unittest.TestCase):
 
         self.assertEqual(numbered[1], "**T-001**")
 
+    def test_number_report_tables_does_not_mark_dated_placeholder_psql_context(self):
+        lines = [
+            "### 主线成交额占比趋势",
+            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
+            "|------|----------|------------|------------|------------|------|----------|------|",
+            "| 2026-05-08 | 电力 | 电力 | 数据暂缺 | 26414.92亿 | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |",
+        ]
+
+        numbered = report_runtime._number_report_tables(lines, postgres_only=True)
+
+        self.assertEqual(numbered[1], "**T-001**")
+        self.assertNotIn("（PSQL）", "\n".join(numbered))
+
     def test_number_report_tables_does_not_mark_cycle_placeholder_without_facts(self):
         lines = [
             "### 1. 周期日历主视图",
@@ -1669,6 +1682,71 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(captured["monthly_context"]["month_return_pct"], 3.2)
         self.assertEqual(captured["monthly_context"]["month_return_source"], "postgresql.daily_report_facts")
 
+    def test_query_monthly_account_context_uses_postgres_repository_when_available(self):
+        captured = {}
+
+        class _StubRepository:
+            def query_monthly_account_ledger(self, end_date, *, account_id="main"):
+                captured["end_date"] = end_date
+                captured["account_id"] = account_id
+                return {
+                    "trade_date": "2026-05-20",
+                    "account_id": account_id,
+                    "month_key": "2026-05",
+                    "month_return_pct": 6.8,
+                    "simulated_cumulative_return_pct": 9.3632,
+                    "source_policy": "manual_review",
+                }
+
+        class _StubService:
+            def __init__(self, repository):
+                self.repository = repository
+
+            def query_monthly_account_ledger(self, end_date, *, account_id="main"):
+                return self.repository.query_monthly_account_ledger(end_date, account_id=account_id)
+
+        with patch.object(report_runtime, "query_monthly_account_context", None, create=True):
+            with patch(
+                "storage.database_service.DatabaseService.from_environment",
+                return_value=_StubService(_StubRepository()),
+            ):
+                context = report_runtime._query_monthly_account_context(
+                    root_dir=".",
+                    target_date="2026-05-20",
+                    account_id="main",
+                )
+
+        self.assertEqual(captured["end_date"], "2026-05-20")
+        self.assertEqual(captured["account_id"], "main")
+        self.assertEqual(context["month_return_source"], "manual_review")
+        self.assertEqual(context["monthly_ledger_trade_date"], "2026-05-20")
+        self.assertEqual(context["monthly_ledger_month_key"], "2026-05")
+        self.assertEqual(context["simulated_cumulative_return_pct"], 9.3632)
+
+    def test_front_page_candidate_position_pct_prefers_nested_positive_evidence(self):
+        candidate = {
+            "target_position_pct": 0,
+            "planned_participation": {
+                "attack_state": "50%",
+                "buy_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+            },
+        }
+
+        self.assertEqual(report_runtime._front_page_candidate_position_pct(candidate), 50)
+
+    def test_runtime_account_unbuyable_uses_cash_and_one_lot_without_knowledge_hit(self):
+        data = {"account_profile": {"cash_available": 9800}}
+        candidate = {"name": "强核心", "code": "000001", "one_lot_amount": 18000}
+
+        self.assertTrue(
+            report_runtime._runtime_account_unbuyable_core_active(
+                data=data,
+                selected_position_candidate=candidate,
+                market_research_snapshot={},
+            )
+        )
+
     def test_front_page_position_decision_keeps_zero_context_for_extreme_candidate(self):
         position_decision = report_runtime._build_front_page_position_decision(
             position_decision={
@@ -1700,6 +1778,142 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(position_decision["signal_grade"], "0")
         self.assertEqual(position_decision["single_focus_constraint"]["status"], "observe")
         self.assertIn("唯一对象", position_decision["full_attack_check"]["missing"])
+
+    def test_front_page_position_decision_promotes_candidate_with_50pct_evidence_before_zero_context(self):
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "observe_0",
+                "target_position_pct": 0,
+                "signal_grade": "0",
+                "monthly_rhythm": {
+                    "month_mode": "weak_market_defense",
+                    "max_position_pct": 0,
+                },
+            },
+            selected_position_candidate={
+                "name": "华电能源",
+                "code": "600726",
+                "sector": "电力",
+                "source_tier": "extreme_conviction",
+                "participation_window": "09:50-10:10",
+                "required_steps": ["主线承接", "回踩收回MA5"],
+                "fallback_state": "不满足回到0%",
+                "target_position_pct": 50,
+            },
+            data={},
+            market_research_snapshot={},
+            final_gate={"can_new_entry": False, "should_reduce": True, "allow_attack_50_ready": True},
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(position_decision["signal_grade"], "50")
+        self.assertEqual(position_decision["participation_mode"], "attack_50_preview")
+        self.assertIn("50%标准进攻预演", position_decision["sizing_reason"])
+
+    def test_front_page_position_decision_promotes_candidate_with_100pct_evidence_before_zero_context(self):
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "observe_0",
+                "target_position_pct": 0,
+                "signal_grade": "0",
+                "monthly_rhythm": {
+                    "month_mode": "weak_market_defense",
+                    "max_position_pct": 0,
+                },
+            },
+            selected_position_candidate={
+                "name": "华电能源",
+                "code": "600726",
+                "sector": "电力",
+                "source_tier": "extreme_conviction",
+                "participation_window": "09:50-10:10",
+                "required_steps": ["主线承接", "回踩收回MA5"],
+                "fallback_state": "不满足回到0%",
+                "target_position_pct": 100,
+            },
+            data={},
+            market_research_snapshot={},
+            final_gate={"can_new_entry": False, "should_reduce": True, "allow_attack_50_ready": True},
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 100)
+        self.assertEqual(position_decision["signal_grade"], "100")
+        self.assertEqual(position_decision["participation_mode"], "full_100")
+        self.assertEqual(position_decision["monthly_rhythm"]["max_position_pct"], 100)
+        self.assertIn("100%核心进攻", position_decision["sizing_reason"])
+
+    def test_front_page_position_decision_keeps_planned_attack_state_from_extreme_list(self):
+        selected = report_runtime._build_front_page_selected_position_candidate(
+            {
+                "position_decision": {
+                    "participation_mode": "observe_0",
+                    "target_position_pct": 0,
+                    "signal_grade": "0",
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "planned_participation": {
+                            "attack_state": "50%",
+                            "buy_window": "09:50-10:10",
+                            "required_steps": ["主线承接", "回踩收回MA5"],
+                            "fallback_state": "不满足回到0%",
+                        },
+                    }
+                ],
+            }
+        )
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "observe_0",
+                "target_position_pct": 0,
+                "signal_grade": "0",
+            },
+            selected_position_candidate=selected,
+            data={},
+            market_research_snapshot={},
+            final_gate={"can_new_entry": False, "should_reduce": True, "allow_attack_50_ready": True},
+        )
+
+        self.assertEqual(report_runtime._front_page_candidate_position_pct(selected), 50)
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(position_decision["signal_grade"], "50")
+        self.assertEqual(position_decision["participation_mode"], "attack_50_preview")
+
+    def test_front_page_selected_candidate_prefers_qualified_selected_before_extreme_list(self):
+        selected = report_runtime._build_front_page_selected_position_candidate(
+            {
+                "position_decision": {
+                    "participation_mode": "observe_0",
+                    "target_position_pct": 0,
+                    "signal_grade": "0",
+                },
+                "selected_position_candidate": {
+                    "name": "华电能源",
+                    "code": "600726",
+                    "sector": "电力",
+                    "target_position_pct": 50,
+                    "participation_window": "09:50-10:10",
+                    "fallback_state": "不满足回到0%",
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "普通观察",
+                        "code": "000001",
+                        "planned_participation": {
+                            "attack_state": "0%",
+                            "buy_window": "09:50-10:10",
+                            "fallback_state": "不满足回到0%",
+                        },
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(selected["code"], "600726")
 
     def test_front_page_position_decision_does_not_upgrade_observation_target_without_independent_evidence(self):
         position_decision = report_runtime._build_front_page_position_decision(
@@ -4729,19 +4943,36 @@ def _runtime_binding_probe(
             return {"lines": [], "module_logs": [], "context": {}}
 
         def _fake_load_index(path):
+            by_stock_code = {
+                f"60{day:04d}": [
+                    {
+                        "stock_code": f"60{day:04d}",
+                        "stock_name": f"索引样本{day}",
+                        "latest_trade_date": f"2026-05-{day:02d}",
+                        "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:50-10:10"},
+                        "mentions": [
+                            {
+                                "mention_trade_date": f"2026-05-{day:02d}",
+                                "rank": 1,
+                                "source_section": "极度看好名单",
+                            }
+                        ],
+                    }
+                ]
+                for day in range(1, 31)
+            }
+            by_stock_code["600578"] = [
+                {
+                    "stock_code": "600578",
+                    "stock_name": "索引旧样本",
+                    "latest_trade_date": "2026-05-20",
+                    "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:30-09:35"},
+                    "mentions": [{"mention_trade_date": "2026-05-20", "rank": 1, "source_section": "极度看好名单"}],
+                }
+            ]
             return {
                 "latest_trade_date": "2026-05-20",
-                "by_stock_code": {
-                    "600578": [
-                        {
-                            "stock_code": "600578",
-                            "stock_name": "索引旧样本",
-                            "latest_trade_date": "2026-05-20",
-                            "planned_participation": {"source_tier": "extreme_conviction", "buy_window": "09:30-09:35"},
-                            "mentions": [{"mention_trade_date": "2026-05-20", "rank": 1, "source_section": "极度看好名单"}],
-                        }
-                    ]
-                },
+                "by_stock_code": by_stock_code,
             }
 
         with TemporaryDirectory() as tempdir:
@@ -4805,6 +5036,8 @@ def _runtime_binding_probe(
         mention_section = result["report"].split("**明日极度看好近25日跟踪表**", 1)[1].split(
             "**重点观察历史回测表**", 1
         )[0]
+        self.assertIn("当前可复盘样本：31条，覆盖2026-05-01至2026-05-30", mention_section)
+        self.assertIn("本表展示最近25个交易日周期内样本", mention_section)
         self.assertIn("| 2026-05-19 | 汇源通信 | 000586 |", mention_section)
         self.assertIn("| 2026-05-20 | 晶方科技 | 603005 |", mention_section)
         self.assertNotIn("| 2026-05-20 | 索引旧样本 | 600578 |", mention_section)
@@ -5484,13 +5717,14 @@ def _runtime_binding_probe(
         )
         rendered = "\n".join(normalized)
 
-        self.assertIn("预计50%标准进攻 / 防守态", rendered)
-        self.assertIn("预计50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%", rendered)
+        self.assertIn("50%标准进攻 / 防守态", rendered)
+        self.assertIn("50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%", rendered)
         self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
-        self.assertIn("当前是预计50%标准进攻预演", rendered)
-        self.assertIn("- **明天仓位放多少**: 预计50%标准进攻；条件不成立回0%", rendered)
+        self.assertIn("当前是50%标准进攻", rendered)
+        self.assertIn("- **明天仓位放多少**: 50%标准进攻；条件不成立回0%", rendered)
         self.assertIn("明日执行目标只按固定交易窗口处理", rendered)
         self.assertIn("**⚠️ 当前不抢跑**: 二档（防守档），本轮只保留固定交易窗口预演。", rendered)
+        self.assertNotIn("预计", rendered)
         self.assertNotIn("当前按0%不参与", rendered)
         self.assertNotIn("0%观察不开新仓", rendered)
         self.assertNotIn("0%新仓", rendered)
@@ -5514,6 +5748,38 @@ def _runtime_binding_probe(
         self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("普通结构才等60分钟确认", rendered)
+
+    def test_sanitize_report_lines_marks_process_tables_as_evidence(self):
+        lines = [
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 电力 | 电力 | 退潮 | 暂无 | 0% / 不参与 | 0%：只处理旧仓，不新增参与 |",
+            "**主线内观察候选**:",
+            "**明日次核心预判**（主线内备选观察）:",
+            "**跨线观察候选**（只看能量迁移，不作为主线执行对象）:",
+            "**重点观察名单**（只保留最心动的少数，每只都绑定固定交易窗口条件）:",
+            "**逐只预判明日风险**（基于今日形态）:",
+            "**明日风险分组**",
+            "**明日观察位预计算表**:",
+            "### 主线内观察候选",
+            "**重点观察复核脚本**:",
+            "**历史重点观察样本去向**（逐个复核，不把走坏样本混进正式名单）:",
+            "##### 附录：# 今日总决策面板",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("**主线内观察候选**:（过程证据）", rendered)
+        self.assertIn("**明日次核心预判**（主线内备选观察）:（过程证据）", rendered)
+        self.assertIn("**跨线观察候选**（只看能量迁移，不作为主线执行对象）:（过程证据）", rendered)
+        self.assertIn("**重点观察名单**（只保留最心动的少数，每只都绑定固定交易窗口条件）:（过程证据）", rendered)
+        self.assertIn("**逐只预判明日风险**（基于今日形态）:（过程证据）", rendered)
+        self.assertIn("**明日风险分组**（过程证据）", rendered)
+        self.assertIn("**明日观察位预计算表**:（过程证据）", rendered)
+        self.assertIn("### 主线内观察候选（过程证据）", rendered)
+        self.assertIn("**重点观察复核脚本**:（过程证据）", rendered)
+        self.assertIn("**历史重点观察样本去向**（逐个复核，不把走坏样本混进正式名单）:（过程证据）", rendered)
+        self.assertIn("##### 附录：# 今日总决策面板（过程证据）", rendered)
 
     def test_sanitize_report_lines_relabels_conditional_buy_plan_under_zero_with_observation_target(self):
         lines = [

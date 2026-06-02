@@ -53,6 +53,9 @@ _QUANT_ANCHOR_FIELDS = (
     "momentum_feedback_plan",
     "reversal_exit_plan",
 )
+_SOURCE_DATE_FIELDS = ("snapshot_date", "refill_date", "price_source_date")
+_PERFORMANCE_FIELDS = ("return_1d_pct", "return_3d_pct", "return_5d_pct", "max_drawdown_5d_pct")
+_WAITING_REVIEW_STATUSES = {"等待复盘", "等待窗口复盘", "等待事实", ""}
 
 
 def _normalize_stock_code(value):
@@ -249,6 +252,245 @@ def _safe_float(value, default=None):
 def _round_or_none(value, digits=2):
     number = _safe_float(value)
     return round(number, digits) if number is not None else None
+
+
+def _merge_missing_fields(*values):
+    merged = []
+    for value in values:
+        if not value:
+            continue
+        if isinstance(value, str):
+            items = [value]
+        else:
+            items = list(value or [])
+        for item in items:
+            field = _clean_text(item)
+            if field and field not in merged:
+                merged.append(field)
+    return merged
+
+
+def _position_plan_pct_from_value(value):
+    text = _clean_text(value)
+    if not text:
+        return None
+    match = re.search(r"(100|50|0)\s*%?", text)
+    if not match:
+        number = _safe_float(text)
+        return int(number) if number in (0, 50, 100) else None
+    number = int(match.group(1))
+    return number if number in (0, 50, 100) else None
+
+
+def _position_plan_pct(planned=None, fallback=None):
+    planned = planned or {}
+    for value in (
+        planned.get("position_plan_pct"),
+        planned.get("target_position_pct"),
+        planned.get("attack_state"),
+        (fallback or {}).get("position_plan_pct") if isinstance(fallback, dict) else None,
+        (fallback or {}).get("target_position_pct") if isinstance(fallback, dict) else None,
+        (fallback or {}).get("attack_state") if isinstance(fallback, dict) else None,
+    ):
+        pct = _position_plan_pct_from_value(value)
+        if pct in (0, 50, 100):
+            return pct
+    return None
+
+
+def _position_plan_label(position_plan_pct):
+    labels = {
+        0: "0%不参与",
+        50: "50%标准进攻",
+        100: "100%核心进攻",
+    }
+    return labels.get(position_plan_pct, "仓位三态待补")
+
+
+def _contract_window_from_planned(planned):
+    planned = planned or {}
+    buy_window = _clean_text(planned.get("buy_window"))
+    if buy_window in {"09:30-09:35", "09:50-10:10", "14:30-14:55", "no_trade"}:
+        return buy_window
+    text = " / ".join(
+        _clean_text(planned.get(key))
+        for key in ("participation_window", "entry_timing", "missed_action", "cancellation")
+        if _clean_text(planned.get(key))
+    )
+    if "09:30-09:35" in text or planned.get("entry_timing") == "open_core":
+        return "09:30-09:35"
+    if "14:30-14:55" in text or planned.get("entry_timing") == "tail_exception":
+        return "14:30-14:55"
+    if "不参与" in text or "no_trade" in text or planned.get("entry_timing") == "no_trade":
+        return "no_trade"
+    return "09:50-10:10"
+
+
+def _cancellation_conditions_from_plan(planned=None, fallback=None):
+    planned = planned or {}
+    fallback = fallback or {}
+    values = []
+    for key in ("cancellation", "ma20_invalidation", "cancel_condition", "invalid_condition", "failure_condition"):
+        value = planned.get(key)
+        if value in (None, "") and isinstance(fallback, dict):
+            value = fallback.get(key)
+        text = _clean_text(value)
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _enrich_planned_participation_contract(planned):
+    planned = dict(planned or {})
+    position_pct = _position_plan_pct(planned)
+    if position_pct is None:
+        position_pct = 0 if _contract_window_from_planned(planned) == "no_trade" else 50
+    cancellation_conditions = _cancellation_conditions_from_plan(planned)
+    confirm_conditions = [
+        _clean_text(planned.get(key))
+        for key in ("auction", "first_minutes", "board", "reseal")
+        if _clean_text(planned.get(key)) and _clean_text(planned.get(key)) != "不启用"
+    ]
+    window = _contract_window_from_planned(planned)
+    planned.update(
+        {
+            "schema_version": "planned_participation.v1",
+            "window": window,
+            "position_plan_pct": position_pct,
+            "action": "participate" if position_pct in (50, 100) and window != "no_trade" else "skip",
+            "confirm_conditions": confirm_conditions,
+            "cancellation_conditions": cancellation_conditions,
+            "missed_entry_plan": planned.get("missed_action") or planned.get("missed_entry_policy"),
+            "invalid_price": planned.get("invalid_price") or planned.get("invalidation_price"),
+            "risk_reward_ratio": _round_or_none(planned.get("risk_reward_ratio")),
+        }
+    )
+    return planned
+
+
+def _normalize_source_dates(*payloads, default_snapshot_date=None, default_price_source_date=None):
+    source_dates = {key: None for key in _SOURCE_DATE_FIELDS}
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        nested = payload.get("source_dates") if isinstance(payload.get("source_dates"), dict) else {}
+        for key in _SOURCE_DATE_FIELDS:
+            value = nested.get(key)
+            if value in (None, ""):
+                value = payload.get(key)
+            if value not in (None, ""):
+                source_dates[key] = _clean_text(value)
+        if not source_dates["price_source_date"]:
+            for key in ("price_date", "source_date", "query_date", "trade_date"):
+                if payload.get(key) not in (None, ""):
+                    source_dates["price_source_date"] = _clean_text(payload.get(key))
+                    break
+    if not source_dates["snapshot_date"] and default_snapshot_date:
+        source_dates["snapshot_date"] = _clean_text(default_snapshot_date)
+    if not source_dates["price_source_date"] and default_price_source_date:
+        source_dates["price_source_date"] = _clean_text(default_price_source_date)
+    return source_dates
+
+
+def _normalize_performance_payload(performance=None):
+    performance = performance if isinstance(performance, dict) else {}
+    normalized = {}
+    for field in _PERFORMANCE_FIELDS:
+        normalized[field] = _round_or_none(performance.get(field)) if field in performance else None
+    return normalized
+
+
+def _price_rows_from_fact(fact):
+    fact = fact or {}
+    for key in ("price_bars", "daily_bars", "rows"):
+        if isinstance(fact.get(key), list):
+            return list(fact.get(key) or [])
+    return []
+
+
+def _price_row_date(row):
+    return str((row or {}).get("date") or (row or {}).get("trade_date") or "").strip()
+
+
+def _performance_from_price_rows(fact, baseline_close):
+    rows = sorted([row for row in _price_rows_from_fact(fact) if _price_row_date(row)], key=_price_row_date)
+    if not rows:
+        return {}
+    mention_date = _clean_text(
+        fact.get("mention_trade_date")
+        or fact.get("report_date")
+        or fact.get("prev_trade_date")
+        or fact.get("snapshot_date")
+    )
+    baseline = _safe_float(baseline_close)
+    follow_rows = rows
+    if mention_date:
+        mention_index = next((index for index, row in enumerate(rows) if _price_row_date(row) == mention_date), None)
+        if mention_index is not None:
+            baseline = _safe_float(rows[mention_index].get("close"), baseline)
+            follow_rows = rows[mention_index + 1 :]
+    elif len(rows) > 1:
+        baseline = _safe_float(rows[0].get("close"), baseline)
+        follow_rows = rows[1:]
+    if baseline in (None, 0):
+        return {}
+
+    result = {}
+    for days, field in ((1, "return_1d_pct"), (3, "return_3d_pct"), (5, "return_5d_pct")):
+        if len(follow_rows) >= days:
+            result[field] = _round_or_none(_pct_change(follow_rows[days - 1].get("close"), baseline))
+    five_day_lows = [_safe_float(row.get("low")) for row in follow_rows[:5]]
+    five_day_lows = [value for value in five_day_lows if value is not None]
+    if five_day_lows:
+        result["max_drawdown_5d_pct"] = _round_or_none(_pct_change(min(five_day_lows), baseline))
+    return result
+
+
+def _review_performance_from_market_fact(fact, *, prev_close=None, close_price=None, low_price=None):
+    fact = fact or {}
+    has_close_price = _safe_float(close_price) is not None and _safe_float(prev_close) not in (None, 0)
+    source_dates = _normalize_source_dates(
+        fact,
+        default_snapshot_date=fact.get("report_date") or fact.get("mention_trade_date"),
+        default_price_source_date=fact.get("review_trade_date") if has_close_price else None,
+    )
+    performance = _normalize_performance_payload(fact.get("performance"))
+    row_performance = _performance_from_price_rows(fact, prev_close)
+    for field, value in row_performance.items():
+        if performance.get(field) is None and value is not None:
+            performance[field] = value
+    if performance.get("return_1d_pct") is None and has_close_price:
+        performance["return_1d_pct"] = _round_or_none(_pct_change(close_price, prev_close))
+    if performance.get("max_drawdown_5d_pct") is None and has_close_price and _safe_float(low_price) is not None:
+        performance["max_drawdown_5d_pct"] = _round_or_none(_pct_change(low_price, prev_close))
+
+    missing_fields = _merge_missing_fields(fact.get("missing_fields"))
+    if not source_dates.get("price_source_date"):
+        missing_fields = _merge_missing_fields(missing_fields, ["price_source_date"])
+        performance = {field: None for field in _PERFORMANCE_FIELDS}
+    for field in _PERFORMANCE_FIELDS:
+        if performance.get(field) is None:
+            missing_fields = _merge_missing_fields(missing_fields, [field])
+    return performance, source_dates, missing_fields
+
+
+def _review_fact_has_price_data(fact):
+    fact = fact or {}
+    if _price_rows_from_fact(fact):
+        return True
+    return any(fact.get(key) not in (None, "") for key in ("prev_close", "open", "high", "low", "close"))
+
+
+def _review_status_for_facts(status):
+    return "待补事实" if _clean_text(status) in _WAITING_REVIEW_STATUSES else _clean_text(status)
+
+
+def _finalize_participation_review(review):
+    review = review or {}
+    review["fact_status"] = _review_status_for_facts(review.get("status"))
+    if review["fact_status"] == "待补事实":
+        review["missing_fields"] = _merge_missing_fields(review.get("missing_fields"), ["review_facts"])
+    return review
 
 
 def _build_stock_setup(item):
@@ -609,7 +851,7 @@ def _build_planned_participation(item):
         "cancellation",
     )
     if not any(script.get(key) for key in required_keys):
-        return _default_participation_script(item)
+        return _enrich_planned_participation_contract(_default_participation_script(item))
     planned = {**_default_participation_script(item), **script}
     planned.update(
         build_participation_window_policy(
@@ -652,12 +894,13 @@ def _build_planned_participation(item):
     ):
         if key in script:
             planned[key] = script[key]
-    return planned
+    return _enrich_planned_participation_contract(planned)
 
 
 def classify_planned_participation_review(
     planned_participation=None,
     *,
+    report_date=None,
     review_trade_date=None,
     auction_matched=False,
     first_minutes_accepted=False,
@@ -679,19 +922,56 @@ def classify_planned_participation_review(
     next_action=None,
     standard_answer_basis=None,
     market_outcome=None,
+    fact_inputs=None,
+    performance=None,
+    source_dates=None,
+    missing_fields=None,
+    **_ignored,
 ):
     planned = planned_participation or {}
     planned_window = _clean_text(planned.get("participation_window"), "未记录参与窗口")
     attack_state = _clean_text(planned.get("attack_state"), "未记录仓位三态")
     participation_window_type = _clean_text(planned.get("participation_window_type"), "structure_confirm")
+    if any(key in _ignored for key in ("prev_close", "close", "low", "price_bars", "daily_bars", "rows")):
+        performance, source_dates, missing_fields = _review_performance_from_market_fact(
+            {
+                **_ignored,
+                "review_trade_date": review_trade_date,
+                "performance": performance,
+                "source_dates": source_dates,
+                "missing_fields": missing_fields,
+            },
+            prev_close=_ignored.get("prev_close"),
+            close_price=_ignored.get("close"),
+            low_price=_ignored.get("low"),
+        )
 
     base = {
+        "schema_version": "participation_review.v1",
+        "report_date": _clean_text(report_date),
         "planned_window": planned_window,
         "participation_window_type": participation_window_type,
         "attack_state": attack_state,
         "matched_steps": [],
         "evidence": _clean_text(evidence),
+        "fact_inputs": {
+            "auction_matched": auction_matched,
+            "first_minutes_accepted": first_minutes_accepted,
+            "board_sealed": board_sealed,
+            "reseal_success": reseal_success,
+            "sector_supported": sector_supported,
+            "cancellation_triggered": cancellation_triggered,
+            "primary_unavailable": primary_unavailable,
+            "missed_action_worked": missed_action_worked,
+        },
+        "performance": _normalize_performance_payload(performance),
+        "source_dates": _normalize_source_dates(source_dates or {}),
+        "missing_fields": _merge_missing_fields(missing_fields),
     }
+    if isinstance(fact_inputs, dict):
+        for key in base["fact_inputs"]:
+            if key in fact_inputs:
+                base["fact_inputs"][key] = fact_inputs.get(key)
     optional_fields = {
         "review_trade_date": review_trade_date,
         "entry_decision": entry_decision,
@@ -729,7 +1009,7 @@ def classify_planned_participation_review(
                 "evidence": _clean_text(cancellation_evidence, base["evidence"] or "作废条件已触发"),
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if primary_unavailable and not missed_action_worked:
         base.update(
@@ -739,7 +1019,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"] or "主目标不可成交",
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if primary_unavailable and missed_action_worked:
         base.update(
@@ -749,7 +1029,7 @@ def classify_planned_participation_review(
                 "evidence": _clean_text(missed_action_evidence, base["evidence"] or "错过后动作获得验证"),
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if entry_decision == "window_confirm_buy":
         base.update(
@@ -759,7 +1039,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"] or "09:50-10:10承接成立",
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if entry_decision == "waiting_window_review":
         base.update(
@@ -769,7 +1049,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"] or "等待分钟窗口承接事实",
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if participation_window_type == "structure_confirm":
         if structure_confirmed and sector_supported:
@@ -780,7 +1060,7 @@ def classify_planned_participation_review(
                     "evidence": base["evidence"] or "结构确认命中",
                 }
             )
-            return base
+            return _finalize_participation_review(base)
         base.update(
             {
                 "status": "等待复盘",
@@ -788,7 +1068,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"],
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if auction_matched and first_minutes_accepted and (board_sealed or reseal_success) and sector_supported:
         base.update(
@@ -798,7 +1078,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"] or "预演关键步骤连续命中",
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     if auction_matched and not first_minutes_accepted:
         base.update(
@@ -808,7 +1088,7 @@ def classify_planned_participation_review(
                 "evidence": base["evidence"] or "竞价之后承接断档",
             }
         )
-        return base
+        return _finalize_participation_review(base)
 
     base.update(
         {
@@ -817,7 +1097,7 @@ def classify_planned_participation_review(
             "evidence": base["evidence"],
         }
     )
-    return base
+    return _finalize_participation_review(base)
 
 
 def _infer_limit_up_pct(stock_code="", stock_name=""):
@@ -1030,6 +1310,12 @@ def build_participation_review_facts_from_market_fact(planned_participation=None
     high_price = _safe_float(fact.get("high"))
     low_price = _safe_float(fact.get("low"))
     close_price = _safe_float(fact.get("close"))
+    performance, source_dates, missing_fields = _review_performance_from_market_fact(
+        fact,
+        prev_close=prev_close,
+        close_price=close_price,
+        low_price=low_price,
+    )
 
     open_change_pct = _pct_change(open_price, prev_close)
     high_change_pct = _pct_change(high_price, prev_close)
@@ -1189,6 +1475,19 @@ def build_participation_review_facts_from_market_fact(planned_participation=None
         "next_action": "若已买入，次日先看是否继续强于市场；失效价失守立即卖，不能把短线拿成长线",
         "standard_answer_basis": standard_answer_basis,
         "market_outcome": market_outcome,
+        "fact_inputs": {
+            "auction_matched": auction_matched,
+            "first_minutes_accepted": first_minutes_accepted,
+            "board_sealed": board_sealed,
+            "reseal_success": reseal_success,
+            "sector_supported": sector_supported,
+            "cancellation_triggered": cancellation_triggered,
+            "primary_unavailable": primary_unavailable,
+            "missed_action_worked": missed_action_worked,
+        },
+        "performance": performance,
+        "source_dates": source_dates,
+        "missing_fields": missing_fields,
     }
 
 
@@ -1679,7 +1978,29 @@ def _snapshot_relative_path(trade_date):
 
 
 def _case_index_record(case, snapshot_path, trade_date):
+    planned_participation = case.get("planned_participation") or {}
+    planned_participation = planned_participation if isinstance(planned_participation, dict) else {}
+    source_report_path = _clean_text(case.get("source_report_path"))
+    position_plan_pct = _position_plan_pct(planned_participation, case)
+    cancellation_conditions = _cancellation_conditions_from_plan(planned_participation, case)
+    source_dates = _normalize_source_dates(
+        case,
+        planned_participation,
+        default_snapshot_date=trade_date,
+    )
+    missing_fields = _merge_missing_fields(case.get("missing_fields"))
+    if position_plan_pct in (50, 100) and not planned_participation:
+        missing_fields = _merge_missing_fields(missing_fields, ["planned_participation"])
+    if position_plan_pct is None:
+        missing_fields = _merge_missing_fields(missing_fields, ["position_plan_pct"])
+    if not source_dates.get("snapshot_date"):
+        missing_fields = _merge_missing_fields(missing_fields, ["snapshot_date"])
+    if not cancellation_conditions and position_plan_pct in (50, 100):
+        missing_fields = _merge_missing_fields(missing_fields, ["cancellation_conditions"])
     record = {
+        "schema_version": case.get("schema_version") or "decision_ledger_record.v1",
+        "report_date": case.get("report_date") or trade_date,
+        "source_report_path": source_report_path,
         "case_id": case.get("case_id"),
         "stock_code": case.get("stock_code"),
         "stock_name": case.get("stock_name"),
@@ -1692,8 +2013,12 @@ def _case_index_record(case, snapshot_path, trade_date):
         "snapshot_path": snapshot_path,
         "cycle_closed": (case.get("cycle_acceptance") or {}).get("status") == "closed",
         "mentions": list(case.get("mentions") or []),
+        "position_plan_pct": position_plan_pct,
+        "position_plan_label": _position_plan_label(position_plan_pct),
+        "cancellation_conditions": cancellation_conditions,
+        "source_dates": source_dates,
+        "missing_fields": missing_fields,
     }
-    planned_participation = case.get("planned_participation") or {}
     if isinstance(planned_participation, dict) and planned_participation:
         record["planned_participation"] = planned_participation
     hypothesis = case.get("hypothesis") or {}
@@ -1702,22 +2027,7 @@ def _case_index_record(case, snapshot_path, trade_date):
     participation_review = case.get("participation_review") or {}
     if isinstance(participation_review, dict) and participation_review:
         record["participation_review_status"] = participation_review.get("status")
-        record["participation_review"] = {
-            "status": participation_review.get("status"),
-            "review_trade_date": participation_review.get("review_trade_date"),
-            "planned_window": participation_review.get("planned_window"),
-            "participation_window_type": participation_review.get("participation_window_type"),
-            "attack_state": participation_review.get("attack_state"),
-            "matched_steps": list(participation_review.get("matched_steps") or []),
-            "evidence": participation_review.get("evidence"),
-            "reason": participation_review.get("reason"),
-            "entry_decision": participation_review.get("entry_decision"),
-            "same_day_action": participation_review.get("same_day_action"),
-            "avoid_action": participation_review.get("avoid_action"),
-            "next_action": participation_review.get("next_action"),
-            "standard_answer_basis": participation_review.get("standard_answer_basis"),
-            "market_outcome": participation_review.get("market_outcome"),
-        }
+        record["participation_review"] = _compact_participation_review_for_index(participation_review)
     return record
 
 
@@ -1905,6 +2215,13 @@ def _market_fact_from_rows(record, trade_date, rows):
         "stock_code": record.get("stock_code"),
         "stock_name": record.get("stock_name"),
         "review_trade_date": trade_date,
+        "report_date": mention_date,
+        "source_dates": {
+            "snapshot_date": mention_date or None,
+            "refill_date": None,
+            "price_source_date": trade_date,
+        },
+        "price_bars": rows,
         "prev_close": prev_bar.get("close"),
         "open": review_bar.get("open"),
         "high": review_bar.get("high"),
@@ -2007,7 +2324,10 @@ def _load_review_market_facts(root, trade_date, previous_index):
 def _compact_participation_review_for_index(review):
     review = review or {}
     return {
+        "schema_version": review.get("schema_version"),
+        "report_date": review.get("report_date"),
         "status": review.get("status"),
+        "fact_status": review.get("fact_status") or _review_status_for_facts(review.get("status")),
         "review_trade_date": review.get("review_trade_date"),
         "planned_window": review.get("planned_window"),
         "participation_window_type": review.get("participation_window_type"),
@@ -2021,6 +2341,10 @@ def _compact_participation_review_for_index(review):
         "next_action": review.get("next_action"),
         "standard_answer_basis": review.get("standard_answer_basis"),
         "market_outcome": review.get("market_outcome"),
+        "fact_inputs": dict(review.get("fact_inputs") or {}),
+        "performance": _normalize_performance_payload(review.get("performance")),
+        "source_dates": _normalize_source_dates(review.get("source_dates") or {}),
+        "missing_fields": _merge_missing_fields(review.get("missing_fields")),
     }
 
 
@@ -2212,6 +2536,26 @@ def _mention_participation_review(mention, record, extreme_mention_count):
     return {}
 
 
+def _review_performance(review):
+    return _normalize_performance_payload((review or {}).get("performance"))
+
+
+def _performance_value_from_review(review, field):
+    return _review_performance(review).get(field)
+
+
+def _format_performance_pct(value):
+    number = _safe_float(value)
+    if number is None:
+        return "待补事实"
+    return f"{number:+.2f}%"
+
+
+def _performance_missing_text(missing_fields):
+    missing = _merge_missing_fields(missing_fields)
+    return "、".join(missing) if missing else "-"
+
+
 def _buy_point_quality_label(review):
     review = review or {}
     status = _clean_text(review.get("status"))
@@ -2226,13 +2570,90 @@ def _buy_point_quality_label(review):
         return "观察位成立"
     if status == "错过后方案命中":
         return "错过后方案成立"
-    if status == "等待复盘":
-        return "等待复盘"
-    return status or "等待事实"
+    if _review_status_for_facts(status) == "待补事实":
+        return "待补事实"
+    return status or "待补事实"
 
 
 def _mention_tracking_record_id(mention_date, stock_code):
     return f"{_clean_text(mention_date)}:{_clean_text(stock_code)}"
+
+
+def _iter_extreme_conviction_mention_coverage_rows(index, *, exclude_a_kill=True):
+    index = index or {}
+    for records in (index.get("by_stock_code") or {}).values():
+        for record in list(records or []):
+            if exclude_a_kill and _is_a_kill_eliminated_record(record):
+                continue
+            extreme_mentions = _extreme_conviction_mentions(record)
+            if not extreme_mentions and _record_is_extreme_conviction(record):
+                latest = _latest_mention(record)
+                extreme_mentions = [latest] if latest else []
+            for mention in extreme_mentions:
+                mention_date = _clean_text(mention.get("mention_trade_date")) or _record_first_mention_date(record)
+                stock_code = _clean_text(record.get("stock_code"))
+                if not mention_date or not stock_code:
+                    continue
+                yield {
+                    "record_id": _mention_tracking_record_id(mention_date, stock_code),
+                    "mention_trade_date": mention_date,
+                    "stock_code": stock_code,
+                }
+
+
+def build_decision_coverage_summary(index, *, surface="tracking", target_window_days=None, exclude_a_kill=True):
+    rows = list(_iter_extreme_conviction_mention_coverage_rows(index, exclude_a_kill=exclude_a_kill))
+    dates = sorted({_clean_text(row.get("mention_trade_date")) for row in rows if row.get("mention_trade_date")})
+    sample_count = len({row.get("record_id") for row in rows if row.get("record_id")})
+    target = int(target_window_days) if target_window_days else None
+    if not sample_count:
+        coverage_status = "missing"
+    elif target and sample_count >= target:
+        coverage_status = "covered"
+    else:
+        coverage_status = "partial"
+    missing_fields = []
+    if not dates:
+        missing_fields = _merge_missing_fields(missing_fields, ["start_date", "end_date"])
+    return {
+        "schema_version": "decision_coverage_summary.v1",
+        "surface": _clean_text(surface, "tracking"),
+        "sample_count": sample_count,
+        "start_date": dates[0] if dates else None,
+        "end_date": dates[-1] if dates else None,
+        "available_report_count": 0,
+        "available_snapshot_count": 0,
+        "available_replay_count": 0,
+        "target_window_days": target,
+        "coverage_status": coverage_status,
+        "missing_fields": missing_fields,
+    }
+
+
+def _format_coverage_summary_line(summary, *, window_days=None):
+    summary = summary or {}
+    sample_count = int(summary.get("sample_count") or 0)
+    start_date = _clean_text(summary.get("start_date"))
+    end_date = _clean_text(summary.get("end_date"))
+    if not sample_count or not start_date or not end_date:
+        return "- 当前可复盘样本：待补事实。"
+    parts = [f"- 当前可复盘样本：{sample_count}条，覆盖{start_date}至{end_date}。"]
+    if window_days:
+        parts.append(f"本表展示最近{int(window_days)}个交易日周期内样本。")
+    return "".join(parts)
+
+
+def _format_backtest_coverage_summary_line(summary, *, max_rows=None):
+    summary = summary or {}
+    sample_count = int(summary.get("sample_count") or 0)
+    start_date = _clean_text(summary.get("start_date"))
+    end_date = _clean_text(summary.get("end_date"))
+    if not sample_count or not start_date or not end_date:
+        return "- 当前可复盘样本：待补事实。"
+    parts = [f"- 当前可复盘样本：{sample_count}条，覆盖{start_date}至{end_date}。"]
+    if max_rows:
+        parts.append(f"本表展示最近{int(max_rows)}条历史样本。")
+    return "".join(parts)
 
 
 def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25, exclude_a_kill=True):
@@ -2256,6 +2677,7 @@ def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25,
                 planned = _mention_planned_participation(mention, record)
                 review = _mention_participation_review(mention, record, extreme_mention_count)
                 stock_code = _clean_text(record.get("stock_code"))
+                review_status = review.get("status") or record.get("participation_review_status") or "等待复盘"
                 rows.append(
                     {
                         "record_id": _mention_tracking_record_id(mention_date, stock_code),
@@ -2267,12 +2689,15 @@ def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25,
                         "sector_candidate": _sector_from_case_or_record(record),
                         "buy_window": planned.get("buy_window") or planned.get("participation_window"),
                         "planned_window": planned.get("participation_window"),
-                        "review_status": review.get("status") or record.get("participation_review_status") or "等待复盘",
+                        "review_status": review_status,
+                        "fact_status": review.get("fact_status") or _review_status_for_facts(review_status),
                         "next_action": review.get("next_action") or review.get("same_day_action") or "等待计划窗口事实回写",
                         "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
                         "reason": mention.get("reason") or "",
                         "source_section": mention.get("source_section") or "",
                         "is_a_kill_eliminated": _is_a_kill_eliminated_record(record),
+                        "source_dates": _normalize_source_dates(record.get("source_dates") or {}, review.get("source_dates") or {}),
+                        "missing_fields": _merge_missing_fields(record.get("missing_fields"), review.get("missing_fields")),
                     }
                 )
     rows.sort(
@@ -2327,7 +2752,19 @@ def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
 
 def render_extreme_conviction_mention_tracking_lines(index, *, end_date="", window_days=25, max_rows=None):
     rows = build_extreme_conviction_mention_rows(index, end_date=end_date, window_days=window_days)
-    return render_extreme_conviction_mention_tracking_rows(rows, max_rows=max_rows)
+    lines = render_extreme_conviction_mention_tracking_rows(rows, max_rows=max_rows)
+    summary = build_decision_coverage_summary(index, surface="tracking")
+    if lines:
+        lines.insert(1, _format_coverage_summary_line(summary, window_days=window_days))
+    return lines
+
+
+def _backtest_row_review_status(review, record, *, allow_record_status=True):
+    status = review.get("status")
+    if not status and allow_record_status:
+        status = record.get("participation_review_status")
+    status = status or "等待复盘"
+    return status
 
 
 def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
@@ -2346,6 +2783,19 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
                 planned = _mention_planned_participation(mention, record)
                 review = _mention_participation_review(mention, record, len(review_mentions))
                 selection_result = _selection_result_from_mention_or_record(mention, record)
+                performance = _review_performance(review)
+                source_dates = _normalize_source_dates(record.get("source_dates") or {}, review.get("source_dates") or {})
+                missing_fields = _merge_missing_fields(record.get("missing_fields"), review.get("missing_fields"))
+                if not source_dates.get("price_source_date") and any(performance.get(field) is not None for field in _PERFORMANCE_FIELDS):
+                    missing_fields = _merge_missing_fields(missing_fields, ["price_source_date"])
+                for field in _PERFORMANCE_FIELDS:
+                    if performance.get(field) is None:
+                        missing_fields = _merge_missing_fields(missing_fields, [field])
+                review_status = _backtest_row_review_status(
+                    review,
+                    record,
+                    allow_record_status=bool(review) or len(review_mentions) == 1,
+                )
                 rows.append(
                     {
                         "mention_trade_date": _clean_text(mention.get("mention_trade_date"))
@@ -2360,12 +2810,22 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
                         "buy_window": planned.get("buy_window") or planned.get("participation_window"),
                         "risk_reward": _risk_reward_label(planned),
                         "buy_point_quality": _buy_point_quality_label(review),
-                        "review_status": review.get("status") or "等待复盘",
+                        "review_status": review_status,
+                        "fact_status": review.get("fact_status") or _review_status_for_facts(review_status),
                         "standard_action": review.get("same_day_action") or review.get("next_action") or "等待计划窗口事实回写",
                         "market_outcome": review.get("market_outcome") or "",
                         "selection_result_status": selection_result.get("status") or "待验证",
                         "selection_result_evidence": selection_result.get("evidence") or "",
                         "selection_result_lesson": selection_result.get("lesson") or "",
+                        "position_plan_pct": _position_plan_pct(planned, record),
+                        "position_plan_label": _position_plan_label(_position_plan_pct(planned, record)),
+                        "source_dates": source_dates,
+                        "price_source_date": source_dates.get("price_source_date"),
+                        "missing_fields": missing_fields,
+                        "return_1d_pct": performance.get("return_1d_pct"),
+                        "return_3d_pct": performance.get("return_3d_pct"),
+                        "return_5d_pct": performance.get("return_5d_pct"),
+                        "max_drawdown_5d_pct": performance.get("max_drawdown_5d_pct"),
                     }
                 )
     rows.sort(
@@ -2386,13 +2846,15 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
         lines.append("")
         return lines
 
+    summary = build_decision_coverage_summary(index, surface="backtest")
+    lines.append(_format_backtest_coverage_summary_line(summary, max_rows=max_rows))
     lines.append("> 历史回测表仅记录过去预演，不作为明日新增参与依据。")
     lines.append("")
-    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 历史标准动作 |")
-    lines.append("|--------|------|------|----------|----------|----------|--------|----------|----------|----------|")
+    lines.append("| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |")
+    lines.append("|--------|------|------|----------|----------|----------|--------|----------|----------|----------|----------|----------|------------|----------|----------|----------|")
     for row in rows:
         lines.append(
-            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {selection_result_status} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {standard_action} |".format(
+            "| {mention_trade_date} | {stock_name} | {stock_code} | {selection_quality} | {selection_result_status} | {buy_window} | {risk_reward} | {buy_point_quality} | {review_status} | {return_1d_pct} | {return_3d_pct} | {return_5d_pct} | {max_drawdown_5d_pct} | {price_source_date} | {missing_fields} | {standard_action} |".format(
                 mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
                 stock_name=_clean_markdown_cell(row.get("stock_name")),
                 stock_code=_clean_markdown_cell(row.get("stock_code")),
@@ -2402,6 +2864,12 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
                 risk_reward=_clean_markdown_cell(row.get("risk_reward")),
                 buy_point_quality=_clean_markdown_cell(row.get("buy_point_quality")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
+                return_1d_pct=_clean_markdown_cell(_format_performance_pct(row.get("return_1d_pct"))),
+                return_3d_pct=_clean_markdown_cell(_format_performance_pct(row.get("return_3d_pct"))),
+                return_5d_pct=_clean_markdown_cell(_format_performance_pct(row.get("return_5d_pct"))),
+                max_drawdown_5d_pct=_clean_markdown_cell(_format_performance_pct(row.get("max_drawdown_5d_pct"))),
+                price_source_date=_clean_markdown_cell(row.get("price_source_date") or (row.get("source_dates") or {}).get("price_source_date") or "待补事实"),
+                missing_fields=_clean_markdown_cell(_performance_missing_text(row.get("missing_fields"))),
                 standard_action=_clean_markdown_cell(_historical_standard_action_text(row.get("standard_action"))),
             )
         )
@@ -2671,6 +3139,28 @@ def write_decision_ledger_artifacts_from_markdown_report(
     )
 
 
+def _source_report_path_from_snapshot(snapshot):
+    source_report = (snapshot or {}).get("source_report") if isinstance((snapshot or {}).get("source_report"), dict) else {}
+    return _clean_text(source_report.get("path"))
+
+
+def _case_source_dates(item, trade_date):
+    return _normalize_source_dates(item if isinstance(item, dict) else {}, default_snapshot_date=trade_date)
+
+
+def _case_missing_fields(item, planned, source_dates, position_plan_pct):
+    missing = _merge_missing_fields((item or {}).get("missing_fields"))
+    if position_plan_pct in (50, 100) and not planned:
+        missing = _merge_missing_fields(missing, ["planned_participation"])
+    if not source_dates.get("snapshot_date"):
+        missing = _merge_missing_fields(missing, ["snapshot_date"])
+    if position_plan_pct is None:
+        missing = _merge_missing_fields(missing, ["position_plan_pct"])
+    if not _cancellation_conditions_from_plan(planned, item):
+        missing = _merge_missing_fields(missing, ["cancellation_conditions"])
+    return missing
+
+
 def build_decision_ledger_snapshot(
     *,
     trade_date,
@@ -2725,11 +3215,39 @@ def build_decision_ledger_snapshot(
             case["core_identity"] = core_identity
         planned_participation = _build_planned_participation(normalized_item)
         if planned_participation:
+            planned_participation = _enrich_planned_participation_contract(planned_participation)
+            position_plan_pct = _position_plan_pct(planned_participation, normalized_item)
+            source_dates = _case_source_dates(normalized_item, trade_date)
             case["planned_participation"] = planned_participation
+            case["schema_version"] = "decision_ledger_record.v1"
+            case["report_date"] = trade_date
+            case["source_report_path"] = _source_report_path_from_snapshot({"source_report": source_report or {}})
+            case["market_participation_qualification"] = (
+                "qualified" if position_plan_pct in (50, 100) else "not_qualified" if position_plan_pct == 0 else "incomplete"
+            )
+            case["position_plan_pct"] = position_plan_pct
+            case["position_plan_label"] = _position_plan_label(position_plan_pct)
+            case["mainline"] = _clean_text(normalized_item.get("mainline") or sector)
+            case["mainline_attack_evidence_score"] = _round_or_none(
+                normalized_item.get("mainline_attack_evidence_score")
+                or normalized_item.get("mainline_score")
+                or normalized_item.get("score"),
+                digits=0,
+            )
+            evidence_labels = normalized_item.get("mainline_attack_evidence_labels") or normalized_item.get("evidence_labels") or []
+            case["mainline_attack_evidence_labels"] = list(evidence_labels) if isinstance(evidence_labels, list) else []
+            case["sample_tier"] = _clean_text(normalized_item.get("sample_tier") or planned_participation.get("source_tier"), "high")
+            case["trend_chain_position"] = _clean_text(normalized_item.get("trend_chain_position"), "unknown")
+            case["cancellation_conditions"] = _cancellation_conditions_from_plan(planned_participation, normalized_item)
+            case["source_dates"] = source_dates
+            case["missing_fields"] = _case_missing_fields(normalized_item, planned_participation, source_dates, position_plan_pct)
             review_facts = normalized_item.get("participation_review_facts") or normalized_item.get("planned_participation_review_facts") or {}
             if isinstance(review_facts, dict) and review_facts:
+                if _review_fact_has_price_data(review_facts) and not any(key in review_facts for key in ("performance", "source_dates", "missing_fields", "fact_inputs")):
+                    review_facts = build_participation_review_facts_from_market_fact(planned_participation, review_facts)
                 case["participation_review"] = classify_planned_participation_review(
                     planned_participation,
+                    report_date=trade_date,
                     **review_facts,
                 )
         cases.append(case)
@@ -2810,6 +3328,7 @@ def merge_snapshot_with_previous_index(snapshot, previous_index=None):
 __all__ = [
     "build_decision_ledger_snapshot",
     "build_decision_ledger_snapshot_from_markdown_report",
+    "build_decision_coverage_summary",
     "build_extreme_conviction_backtest_rows",
     "build_extreme_conviction_mention_rows",
     "build_participation_review_facts_from_market_fact",

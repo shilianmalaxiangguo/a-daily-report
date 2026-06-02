@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary contract for decision-ledger record fields, planned participation, and review labels."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Ledger source dates and historical replay boundaries."}
+{"file": "references/report-contract.md", "reason": "Report action fields and evidence separation."}
+{"file": "references/reasoning-mode-contract.md", "reason": "Reasoning output fields that should be converted into auditable ledger records."}

@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary contract for probability support as evidence, not an automatic action."}
+{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Coverage baseline used to decide whether probability support is ready."}
+{"file": "references/report-contract.md", "reason": "Probability output must not replace the report action contract."}

@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Check implementation against the new decision-loop contract."}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify report action and process-evidence ordering remains compliant."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify replay/backtest changes preserve target-date and source-boundary behavior."}
+{"file": "references/report-contract.md", "reason": "Verify user-facing report behavior and wording stay within the report contract."}
+{"file": "wiki/交易思想/日报术语契约.md", "reason": "Verify user-visible wording avoids banned engineering terms."}

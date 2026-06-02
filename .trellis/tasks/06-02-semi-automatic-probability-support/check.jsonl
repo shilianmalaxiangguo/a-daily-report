@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Verify probability support includes coverage metadata and readiness limits."}
+{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Verify probability support does not run on insufficient coverage."}
+{"file": "references/report-contract.md", "reason": "Verify probability support does not create unsupported final actions."}
+{"file": "wiki/交易思想/日报术语契约.md", "reason": "Verify user-visible wording avoids banned engineering terms."}

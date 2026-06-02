@@ -21,6 +21,7 @@ from report.calendar_section_nodes import render_calendar_section
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.decision_board_nodes import render_decision_board_section
 from report.decision_ledger import (
+    build_decision_coverage_summary as _default_build_decision_coverage_summary,
     build_decision_ledger_snapshot as _default_build_decision_ledger_snapshot,
     prune_replaced_same_day_extreme_mentions as _default_prune_replaced_same_day_extreme_mentions,
     render_extreme_conviction_backtest_lines as _default_render_extreme_conviction_backtest_lines,
@@ -362,11 +363,12 @@ def _table_row_has_structured_fact(row):
         r"[+-]?\d+(?:\.\d+)?(?:亿|万|pct|日|分)",
     )
     has_factual_marker = any(re.search(pattern, joined) for pattern in factual_markers)
+    has_stock_code = bool(re.search(r"\b\d{6}\b", joined))
     if any(marker in joined for marker in _PSQL_STRUCTURED_TABLE_ROW_PLACEHOLDER_MARKERS):
         no_sample_markers = ("暂无样本", "无观察样本", "无跟踪样本", "无龙回头样本", "没有单独观察对象")
         if any(marker in joined for marker in no_sample_markers):
             return False
-        if not has_factual_marker:
+        if not has_stock_code:
             return False
     if has_factual_marker:
         return True
@@ -586,10 +588,57 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
     return normalized
 
 
+_PROCESS_EVIDENCE_LINE_TITLES = (
+    "主线内观察候选",
+    "明日次核心预判",
+    "跨线观察候选",
+    "重点观察名单",
+    "重点观察复核脚本",
+    "历史重点观察样本去向",
+    "重点观察25日跟踪表",
+    "明日极度看好近25日跟踪表",
+    "重点观察历史回测表",
+    "明日观察池",
+    "明天观察池",
+    "异动后观察池",
+    "跟踪记忆校验",
+    "主线趋势密度复核",
+    "当前个股观察监控池",
+    "观察对象生命周期表",
+    "逐只预判明日风险",
+    "明日风险分组",
+    "板块级明日风险预判",
+    "明天先观察组",
+    "明天重点候选组",
+    "明日继续观察",
+    "明日观察位预计算表",
+    "今日总决策面板",
+    "候选主表",
+    "候选选股轨迹",
+    "候选选股轨迹明细",
+)
+
+
+def _mark_process_evidence_line(text):
+    text = str(text or "")
+    if "过程证据" in text:
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return text
+    heading_like = stripped.startswith("#") or stripped.startswith("**")
+    for title in _PROCESS_EVIDENCE_LINE_TITLES:
+        if heading_like and title in stripped:
+            return f"{text}（过程证据）"
+        if stripped.startswith(f"**{title}**") or re.match(rf"^#{{1,6}}\s+(?:附录：#\s*)?{re.escape(title)}(?:\s|$)", stripped):
+            return f"{text}（过程证据）"
+    return text
+
+
 def _sanitize_report_lines(lines, postgres_only=False):
     return _number_report_tables(
         [
-            sanitize_front_page_text(line)
+            _mark_process_evidence_line(sanitize_front_page_text(line))
             for line in _normalize_legacy_execution_framework_under_zero_participation(
                 _normalize_tomorrow_action_soft_words_under_zero_participation(_dedupe_repeated_no_trade_lines(lines))
             )
@@ -1345,6 +1394,10 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
         globals().get("render_extreme_conviction_backtest_lines")
         or _default_render_extreme_conviction_backtest_lines
     )
+    build_coverage_summary = (
+        globals().get("build_decision_coverage_summary")
+        or _default_build_decision_coverage_summary
+    )
     if not callable(render_tracking_lines):
         return []
     index = (decision_ledger_result or {}).get("index") or _read_decision_ledger_index_for_tracking(
@@ -1359,7 +1412,18 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None):
         window_days=25,
     )
     if mention_rows and callable(render_mention_rows):
-        lines.extend(list(render_mention_rows(mention_rows) or []))
+        mention_lines = list(render_mention_rows(mention_rows) or [])
+        if callable(build_coverage_summary) and mention_lines:
+            summary = build_coverage_summary(index, surface="tracking")
+            sample_count = int((summary or {}).get("sample_count") or 0)
+            start_date = str((summary or {}).get("start_date") or "").strip()
+            end_date = str((summary or {}).get("end_date") or "").strip()
+            if sample_count and start_date and end_date:
+                mention_lines.insert(
+                    1,
+                    f"- 当前可复盘样本：{sample_count}条，覆盖{start_date}至{end_date}。本表展示最近25个交易日周期内样本。",
+                )
+        lines.extend(mention_lines)
     elif callable(render_mention_lines):
         lines.extend(list(render_mention_lines(index) or []))
     if callable(render_backtest_lines):
@@ -1429,13 +1493,26 @@ def _build_front_page_selected_position_candidate(execution_stage_context=None):
     )
     zero_position = _has_zero_participation_context(position_decision)
     extreme_items = execution_stage_context.get("extreme_conviction_list", []) or []
-    if zero_position:
-        for item in extreme_items:
-            if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
-                return _front_page_candidate_from_extreme_item(item)
     selected = execution_stage_context.get("selected_position_candidate") or execution_stage_context.get("best_stock")
     if not selected and execution_stage_context.get("trade_gate_open"):
         selected = execution_stage_context.get("watch_anchor")
+    if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        if zero_position and _front_page_candidate_has_execution_qualification(selected):
+            return dict(selected)
+        if not zero_position:
+            return dict(selected)
+    if zero_position:
+        for item in extreme_items:
+            if not isinstance(item, dict) or not (item.get("name") or item.get("code") or item.get("stock_code")):
+                continue
+            candidate = _front_page_candidate_from_extreme_item(item)
+            if _front_page_candidate_has_execution_qualification(candidate):
+                return candidate
+        for item in extreme_items:
+            if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
+                return _front_page_candidate_from_extreme_item(item)
+        if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+            return dict(selected)
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return dict(selected)
     observation_candidates = execution_stage_context.get("display_observation_candidates") or execution_stage_context.get("observation_candidates") or []
@@ -1455,9 +1532,11 @@ def _build_front_page_selected_position_candidate(execution_stage_context=None):
 def _front_page_candidate_from_extreme_item(item):
     item = item or {}
     plan = item.get("planned_participation") or item.get("participation_script") or {}
+    if not isinstance(plan, dict):
+        plan = {}
     default_required_steps = ["竞价表态", "开盘前几分钟承接", "回封观察"]
     default_condition = "竞价表态 + 开盘前几分钟承接 + 回封观察"
-    return {
+    candidate = {
         "name": item.get("name") or item.get("stock_name"),
         "code": item.get("code") or item.get("stock_code"),
         "sector": item.get("sector") or item.get("sector_name") or item.get("所属板块"),
@@ -1467,8 +1546,15 @@ def _front_page_candidate_from_extreme_item(item):
         "required_steps": plan.get("required_steps") or default_required_steps,
         "fallback_state": plan.get("fallback_state") or plan.get("cancellation") or "条件不满足回到0%",
         "condition": plan.get("condition") or default_condition,
+        "planned_participation": dict(plan),
     }
-    return {}
+    for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
+        value = item.get(key)
+        if value in (None, ""):
+            value = plan.get(key)
+        if value not in (None, ""):
+            candidate[key] = value
+    return candidate
 
 
 def _is_runtime_extreme_ice_point(data=None, market_research_snapshot=None, final_gate=None):
@@ -1782,11 +1868,77 @@ def _front_page_target_pct(position_decision):
 def _front_page_candidate_position_pct(candidate):
     if not isinstance(candidate, dict):
         return 0
-    for key in ("target_position_pct", "position_pct", "planned_position_pct"):
-        value = _runtime_cell_float(candidate.get(key))
-        if value is not None:
-            return int(value)
+    positive_values = []
+    fallback_values = []
+    sources = [
+        candidate,
+        candidate.get("planned_participation") if isinstance(candidate.get("planned_participation"), dict) else {},
+        candidate.get("participation_script") if isinstance(candidate.get("participation_script"), dict) else {},
+    ]
+    for source in sources:
+        for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
+            value = _runtime_cell_float(source.get(key))
+            if value is not None:
+                value = int(value)
+                if value >= 50:
+                    positive_values.append(value)
+                else:
+                    fallback_values.append(value)
+    if positive_values:
+        return max(positive_values)
+    if fallback_values:
+        return max(fallback_values)
     return 0
+
+
+def _front_page_candidate_sources(candidate):
+    if not isinstance(candidate, dict):
+        return []
+    return [
+        candidate,
+        candidate.get("planned_participation") if isinstance(candidate.get("planned_participation"), dict) else {},
+        candidate.get("participation_script") if isinstance(candidate.get("participation_script"), dict) else {},
+    ]
+
+
+def _front_page_candidate_has_execution_window(candidate):
+    for source in _front_page_candidate_sources(candidate):
+        if any(str(source.get(key) or "").strip() for key in ("participation_window", "buy_window", "entry_window", "execution_window")):
+            return True
+        steps = source.get("required_steps")
+        if isinstance(steps, (list, tuple)) and any(str(step or "").strip() for step in steps):
+            return True
+    return False
+
+
+def _front_page_candidate_has_fallback_condition(candidate):
+    fallback_keys = (
+        "fallback_state",
+        "cancellation",
+        "invalid_condition",
+        "invalidation",
+        "failure_condition",
+        "stop_loss",
+        "risk_window",
+        "drop_condition",
+    )
+    fallback_markers = ("回到0", "继续0", "不满足", "不参与", "不做", "失效", "止损", "跌破")
+    texts = []
+    for source in _front_page_candidate_sources(candidate):
+        for key in fallback_keys:
+            text = str(source.get(key) or "").strip()
+            if text:
+                texts.append(text)
+    joined = " ".join(texts)
+    return any(marker in joined for marker in fallback_markers)
+
+
+def _front_page_candidate_has_execution_qualification(candidate):
+    return bool(
+        _front_page_candidate_position_pct(candidate) >= 50
+        and _front_page_candidate_has_execution_window(candidate)
+        and _front_page_candidate_has_fallback_condition(candidate)
+    )
 
 
 def _runtime_knowledge_hits(data):
@@ -1817,8 +1969,6 @@ def _runtime_account_profile(data=None, market_research_snapshot=None):
 
 
 def _runtime_account_unbuyable_core_active(data=None, selected_position_candidate=None, market_research_snapshot=None):
-    if not _runtime_has_knowledge_hit(data, "account.unbuyable-core-anchor"):
-        return False
     candidate = selected_position_candidate if isinstance(selected_position_candidate, dict) else {}
     account = _runtime_account_profile(data=data, market_research_snapshot=market_research_snapshot)
     cash_available = _runtime_cell_float(account.get("cash_available"))
@@ -1858,7 +2008,7 @@ def _query_monthly_account_context(root_dir=".", target_date="", account_id="mai
     try:
         from storage.database_service import DatabaseService
 
-        service = DatabaseService.sqlite_d1_compatible(Path(root_dir) / "data" / "cloudflare_free_daily.db")
+        service = DatabaseService.from_environment(Path(root_dir) / "data" / "cloudflare_free_daily.db")
         row = service.query_monthly_account_ledger(target_date, account_id=account_id)
     except Exception:
         return {}
@@ -1871,6 +2021,7 @@ def _query_monthly_account_context(root_dir=".", target_date="", account_id="mai
     }
     for key in (
         "month_return_pct",
+        "simulated_cumulative_return_pct",
         "equity",
         "cash",
         "position_market_value",
@@ -1939,7 +2090,8 @@ def _build_front_page_position_decision(
         final_gate=final_gate,
     ):
         return _force_observation_position_decision(position_decision)
-    if _has_zero_participation_context(position_decision):
+    candidate_target_pct = _front_page_candidate_position_pct(selected_position_candidate)
+    if _has_zero_participation_context(position_decision) and candidate_target_pct < 50:
         return _force_observation_position_decision(position_decision)
     if _is_runtime_extreme_ice_point(data=data, market_research_snapshot=market_research_snapshot, final_gate=final_gate):
         return position_decision
@@ -1949,16 +2101,26 @@ def _build_front_page_position_decision(
             position_decision,
             selected_position_candidate=selected_position_candidate,
         )
-    candidate_target_pct = _front_page_candidate_position_pct(selected_position_candidate)
-    if candidate_target_pct < 50:
+    if candidate_target_pct < 50 or not _front_page_candidate_has_execution_qualification(selected_position_candidate):
         return _force_observation_for_missing_execution_evidence(position_decision)
     monthly_rhythm = dict(position_decision.get("monthly_rhythm") or {}) if isinstance(position_decision.get("monthly_rhythm"), dict) else {}
+    promoted_target_pct = min(candidate_target_pct, 100)
+    promoted_signal_grade = "100" if promoted_target_pct >= 100 else "50"
+    promoted_mode = "full_100" if promoted_signal_grade == "100" else "attack_50_preview"
+    promoted_reason = (
+        "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留100%核心进攻，固定交易窗口内条件不成立就回到0%。"
+        if promoted_signal_grade == "100"
+        else "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。"
+    )
     monthly_rhythm.update(
         {
             "month_mode": "attack_prepare",
-            "target_role": "attack_prepare",
-            "max_position_pct": max(int(_runtime_cell_float(monthly_rhythm.get("max_position_pct")) or 0), 50),
-            "allow_full_attack": bool(monthly_rhythm.get("allow_full_attack")),
+            "target_role": "attack_confirmed" if promoted_signal_grade == "100" else "attack_prepare",
+            "max_position_pct": max(
+                int(_runtime_cell_float(monthly_rhythm.get("max_position_pct")) or 0),
+                promoted_target_pct,
+            ),
+            "allow_full_attack": bool(monthly_rhythm.get("allow_full_attack")) or promoted_signal_grade == "100",
             "trend_invalid": False,
             "reason": "明日极度看好目标已存在，普通防守态只缩小容器，不取消推荐属性。",
         }
@@ -1966,11 +2128,11 @@ def _build_front_page_position_decision(
     updated = dict(position_decision)
     updated.update(
         {
-            "participation_mode": "attack_50_preview",
-            "target_position_pct": min(candidate_target_pct, 100),
-            "signal_grade": "50",
+            "participation_mode": promoted_mode,
+            "target_position_pct": promoted_target_pct,
+            "signal_grade": promoted_signal_grade,
             "candidate_feedback_ready": True,
-            "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。",
+            "sizing_reason": promoted_reason,
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "clear",
@@ -1998,6 +2160,8 @@ def _build_effective_front_page_final_gate(final_gate=None, *, selected_position
         return final_gate
 
     target_label = _target_candidate_label(selected_position_candidate)
+    target_grade = "100" if target_pct >= 100 else "50"
+    target_action_label = "条件100%核心进攻" if target_grade == "100" else "条件50%预演"
     updated = dict(final_gate)
     updated.update(
         {
@@ -2006,8 +2170,8 @@ def _build_effective_front_page_final_gate(final_gate=None, *, selected_position
             "can_new_entry": False,
             "should_reduce": False,
             "allow_attack_50_ready": True,
-            "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), 50),
-            "final_action": f"明日目标标的保留条件50%预演：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
+            "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), target_pct),
+            "final_action": f"明日目标标的保留{target_action_label}：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
             "final_participation": "有明日极度看好目标时，防守态只缩小容器，不取消推荐属性。",
             "gate_reason": "普通防守态不等于每天推荐空仓；先定明日目标标的，再用大盘、板块和分时确认决定是否接雨。",
         }
@@ -2162,28 +2326,28 @@ def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candida
         if text == "- **进攻仓位三态**: 0%观察":
             text = "- **进攻仓位三态**: 50%标准进攻预演"
         if text.startswith("**次日市场环境**: 0%观察 /"):
-            text = text.replace("**次日市场环境**: 0%观察 /", "**次日市场环境**: 预计50%标准进攻 /", 1)
+            text = text.replace("**次日市场环境**: 0%观察 /", "**次日市场环境**: 50%标准进攻 /", 1)
         if "当前按0%不参与，固定交易窗口内条件未成立前只观察" in text:
             text = text.replace(
                 "当前按0%不参与，固定交易窗口内条件未成立前只观察",
-                "预计50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%",
+                "50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%",
             )
-        if text.startswith("- ✅ 不新增参与：预计50%标准进攻"):
+        if text.startswith("- ✅ 不新增参与：50%标准进攻"):
             text = text.replace("- ✅ 不新增参与：", "- ⚠️ 不抢跑：", 1)
         if "0%观察不开新仓" in text:
             text = text.replace(
                 "0%观察不开新仓",
-                "预计50%标准进攻，盘前不抢跑",
+                "50%标准进攻，盘前不抢跑",
             )
         if "0%观察，等待固定交易窗口内条件" in text:
             text = text.replace(
                 "0%观察，等待固定交易窗口内条件",
-                "预计50%标准进攻预演，等待固定交易窗口内条件",
+                "50%标准进攻，等待固定交易窗口内条件",
             )
         if "0%新仓（只处理旧仓，不新增）" in text:
             text = text.replace(
                 "0%新仓（只处理旧仓，不新增）",
-                "预计50%标准进攻；条件不成立回0%",
+                "50%标准进攻；条件不成立回0%",
             )
         if "市场级原则是若你有旧仓就去弱留强，不新增参与" in text:
             text = text.replace(
@@ -2196,7 +2360,7 @@ def _normalize_attack_preview_appendix_lines(lines, *, selected_position_candida
         if "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件" in text:
             text = text.replace(
                 "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
-                "当前是预计50%标准进攻预演，本时段只确认主线核心是否在固定交易窗口内满足条件",
+                "当前是50%标准进攻，本时段只确认主线核心是否在固定交易窗口内满足条件",
             )
         if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
             text = text.replace(

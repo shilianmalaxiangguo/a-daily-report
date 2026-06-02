@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Verify coverage metadata and long-window wording comply with the decision-loop contract."}
+{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Verify implementation still matches current factual coverage or updates it explicitly."}
+{"file": "wiki/交易思想/日报术语契约.md", "reason": "Verify user-facing wording avoids banned engineering terms."}
+{"file": "references/report-contract.md", "reason": "Verify report output remains action-safe and evidence-safe."}

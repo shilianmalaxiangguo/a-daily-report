@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary contract for statistics surfaces, coverage metadata, and evidence/action separation."}
+{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Current coverage baseline that statistics must not overstate."}
+{"file": "references/report-contract.md", "reason": "Report rendering must frame statistics as past evidence, not tomorrow action."}

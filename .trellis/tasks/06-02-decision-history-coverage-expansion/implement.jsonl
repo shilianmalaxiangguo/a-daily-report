@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Primary contract for truthful coverage metadata and decision-ledger review surfaces."}
+{"file": ".trellis/tasks/06-02-daily-report-decision-loop/research/history-coverage-current-state.md", "reason": "Factual baseline for current report/snapshot/replay coverage."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Historical replay and source-date boundaries must stay honest."}
+{"file": "references/report-contract.md", "reason": "Report wording and action surfaces must not overstate historical evidence."}
