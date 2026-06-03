@@ -506,6 +506,53 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(captured["recent_bars"]["002975"], bars)
         self.assertEqual([item["code"] for item in result["shape_repair_pool"]], ["002975"])
 
+    def test_candidate_bundle_dedupes_recent_extreme_mentions_by_stock_code(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "recent_extreme_conviction_mentions": [
+                    {
+                        "stock_name": "京能电力",
+                        "stock_code": "600578",
+                        "sector_candidate": "电力",
+                        "mention_trade_date": "2026-05-14",
+                        "reason": "旧样本",
+                    },
+                    {
+                        "stock_name": "京能电力",
+                        "stock_code": "600578",
+                        "sector_candidate": "电力",
+                        "mention_trade_date": "2026-05-27",
+                        "reason": "最新样本",
+                    },
+                ]
+            },
+            exit_analysis={"sector_name": "电力"},
+            candidates=[],
+            watchlist=[
+                {"name": "电力一号", "code": "000001", "sector": "电力", "score": 90},
+                {"name": "电力二号", "code": "000002", "sector": "电力", "score": 80},
+                {"name": "电力三号", "code": "000003", "sector": "电力", "score": 70},
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-05-29",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+        )
+
+        evaluated_codes = [item["code"] for item in result["evaluated_stocks"]]
+        secondary_codes = [item["code"] for item in result["secondary_stocks"]]
+        self.assertEqual(evaluated_codes.count("600578"), 1)
+        self.assertEqual(secondary_codes, ["600578"])
+        self.assertEqual(result["secondary_stocks"][0]["recent_extreme_mention"]["mention_trade_date"], "2026-05-27")
+        self.assertIn("最新样本", result["secondary_stocks"][0]["reason"])
+
     def test_candidate_bundle_explains_recent_extreme_review_destinations(self):
         def build_groups(evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None):
             return {
@@ -763,6 +810,256 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(core["xuangubao_related_plate_names"], ["资产重组"])
         self.assertEqual(core["xuangubao_limit_up_days"], 1)
 
+    def test_extreme_conviction_uses_anchor_reversal_before_score_ranking(self):
+        result = build_candidate_bundle_contract(
+            data={},
+            exit_analysis={"sector_name": "电力"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "sector": "电力",
+                    "score": 98,
+                    "change_pct": 9.8,
+                    "pattern": "光头大阳柱涨停",
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "trend_aesthetic_status": "通过",
+                },
+                {
+                    "name": "大唐发电",
+                    "code": "601991",
+                    "sector": "电力",
+                    "score": 88,
+                    "change_pct": 5.2,
+                    "pattern": "强实体",
+                    "reason": "电力板块锚定龙 / 趋势比价链锚点",
+                    "trend_aesthetic_status": "通过",
+                },
+                {
+                    "name": "华电辽能",
+                    "code": "600396",
+                    "sector": "电力",
+                    "score": 86,
+                    "change_pct": 4.8,
+                    "pattern": "强趋势",
+                    "reason": "大容量趋势龙头 / 中军承接",
+                    "capacity_profile": "大容量趋势资金",
+                    "why_not_anchor": "大唐发电短线加速过热，华电辽能承接更适合补位",
+                    "allow_extreme_conviction": True,
+                    "trend_aesthetic_status": "通过",
+                },
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[
+                {"name": "大唐发电", "code": "601991", "sector": "电力", "reason": "龙一"},
+            ],
+            zt_pool_by_sector={"电力": [{"代码": "600578"}]},
+            gem_breathing_candidates=[],
+            target_date="2026-05-29",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=build_extreme_conviction_list.__globals__["build_sector_trend_snapshot"],
+            build_extreme_conviction_list=lambda evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None: build_extreme_conviction_list(
+                evaluated_stocks,
+                mainline_name,
+                sector_snapshot=sector_snapshot,
+                top_n=top_n,
+                risk_context=risk_context,
+            ),
+        )
+
+        conviction_by_role = {item["sniper_role"]: item for item in result["extreme_conviction_list"]}
+        self.assertEqual(conviction_by_role["明日主买对象"]["code"], "601991")
+        self.assertEqual(conviction_by_role["明日补位对象"]["code"], "600396")
+        self.assertEqual(conviction_by_role["候选观察"]["code"], "600578")
+        self.assertEqual(conviction_by_role["候选观察"]["candidate_role"], "套利工具")
+        self.assertEqual(conviction_by_role["候选观察"]["anchor_reversal_decision"], "降级观察")
+        self.assertIn("不能替代板块锚", conviction_by_role["候选观察"]["anchor_reversal_reason"])
+        self.assertEqual([item["code"] for item in result["core_stocks"]], ["601991"])
+        self.assertEqual([item["code"] for item in result["secondary_stocks"]], ["600396"])
+        self.assertNotIn("600578", {item["code"] for item in result["core_stocks"] + result["secondary_stocks"]})
+
+    def test_mainline_dragon_source_enters_evaluation_before_limit_up_laggard(self):
+        result = build_candidate_bundle_contract(
+            data={},
+            exit_analysis={"sector_name": "电力"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "sector": "电力",
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "pattern": "光头大阳柱涨停",
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[
+                {
+                    "name": "大唐发电",
+                    "code": "601991",
+                    "sector": "电力",
+                    "score": 82,
+                    "change_pct": 1.1,
+                    "pattern": "沿MA5趋势推进，缩量回踩不破，低点上移",
+                    "reason": "板块锚 / 大容量趋势龙头 / MA5入/MA7清/MA5T / 承接好",
+                    "capacity_profile": "大容量趋势资金",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            zt_pool_by_sector={"电力": [{"代码": "600578"}]},
+            gem_breathing_candidates=[],
+            target_date="2026-06-02",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (
+                [item for item in stocks if item.get("sector") == mainline_name],
+                [item for item in stocks if item.get("sector") != mainline_name],
+            ),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=build_extreme_conviction_list.__globals__["build_sector_trend_snapshot"],
+            build_extreme_conviction_list=lambda evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None: build_extreme_conviction_list(
+                evaluated_stocks,
+                mainline_name,
+                sector_snapshot=sector_snapshot,
+                top_n=top_n,
+                risk_context=risk_context,
+            ),
+        )
+
+        conviction_by_role = {item["sniper_role"]: item for item in result["extreme_conviction_list"]}
+        self.assertEqual(conviction_by_role["明日主买对象"]["code"], "601991")
+        self.assertEqual(conviction_by_role["候选观察"]["code"], "600578")
+        self.assertEqual(conviction_by_role["候选观察"]["candidate_role"], "套利工具")
+        self.assertIn("601991", {item["code"] for item in result["evaluated_stocks"]})
+        self.assertEqual([item["code"] for item in result["core_stocks"]], ["601991"])
+
+    def test_hot_capacity_source_enters_evaluation_before_limit_up_laggard(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "turnover_rank": [
+                    {
+                        "rank": 1,
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                        "turnover": 294.0,
+                        "change_pct": 8.49,
+                    }
+                ],
+                "hot_rank_top30": [
+                    {
+                        "rank": 2,
+                        "name": "工业富联",
+                        "code": "601138",
+                        "concepts": ["共封装光学(CPO)"],
+                        "rate": "41257554",
+                    }
+                ],
+                "stock_full_info": {
+                    "601138": {
+                        "name": "工业富联",
+                        "industry": "通信设备",
+                        "所属行业": "通信设备",
+                        "change_pct": 8.49,
+                        "turnover": 294.0,
+                    },
+                    "002897": {
+                        "name": "意华股份",
+                        "industry": "通信设备",
+                        "所属行业": "通信设备",
+                        "change_pct": 10.0,
+                        "turnover": 6.44,
+                    },
+                },
+            },
+            exit_analysis={"sector_name": "通信设备"},
+            candidates=[
+                {"name": "工业富联", "code": "601138", "sector": "通信设备", "turnover": 294.0, "_source": "成交额排名"},
+                {"name": "意华股份", "code": "002897", "sector": "通信设备", "turnover": 6.44, "_source": "涨停池"},
+            ],
+            watchlist=[
+                {
+                    "name": "意华股份",
+                    "code": "002897",
+                    "sector": "通信设备",
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "pattern": "光头大阳柱涨停",
+                    "reason": "首板涨停 / 被主线带动 / 跟风样本",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={"通信设备": [{"代码": "002897"}]},
+            gem_breathing_candidates=[],
+            target_date="2026-06-02",
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (
+                [item for item in stocks if item.get("sector") == mainline_name],
+                [item for item in stocks if item.get("sector") != mainline_name],
+            ),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=build_extreme_conviction_list.__globals__["build_sector_trend_snapshot"],
+            build_extreme_conviction_list=lambda evaluated_stocks, mainline_name, sector_snapshot=None, top_n=3, risk_context=None: build_extreme_conviction_list(
+                evaluated_stocks,
+                mainline_name,
+                sector_snapshot=sector_snapshot,
+                top_n=top_n,
+                risk_context=risk_context,
+            ),
+        )
+
+        evaluated_by_code = {item["code"]: item for item in result["evaluated_stocks"]}
+        self.assertIn("601138", evaluated_by_code)
+        self.assertEqual(evaluated_by_code["601138"]["candidate_role"], "大容量中军")
+        self.assertEqual(result["sector_trend_snapshot"][0]["anchor_code"], "601138")
+        conviction_by_code = {item["code"]: item for item in result["extreme_conviction_list"]}
+        self.assertEqual(conviction_by_code["601138"]["sniper_role"], "明日主买对象")
+        self.assertEqual(conviction_by_code["601138"]["anchor_reversal_decision"], "可作为主对象")
+        self.assertEqual(conviction_by_code["002897"]["sniper_role"], "候选观察")
+        self.assertEqual(conviction_by_code["002897"]["anchor_reversal_decision"], "降级观察")
+        self.assertEqual([item["code"] for item in result["core_stocks"]], ["601138"])
+
+    def test_anchor_reversal_downgrade_never_becomes_primary_when_alone(self):
+        result = build_extreme_conviction_list(
+            [
+                {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "sector": "电力",
+                    "score": 98,
+                    "change_pct": 9.8,
+                    "pattern": "光头大阳柱涨停",
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            "电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_name": "大唐发电",
+                    "anchor_code": "601991",
+                    "anchor_reason": "板块锚定龙",
+                }
+            ],
+            top_n=3,
+        )
+
+        self.assertEqual(result[0]["anchor_reversal_decision"], "降级观察")
+        self.assertEqual(result[0]["sniper_role"], "候选观察")
+        self.assertFalse(result[0]["primary_buy_candidate"])
+        self.assertFalse(result[0]["backup_buy_candidate"])
+
     def test_candidate_bundle_replaces_market_board_sector_from_xuangubao_plate(self):
         result = build_candidate_bundle_contract(
             data={
@@ -839,6 +1136,58 @@ assert bundle == {"core_stocks": []}
         sectors = {item["code"]: item["sector"] for item in result["extreme_conviction_list"]}
         self.assertEqual(sectors["000417"], "国产芯片")
         self.assertEqual(sectors["300657"], "算力")
+
+    def test_candidate_bundle_uses_ai_server_narrative_over_raw_communication_industry(self):
+        result = build_candidate_bundle_contract(
+            data={
+                "stock_full_info": {
+                    "601138": {
+                        "code": "601138",
+                        "name": "工业富联",
+                        "industry": "通信设备",
+                        "所属行业": "通信设备",
+                        "close": 80.01,
+                        "change_pct": 8.49,
+                    }
+                },
+                "xueqiu_hot_stock_arguments": [
+                    {
+                        "code": "601138",
+                        "full_code": "SH601138",
+                        "argument": "工业富联获英伟达AI平台大额订单",
+                        "provider": "xueqiu.hot_stock.argument",
+                    }
+                ],
+            },
+            exit_analysis={"sector_name": "通信设备"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "工业富联",
+                    "code": "601138",
+                    "sector": "通信设备",
+                    "concepts": ["同花顺果指数", "共封装光学(CPO)", "算力租赁", "液冷服务器"],
+                    "score": 90,
+                }
+            ],
+            abnormal_watch_map={},
+            dragon_stocks=[],
+            zt_pool_by_sector={},
+            gem_breathing_candidates=[],
+            target_date="2026-06-02",
+            normalize_stock_code=lambda code: str(code or "").replace(".SH", ""),
+            get_abnormal_rank_adjustment=lambda item: (0, "", ""),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda evaluated_stocks, *args, **kwargs: evaluated_stocks[:1],
+        )
+
+        stock = result["extreme_conviction_list"][0]
+        self.assertEqual(stock["sector"], "AI算力基础设施")
+        self.assertEqual(stock["trade_narrative_sector"], "AI算力基础设施")
+        self.assertEqual(stock["raw_sector"], "通信设备")
+        self.assertIn("英伟达AI平台", stock["trade_narrative_reason"])
 
 
 if __name__ == "__main__":

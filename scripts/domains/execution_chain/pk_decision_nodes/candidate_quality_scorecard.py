@@ -162,6 +162,8 @@ def _enrich_candidate_trace_inputs(candidate, context, *, source_pool=""):
     enriched = dict(candidate)
     if source_pool:
         enriched["source_pools"] = _merge_unique_values(enriched.get("source_pools"), source_pool)
+    if "position_context_provided" not in enriched and "position_context_provided" in (context or {}):
+        enriched["position_context_provided"] = bool((context or {}).get("position_context_provided"))
     mainline = _meaningful_text(enriched.get("mainline") or enriched.get("主线")) or _context_mainline(context)
     sector = _candidate_sector(enriched) or mainline
     if mainline and not _meaningful_text(enriched.get("mainline")):
@@ -246,6 +248,7 @@ def _build_panel_fields(
     *,
     step0_prediction_cn,
     has_personal_positions,
+    position_context_provided,
     daily_new_entry_limit,
     best_stock,
     watch_anchor,
@@ -253,10 +256,19 @@ def _build_panel_fields(
     backup_candidate = watch_anchor
     if _candidate_key(best_stock) and _candidate_key(best_stock) == _candidate_key(watch_anchor):
         backup_candidate = None
+    if has_personal_positions:
+        account_attention_load = "有持仓需先处理"
+        holding_priority_action = "先处理旧仓，再看新增"
+    elif position_context_provided:
+        account_attention_load = "无持仓负担"
+        holding_priority_action = "无旧仓时只等参与窗口"
+    else:
+        account_attention_load = "持仓未输入，先确认旧仓情况"
+        holding_priority_action = "先确认旧仓情况，再看新增"
     return {
         "market_emotion_label": step0_prediction_cn,
-        "account_attention_load": "有持仓需先处理" if has_personal_positions else "无持仓负担",
-        "holding_priority_action": "先处理旧仓，再看新增" if has_personal_positions else "无旧仓时只等参与窗口",
+        "account_attention_load": account_attention_load,
+        "holding_priority_action": holding_priority_action,
         "daily_new_entry_limit": daily_new_entry_limit,
         "primary_buy_candidate": best_stock,
         "backup_candidate": backup_candidate,
@@ -303,6 +315,7 @@ def build_candidate_quality_scorecard_payload(context):
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
+    position_context_provided = bool(context.get("position_context_provided", False))
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
     waiting_stocks = context.get("waiting_stocks", []) or []
     daily_new_entry_limit = 1 if final_gate.get("can_new_entry") or trade_gate_open else 0
@@ -345,6 +358,7 @@ def build_candidate_quality_scorecard_payload(context):
     panel_fields = _build_panel_fields(
         step0_prediction_cn=step0_prediction_cn,
         has_personal_positions=has_personal_positions,
+        position_context_provided=position_context_provided,
         daily_new_entry_limit=daily_new_entry_limit,
         best_stock=best_stock,
         watch_anchor=watch_anchor,

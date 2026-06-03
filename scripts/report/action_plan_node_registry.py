@@ -1,7 +1,7 @@
 DEFAULT_ACTION_PLAN_NODE_SPECS = [
     {"node_key": "overview", "title": "阶段概览"},
-    {"node_key": "candidate_quality", "title": "候选质量与动作分层"},
     {"node_key": "action_table", "title": "最终动作表"},
+    {"node_key": "candidate_quality", "title": "候选证据附录"},
     {"node_key": "observation_blocks", "title": "观察补充"},
     {"node_key": "positioning", "title": "明天仓位怎么放"},
     {"node_key": "schedule", "title": "明日执行时间表"},

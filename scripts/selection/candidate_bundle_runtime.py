@@ -75,11 +75,41 @@ def _related_plate_names(related_plates):
     return names
 
 
+def _build_xueqiu_argument_map(rows, normalize_stock_code):
+    mapped = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = normalize_stock_code(row.get("code") or row.get("stock_code") or row.get("symbol") or row.get("full_code"))
+        if code:
+            mapped[code] = row
+    return mapped
+
+
 def _first_valid_text(values):
     for value in values or []:
         if _is_valid_sector_label(value):
             return str(value).strip()
     return ""
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(str(value).replace("%", "").replace("+", "").strip())
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _first_number(item, *keys):
+    for key in keys:
+        if key not in (item or {}):
+            continue
+        value = (item or {}).get(key)
+        if value not in (None, ""):
+            return _safe_float(value, 0.0)
+    return 0.0
 
 
 def _infer_sector_from_reason(text):
@@ -150,6 +180,19 @@ def _enrich_candidate_with_xuangubao_reason(item, code, xuangubao_reason_map):
     item["xuangubao_limit_up_days"] = reason.get("limit_up_days", 0)
 
 
+def _enrich_candidate_with_xueqiu_argument(item, code, xueqiu_argument_map):
+    argument = xueqiu_argument_map.get(code, {}) or {}
+    if not argument:
+        return
+    text = str(argument.get("argument") or argument.get("reason") or argument.get("content") or "").strip()
+    if text:
+        item["xueqiu_hot_stock_argument"] = text
+        item.setdefault("xueqiu_hot_stock_reason", text)
+    provider = str(argument.get("provider") or "").strip()
+    if provider:
+        item["xueqiu_hot_stock_argument_provider"] = provider
+
+
 def _enrich_candidate_with_stock_risk(item, code, stock_risk_map):
     risk = (stock_risk_map or {}).get(code, {}) or {}
     if not risk:
@@ -192,6 +235,89 @@ def _normalize_candidate_sector(item):
         item["sector"] = replacement
 
 
+_TRADE_NARRATIVE_RULES = (
+    (
+        "AI算力基础设施",
+        (
+            "英伟达",
+            "NVIDIA",
+            "AI平台",
+            "AI服务器",
+            "AIDC",
+            "数据中心",
+            "智算",
+            "液冷服务器",
+        ),
+    ),
+)
+
+
+def _trade_narrative_text(item):
+    parts = []
+    for key in (
+        "xueqiu_hot_stock_argument",
+        "xueqiu_hot_stock_reason",
+        "reason",
+        "conviction_reason",
+        "xuangubao_stock_reason",
+        "hot_reason",
+        "rank_reason",
+        "popularity_tag",
+    ):
+        value = (item or {}).get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    for key in (
+        "concepts",
+        "concept_list",
+        "sector_tags",
+        "tags",
+        "plates",
+        "related_plates",
+        "xuangubao_related_plate_names",
+    ):
+        value = (item or {}).get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, dict):
+            parts.extend(str(nested) for nested in value.values() if nested not in (None, ""))
+        elif isinstance(value, (list, tuple, set)):
+            for nested in value:
+                if isinstance(nested, dict):
+                    text = str(nested.get("plate_name") or nested.get("name") or "").strip()
+                    if text:
+                        parts.append(text)
+                elif nested not in (None, ""):
+                    parts.append(str(nested))
+        else:
+            parts.append(str(value))
+    return " / ".join(part for part in parts if part)
+
+
+def _infer_trade_narrative_sector(item):
+    text = _trade_narrative_text(item)
+    if not text:
+        return "", ""
+    for sector, markers in _TRADE_NARRATIVE_RULES:
+        for marker in markers:
+            if marker and marker in text:
+                return sector, marker
+    return "", ""
+
+
+def _apply_trade_narrative_sector(item):
+    narrative_sector, evidence = _infer_trade_narrative_sector(item)
+    if not narrative_sector:
+        return
+    raw_sector = str(item.get("sector") or item.get("sector_name") or item.get("industry") or item.get("所属行业") or "").strip()
+    if raw_sector and not item.get("raw_sector"):
+        item["raw_sector"] = raw_sector
+    item["trade_narrative_sector"] = narrative_sector
+    source_reason = str(item.get("xueqiu_hot_stock_argument") or item.get("xueqiu_hot_stock_reason") or "").strip()
+    item["trade_narrative_reason"] = f"当日叙事命中：{source_reason if source_reason and evidence in source_reason else evidence}"
+    item["sector"] = narrative_sector
+
+
 def _candidate_code(item, normalize_stock_code):
     if not isinstance(item, dict):
         return ""
@@ -202,8 +328,261 @@ def _candidate_code(item, normalize_stock_code):
     return ""
 
 
-def _build_recent_extreme_mention_candidates(data, normalize_stock_code):
+def _candidate_identity_text(item):
+    item = item or {}
+    parts = []
+    for key in (
+        "candidate_role",
+        "候选身份",
+        "reason",
+        "conviction_reason",
+        "pattern",
+        "capacity_profile",
+        "turnover_capacity",
+        "volume_capacity",
+        "ma_binding_strategy",
+        "holding_strategy",
+        "position_strategy",
+    ):
+        value = item.get(key)
+        if value not in (None, ""):
+            parts.append(str(value))
+    return " / ".join(parts)
+
+
+def _iter_candidate_terms(item, *extra_values):
+    item = item or {}
+    for value in extra_values:
+        if value not in (None, ""):
+            yield str(value)
+    for key in (
+        "sector",
+        "industry",
+        "所属行业",
+        "sector_name",
+        "concepts",
+        "tags",
+        "plates",
+        "related_plates",
+        "xuangubao_related_plate_names",
+        "xueqiu_hot_stock_argument",
+        "xueqiu_hot_stock_reason",
+        "reason",
+        "popularity_tag",
+        "rank_reason",
+        "hot_reason",
+    ):
+        value = item.get(key)
+        if value in (None, ""):
+            continue
+        if isinstance(value, dict):
+            for nested in value.values():
+                yield str(nested)
+        elif isinstance(value, (list, tuple, set)):
+            for nested in value:
+                if isinstance(nested, dict):
+                    yield str(nested.get("plate_name") or nested.get("name") or nested)
+                else:
+                    yield str(nested)
+        else:
+            yield str(value)
+
+
+def _candidate_matches_mainline(item, mainline_name):
+    mainline_name = str(mainline_name or "").strip()
+    if not mainline_name:
+        return False
+    for term in _iter_candidate_terms(item):
+        term = str(term or "").strip()
+        if term and (mainline_name in term or term in mainline_name):
+            return True
+    return False
+
+
+def _hot_capacity_rank(item, *keys):
+    for key in keys:
+        try:
+            value = int(float(str((item or {}).get(key) or "").strip()))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return 9999
+
+
+def _merge_candidate_context(base, *sources):
+    merged = dict(base or {})
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            if value in (None, ""):
+                continue
+            if key not in merged or merged.get(key) in (None, "", [], {}):
+                merged[key] = value
+    return merged
+
+
+def _is_anchor_source_candidate(item, *, source_name=""):
+    if not isinstance(item, dict):
+        return False
+    if source_name == "dragon_stocks":
+        return True
+    role = str(item.get("candidate_role") or item.get("候选身份") or "").strip()
+    if role in {"板块锚", "分支龙头", "大容量中军"}:
+        return True
+    text = _candidate_identity_text(item)
+    return any(
+        marker in text
+        for marker in (
+            "板块锚",
+            "锚定龙",
+            "趋势比价链",
+            "大容量",
+            "中军",
+            "反复做",
+            "热门股",
+            "龙一",
+            "板块龙",
+            "MA5入/MA7清/MA5T",
+            "MA5B",
+            "MA7清",
+            "MA5T",
+        )
+    )
+
+
+def _build_anchor_source_candidates(
+    *,
+    candidates,
+    dragon_stocks,
+    normalize_stock_code,
+    existing_codes,
+):
     result = []
+    seen = {code for code in existing_codes if code}
+    for source_name, items in (("dragon_stocks", dragon_stocks), ("candidates", candidates)):
+        for item in items or []:
+            if not _is_anchor_source_candidate(item, source_name=source_name):
+                continue
+            code = _candidate_code(item, normalize_stock_code)
+            if not code or code in seen:
+                continue
+            copied = dict(item)
+            copied["code"] = code
+            copied.setdefault("source", source_name)
+            copied.setdefault("source_tier", "anchor_reversal_source")
+            result.append(copied)
+            seen.add(code)
+    return result
+
+
+def _build_hot_capacity_anchor_candidates(
+    *,
+    data,
+    candidates,
+    stock_info_map,
+    normalize_stock_code,
+    existing_codes,
+    mainline_name,
+):
+    if not str(mainline_name or "").strip():
+        return []
+
+    seen = {code for code in existing_codes if code}
+    candidate_map = _build_code_map(candidates or [], normalize_stock_code, ("code", "stock_code", "代码", "symbol"))
+    turnover_map = _build_code_map((data or {}).get("turnover_rank", []), normalize_stock_code, ("code", "stock_code", "代码", "symbol"))
+    hot_rows = []
+    for key in ("hot_rank_top30", "hot_rank_top50", "integrated_hot_list"):
+        hot_rows.extend((data or {}).get(key) or [])
+    hot_map = _build_code_map(hot_rows, normalize_stock_code, ("code", "stock_code", "代码", "symbol"))
+
+    ordered_codes = []
+    for source in (turnover_map, hot_map, candidate_map):
+        for code in source:
+            if code and code not in ordered_codes:
+                ordered_codes.append(code)
+
+    result = []
+    for code in ordered_codes:
+        if not code or code in seen:
+            continue
+        base = candidate_map.get(code, {})
+        turnover_row = turnover_map.get(code, {})
+        hot_row = hot_map.get(code, {})
+        stock_info = stock_info_map.get(code, {})
+        item = _merge_candidate_context(base, turnover_row, hot_row, stock_info)
+        item["code"] = code
+        item.setdefault("name", base.get("name") or turnover_row.get("name") or hot_row.get("name") or stock_info.get("name") or "")
+        item.setdefault("sector", base.get("sector") or turnover_row.get("sector") or stock_info.get("industry") or stock_info.get("所属行业") or "")
+        if stock_info.get("industry") and item.get("industry") in (None, ""):
+            item["industry"] = stock_info.get("industry")
+        if stock_info.get("所属行业") and item.get("所属行业") in (None, ""):
+            item["所属行业"] = stock_info.get("所属行业")
+        _normalize_candidate_sector(item)
+        if not _candidate_matches_mainline(item, mainline_name):
+            continue
+
+        turnover_rank = _hot_capacity_rank(turnover_row, "rank", "turnover_rank")
+        hot_rank = _hot_capacity_rank(hot_row, "rank", "hot_rank", "popularity_rank")
+        turnover = _first_number(item, "turnover", "成交额", "amount")
+        if turnover > 10000:
+            turnover = turnover / 1e8
+        source_text = " / ".join(
+            str(value or "")
+            for value in (
+                base.get("_source"),
+                base.get("source"),
+                turnover_row.get("data_source"),
+                hot_row.get("data_source"),
+                hot_row.get("source"),
+            )
+            if str(value or "").strip()
+        )
+        is_capacity = turnover_rank <= 20 or turnover >= 50
+        is_hot = hot_rank <= 30
+        is_candidate_capacity = any(marker in source_text for marker in ("成交额", "热榜"))
+        if not (is_capacity or is_hot or is_candidate_capacity):
+            continue
+
+        if turnover_rank <= 3 or hot_rank <= 5 or turnover >= 100:
+            score = 92
+        elif turnover_rank <= 10 or hot_rank <= 15 or turnover >= 50:
+            score = 86
+        else:
+            score = 78
+        item["score"] = max(_safe_float(item.get("score", 0), 0), score)
+        item["source"] = "hot_capacity_anchor_source"
+        item["source_tier"] = "anchor_reversal_source"
+        item["candidate_role"] = "大容量中军"
+        item["capacity_profile"] = item.get("capacity_profile") or "大容量趋势资金"
+        if turnover:
+            item["turnover_capacity"] = item.get("turnover_capacity") or f"成交额{turnover:.1f}亿"
+            item["turnover"] = turnover
+        if turnover_rank != 9999:
+            item["turnover_rank"] = turnover_rank
+        if hot_rank != 9999:
+            item["hot_rank"] = hot_rank
+        item["reason"] = item.get("reason") or f"{mainline_name}热门股 / 大容量趋势资金 / 反复做对象 / 承接好"
+        item["pattern"] = item.get("pattern") or "大容量强趋势"
+        item["trend_aesthetic_status"] = item.get("trend_aesthetic_status") or "通过"
+        result.append(item)
+        seen.add(code)
+    result.sort(
+        key=lambda item: (
+            -_hot_capacity_rank(item, "hot_rank"),
+            -_hot_capacity_rank(item, "turnover_rank"),
+            _safe_float(item.get("turnover", 0), 0),
+            _safe_float(item.get("score", 0), 0),
+        ),
+        reverse=True,
+    )
+    return result[:5]
+
+
+def _build_recent_extreme_mention_candidates(data, normalize_stock_code):
+    result_by_code = {}
+    code_order = []
     for row in (data or {}).get("recent_extreme_conviction_mentions") or []:
         if not isinstance(row, dict):
             continue
@@ -214,22 +593,28 @@ def _build_recent_extreme_mention_candidates(data, normalize_stock_code):
         sector = str(row.get("sector") or row.get("sector_candidate") or "").strip()
         reason = str(row.get("reason") or row.get("next_action") or "").strip()
         planned_window = str(row.get("planned_window") or row.get("buy_window") or "").strip()
-        result.append(
-            {
-                "name": name,
-                "code": code,
-                "sector": sector,
-                "score": row.get("score", 50),
-                "source": "recent_extreme_conviction_mention",
-                "source_tier": "extreme_conviction",
-                "reason": reason or "历史重点观察样本待复核",
-                "pattern": str(row.get("pattern") or reason or "历史好形态").strip(),
-                "conviction_reason": reason,
-                "participation_window": planned_window,
-                "recent_extreme_mention": dict(row),
-            }
-        )
-    return result
+        candidate = {
+            "name": name,
+            "code": code,
+            "sector": sector,
+            "score": row.get("score", 50),
+            "source": "recent_extreme_conviction_mention",
+            "source_tier": "extreme_conviction",
+            "reason": reason or "历史重点观察样本待复核",
+            "pattern": str(row.get("pattern") or reason or "历史好形态").strip(),
+            "conviction_reason": reason,
+            "participation_window": planned_window,
+            "recent_extreme_mention": dict(row),
+        }
+        if code not in result_by_code:
+            code_order.append(code)
+            result_by_code[code] = candidate
+            continue
+        current_date = str((result_by_code[code].get("recent_extreme_mention") or {}).get("mention_trade_date") or "")
+        next_date = str(row.get("mention_trade_date") or "")
+        if next_date >= current_date:
+            result_by_code[code] = candidate
+    return [result_by_code[code] for code in code_order if code in result_by_code]
 
 
 def _historical_review_text(item):
@@ -412,6 +797,66 @@ def _build_historical_extreme_review(
     return result
 
 
+def _has_anchor_reversal_contract(item):
+    if not isinstance(item, dict):
+        return False
+    return any(
+        str(item.get(key) or "").strip()
+        for key in (
+            "anchor_reversal_decision",
+            "sector_anchor",
+            "candidate_role",
+            "relationship_to_anchor",
+            "why_not_anchor",
+        )
+    )
+
+
+def _is_primary_conviction(item):
+    return bool((item or {}).get("primary_buy_candidate")) or str((item or {}).get("sniper_role") or "").strip() == "明日主买对象"
+
+
+def _is_backup_conviction(item):
+    return bool((item or {}).get("backup_buy_candidate")) or str((item or {}).get("sniper_role") or "").strip() == "明日补位对象"
+
+
+def _apply_anchor_reversal_visible_groups(
+    *,
+    core_stocks,
+    secondary_stocks,
+    ignored_stocks,
+    extreme_conviction_list,
+    mainline_evaluated_stocks,
+    normalize_stock_code,
+):
+    if not any(_has_anchor_reversal_contract(item) for item in extreme_conviction_list or []):
+        return core_stocks, secondary_stocks, ignored_stocks
+
+    primary = [dict(item) for item in extreme_conviction_list or [] if _is_primary_conviction(item)]
+    backup = [dict(item) for item in extreme_conviction_list or [] if _is_backup_conviction(item)]
+    visible_codes = {
+        _candidate_code(item, normalize_stock_code)
+        for item in primary + backup
+        if _candidate_code(item, normalize_stock_code)
+    }
+    observation = [
+        dict(item)
+        for item in extreme_conviction_list or []
+        if _candidate_code(item, normalize_stock_code) not in visible_codes
+    ]
+    evaluated_by_code = {
+        _candidate_code(item, normalize_stock_code): item
+        for item in mainline_evaluated_stocks or []
+        if _candidate_code(item, normalize_stock_code)
+    }
+    extra_ignored = [
+        item
+        for code, item in evaluated_by_code.items()
+        if code and code not in visible_codes and code not in {_candidate_code(row, normalize_stock_code) for row in observation}
+    ]
+    return primary[:1], backup[:1], observation + extra_ignored
+
+
 def build_candidate_bundle_contract(
     data,
     exit_analysis,
@@ -443,6 +888,7 @@ def build_candidate_bundle_contract(
         normalize_stock_code,
         ("symbol", "code", "stock_code"),
     )
+    xueqiu_argument_map = _build_xueqiu_argument_map(data.get("xueqiu_hot_stock_arguments", []), normalize_stock_code)
 
     lianban_data = data.get("lianban_data", {})
     lb_stocks_map = {}
@@ -463,13 +909,36 @@ def build_candidate_bundle_contract(
                 "plates": list(lb_stock.get("plates") or []),
             }
 
+    primary_mainline = str(exit_analysis.get("sector_name", "") or "").strip()
     watchlist_codes = {_candidate_code(stock, normalize_stock_code) for stock in watchlist or []}
     mention_candidates = [
         item
         for item in _build_recent_extreme_mention_candidates(data, normalize_stock_code)
         if item.get("code") not in watchlist_codes
     ]
-    evaluation_source_stocks = list(watchlist or []) + mention_candidates
+    source_codes = set(watchlist_codes)
+    source_codes.update(_candidate_code(item, normalize_stock_code) for item in mention_candidates)
+    anchor_source_candidates = _build_anchor_source_candidates(
+        candidates=candidates,
+        dragon_stocks=dragon_stocks,
+        normalize_stock_code=normalize_stock_code,
+        existing_codes=source_codes,
+    )
+    source_codes.update(_candidate_code(item, normalize_stock_code) for item in anchor_source_candidates)
+    hot_capacity_anchor_candidates = _build_hot_capacity_anchor_candidates(
+        data=data,
+        candidates=candidates,
+        stock_info_map=stock_info_map,
+        normalize_stock_code=normalize_stock_code,
+        existing_codes=source_codes,
+        mainline_name=primary_mainline,
+    )
+    evaluation_source_stocks = (
+        list(watchlist or [])
+        + mention_candidates
+        + anchor_source_candidates
+        + hot_capacity_anchor_candidates
+    )
 
     evaluated_stocks = []
     for stock in evaluation_source_stocks:
@@ -478,9 +947,11 @@ def build_candidate_bundle_contract(
         normalized_code = normalize_stock_code(code)
         _enrich_candidate_item(item, normalized_code, stock_info_map, volume_anomaly_map)
         _enrich_candidate_with_xuangubao_reason(item, normalized_code, xuangubao_reason_map)
+        _enrich_candidate_with_xueqiu_argument(item, normalized_code, xueqiu_argument_map)
         _enrich_candidate_with_stock_risk(item, normalized_code, stock_risk_map)
         _enrich_candidate_with_recent_bars(item, normalized_code, target_date, fetch_recent_price_bars=fetch_recent_price_bars)
         _normalize_candidate_sector(item)
+        _apply_trade_narrative_sector(item)
         base_score = item.get("score", 0)
         abnormal_item = abnormal_watch_map.get(code, {}) or abnormal_watch_map.get(normalized_code, {})
         abnormal_bonus, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
@@ -492,6 +963,7 @@ def build_candidate_bundle_contract(
         if lb_info.get("plates") and not item.get("plates"):
             item["plates"] = lb_info.get("plates")
         _normalize_candidate_sector(item)
+        _apply_trade_narrative_sector(item)
         lb_count = lb_info.get("连板数", 0)
         tomorrow_strength = base_score
 
@@ -557,7 +1029,6 @@ def build_candidate_bundle_contract(
     )
     _append_log(logs, "candidate_scoring", "success", "已完成候选评分与排序", evaluated_count=len(evaluated_stocks))
 
-    primary_mainline = str(exit_analysis.get("sector_name", "") or "").strip()
     if primary_mainline:
         mainline_evaluated_stocks, crossline_evaluated_stocks = split_candidates_by_mainline(
             evaluated_stocks,
@@ -642,6 +1113,14 @@ def build_candidate_bundle_contract(
         shape_repair_pool,
         normalize_stock_code,
         dragon_rebound_watch_pool,
+    )
+    core_stocks, secondary_stocks, ignored_stocks = _apply_anchor_reversal_visible_groups(
+        core_stocks=core_stocks,
+        secondary_stocks=secondary_stocks,
+        ignored_stocks=ignored_stocks,
+        extreme_conviction_list=extreme_conviction_list,
+        mainline_evaluated_stocks=mainline_evaluated_stocks,
+        normalize_stock_code=normalize_stock_code,
     )
     _append_log(logs, "candidate_grouping", "success", "已完成主线/跨线/创业板分组", mainline_name=primary_mainline)
 

@@ -48,7 +48,7 @@ Legacy conservative sizing is removed: 0/50/100 only. Do not answer uncertainty 
 | `fix_report_defect` | User points to a concrete report bug, duplicated line, fake zero, missing action contract, broken replay, or a delta spec for report behavior. | `references/report-contract.md`, then `references/reasoning-mode-contract.md`, then `references/verification.md` |
 | `review_trade_case` | User asks whether to buy, wait, cut, or review a specific stock or setup. | `references/report-contract.md` |
 | `extract_workflow_memory` | User asks to preserve repeated workflow lessons, preferences, or report-quality defects for future agents. | `references/memory-governance.md` |
-| `optimize_skill` | User asks to improve this skill, routing, references, the report contract, or the report workflow. | `references/report-contract.md`, then `docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`, then `references/reasoning-mode-contract.md`, then `references/memory-governance.md`, then `references/verification.md` |
+| `optimize_skill` | User asks to improve this skill, routing, references, the report contract, or the report workflow. | `references/report-contract.md`, then `docs/trellis/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`, then `references/reasoning-mode-contract.md`, then `references/memory-governance.md`, then `references/verification.md` |
 
 ## Priority Order
 
@@ -75,7 +75,7 @@ When the user gives broad optimization direction, preserve this order unless the
 ## References
 
 - `references/report-contract.md` - report acceptance, user-facing wording, trade-case boundaries.
-- `docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md` - anti-noise boundary for simulation tools and price-action fieldization.
+- `docs/trellis/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md` - anti-noise boundary for simulation tools and price-action fieldization.
 - `references/reasoning-mode-contract.md` - no-API first reasoning decision JSON, boundaries, and no chain-of-thought output.
 - `references/memory-governance.md` - review-artifact memory rules and safety boundaries.
 - `references/verification.md` - practical replay, audit, unittest, and diff checks.

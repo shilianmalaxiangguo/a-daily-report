@@ -79,7 +79,7 @@ class LegacyStageSummaryTest(unittest.TestCase):
 
         row_map = {row["stage_key"]: row["guidance"] for row in rows}
         self.assertEqual(row_map["market_environment"], "🟢 明朗；允许强势跟随")
-        self.assertEqual(row_map["selection_focus"], "15只；军工一号(000001)：已缩成明天唯一执行候选")
+        self.assertEqual(row_map["selection_focus"], "军工一号(000001)：已缩成明天唯一执行候选")
         self.assertEqual(row_map["execution_plan"], "短线；只等明天唯一能买的那只自己走出来")
 
     def test_legacy_stage_summary_turns_candidate_and_risk_rows_into_trade_directives(self):
@@ -104,6 +104,27 @@ class LegacyStageSummaryTest(unittest.TestCase):
             row_map["risk_review"],
             "高位分歧加大；只接受预估赚赔比 1:2.4 的试错，不接受大亏硬扛",
         )
+
+    def test_legacy_stage_summary_selection_focus_drops_count_when_final_target_is_resolved(self):
+        rows = build_legacy_report_stage_rows(
+            {
+                "report_stages": [],
+                "watchlist_count": 15,
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "工业富联", "code": "601138"},
+                    "display_target": {"name": "工业富联", "code": "601138"},
+                    "capital_priority_decision": {
+                        "capital_priority": "new_entry_after_old_exit",
+                        "reason": "先处理旧仓，买工业富联(601138)",
+                    },
+                },
+            }
+        )
+
+        row_map = {row["stage_key"]: row["guidance"] for row in rows}
+        self.assertEqual(row_map["selection_focus"], "工业富联(601138)：明日目标标的，固定交易窗口内条件成立才执行")
+        self.assertNotIn("15只；", row_map["selection_focus"])
 
 
 if __name__ == "__main__":

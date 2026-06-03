@@ -356,17 +356,78 @@ def _has_selected_position_candidate(snapshot):
     return bool(selected.get("name") or selected.get("code") or selected.get("stock_code"))
 
 
-def _selected_candidate_has_execution_basis(snapshot):
+def _selected_candidate_sources(snapshot):
     selected = _selected_position_candidate(snapshot)
-    decision = _position_decision(snapshot)
+    if not selected:
+        return []
+    return [
+        selected,
+        selected.get("planned_participation") if isinstance(selected.get("planned_participation"), dict) else {},
+        selected.get("participation_script") if isinstance(selected.get("participation_script"), dict) else {},
+    ]
+
+
+def _selected_candidate_position_pct(snapshot):
+    positive_values = []
+    fallback_values = []
+    for source in _selected_candidate_sources(snapshot):
+        for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
+            raw_value = source.get(key)
+            if raw_value in (None, ""):
+                continue
+            try:
+                value = float(str(raw_value).strip().replace("%", "").replace("+", ""))
+            except (TypeError, ValueError):
+                continue
+            value = int(value)
+            if value >= 50:
+                positive_values.append(value)
+            else:
+                fallback_values.append(value)
+    if positive_values:
+        return max(positive_values)
+    if fallback_values:
+        return max(fallback_values)
+    return 0
+
+
+def _selected_candidate_has_execution_window(snapshot):
+    for source in _selected_candidate_sources(snapshot):
+        if any(str(source.get(key) or "").strip() for key in ("participation_window", "buy_window", "entry_window", "execution_window")):
+            return True
+        steps = source.get("required_steps")
+        if isinstance(steps, (list, tuple)) and any(str(step or "").strip() for step in steps):
+            return True
+    return False
+
+
+def _selected_candidate_has_fallback_condition(snapshot):
+    fallback_keys = (
+        "fallback_state",
+        "cancellation",
+        "invalid_condition",
+        "invalidation",
+        "failure_condition",
+        "stop_loss",
+        "risk_window",
+        "drop_condition",
+    )
+    fallback_markers = ("回到0", "继续0", "不满足", "不参与", "不做", "失效", "止损", "跌破")
+    texts = []
+    for source in _selected_candidate_sources(snapshot):
+        for key in fallback_keys:
+            text = str(source.get(key) or "").strip()
+            if text:
+                texts.append(text)
+    joined = " ".join(texts)
+    return any(marker in joined for marker in fallback_markers)
+
+
+def _selected_candidate_has_execution_basis(snapshot):
     return bool(
-        selected.get("participation_window")
-        or selected.get("buy_window")
-        or selected.get("condition")
-        or selected.get("required_steps")
-        or selected.get("entry_window")
-        or selected.get("execution_window")
-        or decision.get("trigger_text")
+        _selected_candidate_position_pct(snapshot) >= 50
+        and _selected_candidate_has_execution_window(snapshot)
+        and _selected_candidate_has_fallback_condition(snapshot)
     )
 
 
@@ -452,6 +513,16 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
         and not state_machine.get("market_ice_point")
     )
 
+    if _old_position_priority_active(snapshot):
+        reason = _text_value(_capital_priority_decision(snapshot).get("reason")) or "账户资金优先只处理旧仓，新强对象只保留观察锚。"
+        if "只处理旧仓" not in reason:
+            reason = f"{reason}；只处理旧仓，不新增参与。"
+        return {
+            "basis": reason,
+            "reason": "账户资金优先只处理旧仓，不给新增执行目标",
+            "attribution": "账户问题",
+            "strong": True,
+        }
     if _account_unbuyable_core_active(snapshot):
         return {
             "basis": "当前账户买不了一手。",
@@ -543,13 +614,22 @@ def _has_strong_zero_position_exception(snapshot=None, final_gate=None):
 def _promote_selected_candidate_to_standard_attack(snapshot):
     if not _has_selected_position_candidate(snapshot):
         return
+    if not _selected_candidate_has_execution_basis(snapshot):
+        return
     decision = dict(_position_decision(snapshot))
+    selected_pct = _selected_candidate_position_pct(snapshot)
+    target_pct = 100 if selected_pct >= 100 else 50
+    signal_grade = "100" if target_pct >= 100 else "50"
     decision.update(
         {
-            "signal_grade": "50",
-            "target_position_pct": 50,
-            "participation_mode": decision.get("participation_mode") or "attack_50_preview",
-            "sizing_reason": "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按50%标准进攻预演；固定交易窗口不成立再回0%。",
+            "signal_grade": signal_grade,
+            "target_position_pct": target_pct,
+            "participation_mode": decision.get("participation_mode") or ("full_100" if signal_grade == "100" else "attack_50_preview"),
+            "sizing_reason": (
+                "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按100%核心进攻；固定交易窗口不成立再回0%。"
+                if signal_grade == "100"
+                else "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按50%标准进攻预演；固定交易窗口不成立再回0%。"
+            ),
             "front_page_promoted_from_zero": True,
         }
     )
@@ -576,9 +656,11 @@ def _position_state_contract(snapshot=None, final_gate=None):
     if not grade and final_gate.get("can_new_entry"):
         grade = "50"
     if not grade and _conditional_defense_active(final_gate) and _has_unique_action_target(snapshot):
-        grade = "50"
+        target_pct = int(_safe_float(position_decision.get("target_position_pct"), 0))
+        grade = "100" if target_pct >= 100 else "50"
     if not grade and _has_unique_action_target(snapshot) and not _has_strong_zero_position_exception(snapshot, final_gate=final_gate):
-        grade = "50"
+        target_pct = int(_safe_float(position_decision.get("target_position_pct"), 0))
+        grade = "100" if target_pct >= 100 else "50"
     if not grade:
         grade = "0"
     if (
@@ -589,12 +671,17 @@ def _position_state_contract(snapshot=None, final_gate=None):
     ):
         _promote_selected_candidate_to_standard_attack(snapshot)
         position_decision = _position_decision(snapshot)
-        grade = "50"
+        grade = _normalize_signal_grade(position_decision.get("signal_grade")) or _grade_from_position_pct(
+            position_decision.get("target_position_pct")
+        )
+    if _tradable_proxy_priority_active(snapshot) and _resolution_display_target(snapshot):
+        proxy_pct = int(_safe_float(_resolution_display_target(snapshot).get("target_position_pct"), 50))
+        grade = "100" if proxy_pct >= 100 else "50"
     if grade in ("50", "100") and not _has_unique_action_target(snapshot):
         grade = "0"
     if grade in ("50", "100") and countertrend_defense:
         grade = "0"
-    if grade in ("50", "100") and _account_unbuyable_core_active(snapshot):
+    if grade in ("50", "100") and _account_unbuyable_core_active(snapshot) and not _tradable_proxy_priority_active(snapshot):
         grade = "0"
 
     contract = {
@@ -688,7 +775,7 @@ def _monthly_rhythm_lines(snapshot):
     if (
         not _has_unique_action_target(snapshot)
         or _countertrend_defense_active(snapshot)
-        or _account_unbuyable_core_active(snapshot)
+        or (_account_unbuyable_core_active(snapshot) and not _tradable_proxy_priority_active(snapshot))
     ):
         signal_grade = "0"
         max_position = 0
@@ -703,6 +790,7 @@ def _monthly_rhythm_lines(snapshot):
         "|------|------|",
         f"| 本月模式 | {_monthly_mode_label(monthly_rhythm.get('month_mode'))} |",
         f"| 当月收益 | {_format_pct(monthly_rhythm.get('month_return_pct'), signed=True) if monthly_rhythm.get('month_return_pct') not in (None, '') else '未记录'} |",
+        f"| 模拟累计收益 | {_format_pct(monthly_rhythm.get('simulated_cumulative_return_pct'), signed=True) if monthly_rhythm.get('simulated_cumulative_return_pct') not in (None, '') else '未记录'} |",
         f"| 盈利垫 | {_monthly_profit_cushion_text(monthly_rhythm)} |",
         f"| 进攻仓位三态 | {_position_attack_grade_label(signal_grade)} |",
         f"| 明日最大仓位 | {max_position}% |",
@@ -962,6 +1050,91 @@ def _text_value(*values):
     return ""
 
 
+def _stock_like_from_resolution(value):
+    if not isinstance(value, dict):
+        return {}
+    name = _text_value(value.get("name"), value.get("stock_name"))
+    code = _text_value(value.get("code"), value.get("stock_code"), value.get("id"))
+    if not (name or code):
+        return {}
+    return {
+        "name": name,
+        "code": code,
+        "sector": _text_value(value.get("sector"), value.get("sector_name"), value.get("industry")),
+        "direction": _text_value(value.get("direction"), value.get("theme"), value.get("line")),
+        "role": _text_value(value.get("role"), value.get("render_role")),
+        "identity": _text_value(value.get("identity"), value.get("cycle_identity"), value.get("market_identity")),
+        "one_lot_amount": value.get("one_lot_amount"),
+        "proxy_effect_type": _text_value(
+            value.get("proxy_effect_type"),
+            value.get("effect_type"),
+            value.get("tracking_effect_type"),
+        ),
+        "proxy_reason": _text_value(value.get("proxy_reason"), value.get("reason")),
+        "participation_window": normalize_participation_window(
+            _text_value(value.get("participation_window"), value.get("buy_window"), value.get("entry_window"))
+        ),
+        "participation_window_type": _text_value(value.get("participation_window_type")),
+        "required_steps": value.get("required_steps") if isinstance(value.get("required_steps"), list) else [],
+        "condition": normalize_trading_time_text(_text_value(value.get("condition"))),
+        "fallback_state": normalize_trading_time_text(_text_value(value.get("fallback_state"))),
+    }
+
+
+def _final_target_resolution(snapshot):
+    resolution = (snapshot or {}).get("final_target_resolution") or {}
+    return resolution if isinstance(resolution, dict) else {}
+
+
+def _capital_priority_decision(snapshot):
+    decision = _final_target_resolution(snapshot).get("capital_priority_decision") or {}
+    return decision if isinstance(decision, dict) else {}
+
+
+def _capital_priority(snapshot):
+    return _text_value(_capital_priority_decision(snapshot).get("capital_priority"))
+
+
+def _old_position_priority_active(snapshot):
+    return _capital_priority(snapshot) in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
+
+
+def _tradable_proxy_priority_active(snapshot):
+    return _capital_priority(snapshot) == "tradable_proxy"
+
+
+def _new_entry_after_old_exit_active(snapshot):
+    return _capital_priority(snapshot) == "new_entry_after_old_exit"
+
+
+def _resolution_target(snapshot, key):
+    return _stock_like_from_resolution(_final_target_resolution(snapshot).get(key))
+
+
+def _resolution_watch_target(snapshot):
+    if not (_old_position_priority_active(snapshot) or _tradable_proxy_priority_active(snapshot)):
+        return {}
+    resolution = _final_target_resolution(snapshot)
+    for key in ("watch_target", "new_entry_target", "process_target", "ascii_trace_target"):
+        target = _stock_like_from_resolution(resolution.get(key))
+        if target:
+            return target
+    return {}
+
+
+def _resolution_display_target(snapshot):
+    if _old_position_priority_active(snapshot):
+        return {}
+    if not _tradable_proxy_priority_active(snapshot):
+        return {}
+    target = _resolution_target(snapshot, "display_target") or _resolution_target(snapshot, "tradable_proxy_target")
+    return target
+
+
+def _resolution_new_entry_target(snapshot):
+    return _resolution_target(snapshot, "new_entry_target") or _resolution_target(snapshot, "process_target")
+
+
 def _iter_unique_target_sources(snapshot):
     snapshot = snapshot or {}
     for key in ("candidate_pool", "core_candidates"):
@@ -1070,8 +1243,13 @@ def _resolve_sniper_candidates(snapshot, candidate_snapshot):
 
 def _effective_unique_action_target(snapshot):
     snapshot = snapshot or {}
+    if _old_position_priority_active(snapshot):
+        return {}
     if _countertrend_defense_active(snapshot):
         return {}
+    resolved_display = _resolution_display_target(snapshot)
+    if resolved_display:
+        return _enrich_unique_action_target(snapshot, resolved_display)
     if "reasoning_decision" in snapshot:
         return _enrich_unique_action_target(snapshot, derive_unique_action_target_from_reasoning_decision(snapshot))
     target = snapshot.get("unique_action_target") or {}
@@ -1108,6 +1286,9 @@ def _effective_unique_action_target(snapshot):
 
 def _conditional_observation_target(snapshot):
     snapshot = snapshot or {}
+    resolved_watch = _resolution_watch_target(snapshot)
+    if resolved_watch and not _tradable_proxy_priority_active(snapshot):
+        return _enrich_unique_action_target(snapshot, resolved_watch)
     selected = snapshot.get("selected_position_candidate") or {}
     if not isinstance(selected, dict) or not (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return {}
@@ -1341,9 +1522,8 @@ def _knowledge_hit(snapshot, knowledge_id):
 
 def _account_unbuyable_core_active(snapshot):
     snapshot = snapshot or {}
-    account_hit = _knowledge_hit(snapshot, "account.unbuyable-core-anchor")
     main_target = _t0_selected_target(snapshot)
-    if not account_hit or not (main_target.get("name") or main_target.get("code")):
+    if not (main_target.get("name") or main_target.get("code")):
         return False
     account_profile = _account_profile(snapshot)
     cash_available = _safe_float(account_profile.get("cash_available"), 0)
@@ -1367,11 +1547,60 @@ def _t0_target_label(target):
     return name or code or "暂无"
 
 
-def _account_price_condition_text(position_state):
+def _account_buy_zone_text(snapshot=None, target=None):
+    snapshot = snapshot or {}
+    target = target or {}
+    selected = _selected_position_candidate(snapshot)
+    decision = _position_decision(snapshot)
+    for source in (target, selected, decision):
+        if not isinstance(source, dict):
+            continue
+        line = _text_value(
+            source.get("buy_ma_line"),
+            source.get("entry_ma_line"),
+            source.get("ma_buy_line"),
+            source.get("buy_line"),
+        )
+        if line:
+            return f"{line}附近" if "附近" not in line else line
+    text = " ".join(
+        part
+        for part in (
+            _text_value(decision.get("trigger_text")),
+            _text_value(selected.get("condition")),
+            _text_value(target.get("condition")),
+        )
+        if part
+    )
+    for line in ("MA7", "MA5", "MA3", "MA10"):
+        if line in text:
+            return f"{line}附近"
+    return "MA5附近"
+
+
+def _account_price_condition_text(snapshot, target, position_state):
+    snapshot = snapshot or {}
+    target = target or {}
     position_state = position_state or {}
     if position_state.get("grade") == "0":
         return "开盘-5%附近不新开；-3%低开也只观察能否站回0轴/VWAP/MA强弱线，不能转新增参与"
-    return "开盘-5%附近不抢；-3%低开需站回0轴/VWAP/MA强弱线，固定交易窗口内再执行"
+    selected = _selected_position_candidate(snapshot)
+    decision = _position_decision(snapshot)
+    trigger_raw = _text_value(decision.get("trigger_text"))
+    trigger = str(trigger_raw or "").strip()
+    if not trigger:
+        window = normalize_participation_window(
+            _text_value(
+                target.get("participation_window"),
+                selected.get("participation_window"),
+                selected.get("buy_window"),
+            )
+        )
+        window = str(window or SECOND_CONFIRM_WINDOW).replace("窗口条件", "").strip()
+        trigger = f"{window or SECOND_CONFIRM_WINDOW}看承接"
+    else:
+        trigger = str(trigger).replace("窗口条件", "").strip()
+    return f"买入区间：{_account_buy_zone_text(snapshot, target)}；{trigger}，不满足0%不参与"
 
 
 def _no_t0_context_text(position_context_provided):
@@ -1400,6 +1629,9 @@ def _t0_selected_target(snapshot):
         "direction": selected.get("direction") or selected.get("theme"),
         "identity": selected.get("identity") or selected.get("cycle_identity") or selected.get("market_identity"),
         "one_lot_amount": selected.get("one_lot_amount"),
+        "buy_ma_line": selected.get("buy_ma_line"),
+        "participation_window": selected.get("participation_window") or selected.get("buy_window"),
+        "condition": selected.get("condition"),
     }
 
 
@@ -1409,7 +1641,7 @@ def _t0_main_target(snapshot, position_state):
     if position_state.get("grade") == "0":
         if _countertrend_defense_active(snapshot):
             return {}, ""
-        target = _t0_selected_target(snapshot)
+        target = _resolution_watch_target(snapshot) or _t0_selected_target(snapshot)
         return (target, "条件观察") if target else ({}, "")
 
     if "reasoning_decision" in snapshot:
@@ -1428,7 +1660,19 @@ def _account_status_lines(snapshot=None, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     holding = _existing_position_summary(snapshot)
     main_target, main_role = _t0_main_target(snapshot, position_state)
+    proxy_priority = _tradable_proxy_priority_active(snapshot)
+    proxy_target = _resolution_display_target(snapshot) if proxy_priority else {}
+    original_target = _resolution_new_entry_target(snapshot) if proxy_priority else {}
     has_main_target = isinstance(main_target, dict) and bool(main_target.get("name") or main_target.get("code"))
+    no_holding_t0_target = bool(
+        has_main_target
+        and not holding
+        and position_state.get("grade") != "0"
+        and (
+            _selected_candidate_has_execution_basis(snapshot)
+            or _has_unique_action_target(snapshot)
+        )
+    )
     zero_position_reason = ""
     if position_state.get("grade") == "0":
         zero_context = _zero_position_no_execution_context(
@@ -1444,11 +1688,11 @@ def _account_status_lines(snapshot=None, final_gate=None):
     account_profile = _account_profile(snapshot)
     account_hit = _knowledge_hit(snapshot, "account.unbuyable-core-anchor")
     cash_available = _safe_float(account_profile.get("cash_available"), 0)
-    one_lot_amount = _safe_float((main_target or {}).get("one_lot_amount"), 0)
-    main_identity = str((main_target or {}).get("identity") or "").strip()
+    unbuyable_target = original_target if proxy_priority and original_target else main_target
+    one_lot_amount = _safe_float((unbuyable_target or {}).get("one_lot_amount"), 0)
+    main_identity = str((unbuyable_target or {}).get("identity") or "").strip()
     actual_unbuyable_core = bool(
-        account_hit
-        and has_main_target
+        (has_main_target or bool(proxy_target))
         and cash_available
         and one_lot_amount
         and one_lot_amount > cash_available
@@ -1457,8 +1701,29 @@ def _account_status_lines(snapshot=None, final_gate=None):
     position_context_provided = _position_context_provided(snapshot)
     knowledge_basis_label = ""
     position_label = position_state.get("discipline") or "0%不参与"
-    price_condition = _account_price_condition_text(position_state)
-    if actual_unbuyable_core:
+    price_condition = _account_price_condition_text(snapshot, main_target, position_state)
+    if actual_unbuyable_core and proxy_priority and proxy_target:
+        account_constraint = (
+            f"{capital_text}；先处理旧仓，目标标的买不了一手，改用ETF替代表达"
+            if holding
+            else f"{capital_text}；目标标的买不了一手，改用ETF替代表达"
+        )
+        proxy_effect = str(proxy_target.get("proxy_effect_type") or "").strip() or "同主线"
+        original_label = _t0_target_label(original_target or main_target)
+        proxy_label = _t0_target_label(proxy_target)
+        tomorrow_action = (
+            str(_capital_priority_decision(snapshot).get("reason") or "").strip()
+            or f"目标标的{original_label}，小资金账户可用{proxy_label}替代"
+        )
+        position_label = position_state.get("discipline") or "50%标准进攻"
+        primary_row_label = "明日执行目标"
+        main_label = f"{proxy_label}：{proxy_effect}替代表达"
+        secondary_row_label = "观察对象"
+        identity_text = main_identity or "市场核心"
+        backup_label = f"{original_label}：{identity_text}保留观察"
+        new_entry_limit = "1"
+        price_condition = _account_price_condition_text(snapshot, proxy_target, position_state)
+    elif actual_unbuyable_core:
         account_constraint = f"{capital_text}；当前账户买不了一手"
         identity_text = main_identity or "核心身份"
         target_name = str((main_target or {}).get("name") or (main_target or {}).get("stock_name") or _t0_target_label(main_target)).strip()
@@ -1469,15 +1734,51 @@ def _account_status_lines(snapshot=None, final_gate=None):
         backup_label = _no_t0_context_text(position_context_provided)
         new_entry_limit = "0"
         knowledge_basis_label = str(account_hit.get("title") or "").strip()
-    elif holding:
-        account_constraint = f"{capital_text}；已有昨日持仓优先处理"
-        tomorrow_action = "先处理旧仓，不为新候选分散资金"
+    elif no_holding_t0_target:
+        account_constraint = (
+            f"{capital_text}；无昨日持仓先看T0对象"
+            if position_context_provided
+            else f"{capital_text}；未输入持仓，先确认旧仓再看T0对象"
+        )
+        position_label = position_state.get("discipline") or "50%标准进攻"
+        tomorrow_action = (
+            "只看T0主对象，买入区间命中才新开一手"
+            if position_context_provided
+            else "先确认旧仓情况，再看T0主对象"
+        )
+        new_entry_limit = "1"
+        price_condition = _account_price_condition_text(snapshot, main_target, position_state)
         primary_row_label = "T0主对象"
-        main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
-        secondary_row_label = "T0备用"
-        backup_label = f"{_t0_target_label(main_target)}：仅作观察对象" if has_main_target else "暂无"
-        new_entry_limit = "0"
-        price_condition = "已有仓按持仓预案处理；跌破失效价或09:50-10:10收不回先降风险"
+        main_label = f"{_t0_target_label(main_target)}：{main_role}"
+        if position_context_provided:
+            secondary_row_label = "T0备用"
+            backup_label = "暂无"
+        else:
+            secondary_row_label = "持仓确认"
+            backup_label = "持仓未输入，执行前先确认旧仓情况"
+    elif holding:
+        if has_main_target and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
+            target_label = _t0_target_label(main_target)
+            account_constraint = f"{capital_text}；先处理旧仓腾出资金"
+            tomorrow_action = f"先处理旧仓，买{target_label}"
+            primary_row_label = "旧仓处理"
+            main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
+            secondary_row_label = "明日执行目标"
+            backup_label = f"{target_label}：{main_role}"
+            new_entry_limit = "资金释放后1"
+            price_condition = _account_price_condition_text(snapshot, main_target, position_state)
+        else:
+            account_constraint = f"{capital_text}；已有昨日持仓优先处理"
+            tomorrow_action = "先处理旧仓，不新增参与"
+            primary_row_label = "T0主对象"
+            main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
+            secondary_row_label = "T0备用"
+            if has_main_target and _old_position_priority_active(snapshot):
+                backup_label = f"{_t0_target_label(main_target)}：观察锚，不能转成新增参与"
+            else:
+                backup_label = f"{_t0_target_label(main_target)}：仅作观察对象" if has_main_target else "暂无"
+            new_entry_limit = "0"
+            price_condition = "已有仓按持仓预案处理；跌破失效价或09:50-10:10收不回先降风险"
     elif not position_context_provided:
         account_constraint = f"{capital_text}；未输入持仓，先确认旧仓再看T0对象"
         if position_state.get("grade") == "0":
@@ -1486,8 +1787,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             primary_row_label = "观察对象"
             main_label = f"{_t0_target_label(main_target)}：观察锚，不是T0" if has_main_target else "暂无"
         else:
-            position_label = f"预计{position_label}；条件不成立回0%"
-            tomorrow_action = "确认没有旧仓后，只看明日执行目标"
+            tomorrow_action = "先确认旧仓情况，再看明日执行目标"
             new_entry_limit = "1"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
@@ -1501,8 +1801,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             primary_row_label = "观察对象"
             main_label = f"{_t0_target_label(main_target)}：观察锚，不是T0" if has_main_target else "暂无"
         else:
-            position_label = f"预计{position_label}；条件不成立回0%"
-            tomorrow_action = "只看明日执行目标，条件满足才新开一手"
+            tomorrow_action = "只看明日执行目标，买入区间命中才新开一手"
             new_entry_limit = "1"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"

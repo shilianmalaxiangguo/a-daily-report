@@ -79,8 +79,33 @@ def _numeric_zero(value):
         return False
 
 
+def _final_target_resolution(context):
+    context = context or {}
+    resolution = context.get("final_target_resolution")
+    if isinstance(resolution, dict) and resolution:
+        return resolution
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict):
+        resolution = snapshot.get("final_target_resolution")
+        if isinstance(resolution, dict) and resolution:
+            return resolution
+    return {}
+
+
+def _capital_priority(context):
+    decision = (_final_target_resolution(context).get("capital_priority_decision") or {})
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("capital_priority") or "").strip()
+
+
 def _has_zero_participation_result(context):
     context = context or {}
+    capital_priority = _capital_priority(context)
+    if capital_priority in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
+        return False
+    if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t", "wait"}:
+        return True
     position_decision = context.get("position_decision") or {}
     if isinstance(position_decision, dict):
         grade = str(position_decision.get("signal_grade") or "").strip()

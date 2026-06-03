@@ -63,6 +63,11 @@ def _format_core_identity(stock):
 
 
 def _format_candidate_layer(stock):
+    anchor_decision = _anchor_reversal_value(stock, "anchor_reversal_decision", "板块锚反推结论")
+    if anchor_decision == "不参与":
+        return "不参与"
+    if anchor_decision == "降级观察":
+        return "修复观察"
     eligibility = str(stock.get("execution_eligibility") or "").strip()
     layer = str(stock.get("candidate_layer") or "").strip()
     if eligibility == "blocked_by_negative_news" or layer == "risk_blocked":
@@ -87,6 +92,78 @@ def _format_candidate_layer(stock):
     ):
         return "可执行候选"
     return "观察样本"
+
+
+def _anchor_reversal_value(stock, *keys):
+    stock = stock or {}
+    payload = stock.get("anchor_reversal") or stock.get("板块锚反推") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    for key in keys:
+        value = stock.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def _format_anchor_reversal_reason(stock):
+    decision = _anchor_reversal_value(stock, "anchor_reversal_decision", "板块锚反推结论")
+    sector_anchor = _anchor_reversal_value(stock, "sector_anchor", "板块锚")
+    candidate_role = _anchor_reversal_value(stock, "candidate_role", "候选身份")
+    relationship = _anchor_reversal_value(stock, "relationship_to_anchor", "与板块锚关系")
+    why_not_anchor = _anchor_reversal_value(stock, "why_not_anchor", "为什么不做板块锚", "为什么不做锚", "为什么不做龙头")
+    repair_priority = _anchor_reversal_value(stock, "repair_priority", "修复优先级")
+    reason = _anchor_reversal_value(stock, "anchor_reversal_reason", "板块锚反推原因")
+    ma_strategy = _anchor_reversal_value(stock, "ma_binding_strategy", "均线绑定策略")
+    certainty_path = _anchor_reversal_value(stock, "leader_certainty_path", "龙头确定性路径")
+    limit_up_role = _anchor_reversal_value(stock, "limit_up_evidence_role", "涨停证据角色")
+    if not (
+        decision
+        or sector_anchor
+        or candidate_role
+        or relationship
+        or why_not_anchor
+        or repair_priority
+        or ma_strategy
+        or certainty_path
+        or limit_up_role
+        or reason
+    ):
+        return ""
+    parts = []
+    if decision:
+        parts.append(f"板块锚反推：{decision}")
+    if sector_anchor:
+        parts.append(f"锚：{sector_anchor}")
+    if candidate_role:
+        parts.append(f"身份：{candidate_role}")
+    if relationship:
+        parts.append(f"关系：{relationship}")
+    if why_not_anchor:
+        parts.append(f"为什么不做锚：{why_not_anchor}")
+    if repair_priority:
+        parts.append(f"修复优先级：{repair_priority}")
+    if ma_strategy:
+        parts.append(f"均线绑定：{ma_strategy}")
+    if certainty_path:
+        parts.append(f"龙头路径：{certainty_path}")
+    if limit_up_role:
+        parts.append(f"涨停证据：{limit_up_role}")
+    if reason:
+        parts.append(reason)
+    return _clean_cell("；".join(parts))
+
+
+def _format_conviction_reason(stock):
+    reason = _clean_cell(stock.get("conviction_reason"))
+    anchor_reason = _format_anchor_reversal_reason(stock)
+    if anchor_reason and reason != "-":
+        return _clean_cell(f"{reason}；{anchor_reason}")
+    return anchor_reason or reason
 
 
 def _derive_participation_window(stock):
@@ -316,7 +393,7 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
         for idx, stock in enumerate(extreme_conviction_list, 1):
             lines.append(
                 f"| {idx} | {_clean_cell(stock.get('name'))} | {_clean_cell(stock.get('code'))} | "
-                f"{_clean_cell(stock.get('sector'))} | {_format_core_identity(stock)} | {_format_candidate_layer(stock)} | {_clean_cell(stock.get('conviction_reason'))} | "
+                f"{_clean_cell(stock.get('sector'))} | {_format_core_identity(stock)} | {_format_candidate_layer(stock)} | {_format_conviction_reason(stock)} | "
                 f"{_clean_cell(stock.get('conviction_rule'))} |"
             )
         lines.append("")

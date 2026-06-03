@@ -693,14 +693,14 @@ def _build_position_sizing_decision_legacy_body(
                 "max_position_pct": max(int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)), 50),
                 "allow_full_attack": False,
                 "trend_invalid": False,
-                "reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留预计50%标准进攻，条件不成立回0%。",
+                "reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%标准进攻，条件不成立回0%。",
             }
         )
         decision.update(
             {
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
-                "sizing_reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留预计50%标准进攻，条件不成立回0%。",
+                "sizing_reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%标准进攻，条件不成立回0%。",
             }
         )
         return _finalize(decision)

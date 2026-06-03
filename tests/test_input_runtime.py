@@ -284,6 +284,7 @@ assert "get_top50_turnover_share_series_from_tushare_first" in runtime_mock.call
 assert "get_etf_turnover_series_from_sina_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_price_band_style_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_margin_pressure_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert "get_csi1000_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert result["target_date"] == "2026-04-22"
 """
         )

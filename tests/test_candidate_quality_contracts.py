@@ -414,6 +414,44 @@ class CandidateQualityContractsTest(unittest.TestCase):
         self.assertEqual(result["action_ceiling"], "主买")
         self.assertIn("主买对象", result["decision_reason"])
 
+    def test_nested_anchor_reversal_payload_blocks_new_entry(self):
+        result = evaluate_candidate_quality_sample(
+            {
+                "name": "京能电力",
+                "code": "600578",
+                "quality_role": "主买对象",
+                "selection_quality": "高",
+                "entry_cost_state": "确认中",
+                "anchor_reversal": {
+                    "anchor_reversal_decision": "降级观察",
+                    "anchor_reversal_reason": "套利工具不能替代板块锚",
+                },
+            }
+        )
+
+        self.assertEqual(result["action_ceiling"], "不参与")
+        self.assertEqual(result["new_entry_action"], "只观察，不新增参与")
+        self.assertIn("板块锚反推", result["decision_reason"])
+
+    def test_direct_candidate_contract_blocks_entry_when_anchor_reversal_downgrades(self):
+        contract = build_candidate_quality_contract(
+            {
+                "name": "京能电力",
+                "code": "600578",
+                "anchor_reversal": {
+                    "anchor_reversal_decision": "降级观察",
+                    "anchor_reversal_reason": "套利工具不能替代板块锚",
+                },
+            },
+            action_ceiling="补位",
+            new_entry_action="等触发条件成立",
+        )
+
+        self.assertEqual(contract["visible_row"]["动作上限"], "不参与")
+        self.assertEqual(contract["visible_row"]["新开仓动作"], "只观察，不新增参与")
+        self.assertEqual(contract["data"]["action_ceiling"], "不参与")
+        self.assertEqual(contract["data"]["new_entry_action"], "只观察，不新增参与")
+
     def test_primary_quality_role_still_downgrades_when_key_risk_is_missing(self):
         result = evaluate_candidate_quality_sample(
             {
@@ -462,6 +500,25 @@ class CandidateQualityContractsTest(unittest.TestCase):
         )
 
         self.assertEqual(result["holding_action"], "无仓")
+
+    def test_sample_contract_keeps_unknown_position_context_unresolved(self):
+        contract = evaluate_candidate_quality_sample_contract(
+            {
+                "name": "未知持仓样本",
+                "code": "000002",
+                "selection_quality": "中",
+                "entry_cost_state": "确认中",
+                "position_context_provided": False,
+            }
+        )
+
+        row = contract["visible_row"]
+        self.assertEqual(row["当前持仓"], "待确认")
+        self.assertEqual(row["可卖数量"], "待确认")
+        self.assertEqual(row["不可卖数量"], "待确认")
+        self.assertEqual(row["仓位性质"], "持仓未输入")
+        self.assertEqual(row["持仓动作"], "持仓未输入，先确认旧仓情况")
+        self.assertEqual(contract["single_stock_fields"]["持仓动作"], "持仓未输入，先确认旧仓情况")
 
     def test_shengyang_engine_clarification_limits_action(self):
         core_result = evaluate_candidate_quality_sample(

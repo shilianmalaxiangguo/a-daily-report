@@ -1023,24 +1023,6 @@ def render_daily_judgment_review_panel_lines(panel):
                 reason=_clean_markdown_cell(row.get("latest_reason"), "-"),
             )
         )
-    detail_rows = list(panel.get("recent_detail_rows") or [])
-    lines.append("")
-    lines.append("### 最近5日判断明细")
-    lines.append("| 日期 | 判断项 | 结论 | 预期 | 实际 | 原因 |")
-    lines.append("|------|--------|------|------|------|------|")
-    if not detail_rows:
-        lines.append("| 待补事实 | 暂无已结算项 | 待补事实 | - | - | - |")
-    for row in detail_rows:
-        lines.append(
-            "| {date} | {label} | {result} | {expected} | {actual} | {reason} |".format(
-                date=_clean_markdown_cell(row.get("date"), "待补事实"),
-                label=_clean_markdown_cell(row.get("label")),
-                result=_clean_markdown_cell(row.get("result"), "待补事实"),
-                expected=_clean_markdown_cell(row.get("expected"), "-"),
-                actual=_clean_markdown_cell(row.get("actual"), "-"),
-                reason=_clean_markdown_cell(row.get("reason"), "-"),
-            )
-        )
     previous_date = _clean_text(panel.get("previous_trade_date"))
     lines.append("")
     lines.append(f"### 结算上一交易日：{previous_date or '待补事实'}")

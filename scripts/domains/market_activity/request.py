@@ -242,6 +242,23 @@ def _derive_sector_change_rank_from_fund_flow(sector_fund_flow, *, rank_type="up
     return rows
 
 
+def _is_historical_target_date(target_date, current_dates=None):
+    if not current_dates:
+        return False
+    current = {str(date or "").strip() for date in current_dates if str(date or "").strip()}
+    return str(target_date or "").strip() not in current
+
+
+def _historical_sector_flow_payload(target_date, *, provider="tushare.moneyflow_ind_ths"):
+    return {
+        "inflow": [],
+        "outflow": [],
+        "is_historical": True,
+        "target_date": target_date,
+        "provider": provider,
+    }
+
+
 _PROVIDER_ALIASES = {
     "tencent.fundflow.getHyRank": "tencent.sector_change_rank",
     "eastmoney.push2.clist": "eastmoney.turnover_rank",
@@ -346,6 +363,11 @@ def _has_limit_pool_snapshot_payload(snapshot):
     return bool(snapshot.get("zt_pool") or snapshot.get("dt_pool") or snapshot.get("market_stats"))
 
 
+def _has_limit_pool_rows(snapshot):
+    snapshot = snapshot or {}
+    return bool(snapshot.get("zt_pool") or snapshot.get("dt_pool"))
+
+
 def _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit):
     snapshot = snapshot or {}
     zt_pool_records = list(snapshot.get("zt_pool") or [])
@@ -407,10 +429,13 @@ def collect_market_activity_pool_request_bundle(
 
     emit("  4️⃣ 获取涨停跌停数据（Tushare 优先）...")
     try:
+        snapshot = {}
+        snapshot_market_stats = {}
         limit_pool_fetcher = (request_registry or {}).get("limit_pool_snapshot")
         if callable(limit_pool_fetcher):
             snapshot = limit_pool_fetcher(target_date=target_date) or {}
-            if _has_limit_pool_snapshot_payload(snapshot):
+            snapshot_market_stats = dict(snapshot.get("market_stats") or {})
+            if _has_limit_pool_rows(snapshot):
                 _apply_limit_pool_snapshot(results, data_status, artifacts, snapshot, emit)
                 step_status["涨停跌停数据获取"] = True
                 elapsed, _ = timer.record("涨停跌停数据获取", 4)
@@ -516,18 +541,28 @@ def collect_market_activity_pool_request_bundle(
                 "zt_count": len(results.get("zt_pool", []) or []),
                 "dt_count": len(results.get("dt_pool", []) or []),
             }
-            results["market_stats"] = fallback_stats
-            data_status["大盘涨跌统计"] = False
-            emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
+            if _market_breadth_counts_complete(snapshot_market_stats):
+                market_stats = dict(snapshot_market_stats)
+                market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+                market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+                results["market_stats"] = market_stats
+                data_status["大盘涨跌统计"] = True
+                emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+            else:
+                results["market_stats"] = fallback_stats
+                data_status["大盘涨跌统计"] = False
+                emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
             _append_log(
                 module_logs,
                 "request.market_stats",
-                "degraded",
+                "success" if data_status.get("大盘涨跌统计") else "degraded",
                 "大盘涨跌统计接口异常，使用涨跌停池数量补足",
-                provider="akshare.stock_market_activity_legu",
+                provider=snapshot.get("provider", "akshare.stock_market_activity_legu") if data_status.get("大盘涨跌统计") else "akshare.stock_market_activity_legu",
                 target_keys=["market_stats"],
-                zt_count=fallback_stats["zt_count"],
-                dt_count=fallback_stats["dt_count"],
+                up_count=(results.get("market_stats") or {}).get("up_count", 0),
+                down_count=(results.get("market_stats") or {}).get("down_count", 0),
+                zt_count=(results.get("market_stats") or {}).get("zt_count", fallback_stats["zt_count"]),
+                dt_count=(results.get("market_stats") or {}).get("dt_count", fallback_stats["dt_count"]),
                 error=str(stats_error),
             )
 
@@ -1004,6 +1039,7 @@ def collect_market_activity_sector_snapshot_request_bundle(
     emit("  7️⃣ 获取行业资金流向（Tushare 优先）...")
     try:
         today, yesterday = current_dates or (None, None)
+        historical_target = _is_historical_target_date(target_date, current_dates)
         sector_flow_fetcher = (request_registry or {}).get("sector_fund_flow")
         provider = ""
         if callable(sector_flow_fetcher):
@@ -1016,52 +1052,66 @@ def collect_market_activity_sector_snapshot_request_bundle(
                 outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
                 if inflow or outflow:
                     provider = "tencent.get_sector_fund_flow"
-            results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
+            results["sector_fund_flow"] = {
+                "inflow": inflow,
+                "outflow": outflow,
+                "provider": provider,
+                "fallback_used": bool((sector_flow or {}).get("fallback_used")),
+            }
+            for date_key in ("trade_date", "source_date", "query_date"):
+                if (sector_flow or {}).get(date_key):
+                    results["sector_fund_flow"][date_key] = (sector_flow or {}).get(date_key)
             if inflow or outflow:
                 data_status["行业资金流向"] = True
                 step_status["行业资金流向获取"] = True
                 elapsed, _ = timer.record("行业资金流向获取", 7)
                 emit(f"   ✅ 行业资金流成功: 净流入{len(inflow)}条, 净流出{len(outflow)}条 [⏱ {elapsed:.2f}s]")
             else:
-                results["sector_fund_flow"] = {"inflow": [], "outflow": []}
+                results["sector_fund_flow"].update({"inflow": [], "outflow": []})
                 data_status["行业资金流向"] = False
-                emit("   ❌ 行业资金流向返回空")
+                step_status["行业资金流向获取"] = False
+                timer.record("行业资金流向获取(失败)", 7)
+                emit("   ❌ 行业资金流向返回空，关键数据不完整，停止生成")
         elif target_date == today or target_date == yesterday:
             inflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="in", limit=50))
             outflow = _normalize_sector_fund_flow_rows(tencent.get_sector_fund_flow(flow_type="out", limit=50))
-            results["sector_fund_flow"] = {"inflow": inflow, "outflow": outflow}
+            results["sector_fund_flow"] = {
+                "inflow": inflow,
+                "outflow": outflow,
+                "provider": "tencent.get_sector_fund_flow",
+                "fallback_used": True,
+            }
             if inflow or outflow:
                 data_status["行业资金流向"] = True
                 step_status["行业资金流向获取"] = True
                 elapsed, _ = timer.record("行业资金流向获取", 7)
                 emit(f"   ✅ 腾讯财经成功: 净流入{len(inflow)}条, 净流出{len(outflow)}条 [⏱ {elapsed:.2f}s]")
             else:
-                results["sector_fund_flow"] = {"inflow": [], "outflow": []}
+                results["sector_fund_flow"].update({"inflow": [], "outflow": []})
                 data_status["行业资金流向"] = False
-                emit("   ❌ 行业资金流向返回空")
+                step_status["行业资金流向获取"] = False
+                timer.record("行业资金流向获取(失败)", 7)
+                emit("   ❌ 行业资金流向返回空，关键数据不完整，停止生成")
         else:
-            results["sector_fund_flow"] = {
-                "inflow": [],
-                "outflow": [],
-                "is_historical": True,
-                "target_date": target_date,
-            }
-            data_status["行业资金流向"] = True
-            step_status["行业资金流向获取"] = True
-            timer.record("行业资金流向获取", 7)
-            emit(f"   ⚠️ 历史({target_date})板块资金流向暂不支持，将在报告中提示")
+            results["sector_fund_flow"] = {"inflow": [], "outflow": [], "provider": "tencent.get_sector_fund_flow", "fallback_used": True}
+            data_status["行业资金流向"] = False
+            step_status["行业资金流向获取"] = False
+            timer.record("行业资金流向获取(失败)", 7)
+            emit("   ❌ 历史板块资金流向未取得，关键数据不完整，停止生成")
         _append_log(
             module_logs,
             "request.sector_fund_flow",
             "success" if data_status.get("行业资金流向") else "degraded",
-            "已处理行业资金流向请求",
+            "已处理行业资金流向请求" if data_status.get("行业资金流向") else "行业资金流向缺失，关键数据不完整，停止生成",
             provider=provider or ((sector_flow or {}).get("provider", "tushare.moneyflow_ind_ths") if "sector_flow" in locals() else "tencent.get_sector_fund_flow"),
             target_keys=["sector_fund_flow"],
             historical=bool(results.get("sector_fund_flow", {}).get("is_historical")),
+            error="" if data_status.get("行业资金流向") else "关键数据不完整，停止生成",
         )
     except Exception as error:
         results["sector_fund_flow"] = {"inflow": [], "outflow": []}
         data_status["行业资金流向"] = False
+        step_status["行业资金流向获取"] = False
         emit(f"   ❌ 行业资金流向失败: {error}")
         _append_log(
             module_logs,
@@ -1146,17 +1196,19 @@ def collect_market_activity_sector_snapshot_request_bundle(
         results["sector_change_down"] = sector_down or []
         data_status["板块涨幅排行"] = bool(sector_up)
         data_status["板块跌幅排行"] = bool(sector_down)
-        if sector_up or sector_down:
+        if sector_up and sector_down:
             step_status["板块涨跌幅排行获取"] = True
             elapsed, _ = timer.record("板块涨跌幅排行获取", 8)
             emit(f"   ✅ 板块涨跌幅排行成功 [⏱ {elapsed:.2f}s]")
         else:
-            emit("   ❌ 板块涨跌幅排行为空")
+            step_status["板块涨跌幅排行获取"] = False
+            timer.record("板块涨跌幅排行获取(失败)", 8)
+            emit("   ❌ 板块涨跌幅排行为空，关键数据不完整，停止生成")
         _append_log(
             module_logs,
             "request.sector_change_rank",
             "success" if step_status.get("板块涨跌幅排行获取") else "degraded",
-            "已处理板块涨跌幅排行请求",
+            "已处理板块涨跌幅排行请求" if step_status.get("板块涨跌幅排行获取") else "板块涨跌幅排行缺失，关键数据不完整，停止生成",
             provider=_provider_from_rows(
                 list(results.get("sector_change_up", [])) + list(results.get("sector_change_down", [])),
                 "tencent.sector_change_rank",
@@ -1164,12 +1216,14 @@ def collect_market_activity_sector_snapshot_request_bundle(
             target_keys=["sector_change_up", "sector_change_down"],
             up_count=len(results.get("sector_change_up", [])),
             down_count=len(results.get("sector_change_down", [])),
+            error="" if step_status.get("板块涨跌幅排行获取") else "关键数据不完整，停止生成",
         )
     except Exception as error:
         results["sector_change_up"] = []
         results["sector_change_down"] = []
         data_status["板块涨幅排行"] = False
         data_status["板块跌幅排行"] = False
+        step_status["板块涨跌幅排行获取"] = False
         timer.record("板块涨跌幅排行获取(失败)", 8)
         emit(f"   ❌ 板块涨跌幅排行失败: {error}")
         _append_log(

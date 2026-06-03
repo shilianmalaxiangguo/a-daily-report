@@ -237,6 +237,110 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         self.assertEqual(semiconductor_rows[0]["inflow"], 12.34)
         self.assertEqual(component_rows[0]["inflow"], -5.67)
 
+    def test_ensure_daily_metric_history_index_default_loader_uses_compact_snapshot(self):
+        from domains.market_state import daily_metric_history_index as index
+        from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
+        from storage.database_service import DatabaseService
+
+        compact_snapshot = {
+            "total_turnover": 29246.59,
+            "market_stats": {"up_count": 3869, "down_count": 1509},
+            "sector_fund_flow": {
+                "inflow": [{"name": "半导体", "zljlr": 12.34}],
+                "outflow": [],
+            },
+            "current_mainline_history_record": {
+                "date": "2026-05-22",
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+            },
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-22",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29246.59,
+                "turnover_share_pct": 13.85,
+            },
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "daily.db"
+            with patch.object(
+                index,
+                "load_data_snapshot",
+                side_effect=AssertionError("default index rebuild must not parse full snapshot"),
+            ), patch.object(
+                index,
+                "_load_replay_snapshot_data",
+                side_effect=AssertionError("default index rebuild must not parse full replay snapshot"),
+            ), patch.object(
+                index,
+                "_load_compact_replay_metric_snapshot",
+                return_value=None,
+            ), patch.object(
+                index,
+                "_load_compact_metric_history_snapshot",
+                return_value=(compact_snapshot, ""),
+            ) as compact_loader:
+                result = ensure_daily_metric_history_index(
+                    end_date="2026-05-22",
+                    window_days=1,
+                    max_scan_days=1,
+                    db_path=db_path,
+                )
+            service = DatabaseService.sqlite_d1_compatible(db_path)
+            market_total = service.query_market_daily_total("2026-05-22")
+            turnover_rows = service.query_mainline_turnover_series("2026-05-22", "半导体", window_days=1)
+
+        compact_loader.assert_called_once_with("2026-05-22")
+        self.assertEqual(result["indexed_count"], 1)
+        self.assertEqual(market_total["total_amount_yi"], 29246.59)
+        self.assertEqual(turnover_rows[0]["sector_turnover"], 4050.0)
+
+    def test_ensure_daily_metric_history_index_reuses_default_rebuild_window(self):
+        from domains.market_state import daily_metric_history_index as index
+        from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
+        from storage.database_service import DatabaseService
+
+        snapshot = {
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-22",
+                "sector_name": "半导体",
+                "sector_turnover": 4050.0,
+                "total_turnover": 29246.59,
+                "turnover_share_pct": 13.85,
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "daily.db"
+            with patch.object(index, "_DEFAULT_REBUILD_WINDOW_CACHE", {}), patch.object(
+                index,
+                "_load_compact_metric_history_snapshot",
+                return_value=(snapshot, ""),
+            ) as compact_loader, patch.object(
+                index,
+                "_load_compact_replay_metric_snapshot",
+                return_value=None,
+            ):
+                first = ensure_daily_metric_history_index(
+                    end_date="2026-05-22",
+                    window_days=1,
+                    max_scan_days=1,
+                    db_path=db_path,
+                    database_service_cls=DatabaseService,
+                )
+                second = ensure_daily_metric_history_index(
+                    end_date="2026-05-22",
+                    window_days=1,
+                    max_scan_days=1,
+                    db_path=db_path,
+                    database_service_cls=DatabaseService,
+                )
+
+        self.assertEqual(first, second)
+        compact_loader.assert_called_once_with("2026-05-22")
+
 
 if __name__ == "__main__":
     unittest.main()

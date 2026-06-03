@@ -56,6 +56,19 @@ class MonthlyRhythmRuntimeTest(unittest.TestCase):
         self.assertTrue(result["allow_full_attack"])
         self.assertEqual(result["target_role"], "attack_confirmed")
 
+    def test_monthly_context_keeps_simulated_cumulative_return(self):
+        result = build_monthly_rhythm_decision(
+            target_date="2026-06-18",
+            monthly_context={
+                "month_mode": "ordinary_attack",
+                "month_return_pct": 3.2,
+                "simulated_cumulative_return_pct": 9.36,
+            },
+            state_machine_snapshot={"execution_bias": "prep_only", "energy_state": "收缩防守"},
+        )
+
+        self.assertEqual(result["simulated_cumulative_return_pct"], 9.36)
+
     def test_month_profit_near_target_keeps_attack_when_trend_is_right(self):
         result = build_monthly_rhythm_decision(
             target_date="2026-06-25",

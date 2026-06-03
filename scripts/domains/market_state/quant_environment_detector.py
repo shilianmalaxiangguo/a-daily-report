@@ -57,7 +57,7 @@ def _detect_narrow_pool_attack(market_data):
             "description": "指数强但上涨家数弱,资金集中少数板块路径",
             "evidence": f"指数+{index_change:.2f}%, 上涨家数{up_ratio:.1f}%, Top50占比{top50_share:.1f}%",
             "action": "只看被资金持续选择的板块路径,不把指数上涨当普涨环境",
-            "risk": "未被选择的方向不能因为指数上涨而提高参与资格"
+            "risk": "未被选择的方向不能因为指数上涨而提高观察质量"
         }
 
     return {"detected": False}

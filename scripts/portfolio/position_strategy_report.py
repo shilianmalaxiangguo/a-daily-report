@@ -89,7 +89,7 @@ def _source_report_allows_new_position(markdown_text):
         "明日不新增参与",
         "不构成明日新增参与",
         "最终0%时只作观察样本",
-        "先处理旧仓，不为新候选分散资金",
+        "先处理旧仓，不新增参与",
     )
     return not any(marker in text for marker in no_new_markers)
 
@@ -336,15 +336,53 @@ def _holding_identity_action(identity_kind):
     return "不享受极度看好身份；只按旧仓失效、防守线和大盘剧本处理。"
 
 
+def _format_number(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def _format_lots(value):
+    text = _format_number(value)
+    return f"{text}手" if text else ""
+
+
+def _format_holding_position_text(position):
+    pct = position.get("position", position.get("position_pct", None))
+    if isinstance(pct, (int, float)):
+        return f"{pct:.1f}%"
+    if pct not in (None, ""):
+        return _clean_text(pct, "-")
+    shares = position.get("shares")
+    if not shares and position.get("lots") not in (None, ""):
+        shares = int(float(position.get("lots")) * 100)
+    lots_text = _format_lots(position.get("lots"))
+    parts = []
+    if lots_text:
+        parts.append(lots_text)
+    if shares:
+        parts.append(f"{shares}股")
+    base = "/".join(parts)
+    if position.get("trade_action") == "做T":
+        buy_text = _format_lots(position.get("buy_lots"))
+        sell_text = _format_lots(position.get("sell_lots"))
+        trade_parts = []
+        if buy_text:
+            trade_parts.append(f"买入{buy_text}")
+        if sell_text:
+            trade_parts.append(f"卖出{sell_text}")
+        trade_text = f"今日做T{'、'.join(trade_parts)}" if trade_parts else "今日做T"
+        return f"{base}，{trade_text}" if base else trade_text
+    return base or "-"
+
+
 def _render_holding_rows(positions, candidates, tracking_items, scenario):
     rows = []
     for position in positions or []:
         name = _clean_text(position.get("name") or position.get("stock_name"), "-")
-        pct = position.get("position", position.get("position_pct", "-"))
-        if isinstance(pct, (int, float)):
-            pct_text = f"{pct:.1f}%"
-        else:
-            pct_text = _clean_text(pct, "-")
+        pct_text = _format_holding_position_text(position)
         identity, identity_kind = _holding_identity(position, candidates, tracking_items)
         action = _holding_identity_action(identity_kind)
         rows.append(f"| {name} | {pct_text} | {identity} | {scenario['holding_action']} | {action} |")

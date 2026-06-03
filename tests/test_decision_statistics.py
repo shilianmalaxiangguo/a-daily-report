@@ -649,11 +649,11 @@ class DecisionStatisticsTest(unittest.TestCase):
             "| 核心候选判断 | 100.00% | 正确 | 京能电力(600578) | 候选进入次日资金视野 | 候选进入次日资金视野，判断成立 |",
             rendered,
         )
-        self.assertIn("### 最近5日判断明细", rendered)
-        self.assertIn("| 日期 | 判断项 | 结论 | 预期 | 实际 | 原因 |", rendered)
-        self.assertIn("| 2026-05-29 | 市场状态判断 | 错误 | 混沌 | 退潮 | 预判混沌，次日实际为退潮 |", rendered)
-        self.assertIn("| 2026-05-29 | 主线判断 | 正确 | 无确认主线 | 无确认主线 | 次日主线仍无确认主线 |", rendered)
-        self.assertIn(
+        self.assertNotIn("### 最近5日判断明细", rendered)
+        self.assertNotIn("| 日期 | 判断项 | 结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertNotIn("| 2026-05-29 | 市场状态判断 | 错误 | 混沌 | 退潮 | 预判混沌，次日实际为退潮 |", rendered)
+        self.assertNotIn("| 2026-05-29 | 主线判断 | 正确 | 无确认主线 | 无确认主线 | 次日主线仍无确认主线 |", rendered)
+        self.assertNotIn(
             "| 2026-05-29 | 核心候选判断 | 正确 | 京能电力(600578) | 京能电力(600578)进入hot_rank_top50、京能电力(600578)进入integrated_hot_list | 候选进入次日资金视野，判断成立 |",
             rendered,
         )

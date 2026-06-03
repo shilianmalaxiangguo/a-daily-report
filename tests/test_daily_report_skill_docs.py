@@ -136,7 +136,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
     def test_report_contract_retires_legacy_conservative_sizing(self):
         skill = self._read("SKILL.md")
         report_contract = self._read("references/report-contract.md")
-        v2_spec = self._read("docs/superpowers/specs/2026-04-25-daily-report-v2-design.md")
+        v2_spec = self._read("docs/trellis/specs/2026-04-25-daily-report-v2-design.md")
         combined = "\n".join([skill, report_contract])
 
         for required in [
@@ -265,7 +265,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         skill = self._read("SKILL.md")
         report_contract = self._read("references/report-contract.md")
         boundary_spec = self._read(
-            "docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md"
+            "docs/trellis/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md"
         )
         combined = "\n".join([skill, report_contract, boundary_spec])
 
@@ -810,8 +810,8 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             ROOT / "CONTEXT.md",
             ROOT / "references",
             ROOT / "wiki",
-            ROOT / "docs" / "superpowers" / "specs",
-            ROOT / "docs" / "superpowers" / "plans",
+            ROOT / "docs" / "trellis" / "specs",
+            ROOT / "docs" / "trellis" / "plans",
             *self._latest_public_report_paths(),
         ]
         offenders = []

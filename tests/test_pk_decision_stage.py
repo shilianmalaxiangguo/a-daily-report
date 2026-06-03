@@ -223,6 +223,14 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         self.assertEqual(result["exports"]["candidate_quality_panel_fields"]["market_emotion_label"], "退潮防守")
+        self.assertEqual(
+            result["exports"]["candidate_quality_panel_fields"]["account_attention_load"],
+            "持仓未输入，先确认旧仓情况",
+        )
+        self.assertEqual(
+            result["exports"]["candidate_quality_panel_fields"]["holding_priority_action"],
+            "先确认旧仓情况，再看新增",
+        )
         self.assertEqual(result["exports"]["candidate_quality_samples"], [])
         self.assertEqual(
             result["exports"]["candidate_quality_scorecard_diagnostics"],
@@ -234,6 +242,28 @@ class PkDecisionStageTest(unittest.TestCase):
                 "source": "pk_decision",
             },
         )
+
+    def test_candidate_quality_scorecard_uses_confirmed_empty_position_context(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction_cn": "退潮防守",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "position_context_provided": True,
+                "best_stock": None,
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["candidate_quality_scorecard", "export_stage_state"],
+        )
+
+        panel_fields = result["exports"]["candidate_quality_panel_fields"]
+        self.assertEqual(panel_fields["account_attention_load"], "无持仓负担")
+        self.assertEqual(panel_fields["holding_priority_action"], "无旧仓时只等参与窗口")
 
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(

@@ -275,7 +275,7 @@ def calculate_sector_diffusion_quality(sector_name, sector_data):
     else:
         level = "弱扩散"
         conclusion = f"{sector_name}扩散质量不足,量化资金可能离场,先防分化"
-        action = "不追高位加速,先处理旧仓,不为新候选分散资金"
+        action = "不追高位加速,先处理旧仓,不新增参与"
 
     return {
         "sector_name": sector_name,

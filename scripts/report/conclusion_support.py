@@ -6,13 +6,75 @@ def format_stock_label(stock):
     if not isinstance(stock, dict):
         return str(stock or "").strip()
     name = str(stock.get("name", "") or "").strip()
-    code = str(stock.get("code", "") or "").strip()
+    code = str(stock.get("code") or stock.get("stock_code") or "").strip()
     if name and code:
         return f"{name}({code})"
     return name or code or "-"
 
 
+def _final_target_resolution(context):
+    context = context or {}
+    resolution = context.get("final_target_resolution")
+    if isinstance(resolution, dict) and resolution:
+        return resolution
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict):
+        resolution = snapshot.get("final_target_resolution")
+        if isinstance(resolution, dict) and resolution:
+            return resolution
+    return {}
+
+
+def _capital_priority(context):
+    decision = (_final_target_resolution(context).get("capital_priority_decision") or {})
+    if not isinstance(decision, dict):
+        return ""
+    return str(decision.get("capital_priority") or "").strip()
+
+
+def _resolution_target(resolution, *keys):
+    for key in keys:
+        target = resolution.get(key)
+        if isinstance(target, dict) and (target.get("name") or target.get("code") or target.get("stock_code")):
+            return target
+    return {}
+
+
+def _old_position_priority_active(context):
+    return _capital_priority(context) in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
+
+
+def _tradable_proxy_priority_active(context):
+    return _capital_priority(context) == "tradable_proxy"
+
+
+def _resolved_target_position_pct(target, fallback=0):
+    target = target or {}
+    for key in ("target_position_pct", "position_pct", "planned_position_pct"):
+        value = target.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return int(float(str(value).replace("%", "").strip()))
+        except (TypeError, ValueError):
+            continue
+    return fallback
+
+
 def resolve_selected_position_candidate(context):
+    resolution = _final_target_resolution(context)
+    if resolution:
+        if _old_position_priority_active(context):
+            resolved = _resolution_target(resolution, "watch_target", "new_entry_target", "process_target", "ascii_trace_target")
+            if resolved:
+                return resolved
+        if _tradable_proxy_priority_active(context):
+            resolved = _resolution_target(resolution, "display_target", "tradable_proxy_target")
+            if resolved:
+                return resolved
+        resolved = _resolution_target(resolution, "display_target", "new_entry_target", "watch_target", "process_target")
+        if resolved:
+            return resolved
     selected = context.get("selected_position_candidate") or {}
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return selected
@@ -20,6 +82,12 @@ def resolve_selected_position_candidate(context):
 
 
 def selected_target_is_attack_ready(context):
+    if _old_position_priority_active(context) or _capital_priority(context) == "wait":
+        return False
+    if _tradable_proxy_priority_active(context):
+        resolution = _final_target_resolution(context)
+        proxy_target = _resolution_target(resolution, "display_target", "tradable_proxy_target")
+        return bool(proxy_target) and _resolved_target_position_pct(proxy_target, fallback=50) >= 50
     position_decision = context.get("position_decision") or {}
     try:
         target_pct = int(float(position_decision.get("target_position_pct") or 0))
@@ -41,6 +109,11 @@ def build_market_outlook_text(context):
     action_text = str(context.get("step0_action", "") or "").strip()
     final_gate = context.get("final_gate") or {}
     selected = resolve_selected_position_candidate(context)
+    if _old_position_priority_active(context):
+        final_action = str(final_gate.get("final_action", "") or "").strip()
+        parts = [part for part in (prediction_text, final_action) if part]
+        if parts:
+            return "；".join(parts)
     if selected and selected_target_is_attack_ready(context):
         final_action = str(final_gate.get("final_action", "") or "").strip()
         parts = [part for part in (prediction_text, final_action) if part]
@@ -61,6 +134,8 @@ def build_market_outlook_text(context):
 def build_focus_recap_text(context):
     selected = resolve_selected_position_candidate(context)
     if selected:
+        if _old_position_priority_active(context):
+            return f"{format_stock_label(selected)}：观察锚，旧仓先处理"
         if selected_target_is_attack_ready(context):
             return f"{format_stock_label(selected)}：明日目标标的，固定交易窗口内条件成立才执行"
         return f"{format_stock_label(selected)}：明日目标标的，先观察强弱与承接"
@@ -105,17 +180,19 @@ def build_candidate_trade_directive(context):
     core_count = int(context.get("core_count", 0) or 0)
     secondary_count = int(context.get("secondary_count", 0) or 0)
     crossline_count = int(context.get("crossline_count", 0) or 0)
-    summary = f"{core_count}只主线核心 / {secondary_count}只备选 / {crossline_count}只跨线观察"
 
     selected = resolve_selected_position_candidate(context)
     best_stock = context.get("best_stock") or {}
     watch_anchor = context.get("watch_anchor") or {}
     if selected:
+        if _old_position_priority_active(context):
+            return f"板块锚反推已收敛到观察锚{format_stock_label(selected)}，但账户先处理旧仓，不新增参与"
         if selected_target_is_attack_ready(context):
-            directive = f"已缩到明日目标标的{format_stock_label(selected)}，只看固定交易窗口内条件是否成立"
+            return f"板块锚反推已收敛到明日目标标的{format_stock_label(selected)}，只看固定交易窗口内条件是否成立"
         else:
-            directive = f"已缩到明日目标标的{format_stock_label(selected)}，先观察强弱与承接"
-    elif best_stock:
+            return f"板块锚反推已收敛到明日目标标的{format_stock_label(selected)}，先观察强弱与承接"
+    summary = f"{core_count}只主线核心 / {secondary_count}只备选 / {crossline_count}只跨线观察"
+    if best_stock:
         directive = f"先只在主线核心里做减法，目标缩到{format_stock_label(best_stock)}"
     elif core_count > 0:
         directive = "先只在主线核心里做减法，不把跨线对象直接当观察位"

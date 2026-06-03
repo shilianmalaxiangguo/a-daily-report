@@ -70,6 +70,7 @@ def build_monthly_rhythm_decision(
 
     raw_month_return = monthly_context.get("month_return_pct", monthly_context.get("monthly_return_pct"))
     month_return_pct = _optional_float(raw_month_return)
+    simulated_cumulative_return_pct = _optional_float(monthly_context.get("simulated_cumulative_return_pct"))
     has_month_return = month_return_pct is not None
     profit_cushion_pct = _safe_float(monthly_context.get("profit_cushion_pct", 10.0), 10.0)
     loss_guard_pct = _safe_float(monthly_context.get("loss_guard_pct", -3.0), -3.0)
@@ -145,6 +146,7 @@ def build_monthly_rhythm_decision(
         "month_mode": month_mode,
         "target_role": target_role,
         "month_return_pct": month_return_pct,
+        "simulated_cumulative_return_pct": simulated_cumulative_return_pct,
         "month_return_source": monthly_context.get("month_return_source") or ("recorded" if has_month_return else "missing"),
         "profit_cushion_pct": profit_cushion_pct,
         "loss_guard_pct": loss_guard_pct,

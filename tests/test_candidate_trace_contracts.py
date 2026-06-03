@@ -83,6 +83,23 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertIn("sector", trace["missing_data"])
         self.assertIn("市场条件数据缺失", trace["branch_path"])
 
+    def test_trade_narrative_sector_is_used_as_visible_sector(self):
+        trace = build_candidate_trace(
+            {
+                "name": "工业富联",
+                "code": "601138",
+                "mainline": "AI算力基础设施",
+                "sector": "通信设备",
+                "trade_narrative_sector": "AI算力基础设施",
+                "market_fit": "满足",
+                "mainline_fit": "满足",
+                "stock_structure_fit": "部分满足",
+                "final_action": "09:50-10:10确认",
+            }
+        )
+
+        self.assertEqual(trace["sector"], "AI算力基础设施")
+
     def test_check_results_are_controlled(self):
         self.assertEqual(CHECK_RESULTS, ("满足", "部分满足", "未满足", "数据缺失"))
         trace = build_candidate_trace(
@@ -247,6 +264,102 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertEqual(payload["visible_scope"], "T0_T1_T2_T3")
         self.assertEqual(payload["traces"][0]["stock_code"], "002185")
         self.assertEqual(payload["eliminated_summary"][0]["reason"], "主线不匹配")
+
+    def test_candidate_trace_preserves_anchor_ma_path_and_limit_up_role(self):
+        trace = build_candidate_trace(
+            {
+                "name": "大唐发电",
+                "code": "601991",
+                "tier": "T0",
+                "mainline": "电力",
+                "sector": "电力",
+                "sector_anchor": "大唐发电(601991)",
+                "candidate_role": "板块锚",
+                "relationship_to_anchor": "资金回流优先看板块锚，候选本身就是板块锚",
+                "repair_priority": "优先修复",
+                "anchor_reversal_decision": "可作为主对象",
+                "anchor_reversal_reason": "候选就是板块锚，MA5入/MA7清/MA5T和承接路径明确，涨停只是证据，慢即是快",
+                "ma_binding_strategy": "MA5入/MA7清/MA5T",
+                "leader_certainty_path": "板块锚优先，MA5入/MA7清/MA5T和承接路径明确",
+                "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+            }
+        )
+
+        anchor = trace["anchor_reversal"]
+        self.assertEqual(anchor["ma_binding_strategy"], "MA5入/MA7清/MA5T")
+        self.assertIn("承接路径明确", anchor["leader_certainty_path"])
+        self.assertIn("涨停只是证据", anchor["limit_up_evidence_role"])
+
+    def test_candidate_trace_accepts_why_not_sector_anchor_alias(self):
+        trace = build_candidate_trace(
+            {
+                "name": "华电辽能",
+                "code": "600396",
+                "tier": "T1",
+                "mainline": "电力",
+                "sector": "电力",
+                "sector_anchor": "大唐发电(601991)",
+                "candidate_role": "大容量中军",
+                "为什么不做板块锚": "大唐发电短线加速过热，华电辽能承接更适合补位",
+                "anchor_reversal_decision": "可作为补位",
+            }
+        )
+
+        self.assertEqual(
+            trace["anchor_reversal"]["why_not_anchor"],
+            "大唐发电短线加速过热，华电辽能承接更适合补位",
+        )
+
+    def test_candidate_trace_preserves_nested_anchor_reversal_payload(self):
+        trace = build_candidate_trace(
+            {
+                "name": "京能电力",
+                "code": "600578",
+                "tier": "T1",
+                "mainline": "电力",
+                "sector": "电力",
+                "anchor_reversal": {
+                    "sector_anchor": "大唐发电(601991)",
+                    "candidate_role": "套利工具",
+                    "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                    "why_not_anchor": "不能证明比板块锚更值得参与",
+                    "anchor_reversal_decision": "降级观察",
+                    "anchor_reversal_reason": "套利工具不能替代板块锚",
+                    "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+                },
+            }
+        )
+
+        anchor = trace["anchor_reversal"]
+        self.assertEqual(anchor["sector_anchor"], "大唐发电(601991)")
+        self.assertEqual(anchor["anchor_reversal_decision"], "降级观察")
+        self.assertIn("涨停只是证据", anchor["limit_up_evidence_role"])
+
+    def test_candidate_trace_blocks_action_when_anchor_reversal_downgrades(self):
+        trace = build_candidate_trace(
+            {
+                "name": "京能电力",
+                "code": "600578",
+                "tier": "T1",
+                "mainline": "电力",
+                "sector": "电力",
+                "market_fit": "满足",
+                "mainline_fit": "满足",
+                "stock_structure_fit": "满足",
+                "latest_price": 5,
+                "available_cash": 10000,
+                "anchor_reversal": {
+                    "sector_anchor": "大唐发电(601991)",
+                    "candidate_role": "套利工具",
+                    "anchor_reversal_decision": "降级观察",
+                    "anchor_reversal_reason": "套利工具不能替代板块锚",
+                },
+            }
+        )
+
+        self.assertEqual(trace["final_action"], "板块锚反推降级，只观察，不新增参与")
+        self.assertIn("板块锚反推降级观察", trace["branch_path"])
+        self.assertIn("只观察，不新增参与", trace["visible_summary"])
 
 
 if __name__ == "__main__":

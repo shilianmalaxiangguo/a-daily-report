@@ -7,7 +7,7 @@ import re
 import traceback
 from pathlib import Path
 
-from daily_report_snapshot_io import load_data_snapshot
+from daily_report_snapshot_io import LEDGER_MODE_FROZEN, _get_snapshot_path, load_data_snapshot
 
 try:
     from storage.database_service import DatabaseService
@@ -130,6 +130,18 @@ def _load_replay_snapshot_data(target_date):
     return payload if isinstance(payload, dict) else None
 
 
+def _load_compact_replay_metric_snapshot(target_date):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        stack = "".join(traceback.format_stack(limit=12))
+        raise RuntimeError(
+            "PostgreSQL-only runtime attempted to read replay JSON snapshot "
+            f"for {target_date}.\n{stack}"
+        )
+    path = _repo_root() / "snapshots" / "replay" / f"{target_date}_replay.json"
+    snapshot_data, _ = _load_compact_snapshot_file(path)
+    return snapshot_data
+
+
 def _load_report_markdown(target_date):
     candidates = [
         _repo_root() / "reports" / "replay" / f"{target_date}_A股日报_完整版_replay.md",
@@ -145,6 +157,137 @@ def _load_report_markdown(target_date):
         except Exception:
             continue
     return ""
+
+
+_COMPACT_METRIC_HISTORY_KEYS = (
+    "total_turnover",
+    "market_overview",
+    "market_stats",
+    "sector_fund_flow",
+    "current_mainline_history_record",
+    "mainline_history_record",
+    "recent_mainline_history",
+    "current_sector_turnover_snapshot",
+    "sector_turnover_snapshot",
+    "mainline_turnover_summary",
+    "new_high_feedback",
+)
+_DEFAULT_REBUILD_WINDOW_CACHE = {}
+
+
+def _decode_json_value(value_text):
+    return json.JSONDecoder().raw_decode(str(value_text or "").lstrip())[0]
+
+
+def _decode_top_level_data_field_from_text(text, field_name):
+    marker = f'\n    "{field_name}":'
+    index = str(text or "").find(marker)
+    if index < 0 and str(text or "").startswith(marker.lstrip("\n")):
+        index = 0
+    if index < 0:
+        return None, False
+    colon_index = str(text).find(":", index + len(marker))
+    if colon_index < 0:
+        return None, False
+    try:
+        return _decode_json_value(str(text)[colon_index + 1 :]), True
+    except (json.JSONDecodeError, ValueError):
+        return None, False
+
+
+def _extract_top_level_data_fields_from_file(snapshot_path, field_names):
+    wanted = {str(field_name or "").strip() for field_name in field_names or [] if str(field_name or "").strip()}
+    found = {}
+    if not wanted:
+        return found
+
+    collecting_key = ""
+    value_lines = []
+    try:
+        with Path(snapshot_path).open("r", encoding="utf-8") as file_obj:
+            for line in file_obj:
+                if not collecting_key:
+                    matched_key = ""
+                    for field_name in wanted - set(found):
+                        marker = f'"{field_name}":'
+                        if line.startswith(f"    {marker}"):
+                            matched_key = field_name
+                            break
+                    if not matched_key:
+                        continue
+                    collecting_key = matched_key
+                    value_lines = [line.split(":", 1)[1]]
+                else:
+                    value_lines.append(line)
+                try:
+                    found[collecting_key] = _decode_json_value("".join(value_lines))
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                collecting_key = ""
+                value_lines = []
+                if wanted <= set(found):
+                    break
+    except OSError:
+        return found
+    return found
+
+
+def _load_compact_snapshot_file(snapshot_path):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        stack = "".join(traceback.format_stack(limit=12))
+        raise RuntimeError(
+            "PostgreSQL-only runtime attempted to read JSON snapshot "
+            f"for {snapshot_path}.\n{stack}"
+        )
+
+    snapshot_path = Path(snapshot_path)
+    if not snapshot_path.exists():
+        return None, None
+
+    try:
+        file_size = snapshot_path.stat().st_size
+    except OSError:
+        return None, None
+
+    if file_size <= 32 * 1024 * 1024:
+        with snapshot_path.open("r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+        if isinstance(snapshot, dict) and "data" in snapshot:
+            return snapshot.get("data"), snapshot.get("supplementary_perspective", "") or ""
+        if isinstance(snapshot, dict):
+            perspective = snapshot.get("supplementary_perspective", "") or ""
+            ignored = {"supplementary_perspective", "perspective_updated_at", "saved_at", "mode", "date"}
+            return {k: v for k, v in snapshot.items() if k not in ignored}, perspective
+        return snapshot, ""
+
+    head_size = min(file_size, 32 * 1024 * 1024)
+    tail_size = min(file_size, 16 * 1024 * 1024)
+    try:
+        with snapshot_path.open("rb") as file_obj:
+            head_text = file_obj.read(head_size).decode("utf-8", errors="replace")
+            file_obj.seek(max(file_size - tail_size, 0))
+            tail_text = file_obj.read(tail_size).decode("utf-8", errors="replace")
+    except OSError:
+        return None, None
+
+    compact = {}
+    missing_keys = []
+    for key in _COMPACT_METRIC_HISTORY_KEYS:
+        value, found = _decode_top_level_data_field_from_text(head_text, key)
+        if not found:
+            value, found = _decode_top_level_data_field_from_text(tail_text, key)
+        if not found:
+            missing_keys.append(key)
+        else:
+            compact[key] = value
+    for key, value in _extract_top_level_data_fields_from_file(snapshot_path, missing_keys).items():
+        compact[key] = value
+    return compact if compact else None, ""
+
+
+def _load_compact_metric_history_snapshot(target_date):
+    snapshot_path = Path(_get_snapshot_path(target_date, mode=LEDGER_MODE_FROZEN))
+    return _load_compact_snapshot_file(snapshot_path)
 
 
 def _new_high_record_from_report_markdown(markdown, fallback_date):
@@ -416,6 +559,20 @@ def ensure_daily_metric_history_index(
     build_new_high_feedback_fn=None,
     candidate_dates=None,
 ):
+    using_default_snapshot_loader = load_snapshot_fn is None
+    using_default_replay_loader = load_replay_snapshot_fn is None
+    cache_key = None
+    if using_default_snapshot_loader and using_default_replay_loader and not candidate_dates:
+        cache_key = (
+            db_path,
+            str(end_date or "").strip(),
+            int(window_days or 25),
+            int(max_scan_days or 60),
+        )
+        cached = _DEFAULT_REBUILD_WINDOW_CACHE.get(cache_key)
+        if cached is not None:
+            return dict(cached)
+
     database_service_cls = database_service_cls or DatabaseService
     if database_service_cls is None:
         return {"indexed_count": 0, "dates": []}
@@ -423,8 +580,8 @@ def ensure_daily_metric_history_index(
         service = database_service_cls.from_environment(db_path)
     else:
         service = database_service_cls.sqlite_d1_compatible(db_path)
-    load_snapshot_fn = load_snapshot_fn or load_data_snapshot
-    load_replay_snapshot_fn = load_replay_snapshot_fn or _load_replay_snapshot_data
+    load_snapshot_fn = load_snapshot_fn or _load_compact_metric_history_snapshot
+    load_replay_snapshot_fn = load_replay_snapshot_fn or _load_compact_replay_metric_snapshot
     load_report_markdown_fn = load_report_markdown_fn or _load_report_markdown
     indexed_dates = []
     new_high_dates = []
@@ -477,7 +634,10 @@ def ensure_daily_metric_history_index(
             new_high_dates.append(cursor)
         if indexed_any:
             indexed_dates.append(cursor)
-    return {"indexed_count": len(indexed_dates), "dates": sorted(indexed_dates)}
+    result = {"indexed_count": len(indexed_dates), "dates": sorted(indexed_dates)}
+    if cache_key is not None:
+        _DEFAULT_REBUILD_WINDOW_CACHE[cache_key] = dict(result)
+    return result
 
 
 __all__ = ["ensure_daily_metric_history_index"]

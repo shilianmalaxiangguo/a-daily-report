@@ -276,6 +276,42 @@ class MarketActivityRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.pool_snapshot"], "akshare.limit_up_down+akshare.stock_market_activity_legu")
 
+    def test_collect_market_activity_pool_request_bundle_uses_snapshot_daily_breadth_when_legacy_stats_fail(self):
+        timer = _TimerStub()
+        emitted = []
+        legacy_calls = []
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-05-29",
+            get_limit_up_pool=lambda date_str: legacy_calls.append(("limit_up", date_str)) or (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "电力", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: legacy_calls.append(("limit_down", date_str)) or (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "半导体"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: (_ for _ in ()).throw(RuntimeError("legacy stats unavailable")),
+            request_registry={
+                "limit_pool_snapshot": lambda *, target_date: {
+                    "zt_pool": [],
+                    "dt_pool": [],
+                    "market_stats": {"up_count": 2100, "down_count": 3200, "zt_count": 49, "dt_count": 50},
+                    "provider": "legacy.limit_pool_snapshot",
+                    "fallback_used": True,
+                    "source_status": "empty",
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(legacy_calls, [("limit_up", "20260529"), ("limit_down", "20260529")])
+        self.assertEqual(result["results"]["zt_pool"][0]["名称"], "涨停一号")
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 2100)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 3200)
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+
     def test_collect_market_activity_pool_request_bundle_infers_sector_from_limit_reason(self):
         timer = _TimerStub()
         emitted = []
@@ -662,6 +698,8 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(legacy_calls, [])
         self.assertEqual(result["results"]["hot_plates"][0]["data_source"], "tushare.ths_hot")
         self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["data_source"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(result["results"]["sector_fund_flow"]["provider"], "tushare.moneyflow_ind_ths")
+        self.assertFalse(result["results"]["sector_fund_flow"]["fallback_used"])
         self.assertEqual(result["results"]["concept_fund_flow"]["rows"][0]["data_source"], "tushare.ths_member+tushare.moneyflow")
         self.assertEqual(result["results"]["sector_change_up"][0]["data_source"], "tushare.ths_daily")
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
@@ -811,7 +849,7 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(provider_by_step["request.sector_change_rank"], "akshare.stock_board_industry_name_em")
         self.assertEqual(provider_by_step["request.turnover_rank"], "akshare.stock_zh_a_spot_em")
 
-    def test_collect_market_activity_sector_snapshot_request_bundle_marks_historical_sector_flow_as_handled(self):
+    def test_collect_market_activity_sector_snapshot_request_bundle_marks_historical_sector_flow_as_incomplete(self):
         timer = _TimerStub()
         emitted = []
         tencent = _TencentStub()
@@ -828,9 +866,45 @@ class MarketActivityRequestTest(unittest.TestCase):
             current_dates=("2026-04-22", "2026-04-21"),
         )
 
-        self.assertTrue(result["data_status"]["行业资金流向"])
-        self.assertTrue(result["step_status"]["行业资金流向获取"])
-        self.assertTrue(result["results"]["sector_fund_flow"]["is_historical"])
+        self.assertFalse(result["data_status"]["行业资金流向"])
+        self.assertFalse(result["step_status"]["行业资金流向获取"])
+        self.assertFalse(result["data_status"]["板块涨幅排行"])
+        self.assertFalse(result["data_status"]["板块跌幅排行"])
+        self.assertFalse(result["step_status"]["板块涨跌幅排行获取"])
+        self.assertNotIn("is_historical", result["results"]["sector_fund_flow"])
+        self.assertTrue(any("关键数据不完整，停止生成" in message for message in emitted))
+
+    def test_collect_market_activity_sector_snapshot_request_bundle_marks_historical_registry_empty_flow_as_incomplete(self):
+        timer = _TimerStub()
+        emitted = []
+        tencent = _TencentStub()
+
+        result = collect_market_activity_sector_snapshot_request_bundle(
+            "2026-05-29",
+            fetch_hot_plate=lambda: [],
+            tencent=tencent,
+            get_sector_change_from_iwencai=lambda rank_type="up", limit=10, target_date=None: [],
+            get_turnover_rank_from_iwencai=lambda limit=50, target_date=None: [],
+            request_registry={
+                "sector_fund_flow": lambda *, target_date, limit=50: {
+                    "inflow": [],
+                    "outflow": [],
+                    "provider": "tushare.moneyflow_ind_ths",
+                    "fallback_used": False,
+                },
+            },
+            timer=timer,
+            emit=emitted.append,
+            current_dates=("2026-05-31", "2026-05-30"),
+        )
+
+        self.assertFalse(result["data_status"]["行业资金流向"])
+        self.assertFalse(result["step_status"]["行业资金流向获取"])
+        self.assertFalse(result["data_status"]["板块涨幅排行"])
+        self.assertFalse(result["data_status"]["板块跌幅排行"])
+        self.assertFalse(result["step_status"]["板块涨跌幅排行获取"])
+        self.assertNotIn("is_historical", result["results"]["sector_fund_flow"])
+        self.assertTrue(any("关键数据不完整，停止生成" in message for message in emitted))
 
     def test_collect_market_activity_sector_snapshot_request_bundle_derives_sector_change_from_fund_flow(self):
         timer = _TimerStub()

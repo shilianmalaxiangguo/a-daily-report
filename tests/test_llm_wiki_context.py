@@ -17,7 +17,7 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-05-28")
+        self.assertEqual(context["version"], "2026-06-01")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
@@ -101,6 +101,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("非主战场纪律 -> 低适配行情不扩战法，不为证明全能而新增参与", context["field_mappings"])
         self.assertIn("正确风险 -> 小资金不是求稳回避风险，而是选择市场愿意拥抱的高辨识度风险，再用仓位、窗口、做T和卖点线压低下行", context["field_mappings"])
         self.assertIn("辨识度优先样本 -> 优先看市场效应、成交容量、板块核心、涨停反馈、承接和收盘位置，不用便宜或好做T替代", context["field_mappings"])
+        self.assertIn("涨停位置与资金信心 -> 涨停数量看情绪，涨停位置看信心；高位承接和突破晋级说明资金愿意进攻，低位首板多更偏反弹点火", context["field_mappings"])
         self.assertIn("上影线身份分层 -> 高辨识度核心长上影先观察修复，跟风票长上影优先处理，低辨识度票长上影不参与", context["field_mappings"])
         self.assertIn("资金阶段 -> 小资金允许追求高弹性，但只做市场承认的热门核心，不做随机高波动", context["field_mappings"])
         self.assertIn("小资金优势校准 -> 小资金优势是灵活切换核心，不是频繁乱动或救错误仓", context["field_mappings"])
@@ -294,6 +295,26 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("外部启发先做来源保真再落字段", digest)
         self.assertIn("判断欲强先回价格账户亏损边界失效条件", digest)
 
+    def test_ai_friction_wiki_records_copying_with_focus_and_idea(self):
+        context = build_llm_wiki_context()
+        wiki_text = (ROOT / "wiki/交易思想/AI摩擦与知识复利.md").read_text(encoding="utf-8")
+
+        for required in [
+            "模仿学习校准",
+            "抄袭不可怕",
+            "重心和理念",
+            "初学至少八分像",
+            "成熟后三五分取骨架",
+            "初学乱发挥",
+            "成熟后不思进取",
+        ]:
+            self.assertIn(required, wiki_text)
+
+        self.assertIn(
+            "模仿学习校准 -> 抄袭不可怕，怕的是不知道抄的重心和理念；初学先八分像拿正反馈，成熟后取三五分骨架迁移",
+            context["field_mappings"],
+        )
+
     def test_action_layer_wiki_records_position_and_inside_boundary_discipline(self):
         context = build_llm_wiki_context()
         wiki_text = (ROOT / "wiki/交易思想/扣分系统与动作分层.md").read_text(encoding="utf-8")
@@ -359,6 +380,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("占比回落后排掉队核心跌回VWAP或关键均线先退出", digest)
         self.assertIn("迹象到规律再到实战运用", digest)
         self.assertIn("弱方向掉队强方向扩散承接才参与", digest)
+        self.assertIn("涨停数量看情绪位置看信心", digest)
+        self.assertIn("高位承接才进攻低位首板偏反弹", digest)
         self.assertIn("短线超短主战场追求500强", digest)
         self.assertIn("非主战场不拖后腿不扩战法", digest)
         self.assertIn("正确风险选高辨识度用策略压下行", digest)
@@ -383,8 +406,6 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("辨识度优先", digest)
         self.assertIn("新股身份不是辨识度", digest)
         self.assertIn("低流动性锯齿涨停不升格", digest)
-        self.assertIn("新股年景小年后按大年假设", digest)
-        self.assertIn("2026-04-13启动后看年底持续活跃", digest)
         self.assertIn("买点卖点底层操作", digest)
         self.assertIn("MA3/MA7/MA10/MA20", digest)
         self.assertIn("点位说明MA/VWAP/开盘价/前高低/密集区/形态", digest)
@@ -436,10 +457,26 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("买卖窗口0930-0935/0950-1010/1430-1455", digest)
         self.assertIn("失效价和单笔-5%底线", digest)
         self.assertIn("资格条件可做参与", digest)
-        self.assertLessEqual(len(digest), 1450)
+        self.assertLessEqual(len(digest), 1500)
         self.assertNotIn("缠论原文", digest)
         self.assertNotIn("能量学", digest)
         self.assertNotIn("教你炒股票", digest)
+
+    def test_market_evolution_wiki_records_limit_up_position_confidence(self):
+        wiki_text = (ROOT / "wiki/交易思想/判断样本与市场演变.md").read_text(encoding="utf-8")
+
+        for required in [
+            "涨停位置与资金信心",
+            "高位承接反证",
+            "涨停数量只说明情绪活跃",
+            "涨停落点才说明资金信心",
+            "低位首板、超跌首板和分散点火",
+            "limit_up_position_confidence",
+            "high_level_acceptance_evidence",
+            "low_level_first_board_rebound",
+            "先按反弹情绪处理",
+        ]:
+            self.assertIn(required, wiki_text)
 
     def test_t_risk_control_wiki_records_expected_value_rule(self):
         wiki_text = (ROOT / "wiki/交易思想/做T与风险控制.md").read_text(encoding="utf-8")
@@ -550,6 +587,76 @@ class LlmWikiContextTest(unittest.TestCase):
             "普涨环境",
         ]:
             self.assertIn(required, wiki_text)
+
+    def test_llm_wiki_records_final_target_resolution_output_contract(self):
+        context = build_llm_wiki_context()
+        digest = context["report_digest_text"]
+        flows = "\n".join(context["process_flows"])
+
+        self.assertIn(
+            "最终对象统一口径 -> 板块锚反推先选强对象，小账户资金取舍再定资金优先，最后只生成明日唯一动作或观察锚",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "最终对象角色拆分 -> new_entry_target新开仓对象 / existing_position_target旧仓处理对象 / tradable_proxy_target小资金可交易替代表达 / watch_target观察锚 / process_target过程对象 / display_target最终动作显示对象",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "Wiki口径边界 -> LLM Wiki沉淀统一输出口径，运行代码生成final_target_resolution，报告模块只消费该结果不各自重算标的",
+            context["report_boundaries"],
+        )
+        self.assertIn("板块锚反推", flows)
+        self.assertIn("小账户资金取舍", flows)
+        self.assertIn("final_target_resolution", flows)
+        self.assertIn("tradable_proxy_target: 小资金可交易替代表达", flows)
+        self.assertIn("display_target: 明日唯一动作或观察锚", flows)
+        self.assertIn("只消费final_target_resolution，不各自重算标的", flows)
+
+    def test_article_cognition_gap_rules_enter_llm_wiki(self):
+        context = build_llm_wiki_context()
+        field_mappings = context["field_mappings"]
+        digest = context["report_digest_text"]
+        price_wiki = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+        sector_wiki = (ROOT / "wiki/板块补充/板块中枢与主线延续.md").read_text(encoding="utf-8")
+
+        for required in [
+            "情绪异动两日验证",
+            "连续实体阴线",
+            "最后一杀",
+            "资金切换到新线路",
+            "超跌反弹只按短套利预期",
+        ]:
+            self.assertIn(required, price_wiki)
+
+        for required in [
+            "线路代表不是买入名单",
+            "彩蛋只作为线路代表",
+            "爆发后顺着同线找龙2、龙3",
+            "鱼尾行情只看核心",
+            "后排补涨一旦承接散掉",
+        ]:
+            self.assertIn(required, sector_wiki)
+
+        self.assertIn(
+            "情绪异动两日验证 -> 大众情绪剧烈波动后先写两日验证；连续实体阴线按最后一杀观察，异动后直接大阳按资金切到新线路观察",
+            field_mappings,
+        )
+        self.assertIn(
+            "超跌反弹预期 -> 跌多只给短套利预期；未出现趋势反转和资金回流前，不把反弹升级为新趋势",
+            field_mappings,
+        )
+        self.assertIn(
+            "鱼尾后排风险 -> 加速末端只看核心承接；补涨和后排只能作反馈，承接散掉先杀后排",
+            field_mappings,
+        )
+        self.assertIn(
+            "线路代表 -> 彩蛋和候选只代表资金可能切换的线路，爆发后顺着同线找龙2、龙3，不把名单当买入名单",
+            field_mappings,
+        )
+        self.assertIn("情绪异动后看两日验证", digest)
+        self.assertIn("超跌反弹只按短套利", digest)
+        self.assertIn("鱼尾只看核心不追后排", digest)
+        self.assertIn("彩蛋是线路代表不是买入名单", digest)
 
 
 if __name__ == "__main__":

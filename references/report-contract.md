@@ -87,7 +87,7 @@ This reference is for report quality judgment. It is not a command manual.
 - Future daily-report requests use a delta spec by default: describe only the new or changed behavior.
 - New requests default inherit this report contract unless the latest user instruction explicitly overrides it.
 - Future report changes inherit both report contract and reasoning contract unless the latest user instruction explicitly overrides them.
-- Future report changes also inherit `docs/superpowers/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`: simulation tools stay out of the main chain, and trading experience enters only after becoming price-action fields.
+- Future report changes also inherit `docs/trellis/specs/2026-05-03-daily-report-anti-noise-price-action-boundary-design.md`: simulation tools stay out of the main chain, and trading experience enters only after becoming price-action fields.
 - In practice, new report requests do not need to restate existing guardrails.
 
 ## Optimization Order

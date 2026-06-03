@@ -63,8 +63,13 @@ def _build_environment_row(context, stage_meta=None):
 def _build_selection_row(context, stage_meta=None):
     watchlist_count = int(context.get("watchlist_count", 0) or 0)
     guidance = f"{watchlist_count}只"
-    if resolve_today_focus_items(context) or resolve_selected_position_candidate(context):
-        guidance = f"{guidance}；{build_focus_recap_text(context)}"
+    focus_text = build_focus_recap_text(context)
+    if (
+        resolve_selected_position_candidate(context)
+        or context.get("best_stock")
+        or resolve_today_focus_items(context)
+    ) and focus_text:
+        guidance = focus_text
     return _row("selection_focus", _resolve_stage_title(stage_meta, "明天观察池"), guidance)
 
 

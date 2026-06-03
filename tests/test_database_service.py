@@ -105,7 +105,9 @@ class DatabaseServiceTest(unittest.TestCase):
             self.assertEqual(service.query_new_high_feedback_series("2026-05-12")[0]["new_high_count"], 88)
             price_band_rows = service.query_price_band_style_series("2026-05-12", window_days=25)["rows"]
             self.assertEqual(price_band_rows[0]["style_label"], "震荡")
-            self.assertEqual(service.query_monthly_account_ledger("2026-05-12")["month_return_pct"], 4.2)
+            monthly = service.query_monthly_account_ledger("2026-05-12")
+            self.assertEqual(monthly["month_return_pct"], 4.2)
+            self.assertEqual(monthly["simulated_cumulative_return_pct"], 4.2)
 
     def test_database_service_tracks_extreme_conviction_mentions_by_recent_25_trade_dates(self):
         from storage.database_service import DatabaseService

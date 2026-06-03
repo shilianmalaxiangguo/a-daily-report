@@ -47,6 +47,36 @@ def _price_band_style_label(spread_pct):
     return "震荡"
 
 
+def _nullable_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compound_monthly_return_pct(values):
+    normalized = []
+    for value in values or []:
+        number = _nullable_float(value)
+        if number is None:
+            continue
+        normalized.append(number / 100.0)
+    if not normalized:
+        return None
+    try:
+        from report.strategy_tracking_support import compound_returns
+
+        compounded = compound_returns(normalized)
+    except Exception:
+        nav = 1.0
+        for value in normalized:
+            nav *= 1.0 + value
+        compounded = nav - 1.0
+    return round(compounded * 100.0, 4)
+
+
 def _text(value):
     return str(value or "").strip()
 
@@ -306,6 +336,7 @@ class CloudflareFreeDailyDb:
                     account_id TEXT NOT NULL DEFAULT 'main',
                     month_key TEXT NOT NULL DEFAULT '',
                     month_return_pct REAL,
+                    simulated_cumulative_return_pct REAL,
                     equity REAL,
                     cash REAL,
                     position_market_value REAL,
@@ -322,6 +353,12 @@ class CloudflareFreeDailyDb:
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(monthly_account_ledger)").fetchall()
+            }
+            if "simulated_cumulative_return_pct" not in columns:
+                conn.execute("ALTER TABLE monthly_account_ledger ADD COLUMN simulated_cumulative_return_pct REAL")
             conn.commit()
 
     def _normalize_month_key(self, trade_date="", month_key=""):
@@ -353,6 +390,7 @@ class CloudflareFreeDailyDb:
             "account_id": account_id,
             "month_key": month_key,
             "month_return_pct": self._nullable_float(row.get("month_return_pct", row.get("monthly_return_pct"))),
+            "simulated_cumulative_return_pct": self._nullable_float(row.get("simulated_cumulative_return_pct")),
             "equity": self._nullable_float(row.get("equity")),
             "cash": self._nullable_float(row.get("cash")),
             "position_market_value": self._nullable_float(row.get("position_market_value")),
@@ -367,23 +405,116 @@ class CloudflareFreeDailyDb:
             "updated_at": _utc_now_text(),
         }
 
+    def _monthly_return_by_month_until(self, end_date, *, account_id="main"):
+        end_date = _text(end_date)
+        account_id = _text(account_id) or "main"
+        if not end_date:
+            return {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT month_key, trade_date, month_return_pct
+                FROM monthly_account_ledger
+                WHERE account_id = ?
+                  AND trade_date <= ?
+                  AND month_return_pct IS NOT NULL
+                ORDER BY month_key ASC, trade_date ASC
+                """,
+                (account_id, end_date),
+            ).fetchall()
+        latest_by_month = {}
+        for row in rows:
+            item = dict(row)
+            month_key = _text(item.get("month_key"))
+            month_return_pct = self._nullable_float(item.get("month_return_pct"))
+            if month_key and month_return_pct is not None:
+                latest_by_month[month_key] = month_return_pct
+        return latest_by_month
+
+    def _simulated_cumulative_return_pct_for_item(self, item):
+        item = item or {}
+        latest_by_month = self._monthly_return_by_month_until(
+            item.get("trade_date"),
+            account_id=item.get("account_id") or "main",
+        )
+        month_key = _text(item.get("month_key"))
+        month_return_pct = self._nullable_float(item.get("month_return_pct"))
+        if month_key and month_return_pct is not None:
+            latest_by_month[month_key] = month_return_pct
+        values = [latest_by_month[key] for key in sorted(latest_by_month)]
+        return _compound_monthly_return_pct(values)
+
+    def _refresh_monthly_account_cumulative_returns(self, *, account_id="main"):
+        account_id = _text(account_id) or "main"
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT trade_date, account_id, month_key, month_return_pct
+                FROM monthly_account_ledger
+                WHERE account_id = ?
+                  AND month_return_pct IS NOT NULL
+                ORDER BY trade_date ASC, month_key ASC
+                """,
+                (account_id,),
+            ).fetchall()
+            latest_by_month = {}
+            updates = []
+            for row in rows:
+                item = dict(row)
+                trade_date = _text(item.get("trade_date"))
+                month_key = _text(item.get("month_key"))
+                month_return_pct = self._nullable_float(item.get("month_return_pct"))
+                if not trade_date or not month_key or month_return_pct is None:
+                    continue
+                latest_by_month[month_key] = month_return_pct
+                cumulative_return_pct = _compound_monthly_return_pct(
+                    [latest_by_month[key] for key in sorted(latest_by_month)]
+                )
+                if cumulative_return_pct is not None:
+                    updates.append((cumulative_return_pct, trade_date, account_id))
+            if updates:
+                conn.executemany(
+                    """
+                    UPDATE monthly_account_ledger
+                    SET simulated_cumulative_return_pct = ?,
+                        updated_at = ?
+                    WHERE trade_date = ?
+                      AND account_id = ?
+                    """,
+                    [
+                        (
+                            cumulative_return_pct,
+                            _utc_now_text(),
+                            trade_date,
+                            account_id,
+                        )
+                        for cumulative_return_pct, trade_date, account_id in updates
+                    ],
+                )
+            conn.commit()
+        return len(updates)
+
     def upsert_monthly_account_ledger(self, row):
         item = self._normalize_monthly_account_ledger(row)
         if not item["trade_date"] or not item["account_id"] or not item["month_key"]:
             return {}
+        if item["simulated_cumulative_return_pct"] is None:
+            item["simulated_cumulative_return_pct"] = self._simulated_cumulative_return_pct_for_item(item)
         with self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO monthly_account_ledger(
-                    trade_date, account_id, month_key, month_return_pct, equity, cash,
+                    trade_date, account_id, month_key, month_return_pct,
+                    simulated_cumulative_return_pct, equity, cash,
                     position_market_value, realized_pnl, unrealized_pnl, max_drawdown_pct,
                     planned_trade_count, unplanned_trade_count, note, source_policy,
                     payload_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_date, account_id) DO UPDATE SET
                     month_key=excluded.month_key,
                     month_return_pct=excluded.month_return_pct,
+                    simulated_cumulative_return_pct=excluded.simulated_cumulative_return_pct,
                     equity=excluded.equity,
                     cash=excluded.cash,
                     position_market_value=excluded.position_market_value,
@@ -402,6 +533,7 @@ class CloudflareFreeDailyDb:
                     item["account_id"],
                     item["month_key"],
                     item["month_return_pct"],
+                    item["simulated_cumulative_return_pct"],
                     item["equity"],
                     item["cash"],
                     item["position_market_value"],
@@ -417,6 +549,7 @@ class CloudflareFreeDailyDb:
                 ),
             )
             conn.commit()
+        self._refresh_monthly_account_cumulative_returns(account_id=item["account_id"])
         return item
 
     def query_monthly_account_ledger(self, end_date, *, account_id="main"):
@@ -429,7 +562,8 @@ class CloudflareFreeDailyDb:
             row = conn.execute(
                 """
                 SELECT trade_date, account_id, month_key, month_return_pct, equity, cash,
-                       position_market_value, realized_pnl, unrealized_pnl, max_drawdown_pct,
+                       simulated_cumulative_return_pct, position_market_value,
+                       realized_pnl, unrealized_pnl, max_drawdown_pct,
                        planned_trade_count, unplanned_trade_count, note, source_policy,
                        payload_json, updated_at
                 FROM monthly_account_ledger
@@ -448,6 +582,9 @@ class CloudflareFreeDailyDb:
             item["payload"] = json.loads(item.get("payload_json") or "{}")
         except json.JSONDecodeError:
             item["payload"] = {}
+        computed_cumulative_return_pct = self._simulated_cumulative_return_pct_for_item(item)
+        if computed_cumulative_return_pct is not None:
+            item["simulated_cumulative_return_pct"] = computed_cumulative_return_pct
         return item
 
     def upsert_mainline_daily(self, row):

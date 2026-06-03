@@ -29,6 +29,7 @@ __all__ = [
 ]
 
 _MISSING = object()
+_COMPACT_HISTORY_SNAPSHOT_CACHE = {}
 _NON_DIRECTIONAL_SECTOR_LABELS = {
     "HS",
     "GEM",
@@ -765,6 +766,32 @@ def _extract_sector_signed_flow(snapshot_data, sector_name):
     return 0.0
 
 
+def _compact_history_snapshot(snapshot_data):
+    if not isinstance(snapshot_data, dict):
+        return {}
+    compact = {}
+    sector_fund_flow = snapshot_data.get("sector_fund_flow")
+    if isinstance(sector_fund_flow, dict):
+        compact["sector_fund_flow"] = {
+            "inflow": list(sector_fund_flow.get("inflow") or []),
+            "outflow": list(sector_fund_flow.get("outflow") or []),
+        }
+    if "total_turnover" in snapshot_data:
+        compact["total_turnover"] = snapshot_data.get("total_turnover")
+    return compact
+
+
+def _load_compact_history_snapshot(cursor):
+    cursor = str(cursor or "").strip()
+    if not cursor:
+        return {}
+    cache_key = (load_data_snapshot, cursor)
+    if cache_key not in _COMPACT_HISTORY_SNAPSHOT_CACHE:
+        snapshot_data, _ = load_data_snapshot(cursor)
+        _COMPACT_HISTORY_SNAPSHOT_CACHE[cache_key] = _compact_history_snapshot(snapshot_data)
+    return _COMPACT_HISTORY_SNAPSHOT_CACHE.get(cache_key) or {}
+
+
 def _load_recent_sector_flow_history_from_fact_db(target_date, sector_name, lookback_days=2, *, postgres_only=False):
     service = _create_database_service(postgres_only=postgres_only)
     if service is None:
@@ -802,7 +829,7 @@ def _load_recent_sector_flow_history_legacy_body(target_date, sector_name, lookb
         if not cursor:
             break
         scanned_days += 1
-        snapshot_data, _ = load_data_snapshot(cursor)
+        snapshot_data = _load_compact_history_snapshot(cursor)
         if not snapshot_data:
             continue
 
@@ -864,7 +891,7 @@ def _load_recent_market_turnover_history_legacy_body(target_date, lookback_days=
         if not cursor:
             break
         scanned_days += 1
-        snapshot_data, _ = load_data_snapshot(cursor)
+        snapshot_data = _load_compact_history_snapshot(cursor)
         if not snapshot_data:
             continue
 

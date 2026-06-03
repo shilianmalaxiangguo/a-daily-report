@@ -67,32 +67,136 @@ def _parse_position_string_legacy_body(position_str):
     if positions:
         return positions
 
-    lot_match = re.search(r"(\d+(?:\.\d+)?)\s*手\s*([\u4e00-\u9fa5A-Za-z0-9*STst]+)", raw_text)
-    if not lot_match:
+    t0_match = re.search(
+        r"([\u4e00-\u9fa5A-Za-z0-9*STst]+?)\s*做T\s*买\s*(\d+(?:\.\d+)?)\s*手\s*卖\s*(\d+(?:\.\d+)?)\s*手",
+        raw_text,
+    )
+    if t0_match:
+        return [
+            {
+                "name": _clean_position_name(t0_match.group(1)),
+                "buy_lots": float(t0_match.group(2)),
+                "sell_lots": float(t0_match.group(3)),
+                "trade_action": "做T",
+            }
+        ]
+
+    account_fields = _extract_account_fields(raw_text)
+    named_lot_positions = _extract_named_lot_holdings(raw_text)
+    if named_lot_positions:
+        named_lot_positions[0].update(account_fields)
+        _apply_t0_trade_fields(raw_text, named_lot_positions)
+        return [{key: value for key, value in position.items() if value is not None} for position in named_lot_positions]
+
+    lot_matches = list(re.finditer(r"(\d+(?:\.\d+)?)\s*手\s*([\u4e00-\u9fa5A-Za-z0-9*STst]+)", raw_text))
+    if not lot_matches:
         return positions
+
+    for index, lot_match in enumerate(lot_matches):
+        lots = float(lot_match.group(1))
+        name = _clean_position_name(lot_match.group(2))
+        if _is_position_name_noise(name):
+            continue
+        position = {
+            "name": name,
+            "lots": lots,
+            "shares": int(lots * 100),
+        }
+        if index == 0:
+            position.update(account_fields)
+        positions.append({key: value for key, value in position.items() if value is not None})
+    _apply_t0_trade_fields(raw_text, positions)
+    return positions
+
+
+def _extract_account_fields(raw_text):
+    import re
 
     def _float_after(label):
         match = re.search(rf"{label}\s*([+-]?\d+(?:\.\d+)?)", raw_text)
         return float(match.group(1)) if match else None
 
-    lots = float(lot_match.group(1))
-    name = lot_match.group(2).strip("，,。；; ")
-    position = {
-        "name": name,
-        "lots": lots,
-        "shares": int(lots * 100),
+    account_fields = {
         "cost": _float_after("成本"),
         "total_asset": _float_after("总资产"),
         "daily_profit": _float_after("当日盈利"),
     }
-    capital_match = re.search(r"(\d+(?:\.\d+)?\s*w)\s*本金", raw_text, flags=re.IGNORECASE)
+    capital_match = re.search(
+        r"(?:账户总资金|总资金|账户资金)[^\d]*(\d+(?:\.\d+)?\s*w)|(\d+(?:\.\d+)?\s*w)\s*本金",
+        raw_text,
+        flags=re.IGNORECASE,
+    )
     if capital_match:
-        position["account_capital"] = capital_match.group(1).replace(" ", "")
+        capital = capital_match.group(1) or capital_match.group(2)
+        account_fields["account_capital"] = capital.replace(" ", "")
     profit_pct_match = re.search(r"当日盈利[^\d+-]*[+-]?\d+(?:\.\d+)?\s+([+-]?\d+(?:\.\d+)?)\s*%", raw_text)
     if profit_pct_match:
-        position["daily_profit_pct"] = float(profit_pct_match.group(1))
-    positions.append({key: value for key, value in position.items() if value is not None})
+        account_fields["daily_profit_pct"] = float(profit_pct_match.group(1))
+    return {key: value for key, value in account_fields.items() if value is not None}
+
+
+def _extract_named_lot_holdings(raw_text):
+    import re
+
+    patterns = [
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
+            r"(?P<code>\d{6})\s*(?:当前收盘)?(?:仍)?(?:持有|持仓|仓位)?\s*"
+            r"(?P<lots>\d+(?:\.\d+)?)\s*手(?P<note>T\+1仓|T\+0仓|底仓|旧仓|仓)?"
+        ),
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
+            r"(?:当前收盘)?(?:仍)?(?:持有|持仓|仓位)\s*"
+            r"(?P<lots>\d+(?:\.\d+)?)\s*手(?P<note>T\+1仓|T\+0仓|底仓|旧仓|仓)?"
+        ),
+    ]
+    positions = []
+    seen = set()
+    for pattern in patterns:
+        for match in pattern.finditer(raw_text):
+            name = _clean_position_name(match.group("name"))
+            if _is_position_name_noise(name):
+                continue
+            lots = float(match.group("lots"))
+            code = (match.groupdict().get("code") or "").strip()
+            key = (name, code, lots)
+            if key in seen:
+                continue
+            seen.add(key)
+            position = {
+                "name": name,
+                "code": code,
+                "lots": lots,
+                "shares": int(lots * 100),
+                "holding_note": match.group("note") or "",
+            }
+            positions.append({field: value for field, value in position.items() if value})
     return positions
+
+
+def _extract_t0_trade_fields(raw_text):
+    import re
+
+    if "做T" not in raw_text:
+        return {}
+    fields = {"trade_action": "做T"}
+    buy_match = re.search(r"(?:买入|买)\s*(\d+(?:\.\d+)?)\s*手", raw_text)
+    sell_match = re.search(r"(?:卖出|卖)\s*(?:旧仓)?\s*(\d+(?:\.\d+)?)\s*手", raw_text)
+    if not sell_match:
+        sell_match = re.search(r"(\d+(?:\.\d+)?)\s*手[^，,。；;]{0,8}(?:卖出|卖)", raw_text)
+    if buy_match:
+        fields["buy_lots"] = float(buy_match.group(1))
+    if sell_match:
+        fields["sell_lots"] = float(sell_match.group(1))
+    return fields
+
+
+def _apply_t0_trade_fields(raw_text, positions):
+    if len(positions or []) != 1:
+        return
+    fields = _extract_t0_trade_fields(raw_text)
+    if fields:
+        positions[0].update(fields)
 
 
 def _format_number(value):
@@ -102,6 +206,57 @@ def _format_number(value):
         return ""
     text = f"{number:.3f}".rstrip("0").rstrip(".")
     return text
+
+
+def _format_lots(value):
+    text = _format_number(value)
+    return f"{text}手" if text else ""
+
+
+def _clean_position_name(name):
+    import re
+
+    text = str(name or "").strip("，,。；; ")
+    for prefix in ("我的仓位是", "仓位是", "持仓是", "我今天", "今天", "我"):
+        if text.startswith(prefix) and len(text) > len(prefix):
+            text = text[len(prefix):].strip()
+    text = re.sub(r"^(?:现在|目前|另外|持仓是|持有)", "", text).strip()
+    return text
+
+
+def _is_position_name_noise(name):
+    text = _clean_position_name(name)
+    if not text:
+        return True
+    upper = text.upper()
+    if upper in {"T", "T0", "T1", "T+0", "T+1"}:
+        return True
+    noise_words = {"旧仓", "底仓", "仓", "收盘", "当前收盘", "开盘", "尾盘", "买入", "卖出"}
+    if text in noise_words:
+        return True
+    return any(word in text for word in ("买入", "卖出", "涨停卖出"))
+
+
+def _position_share_text(position):
+    shares = position.get("shares")
+    if not shares and position.get("lots") not in (None, ""):
+        shares = int(float(position.get("lots")) * 100)
+    if shares:
+        return f"{shares}股"
+    return _format_lots(position.get("lots"))
+
+
+def _format_t0_trade_text(position):
+    if position.get("trade_action") != "做T":
+        return ""
+    buy_text = _format_lots(position.get("buy_lots"))
+    sell_text = _format_lots(position.get("sell_lots"))
+    parts = []
+    if buy_text:
+        parts.append(f"买入{buy_text}")
+    if sell_text:
+        parts.append(f"卖出{sell_text}")
+    return f"今日做T{'、'.join(parts)}" if parts else "今日做T"
 
 
 def _find_position_quote(data, position):
@@ -149,25 +304,39 @@ def build_personal_position_context(data, positions):
     if not positions:
         return {}
     primary = dict(positions[0])
-    quote = _find_position_quote(data, primary)
-    name = primary.get("name") or quote.get("name") or quote.get("名称") or "旧仓"
-    code = primary.get("code") or primary.get("stock_code") or quote.get("code") or quote.get("代码") or ""
-    shares = primary.get("shares")
-    if not shares and primary.get("lots") not in (None, ""):
-        shares = int(float(primary.get("lots")) * 100)
-    cost = _format_number(primary.get("cost"))
-    close = _format_number(quote.get("close") or quote.get("price") or quote.get("最新价"))
-    support = str(primary.get("support_band") or "42.84~43.05").strip()
-    label = f"{name}({code})" if code else str(name)
-    summary_parts = [f"持有{label}"]
-    if shares:
-        summary_parts.append(f"{shares}股")
-    if cost:
-        summary_parts.append(f"成本{cost}")
+    holding_summaries = []
+    primary_close = ""
+    primary_support = str(primary.get("support_band") or "42.84~43.05").strip()
+    for index, position in enumerate(positions):
+        position = dict(position)
+        quote = _find_position_quote(data, position)
+        name = position.get("name") or quote.get("name") or quote.get("名称") or "旧仓"
+        code = position.get("code") or position.get("stock_code") or quote.get("code") or quote.get("代码") or ""
+        share_text = _position_share_text(position)
+        t0_trade_text = _format_t0_trade_text(position)
+        cost = _format_number(position.get("cost"))
+        close = _format_number(quote.get("close") or quote.get("price") or quote.get("最新价"))
+        label = f"{name}({code})" if code else str(name)
+        summary_parts = [label]
+        if share_text:
+            summary_parts.append(share_text)
+        holding_note = str(position.get("holding_note") or "").strip()
+        if holding_note:
+            summary_parts.append(holding_note)
+        if t0_trade_text:
+            summary_parts.append(t0_trade_text)
+        if cost:
+            summary_parts.append(f"成本{cost}")
+        prefix = "" if t0_trade_text and not share_text else "持有"
+        holding_summaries.append(f"{prefix}{'，'.join(summary_parts)}")
+        if index == 0:
+            primary_close = close
     decision = "先处理旧仓"
-    if close:
-        decision = f"先看{close}能否守住，跌破{support}或09:50-10:10收不回先卖"
-    summary = "，".join(summary_parts) + f"；{decision}；新开仓0手"
+    if primary.get("trade_action") == "做T":
+        decision = "若仍有旧仓，先按买点失败仓处理，09:50-10:10不能修复则优先处理"
+    elif len(positions) == 1 and primary_close:
+        decision = f"先看{primary_close}能否守住，跌破{primary_support}或09:50-10:10收不回先卖"
+    summary = "；".join(holding_summaries) + f"；{decision}；新开仓0手"
     return {
         "account_profile": {"capital_text": _format_account_profile(primary)},
         "existing_position_summary": {

@@ -108,9 +108,9 @@ class CloudflareFreeDailyDbTest(unittest.TestCase):
             db = CloudflareFreeDailyDb(Path(tmp) / "daily.db")
             db.upsert_monthly_account_ledger(
                 {
-                    "trade_date": "2026-05-10",
+                    "trade_date": "2026-04-30",
                     "account_id": "main",
-                    "month_key": "2026-05",
+                    "month_key": "2026-04",
                     "month_return_pct": 2.4,
                     "equity": 102400.0,
                     "cash": 52000.0,
@@ -132,14 +132,44 @@ class CloudflareFreeDailyDbTest(unittest.TestCase):
             )
 
             latest = db.query_monthly_account_ledger("2026-05-20")
-            earlier = db.query_monthly_account_ledger("2026-05-15")
+            earlier = db.query_monthly_account_ledger("2026-04-30")
 
         self.assertEqual(latest["trade_date"], "2026-05-20")
         self.assertEqual(latest["month_key"], "2026-05")
         self.assertAlmostEqual(latest["month_return_pct"], 6.8)
+        self.assertAlmostEqual(latest["simulated_cumulative_return_pct"], 9.3632, places=4)
         self.assertEqual(latest["source_policy"], "manual_review")
-        self.assertEqual(earlier["trade_date"], "2026-05-10")
+        self.assertEqual(earlier["trade_date"], "2026-04-30")
         self.assertAlmostEqual(earlier["month_return_pct"], 2.4)
+        self.assertAlmostEqual(earlier["simulated_cumulative_return_pct"], 2.4, places=4)
+
+    def test_monthly_account_ledger_query_recomputes_after_out_of_order_backfill(self):
+        from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = CloudflareFreeDailyDb(Path(tmp) / "daily.db")
+            db.upsert_monthly_account_ledger(
+                {
+                    "trade_date": "2026-05-20",
+                    "account_id": "main",
+                    "month_key": "2026-05",
+                    "month_return_pct": 6.8,
+                    "source_policy": "manual_review",
+                }
+            )
+            db.upsert_monthly_account_ledger(
+                {
+                    "trade_date": "2026-04-30",
+                    "account_id": "main",
+                    "month_key": "2026-04",
+                    "month_return_pct": 2.4,
+                    "source_policy": "manual_review",
+                }
+            )
+
+            latest = db.query_monthly_account_ledger("2026-05-20")
+
+        self.assertAlmostEqual(latest["simulated_cumulative_return_pct"], 9.3632, places=4)
 
     def test_query_top_turnover_share_series_uses_precomputed_ranks(self):
         from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb

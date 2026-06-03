@@ -150,6 +150,61 @@ assert report == "# report"
 
         self.assertEqual(result, [{"name": "晶方科技", "lots": 2.0, "shares": 200}])
 
+    def test_parse_position_string_extracts_multiple_lot_holdings(self):
+        module = self._load_module()
+
+        result = module.parse_position_string("我的仓位是5手京能电力，2手华电辽能")
+
+        self.assertEqual(
+            result,
+            [
+                {"name": "京能电力", "lots": 5.0, "shares": 500},
+                {"name": "华电辽能", "lots": 2.0, "shares": 200},
+            ],
+        )
+
+    def test_parse_position_string_extracts_t0_buy_sell_stock_name(self):
+        module = self._load_module()
+
+        result = module.parse_position_string("我今天华电辽能做T买2手卖2手，MA5买入，然后尾盘卖出")
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "name": "华电辽能",
+                    "buy_lots": 2.0,
+                    "sell_lots": 2.0,
+                    "trade_action": "做T",
+                }
+            ],
+        )
+
+    def test_parse_position_string_reads_t1_holding_without_using_t_as_name(self):
+        module = self._load_module()
+
+        result = module.parse_position_string(
+            "账户总资金约1w；华电辽能600396当前收盘仍持有2手T+1仓；"
+            "2026-06-03开盘0轴/MA5附近买入2手，尾盘涨停卖出旧仓2手，今日做T成功"
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "name": "华电辽能",
+                    "code": "600396",
+                    "lots": 2.0,
+                    "shares": 200,
+                    "account_capital": "1w",
+                    "trade_action": "做T",
+                    "buy_lots": 2.0,
+                    "sell_lots": 2.0,
+                    "holding_note": "T+1仓",
+                }
+            ],
+        )
+
     def test_personal_position_context_prefers_quote_with_close_price_for_old_holding(self):
         module = self._load_module()
 
@@ -179,6 +234,55 @@ assert report == "# report"
             "先看45.1能否守住，跌破42.84~43.05或09:50-10:10收不回先卖",
             context["existing_position_summary"]["summary"],
         )
+
+    def test_personal_position_context_preserves_multiple_lot_holdings(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("我的仓位是5手京能电力，2手华电辽能")
+        context = module.build_personal_position_context(
+            {
+                "turnover_rank": [
+                    {"code": "600578", "name": "京能电力"},
+                    {"code": "600396", "name": "华电辽能"},
+                ],
+            },
+            positions,
+        )
+
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "持有京能电力(600578)，500股；持有华电辽能(600396)，200股；先处理旧仓；新开仓0手",
+        )
+
+    def test_personal_position_context_explains_t0_buy_sell_holding(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("我今天华电辽能做T买2手卖2手，MA5买入，然后尾盘卖出")
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600396", "name": "华电辽能"}]},
+            positions,
+        )
+
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "华电辽能(600396)，今日做T买入2手、卖出2手；若仍有旧仓，先按买点失败仓处理，09:50-10:10不能修复则优先处理；新开仓0手",
+        )
+
+    def test_personal_position_context_keeps_t1_holding_name(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string(
+            "账户总资金约1w；华电辽能600396当前收盘仍持有2手T+1仓；"
+            "2026-06-03开盘0轴/MA5附近买入2手，尾盘涨停卖出旧仓2手，今日做T成功"
+        )
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600396", "name": "华电辽能"}]},
+            positions,
+        )
+
+        summary = context["existing_position_summary"]["summary"]
+        self.assertIn("持有华电辽能(600396)，200股，T+1仓，今日做T买入2手、卖出2手", summary)
+        self.assertNotIn("持有T", summary)
 
     def test_analyze_position_management_runtime_exposes_helper_bindings(self):
         module = self._load_module()

@@ -109,6 +109,31 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("分层参与，买入后", rendered)
 
+    def test_final_target_resolution_overrides_stale_zero_positioning_output(self):
+        lines = render_positioning_section(
+            {
+                "enabled_node_keys": ["execution_framework", "intraday_note"],
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                "final_gate": {"final_action": "明日不新增参与，只观察风险是否钝化"},
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "工业富联", "code": "601138"},
+                    "existing_position_target": {"name": "华电辽能", "code": "600396"},
+                    "display_target": {"name": "工业富联", "code": "601138"},
+                    "capital_priority_decision": {
+                        "capital_priority": "new_entry_after_old_exit",
+                        "reason": "先处理旧仓，买工业富联(601138)；固定交易窗口条件成立才参与，不满足回到0%",
+                    },
+                },
+                "get_execution_framework_text": lambda: "先处理旧仓，再按固定交易窗口确认工业富联",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**怎么执行**：先处理旧仓，再按固定交易窗口确认工业富联", rendered)
+        self.assertIn("明日只按09:30-09:35、09:50-10:10、14:30-14:55三段窗口处理", rendered)
+        self.assertNotIn("最终0%时不按固定交易窗口执行", rendered)
+        self.assertNotIn("明日不新增参与", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

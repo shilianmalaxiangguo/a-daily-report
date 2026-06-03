@@ -71,6 +71,27 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertNotIn("卖出用于买入", report)
         self.assertNotIn("为了买而卖", report)
 
+    def test_render_formats_lot_based_t0_holding_position(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={},
+            target_date="2026-06-01",
+            positions=[
+                {
+                    "name": "华电辽能",
+                    "lots": 2.0,
+                    "shares": 200,
+                    "buy_lots": 2.0,
+                    "sell_lots": 2.0,
+                    "trade_action": "做T",
+                }
+            ],
+        )
+
+        self.assertIn("| 华电辽能 | 2手/200股，今日做T买入2手、卖出2手 | 否 |", report)
+        self.assertNotIn("| 卖2手 |", report)
+
     def test_save_position_strategy_report_writes_replay_path(self):
         from portfolio.position_strategy_report import save_position_strategy_report
 
@@ -116,7 +137,7 @@ class PositionStrategyReportTest(unittest.TestCase):
 ## 明日账户建议
 | 项目 | 结论 |
 |------|------|
-| 明日动作 | 先处理旧仓，不为新候选分散资金 |
+| 明日动作 | 先处理旧仓，不新增参与 |
 | T0主对象 | 持有晶方科技(603005)，100股，成本43.835；先看45.1能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手 |
 | T0备用 | 华天科技(002185)：仅作条件观察 |
 | 新开仓上限 | 0 |

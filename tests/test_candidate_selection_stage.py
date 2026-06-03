@@ -351,6 +351,97 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("| 竞价表态 + 回封参与 | 50% |", rendered)
         self.assertNotIn("| 竞价表态 + 回封参与 | 100% |", rendered)
 
+    def test_conviction_list_renders_anchor_reversal_inside_reason(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "sector": "电力",
+                        "conviction_reason": "低位补涨",
+                        "conviction_rule": "只观察承接",
+                        "candidate_role": "套利工具",
+                        "sector_anchor": "大唐发电(601991)",
+                        "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                        "repair_priority": "后排修复",
+                        "anchor_reversal_decision": "降级观察",
+                        "anchor_reversal_reason": "套利工具不能替代板块锚",
+                        "ma_binding_strategy": "MA5入/MA7清/MA5T",
+                        "leader_certainty_path": "板块锚优先，MA5入/MA7清/MA5T和承接路径明确",
+                        "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("板块锚反推：降级观察", rendered)
+        self.assertIn("身份：套利工具", rendered)
+        self.assertIn("大唐发电(601991)", rendered)
+        self.assertIn("被大唐发电(601991)带动，只能反馈板块强度", rendered)
+        self.assertIn("后排修复", rendered)
+        self.assertIn("套利工具不能替代板块锚", rendered)
+        self.assertIn("MA5入/MA7清/MA5T", rendered)
+        self.assertIn("板块锚优先", rendered)
+        self.assertIn("涨停只是证据", rendered)
+
+    def test_conviction_list_anchor_reversal_downgrade_overrides_stale_executable_layer(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "sector": "电力",
+                        "candidate_layer": "executable_candidate",
+                        "execution_eligibility": "auction_reseal",
+                        "conviction_reason": "低位补涨",
+                        "conviction_rule": "只观察承接",
+                        "candidate_role": "套利工具",
+                        "sector_anchor": "大唐发电(601991)",
+                        "anchor_reversal_decision": "降级观察",
+                        "anchor_reversal_reason": "套利工具不能替代板块锚",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 京能电力 | 600578 | 电力 |", rendered)
+        self.assertIn("| 修复观察 | 低位补涨；板块锚反推：降级观察", rendered)
+        self.assertNotIn("| 可执行候选 | 低位补涨；板块锚反推：降级观察", rendered)
+
+    def test_conviction_list_nested_anchor_reversal_overrides_stale_executable_layer(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "sector": "电力",
+                        "candidate_layer": "executable_candidate",
+                        "execution_eligibility": "auction_reseal",
+                        "conviction_reason": "低位补涨",
+                        "conviction_rule": "只观察承接",
+                        "anchor_reversal": {
+                            "sector_anchor": "大唐发电(601991)",
+                            "candidate_role": "套利工具",
+                            "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                            "why_not_anchor": "不能证明比板块锚更值得参与",
+                            "anchor_reversal_decision": "降级观察",
+                            "anchor_reversal_reason": "套利工具不能替代板块锚",
+                        },
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 修复观察 | 低位补涨；板块锚反推：降级观察", rendered)
+        self.assertIn("为什么不做锚：不能证明比板块锚更值得参与", rendered)
+        self.assertNotIn("| 可执行候选 | 低位补涨；板块锚反推：降级观察", rendered)
+
     def test_candidate_selection_renders_shape_repair_pool_separately(self):
         result = build_candidate_selection_runtime(
             {

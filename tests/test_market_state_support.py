@@ -541,6 +541,52 @@ assert leader["name"] == "军工龙头"
             ],
         )
 
+    def test_market_state_support_reuses_compact_snapshot_history_between_sector_queries(self):
+        support = self._load_module()
+        snapshot_calls = []
+        snapshots = {
+            "2026-04-21": {
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "军工", "zljlr": 12.5},
+                        {"name": "半导体", "zljlr": 8.8},
+                    ],
+                    "outflow": [],
+                },
+                "large_unused_payload": ["x"] * 100,
+            },
+            "2026-04-20": {
+                "sector_fund_flow": {
+                    "inflow": [],
+                    "outflow": [
+                        {"name": "军工", "zljlr": -3.2},
+                        {"name": "半导体", "zljlr": -1.1},
+                    ],
+                },
+                "large_unused_payload": ["y"] * 100,
+            },
+        }
+
+        helpers = {
+            "DatabaseService": None,
+            "_normalize_kline_date_str": lambda value: str(value),
+            "get_previous_date_str": lambda value: {
+                "2026-04-22": "2026-04-21",
+                "2026-04-21": "2026-04-20",
+                "2026-04-20": "",
+            }.get(value, ""),
+            "load_data_snapshot": lambda cursor: snapshot_calls.append(cursor) or (snapshots.get(cursor, {}), None),
+            "sector_name_matches": lambda left, right: left == right,
+            "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
+        }
+
+        first = support.load_recent_sector_flow_history("2026-04-22", "军工", lookback_days=2, helpers=helpers)
+        second = support.load_recent_sector_flow_history("2026-04-22", "半导体", lookback_days=2, helpers=helpers)
+
+        self.assertEqual(first, [{"date": "2026-04-20", "inflow": -3.2}, {"date": "2026-04-21", "inflow": 12.5}])
+        self.assertEqual(second, [{"date": "2026-04-20", "inflow": -1.1}, {"date": "2026-04-21", "inflow": 8.8}])
+        self.assertEqual(snapshot_calls, ["2026-04-21", "2026-04-20"])
+
     def test_market_state_support_loads_recent_market_turnover_history_from_snapshots(self):
         support = self._load_module()
 
@@ -777,7 +823,7 @@ assert leader["name"] == "军工龙头"
         )
         self.assertGreaterEqual(normalize_mock.call_count, 2)
         self.assertGreaterEqual(previous_date_mock.call_count, 4)
-        self.assertGreaterEqual(snapshot_mock.call_count, 4)
+        self.assertEqual(snapshot_mock.call_count, 2)
         self.assertGreaterEqual(sector_match_mock.call_count, 2)
         self.assertGreaterEqual(safe_float_mock.call_count, 4)
 

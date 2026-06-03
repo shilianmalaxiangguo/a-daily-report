@@ -122,6 +122,11 @@ def run(ctx):
     recent_sector_turnover_history = inputs.get("recent_sector_turnover_history", []) or []
     mainline_turnover_summary = inputs.get("mainline_turnover_summary", {}) or {}
     final_gate = inputs.get("final_gate", {}) or {}
+    final_target_resolution = (
+        inputs.get("final_target_resolution")
+        or market_research_snapshot.get("final_target_resolution")
+        or {}
+    )
     watchlist = inputs.get("watchlist", []) or []
     core_stocks = inputs.get("core_stocks", []) or []
     secondary_stocks = inputs.get("secondary_stocks", []) or []
@@ -165,6 +170,7 @@ def run(ctx):
                     "watch_anchor_type": inputs.get("watch_anchor_type", ""),
                     "selected_position_candidate": inputs.get("selected_position_candidate"),
                     "position_decision": inputs.get("position_decision", {}) or {},
+                    "final_target_resolution": final_target_resolution,
                     "style_switch": (market_research_snapshot.get("style_switch", {}) or {}),
                     "tracking_memory_status": inputs.get("tracking_memory_status", {}) or {},
                     "today_validated_items": inputs.get("today_validated_items"),

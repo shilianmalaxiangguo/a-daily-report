@@ -137,13 +137,52 @@ def _terminal_step(tier, missing_data, account_status, checks):
     return f"进入 {tier or '候选'} 条件观察"
 
 
+def _anchor_value(candidate, payload, *keys):
+    for key in keys:
+        value = candidate.get(key)
+        if value not in (None, ""):
+            return value
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _anchor_reversal_payload(candidate):
+    nested_payload = candidate.get("anchor_reversal") or candidate.get("板块锚反推") or {}
+    if not isinstance(nested_payload, dict):
+        nested_payload = {}
+    payload = {
+        "sector_anchor": _clean_text(_anchor_value(candidate, nested_payload, "sector_anchor", "板块锚")),
+        "candidate_role": _clean_text(_anchor_value(candidate, nested_payload, "candidate_role", "候选身份")),
+        "relationship_to_anchor": _clean_text(_anchor_value(candidate, nested_payload, "relationship_to_anchor", "与板块锚关系")),
+        "why_not_anchor": _clean_text(
+            _anchor_value(candidate, nested_payload, "why_not_anchor", "为什么不做板块锚", "为什么不做锚", "为什么不做龙头")
+        ),
+        "repair_priority": _clean_text(_anchor_value(candidate, nested_payload, "repair_priority", "修复优先级")),
+        "anchor_reversal_decision": _clean_text(_anchor_value(candidate, nested_payload, "anchor_reversal_decision", "板块锚反推结论")),
+        "anchor_reversal_reason": _clean_text(_anchor_value(candidate, nested_payload, "anchor_reversal_reason", "板块锚反推原因")),
+        "ma_binding_strategy": _clean_text(_anchor_value(candidate, nested_payload, "ma_binding_strategy", "均线绑定策略")),
+        "leader_certainty_path": _clean_text(_anchor_value(candidate, nested_payload, "leader_certainty_path", "龙头确定性路径")),
+        "limit_up_evidence_role": _clean_text(_anchor_value(candidate, nested_payload, "limit_up_evidence_role", "涨停证据角色")),
+    }
+    return {key: value for key, value in payload.items() if value}
+
+
 def build_candidate_trace(candidate):
     candidate = _as_candidate_dict(candidate)
     code = _stock_code(candidate)
     name = _stock_name(candidate)
     tier = _tier(candidate)
     mainline = _clean_text(candidate.get("mainline") or candidate.get("主线"))
-    sector = _clean_text(candidate.get("sector") or candidate.get("板块"))
+    sector = _clean_text(
+        candidate.get("trade_narrative_sector")
+        or candidate.get("active_trade_sector")
+        or candidate.get("主 tag")
+        or candidate.get("sector")
+        or candidate.get("板块")
+    )
     source_pools = _as_list(candidate.get("source_pools") or candidate.get("来源池"))
 
     checks = [
@@ -169,11 +208,17 @@ def build_candidate_trace(candidate):
     if account_missing and not decisive_non_participation:
         missing_data.append("account_context")
 
+    anchor_reversal = _anchor_reversal_payload(candidate)
+    anchor_decision = _clean_text(anchor_reversal.get("anchor_reversal_decision")) if anchor_reversal else ""
     final_action = _clean_text(candidate.get("final_action") or candidate.get("最终动作"))
+    if anchor_decision in {"降级观察", "不参与"} and not final_action:
+        final_action = "板块锚反推降级，只观察，不新增参与"
     if missing_data and not final_action:
         final_action = "关键数据不完整，停止生成动作"
 
     branch_path = [f"{check['label']}{check['result']}" for check in checks]
+    if anchor_decision in {"降级观察", "不参与"}:
+        branch_path.append(f"板块锚反推{anchor_decision}")
     branch_path.append(_terminal_step(tier, missing_data, account_status, checks))
 
     key_inputs = [
@@ -181,8 +226,16 @@ def build_candidate_trace(candidate):
     ]
     if account_reason:
         key_inputs.append({"field": "账户说明", "value": account_reason, "source": "account_context"})
+    if anchor_reversal:
+        key_inputs.append(
+            {
+                "field": "板块锚反推",
+                "value": anchor_reversal.get("anchor_reversal_decision") or anchor_reversal.get("candidate_role"),
+                "source": "anchor_reversal",
+            }
+        )
 
-    return {
+    trace = {
         "stock_code": code,
         "stock_name": name,
         "tier": tier,
@@ -198,6 +251,9 @@ def build_candidate_trace(candidate):
         "missing_data": missing_data,
         "visible_summary": _visible_summary(name, tier, checks, final_action),
     }
+    if anchor_reversal:
+        trace["anchor_reversal"] = anchor_reversal
+    return trace
 
 
 def build_eliminated_summary(items):

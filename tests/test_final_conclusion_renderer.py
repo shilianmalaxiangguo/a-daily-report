@@ -11,6 +11,7 @@ from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.conclusion_support import (
     build_candidate_trade_directive,
     build_focus_recap_text,
+    build_market_outlook_text,
     derive_risk_guard_text,
     derive_trade_style,
     selected_target_is_attack_ready,
@@ -61,7 +62,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 环境与跟随裁决 |", rendered)
-        self.assertIn("| 明天观察池 | 12只 |", rendered)
+        self.assertIn("| 明天观察池 | 军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
         self.assertIn("| 唯一动作 | 军工一号(000001)；按固定交易窗口条件触发 |", rendered)
         self.assertIn("| 明日策略 | 唯一标的条件触发：只操作军工一号", rendered)
         self.assertNotIn("stage_key", rendered)
@@ -202,6 +203,52 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertEqual(derive_trade_style(context), "空仓")
         self.assertIn("当前先守住回撤", derive_risk_guard_text(context))
 
+    def test_old_position_priority_keeps_new_target_as_observation_anchor(self):
+        context = {
+            "display_mvp_mode": False,
+            "step0_prediction_cn": "🚫 暂不跟随",
+            "final_gate": {
+                "can_new_entry": False,
+                "should_reduce": True,
+                "final_action": "先处理旧仓，不新增参与；新强对象只保留观察锚",
+            },
+            "selected_position_candidate": {
+                "name": "工业富联",
+                "code": "601138",
+                "sector": "通信设备",
+            },
+            "position_decision": {
+                "target_position_pct": 100,
+                "participation_mode": "full_100",
+            },
+            "final_target_resolution": {
+                "new_entry_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
+                "watch_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
+                "existing_position_target": {"name": "华电辽能", "code": "600396", "role": "旧仓处理"},
+                "display_target": {"name": "华电辽能", "code": "600396", "role": "旧仓处理"},
+                "capital_priority_decision": {
+                    "capital_priority": "old_position_t",
+                    "reason": "约1w账户先处理已有仓，工业富联只保留观察锚",
+                },
+            },
+        }
+
+        self.assertFalse(selected_target_is_attack_ready(context))
+        self.assertEqual(build_focus_recap_text(context), "工业富联(601138)：观察锚，旧仓先处理")
+        self.assertIn("先处理旧仓，不新增参与", build_market_outlook_text(context))
+        self.assertIn("账户先处理旧仓，不新增参与", build_candidate_trade_directive(context))
+        self.assertNotIn("固定交易窗口内条件是否成立", build_candidate_trade_directive(context))
+
+        rendered = "\n".join(build_legacy_final_conclusion_lines(context))
+        self.assertIn("| 今日关注标的 | 工业富联(601138)：观察锚，旧仓先处理 |", rendered)
+        self.assertIn("| 明天观察池 | 工业富联(601138)：观察锚，旧仓先处理 |", rendered)
+        self.assertIn("| 明日买点预计算 | 空仓；不开新仓，只保留重点观察谁 |", rendered)
+        self.assertIn("| 唯一动作 | 工业富联(601138)；先观察强弱，不抢跑 |", rendered)
+        self.assertIn("| 明日策略 | 只处理旧仓：继续研究市场，但不新增参与", rendered)
+        self.assertNotIn("工业富联(601138)：明日目标标的", rendered)
+        self.assertNotIn("只等明日目标标的在固定交易窗口内满足条件", rendered)
+        self.assertNotIn("明日目标标的条件触发", rendered)
+
     def test_candidate_trade_directive_keeps_zero_position_target_observational(self):
         directive = build_candidate_trade_directive(
             {
@@ -223,8 +270,30 @@ class FinalConclusionRendererTest(unittest.TestCase):
             }
         )
 
-        self.assertIn("已缩到明日目标标的汇源通信(000586)，先观察强弱与承接", directive)
+        self.assertIn("板块锚反推已收敛到明日目标标的汇源通信(000586)，先观察强弱与承接", directive)
         self.assertNotIn("只看参与窗口是否成立", directive)
+
+    def test_candidate_trade_directive_replaces_legacy_counts_when_selected_target_exists(self):
+        directive = build_candidate_trade_directive(
+            {
+                "core_count": 3,
+                "secondary_count": 1,
+                "crossline_count": 4,
+                "selected_position_candidate": {
+                    "name": "华锋股份",
+                    "code": "002806",
+                },
+                "position_decision": {
+                    "target_position_pct": 50,
+                    "participation_mode": "attack_50_preview",
+                },
+            }
+        )
+
+        self.assertIn("板块锚反推已收敛到明日目标标的华锋股份(002806)", directive)
+        self.assertNotIn("3只主线核心", directive)
+        self.assertNotIn("1只备选", directive)
+        self.assertNotIn("4只跨线观察", directive)
 
     def test_final_conclusion_rebuilds_stale_stage_rows_when_selected_target_is_ready(self):
         lines = build_legacy_final_conclusion_lines(
@@ -290,7 +359,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        selection_row = "| 观察池先看什么 | 9只 |"
+        selection_row = "| 观察池先看什么 | 军工一号(000001)：已缩成明天唯一执行候选 |"
         environment_row = "| 环境先怎么判 | 先判环境 |"
         execution_row = "| 买点计划怎么排 | 只等明天唯一能买的那只自己走出来 |"
         self.assertIn(selection_row, rendered)
@@ -321,7 +390,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("| 环境与跟随裁决 | 🟢 明朗；允许强势跟随 |", rendered)
-        self.assertIn("| 明天观察池 | 15只；军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
+        self.assertIn("| 明天观察池 | 军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
         self.assertNotIn("老龙头(000002)：今日再次入池", rendered)
         self.assertIn("| 主线核心与跨线观察 | 2只主线核心 / 1只备选 / 1只跨线观察；先只在主线核心里做减法，目标缩到军工一号(000001) |", rendered)
         self.assertIn("| 明日风险预判 | 高位分歧加大；只接受预估赚赔比 1:2.4 的试错，不接受大亏硬扛 |", rendered)

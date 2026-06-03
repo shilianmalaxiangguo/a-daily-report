@@ -243,6 +243,7 @@ def build_final_conclusion_full_stage_rows_node(context, node_meta=None, node_lo
             "watch_anchor_type": context.get("watch_anchor_type", ""),
             "selected_position_candidate": context.get("selected_position_candidate"),
             "position_decision": context.get("position_decision"),
+            "final_target_resolution": context.get("final_target_resolution") or {},
             "position_level": context.get("position_level", ""),
             "trade_style": context.get("trade_style", ""),
             "abnormal_probe_parts": context.get("abnormal_probe_parts") or [],

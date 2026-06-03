@@ -91,6 +91,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             "month_mode": "ordinary_attack",
                             "target_role": "attack_prepare",
                             "month_return_pct": 6.8,
+                            "simulated_cumulative_return_pct": 9.3632,
                             "profit_cushion_pct": 10.0,
                             "max_position_pct": 50,
                             "allow_full_attack": False,
@@ -106,6 +107,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("### 月度攻防与进攻仓位", rendered)
         self.assertIn("| 本月模式 | 普通进攻月 |", rendered)
         self.assertIn("| 当月收益 | +6.80% |", rendered)
+        self.assertIn("| 模拟累计收益 | +9.36% |", rendered)
         self.assertIn("| 盈利垫 | 未触发（阈值+10.00%） |", rendered)
         self.assertIn("| 进攻仓位三态 | 50% |", rendered)
         self.assertIn("| 明日最大仓位 | 50% |", rendered)
@@ -297,8 +299,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         "name": "京能电力",
                         "code": "600578",
                         "sector": "电力",
+                        "target_position_pct": 50,
                         "participation_window": "09:50-10:10确认",
                         "condition": "主线承接 + 个股强弱重新确认",
+                        "fallback_state": "不满足回到0%",
                     },
                     "position_decision": {
                         "signal_grade": "0",
@@ -794,14 +798,80 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日仓位 | 预计50%标准进攻；条件不成立回0% |", account_section)
-        self.assertIn("| 明日动作 | 确认没有旧仓后，只看明日执行目标 |", account_section)
-        self.assertIn("| 明日执行目标 | 大唐发电(601991)：固定交易窗口条件 |", account_section)
-        self.assertIn("| T0对象 | 持仓未输入，不能定义T0对象 |", account_section)
-        self.assertIn("| 价格条件 | 开盘-5%附近不抢；-3%低开需站回0轴/VWAP/MA强弱线，固定交易窗口内再执行 |", account_section)
+        self.assertIn("| 明日仓位 | 50%标准进攻 |", account_section)
+        self.assertIn("| 明日动作 | 先确认旧仓情况，再看T0主对象 |", account_section)
+        self.assertIn("| T0主对象 | 大唐发电(601991)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
+        self.assertNotIn("无旧仓", account_section)
+        self.assertNotIn("确认没有旧仓", account_section)
+        self.assertIn("| 价格条件 | 买入区间：MA5附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
         self.assertIn("| 新开仓上限 | 1 |", account_section)
-        self.assertNotIn("| T0主对象 |", account_section)
+        self.assertNotIn("| 明日执行目标 |", account_section)
+        self.assertNotIn("预计", account_section)
         self.assertIn("| 50%标准进攻 |", rendered)
+
+    def test_front_page_t0_card_uses_t0_main_object_when_no_yesterday_holding(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-28",
+                market_research_snapshot={
+                    "position_context_provided": True,
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "selected_position_candidate": {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "buy_ma_line": "MA7",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                },
+                final_gate={"allow_attack_50_ready": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；无昨日持仓先看T0对象 |", account_section)
+        self.assertIn("| 明日仓位 | 50%标准进攻 |", account_section)
+        self.assertIn("| T0主对象 | 华电能源(600726)：固定交易窗口条件 |", account_section)
+        self.assertIn("| T0备用 | 暂无 |", account_section)
+        self.assertIn("| 价格条件 | 买入区间：MA7附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
+        self.assertNotIn("| T0对象 | 无昨日持仓，不涉及T0 |", account_section)
+        self.assertNotIn("预计", account_section)
+
+    def test_front_page_t0_card_keeps_100pct_core_evidence(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-28",
+                market_research_snapshot={
+                    "position_context_provided": True,
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "selected_position_candidate": {
+                        "name": "华电能源",
+                        "code": "600726",
+                        "sector": "电力",
+                        "buy_ma_line": "MA7",
+                    },
+                    "position_decision": {
+                        "signal_grade": "100",
+                        "target_position_pct": 100,
+                        "monthly_rhythm": {"max_position_pct": 100},
+                    },
+                },
+                final_gate={"allow_attack_50_ready": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 明日仓位 | 100%核心进攻 |", account_section)
+        self.assertIn("| T0主对象 | 华电能源(600726)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 价格条件 | 买入区间：MA7附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
+        self.assertNotIn("| 明日仓位 | 50%标准进攻 |", account_section)
+        self.assertNotIn("预计", account_section)
 
     def test_front_page_reduce_only_candidate_renders_expected_50_preview(self):
         rendered = "\n".join(
@@ -814,8 +884,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         "name": "华电能源",
                         "code": "600726",
                         "sector": "电力",
+                        "target_position_pct": 50,
                         "participation_window": "09:50-10:10",
                         "required_steps": ["竞价表态", "开盘前几分钟承接", "回封观察"],
+                        "fallback_state": "不满足回到0%",
                     },
                     "position_decision": {
                         "participation_mode": "observe_0",
@@ -840,11 +912,16 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日仓位 | 预计50%标准进攻；条件不成立回0% |", account_section)
-        self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
-        self.assertIn("| T0对象 | 持仓未输入，不能定义T0对象 |", account_section)
+        self.assertIn("| 明日仓位 | 50%标准进攻 |", account_section)
+        self.assertIn("| 明日动作 | 先确认旧仓情况，再看T0主对象 |", account_section)
+        self.assertIn("| T0主对象 | 华电能源(600726)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
+        self.assertNotIn("无旧仓", account_section)
+        self.assertNotIn("确认没有旧仓", account_section)
+        self.assertIn("| 价格条件 | 买入区间：MA5附近；09:50-10:10站上9.21且不破8.75，不满足0%不参与 |", account_section)
         self.assertNotIn("| 明日仓位 | 0%不参与 |", account_section)
         self.assertNotIn("| 观察对象 | 华电能源(600726)：观察锚，不是T0 |", account_section)
+        self.assertNotIn("预计", account_section)
 
     def test_front_page_t0_card_prioritizes_existing_position(self):
         rendered = "\n".join(
@@ -872,7 +949,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 账户约束 | 约1w账户；已有昨日持仓优先处理 |", account_section)
-        self.assertIn("| 明日动作 | 先处理旧仓，不为新候选分散资金 |", account_section)
+        self.assertIn("| 明日动作 | 先处理旧仓，不新增参与 |", account_section)
         self.assertIn("| T0主对象 | 已有昨日持仓晶方科技(603005)，先按持仓预案处理 |", account_section)
         self.assertIn("| T0备用 | 华天科技(002185)：仅作观察对象 |", account_section)
         self.assertIn("| 新开仓上限 | 0 |", account_section)
@@ -927,6 +1004,128 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
         self.assertNotIn("50%标准进攻，只做预演命中的合格对象", rendered)
 
+    def test_front_page_account_advice_uses_cash_and_one_lot_without_knowledge_hit(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-29",
+                market_research_snapshot={
+                    "account_profile": {
+                        "capital_text": "约1w账户",
+                        "cash_available": 9800,
+                    },
+                    "selected_position_candidate": {
+                        "name": "强核心",
+                        "code": "000001",
+                        "sector": "半导体",
+                        "identity": "市场核心",
+                        "one_lot_amount": 18000,
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                },
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 明日仓位 | 0%不参与 |", account_section)
+        self.assertIn("| 明日动作 | 当前账户不参与；强核心仍保留市场核心观察 |", account_section)
+        self.assertIn("| 观察对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", account_section)
+        self.assertNotIn("| T0主对象 |", account_section)
+        self.assertNotIn("| 经验库依据 |", account_section)
+
+    def test_front_page_account_advice_uses_tradable_proxy_for_unbuyable_core(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-03",
+                market_research_snapshot={
+                    "account_profile": {
+                        "capital_text": "约1w账户",
+                        "cash_available": 9800,
+                    },
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "selected_position_candidate": {
+                        "name": "中际旭创",
+                        "code": "300308",
+                        "sector": "通信设备",
+                        "identity": "市场核心",
+                        "one_lot_amount": 16800,
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "中际旭创",
+                            "code": "300308",
+                            "sector": "通信设备",
+                            "identity": "市场核心",
+                            "one_lot_amount": 16800,
+                            "participation_window": "09:50-10:10",
+                        },
+                        "watch_target": {
+                            "name": "中际旭创",
+                            "code": "300308",
+                            "sector": "通信设备",
+                            "identity": "市场核心",
+                            "one_lot_amount": 16800,
+                        },
+                        "process_target": {
+                            "name": "中际旭创",
+                            "code": "300308",
+                            "sector": "通信设备",
+                            "identity": "市场核心",
+                            "one_lot_amount": 16800,
+                        },
+                        "tradable_proxy_target": {
+                            "name": "通信ETF",
+                            "code": "515880",
+                            "sector": "通信设备",
+                            "proxy_effect_type": "行业板块效应",
+                            "proxy_reason": "跟踪通信设备方向，不退到弱跟风个股",
+                            "condition": "通信设备承接继续",
+                            "participation_window": "09:50-10:10",
+                            "fallback_state": "不满足回到0%",
+                        },
+                        "display_target": {
+                            "name": "通信ETF",
+                            "code": "515880",
+                            "sector": "通信设备",
+                            "proxy_effect_type": "行业板块效应",
+                            "condition": "通信设备承接继续",
+                            "participation_window": "09:50-10:10",
+                            "fallback_state": "不满足回到0%",
+                        },
+                        "capital_priority_decision": {
+                            "capital_priority": "tradable_proxy",
+                            "reason": "目标标的中际旭创(300308)，小资金账户可用通信ETF(515880)替代",
+                        },
+                    },
+                },
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
+        execution_section = rendered[rendered.index("## 六、明日执行计划") : rendered.index("## 七、最终结论")]
+        final_section = rendered[rendered.index("## 七、最终结论") :]
+
+        self.assertIn("| 明日仓位 | 50%标准进攻 |", account_section)
+        self.assertIn("| 明日动作 | 目标标的中际旭创(300308)，小资金账户可用通信ETF(515880)替代 |", account_section)
+        self.assertIn("| 明日执行目标 | 通信ETF(515880)：行业板块效应替代表达 |", account_section)
+        self.assertIn("| 观察对象 | 中际旭创(300308)：市场核心保留观察 |", account_section)
+        self.assertIn("| 新开仓上限 | 1 |", account_section)
+        self.assertIn("| 执行目标 | 515880 通信ETF（通信设备） |", stock_section)
+        self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", execution_section)
+        self.assertIn("| 只看唯一对象 | 515880 通信ETF（通信设备） | 09:50-10:10 | 通信设备承接继续 | 不满足回到0%不参与 |", execution_section)
+        self.assertIn("| 50%标准进攻，只做预演命中的合格对象 |", final_section)
+        self.assertIn("515880 通信ETF（通信设备）", final_section)
+        self.assertNotIn("| 观察对象 | 中际旭创(300308)：当前账户买不了一手，只保留观察 |", account_section)
+
     def test_front_page_t0_card_does_not_assume_no_holding_without_account_context(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -952,6 +1151,42 @@ class FrontPageV2RendererTest(unittest.TestCase):
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 账户约束 | 约1w账户；未输入持仓，先确认旧仓再看T0对象 |", account_section)
         self.assertNotIn("无昨日持仓", account_section)
+
+    def test_front_page_zero_participation_keeps_candidate_as_observation_not_t0(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-28",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "selected_position_candidate": {
+                        "name": "江海股份",
+                        "code": "002484",
+                        "sector": "元件",
+                        "target_position_pct": 50,
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    },
+                    "position_decision": {
+                        "signal_grade": "0",
+                        "target_position_pct": 0,
+                        "monthly_rhythm": {
+                            "max_position_pct": 0,
+                            "market_ice_point": True,
+                            "reason": "冰点防守",
+                        },
+                    },
+                },
+                final_gate={"can_new_entry": False, "market_ice_point": True},
+                position_level="一档（空仓档）",
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 明日仓位 | 0%不参与 |", account_section)
+        self.assertIn("| 明日动作 | 0%不参与；只保留观察对象，不新开 |", account_section)
+        self.assertIn("| 观察对象 | 江海股份(002484)：观察锚，不是T0 |", account_section)
+        self.assertNotIn("| T0主对象 |", account_section)
 
     def test_front_page_t0_card_shows_position_decision_for_real_small_account_holding(self):
         rendered = "\n".join(
@@ -981,7 +1216,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 账户约束 | 1w本金；总资产10126.52；当日盈利126.52（+1.27%）；已有昨日持仓优先处理 |", account_section)
-        self.assertIn("| 明日动作 | 先处理旧仓，不为新候选分散资金 |", account_section)
+        self.assertIn("| 明日动作 | 先处理旧仓，不新增参与 |", account_section)
         self.assertIn(
             "| T0主对象 | 持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手 |",
             account_section,
@@ -1960,6 +2195,146 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 明日节奏 | 低频聚焦；只保留主线核心；题材荒时不从旧方向强行扩散候选 |", rendered)
         self.assertIn("| 0%不参与 | 不确定时不值得主动参与 | 科技 | 科技 | 低频聚焦 |", rendered)
         self.assertIn("低频聚焦。原因是指数强但真实赚钱效应弱，成交额高位但结构集中。", rendered)
+
+    def test_final_target_resolution_new_entry_after_old_position_exit_keeps_target_actionable(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-03",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                    },
+                    "unique_action_target": {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                        "participation_window": "09:50-10:10",
+                        "condition": "板块锚承接继续",
+                        "fallback_state": "不满足回到0%",
+                    },
+                    "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                            "participation_window": "09:50-10:10",
+                            "condition": "板块锚承接继续",
+                            "fallback_state": "不满足回到0%",
+                        },
+                        "existing_position_target": {
+                            "name": "华电辽能",
+                            "code": "600396",
+                            "sector": "电力",
+                            "role": "旧仓处理",
+                        },
+                        "display_target": {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                        },
+                        "capital_priority_decision": {
+                            "capital_priority": "new_entry_after_old_exit",
+                            "reason": "先处理旧仓腾出资金，工业富联具备执行条件",
+                        },
+                    },
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
+        execution_section = rendered[rendered.index("## 六、明日执行计划") : rendered.index("## 七、最终结论")]
+        final_section = rendered[rendered.index("## 七、最终结论") :]
+
+        self.assertIn("| 明日动作 | 先处理旧仓，买工业富联(601138) |", account_section)
+        self.assertIn("| 旧仓处理 | 华电辽能(600396)：已有仓先按MA5T处理 |", account_section)
+        self.assertIn("| 明日执行目标 | 工业富联(601138)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 新开仓上限 | 资金释放后1 |", account_section)
+        self.assertIn("| 明日仓位 | 50%标准进攻 |", stock_section)
+        self.assertIn("| 执行目标 | 601138 工业富联（通信设备） |", stock_section)
+        self.assertIn("| 只看唯一对象 | 601138 工业富联（通信设备） | 09:50-10:10 | 板块锚承接继续 | 不满足回到0%不参与 |", execution_section)
+        self.assertIn("| 50%标准进攻，只做预演命中的合格对象 |", final_section)
+        self.assertIn("601138 工业富联（通信设备）", final_section)
+        self.assertNotIn("观察锚：601138 工业富联", final_section)
+
+    def test_final_target_resolution_old_position_priority_turns_new_entry_into_watch_anchor(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-03",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                    },
+                    "unique_action_target": {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                        "participation_window": "09:50-10:10",
+                    },
+                    "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                            "participation_window": "09:50-10:10",
+                            "condition": "板块锚承接继续",
+                            "fallback_state": "不满足继续观察",
+                        },
+                        "existing_position_target": {
+                            "name": "华电辽能",
+                            "code": "600396",
+                            "sector": "电力",
+                            "role": "旧仓处理",
+                        },
+                        "watch_target": {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                            "participation_window": "09:50-10:10",
+                            "condition": "板块锚承接继续",
+                            "fallback_state": "不满足继续观察",
+                        },
+                        "display_target": {
+                            "name": "华电辽能",
+                            "code": "600396",
+                            "sector": "电力",
+                            "role": "旧仓处理",
+                        },
+                        "capital_priority_decision": {
+                            "capital_priority": "old_position_t",
+                            "reason": "约1w账户先处理已有仓，工业富联只保留观察锚",
+                        },
+                    },
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        stock_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
+        execution_section = rendered[rendered.index("## 六、明日执行计划") : rendered.index("## 七、最终结论")]
+        final_section = rendered[rendered.index("## 七、最终结论") :]
+
+        self.assertIn("| 明日动作 | 先处理旧仓，不新增参与 |", account_section)
+        self.assertIn("| T0主对象 | 华电辽能(600396)：已有仓先按MA5T处理 |", account_section)
+        self.assertIn("| T0备用 | 工业富联(601138)：观察锚，不能转成新增参与 |", account_section)
+        self.assertIn("| 明日仓位 | 0%不参与 |", stock_section)
+        self.assertIn("| 执行目标 | 无 |", stock_section)
+        self.assertIn("| 观察锚 | 601138 工业富联（通信设备） |", stock_section)
+        self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", execution_section)
+        self.assertIn("| 只看观察锚 | 601138 工业富联（通信设备） | 09:50-10:10 | 板块锚承接继续 | 不满足继续观察 |", execution_section)
+        self.assertIn("观察锚：601138 工业富联（通信设备）", final_section)
+        self.assertNotIn("| 明日唯一动作 |", execution_section)
+        self.assertNotIn("| 只看唯一对象 | 601138 工业富联", execution_section)
 
 
 if __name__ == "__main__":

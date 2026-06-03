@@ -118,6 +118,101 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual(result[0]["anchor_code"], "000001")
         self.assertGreater(result[0]["density_score"], result[1]["density_score"])
 
+    def test_sector_snapshot_keeps_known_anchor_above_limit_up_laggard(self):
+        result = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "reason": "板块锚 / 大容量趋势龙头 / MA5入/MA7清/MA5T / 承接好",
+                },
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                },
+            ],
+            evaluated_stocks=[
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "tomorrow_strength": 82,
+                    "score": 82,
+                    "change_pct": 1.1,
+                    "连板数": 0,
+                    "reason": "板块锚 / 大容量趋势龙头 / MA5入/MA7清/MA5T / 承接好",
+                    "capacity_profile": "大容量趋势资金",
+                    "pattern": "沿MA5趋势推进，缩量回踩不破",
+                },
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 118,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            dragon_stocks=[
+                {"code": "601991", "name": "大唐发电", "sector": "电力", "reason": "板块锚"},
+            ],
+            zt_pool_by_sector={"电力": [{"code": "600578"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(result[0]["anchor_code"], "601991")
+        self.assertEqual(result[0]["anchor_name"], "大唐发电")
+        self.assertIn("板块锚", result[0]["anchor_reason"])
+
+    def test_sector_snapshot_uses_watchlist_dragon_anchor_even_when_laggard_is_evaluated(self):
+        result = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "reason": "板块锚 / 大容量趋势龙头 / 承接好",
+                }
+            ],
+            evaluated_stocks=[
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 118,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            dragon_stocks=[
+                {"code": "601991", "name": "大唐发电", "sector": "电力", "reason": "板块锚 / 龙头"},
+            ],
+            zt_pool_by_sector={"电力": [{"code": "600578"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(result[0]["anchor_code"], "601991")
+        self.assertEqual(result[0]["anchor_name"], "大唐发电")
+
     def test_build_sector_trend_snapshot_ignores_market_board_labels(self):
         result = build_sector_trend_snapshot(
             candidates=[
@@ -538,6 +633,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "abnormal_follow_state": "缩量消化",
                     "close_ma_alignment": "MA5",
                     "turnover_capacity": "large",
+                    "why_not_anchor": "大唐发电短线加速过热，华电辽能承接更适合补位",
                 },
             ],
             mainline_name="电力",
@@ -565,6 +661,231 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("缩量回撤", primary["acceptance_repair_required"])
         self.assertIn("持筹者", primary["common_selection_check"])
         self.assertEqual(primary["final_risk_review"]["status"], "通过")
+
+    def test_anchor_reversal_downgrade_cannot_be_primary_when_only_laggard_passes_shape(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 9.8,
+                    "连板数": 1,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_name": "大唐发电",
+                    "anchor_code": "601991",
+                    "anchor_reason": "板块锚定龙",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["600578"])
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "降级观察")
+        self.assertEqual(conviction[0]["sniper_role"], "候选观察")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertFalse(conviction[0]["backup_buy_candidate"])
+        self.assertIn("只观察", conviction[0]["conviction_rule"])
+        self.assertNotIn("才参与", conviction[0]["conviction_rule"])
+
+    def test_anchor_reversal_backup_does_not_become_primary_when_anchor_is_not_in_candidates(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600396",
+                    "name": "华电辽能",
+                    "sector": "电力",
+                    "tomorrow_strength": 90,
+                    "score": 90,
+                    "change_pct": 4.8,
+                    "连板数": 0,
+                    "reason": "大容量趋势龙头 / 中军承接",
+                    "capacity_profile": "大容量趋势资金",
+                    "why_not_anchor": "大唐发电短线加速过热，华电辽能承接更适合补位",
+                    "allow_extreme_conviction": True,
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_name": "大唐发电",
+                    "anchor_code": "601991",
+                    "anchor_reason": "板块锚定龙",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "可作为补位")
+        self.assertEqual(conviction[0]["sniper_role"], "明日补位对象")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertTrue(conviction[0]["backup_buy_candidate"])
+
+    def test_failed_anchor_laggard_arbitrage_is_no_participation(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "603005",
+                    "name": "晶方科技",
+                    "sector": "半导体",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 9.8,
+                    "连板数": 1,
+                    "reason": "套利工具 / 跟风样本 / 被封测龙头带动",
+                    "pattern": "光头大阳柱涨停",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="半导体",
+            sector_snapshot=[
+                {
+                    "sector": "半导体",
+                    "anchor_name": "华天科技",
+                    "anchor_code": "002185",
+                    "anchor_status": "板块锚失效",
+                    "anchor_reason": "华天科技、长电科技破位走弱",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["603005"])
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "不参与")
+        self.assertEqual(conviction[0]["repair_priority"], "风险放大")
+        self.assertEqual(conviction[0]["sniper_role"], "候选观察")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertFalse(conviction[0]["backup_buy_candidate"])
+
+    def test_sector_snapshot_prefers_structured_anchor_role_over_limit_up_laggard(self):
+        result = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[],
+            evaluated_stocks=[
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "candidate_role": "板块锚",
+                    "tomorrow_strength": 70,
+                    "score": 70,
+                    "reason": "普通趋势承接",
+                },
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 118,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            dragon_stocks=[],
+            zt_pool_by_sector={"电力": [{"code": "600578"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(result[0]["anchor_code"], "601991")
+        self.assertEqual(result[0]["anchor_name"], "大唐发电")
+
+    def test_auto_sector_snapshot_preserves_failed_anchor_for_laggard_no_participation(self):
+        sector_snapshot = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[],
+            evaluated_stocks=[
+                {
+                    "code": "002185",
+                    "name": "华天科技",
+                    "sector": "半导体",
+                    "candidate_role": "板块锚",
+                    "anchor_status": "板块锚失效",
+                    "tomorrow_strength": 70,
+                    "score": 70,
+                    "reason": "华天科技、长电科技破位走弱",
+                },
+                {
+                    "code": "603005",
+                    "name": "晶方科技",
+                    "sector": "半导体",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 9.8,
+                    "连板数": 1,
+                    "reason": "套利工具 / 跟风样本 / 被封测龙头带动",
+                    "pattern": "光头大阳柱涨停",
+                },
+            ],
+            dragon_stocks=[],
+            zt_pool_by_sector={"半导体": [{"code": "603005"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "603005",
+                    "name": "晶方科技",
+                    "sector": "半导体",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 9.8,
+                    "连板数": 1,
+                    "reason": "套利工具 / 跟风样本 / 被封测龙头带动",
+                    "pattern": "光头大阳柱涨停",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="半导体",
+            sector_snapshot=sector_snapshot,
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(sector_snapshot[0]["anchor_code"], "002185")
+        self.assertEqual(sector_snapshot[0]["anchor_status"], "板块锚失效")
+        self.assertIn("破位走弱", sector_snapshot[0]["anchor_reason"])
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "不参与")
+        self.assertEqual(conviction[0]["repair_priority"], "风险放大")
 
     def test_build_conviction_list_excludes_unrepaired_upper_shadow_and_broken_sell_line(self):
         conviction = build_extreme_conviction_list(
@@ -1789,6 +2110,114 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("电力", core["missed_action"])
         self.assertIn("趋势比价链", core["missed_action"])
         self.assertNotIn("不临时补票", core["missed_action"])
+
+    def test_anchor_with_ma_roll_path_enters_comparison_ahead_of_limit_up_laggard(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 118,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "next_day_limit_probability_band": "高",
+                    "limit_up_inertia_score": 92,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                    "trend_aesthetic_status": "通过",
+                },
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "tomorrow_strength": 82,
+                    "score": 82,
+                    "change_pct": 1.1,
+                    "连板数": 0,
+                    "reason": "板块锚 / 大容量趋势龙头 / MA5入/MA7清/MA5T / 承接好",
+                    "capacity_profile": "大容量趋势资金",
+                    "pattern": "沿MA5趋势推进，缩量回踩不破，低点上移",
+                    "trend_aesthetic_status": "通过",
+                },
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_code": "601991",
+                    "anchor_name": "大唐发电",
+                    "anchor_reason": "板块锚 / 大容量趋势龙头 / MA5入/MA7清/MA5T",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        by_role = {item["sniper_role"]: item for item in conviction}
+        self.assertEqual(by_role["明日主买对象"]["code"], "601991")
+        self.assertEqual(by_role["明日主买对象"]["anchor_reversal_decision"], "可作为主对象")
+        self.assertIn("MA5入/MA7清/MA5T", by_role["明日主买对象"]["anchor_reversal_reason"])
+        self.assertEqual(by_role["候选观察"]["code"], "600578")
+        self.assertEqual(by_role["候选观察"]["anchor_reversal_decision"], "降级观察")
+        self.assertIn("涨停只是证据", by_role["候选观察"]["anchor_reversal_reason"])
+        self.assertEqual(by_role["候选观察"]["next_day_limit_probability_band"], "高于普通上涨样本")
+        self.assertGreaterEqual(by_role["候选观察"]["limit_up_inertia_score"], 90)
+
+    def test_capacity_acceptance_anchor_enters_comparison_without_ma_text(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600578",
+                    "name": "京能电力",
+                    "sector": "电力",
+                    "tomorrow_strength": 118,
+                    "score": 98,
+                    "change_pct": 10.0,
+                    "连板数": 1,
+                    "reason": "低位补涨 / 套利工具 / 被板块带动",
+                    "pattern": "光头大阳柱涨停",
+                    "trend_aesthetic_status": "通过",
+                },
+                {
+                    "code": "601991",
+                    "name": "大唐发电",
+                    "sector": "电力",
+                    "tomorrow_strength": 82,
+                    "score": 82,
+                    "change_pct": 1.1,
+                    "连板数": 0,
+                    "reason": "板块锚 / 大容量趋势龙头 / 承接好 / 反复做",
+                    "capacity_profile": "大容量趋势资金",
+                    "pattern": "缩量回踩不破，低点上移",
+                    "trend_aesthetic_status": "通过",
+                },
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_code": "601991",
+                    "anchor_name": "大唐发电",
+                    "anchor_reason": "板块锚 / 大容量趋势龙头",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        by_role = {item["sniper_role"]: item for item in conviction}
+        self.assertEqual(by_role["明日主买对象"]["code"], "601991")
+        self.assertEqual(by_role["候选观察"]["code"], "600578")
 
 
 if __name__ == "__main__":

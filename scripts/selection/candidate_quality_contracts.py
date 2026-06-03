@@ -59,6 +59,24 @@ def _has_marker(values, marker):
     return any(marker in str(value) for value in _as_list(values))
 
 
+def _anchor_reversal_decision(candidate):
+    candidate = candidate or {}
+    payload = candidate.get("anchor_reversal") or candidate.get("板块锚反推") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return str(
+        candidate.get("anchor_reversal_decision")
+        or candidate.get("板块锚反推结论")
+        or payload.get("anchor_reversal_decision")
+        or payload.get("板块锚反推结论")
+        or ""
+    ).strip()
+
+
+def _anchor_reversal_downgrades(candidate):
+    return _anchor_reversal_decision(candidate) in {"降级观察", "不参与"}
+
+
 def _as_number(value):
     try:
         return float(value or 0)
@@ -73,10 +91,32 @@ def _as_limit_number(value):
     return numeric
 
 
+_POSITION_QUANTITY_KEYS = (
+    "current_position_shares",
+    "当前持仓",
+    "sellable_shares",
+    "可卖数量",
+    "locked_shares",
+    "不可卖数量",
+)
+
+
+def _has_position_quantity(candidate):
+    candidate = candidate or {}
+    return any(candidate.get(key) not in (None, "") for key in _POSITION_QUANTITY_KEYS)
+
+
+def _position_context_unknown(candidate):
+    candidate = candidate or {}
+    return candidate.get("position_context_provided") is False and not _has_position_quantity(candidate)
+
+
 def _position_nature(candidate):
     explicit = candidate.get("position_nature", candidate.get("仓位性质"))
     if explicit not in (None, ""):
         return explicit
+    if _position_context_unknown(candidate):
+        return "持仓未输入"
     current_position = _as_number(candidate.get("current_position_shares", candidate.get("当前持仓", 0)))
     return "已有仓" if current_position > 0 else "无仓"
 
@@ -171,6 +211,8 @@ def _account_base_cash(candidate):
 
 def _resolve_actual_position_pct(candidate, target_position_pct):
     candidate = candidate or {}
+    if _position_context_unknown(candidate):
+        return None
     for key in ("actual_position_pct", "实际仓位", "actual_position", "当前仓位"):
         parsed = _parse_pct(candidate.get(key))
         if parsed is not None:
@@ -315,9 +357,18 @@ def build_candidate_quality_contract(
     recovery_conditions = _as_list(recovery_conditions)
     removal_conditions = _as_list(removal_conditions)
     worst_case_plan = worst_case_plan or {}
-    current_position = _as_limit_number(candidate.get("current_position_shares", candidate.get("当前持仓", 0)))
-    sellable = _as_limit_number(candidate.get("sellable_shares", candidate.get("可卖数量", 0)))
-    locked = _as_limit_number(candidate.get("locked_shares", candidate.get("不可卖数量", 0)))
+    if _anchor_reversal_downgrades(candidate):
+        action_ceiling = "不参与"
+        new_entry_action = "只观察，不新增参与"
+    position_unknown = _position_context_unknown(candidate)
+    if position_unknown:
+        current_position = "待确认"
+        sellable = "待确认"
+        locked = "待确认"
+    else:
+        current_position = _as_limit_number(candidate.get("current_position_shares", candidate.get("当前持仓", 0)))
+        sellable = _as_limit_number(candidate.get("sellable_shares", candidate.get("可卖数量", 0)))
+        locked = _as_limit_number(candidate.get("locked_shares", candidate.get("不可卖数量", 0)))
     account_trade_status, account_trade_reason = _resolve_account_trade_status(candidate)
     target_position_pct = _resolve_target_position_pct(candidate)
     actual_position_pct = _resolve_actual_position_pct(candidate, target_position_pct)
@@ -421,6 +472,7 @@ def evaluate_candidate_quality_sample(candidate):
     entry_cost_state = str(candidate.get("entry_cost_state") or "").strip()
     quality_role = str(candidate.get("quality_role") or "").strip()
     is_core = bool(candidate.get("is_core"))
+    position_unknown = _position_context_unknown(candidate)
     current_position = _as_number(candidate.get("current_position_shares", 0))
     sellable = _as_number(candidate.get("sellable_shares", 0))
     locked = _as_number(candidate.get("locked_shares", 0))
@@ -429,7 +481,7 @@ def evaluate_candidate_quality_sample(candidate):
 
     action_ceiling = "补位"
     entry_quality_label = "等确认"
-    holding_action = "无仓"
+    holding_action = "持仓未输入，先确认旧仓情况" if position_unknown else "无仓"
     new_entry_action = "等触发条件成立"
     reasons = []
 
@@ -482,6 +534,11 @@ def evaluate_candidate_quality_sample(candidate):
     if account_trade_status == "实际不可买":
         new_entry_action = "账户条件不适配，只观察强度，不参与"
         reasons.append(account_trade_reason)
+
+    if _anchor_reversal_downgrades(candidate):
+        action_ceiling = "不参与"
+        new_entry_action = "只观察，不新增参与"
+        reasons.append("板块锚反推为降级观察，不进入新增动作")
 
     return {
         "selection_quality_label": selection_quality,

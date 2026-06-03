@@ -633,7 +633,7 @@ def _build_dialectical_decision_snapshot_legacy_body(
             f"更像少数方向的窄池子进攻，不是普涨环境。"
         )
         index_profit_action = (
-            f"只看{densest_sector or '被资金持续选择的方向'}，没有站对板块路径时不因指数上涨提高参与资格；"
+            f"只看{densest_sector or '被资金持续选择的方向'}，没有站对板块路径时不因指数上涨提高观察质量；"
             "先区分核心锚、量化弹性和情绪后排，不能用同一个板块结论覆盖不同持仓周期。"
         )
     elif benchmark_change <= -0.1 and profit_effect_strong:

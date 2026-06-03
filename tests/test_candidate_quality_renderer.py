@@ -218,12 +218,111 @@ class CandidateQualityRendererTest(unittest.TestCase):
         markdown = render_candidate_quality_section(panel, contracts, render_trace_tables=True)
 
         self.assertIn("### 候选选股轨迹", markdown)
-        self.assertIn("| 层级 | 候选 | 主线/板块 | 为什么进入这一层 | 卡点 | 明日动作 |", markdown)
+        self.assertIn("| 层级 | 候选 | 主线/板块 | 板块锚反推 | 为什么进入这一层 | 卡点 | 明日动作 |", markdown)
         self.assertIn("| T0 | 华天科技(002185) | 半导体 |", markdown)
         self.assertNotIn("| T3 | 步步高(002251) | 消费 | 为什么进入这一层 |", markdown)
         self.assertIn("### 候选选股轨迹明细", markdown)
-        self.assertIn("| 层级 | 候选 | 来源池 | 主线/板块 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |", markdown)
+        self.assertIn("| 层级 | 候选 | 来源池 | 主线/板块 | 板块锚反推 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |", markdown)
         self.assertIn("| T3 | 步步高(002251) | 异动线索 | 消费 |", markdown)
+
+    def test_renderer_outputs_sniper_ascii_selection_graph(self):
+        panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")
+        contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "大唐发电",
+                    "code": "601991",
+                    "tier": "T0",
+                    "source_pools": ["涨停池", "成交额排名"],
+                    "mainline": "电力",
+                    "sector": "电力",
+                    "quality_role": "主买对象",
+                    "sector_anchor": "大唐发电(601991)",
+                    "candidate_role": "板块锚",
+                    "relationship_to_anchor": "自身就是资金回流锚",
+                    "anchor_reversal_decision": "可作为主对象",
+                    "anchor_reversal_reason": "板块锚承接和MA5入/MA7清/MA5T路径明确",
+                    "final_action": "09:50-10:10确认，条件不满足继续0%",
+                }
+            ),
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "华电辽能",
+                    "code": "600396",
+                    "tier": "T1",
+                    "source_pools": ["成交额排名"],
+                    "mainline": "电力",
+                    "sector": "电力",
+                    "sector_anchor": "大唐发电(601991)",
+                    "candidate_role": "大容量中军",
+                    "relationship_to_anchor": "跟随板块锚承接，承担容量确认",
+                    "why_not_anchor": "大唐发电短线加速过热，华电辽能承接更适合补位",
+                    "anchor_reversal_decision": "可作为补位",
+                    "anchor_reversal_reason": "容量承接可作为备选比较",
+                    "final_action": "只在09:50-10:10承接确认后补位",
+                }
+            ),
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "京能电力",
+                    "code": "600578",
+                    "tier": "T1",
+                    "source_pools": ["涨停池"],
+                    "mainline": "电力",
+                    "sector": "电力",
+                    "sector_anchor": "大唐发电(601991)",
+                    "candidate_role": "套利工具",
+                    "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                    "why_not_anchor": "不能证明比大唐发电更值得参与",
+                    "anchor_reversal_decision": "降级观察",
+                    "anchor_reversal_reason": "套利工具不能替代板块锚",
+                    "final_action": "只观察，不新增参与",
+                }
+            ),
+        ]
+
+        markdown = render_candidate_quality_section(panel, contracts, render_trace_tables=True)
+
+        self.assertIn("### 狙击手最终标的路径图", markdown)
+        self.assertIn("```text", markdown)
+        self.assertIn("原始候选池", markdown)
+        self.assertIn("+-- 主线/板块: 电力", markdown)
+        self.assertIn("+-- 板块锚: 大唐发电(601991)", markdown)
+        self.assertIn("+-- 明日主买对象: 大唐发电(601991)", markdown)
+        self.assertIn("+-- 明日补位对象: 华电辽能(600396)", markdown)
+        self.assertIn("+-- 观察/不参与: 京能电力(600578)", markdown)
+        self.assertIn("+-- 身份: 套利工具", markdown)
+        self.assertIn("+-- 偏差/卡点: 不能证明比大唐发电更值得参与", markdown)
+        self.assertIn("+-- 处理: 降级观察", markdown)
+        self.assertLess(markdown.index("### 狙击手最终标的路径图"), markdown.index("### 候选选股轨迹"))
+
+    def test_renderer_does_not_label_unmet_anchor_trace_as_main_buy_in_graph(self):
+        panel = build_daily_quality_decision_panel(market_emotion_label="暂不跟随")
+        contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "工业富联",
+                    "code": "601138",
+                    "tier": "T0",
+                    "mainline": "通信设备",
+                    "sector": "AI算力基础设施",
+                    "sector_anchor": "工业富联(601138)",
+                    "candidate_role": "板块锚",
+                    "relationship_to_anchor": "资金回流优先看板块锚，候选本身就是板块锚",
+                    "anchor_reversal_decision": "可作为主对象",
+                    "anchor_reversal_reason": "候选就是板块锚，分歧后资金优先回看",
+                    "market_fit": "未满足",
+                    "mainline_fit": "未满足",
+                    "stock_structure_fit": "部分满足",
+                    "final_action": "条件未满足，继续不参与",
+                }
+            )
+        ]
+
+        markdown = render_candidate_quality_section(panel, contracts, render_trace_tables=True)
+
+        self.assertIn("+-- 观察/不参与: 工业富联(601138)", markdown)
+        self.assertNotIn("+-- 明日主买对象: 工业富联(601138)", markdown)
 
     def test_renderer_outputs_eliminated_summary(self):
         panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")

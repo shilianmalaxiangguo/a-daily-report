@@ -149,7 +149,7 @@ class ActionPlanRendererTest(unittest.TestCase):
 
         self.assertNotIn("候选质量与动作分层", "\n".join(disabled_lines))
         rendered = "\n".join(enabled_lines)
-        self.assertIn("##### 候选质量与动作分层", rendered)
+        self.assertIn("##### 候选质量与动作分层（过程证据）", rendered)
         self.assertNotIn("\n## 候选质量与动作分层", rendered)
         self.assertIn("| 候选 | 账户状态 | 计划仓位档 | 实际仓位 | 当前持仓 | 可卖数量 | 选股质量 | 买点质量 | 动作上限 | 新开仓动作 |", rendered)
         self.assertNotIn("| 不可卖数量 |", rendered)
@@ -157,6 +157,80 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("| 汇源通信(000586) | 实际可买 |  |  | 500 | 100 | 低 | 看似便宜 | 不参与 |", rendered)
         self.assertIn("- 持仓动作：已有仓按失效线处理，可卖100，不可卖400", rendered)
         self.assertIn("| 汇源通信(000586) | 实际可买 |  |  | 500 | 100 | 低 | 看似便宜 | 不参与 |", rendered)
+
+    def test_action_table_stays_before_candidate_quality_process_evidence(self):
+        panel = build_daily_quality_decision_panel(
+            market_emotion_label="退潮踩踏",
+            account_attention_load="高",
+            holding_priority_action="先处理旧仓",
+            daily_new_entry_limit=0,
+        )
+        candidate_contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "华电能源",
+                    "code": "600726",
+                    "selection_quality": "高",
+                    "entry_cost_state": "确认中",
+                    "current_position_shares": 0,
+                    "sellable_shares": 0,
+                }
+            )
+        ]
+
+        lines = render_action_plan_section(
+            {
+                "action_rows": [
+                    {
+                        "action": "只看观察锚",
+                        "name": "华电能源",
+                        "code": "600726",
+                        "trigger": "09:50-10:10承接确认",
+                        "risk_window": "不满足继续0%",
+                    }
+                ],
+                "candidate_quality_panel": panel,
+                "candidate_quality_contracts": candidate_contracts,
+                "enabled_node_keys": ["overview", "action_table", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertLess(
+            rendered.index("**最终动作表**（只展示真正具备参与资格的对象）:"),
+            rendered.index("##### 候选质量与动作分层（过程证据）"),
+        )
+        self.assertIn("###### 今日总决策面板（过程证据）", rendered)
+        self.assertIn("###### 候选主表（过程证据）", rendered)
+        self.assertNotIn("##### 候选质量与动作分层", rendered.splitlines())
+        self.assertNotIn("###### 今日总决策面板", rendered.splitlines())
+
+    def test_candidate_quality_keeps_unknown_position_context_unresolved(self):
+        lines = render_action_plan_section(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "退潮防守",
+                    "account_attention_load": "持仓未输入，先确认旧仓情况",
+                    "holding_priority_action": "先确认旧仓情况，再看新增",
+                    "daily_new_entry_limit": 0,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "中际旭创",
+                        "code": "300308",
+                        "selection_quality": "中",
+                        "entry_cost_state": "确认中",
+                        "position_context_provided": False,
+                    }
+                ],
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 中际旭创(300308) | 实际可买 |  |  | 待确认 | 待确认 | 中 | 等确认 | 补位 |", rendered)
+        self.assertIn("- 持仓动作：持仓未输入，先确认旧仓情况", rendered)
+        self.assertNotIn("持仓动作：无仓", rendered)
 
     def test_candidate_quality_node_can_materialize_from_daily_context_samples(self):
         lines = render_action_plan_section(
@@ -196,7 +270,7 @@ class ActionPlanRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("##### 候选质量与动作分层", rendered)
+        self.assertIn("##### 候选质量与动作分层（过程证据）", rendered)
         self.assertIn("| 今日新增上限 | 1 |", rendered)
         self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
         self.assertIn("| 补位对象 | 上峰水泥(000672) |", rendered)
@@ -227,8 +301,8 @@ class ActionPlanRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("## 候选质量与动作分层", rendered)
-        self.assertNotIn("##### 候选质量与动作分层", rendered)
+        self.assertIn("## 候选质量与动作分层（过程证据）", rendered)
+        self.assertNotIn("##### 候选质量与动作分层", rendered.splitlines())
 
     def test_candidate_quality_node_can_render_and_export_candidate_traces(self):
         lines = build_action_plan_candidate_quality_node(
@@ -266,6 +340,87 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("未进入分层原因统计", rendered)
         self.assertEqual(lines["exports"]["candidate_traces"][0]["stock_code"], "002185")
         self.assertEqual(lines["exports"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
+
+    def test_candidate_quality_node_renders_trace_tables_by_default(self):
+        lines = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线活跃",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "tier": "T1",
+                        "mainline": "电力",
+                        "sector": "电力",
+                        "sector_anchor": "大唐发电(601991)",
+                        "candidate_role": "套利工具",
+                        "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                        "为什么不做板块锚": "不能证明比大唐发电更值得参与",
+                        "anchor_reversal_decision": "降级观察",
+                        "anchor_reversal_reason": "套利工具不能替代板块锚",
+                    }
+                ],
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines["lines"])
+        self.assertIn("候选选股轨迹（过程证据）", rendered)
+        self.assertIn("大唐发电(601991)", rendered)
+        self.assertIn("为什么不做锚：不能证明比大唐发电更值得参与", rendered)
+        self.assertIn("降级观察", rendered)
+
+    def test_candidate_quality_node_renders_richer_context_trace(self):
+        lines = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线活跃",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "tier": "T1",
+                        "mainline": "电力",
+                        "sector": "电力",
+                        "quality_role": "主买对象",
+                    }
+                ],
+                "candidate_traces": [
+                    {
+                        "stock_code": "600578",
+                        "stock_name": "京能电力",
+                        "tier": "T1",
+                        "mainline": "电力",
+                        "sector": "电力",
+                        "checks": [
+                            {"label": "市场条件", "result": "部分满足", "evidence": "主线活跃"},
+                            {"label": "主线条件", "result": "满足", "evidence": "电力仍有承接"},
+                            {"label": "个股结构", "result": "部分满足", "evidence": "后排涨停"},
+                        ],
+                        "anchor_reversal": {
+                            "sector_anchor": "大唐发电(601991)",
+                            "candidate_role": "套利工具",
+                            "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                            "why_not_anchor": "不能证明比板块锚更值得参与",
+                            "anchor_reversal_decision": "降级观察",
+                            "anchor_reversal_reason": "套利工具不能替代板块锚",
+                            "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+                        },
+                    }
+                ],
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines["lines"])
+        self.assertIn("大唐发电(601991)", rendered)
+        self.assertIn("为什么不做锚：不能证明比板块锚更值得参与", rendered)
+        self.assertIn("涨停只是证据", rendered)
 
     def test_candidate_quality_node_prefers_richer_contract_trace_over_incomplete_existing_trace(self):
         lines = build_action_plan_candidate_quality_node(
@@ -307,6 +462,89 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertEqual(trace["tier"], "T0")
         self.assertEqual(trace["mainline"], "电力")
         self.assertEqual(trace["trigger_condition"], "固定交易窗口内承接确认")
+
+    def test_candidate_quality_trace_renders_anchor_reversal_fields(self):
+        lines = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线活跃",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "tier": "T1",
+                        "source_pools": ["重点观察名单"],
+                        "mainline": "电力",
+                        "sector": "电力",
+                        "market_fit": "部分满足",
+                        "mainline_fit": "满足",
+                        "stock_structure_fit": "部分满足",
+                        "sector_anchor": "大唐发电(601991)",
+                        "candidate_role": "套利工具",
+                        "relationship_to_anchor": "被大唐发电(601991)带动，只能反馈板块强度",
+                        "why_not_anchor": "",
+                        "repair_priority": "后排修复",
+                        "anchor_reversal_decision": "降级观察",
+                        "anchor_reversal_reason": "套利工具不能替代板块锚",
+                        "ma_binding_strategy": "MA5入/MA7清/MA5T",
+                        "leader_certainty_path": "板块锚优先，MA5入/MA7清/MA5T和承接路径明确",
+                        "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+                        "final_action": "只观察，不新增参与",
+                    }
+                ],
+                "render_candidate_trace_tables": True,
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines["lines"])
+        trace = lines["exports"]["candidate_traces"][0]
+        self.assertEqual(trace["anchor_reversal"]["candidate_role"], "套利工具")
+        self.assertIn("狙击手最终标的路径图（过程证据）", rendered)
+        self.assertIn("板块锚反推", rendered)
+        self.assertIn("大唐发电(601991)", rendered)
+        self.assertIn("被大唐发电(601991)带动，只能反馈板块强度", rendered)
+        self.assertIn("后排修复", rendered)
+        self.assertIn("降级观察", rendered)
+        self.assertIn("MA5入/MA7清/MA5T", rendered)
+        self.assertIn("板块锚优先", rendered)
+        self.assertIn("涨停只是证据", rendered)
+        self.assertIn("| 京能电力(600578) | 实际可买 |  |  | 0 | 0 | 中 | 等确认 | 不参与 | 只观察，不新增参与 |", rendered)
+
+    def test_candidate_quality_blocks_entry_when_anchor_reversal_is_no_participation(self):
+        lines = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "主线转弱",
+                    "daily_new_entry_limit": 1,
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "晶方科技",
+                        "code": "603005",
+                        "tier": "T1",
+                        "source_pools": ["重点观察名单"],
+                        "mainline": "半导体",
+                        "sector": "半导体",
+                        "sector_anchor": "华天科技(002185)",
+                        "candidate_role": "套利工具",
+                        "relationship_to_anchor": "板块锚已失效，套利工具会放大回撤风险",
+                        "repair_priority": "风险放大",
+                        "anchor_reversal_decision": "不参与",
+                        "anchor_reversal_reason": "板块锚已失效，后排风险更大",
+                    }
+                ],
+                "render_candidate_trace_tables": True,
+                "enabled_node_keys": ["candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines["lines"])
+        self.assertIn("板块锚已失效，套利工具会放大回撤风险", rendered)
+        self.assertIn("不参与", rendered)
+        self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 中 | 等确认 | 不参与 | 只观察，不新增参与 |", rendered)
 
     def test_render_action_plan_result_exposes_candidate_trace_exports(self):
         context = {
