@@ -308,6 +308,88 @@ The table states that the current covered sample is 42 trading days from 2026-03
 
 Why correct: the user can separate current evidence from the next data-expansion objective.
 
+## Scenario: Opportunity Comparison Snapshot Sources
+
+### 1. Scope / Trigger
+
+Use this contract when the report compares an existing holding against a new target, renders an `opportunity_comparison.v1` table, or downgrades 50% / 100% output because risk prices or risk-reward are incomplete.
+
+### 2. Signatures
+
+Runtime comparison builders consume existing target-date snapshot data only:
+
+```python
+_runtime_opportunity_comparison(
+    data: dict,
+    selected_position_candidate: dict,
+    position_decision: dict,
+    market_research_snapshot: dict,
+) -> dict
+```
+
+The comparison output keeps the report-level contract:
+
+```python
+{
+    "schema_version": "opportunity_comparison.v1",
+    "old_position": {...},
+    "new_target": {...},
+    "additional_target_comparisons": [
+        {"schema_version": "opportunity_comparison.v1", "new_target": {...}, "comparison": {...}}
+    ],
+    "comparison": {...},
+}
+```
+
+### 3. Contracts
+
+- The selected target is not the only valid comparison row. If the approved spec names a calibration target that already exists in the same target-date snapshot, the table must include it even when the runtime-selected display target has moved to another observation anchor.
+- Extra comparison rows may come from existing snapshot sources such as `extreme_conviction_list`, `candidate_snapshot.extreme_conviction_list`, `display_observation_candidates`, `watchlist`, `candidates`, `hot_rank_top50`, `hot_rank_top30`, `integrated_hot_list`, `turnover_rank`, or `turnover_over_100b`.
+- Historical replay must not add a new live data source only to fill the table. If the row is not in target-date facts, keep it missing and report the risk.
+- When a candidate source has only name/code or a stale sector such as `未归类`, enrich display fields from `stock_full_info[code]` in the same snapshot. Use `close` as the observation/current price and `industry` / `所属行业` as the display line when candidate sector is missing.
+- Enrichment must fill missing price facts; it must not create a positive participation result. Missing MA5, MA10, VWAP, invalidation, or risk-reward still caps the row at observation/no new participation.
+- When the extra target is in the same line as the selected target and has no explicit role, label it as a same-line comparison candidate rather than a new core.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Selected target has incomplete risk prices | Render observation/no new participation and record missing fields |
+| Spec-required comparison target exists only in `candidates` or hot/turnover lists | Include it and enrich from same-date `stock_full_info` |
+| Candidate sector is `未归类` but stock info has an industry | Render the stock-info industry for comparison |
+| Extra target has no MA5/MA10/VWAP or invalidation | Show `-` for missing risk prices and keep risk-reward as incomplete |
+| Historical replay lacks the target in all same-date facts | Do not fetch current data; keep the row absent or explicitly missing |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good replay calibration | 华天科技 appears in `candidates` and `stock_full_info` but not `extreme_conviction_list` | Table includes 华天科技 with target-date close and observation-only conclusion |
+| Base selected observation | Runtime selects 长电科技 as observation anchor with incomplete risk prices | Table keeps 长电科技 observation-only |
+| Bad list-only lookup | Extra rows search only `extreme_conviction_list` | Spec-required target disappears from the table |
+| Bad live refill | Replay calls a current-only quote source to fill missing MA prices | Reject the data for historical comparison |
+
+### 6. Tests Required
+
+- `tests.test_report_runtime.ReportRuntimeTest.test_runtime_opportunity_table_keeps_huatian_calibration_candidate`
+- `tests.test_candidate_execution_contracts` for risk price comfort and risk-reward boundaries
+- `tests.test_report_acceptance_audit` for positive 50% / 100% wording with missing comparison or incomplete risk/reward
+- A generated replay report plus `scripts/report/report_acceptance_audit.py` when the rendered table changes
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+Only search the final extreme-conviction list for extra comparison rows, so a target that exists in same-date hot-list/candidate facts disappears from the opportunity table.
+```
+
+#### Correct
+
+```text
+Search existing target-date candidate, hot-list, turnover, and stock-info facts; render the target as a comparison row, then keep it observation-only when risk prices are incomplete.
+```
+
 ## Full Attack Roadmap
 
 ### Phase 1: Honest Coverage And Stable Closed Loop

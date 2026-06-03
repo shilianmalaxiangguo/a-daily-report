@@ -1747,6 +1747,22 @@ class ReportRuntimeTest(unittest.TestCase):
             )
         )
 
+    def test_runtime_account_unbuyable_respects_resolved_account_status(self):
+        candidate = {
+            "name": "科创核心",
+            "code": "688001",
+            "account_trade_status": "实际不可买",
+            "account_trade_reason": "科创板交易资格不适配",
+        }
+
+        self.assertTrue(
+            report_runtime._runtime_account_unbuyable_core_active(
+                data={"account_profile": {"cash_available": 9800}},
+                selected_position_candidate=candidate,
+                market_research_snapshot={},
+            )
+        )
+
     def test_front_page_position_decision_keeps_zero_context_for_extreme_candidate(self):
         position_decision = report_runtime._build_front_page_position_decision(
             position_decision={
@@ -1799,6 +1815,14 @@ class ReportRuntimeTest(unittest.TestCase):
                 "required_steps": ["主线承接", "回踩收回MA5"],
                 "fallback_state": "不满足回到0%",
                 "target_position_pct": 50,
+                "target_role": "core",
+                "strength_evidence": ["电力资金回流", "板块锚"],
+                "probe_entry_price": 10.0,
+                "ma5": 9.9,
+                "ma10": 9.8,
+                "vwap": 9.95,
+                "stop_price": 9.6,
+                "target_price": 11.0,
             },
             data={},
             market_research_snapshot={},
@@ -1830,6 +1854,14 @@ class ReportRuntimeTest(unittest.TestCase):
                 "required_steps": ["主线承接", "回踩收回MA5"],
                 "fallback_state": "不满足回到0%",
                 "target_position_pct": 100,
+                "target_role": "core",
+                "strength_evidence": ["电力资金回流", "板块锚"],
+                "probe_entry_price": 10.0,
+                "ma5": 9.9,
+                "ma10": 9.8,
+                "vwap": 9.95,
+                "stop_price": 9.6,
+                "target_price": 11.0,
             },
             data={},
             market_research_snapshot={},
@@ -1855,6 +1887,14 @@ class ReportRuntimeTest(unittest.TestCase):
                         "name": "华电能源",
                         "code": "600726",
                         "sector": "电力",
+                        "target_role": "core",
+                        "strength_evidence": ["电力资金回流", "板块锚"],
+                        "probe_entry_price": 10.0,
+                        "ma5": 9.9,
+                        "ma10": 9.8,
+                        "vwap": 9.95,
+                        "stop_price": 9.6,
+                        "target_price": 11.0,
                         "planned_participation": {
                             "attack_state": "50%",
                             "buy_window": "09:50-10:10",
@@ -1882,6 +1922,100 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(position_decision["target_position_pct"], 50)
         self.assertEqual(position_decision["signal_grade"], "50")
         self.assertEqual(position_decision["participation_mode"], "attack_50_preview")
+
+    def test_front_page_position_decision_keeps_anchor_reversal_observation_at_zero(self):
+        selected = report_runtime._build_front_page_selected_position_candidate(
+            {
+                "position_decision": {
+                    "participation_mode": "observe_0",
+                    "target_position_pct": 0,
+                    "signal_grade": "0",
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "京能电力",
+                        "code": "600578",
+                        "sector": "电力",
+                        "sniper_role": "候选观察",
+                        "anchor_reversal_decision": "降级观察",
+                        "candidate_layer": "watch_sample",
+                        "execution_eligibility": "anchor_reversal_observation",
+                        "planned_participation": {
+                            "attack_state": "50%",
+                            "buy_window": "09:50-10:10",
+                            "required_steps": ["主线承接", "回踩收回MA5"],
+                            "fallback_state": "不满足回到0%",
+                        },
+                    }
+                ],
+            }
+        )
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "observe_0",
+                "target_position_pct": 0,
+                "signal_grade": "0",
+            },
+            selected_position_candidate=selected,
+            data={},
+            market_research_snapshot={},
+            final_gate={"can_new_entry": False, "should_reduce": True, "allow_attack_50_ready": True},
+        )
+
+        self.assertEqual(selected["anchor_reversal_decision"], "降级观察")
+        self.assertFalse(report_runtime._front_page_candidate_has_execution_qualification(selected))
+        self.assertEqual(position_decision["target_position_pct"], 0)
+        self.assertEqual(position_decision["signal_grade"], "0")
+        self.assertNotEqual(position_decision.get("participation_mode"), "attack_50_preview")
+
+    def test_front_page_position_decision_keeps_single_backup_candidate_observation_only(self):
+        selected = report_runtime._build_front_page_selected_position_candidate(
+            {
+                "position_decision": {
+                    "participation_mode": "observe_0",
+                    "target_position_pct": 0,
+                    "signal_grade": "0",
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "华电辽能",
+                        "code": "600396",
+                        "sector": "电力",
+                        "sniper_role": "明日补位对象",
+                        "primary_buy_candidate": False,
+                        "backup_buy_candidate": True,
+                        "anchor_reversal_decision": "可作为补位",
+                        "candidate_layer": "executable_candidate",
+                        "execution_eligibility": "auction_reseal",
+                        "planned_participation": {
+                            "attack_state": "50%",
+                            "buy_window": "09:50-10:10",
+                            "required_steps": ["主线承接", "回踩收回MA5"],
+                            "fallback_state": "不满足回到0%",
+                        },
+                    }
+                ],
+            }
+        )
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "observe_0",
+                "target_position_pct": 0,
+                "signal_grade": "0",
+            },
+            selected_position_candidate=selected,
+            data={},
+            market_research_snapshot={},
+            final_gate={"can_new_entry": False, "should_reduce": True, "allow_attack_50_ready": True},
+        )
+
+        self.assertEqual(selected["sniper_role"], "明日补位对象")
+        self.assertFalse(report_runtime._front_page_candidate_has_execution_qualification(selected))
+        self.assertEqual(position_decision["target_position_pct"], 0)
+        self.assertEqual(position_decision["signal_grade"], "0")
+        self.assertNotEqual(position_decision.get("participation_mode"), "attack_50_preview")
 
     def test_front_page_selected_candidate_prefers_qualified_selected_before_extreme_list(self):
         selected = report_runtime._build_front_page_selected_position_candidate(
@@ -3412,6 +3546,14 @@ class ReportRuntimeTest(unittest.TestCase):
                             "acceptance_repair_required": "缩量回撤到MA3附近，站回VWAP",
                             "final_risk_review": {"status": "通过"},
                             "participation_window": "竞价表态 + 回封参与",
+                            "target_role": "core",
+                            "strength_evidence": ["电力资金回流", "板块锚"],
+                            "probe_entry_price": 10.0,
+                            "ma5": 9.9,
+                            "ma10": 9.8,
+                            "vwap": 9.95,
+                            "stop_price": 9.6,
+                            "target_price": 11.0,
                         }
                     ],
                 },
@@ -4885,7 +5027,9 @@ def _runtime_binding_probe(
         report = result["report"]
         self.assertIn("**五项判断复盘统计表**", report)
         self.assertIn("| 市场状态判断 | 进攻/退潮/修复/混沌/冰点是否被次日走势验证 |", report)
-        self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 1 | 0 | 1 | 0 | 0.00% | 资金次日没有继续选择电力 |", report)
+        self.assertIn("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", report)
+        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |", report)
+        self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 0.00% | 错误 | - | - | 资金次日没有继续选择电力 |", report)
 
     def test_runtime_inserts_daily_judgment_panel_at_front_before_account_advice(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
@@ -4982,6 +5126,611 @@ def _runtime_binding_probe(
         self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", report)
         self.assertLess(report.index("## 判断纠偏与今日五项结论"), report.index("## 明日账户建议"))
         self.assertIn("| 核心候选判断 | 粤电力Ａ(000539) | 下一交易日验证是否进入资金视野 |", report)
+
+    def test_runtime_inserts_single_final_target_solution_before_account_advice(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "退潮"},
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "selected_position_candidate": {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "primary_buy_candidate": True,
+                        "sector_anchor": "工业富联(601138)",
+                        "candidate_role": "板块锚",
+                        "relationship_to_anchor": "资金回流优先看板块锚，候选本身就是板块锚",
+                        "anchor_reversal_reason": "候选就是板块锚，分歧后资金优先回看",
+                        "leader_certainty_path": "板块锚优先，容量和趋势承接优先于一日涨停",
+                        "limit_up_evidence_role": "涨停只是证据，不能替代板块锚和承接路径",
+                        "target_role": "core",
+                        "strength_evidence": ["通信设备资金回流", "板块锚"],
+                        "probe_entry_price": 10.0,
+                        "ma5": 9.9,
+                        "ma10": 9.8,
+                        "vwap": 9.95,
+                        "stop_price": 9.6,
+                        "target_price": 11.0,
+                        "planned_participation": {
+                            "buy_window": "09:30-09:35",
+                            "fallback_state": "不满足回到0%",
+                        },
+                    },
+                    "extreme_conviction_list": [
+                        {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                            "sniper_role": "明日主买对象",
+                            "anchor_reversal_decision": "可作为主对象",
+                            "primary_buy_candidate": True,
+                            "sector_anchor": "工业富联(601138)",
+                            "target_role": "core",
+                            "strength_evidence": ["通信设备资金回流", "板块锚"],
+                            "probe_entry_price": 10.0,
+                            "ma5": 9.9,
+                            "ma10": 9.8,
+                            "vwap": 9.95,
+                            "stop_price": 9.6,
+                            "target_price": 11.0,
+                        }
+                    ],
+                    "position_decision": {"target_position_pct": 100, "signal_grade": "100"},
+                },
+            }
+
+        def _fake_load_index(path):
+            return {
+                "available_trade_dates": ["2026-06-01", "2026-06-02"],
+                "by_stock_code": {},
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=_fake_load_index,
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front", "", "## 明日账户建议", "| 项目 | 结论 |"],
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-06-02",
+            helpers=helpers,
+            config={},
+        )
+
+        report = result["report"]
+        self.assertEqual(report.count("## 最终标的解题过程"), 1)
+        self.assertIn("| 最终结果 | 工业富联(601138) |", report)
+        self.assertIn("+-- 最终结果: 工业富联(601138)", report)
+        self.assertIn("+-- 板块锚: 工业富联(601138)", report)
+        self.assertIn("+-- 龙头路径: 板块锚优先，容量和趋势承接优先于一日涨停", report)
+        self.assertIn("| 核心候选判断 | 工业富联(601138) | 下一交易日验证是否进入资金视野 |", report)
+        self.assertLess(report.index("## 最终标的解题过程"), report.index("## 明日账户建议"))
+
+    def test_runtime_builds_final_target_resolution_for_new_entry_after_old_position_exit(self):
+        captured = {}
+
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "混沌"},
+                    "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                    "selected_position_candidate": {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "primary_buy_candidate": True,
+                        "sector_anchor": "工业富联(601138)",
+                        "candidate_role": "板块锚",
+                        "target_role": "core",
+                        "strength_evidence": ["通信设备资金回流", "板块锚", "趋势核心"],
+                        "relationship_to_anchor": "资金回流优先看板块锚",
+                        "leader_certainty_path": "板块锚优先，慢即是快",
+                        "probe_entry_price": 10.0,
+                        "ma5": 9.9,
+                        "ma10": 9.8,
+                        "vwap": 9.95,
+                        "stop_price": 9.6,
+                        "target_price": 11.0,
+                        "planned_participation": {
+                            "buy_window": "09:50-10:10",
+                            "fallback_state": "不满足继续观察",
+                        },
+                    },
+                    "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
+                },
+            }
+
+        def _fake_front_page(report, **kwargs):
+            captured["snapshot"] = kwargs["market_research_snapshot"]
+            return [
+                "# front",
+                "",
+                "## 明日账户建议",
+                "| 明日动作 | 先处理旧仓，买工业富联(601138)；固定交易窗口条件成立才参与，不满足回到0% |",
+                "| 新开仓上限 | 资金释放后1 |",
+            ]
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=lambda path: {"available_trade_dates": [], "by_stock_code": {}},
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=_fake_front_page,
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {
+                "exchange_monitor_today": [],
+                "exchange_monitor_nextday": [],
+                "personal_position_context": {
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                    },
+                },
+            },
+            "2026-06-03",
+            helpers=helpers,
+            config={},
+        )
+
+        resolution = captured["snapshot"]["final_target_resolution"]
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry_after_old_exit")
+        self.assertEqual(resolution["new_entry_target"]["code"], "601138")
+        self.assertEqual(resolution["watch_target"], {})
+        self.assertEqual(resolution["existing_position_target"]["name"], "华电辽能")
+        self.assertEqual(resolution["display_target"]["code"], "601138")
+        self.assertIn("| 最终结果 | 工业富联(601138) |", result["report"])
+        self.assertIn("| 明日动作 | 先处理旧仓，买工业富联(601138)；固定交易窗口条件成立才参与，不满足回到0% |", result["report"])
+        self.assertIn("+-- 小账户资金取舍: new_entry_after_old_exit", result["report"])
+        self.assertIn("+-- 旧仓处理: 华电辽能(600396)", result["report"])
+        self.assertIn("+-- 最终结果: 工业富联(601138)", result["report"])
+
+    def test_runtime_keeps_new_target_observational_when_risk_price_is_missing(self):
+        selected = {
+            "name": "华天科技",
+            "code": "002185",
+            "sector": "半导体",
+            "target_role": "sector_anchor",
+            "candidate_role": "板块锚",
+            "strength_evidence": ["半导体资金回流", "板块锚"],
+            "participation_window": "竞价表态 + 回封参与",
+            "buy_window": "09:30-09:35",
+            "fallback_state": "不满足回到0%",
+        }
+        data = {
+            "personal_position_context": {
+                "account_profile": {"capital_text": "约1w账户"},
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有华电辽能(600396)，200股，T+1仓，今日做T买入2手、卖出2手；先处理旧仓",
+                },
+            }
+        }
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={"target_position_pct": 100, "signal_grade": "100"},
+            selected_position_candidate=selected,
+            data=data,
+            market_research_snapshot={},
+        )
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data=data,
+            selected_position_candidate=selected,
+            position_decision=position_decision,
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 0)
+        self.assertEqual(position_decision["signal_grade"], "0")
+        self.assertIn("风险价格", position_decision["sizing_reason"])
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "old_position_t")
+        self.assertEqual(resolution["display_target"]["code"], "600396")
+        self.assertEqual(resolution["watch_target"]["code"], "002185")
+        self.assertEqual(resolution["opportunity_comparison"]["new_target"]["risk_reward_state"], "待计算")
+
+    def test_runtime_final_target_solution_renders_opportunity_cost_table(self):
+        selected = {
+            "name": "华天科技",
+            "code": "002185",
+            "sector": "半导体",
+            "candidate_role": "板块锚",
+        }
+        lines = report_runtime._runtime_selected_target_solution_lines(
+            selected,
+            final_gate={"final_action": "只保留观察，等风险价格补齐"},
+            mainline_turnover_summary={"current_mainline": "半导体"},
+            final_target_resolution={
+                "display_target": {"name": "华电辽能", "code": "600396"},
+                "watch_target": selected,
+                "existing_position_target": {"name": "华电辽能", "code": "600396"},
+                "capital_priority_decision": {"capital_priority": "old_position_t"},
+                "opportunity_comparison": {
+                    "old_position": {
+                        "name": "华电辽能",
+                        "code": "600396",
+                        "holding_role": "old_position",
+                        "old_plan_action": "repair_once",
+                    },
+                    "new_target": {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "target_role": "sector_anchor",
+                        "observation_price": 19.16,
+                        "ma5": 18.2,
+                        "ma10": 17.8,
+                        "vwap": None,
+                        "invalid_price": None,
+                        "target_price": None,
+                        "downside_to_ma5_pct": 5.01,
+                        "downside_to_ma10_pct": 6.99,
+                        "risk_reward_state": "待计算",
+                    },
+                    "comparison": {
+                        "capital_efficiency_result": "observe",
+                        "max_participation_pct": 0,
+                        "final_action": "只保留观察，等风险价格补齐",
+                    },
+                },
+            },
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("## 旧仓与新机会风险价格对比", rendered)
+        self.assertIn("| 华电辽能(600396) | old_position |", rendered)
+        self.assertIn("| 华天科技(002185) | sector_anchor | 19.16 | 18.20 / -5.01% | 17.80 / -6.99% | - | - | - | 待计算 | 只保留观察，等风险价格补齐 |", rendered)
+
+    def test_runtime_recovers_huadian_old_position_from_damaged_t_summary(self):
+        old_position = report_runtime._runtime_old_position_for_opportunity(
+            data={
+                "target_date": "2026-06-03",
+                "stock_full_info": {"600396": {"name": "华电辽能"}},
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有T，200股；先处理旧仓；新开仓0手",
+                    }
+                },
+            },
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(old_position["name"], "华电辽能")
+        self.assertEqual(old_position["code"], "600396")
+        self.assertEqual(old_position["summary"], "持有T，200股；先处理旧仓；新开仓0手")
+
+    def test_runtime_opportunity_table_keeps_huatian_calibration_candidate(self):
+        selected = {
+            "name": "长电科技",
+            "code": "600584",
+            "sector": "半导体",
+            "target_role": "sector_anchor",
+            "close": 80.13,
+            "stop_price": 76.12,
+            "risk_reward_state": "待计算",
+        }
+        comparison = report_runtime._runtime_opportunity_comparison(
+            data={
+                "target_date": "2026-06-03",
+                "stock_full_info": {
+                    "600396": {"name": "华电辽能"},
+                    "002185": {
+                        "name": "华天科技",
+                        "industry": "半导体",
+                        "close": 19.16,
+                    },
+                },
+                "candidates": [
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "未归类",
+                        "_source": "热榜",
+                    }
+                ],
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有T，200股；先处理旧仓；新开仓0手",
+                    }
+                },
+            },
+            selected_position_candidate=selected,
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            market_research_snapshot={},
+        )
+        rendered = "\n".join(report_runtime._runtime_opportunity_comparison_lines(comparison))
+
+        self.assertEqual(comparison["old_position"]["name"], "华电辽能")
+        self.assertIn("additional_target_comparisons", comparison)
+        self.assertIn("| 华电辽能(600396) | old_position |", rendered)
+        self.assertIn("| 长电科技(600584) | sector_anchor | 80.13 |", rendered)
+        self.assertIn("| 华天科技(002185) | same_line_candidate | 19.16 |", rendered)
+
+    def test_runtime_keeps_new_candidate_observational_when_existing_position_wins(self):
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data={
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                    }
+                }
+            },
+            selected_position_candidate={
+                "name": "工业富联",
+                "code": "601138",
+                "sector": "通信设备",
+            },
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "old_position_t")
+        self.assertEqual(resolution["display_target"]["name"], "华电辽能")
+        self.assertEqual(resolution["watch_target"]["code"], "601138")
+
+    def test_runtime_builds_final_target_resolution_for_unbuyable_core_proxy(self):
+        selected = {
+            "name": "中际旭创",
+            "code": "300308",
+            "sector": "通信设备",
+            "identity": "市场核心",
+            "one_lot_amount": 16800,
+            "sniper_role": "明日主买对象",
+            "anchor_reversal_decision": "可作为主对象",
+            "primary_buy_candidate": True,
+            "sector_anchor": "中际旭创(300308)",
+            "candidate_role": "板块锚",
+            "relationship_to_anchor": "通信设备回流优先看板块锚",
+            "leader_certainty_path": "大容量核心优先，慢即是快",
+            "planned_participation": {
+                "buy_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+            },
+            "tradable_proxy_target": {
+                "name": "通信ETF",
+                "code": "515880",
+                "sector": "通信设备",
+                "proxy_effect_type": "行业板块效应",
+                "proxy_reason": "跟踪通信设备方向，不退到弱跟风个股",
+                "condition": "通信设备承接继续",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+                "execution_eligible": True,
+                "target_position_pct": 50,
+            },
+        }
+        data = {"account_profile": {"cash_available": 9800}}
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={"target_position_pct": 50, "signal_grade": "50"},
+            selected_position_candidate=selected,
+            data=data,
+            market_research_snapshot={},
+        )
+
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data=data,
+            selected_position_candidate=selected,
+            position_decision=position_decision,
+            market_research_snapshot={},
+        )
+        lines = "\n".join(
+            report_runtime._runtime_selected_target_solution_lines(
+                selected,
+                final_gate={"final_action": "固定交易窗口条件成立才参与，不满足回到0%"},
+                mainline_turnover_summary={"current_mainline": "通信设备"},
+                final_target_resolution=resolution,
+            )
+        )
+
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "tradable_proxy")
+        self.assertEqual(resolution["new_entry_target"]["code"], "300308")
+        self.assertEqual(resolution["watch_target"]["code"], "300308")
+        self.assertEqual(resolution["process_target"]["code"], "300308")
+        self.assertEqual(resolution["tradable_proxy_target"]["code"], "515880")
+        self.assertEqual(resolution["display_target"]["code"], "515880")
+        self.assertIn("| 最终结果 | 通信ETF(515880) |", lines)
+        self.assertIn("| 目标标的 | 中际旭创(300308) |", lines)
+        self.assertIn("| 小资金替代表达 | 通信ETF(515880) |", lines)
+        self.assertIn("目标标的中际旭创(300308)，小资金账户可用通信ETF(515880)替代", lines)
+        self.assertIn("+-- 目标标的: 中际旭创(300308)", lines)
+        self.assertIn("+-- 小资金账户: 可用通信ETF(515880)替代", lines)
+        self.assertIn("+-- 替代效应: 行业板块效应", lines)
+        self.assertNotIn("跟风", resolution["display_target"].get("candidate_role", ""))
+
+    def test_daily_judgment_front_panel_uses_anchor_primary_not_same_day_observation_records(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "601138": [{"stock_name": "工业富联", "stock_code": "601138", "report_date": "2026-06-01"}],
+                "600487": [{"stock_name": "亨通光电", "stock_code": "600487", "report_date": "2026-06-01"}],
+                "600522": [{"stock_name": "中天科技", "stock_code": "600522", "report_date": "2026-06-01"}],
+            },
+        }
+
+        lines = report_runtime._build_daily_judgment_front_panel_lines(
+            index,
+            target_date="2026-06-01",
+            market_state_snapshot={"market_state": "混沌"},
+            mainline_turnover_summary={"current_mainline": "通信设备"},
+            selected_position_candidate={
+                "name": "工业富联",
+                "code": "601138",
+                "sniper_role": "明日主买对象",
+                "anchor_reversal_decision": "可作为主对象",
+            },
+            extreme_conviction_list=[
+                {
+                    "name": "工业富联",
+                    "code": "601138",
+                    "sniper_role": "明日主买对象",
+                    "anchor_reversal_decision": "可作为主对象",
+                },
+                {
+                    "name": "亨通光电",
+                    "code": "600487",
+                    "sniper_role": "候选观察",
+                    "anchor_reversal_decision": "降级观察",
+                },
+                {
+                    "name": "中天科技",
+                    "code": "600522",
+                    "sniper_role": "候选观察补充",
+                    "anchor_reversal_decision": "降级观察",
+                },
+            ],
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 核心候选判断 | 工业富联(601138) | 下一交易日验证是否进入资金视野 |", rendered)
+        self.assertNotIn("亨通光电", rendered)
+        self.assertNotIn("中天科技", rendered)
+
+    def test_front_page_target_prefers_current_mainline_primary_over_stale_selected_candidate(self):
+        data = {}
+        market_snapshot = {
+            "mainline_turnover_summary": {"current_mainline": "通信设备"},
+            "selected_position_candidate": {
+                "name": "大有能源",
+                "code": "600403",
+                "sector": "煤炭开采",
+                "sniper_role": "明日主买对象",
+                "anchor_reversal_decision": "可作为主对象",
+            },
+            "extreme_conviction_list": [
+                {
+                    "name": "工业富联",
+                    "code": "601138",
+                    "sector": "通信设备",
+                    "sniper_role": "明日主买对象",
+                    "anchor_reversal_decision": "可作为主对象",
+                    "primary_buy_candidate": True,
+                    "sector_anchor": "工业富联(601138)",
+                },
+                {
+                    "name": "意华股份",
+                    "code": "002897",
+                    "sector": "通信设备",
+                    "sniper_role": "候选观察",
+                    "anchor_reversal_decision": "降级观察",
+                },
+            ],
+        }
+        execution_context = {
+            "market_research_snapshot": market_snapshot,
+            "mainline_turnover_summary": {"current_mainline": "通信设备"},
+            "selected_position_candidate": dict(market_snapshot["selected_position_candidate"]),
+            "extreme_conviction_list": list(market_snapshot["extreme_conviction_list"]),
+        }
+
+        selected = report_runtime._resolve_front_page_target_candidate(
+            data=data,
+            execution_stage_context=execution_context,
+            report_lines=[],
+            target_date="2026-06-02",
+        )
+        panel_context = report_runtime._build_current_judgment_context_for_panel(
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+            mainline_turnover_summary={"current_mainline": "通信设备"},
+            selected_position_candidate=selected,
+            extreme_conviction_list=execution_context["extreme_conviction_list"],
+        )
+
+        self.assertEqual(selected["code"], "601138")
+        self.assertEqual(data["current_core_candidate"]["code"], "601138")
+        self.assertEqual(execution_context["current_core_candidate"]["code"], "601138")
+        self.assertEqual(market_snapshot["current_core_candidate"]["code"], "601138")
+        self.assertEqual([item["code"] for item in panel_context["core_candidates"]], ["601138"])
+
+    def test_front_page_target_is_stable_when_current_candidate_order_changes(self):
+        stale_selected = {
+            "name": "大有能源",
+            "code": "600403",
+            "sector": "煤炭开采",
+            "sniper_role": "明日主买对象",
+            "anchor_reversal_decision": "可作为主对象",
+        }
+        primary = {
+            "name": "工业富联",
+            "code": "601138",
+            "sector": "通信设备",
+            "sniper_role": "明日主买对象",
+            "anchor_reversal_decision": "可作为主对象",
+            "primary_buy_candidate": True,
+            "sector_anchor": "工业富联(601138)",
+        }
+        observation = {
+            "name": "意华股份",
+            "code": "002897",
+            "sector": "通信设备",
+            "sniper_role": "候选观察",
+            "anchor_reversal_decision": "降级观察",
+        }
+
+        resolved_codes = []
+        for extreme_list in ([observation, primary], [primary, observation]):
+            data = {}
+            market_snapshot = {
+                "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                "selected_position_candidate": dict(stale_selected),
+                "extreme_conviction_list": [dict(item) for item in extreme_list],
+            }
+            execution_context = {
+                "market_research_snapshot": market_snapshot,
+                "mainline_turnover_summary": {"current_mainline": "通信设备"},
+                "selected_position_candidate": dict(stale_selected),
+                "extreme_conviction_list": [dict(item) for item in extreme_list],
+            }
+            selected = report_runtime._resolve_front_page_target_candidate(
+                data=data,
+                execution_stage_context=execution_context,
+                report_lines=[],
+                target_date="2026-06-02",
+            )
+            resolved_codes.append(selected["code"])
+
+        self.assertEqual(resolved_codes, ["601138", "601138"])
 
     def test_postgres_configured_decision_ledger_tracking_reads_database_not_json(self):
         class StubService:
@@ -5689,6 +6438,23 @@ def _runtime_binding_probe(
                             "reason": "大盘冰点、弱市场或趋势失效时，三态模型只允许0%保护本金。",
                         },
                     },
+                    "selected_position_candidate": {
+                        "name": "汇源通信",
+                        "code": "000586",
+                        "sector": "通信设备",
+                        "target_role": "core",
+                        "strength_evidence": ["通信设备资金回流", "板块锚"],
+                        "participation_window": "09:50-10:10",
+                        "required_steps": ["主线承接", "回踩收回MA5"],
+                        "fallback_state": "不满足回到0%",
+                        "target_position_pct": 50,
+                        "probe_entry_price": 10.0,
+                        "ma5": 9.9,
+                        "ma10": 9.8,
+                        "vwap": 9.95,
+                        "stop_price": 9.6,
+                        "target_price": 11.0,
+                    },
                 },
             }
 
@@ -5870,6 +6636,37 @@ def _runtime_binding_probe(
         self.assertNotIn("50%标准进攻", rendered)
         self.assertNotIn("唯一对象是否", rendered)
         self.assertNotIn("50%标准进攻预演", rendered)
+
+    def test_runtime_appendix_uses_observation_language_when_old_position_wins(self):
+        lines = [
+            "- **明天具体怎么做**: 明日目标标的保留条件100%核心进攻：只看601138 工业富联，固定交易窗口内条件成立才执行，不满足回到0%",
+            "- **明天仓位放多少**: 盘前0%；参与窗口命中后才评估50%标准进攻",
+            "**重点观察参与脚本**:",
+            "| 参与窗口 | 仓位三态 | 检查步骤 | 回封参与 | 作废条件 |",
+            "|----------|----------|----------|----------|----------|",
+            "| 09:30-09:35 | 100% | 竞价表态 / 回封/打板 | 快速回封 | 不满足继续0% |",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"code": "601138", "name": "工业富联"},
+            position_decision={"signal_grade": "100", "target_position_pct": 100, "participation_mode": "full_100"},
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "old_position_t"},
+                "watch_target": {"code": "601138", "name": "工业富联"},
+                "existing_position_target": {"code": "600396", "name": "华电辽能"},
+            },
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("只保留观察锚，不能转成新增参与", rendered)
+        self.assertIn("重点观察复核脚本", rendered)
+        self.assertIn("| 观察窗口 | 观察状态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
+        self.assertNotIn("明日目标标的保留条件100%核心进攻", rendered)
+        self.assertNotIn("才评估50%标准进攻", rendered)
+        self.assertNotIn("重点观察参与脚本", rendered)
+        self.assertNotIn("参与窗口", rendered)
+        self.assertNotIn("回封/打板", rendered)
 
     def test_runtime_attack_preview_relabels_legacy_zero_appendix_lines(self):
         lines = [
@@ -6101,7 +6898,7 @@ def _runtime_binding_probe(
             "| 项目 | 结论 |",
             "|------|------|",
             "| 账户约束 | 1w本金；已有昨日持仓优先处理 |",
-            "| 明日动作 | 先处理旧仓，不为新候选分散资金 |",
+            "| 明日动作 | 先处理旧仓，不新增参与 |",
             "| T0主对象 | 持有晶方科技(603005)，100股，成本44.256；新开仓0手 |",
             "| T0备用 | 华天科技(002185)：仅作条件观察 |",
             "| 新开仓上限 | 0 |",
