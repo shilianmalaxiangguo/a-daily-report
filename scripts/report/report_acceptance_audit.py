@@ -53,6 +53,36 @@ LEGACY_TRADING_TIME_WORDING_MARKERS = (
     "参与窗口" + "才",
 )
 
+PROCESS_EVIDENCE_TITLES = (
+    "主线内观察候选",
+    "明日次核心预判",
+    "跨线观察候选",
+    "重点观察名单",
+    "重点观察复核脚本",
+    "历史重点观察样本去向",
+    "重点观察25日跟踪表",
+    "明日极度看好近25日跟踪表",
+    "重点观察历史回测表",
+    "明日观察池",
+    "明天观察池",
+    "异动后观察池",
+    "跟踪记忆校验",
+    "主线趋势密度复核",
+    "当前个股观察监控池",
+    "观察对象生命周期表",
+    "逐只预判明日风险",
+    "明日风险分组",
+    "板块级明日风险预判",
+    "明天先观察组",
+    "明天重点候选组",
+    "明日继续观察",
+    "明日观察位预计算表",
+    "今日总决策面板",
+    "候选主表",
+    "候选选股轨迹",
+    "候选选股轨迹明细",
+)
+
 FRONT_PAGE_HEADINGS = [
     "## 一、交易纪律",
     "## 二、市场基底",
@@ -307,6 +337,9 @@ ZERO_POSITION_WEAK_BASIS_MARKERS = (
     "当前只有观察权",
     "等待确认",
 )
+OPPORTUNITY_COMPARISON_HEADING = "## 旧仓与新机会风险价格对比"
+OLD_POSITION_COMPARISON_ROLE_MARKERS = ("old_position", "failed_entry", "trend_holding", "旧仓")
+INCOMPLETE_OPPORTUNITY_RISK_MARKERS = ("", "-", "待计算", "不合格", "缺失", "待补")
 
 
 def _finding(code, message, line=None):
@@ -611,6 +644,25 @@ def _audit_candidate_section_contract(lines):
     return findings
 
 
+def _audit_process_evidence_headings(lines):
+    findings = []
+    for index, line in enumerate(lines, 1):
+        text = str(line or "").strip()
+        if not text or "过程证据" in text:
+            continue
+        if not text.startswith(("#", "*")):
+            continue
+        if any(title in text for title in PROCESS_EVIDENCE_TITLES):
+            findings.append(
+                _finding(
+                    "process_evidence_heading_missing_marker",
+                    f"过程证据标题必须标注（过程证据）: {text}",
+                    line=index,
+                )
+            )
+    return findings
+
+
 def audit_new_stock_visibility(markdown_text):
     lines = _lines(markdown_text)
     if NEW_STOCK_VISIBILITY_HEADING not in lines:
@@ -890,19 +942,14 @@ def _audit_account_advice_position_contract(lines):
             )
         )
 
-    section_text = "\n".join(str(line or "") for _, line in section)
-    no_holding_markers = ("未输入持仓", "无昨日持仓", "无持仓负担", "无旧仓")
-    holding_markers = ("已有昨日持仓", "昨日持仓对象", "持有", "成本", "旧仓")
-    has_holding_basis = any(marker in section_text for marker in holding_markers)
-    has_no_holding_basis = any(marker in section_text for marker in no_holding_markers)
-    for index, label, _ in rows:
+    for index, label, value in rows:
         if label != "T0主对象":
             continue
-        if has_no_holding_basis or not has_holding_basis:
+        if not str(value or "").strip() or str(value or "").strip() in {"-", "暂无"}:
             findings.append(
                 _finding(
-                    "t0_object_without_holding_context",
-                    "T0对象必须来自已有持仓；未输入或无昨日持仓时只能写明日执行目标或观察对象",
+                    "t0_main_object_missing_target",
+                    "T0主对象必须写清对象，不能留空",
                     line=index,
                 )
             )
@@ -1502,6 +1549,93 @@ def _final_summary_has_conditional_zero_plan(lines):
     return has_observation_prefix and has_participation_plan
 
 
+def _positive_participation_pct(lines):
+    text = "\n".join(str(line or "") for line in list(lines or []))
+    if any(marker in text for marker in ("100% / 核心进攻", "100%核心进攻", "条件100%核心进攻")):
+        return 100
+    if any(marker in text for marker in ("50% / 标准进攻", "50%标准进攻", "条件50%预演")):
+        return 50
+    return 0
+
+
+def _extract_opportunity_comparison_rows(lines):
+    rows = []
+    in_section = False
+    for offset, line in enumerate(_front_page_lines(lines), 1):
+        text = str(line or "").strip()
+        if text == OPPORTUNITY_COMPARISON_HEADING:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if text.startswith("## "):
+            break
+        cells = _split_md_row(line)
+        if not cells or _is_separator_cells(cells) or cells[0] == "对象":
+            continue
+        rows.append((offset, cells))
+    return rows
+
+
+def _is_old_position_comparison_row(cells):
+    if len(cells) < 2:
+        return False
+    role = str(cells[1] or "")
+    return any(marker in role for marker in OLD_POSITION_COMPARISON_ROLE_MARKERS)
+
+
+def _is_incomplete_opportunity_cell(value):
+    text = str(value or "").strip()
+    if text in INCOMPLETE_OPPORTUNITY_RISK_MARKERS:
+        return True
+    return any(marker and marker in text for marker in INCOMPLETE_OPPORTUNITY_RISK_MARKERS if marker not in ("", "-"))
+
+
+def _target_opportunity_row_has_incomplete_risk(cells):
+    if len(cells) < 10:
+        return True
+    required_price_columns = (2, 3, 4, 6, 7)
+    if any(_is_incomplete_opportunity_cell(cells[index]) for index in required_price_columns):
+        return True
+    risk_reward_state = str(cells[8] or "").strip()
+    if risk_reward_state in ("合格", "正盈亏比"):
+        return False
+    if any(marker in risk_reward_state for marker in ("待计算", "不合格", "缺失", "待补")):
+        return True
+    return not risk_reward_state
+
+
+def _audit_opportunity_comparison_contract(lines):
+    front = _front_page_lines(lines)
+    if _positive_participation_pct(front) < 50:
+        return []
+    front_text = "\n".join(str(line or "") for line in front)
+    requires_comparison = any(marker in front_text for marker in ("先处理旧仓", "释放旧仓资金", "旧仓资金"))
+    rows = _extract_opportunity_comparison_rows(lines)
+    findings = []
+    if requires_comparison and not rows:
+        findings.append(
+            _finding(
+                "opportunity_comparison_missing",
+                "50/100结论涉及旧仓资金切换时，必须先展示旧仓与新机会的风险价格对比",
+            )
+        )
+        return findings
+    for offset, cells in rows:
+        if _is_old_position_comparison_row(cells):
+            continue
+        if not _target_opportunity_row_has_incomplete_risk(cells):
+            continue
+        findings.append(
+            _finding(
+                "opportunity_comparison_incomplete_risk",
+                "50/100结论不能同时保留风险价格或盈亏比未补齐的新目标",
+                line=offset,
+            )
+        )
+    return findings
+
+
 def _is_zero_position_conflict_line(cells):
     row_text = " ".join(cells)
     if any(marker in row_text for marker in ("不新增参与", "不能转成新增参与", "暂无新增参与资格")):
@@ -1896,6 +2030,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_front_page_headings(lines))
     findings.extend(_audit_monthly_rhythm_section(lines))
     findings.extend(_audit_candidate_section_contract(lines))
+    findings.extend(_audit_process_evidence_headings(lines))
     findings.extend(_audit_mainline_capacity_regime_contract(lines))
     findings.extend(_audit_legacy_surface_wording(lines))
     findings.extend(_audit_legacy_trading_time_wording(lines))
@@ -1909,6 +2044,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_market_breadth_incomplete(lines))
     findings.extend(_audit_position_context_contradictions(lines))
     findings.extend(_audit_account_advice_position_contract(lines))
+    findings.extend(_audit_opportunity_comparison_contract(lines))
     findings.extend(_audit_incomplete_candidate_execution_plan(lines))
     findings.extend(_audit_candidate_identity_conflicts(lines))
     findings.extend(_audit_success_rates_match_request_logs(lines))

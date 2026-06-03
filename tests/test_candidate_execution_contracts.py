@@ -15,6 +15,7 @@ from selection.candidate_execution_contracts import (
     build_gem_textbook_front_text,
     build_gem_textbook_next_step_text,
     build_limit_up_inertia_profile,
+    build_opportunity_comparison,
     build_participation_window_from_candidate,
     build_participation_window_policy,
     build_philosophy_constraint_text,
@@ -247,6 +248,93 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         )
         self.assertIn("观察位、作废线和上方空间", invalid_shape["risk_reward_plan"])
         self.assertNotIn("买点", invalid_shape["risk_reward_plan"])
+
+    def test_opportunity_comparison_keeps_missing_risk_price_at_observation(self):
+        comparison = build_opportunity_comparison(
+            old_position={
+                "name": "华电辽能",
+                "code": "600396",
+                "shares": 200,
+                "old_logic_state": "valid",
+            },
+            new_target={
+                "name": "华天科技",
+                "code": "002185",
+                "target_role": "sector_anchor",
+            },
+            requested_participation_pct=100,
+        )
+
+        self.assertEqual(comparison["schema_version"], "opportunity_comparison.v1")
+        self.assertEqual(comparison["new_target"]["risk_reward_state"], "待计算")
+        self.assertEqual(comparison["new_target"]["risk_price_comfort"], "incomplete")
+        self.assertFalse(comparison["comparison"]["risk_boundary_controllable"])
+        self.assertFalse(comparison["comparison"]["old_position_must_be_released"])
+        self.assertEqual(comparison["comparison"]["max_participation_pct"], 0)
+        self.assertIn("只保留观察", comparison["comparison"]["final_action"])
+        self.assertIn("risk_price", comparison["new_target"]["missing_fields"])
+
+    def test_opportunity_comparison_rejects_stretched_ma_risk_even_for_stronger_target(self):
+        comparison = build_opportunity_comparison(
+            old_position={
+                "name": "华电辽能",
+                "code": "600396",
+                "shares": 200,
+                "old_logic_state": "weakening",
+            },
+            new_target={
+                "name": "华天科技",
+                "code": "002185",
+                "target_role": "core",
+                "strength_evidence": ["半导体资金回流", "板块锚"],
+                "probe_entry_price": 20.0,
+                "ma5": 18.6,
+                "ma10": 18.0,
+                "vwap": 19.2,
+                "stop_price": 17.4,
+                "target_price": 22.0,
+            },
+            requested_participation_pct=100,
+        )
+
+        self.assertEqual(comparison["new_target"]["risk_price_comfort"], "unacceptable")
+        self.assertGreaterEqual(comparison["new_target"]["downside_to_ma5_pct"], 5.0)
+        self.assertFalse(comparison["comparison"]["risk_boundary_controllable"])
+        self.assertEqual(comparison["comparison"]["max_participation_pct"], 0)
+        self.assertIn("等待回踩", comparison["comparison"]["final_action"])
+
+    def test_opportunity_comparison_allows_switch_only_when_stronger_and_risk_controlled(self):
+        comparison = build_opportunity_comparison(
+            old_position={
+                "name": "华电辽能",
+                "code": "600396",
+                "shares": 200,
+                "old_logic_state": "weakening",
+            },
+            new_target={
+                "name": "华天科技",
+                "code": "002185",
+                "line": "半导体",
+                "target_role": "core",
+                "strength_evidence": ["半导体资金回流", "板块锚", "近新高结构"],
+                "entry_window": "09:50-10:10",
+                "probe_entry_price": 10.0,
+                "ma5": 9.8,
+                "ma10": 9.6,
+                "vwap": 9.9,
+                "stop_price": 9.5,
+                "target_price": 11.5,
+            },
+            requested_participation_pct=100,
+        )
+
+        self.assertEqual(comparison["new_target"]["risk_reward_state"], "合格")
+        self.assertEqual(comparison["new_target"]["risk_price_comfort"], "comfortable")
+        self.assertTrue(comparison["comparison"]["new_target_materially_stronger"])
+        self.assertTrue(comparison["comparison"]["old_position_must_be_released"])
+        self.assertTrue(comparison["comparison"]["risk_boundary_controllable"])
+        self.assertEqual(comparison["comparison"]["max_participation_pct"], 100)
+        self.assertIn("先释放旧仓资金", comparison["comparison"]["final_action"])
 
     def test_participation_window_from_candidate_uses_fast_path_for_core_markers(self):
         self.assertEqual(

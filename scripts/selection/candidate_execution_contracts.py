@@ -135,6 +135,7 @@ __all__ = [
     "build_gem_textbook_next_step_text",
     "build_gem_textbook_reference_text",
     "build_limit_up_inertia_profile",
+    "build_opportunity_comparison",
     "build_participation_window_from_candidate",
     "build_participation_window_policy",
     "build_quant_anchor_plan",
@@ -334,6 +335,185 @@ def build_risk_reward_plan(candidate=None, *, min_ratio=2.0):
         }
     )
     return base
+
+
+def _first_text(candidate, *keys, default=""):
+    candidate = candidate or {}
+    for key in keys:
+        value = candidate.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return default
+
+
+def _downside_pct(entry, risk_price):
+    try:
+        entry = float(entry)
+        risk_price = float(risk_price)
+    except (TypeError, ValueError):
+        return None
+    if entry <= 0 or risk_price <= 0 or risk_price >= entry:
+        return 0.0
+    return round((entry - risk_price) / entry * 100, 2)
+
+
+def _risk_price_comfort(*, entry, ma5, ma10, vwap, invalid_price):
+    if entry is None or invalid_price is None:
+        return "incomplete"
+    risk_distances = {
+        "ma5": _downside_pct(entry, ma5),
+        "ma10": _downside_pct(entry, ma10),
+        "vwap": _downside_pct(entry, vwap),
+    }
+    usable_distances = [value for value in risk_distances.values() if value is not None]
+    if not usable_distances:
+        return "incomplete"
+    if risk_distances.get("ma5") is not None and risk_distances["ma5"] >= 5:
+        return "unacceptable"
+    nearest = min(value for value in usable_distances if value >= 0)
+    if nearest >= 5:
+        return "unacceptable"
+    if nearest >= 3:
+        return "stretched"
+    return "comfortable"
+
+
+def _candidate_materially_stronger(candidate):
+    role = _first_text(candidate, "target_role", "role", "quality_role")
+    role_is_core = role in {"core", "sector_anchor", "主线核心", "板块锚", "趋势核心"}
+    evidence = candidate.get("strength_evidence") or candidate.get("positive_shape_evidence") or []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    evidence_count = len([item for item in evidence if str(item or "").strip()])
+    strength_score = _first_number(candidate, "tomorrow_strength", "strength_score", "quality_score", default=0)
+    return bool(role_is_core and (evidence_count >= 2 or strength_score >= 85))
+
+
+def _old_position_weakening(old_position):
+    old_position = old_position or {}
+    state = _first_text(old_position, "old_logic_state", "logic_state")
+    action = _first_text(old_position, "old_plan_action", "action")
+    return state in {"weakening", "invalid", "转弱", "失效"} or action in {"reduce", "exit", "repair_once", "减仓", "卖出"}
+
+
+def build_opportunity_comparison(
+    *,
+    old_position=None,
+    new_target=None,
+    account_capital=None,
+    requested_participation_pct=100,
+    min_ratio=2.0,
+):
+    old_position = dict(old_position or {})
+    new_target = dict(new_target or {})
+    risk_reward = build_risk_reward_plan(new_target, min_ratio=min_ratio)
+    entry = _first_number(
+        new_target,
+        "observation_price",
+        "probe_entry_price",
+        "ma_reversion_entry",
+        "close",
+        "price",
+        "latest_price",
+        default=None,
+    )
+    ma5 = _first_number(new_target, "ma5", "MA5", default=None)
+    ma10 = _first_number(new_target, "ma10", "MA10", default=None)
+    vwap = _first_number(new_target, "vwap", "VWAP", "intraday_vwap", default=None)
+    invalid_price = _first_number(new_target, "invalid_price", "stop_price", "ma20", "effective_stop", "stop_loss", default=None)
+    target_price = _first_number(new_target, "target_price", "limit_up_price", "previous_high", "recent_high", "high", default=None)
+    risk_price_comfort = _risk_price_comfort(
+        entry=entry,
+        ma5=ma5,
+        ma10=ma10,
+        vwap=vwap,
+        invalid_price=invalid_price,
+    )
+    missing_fields = []
+    if entry is None:
+        missing_fields.append("observation_price")
+    if invalid_price is None:
+        missing_fields.append("invalid_price")
+    if target_price is None:
+        missing_fields.append("target_price")
+    if risk_price_comfort == "incomplete":
+        missing_fields.append("risk_price")
+
+    stronger = _candidate_materially_stronger(new_target)
+    old_weakening = _old_position_weakening(old_position)
+    risk_controllable = risk_reward["risk_reward_state"] == "合格" and risk_price_comfort == "comfortable"
+    old_must_release = bool(old_position and old_weakening and stronger and risk_controllable)
+    requested_pct = int(_safe_float(requested_participation_pct, 0))
+    max_pct = min(max(requested_pct, 0), 100) if risk_controllable and stronger else 0
+    if risk_price_comfort == "incomplete":
+        final_action = "只保留观察，等风险价格补齐"
+        capital_result = "observe"
+    elif not risk_controllable and risk_price_comfort in {"stretched", "unacceptable"}:
+        final_action = "强度保留，等待回踩/收回窗口"
+        capital_result = "wait"
+    elif risk_reward["risk_reward_state"] != "合格":
+        final_action = "只保留观察，等待盈亏比修复"
+        capital_result = "observe"
+    elif old_must_release:
+        final_action = "先释放旧仓资金，只在固定交易窗口参与新核心"
+        capital_result = "new_entry_after_old_exit"
+    elif stronger and risk_controllable:
+        final_action = "新目标具备参与条件，按固定交易窗口执行"
+        capital_result = "new_entry_after_old_exit" if old_position else "wait"
+    else:
+        final_action = "旧仓按原计划处理，新目标观察"
+        capital_result = "old_position_t" if old_position else "observe"
+
+    return {
+        "schema_version": "opportunity_comparison.v1",
+        "account_capital": account_capital or old_position.get("account_capital") or new_target.get("account_capital"),
+        "old_position": {
+            "name": _first_text(old_position, "name", "stock_name"),
+            "code": _first_text(old_position, "code", "stock_code"),
+            "shares": old_position.get("shares"),
+            "sellable_shares": old_position.get("sellable_shares"),
+            "unsellable_shares": old_position.get("unsellable_shares"),
+            "holding_role": _first_text(old_position, "holding_role", default="old_position" if old_position else "unknown"),
+            "old_logic_state": _first_text(old_position, "old_logic_state", "logic_state", default="incomplete"),
+            "old_plan_action": _first_text(old_position, "old_plan_action", "action", default="observe"),
+            "old_plan_reason": _first_text(old_position, "old_plan_reason", "reason"),
+            "lower_defense_price": _first_number(old_position, "lower_defense_price", "defense_price", "stop_price", default=None),
+            "upper_take_profit_price": _first_number(old_position, "upper_take_profit_price", "take_profit_price", "target_price", default=None),
+            "missing_fields": [],
+        },
+        "new_target": {
+            "name": _first_text(new_target, "name", "stock_name"),
+            "code": _first_text(new_target, "code", "stock_code"),
+            "line": _first_text(new_target, "line", "sector", "mainline"),
+            "target_role": _first_text(new_target, "target_role", "role", "quality_role", default="unknown"),
+            "strength_evidence": new_target.get("strength_evidence") or [],
+            "entry_window": _first_text(new_target, "entry_window", "buy_window", "participation_window", default="no_trade"),
+            "observation_price": entry,
+            "ma5": ma5,
+            "ma10": ma10,
+            "vwap": vwap,
+            "invalid_price": invalid_price,
+            "target_price": target_price,
+            "downside_to_ma5_pct": _downside_pct(entry, ma5),
+            "downside_to_ma10_pct": _downside_pct(entry, ma10),
+            "downside_to_vwap_pct": _downside_pct(entry, vwap),
+            "downside_to_invalid_pct": _downside_pct(entry, invalid_price),
+            "risk_reward_ratio": risk_reward.get("risk_reward_ratio"),
+            "risk_reward_state": risk_reward.get("risk_reward_state"),
+            "risk_reward_plan": risk_reward.get("risk_reward_plan"),
+            "risk_price_comfort": risk_price_comfort,
+            "missing_fields": missing_fields,
+        },
+        "comparison": {
+            "new_target_materially_stronger": stronger,
+            "old_position_must_be_released": old_must_release,
+            "risk_boundary_controllable": risk_controllable,
+            "capital_efficiency_result": capital_result,
+            "max_participation_pct": max_pct,
+            "final_action": final_action,
+            "reason": final_action,
+        },
+    }
 
 
 def build_gem_textbook_reference_text(label=""):

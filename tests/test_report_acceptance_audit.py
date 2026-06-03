@@ -78,7 +78,7 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 50%标准进攻 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50% / 标准进攻 | 50%：只做合格对象，满足预演情境后执行，不满足回到0% |
 
 ## 八、详细附录
-**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:
+**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）（过程证据）:
 | 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |
 |--------|------|------|------|----------|----------|----------|------------|--------|--------|
 | 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |
@@ -573,7 +573,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_missing_extreme_conviction_recent_tracking_table(self):
         bad = GOOD_MARKDOWN.replace(
-            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:\n"
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）（过程证据）:\n"
             "| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |\n"
             "|--------|------|------|------|----------|----------|----------|------------|--------|--------|\n"
             "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |\n\n",
@@ -710,7 +710,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0% / 不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
                 "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 条件观察：300613 富瀚微（半导体） | 0% / 不参与 | 盘前0%；09:50-10:10窗口主线确认 + 承接 + 观察窗口同时成立，才评估50%标准进攻；不满足继续0% |",
             )
-            + "\n##### 附录：# 今日总决策面板\n"
+            + "\n##### 附录：# 今日总决策面板（过程证据）\n"
             + "| 字段 | 内容 |\n"
             + "|------|------|\n"
             + "| 今日新增上限 | 0 |\n"
@@ -762,7 +762,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 "| 观察锚去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |\n"
                 "| 当前状态 | 0%无合格标的 |",
             )
-            + "\n##### 附录：# 今日总决策面板\n"
+            + "\n##### 附录：# 今日总决策面板（过程证据）\n"
             + "| 字段 | 内容 |\n"
             + "|------|------|\n"
             + "| 今日新增上限 | 0 |\n"
@@ -995,7 +995,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
     def test_audit_flags_zero_position_with_current_backup_candidate_named_in_appendix(self):
         bad = self.zero_position_report() + (
-            "\n##### 附录：# 今日总决策面板\n"
+            "\n##### 附录：# 今日总决策面板（过程证据）\n"
             "| 字段 | 内容 |\n"
             "|------|------|\n"
             "| 今日新增上限 | 0 |\n"
@@ -1372,22 +1372,35 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("unknown_position_rendered_as_no_holding", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
-    def test_audit_flags_t0_object_without_holding_context(self):
-        bad = GOOD_MARKDOWN.replace(
+    def test_audit_allows_t0_main_object_when_no_yesterday_holding_and_position_is_50(self):
+        good = GOOD_MARKDOWN.replace(
             "## 一、交易纪律",
             "## 明日账户建议\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 账户约束 | 约1w账户；未输入持仓，先确认旧仓再看T0对象 |\n"
-            "| 明日动作 | 不新开，只做条件观察 |\n"
-            "| T0主对象 | 华电能源(600726)：条件观察 |\n"
-            "| 新增参与上限 | 0 |\n\n"
+            "| 账户约束 | 约1w账户；无昨日持仓先看T0对象 |\n"
+            "| 明日仓位 | 50%标准进攻 |\n"
+            "| 明日动作 | 只看T0主对象，条件满足才新开一手 |\n"
+            "| T0主对象 | 华电能源(600726)：固定交易窗口条件 |\n"
+            "| T0备用 | 暂无 |\n"
+            "| 新增参与上限 | 1 |\n\n"
             "## 一、交易纪律",
+        )
+
+        result = audit_report_markdown(good)
+
+        self.assertNotIn("t0_object_without_holding_context", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"])
+
+    def test_audit_flags_unmarked_process_evidence_headings(self):
+        bad = GOOD_MARKDOWN.replace(
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）（过程证据）:",
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
         )
 
         result = audit_report_markdown(bad)
 
-        self.assertIn("t0_object_without_holding_context", {finding["code"] for finding in result["findings"]})
+        self.assertIn("process_evidence_heading_missing_marker", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_account_advice_without_position_line(self):
@@ -1406,6 +1419,39 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("account_advice_missing_position", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_old_position_switch_without_opportunity_comparison(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 一、交易纪律",
+            "## 明日账户建议\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 持仓确认 | 已有旧仓华电辽能(600396) |\n"
+            "| 明日仓位 | 50%标准进攻 |\n"
+            "| 明日动作 | 先处理旧仓，买华天科技(002185)；固定交易窗口条件成立才参与，不满足回到0% |\n\n"
+            "## 一、交易纪律",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("opportunity_comparison_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_positive_participation_with_incomplete_opportunity_risk(self):
+        bad = GOOD_MARKDOWN.replace(
+            "## 六、明日执行计划",
+            "## 旧仓与新机会风险价格对比\n"
+            "| 对象 | 身份 | 当前/观察价 | MA5风险 | MA10风险 | VWAP风险 | 作废价 | 上方空间 | 盈亏比 | 账户结论 |\n"
+            "|------|------|-------------|---------|----------|----------|--------|----------|--------|----------|\n"
+            "| 华电辽能(600396) | old_position | - | - | - | - | - | - | - | repair_once |\n"
+            "| 华天科技(002185) | sector_anchor | 19.16 | 18.20 / -5.01% | 17.80 / -6.99% | - | - | - | 待计算 | 只保留观察，等风险价格补齐 |\n\n"
+            "## 六、明日执行计划",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("opportunity_comparison_incomplete_risk", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_incomplete_candidate_trace_with_execution_plan(self):
