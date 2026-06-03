@@ -1,0 +1,4 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `.generated/venv-py314/bin/python3.14 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend implementation conventions for report/storage code"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database boundary guidance for structured PSQL facts"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow guidance for PSQL facts to report labels"}
