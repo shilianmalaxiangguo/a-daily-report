@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Core daily-report decision payload, planned participation, replay, and audit contract for implementation"}
+{"file": "references/report-contract.md", "reason": "Existing 0/50/100 participation and risk-reward report contract"}
+{"file": "wiki/交易思想/日报术语契约.md", "reason": "User-facing wording constraints for report and assistant-visible task output"}
+{"file": "wiki/交易思想/扣分系统与动作分层.md", "reason": "Existing ranking order, buy-point cost, risk/cost deductions, and old-position/new-entry separation doctrine"}
+{"file": "wiki/交易思想/极度看好参与时机.md", "reason": "Existing MA execution anchor, risk-reward, and participation-window doctrine"}
+{"file": "wiki/交易思想/价格行为与能量框架.md", "reason": "Article-derived emotion verification, oversold-rebound expectation, and risk-price doctrine"}
+{"file": "wiki/板块补充/板块中枢与主线延续.md", "reason": "Article-derived line representative and tail-stage follower risk doctrine"}
+{"file": ".trellis/tasks/06-03-article-informed-daily-report-revision/info.md", "reason": "Task-local technical design and verification plan"}
