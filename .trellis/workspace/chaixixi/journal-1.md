@@ -47,3 +47,40 @@ Migrated daily report decision and runtime facts to PostgreSQL structured storag
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Article-informed daily report revision
+
+**Date**: 2026-06-03
+**Task**: Article-informed daily report revision
+**Branch**: `develop`
+
+### Summary
+
+Added opportunity-cost comparison for old-position versus snapshot opportunities; regenerated and audited the 2026-06-03 replay.
+
+### Main Changes
+
+- Implemented snapshot-source enrichment for opportunity comparison rows.
+- Kept 华天科技 as a same-line comparison candidate when it exists in target-date candidate/hot/turnover facts but not the selected extreme list.
+- Preserved observation-only output when risk prices and risk-reward are incomplete.
+- Verification: 260 focused tests passed; 2026-06-03 replay regenerated; report acceptance audit passed; diff check passed.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fdef59bd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
