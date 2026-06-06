@@ -60,7 +60,7 @@ def _table(headers: list[str], rows: list[list[Any]], *, attention_first_row: bo
             )
             body_rows.append(f"<tr>{cells}</tr>")
         body = "\n".join(body_rows)
-    return f"<table><thead><tr>{header_html}</tr></thead><tbody>{body}</tbody></table>"
+    return f'<div class="reader-table"><table><thead><tr>{header_html}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
 def _yes_no(value: Any) -> str:

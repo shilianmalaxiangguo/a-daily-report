@@ -6,13 +6,18 @@
   <title>$title</title>
   <style>
     :root {
-      --paper: #ffffff;
-      --surface: #f7f7f7;
-      --line: #e6e6e6;
-      --body: #171717;
-      --muted: #6f6f6f;
+      --reader-bg: #ffffff;
+      --reader-chrome: #f4f3f1;
+      --reader-chrome-strong: #ecebea;
+      --reader-surface: #faf9f7;
+      --reader-line: #e5e2de;
+      --reader-text: #111111;
+      --reader-muted: #6b6b70;
+      --reader-muted-soft: #9a9894;
       --accent: #c20c0c;
-      --accent-soft: #fff1f1;
+      --accent-red: #d33a31;
+      --accent-soft: #fff3f3;
+      --editor-width: 720px;
       color-scheme: light;
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
       letter-spacing: 0;
@@ -24,78 +29,213 @@
 
     body {
       margin: 0;
-      background: var(--paper);
-      color: var(--body);
+      background: var(--reader-chrome);
+      color: var(--reader-text);
       font-size: 16px;
-      line-height: 1.72;
+      line-height: 1.74;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
 
-    main {
-      width: min(920px, calc(100% - 32px));
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .bear-shell {
+      display: grid;
+      grid-template-columns: 188px 272px minmax(0, 1fr);
+      min-height: calc(100vh - 48px);
+      width: min(1220px, calc(100% - 32px));
+      margin: 24px auto;
+      overflow: hidden;
+      background: var(--reader-bg);
+      border: 1px solid var(--reader-line);
+      border-radius: 8px;
+      box-shadow: 0 18px 48px rgba(33, 31, 28, 0.10), 0 3px 10px rgba(33, 31, 28, 0.06);
+    }
+
+    .bear-sidebar {
+      background: var(--reader-chrome-strong);
+      border-right: 1px solid var(--reader-line);
+      padding: 16px 12px;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .window-controls span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #d6d2cd;
+    }
+
+    .window-controls span:first-child {
+      background: var(--accent-red);
+    }
+
+    .sidebar-title,
+    .rail-title {
+      margin: 0 0 12px;
+      color: var(--reader-muted);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .sidebar-nav,
+    .mobile-nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .sidebar-nav a {
+      display: block;
+      padding: 8px 10px;
+      border-radius: 6px;
+      color: var(--reader-text);
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .sidebar-nav a[aria-current="page"],
+    .sidebar-nav a:hover {
+      background: var(--reader-bg);
+      color: var(--accent);
+    }
+
+    .note-rail {
+      background: var(--reader-surface);
+      border-right: 1px solid var(--reader-line);
+      padding: 18px 12px;
+    }
+
+    .note-item {
+      display: block;
+      margin-bottom: 8px;
+      padding: 11px 12px 12px;
+      border-left: 3px solid transparent;
+      border-radius: 6px;
+      background: transparent;
+    }
+
+    .note-item.is-active {
+      border-left-color: var(--accent-red);
+      background: var(--reader-bg);
+      box-shadow: 0 1px 2px rgba(33, 31, 28, 0.06);
+    }
+
+    .note-date {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .note-title {
+      display: block;
+      color: var(--reader-text);
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .note-excerpt {
+      display: block;
+      margin-top: 4px;
+      color: var(--reader-muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .editor-pane {
+      min-width: 0;
+      background: var(--reader-bg);
+    }
+
+    .reader-document {
+      width: min(var(--editor-width), calc(100% - 56px));
       margin: 0 auto;
-      padding: 40px 0 64px;
+      padding: 48px 0 72px;
     }
 
-    header {
-      border-bottom: 1px solid var(--line);
+    .reader-header {
       margin-bottom: 28px;
-      padding-bottom: 20px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--reader-line);
     }
 
     h1 {
       margin: 0 0 10px;
-      color: var(--body);
-      font-size: 32px;
+      color: var(--reader-text);
+      font-size: 30px;
       font-weight: 700;
-      line-height: 1.2;
+      line-height: 1.25;
     }
 
     h2 {
-      margin: 32px 0 12px;
-      color: var(--body);
+      margin: 0 0 12px;
+      color: var(--reader-text);
       font-size: 20px;
       font-weight: 700;
       line-height: 1.35;
     }
 
     .meta {
-      color: var(--muted);
+      color: var(--reader-muted);
       font-size: 14px;
     }
 
-    nav {
+    .mobile-nav {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       margin-top: 18px;
     }
 
-    nav a {
-      border-bottom: 1px solid transparent;
-      color: var(--muted);
+    .mobile-nav a {
+      padding: 5px 8px;
+      border: 1px solid var(--reader-line);
+      border-radius: 6px;
+      color: var(--reader-muted);
       font-size: 14px;
-      text-decoration: none;
     }
 
-    nav a:hover {
-      border-color: var(--accent);
+    .mobile-nav a:hover {
+      border-color: var(--accent-red);
       color: var(--accent);
     }
 
     section {
-      border-bottom: 1px solid var(--line);
-      padding: 6px 0 24px;
+      border-bottom: 1px solid var(--reader-line);
+      padding: 28px 0;
+    }
+
+    section:first-of-type {
+      padding-top: 0;
+    }
+
+    .reader-table {
+      overflow-x: auto;
+      border: 1px solid var(--reader-line);
+      border-radius: 8px;
+      background: var(--reader-bg);
     }
 
     table {
       border-collapse: collapse;
+      min-width: 560px;
       width: 100%;
       table-layout: fixed;
     }
 
     th,
     td {
-      border-bottom: 1px solid var(--line);
+      border-bottom: 1px solid var(--reader-line);
       padding: 10px 12px;
       text-align: left;
       vertical-align: top;
@@ -103,26 +243,59 @@
     }
 
     th {
-      background: var(--surface);
-      color: var(--muted);
+      background: var(--reader-surface);
+      color: var(--reader-muted);
       font-size: 13px;
       font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
     }
 
     td.attention {
       background: var(--accent-soft);
       color: var(--accent);
       font-weight: 700;
+      box-shadow: inset 3px 0 0 var(--accent-red);
     }
 
     .muted {
-      color: var(--muted);
+      color: var(--reader-muted);
+    }
+
+    ::selection {
+      background: var(--accent-soft);
+      color: var(--accent);
     }
 
     @media (max-width: 640px) {
-      main {
-        width: min(100% - 20px, 920px);
-        padding-top: 24px;
+      body {
+        background: var(--reader-bg);
+      }
+
+      .bear-shell {
+        display: block;
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .bear-sidebar,
+      .note-rail {
+        display: none;
+      }
+
+      .reader-document {
+        width: min(100% - 24px, var(--editor-width));
+        padding: 24px 0 48px;
+      }
+
+      .reader-header {
+        margin-bottom: 20px;
       }
 
       h1 {
@@ -134,57 +307,103 @@
         padding: 9px 8px;
         font-size: 14px;
       }
+
+      .reader-table {
+        margin-inline: -2px;
+      }
+    }
+
+    @media (min-width: 641px) {
+      .mobile-nav {
+        display: none;
+      }
+    }
+
+    @media (max-width: 980px) and (min-width: 641px) {
+      .bear-shell {
+        grid-template-columns: 220px minmax(0, 1fr);
+      }
+
+      .bear-sidebar {
+        display: none;
+      }
     }
   </style>
 </head>
 <body>
-  <main>
-    <header>
-      <h1>$title</h1>
-      <div class="meta">交易日：$trade_date · 来源：$source</div>
-      <nav aria-label="日报章节">
-        <a href="#tomorrow-action">明日动作</a>
+  <div class="bear-shell">
+    <aside class="bear-sidebar" aria-label="日报目录">
+      <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="sidebar-title">日报</div>
+      <nav class="sidebar-nav" aria-label="日报章节">
+        <a href="#tomorrow-action" aria-current="page">明日动作</a>
         <a href="#market-spine">市场结构</a>
         <a href="#mainline-evidence">主线证据</a>
         <a href="#candidate-actions">候选动作</a>
+        <a href="#participation-reviews">参与复盘</a>
         <a href="#data-sources">数据来源</a>
       </nav>
-    </header>
+    </aside>
 
-    <section id="tomorrow-action">
-      <h2>明日动作</h2>
-      $tomorrow_action
-    </section>
+    <aside class="note-rail" aria-label="交易日日报">
+      <div class="rail-title">交易日</div>
+      <a class="note-item is-active" href="#tomorrow-action">
+        <span class="note-date">$trade_date</span>
+        <span class="note-title">$title</span>
+        <span class="note-excerpt">$source</span>
+      </a>
+    </aside>
 
-    <section id="market-spine">
-      <h2>市场结构</h2>
-      $market_spine
-    </section>
+    <main class="editor-pane">
+      <article class="reader-document">
+        <header class="reader-header">
+          <h1>$title</h1>
+          <div class="meta">交易日：$trade_date · 来源：$source</div>
+          <nav class="mobile-nav" aria-label="日报章节">
+            <a href="#tomorrow-action">明日动作</a>
+            <a href="#market-spine">市场结构</a>
+            <a href="#mainline-evidence">主线证据</a>
+            <a href="#candidate-actions">候选动作</a>
+            <a href="#data-sources">数据来源</a>
+          </nav>
+        </header>
 
-    <section id="mainline-evidence">
-      <h2>主线证据</h2>
-      $mainline_evidence
-    </section>
+        <section id="tomorrow-action">
+          <h2>明日动作</h2>
+          $tomorrow_action
+        </section>
 
-    <section id="candidate-actions">
-      <h2>候选动作</h2>
-      $candidate_actions
-    </section>
+        <section id="market-spine">
+          <h2>市场结构</h2>
+          $market_spine
+        </section>
 
-    <section id="participation-reviews">
-      <h2>参与复盘</h2>
-      $participation_reviews
-    </section>
+        <section id="mainline-evidence">
+          <h2>主线证据</h2>
+          $mainline_evidence
+        </section>
 
-    <section id="data-sources">
-      <h2>数据来源</h2>
-      $data_sources
-    </section>
+        <section id="candidate-actions">
+          <h2>候选动作</h2>
+          $candidate_actions
+        </section>
 
-    <section id="diagnostics">
-      <h2>事实完整性</h2>
-      $diagnostics
-    </section>
-  </main>
+        <section id="participation-reviews">
+          <h2>参与复盘</h2>
+          $participation_reviews
+        </section>
+
+        <section id="data-sources">
+          <h2>数据来源</h2>
+          $data_sources
+        </section>
+
+        <section id="diagnostics">
+          <h2>事实完整性</h2>
+          $diagnostics
+        </section>
+      </article>
+    </main>
+  </div>
 </body>
 </html>
