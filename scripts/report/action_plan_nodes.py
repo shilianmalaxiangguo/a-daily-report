@@ -1,4 +1,9 @@
 from report.candidate_quality_renderer import COMPACT_CANDIDATE_TABLE_FIELDS, render_candidate_quality_section
+from report.sniper_target_derivation import (
+    build_sniper_target_derivation_packet,
+    compact_section as _sniper_target_derivation_compact_section,
+)
+from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
     evaluate_candidate_quality_sample_contract,
@@ -10,6 +15,7 @@ _PROCESS_EVIDENCE_TITLES = {
     "候选质量与动作分层",
     "今日总决策面板",
     "候选主表",
+    "最终标的传导链",
     "狙击手最终标的路径图",
     "候选选股轨迹",
     "候选选股轨迹明细",
@@ -121,6 +127,24 @@ def _contracts_with_selected_traces(contracts, traces):
     return rendered_contracts
 
 
+def _candidate_quality_derivation_packet(context):
+    packet = context.get("sniper_target_derivation")
+    if isinstance(packet, dict) and packet.get("canonical_target"):
+        return packet
+    if not isinstance(context.get("final_target_resolution"), dict):
+        return {}
+    return build_sniper_target_derivation_packet(
+        data=context,
+        execution_stage_context=context.get("execution_stage_context") if isinstance(context.get("execution_stage_context"), dict) else {},
+        market_research_snapshot=context,
+        final_target_resolution=context.get("final_target_resolution"),
+        selected_position_candidate=context.get("selected_position_candidate"),
+        position_decision=context.get("position_decision"),
+        final_gate=context.get("final_gate"),
+        two_layer_decision_payload=context.get("two_layer_decision_payload"),
+    )
+
+
 def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
     section_title = str(context.get("section_title", "") or "明日操作计划").strip() or "明日操作计划"
     return {
@@ -136,6 +160,10 @@ def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
 
 
 def build_action_plan_candidate_quality_node(context, node_meta=None, node_lookup=None):
+    context = context or {}
+    if not context.get("candidate_quality_panel") and not context.get("candidate_quality_contracts"):
+        if isinstance(context.get("sniper_target_derivation"), dict) or isinstance(context.get("final_target_resolution"), dict):
+            context = {**context, **build_candidate_quality_scorecard_payload(context)}
     panel = context.get("candidate_quality_panel")
     contracts = context.get("candidate_quality_contracts") or []
     enabled_node_keys = set(context.get("enabled_node_keys") or [])
@@ -169,6 +197,22 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
         render_trace_tables=render_trace_tables,
         eliminated_summary=eliminated_summary,
     ).splitlines()
+    derivation_packet = _candidate_quality_derivation_packet(context)
+    derivation_lines = []
+    if isinstance(derivation_packet, dict) and derivation_packet.get("canonical_target"):
+        derivation_lines = _sniper_target_derivation_compact_section(
+            derivation_packet,
+            heading=f"{'#' * min(6, heading_level + 1)} 最终标的传导链",
+        )
+    if derivation_lines:
+        insert_at = 0
+        for index, line in enumerate(rendered_lines):
+            if "候选主表" in str(line):
+                insert_at = index
+                while insert_at > 0 and str(rendered_lines[insert_at - 1]).strip() == "":
+                    insert_at -= 1
+                break
+        rendered_lines = rendered_lines[:insert_at] + derivation_lines + [""] + rendered_lines[insert_at:]
     return {
         "lines": _mark_process_evidence_headings(rendered_lines),
         "exports": {

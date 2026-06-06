@@ -1,4 +1,5 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.sniper_target_derivation import stock_key as _derivation_stock_key
 
 
 def _candidate_key(candidate):
@@ -244,6 +245,128 @@ def _quality_candidate(candidate, *, quality_role="", selection_quality="", entr
     return enriched
 
 
+def _current_watch_target(context):
+    context = context or {}
+    derivation = context.get("sniper_target_derivation")
+    if isinstance(derivation, dict):
+        canonical = derivation.get("canonical_target")
+        if isinstance(canonical, dict) and _candidate_key(canonical):
+            return canonical
+    final_target_resolution = context.get("final_target_resolution")
+    if isinstance(final_target_resolution, dict):
+        watch_target = final_target_resolution.get("watch_target")
+        if isinstance(watch_target, dict) and _candidate_key(watch_target):
+            return watch_target
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict):
+        nested_resolution = snapshot.get("final_target_resolution")
+        if isinstance(nested_resolution, dict):
+            watch_target = nested_resolution.get("watch_target")
+            if isinstance(watch_target, dict) and _candidate_key(watch_target):
+                return watch_target
+        candidate = snapshot.get("selected_position_candidate")
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    for key in ("selected_position_candidate", "current_core_candidate", "front_page_selected_position_candidate"):
+        candidate = context.get(key)
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            return candidate
+    return None
+
+
+def _sniper_target_derivation(context):
+    context = context or {}
+    packet = context.get("sniper_target_derivation")
+    if isinstance(packet, dict):
+        return packet
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict) and isinstance(snapshot.get("sniper_target_derivation"), dict):
+        return snapshot.get("sniper_target_derivation")
+    return {}
+
+
+def _candidate_from_derivation_step(step, canonical_key):
+    if not isinstance(step, dict):
+        return None
+    candidate = step.get("candidate")
+    if not isinstance(candidate, dict):
+        return None
+    if _candidate_key(candidate) == canonical_key or _derivation_stock_key(candidate) == canonical_key:
+        return None
+    role = _clean_text(step.get("role")) or "过程候选"
+    decision = _clean_text(step.get("decision")) or "仅过程证据"
+    enriched = dict(candidate)
+    enriched["quality_role"] = role
+    enriched["selection_quality"] = "过程证据"
+    enriched["entry_cost_state"] = "不作为最终对象"
+    enriched["source_pools"] = _merge_unique_values(enriched.get("source_pools"), step.get("source") or "sniper_target_derivation")
+    enriched["tier"] = enriched.get("tier") or "T3"
+    enriched["final_action"] = f"{role} / {decision}"
+    enriched["action_ceiling"] = "仅过程证据"
+    enriched["new_entry_action"] = f"{role} / {decision}"
+    enriched["visible_summary"] = _clean_text(step.get("reason")) or "最终解析未选为观察对象"
+    return enriched
+
+
+def _derivation_process_samples(context, target):
+    packet = _sniper_target_derivation(context)
+    if not packet:
+        return []
+    canonical_key = _candidate_key(target) or _derivation_stock_key(packet.get("canonical_target") or {})
+    samples = []
+    seen = set()
+    for step in packet.get("steps") or []:
+        sample = _candidate_from_derivation_step(step, canonical_key)
+        if not sample:
+            continue
+        key = _candidate_key(sample) or _derivation_stock_key(sample)
+        if key in seen:
+            continue
+        seen.add(key)
+        samples.append(sample)
+    return samples
+
+
+def _replace_or_prepend_candidate(candidates, target):
+    if not isinstance(target, dict) or not _candidate_key(target):
+        return list(candidates or [])
+    target_key = _candidate_key(target)
+    merged = [dict(target)]
+    for candidate in list(candidates or []):
+        if not isinstance(candidate, dict):
+            continue
+        if _candidate_key(candidate) == target_key:
+            continue
+        merged.append(candidate)
+    return merged
+
+
+def _replace_with_current_candidate(candidates, target):
+    if not isinstance(target, dict) or not _candidate_key(target):
+        return list(candidates or [])
+    target_key = _candidate_key(target)
+    for candidate in list(candidates or []):
+        if isinstance(candidate, dict) and _candidate_key(candidate) == target_key:
+            merged = dict(candidate)
+            merged.update({key: value for key, value in target.items() if value not in (None, "")})
+            return [merged]
+    return [dict(target)]
+
+
+def _align_panel_fields_to_current_watch_target(panel_fields, target):
+    if not isinstance(target, dict) or not _candidate_key(target):
+        return panel_fields
+    updated = dict(panel_fields or {})
+    primary = updated.get("primary_buy_candidate")
+    if _candidate_key(primary) == _candidate_key(target):
+        updated["primary_buy_candidate"] = target
+        updated["backup_candidate"] = None
+    else:
+        updated["primary_buy_candidate"] = None
+        updated["backup_candidate"] = target
+    return updated
+
+
 def _build_panel_fields(
     *,
     step0_prediction_cn,
@@ -294,29 +417,38 @@ def _build_diagnostics(samples):
 
 def build_candidate_quality_scorecard_payload(context):
     context = context or {}
+    current_watch_target = _current_watch_target(context)
+    derivation_packet = _sniper_target_derivation(context)
     existing_panel_fields = context.get("candidate_quality_panel_fields")
     existing_samples = context.get("candidate_quality_samples")
     existing_diagnostics = context.get("candidate_quality_scorecard_diagnostics")
     if existing_panel_fields is not None and existing_samples is not None:
+        panel_fields = _align_panel_fields_to_current_watch_target(existing_panel_fields, current_watch_target)
+        candidate_samples = _replace_with_current_candidate(existing_samples, current_watch_target)
+        candidate_samples.extend(_derivation_process_samples(context, current_watch_target))
         samples = [
             _enrich_candidate_trace_inputs(sample, context)
-            for sample in list(existing_samples or [])
+            for sample in list(candidate_samples or [])
             if isinstance(sample, dict)
         ]
         return {
-            "candidate_quality_panel_fields": sanitize_user_visible_text(existing_panel_fields),
+            "candidate_quality_panel_fields": sanitize_user_visible_text(panel_fields),
             "candidate_quality_samples": sanitize_user_visible_text(samples),
             "candidate_quality_scorecard_diagnostics": dict(existing_diagnostics or _build_diagnostics(samples)),
+            "sniper_target_derivation": derivation_packet,
         }
 
     trade_gate_open = context.get("trade_gate_open", False)
     best_stock = context.get("best_stock")
-    watch_anchor = context.get("watch_anchor")
+    watch_anchor = current_watch_target or context.get("watch_anchor")
+    if current_watch_target and _candidate_key(best_stock) != _candidate_key(current_watch_target):
+        best_stock = None
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
     position_context_provided = bool(context.get("position_context_provided", False))
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
+    display_observation_candidates = _replace_or_prepend_candidate(display_observation_candidates, current_watch_target)
     waiting_stocks = context.get("waiting_stocks", []) or []
     daily_new_entry_limit = 1 if final_gate.get("can_new_entry") or trade_gate_open else 0
 
@@ -338,6 +470,7 @@ def build_candidate_quality_scorecard_payload(context):
                 source_pool="watch_anchor",
             ),
         ]
+        + _derivation_process_samples(context, current_watch_target)
         + [
             _enrich_candidate_trace_inputs(candidate, context, source_pool="display_observation_candidates")
             for candidate in list(display_observation_candidates)
@@ -367,6 +500,7 @@ def build_candidate_quality_scorecard_payload(context):
         "candidate_quality_panel_fields": sanitize_user_visible_text(panel_fields),
         "candidate_quality_samples": sanitize_user_visible_text(samples),
         "candidate_quality_scorecard_diagnostics": _build_diagnostics(samples),
+        "sniper_target_derivation": derivation_packet,
     }
 
 

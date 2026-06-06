@@ -79,14 +79,17 @@ PROCESS_EVIDENCE_TITLES = (
     "明日观察位预计算表",
     "今日总决策面板",
     "候选主表",
+    "最终标的传导链",
+    "狙击手最终标的完整路径图",
     "候选选股轨迹",
     "候选选股轨迹明细",
 )
 
 FRONT_PAGE_HEADINGS = [
-    "## 一、交易纪律",
     "## 二、市场基底",
     "## 三、周期与主线",
+    "## 明日账户建议",
+    "## 一、交易纪律",
     "## 四、资金意图",
     "## 五、个股解读",
     "## 六、明日执行计划",
@@ -334,6 +337,7 @@ ZERO_POSITION_STRONG_BASIS_MARKERS = (
 ZERO_POSITION_WEAK_BASIS_MARKERS = (
     "市场条件未到",
     "只保留观察锚",
+    "只保留观察对象",
     "当前只有观察权",
     "等待确认",
 )
@@ -652,6 +656,8 @@ def _audit_process_evidence_headings(lines):
             continue
         if not text.startswith(("#", "*")):
             continue
+        if _is_front_page_sniper_derivation_heading(lines, index - 1, text):
+            continue
         if any(title in text for title in PROCESS_EVIDENCE_TITLES):
             findings.append(
                 _finding(
@@ -661,6 +667,35 @@ def _audit_process_evidence_headings(lines):
                 )
             )
     return findings
+
+
+def _is_front_page_sniper_derivation_heading(lines, zero_based_index, text):
+    if "最终标的传导链" not in text:
+        return False
+    if APPENDIX_HEADING in list(lines)[:zero_based_index]:
+        return False
+    title = re.sub(r"^[#*\s]+|[*\s:：]+$", "", text)
+    if title != "最终标的传导链":
+        return False
+    in_code_block = False
+    code_block_lines = []
+    for line in list(lines)[zero_based_index + 1 :]:
+        value = str(line or "").strip()
+        if value.startswith("#"):
+            break
+        if not value:
+            continue
+        if not in_code_block:
+            if value == "```text":
+                in_code_block = True
+                continue
+            if value.startswith("*"):
+                break
+            continue
+        if value == "```":
+            break
+        code_block_lines.append(value)
+    return bool(code_block_lines) and any(("最终观察锚" in value or "最终观察对象" in value) for value in code_block_lines)
 
 
 def audit_new_stock_visibility(markdown_text):
@@ -1461,7 +1496,60 @@ def _extract_execution_unique_target(lines):
             return cells[1]
         if len(cells) >= 5 and cells[0] == "只看观察锚":
             return cells[1]
+        if len(cells) >= 5 and cells[0] == "只看观察对象":
+            return cells[1]
         if len(cells) >= 5 and cells[0] == "只看条件观察对象":
+            return cells[1]
+    return ""
+
+
+def _extract_closing_action_target(lines):
+    in_checklist = False
+    for line in lines:
+        text = str(line or "")
+        if text.strip() == "### 明日行动清单":
+            in_checklist = True
+            continue
+        if in_checklist and text.startswith("#"):
+            break
+        if not in_checklist:
+            continue
+        cells = _split_md_row(text)
+        if len(cells) >= 2 and cells[0] == "最终对象":
+            return cells[1]
+    return ""
+
+
+def _extract_opening_verdict_final_object(lines):
+    in_opening = False
+    for line in lines:
+        text = str(line or "")
+        if text.strip() == "## 日报裁决总览":
+            in_opening = True
+            continue
+        if in_opening and text.startswith("## "):
+            break
+        if not in_opening:
+            continue
+        cells = _split_md_row(text)
+        if len(cells) >= 2 and cells[0] == "最终对象":
+            return cells[1]
+    return ""
+
+
+def _extract_final_solution_result(lines):
+    in_solution = False
+    for line in lines:
+        text = str(line or "")
+        if text.strip() == "## 最终标的解题过程":
+            in_solution = True
+            continue
+        if in_solution and text.startswith("## "):
+            break
+        if not in_solution:
+            continue
+        cells = _split_md_row(text)
+        if len(cells) >= 2 and cells[0] == "最终结果":
             return cells[1]
     return ""
 
@@ -1544,7 +1632,7 @@ def _final_summary_has_conditional_zero_plan(lines):
     if "0% / 不参与" not in style:
         return False
     text = "\n".join(str(line or "") for line in list(lines or []))
-    has_observation_prefix = any(marker in str(target or "") for marker in ("条件观察：", "观察锚："))
+    has_observation_prefix = any(marker in str(target or "") for marker in ("条件观察：", "观察锚：", "观察对象："))
     has_participation_plan = any(marker in text for marker in ("条件50%", "50%标准进攻", "才评估50%标准进攻"))
     return has_observation_prefix and has_participation_plan
 
@@ -1749,13 +1837,18 @@ def _audit_position_state_rendering(lines):
     return []
 
 
-def _is_empty_target(value):
+def _target_text_without_role(value):
     text = str(value or "").strip()
-    if text in ("", "-", "暂无", "不做"):
+    return re.sub(r"^(?:条件观察|观察锚|观察对象|条件执行对象|明日执行对象|最终执行对象|执行对象|执行目标)[:：]\s*", "", text).strip()
+
+
+def _is_empty_target(value):
+    text = _target_text_without_role(value)
+    if text in ("", "-", "无", "暂无", "不做", "无明日执行对象", "无执行对象", "无执行目标"):
         return True
     if re.search(r"(?<!\d)\d{6}(?!\d)", text):
         return False
-    return "暂无" in text or "不做" in text
+    return "暂无" in text or "不做" in text or "无明日执行对象" in text or "无执行对象" in text or "无执行目标" in text
 
 
 def _is_empty_execution_target(value):
@@ -1774,6 +1867,15 @@ def _extract_front_kv_value(front_lines, label):
 def _audit_zero_position_decision_attribution(lines):
     front = _front_page_lines(lines)
     if not _final_summary_is_zero_position(front):
+        return []
+    front_execution_object = _extract_front_execution_object(lines)
+    front_text = "\n".join(str(line or "") for line in front)
+    if (
+        front_execution_object
+        and _target_identity(front_execution_object)
+        and "## B档执行条件" in front_text
+        and "条件满足才B档执行" in front_text
+    ):
         return []
 
     required_labels = ("明日仓位", "执行目标", "不参与依据", "无执行目标原因", "责任归因")
@@ -1800,7 +1902,7 @@ def _audit_zero_position_decision_attribution(lines):
         findings.append(
             _finding(
                 "zero_position_execution_target_conflict",
-                "0%不参与时执行目标必须写无，具体对象只能写观察锚",
+                "0%不参与时执行目标必须写无，具体对象只能写观察对象",
                 line=offsets.get("执行目标"),
             )
         )
@@ -1815,28 +1917,34 @@ def _audit_zero_position_decision_attribution(lines):
             )
         )
 
-    observation_anchor, anchor_offset = _extract_front_kv_value(front, "观察锚")
+    observation_anchor, anchor_offset = _extract_front_kv_value(front, "观察对象")
+    if not observation_anchor:
+        observation_anchor, anchor_offset = _extract_front_kv_value(front, "观察锚")
     if observation_anchor and not _is_empty_target(observation_anchor):
         basis = values["不参与依据"]
         if not _has_strong_zero_position_basis(basis):
             findings.append(
                 _finding(
                     "zero_position_strong_basis_missing",
-                    "0%不参与仍保留观察锚时，必须写清弱市场、冰点、趋势失效、关键数据不完整、账户限制或旧仓处理等强理由",
+                    "0%不参与仍保留观察对象时，必须写清弱市场、冰点、趋势失效、关键数据不完整、账户限制或旧仓处理等强理由",
                     line=offsets.get("不参与依据") or anchor_offset,
                 )
             )
-        lifecycle_labels = ("观察锚性质", "恢复评估条件", "观察锚去留")
+        lifecycle_label_groups = (
+            ("观察对象性质", "观察锚性质"),
+            ("恢复评估条件",),
+            ("观察对象去留", "观察锚去留"),
+        )
         missing_lifecycle = [
-            label
-            for label in lifecycle_labels
-            if not str(_extract_front_kv_value(front, label)[0] or "").strip()
+            labels[0]
+            for labels in lifecycle_label_groups
+            if not any(str(_extract_front_kv_value(front, label)[0] or "").strip() for label in labels)
         ]
         if missing_lifecycle:
             findings.append(
                 _finding(
                     "zero_position_observation_anchor_lifecycle_missing",
-                    "0%不参与仍保留观察锚时，必须写观察锚性质、恢复评估条件和观察锚去留",
+                    "0%不参与仍保留观察对象时，必须写观察对象性质、恢复评估条件和观察对象去留",
                     line=anchor_offset,
                 )
             )
@@ -1845,12 +1953,150 @@ def _audit_zero_position_decision_attribution(lines):
 
 
 def _target_identity(value):
-    text = str(value or "").strip()
-    text = re.sub(r"^(?:条件观察|观察锚)[:：]\s*", "", text)
+    text = _target_text_without_role(value)
+    if _is_empty_target(text):
+        return ""
     match = re.search(r"(?<!\d)(\d{6})(?!\d)", text)
     if match:
         return match.group(1)
     return text
+
+
+def _report_final_object_sources(lines):
+    front = _front_page_lines(lines)
+    appendix = _appendix_lines(lines)
+    sources = []
+
+    for label, value in (
+        ("opening_verdict", _extract_opening_verdict_final_object(front)),
+        ("final_solution", _extract_final_solution_result(front)),
+        ("opening_execution", _extract_front_execution_object(lines)),
+        ("execution_plan", _extract_execution_unique_target(front)),
+        ("final_object", _extract_final_unique_target(front)),
+        ("next_day_action", _extract_closing_action_target(front)),
+    ):
+        identity = _target_identity(value)
+        if identity:
+            sources.append((label, identity, value))
+
+    for identity in _extract_sniper_derivation_final_identities(front):
+        sources.append(("process_graph", identity, identity))
+    for identity in _extract_sniper_derivation_final_identities(appendix):
+        sources.append(("process_graph", identity, identity))
+    return sources
+
+
+def _extract_front_execution_object(lines):
+    for line in _front_page_lines(lines):
+        cells = _split_md_row(line)
+        if len(cells) >= 2 and cells[0] == "明日执行对象":
+            return cells[1]
+    return ""
+
+
+def _extract_audit_layer_execution_object(lines):
+    in_audit_layer = False
+    for line in lines:
+        text = str(line or "")
+        if text.strip() == "## 推导审计层":
+            in_audit_layer = True
+            continue
+        if in_audit_layer and text.startswith("## "):
+            break
+        if not in_audit_layer:
+            continue
+        if "条件执行对象：" in text:
+            return text.split("条件执行对象：", 1)[-1].strip()
+    return ""
+
+
+def _audit_two_layer_execution_object_consistency(lines):
+    front_object = _extract_front_execution_object(lines)
+    if not front_object:
+        return []
+    audit_object = _extract_audit_layer_execution_object(lines)
+    if not audit_object:
+        return []
+    front_identity = _target_identity(front_object)
+    audit_identity = _target_identity(audit_object)
+    if front_identity and audit_identity and front_identity != audit_identity:
+        return [
+            _finding(
+                "two_layer_execution_object_mismatch",
+                f"front execution object {front_object} conflicts with audit-layer object {audit_object}",
+            )
+        ]
+    return []
+
+
+def _audit_b_level_conditions(lines):
+    front_text = "\n".join(str(line or "") for line in _front_page_lines(lines))
+    if "B档执行" not in front_text:
+        return []
+    if "## B档执行条件" in front_text and "低开承接型" in front_text and "主动进攻型" in front_text:
+        return []
+    return [
+        _finding(
+            "b_level_conditions_missing",
+            "front page mentions B档执行 but does not render both B档 trigger conditions",
+        )
+    ]
+
+
+def _audit_front_execution_object_negation(lines):
+    front_object = _extract_front_execution_object(lines)
+    if not front_object or not _target_identity(front_object):
+        return []
+    findings = []
+    negation_markers = ("不是执行对象", "不能定义明日执行对象", "不涉及明日执行对象")
+    for offset, line in enumerate(_front_page_lines(lines), 1):
+        text = str(line or "")
+        if not any(marker in text for marker in negation_markers):
+            continue
+        findings.append(
+            _finding(
+                "front_execution_object_negated",
+                "front page declares 明日执行对象 but later negates that execution object",
+                line=offset,
+            )
+        )
+    return findings
+
+
+def _audit_front_execution_object_downgrade(lines):
+    front_object = _extract_front_execution_object(lines)
+    front_identity = _target_identity(front_object)
+    if not front_identity or _is_empty_target(front_object):
+        return []
+    downgrade_markers = (
+        "最终观察锚",
+        "身份=观察锚",
+        "只看观察锚",
+        "观察锚：",
+        "0%只观察",
+        "只观察",
+        "不是执行目标",
+        "不是执行对象",
+        "不能转成新增参与",
+        "缺少可执行对象",
+    )
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        if "明日执行对象" in text:
+            continue
+        if front_identity not in _target_identity(text) and front_identity not in text:
+            continue
+        if not any(marker in text for marker in downgrade_markers):
+            continue
+        findings.append(
+            _finding(
+                "front_execution_object_downgraded",
+                "front page declares 明日执行对象 but the report later downgrades the same object to observation-only",
+                line=offset,
+            )
+        )
+    return findings
 
 
 def _extract_observation_anchor_identity(lines):
@@ -1877,13 +2123,168 @@ def _extract_first_watch_order_identity(lines):
     return ""
 
 
+def _extract_sniper_derivation_final_identity(lines):
+    identities = _extract_sniper_derivation_final_identities(lines)
+    return identities[0] if identities else ""
+
+
+def _extract_sniper_derivation_final_identities(lines, *, include_empty=False):
+    text = "\n".join(str(line or "") for line in lines)
+    identities = []
+    for pattern in (
+        r"最终观察锚[:：]\s*([^\n,，]+)",
+        r"最终观察对象[:：]\s*([^\n,，]+)",
+        r"最终对象[:：]\s*([^\n,，|]+)",
+        r"最终对象=([^\n]+?)\s+身份=观察锚",
+        r"最终对象=([^\n]+?)\s+身份=观察对象",
+        r"最终对象=([^\n]+?)\s+身份=执行对象",
+        r"最终执行对象[:：]\s*([^\n,，]+)",
+        r"canonical_target=([^\n]+?)\s+role=观察锚",
+        r"canonical_target=([^\n]+?)\s+role=观察对象",
+        r"canonical_target=([^\n]+?)\s+role=执行对象",
+    ):
+        for match in re.finditer(pattern, text):
+            raw_target = str(match.group(1) or "").strip()
+            identity = _target_identity(raw_target)
+            if not identity and include_empty:
+                identity = _target_text_without_role(raw_target) or "暂无"
+            if identity and identity not in identities:
+                identities.append(identity)
+    return identities
+
+
+def _audit_final_object_identity_consistency(lines):
+    front = _front_page_lines(lines)
+    sources = _report_final_object_sources(lines)
+    opening_target = _extract_opening_verdict_final_object(front)
+    if opening_target and _is_empty_target(opening_target) and sources:
+        later_detail = "；".join(f"{label}={value}" for label, _, value in sources)
+        return [
+            _finding(
+                "opening_final_object_empty_conflict",
+                f"opening final object is empty but later report surfaces name a final object: {later_detail}",
+            )
+        ]
+
+    unique = []
+    for source in sources:
+        if source[1] not in [item[1] for item in unique]:
+            unique.append(source)
+    if len(unique) <= 1:
+        return []
+    detail = "；".join(f"{label}={value}" for label, _, value in unique)
+    return [
+        _finding(
+            "final_object_identity_conflict",
+            f"final object identity conflicts across report surfaces: {detail}",
+        )
+    ]
+
+
+def _audit_derivation_audit_rejection_consistency(lines):
+    final_sources = _report_final_object_sources(lines)
+    final_identities = []
+    for _, identity, _ in final_sources:
+        if identity not in final_identities:
+            final_identities.append(identity)
+    if not final_identities:
+        return []
+    findings = []
+    in_audit_layer = False
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        if text.strip() == "## 推导审计层":
+            in_audit_layer = True
+            continue
+        if in_audit_layer and text.startswith("## "):
+            break
+        if not in_audit_layer:
+            continue
+        if "淘汰" not in text:
+            continue
+        rejected = [identity for identity in final_identities if identity in text]
+        if not rejected:
+            continue
+        findings.append(
+            _finding(
+                "final_object_rejected_in_derivation_audit",
+                f"final object appears in derivation rejected list: {', '.join(rejected)}",
+                line=offset,
+            )
+        )
+    return findings
+
+
+def _audit_process_candidate_loss_reasons(lines):
+    circular_reason_markers = (
+        "最终解析未选为",
+        "未选为最终",
+        "原因=进入最终观察对象",
+        "原因=进入最终执行对象",
+    )
+    findings = []
+    in_graph = False
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        if "狙击手最终标的完整路径图" in text or "最终标的传导链" in text:
+            in_graph = True
+            continue
+        if in_graph and text.startswith("## "):
+            in_graph = False
+        if not in_graph:
+            continue
+        if "候选=" not in text and "过程候选 /" not in text:
+            continue
+        if not any(marker in text for marker in circular_reason_markers):
+            continue
+        findings.append(
+            _finding(
+                "process_candidate_loss_reason_circular",
+                "process candidate replacement reason must cite same-pool dimensions, not restate that it was not selected",
+                line=offset,
+            )
+        )
+    return findings
+
+
+def _audit_sniper_target_derivation_consistency(lines):
+    front = _front_page_lines(lines)
+    appendix = _appendix_lines(lines)
+    chain_identities = _extract_sniper_derivation_final_identities(front, include_empty=True)
+    for identity in _extract_sniper_derivation_final_identities(appendix, include_empty=True):
+        if identity not in chain_identities:
+            chain_identities.append(identity)
+    if not chain_identities:
+        return []
+    final_target = _extract_final_unique_target(front)
+    final_identity = _target_identity(final_target)
+    findings = []
+    if final_identity and not _is_empty_target(final_target):
+        mismatched = [identity for identity in chain_identities if identity != final_identity]
+        if mismatched:
+            findings.append(
+                _finding(
+                    "sniper_target_derivation_mismatch",
+                    f"front-page final observation target {final_target} conflicts with derivation chain final target {mismatched[0]}",
+                )
+            )
+    elif len(chain_identities) > 1:
+        findings.append(
+            _finding(
+                "sniper_target_derivation_mismatch",
+                f"derivation chains contain conflicting final targets {', '.join(chain_identities)}",
+            )
+        )
+    return findings
+
+
 def _audit_observation_anchor_consistency(lines):
     front = _front_page_lines(lines)
     final_target = _extract_final_unique_target(front)
     final_identity = _target_identity(final_target)
     if not final_identity or _is_empty_target(final_target):
         return []
-    if not any(marker in str(final_target or "") for marker in ("观察锚", "条件观察")):
+    if not any(marker in str(final_target or "") for marker in ("观察锚", "观察对象", "条件观察")):
         return []
     findings = []
     appendix = _appendix_lines(lines)
@@ -1913,6 +2314,13 @@ def _audit_unique_focus(lines):
     final_target = _extract_final_unique_target(front)
     execution_empty = _is_empty_target(execution_target)
     final_empty = _is_empty_target(final_target)
+    final_is_zero_observation = (
+        _final_summary_is_zero_position(front)
+        and not final_empty
+        and any(marker in str(final_target or "") for marker in ("观察对象", "观察锚", "条件观察"))
+    )
+    if execution_empty and final_is_zero_observation:
+        return findings
     if execution_empty != final_empty:
         findings.append(
             _finding(
@@ -2037,6 +2445,10 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_execution_windows(lines))
     findings.extend(_audit_execution_conditions(lines))
     findings.extend(_audit_unique_action_target_contract(lines))
+    findings.extend(_audit_b_level_conditions(lines))
+    findings.extend(_audit_two_layer_execution_object_consistency(lines))
+    findings.extend(_audit_front_execution_object_negation(lines))
+    findings.extend(_audit_front_execution_object_downgrade(lines))
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_front_page_duplicate_long_cells(lines))
@@ -2056,6 +2468,10 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_anti_noise_language(lines))
     findings.extend(_audit_unique_focus(lines))
     findings.extend(audit_new_stock_visibility(markdown)["findings"])
+    findings.extend(_audit_final_object_identity_consistency(lines))
+    findings.extend(_audit_derivation_audit_rejection_consistency(lines))
+    findings.extend(_audit_process_candidate_loss_reasons(lines))
+    findings.extend(_audit_sniper_target_derivation_consistency(lines))
     findings.extend(_audit_observation_anchor_consistency(lines))
     findings.extend(_audit_zero_position_decision_attribution(lines))
     findings.extend(_audit_zero_position_tomorrow_action_consistency(lines))

@@ -280,6 +280,106 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("- 持仓动作：已有仓按失效线处理，可卖300，不可卖100", rendered)
         self.assertIn("| 上峰水泥(000672) | 实际可买 |  |  | 400 | 300 | 中 | 等确认 | 修复观察 |", rendered)
 
+    def test_candidate_quality_node_realigns_stale_panel_fields_from_derivation_packet(self):
+        lines = render_action_plan_section(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "account_attention_load": "无持仓负担",
+                    "holding_priority_action": "无旧仓时只等参与窗口",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": {"name": "上海石化", "code": "600688"},
+                    "backup_candidate": {"name": "上海石化", "code": "600688"},
+                },
+                "candidate_quality_samples": [
+                    {"name": "上海石化", "code": "600688", "selection_quality": "中", "entry_cost_state": "确认中"},
+                ],
+                "sniper_target_derivation": {
+                    "schema_version": "sniper_target_derivation.v1",
+                    "canonical_target": {"name": "豫能控股", "code": "001896", "role": "观察锚"},
+                    "final_action": {"position_pct": 0, "action": "只观察，不新增参与"},
+                    "compact_ascii": [
+                        "原始候选",
+                        "|",
+                        "+-- 上海石化(600688): 过程候选 / 被替换",
+                        "|",
+                        "`-- 最终观察锚: 豫能控股(001896), 0%只观察",
+                    ],
+                    "steps": [
+                        {
+                            "step_id": "T0",
+                            "source": "execution_stage_context.watch_anchor",
+                            "candidate": {"name": "上海石化", "code": "600688"},
+                            "role": "过程候选",
+                            "decision": "被替换",
+                            "reason": "最终解析未选为观察锚",
+                        }
+                    ],
+                },
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 补位对象 | 豫能控股(001896) |", rendered)
+        self.assertIn("| 豫能控股(001896) |", rendered)
+        self.assertIn("上海石化(600688): 过程候选 / 被替换", rendered)
+        self.assertIn("| 上海石化(600688) | 实际可买 |  |  | 0 | 0 | 过程证据 | 不作为最终对象 | 不参与 | 过程候选 / 被替换 |", rendered)
+        self.assertNotIn("| 主买对象 | 上海石化(600688) |", rendered)
+        self.assertNotIn("| 补位对象 | 上海石化(600688) |", rendered)
+
+    def test_candidate_quality_node_uses_final_resolution_when_derivation_packet_is_empty(self):
+        result = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "account_attention_load": "无持仓负担",
+                    "holding_priority_action": "无旧仓时只等观察窗口",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": {"name": "上海石化", "code": "600688"},
+                    "backup_candidate": {"name": "上海石化", "code": "600688"},
+                },
+                "candidate_quality_samples": [
+                    {"name": "上海石化", "code": "600688", "selection_quality": "中", "entry_cost_state": "确认中"},
+                ],
+                "sniper_target_derivation": {},
+                "final_target_resolution": {
+                    "watch_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                },
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("最终观察对象: 豫能控股(001896)", rendered)
+        self.assertNotIn("最终观察对象: 暂无", rendered)
+
+    def test_candidate_quality_node_does_not_render_empty_derivation_chain_without_final_resolution(self):
+        result = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "account_attention_load": "无持仓负担",
+                    "holding_priority_action": "无旧仓时只等观察窗口",
+                    "daily_new_entry_limit": 0,
+                    "backup_candidate": {"name": "豫能控股", "code": "001896"},
+                },
+                "candidate_quality_samples": [
+                    {"name": "豫能控股", "code": "001896", "selection_quality": "中", "entry_cost_state": "确认中"},
+                ],
+                "sniper_target_derivation": {},
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertNotIn("最终标的传导链", rendered)
+        self.assertNotIn("最终观察对象: 暂无", rendered)
+
     def test_candidate_quality_node_uses_normal_heading_when_rendered_without_overview(self):
         lines = render_action_plan_section(
             {

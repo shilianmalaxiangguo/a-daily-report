@@ -390,6 +390,299 @@ Only search the final extreme-conviction list for extra comparison rows, so a ta
 Search existing target-date candidate, hot-list, turnover, and stock-info facts; render the target as a comparison row, then keep it observation-only when risk prices are incomplete.
 ```
 
+## Scenario: Appendix Fact Normalization And Current Target Priority
+
+### 1. Scope / Trigger
+
+Use this contract when changing daily report appendix sections, market-analysis
+nodes, process-evidence tables, quant-environment rendering, or final
+observation target panels.
+
+This scenario exists to prevent four report-output failures:
+
+- flat sector turnover history rendered as duplicate zero-share rows,
+- absolute turnover wording hiding target-date shrinkage facts,
+- no-trade process rows retaining stale intraday participation evidence,
+- stale candidate records overriding the current resolved observation target.
+
+### 2. Signatures
+
+`recent_sector_turnover_history` may arrive in grouped or flat form:
+
+```python
+[
+    {
+        "sector_name": "电力",
+        "history": [
+            {"date": "YYYY-MM-DD", "turnover_share_pct": 2.8},
+            {"date": "YYYY-MM-DD", "turnover_share_pct": 3.5},
+        ],
+    },
+    {"date": "YYYY-MM-DD", "sector_name": "半导体", "turnover_share_pct": 5.8},
+]
+```
+
+Market turnover comparison may use direct market history or an existing
+target-date Top50 share series:
+
+```python
+{
+    "total_turnover": 27791.64,
+    "market_turnover_history": [
+        {"date": "YYYY-MM-DD", "turnover": 32643.59},
+    ],
+    "top50_turnover_share_series": {
+        "rows": [
+            {"trade_date": "YYYY-MM-DD", "market_amount_yi": 31531.25},
+            {"trade_date": "YYYY-MM-DD", "market_amount_yi": 27791.64},
+        ]
+    },
+}
+```
+
+Current observation target priority:
+
+```python
+[
+    "final_target_resolution.watch_target",
+    "market_research_snapshot.selected_position_candidate",
+    "selected_position_candidate",
+    "current_core_candidate",
+    "decision-ledger fallback only when no current candidate context exists",
+]
+```
+
+No-trade process rows must normalize derived fields before rendering:
+
+```python
+{
+    "participation_window_type": "no_trade",
+    "position_plan_pct": 0,
+    "auction_script": "只观察，不新增参与",
+    "first_minutes_script": "只观察，不新增参与",
+    "board_script": "只观察，不新增参与",
+    "reseal_script": "只观察，不新增参与",
+}
+```
+
+### 3. Contracts
+
+- Sector-turnover trend builders must normalize mixed flat/grouped history by
+  sector before computing trend rows.
+- Top-N sector turnover output must compute all normalized sector candidates,
+  sort by latest positive share, and only then slice the display list.
+- A sector with target-date positive share must not render as `0.0%` or
+  `待累计` because the input used flat rows.
+- Market-analysis volume text must prefer target-date relative comparison
+  labels from `build_turnover_comparison(...)` when available. The absolute
+  turnover condition may follow as context, but it must not hide continuous
+  shrinkage or pullback.
+- If `market_turnover_history` is missing but
+  `top50_turnover_share_series.rows[*].market_amount_yi` is present for the
+  target date, use that existing same-date series before falling back to
+  absolute-only wording.
+- Quant-environment rendering must support both nested
+  `{"environment": {...}}` and detector-top-level `{summary, modes, action}`
+  payloads.
+- Generic no-trade process rows without a stock identity, or repeated rows that
+  add no new price/window/cancellation facts, must be compacted before the
+  appendix table is rendered.
+- A no-trade process row must not keep stale `50%`, timed entry windows,
+  auction/reseal participation scripts, or board-action wording.
+- Final decision panels and appendix observation anchors must prefer the
+  current resolved target over same-day stale ledger or scorecard fallbacks.
+- Current observation-only rows still count as current context. Do not refill
+  the panel with a stale core candidate merely because the current rows are not
+  participating.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| `recent_sector_turnover_history` contains flat rows | Group by sector, sort each history by date, then compute trend |
+| Same sector appears in grouped and flat input | Merge by sector identity and avoid duplicate display rows |
+| More than five sectors are available | Rank all computed sectors by latest share before slicing Top 5 |
+| Latest sector share is positive | Render the latest share and trend sequence, not `0.0%` / `待累计` |
+| Direct market history is absent but Top50 series has `market_amount_yi` | Build relative turnover comparison from the existing target-date series |
+| Relative comparison says turnover is shrinking while absolute level is high | Render shrinkage/pullback first, then absolute condition |
+| Quant detector returns top-level `summary`, `modes`, `action` | Render the detected summary and action instead of `待识别` |
+| No-trade row has no stock identity and repeats generic scripts | Drop the duplicate row from process evidence |
+| No-trade row has stock identity but stale timed scripts | Keep the row only after rewriting scripts to observation-only text |
+| Final target resolution names one watch target | Use that target for T-116-style panels and appendix anchors |
+| Ledger fallback names a different stock while current context exists | Keep the current target; ledger data remains fallback only |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good flat sector history | Flat `电力` and `半导体` rows with positive shares | One row per sector with real share sequence |
+| Good Top 5 ranking | Six normalized sectors where the sixth input row has the highest latest share | Highest latest-share sectors appear after sorting, independent of input order |
+| Base short sector history | Only one positive day for a sector | Render latest share and mark trend as pending or insufficient, without duplicating the sector |
+| Good shrinkage wording | Current turnover is high but recent target-date series falls sharply | Volume line starts with continuous pullback/shrinkage label |
+| Good quant payload | Detector returns top-level action advice | Quant appendix renders current summary and action advice |
+| Good observation target | Runtime resolves `豫能控股(001896)` while stale fallback has `上海石化(600688)` | Current panel and appendix anchor render `豫能控股` |
+| Bad flat-sector handling | Flat rows are treated as grouped rows with missing `history` | Duplicate sectors render `0.0%` and `待累计` |
+| Bad absolute-only volume | `27791.64亿元` is called abundant without mentioning sharp pullback | User cannot see the shrinkage fact |
+| Bad stale process evidence | `no_trade` row still shows `50%` or timed entry scripts | Report implies a participation plan that no longer exists |
+| Bad stale target fallback | Same-day ledger target replaces runtime-resolved target | Process evidence contradicts the final observation target |
+
+### 6. Tests Required
+
+When these surfaces change, add or update tests that assert:
+
+- `tests.test_market_activity_domain_report_sections` covers flat sector
+  history normalization, deduplication, and non-zero latest shares.
+- `tests.test_sector_fund_flow_enhancer` covers quant-environment top-level and
+  nested payload shapes.
+- `tests.test_market_analysis_builder` covers relative turnover shrinkage from
+  both `market_turnover_history` and `top50_turnover_share_series`.
+- `tests.test_two_market_turnover_node_runtime` covers target-date fallback
+  history extraction from existing Top50 series rows.
+- `tests.test_candidate_selection_stage` covers no-trade process-row compaction
+  and stale script removal.
+- `tests.test_report_runtime` and `tests.test_front_page_v2_renderer` cover
+  current target priority over stale fallback records.
+
+For a rendered-report behavior change, also run the narrow replay command for
+the target date when the required historical snapshot exists.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+for item in rows[:5]:
+    build_sector_turnover_trend(item)
+```
+
+Why wrong: flat rows do not have grouped `history`, and slicing before ranking
+can drop the strongest latest-share sector.
+
+#### Correct
+
+```python
+normalized = _normalize_sector_turnover_history_rows(rows)
+summary_rows = [build_sector_turnover_trend(item) for item in normalized]
+summary_rows = [row for row in summary_rows if row.latest_share_pct > 0]
+summary_rows = sorted(summary_rows, key=lambda row: row.latest_share_pct, reverse=True)[:5]
+```
+
+Why correct: every sector is computed once, ranked by current share, and only
+then limited for display.
+
+#### Wrong
+
+```text
+量能水平: 27791.64亿元，量能充沛，但赚钱效应不足
+```
+
+when same-date history shows a large turnover pullback.
+
+#### Correct
+
+```text
+量能水平: 27791.64亿元，成交额冲高后回落；量能充沛，但赚钱效应不足
+```
+
+Why correct: the user sees both the relative contraction and the absolute
+context.
+
+## Scenario: Sniper Target Derivation Packet
+
+### 1. Scope / Trigger
+
+Use this contract when changing daily-report final target resolution, front-page
+target explanation, candidate-quality process evidence, action-plan rendering,
+appendix observation anchors, or report acceptance checks.
+
+### 2. Signatures
+
+Runtime must build and store one canonical packet after
+`final_target_resolution` exists:
+
+```python
+{
+    "schema_version": "sniper_target_derivation.v1",
+    "target_date": "YYYY-MM-DD",
+    "canonical_target": {"code": "001896", "name": "豫能控股", "role": "观察对象"},
+    "final_action": {
+        "position_pct": 0,
+        "action": "只观察，不新增参与",
+        "reason": "str",
+    },
+    "steps": [
+        {
+            "step_id": "T0",
+            "label": "原始候选",
+            "source": "execution_stage_context.best_stock",
+            "candidate": {"code": "600688", "name": "上海石化"},
+            "role": "过程候选",
+            "decision": "被替换",
+            "reason": "最终解析未选为观察对象",
+        },
+        {
+            "step_id": "T3",
+            "label": "最终对象解析",
+            "source": "final_target_resolution.watch_target",
+            "candidate": {"code": "001896", "name": "豫能控股"},
+            "role": "观察对象",
+            "decision": "最终",
+            "reason": "str",
+        },
+    ],
+    "warnings": ["str"],
+    "compact_ascii": ["str"],
+    "full_ascii": ["str"],
+}
+```
+
+Store the same packet under:
+
+- `data["sniper_target_derivation"]`
+- `execution_stage_context["sniper_target_derivation"]`
+- `market_research_snapshot["sniper_target_derivation"]`
+
+### 3. Contracts
+
+- `canonical_target` is the only final observation target for final-action
+  surfaces. It must prefer `final_target_resolution.watch_target`, then
+  `display_target`, then `new_entry_target`, then the selected/current
+  candidate.
+- Front-page final-target solution must render the packet's compact ASCII chain.
+- Appendix must render the packet's full ASCII chain before process tables.
+- Candidate-quality and action-plan process evidence may render other candidates
+  only as role-labeled nodes such as `过程候选`, `被替换`, `备选观察`, or
+  `仅过程证据`.
+- A stale `best_stock`, `watch_anchor`, or prebuilt
+  `candidate_quality_panel_fields` value must not become a final observation
+  target when the packet canonical target differs.
+- Current selected/current-core candidates are valid observation context even
+  when position is 0%. Do not refill them from stale process candidates solely
+  because the current result is observation-only.
+- Acceptance audit must compare the rendered final observation target with the
+  derivation-chain final target. Process candidates may differ; the final target
+  may not.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| `best_stock/watch_anchor` is 上海石化 and `final_target_resolution.watch_target` is 豫能控股 | Render 豫能控股 as the only final observation target; render 上海石化 only as `过程候选 / 被替换` |
+| Candidate-quality prebuilt fields contain a stale local stock | Replace final panel identity with `canonical_target`; keep stale stock only as process evidence when the packet has that node |
+| Front page receives the packet | Render compact ASCII before or inside the final-target explanation |
+| Appendix receives the packet | Render full ASCII chain before detailed process tables |
+| Acceptance audit sees final target and chain target differ | Return `sniper_target_derivation_mismatch` |
+
+### 5. Tests Required
+
+- Runtime packet build/store tests for `sniper_target_derivation.v1`.
+- Runtime full-report test where local process candidate differs from the
+  canonical target.
+- Front-page renderer test for compact chain consumption.
+- Candidate-quality/action-plan renderer test that keeps non-final candidates as
+  process evidence.
+- Acceptance audit tests for matching and mismatching chain final targets.
+
 ## Full Attack Roadmap
 
 ### Phase 1: Honest Coverage And Stable Closed Loop

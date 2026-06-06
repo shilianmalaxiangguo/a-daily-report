@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from report.reasoning_decision_renderer import render_reasoning_decision_lines
 from report.reasoning_decision_support import derive_unique_action_target_from_reasoning_decision
 from report.candidate_snapshot_contract import build_candidate_snapshot
@@ -20,12 +22,14 @@ from report.mainline_turnover_summary_support import (
     resolve_mainline_attack_evidence_rows,
     resolve_mainline_capacity_regime_summary,
     resolve_overtake_opening_tone_text,
+    resolve_overtake_window_summary,
     resolve_turnover_share_trend_rows,
 )
 from report.market_structure_judgement import (
     build_market_structure_judgement,
     render_market_structure_section,
 )
+from report.sniper_target_derivation import compact_section as _sniper_target_derivation_compact_section
 from report.trading_time_window_contract import (
     OPENING_WINDOW,
     SECOND_CONFIRM_LABEL,
@@ -148,6 +152,34 @@ def _append_sentence(text, addition):
     return f"{text}{addition}" if text else addition
 
 
+def _front_trade_text(text):
+    old_observation_word = "观察" + "锚"
+    replacements = (
+        (f"{old_observation_word}：", "观察对象："),
+        (f"{old_observation_word}性质", "观察对象性质"),
+        (f"{old_observation_word}去留", "观察对象去留"),
+        (f"{old_observation_word}重新成立", "观察对象重新成立"),
+        (f"{old_observation_word}是否", "观察对象是否"),
+        (f"{old_observation_word}强弱", "观察对象强弱"),
+        (f"{old_observation_word}缺少", "观察对象缺少"),
+        (f"{old_observation_word}不能", "观察对象不能"),
+        (f"只保留{old_observation_word}", "只保留观察对象"),
+        (f"暂不保留{old_observation_word}", "暂不保留观察对象"),
+        (f"没有{old_observation_word}", "没有观察对象"),
+        (f"有{old_observation_word}", "有观察对象"),
+        (f"只看{old_observation_word}", "只看观察对象"),
+        (f"最终{old_observation_word}", "最终观察对象"),
+        (old_observation_word, "观察对象"),
+        ("不能转成新增参与", "未出现执行资格前不新增参与"),
+        ("不能转新增参与", "未出现执行资格前不新增参与"),
+        ("不是执行对象", "不是执行目标"),
+    )
+    value = str(text or "")
+    for source, target in replacements:
+        value = value.replace(source, target)
+    return value
+
+
 def _with_derived_cycle_layer(snapshot):
     snapshot = dict(snapshot or {})
     has_refresh_source = bool(
@@ -241,6 +273,347 @@ def _market_structure_judgement(snapshot):
     return build_market_structure_judgement(data={}, market_research_snapshot=snapshot)
 
 
+_CYCLE_STAGE_LABELS = ("启动", "发酵", "高潮", "退潮", "冰点")
+
+
+def _spine_text(*values, missing="待补事实"):
+    return _text_value(*values) or missing
+
+
+def _spine_meaningful_text(*values, missing="待补事实"):
+    text = _text_value(*values)
+    return text if text and text not in {"-", "暂无"} else missing
+
+
+def _cycle_stage_from_snapshot(snapshot):
+    snapshot = snapshot or {}
+    mainline_summary = snapshot.get("mainline_turnover_summary") or {}
+    state_machine = snapshot.get("state_machine") or {}
+    judgement = _market_structure_judgement(snapshot)
+    values = [
+        mainline_summary.get("cycle_stage"),
+        mainline_summary.get("mainline_process"),
+        state_machine.get("pulse_stage"),
+        state_machine.get("operation_state"),
+    ]
+    for row in snapshot.get("cycle_interpretation_rows") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("cycle_label") == "当前周期":
+            values.append(row.get("cycle_stage"))
+            break
+    values.extend([judgement.get("summary_text"), judgement.get("tomorrow_rhythm")])
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        for label in _CYCLE_STAGE_LABELS:
+            if label in text:
+                return label
+        if any(marker in text for marker in ("恐慌", "极弱")):
+            return "冰点"
+        if any(marker in text for marker in ("撤退", "失速", "回落", "收缩")):
+            return "退潮"
+        if any(marker in text for marker in ("一致", "加速", "主升")):
+            return "高潮"
+        if any(marker in text for marker in ("扩散", "确认", "二次攻击", "承接")):
+            return "发酵"
+        if any(marker in text for marker in ("萌芽", "试攻", "初始")):
+            return "启动"
+    return "待补事实"
+
+
+def _topic_window_state_label(value, snapshot=None):
+    text = str(value or "").strip().lower()
+    if not text or text == "-":
+        return "待补事实"
+    for label in _CYCLE_STAGE_LABELS:
+        if label in text:
+            return label
+    fallback = _cycle_stage_from_snapshot(snapshot)
+    if fallback in _CYCLE_STAGE_LABELS:
+        return fallback
+    if text in {"open", "opening", "opened"} or any(marker in text for marker in ("打开", "开启", "可观察")):
+        return "发酵"
+    if text in {"closed", "close"} or any(marker in text for marker in ("关闭", "未开", "没有")):
+        return "退潮"
+    if text in {"watch", "observe", "pending"} or any(marker in text for marker in ("观察", "待", "验证")):
+        return "启动"
+    return str(value or "").strip()
+
+
+def _topic_window_text(*values, missing="待补事实"):
+    text = _spine_meaningful_text(*values, missing=missing)
+    if text == missing:
+        return text
+    phrase_replacements = (
+        ("等10点确认后再看", "题材窗口待验证"),
+        ("等待10点确认后再看", "题材窗口待验证"),
+        ("等10点确认", "题材窗口待验证"),
+        ("等待10点确认", "题材窗口待验证"),
+        ("10点确认后", "题材窗口满足条件后"),
+        ("10点确认", "题材窗口满足条件后"),
+        ("09:50确认", "题材窗口满足条件后"),
+        ("10:00左右观察", "题材窗口待验证"),
+        ("10:00左右买", "题材窗口满足条件后"),
+    )
+    for old, new in phrase_replacements:
+        text = text.replace(old, new)
+    for marker in (OPENING_WINDOW, SECOND_CONFIRM_WINDOW, TAIL_WINDOW):
+        text = text.replace(marker, "题材窗口")
+    text = text.replace("交易时间窗口", "题材窗口")
+    text = re.sub(r"\d{1,2}:\d{2}(?:-\d{1,2}:\d{2})?", "题材窗口", text)
+
+    def _replace_ten_oclock(match):
+        prefix = match.group(1) or ""
+        return "题材窗口待验证" if prefix in {"等", "等待"} else "题材窗口满足条件后"
+
+    text = re.sub(r"(等|等待)?10点(?:确认后|确认|后|附近|前后)?", _replace_ten_oclock, text)
+    replacements = (
+        ("题材窗口打开", "题材窗口满足条件后"),
+        ("题材窗口开启", "题材窗口满足条件后"),
+        ("题材窗口关闭", "题材窗口条件未满足"),
+        ("题材窗口确认后", "题材窗口满足条件后"),
+        ("题材窗口确认", "题材窗口满足条件"),
+        ("题材窗口条件后", "题材窗口满足条件后"),
+        ("题材窗口满足条件后后", "题材窗口满足条件后"),
+        ("题材窗口待验证后再看", "题材窗口待验证"),
+        ("题材窗口待验证再看", "题材窗口待验证"),
+        ("等题材窗口满足条件后", "题材窗口待验证"),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
+
+
+def _split_direction_text(value):
+    if isinstance(value, (list, tuple)):
+        parts = []
+        for item in value:
+            parts.extend(_split_direction_text(item))
+        return parts
+    text = str(value or "").strip()
+    if not text or text in {"-", "暂无", "待补事实"}:
+        return []
+    for separator in ("，", "、", "/", "；", ";"):
+        text = text.replace(separator, ",")
+    return [part.strip() for part in text.split(",") if part.strip() and part.strip() not in {"-", "暂无"}]
+
+
+def _sector_internal_sectors(snapshot):
+    data = (snapshot or {}).get("sector_internal_analysis") or (snapshot or {}).get("sector_internal_analysis_data") or {}
+    if not isinstance(data, dict):
+        return []
+    return [item for item in data.get("sectors") or [] if isinstance(item, dict)]
+
+
+def _sector_analysis_name(item):
+    return _text_value(item.get("sector_name"), item.get("name"), item.get("line"), item.get("sector"))
+
+
+def _sector_analysis_for_direction(snapshot, direction):
+    sectors = _sector_internal_sectors(snapshot)
+    direction = str(direction or "").strip()
+    if not sectors or not direction or direction == "待补事实":
+        return {}
+    for item in sectors:
+        sector_name = _sector_analysis_name(item)
+        if sector_name and sector_name == direction:
+            return item
+    for item in sectors:
+        sector_name = _sector_analysis_name(item)
+        if sector_name and (direction in sector_name or sector_name in direction):
+            return item
+    return {}
+
+
+def _key_direction_names(snapshot, primary_line, capacity, overtake):
+    names = []
+
+    def append(value):
+        for name in _split_direction_text(value):
+            if name and name not in names:
+                names.append(name)
+
+    append(primary_line)
+    append(capacity.get("other_lines"))
+    append(overtake.get("rival_line"))
+    for item in _sector_internal_sectors(snapshot):
+        append(_sector_analysis_name(item))
+    while len(names) < 3:
+        names.append("待补事实")
+    return names[:3]
+
+
+def _sector_relationship_rows(snapshot, primary_line, capacity, overtake, judgement, mainline_summary):
+    directions = _key_direction_names(snapshot, primary_line, capacity, overtake)
+    roles = ("主攻线", "竞争线", "潜在超车线")
+    relationship_state = _spine_meaningful_text(
+        capacity.get("sector_relationship_state"),
+        judgement.get("rotation_nature"),
+        missing="待验证",
+    )
+    process = _spine_meaningful_text(
+        capacity.get("mainline_process"),
+        mainline_summary.get("cycle_stage"),
+        missing="待验证",
+    )
+    action = _spine_meaningful_text(
+        capacity.get("tomorrow_action"),
+        judgement.get("candidate_policy"),
+        missing="待验证",
+    )
+    rows = []
+    for index, direction in enumerate(directions):
+        peer = _spine_meaningful_text(
+            capacity.get("other_lines") if index == 0 else directions[0],
+            overtake.get("rival_line") if index == 0 else "",
+            missing="待补事实",
+        )
+        rows.append(
+            (
+                "| {role} | {direction} | {peer} | {state} | {process} | {action} |"
+            ).format(
+                role=roles[index],
+                direction=direction,
+                peer=peer,
+                state=relationship_state,
+                process=process,
+                action=action,
+            )
+        )
+    return rows
+
+
+def _first_sector_analysis(snapshot, primary_line=""):
+    sectors = _sector_internal_sectors(snapshot)
+    if not sectors:
+        return {}
+    primary_line = str(primary_line or "").strip()
+    if primary_line:
+        item = _sector_analysis_for_direction(snapshot, primary_line)
+        if item:
+            return item
+    return sectors[0]
+
+
+def _stock_text_from_value(value, limit=1):
+    if isinstance(value, dict):
+        nested = _stock_text_from_value(
+            value.get("stocks")
+            or value.get("core_anchors")
+            or value.get("leaders")
+            or value.get("followers"),
+            limit=limit,
+        )
+        return _text_value(value.get("name"), value.get("stock_name"), value.get("code"), value.get("stock_code"), nested)
+    if isinstance(value, (list, tuple)):
+        names = [_stock_text_from_value(item, limit=limit) for item in value]
+        names = [name for name in names if name]
+        return "、".join(names[:limit])
+    return _text_value(value)
+
+
+def _dragon_pullback_result_text(snapshot):
+    if not _dragon_pullback_review_active(snapshot):
+        return ""
+    review = _dragon_pullback_review(snapshot)
+    leader = str(review.get("leader") or "").strip()
+    laggards = _dragon_pullback_laggard_text(snapshot)
+    if laggards:
+        return f"{leader}二次确认；{laggards}低位补涨反哺核心辨识度"
+    return f"{leader}二次确认；等待低位补涨继续验证"
+
+
+def _leader_core_validation_rows(snapshot, directions, primary_line):
+    dragon_result = _dragon_pullback_result_text(snapshot)
+    dragon_leader = (_dragon_pullback_review(snapshot) or {}).get("leader")
+    dragon_laggards = _dragon_pullback_laggard_text(snapshot)
+    rows = []
+    for direction in directions:
+        sector_analysis = _sector_analysis_for_direction(snapshot, direction)
+        is_primary = direction != "待补事实" and (
+            direction == primary_line or direction in str(primary_line or "") or str(primary_line or "") in direction
+        )
+        core_anchor = _spine_meaningful_text(
+            _stock_text_from_value(sector_analysis.get("core_anchor")),
+            _stock_text_from_value(sector_analysis.get("anchor")),
+            _stock_text_from_value(sector_analysis.get("leader")),
+            dragon_leader if is_primary else "",
+        )
+        elastic_vehicle = _spine_meaningful_text(
+            _stock_text_from_value(sector_analysis.get("elastic_vehicle")),
+            _stock_text_from_value(sector_analysis.get("elastic_carrier")),
+            _stock_text_from_value(sector_analysis.get("elastic_stock")),
+            _stock_text_from_value(sector_analysis.get("rear_acceptance")),
+            dragon_laggards if is_primary else "",
+        )
+        core_verification = _spine_meaningful_text(
+            dragon_result if is_primary else "",
+            sector_analysis.get("validation"),
+            sector_analysis.get("conclusion"),
+            (sector_analysis.get("relative_position") or {}).get("conclusion") if isinstance(sector_analysis.get("relative_position"), dict) else "",
+            missing="待验证",
+        )
+        rows.append(f"| {direction} | {core_anchor} | {elastic_vehicle} | {core_verification} |")
+    return rows
+
+
+def _market_sector_spine_lines(snapshot):
+    snapshot = snapshot or {}
+    judgement = _market_structure_judgement(snapshot)
+    mainline_summary = snapshot.get("mainline_turnover_summary") or {}
+    capacity = resolve_mainline_capacity_regime_summary(snapshot)
+    overtake = resolve_overtake_window_summary(snapshot)
+    primary_line = _spine_meaningful_text(capacity.get("primary_line"), mainline_summary.get("current_mainline"))
+    directions = _key_direction_names(snapshot, primary_line, capacity, overtake)
+    return [
+        "### 市场阶段",
+        "| 项目 | 结论 |",
+        "|------|------|",
+        f"| 周期标签 | {_cycle_stage_from_snapshot(snapshot)} |",
+        f"| 市场结构 | {_spine_text(judgement.get('summary_text'), judgement.get('index_profit_relation'))} |",
+        f"| 明日节奏 | {_spine_text(judgement.get('tomorrow_rhythm'), missing='待验证')} |",
+        "",
+        "### 资金结构",
+        "| 层级 | 结论 |",
+        "|------|------|",
+        f"| 市场资金 | {_spine_text(mainline_summary.get('data_text'), judgement.get('turnover_distribution'))} |",
+        f"| 板块迁移 | {_spine_text(mainline_summary.get('turnover_share_trend_summary'), mainline_summary.get('conclusion'), judgement.get('rotation_nature'))} |",
+        "",
+        "### 板块关系",
+        "| 关系 | 主攻线 | 竞争/背景线 | 关系状态 | 进程 | 明日验证 |",
+        "|------|--------|-------------|----------|------|----------|",
+        *_sector_relationship_rows(snapshot, primary_line, capacity, overtake, judgement, mainline_summary),
+        "",
+        "### 超车 / 失速 / 窗口",
+        "| 项目 | 状态 | 依据 | 验证 |",
+        "|------|------|------|------|",
+        (
+            "| 题材窗口 | {state} | {maturity} | {action} |"
+        ).format(
+            state=_topic_window_state_label(overtake.get("window_state"), snapshot),
+            maturity=_topic_window_text(overtake.get("observation_maturity")),
+            action=_topic_window_text(overtake.get("action"), missing="待验证"),
+        ),
+        (
+            "| 超车/失速 | {own_line} / {rival_line} | {own_stability}；{rival_slowdown} | {failure} |"
+        ).format(
+            own_line=_topic_window_text(overtake.get("own_line")),
+            rival_line=_topic_window_text(overtake.get("rival_line")),
+            own_stability=_topic_window_text(overtake.get("own_stability")),
+            rival_slowdown=_topic_window_text(overtake.get("rival_slowdown")),
+            failure=_topic_window_text(overtake.get("failure_condition"), missing="待验证"),
+        ),
+        "",
+        "### 龙头 / 核心验证",
+        "| 方向 | 核心锚 | 弹性载体 | 验证结论 |",
+        "|------|--------|----------|----------|",
+        *_leader_core_validation_rows(snapshot, directions, primary_line),
+        "",
+    ]
+
+
 def _discipline_table(final_gate=None, position_level="", snapshot=None):
     final_gate = final_gate or {}
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
@@ -299,6 +672,14 @@ def _conditional_defense_active(final_gate):
         and not final_gate.get("can_new_entry")
         and not final_gate.get("should_reduce")
     )
+
+
+def _final_action_forces_zero_position(final_gate):
+    final_gate = final_gate or {}
+    text = str(final_gate.get("final_action") or "").strip()
+    if not text:
+        return False
+    return any(marker in text for marker in ("空仓等待", "不新增参与", "禁止参与", "只做退出"))
 
 
 def _countertrend_defense_active(snapshot):
@@ -489,7 +870,7 @@ def _compose_zero_no_execution_reason(snapshot=None, final_gate=None, basis_reas
         return f"{stress_reason}；指数图形与主攻线承接未修复，所以不给执行目标。"
     basis_reason = str(basis_reason or "").strip()
     if any(marker in basis_reason for marker in ("弱市场", "冰点", "趋势失效", "退潮", "未止跌")):
-        return "市场条件未修复，只保留观察锚，不给执行目标。"
+        return "市场条件未修复，只保留观察对象，不给执行目标。"
     return basis_reason
 
 
@@ -514,11 +895,15 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
     )
 
     if _old_position_priority_active(snapshot):
-        reason = _text_value(_capital_priority_decision(snapshot).get("reason")) or "账户资金优先只处理旧仓，新强对象只保留观察锚。"
-        if "只处理旧仓" not in reason:
-            reason = f"{reason}；只处理旧仓，不新增参与。"
+        reason = _front_trade_text(
+            _text_value(_capital_priority_decision(snapshot).get("reason"))
+            or "账户资金优先只处理旧仓，新强对象只保留观察对象。"
+        )
+        basis = reason
+        if "只处理旧仓" not in basis:
+            basis = f"{basis}；只处理旧仓，不新增参与。"
         return {
-            "basis": reason,
+            "basis": basis,
             "reason": "账户资金优先只处理旧仓，不给新增执行目标",
             "attribution": "账户问题",
             "strong": True,
@@ -526,8 +911,23 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
     if _account_unbuyable_core_active(snapshot):
         return {
             "basis": "当前账户买不了一手。",
-            "reason": "当前账户买不了一手，只保留观察锚",
+            "reason": "当前账户买不了一手，只保留观察对象",
             "attribution": "账户问题",
+            "strong": True,
+        }
+    if _final_action_forces_zero_position(final_gate):
+        reason = _front_trade_text(str(final_gate.get("final_action") or "最终条件不支持新增参与。").strip())
+        basis = reason
+        if "只处理旧仓" not in basis and "旧仓" not in basis and "只做退出" in basis:
+            basis = f"{basis}；只处理旧仓，不新增参与。"
+        elif "只处理旧仓" not in basis and "旧仓" not in basis and any(
+            marker in basis for marker in ("空仓", "禁止参与", "不新增参与")
+        ):
+            basis = f"{basis}；弱市场、冰点或趋势失效时只保留观察对象。"
+        return {
+            "basis": basis,
+            "reason": reason,
+            "attribution": "市场问题",
             "strong": True,
         }
     if _snapshot_has_key_data_gap(snapshot):
@@ -553,7 +953,7 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
     if _countertrend_defense_active(snapshot):
         return {
             "basis": "逆势攻击或放量下杀，先防踩踏。",
-            "reason": "市场条件不支持，暂不保留观察锚",
+            "reason": "市场条件不支持，暂不保留观察对象",
             "attribution": "市场问题",
             "strong": True,
         }
@@ -594,9 +994,16 @@ def _zero_position_exception_context(snapshot=None, final_gate=None, *, has_obse
             "attribution": "决策问题",
             "strong": False,
         }
+    if not _selected_candidate_has_execution_basis(snapshot):
+        return {
+            "basis": "关键数据不完整：观察对象缺少完整执行条件，只能观察，不能新增参与。",
+            "reason": "关键数据不完整，观察对象不能定义为执行目标",
+            "attribution": "数据问题",
+            "strong": True,
+        }
     return {
-        "basis": "市场条件未到，只保留观察锚",
-        "reason": "市场条件未到，只保留观察锚",
+        "basis": "市场条件未到，只保留观察对象",
+        "reason": "市场条件未到，只保留观察对象",
         "attribution": "市场问题",
         "strong": False,
     }
@@ -645,6 +1052,8 @@ def _position_state_contract(snapshot=None, final_gate=None):
     grade = _normalize_signal_grade(position_decision.get("signal_grade"))
     if not grade and "target_position_pct" in position_decision:
         grade = _grade_from_position_pct(position_decision.get("target_position_pct"))
+    if _final_action_forces_zero_position(final_gate):
+        grade = "0"
     reasoning_decision = snapshot.get("reasoning_decision") or {}
     if (
         not grade
@@ -674,14 +1083,18 @@ def _position_state_contract(snapshot=None, final_gate=None):
         grade = _normalize_signal_grade(position_decision.get("signal_grade")) or _grade_from_position_pct(
             position_decision.get("target_position_pct")
         )
-    if _tradable_proxy_priority_active(snapshot) and _resolution_display_target(snapshot):
+    if (
+        _tradable_proxy_action_active(snapshot)
+        and _resolution_display_target(snapshot)
+        and not _final_action_forces_zero_position(final_gate)
+    ):
         proxy_pct = int(_safe_float(_resolution_display_target(snapshot).get("target_position_pct"), 50))
         grade = "100" if proxy_pct >= 100 else "50"
     if grade in ("50", "100") and not _has_unique_action_target(snapshot):
         grade = "0"
     if grade in ("50", "100") and countertrend_defense:
         grade = "0"
-    if grade in ("50", "100") and _account_unbuyable_core_active(snapshot) and not _tradable_proxy_priority_active(snapshot):
+    if grade in ("50", "100") and _account_unbuyable_core_active(snapshot) and not _tradable_proxy_action_active(snapshot):
         grade = "0"
 
     contract = {
@@ -751,8 +1164,9 @@ def _position_attack_grade_label(signal_grade):
     }.get(state, "0%")
 
 
-def _monthly_rhythm_lines(snapshot):
+def _monthly_rhythm_lines(snapshot, final_gate=None):
     snapshot = snapshot or {}
+    final_gate = final_gate or {}
     position_decision = snapshot.get("position_decision") or {}
     if not isinstance(position_decision, dict):
         position_decision = {}
@@ -775,7 +1189,8 @@ def _monthly_rhythm_lines(snapshot):
     if (
         not _has_unique_action_target(snapshot)
         or _countertrend_defense_active(snapshot)
-        or (_account_unbuyable_core_active(snapshot) and not _tradable_proxy_priority_active(snapshot))
+        or (_account_unbuyable_core_active(snapshot) and not _tradable_proxy_action_active(snapshot))
+        or _final_action_forces_zero_position(final_gate)
     ):
         signal_grade = "0"
         max_position = 0
@@ -1086,6 +1501,11 @@ def _final_target_resolution(snapshot):
     return resolution if isinstance(resolution, dict) else {}
 
 
+def _sniper_target_derivation(snapshot):
+    packet = (snapshot or {}).get("sniper_target_derivation") or {}
+    return packet if isinstance(packet, dict) else {}
+
+
 def _capital_priority_decision(snapshot):
     decision = _final_target_resolution(snapshot).get("capital_priority_decision") or {}
     return decision if isinstance(decision, dict) else {}
@@ -1111,8 +1531,31 @@ def _resolution_target(snapshot, key):
     return _stock_like_from_resolution(_final_target_resolution(snapshot).get(key))
 
 
+def _resolution_targets_match(left, right):
+    left = left if isinstance(left, dict) else {}
+    right = right if isinstance(right, dict) else {}
+    left_code = _text_value(left.get("code"), left.get("stock_code"), left.get("id"))
+    right_code = _text_value(right.get("code"), right.get("stock_code"), right.get("id"))
+    if left_code and right_code and left_code == right_code:
+        return True
+    left_name = _text_value(left.get("name"), left.get("stock_name"))
+    right_name = _text_value(right.get("name"), right.get("stock_name"))
+    return bool(left_name and right_name and left_name == right_name)
+
+
+def _display_target_is_tradable_proxy(snapshot):
+    resolution = _final_target_resolution(snapshot)
+    display = _stock_like_from_resolution(resolution.get("display_target"))
+    proxy = _stock_like_from_resolution(resolution.get("tradable_proxy_target"))
+    return bool(display and proxy and _resolution_targets_match(display, proxy))
+
+
+def _tradable_proxy_action_active(snapshot):
+    return _tradable_proxy_priority_active(snapshot) or _display_target_is_tradable_proxy(snapshot)
+
+
 def _resolution_watch_target(snapshot):
-    if not (_old_position_priority_active(snapshot) or _tradable_proxy_priority_active(snapshot)):
+    if not (_old_position_priority_active(snapshot) or _tradable_proxy_action_active(snapshot)):
         return {}
     resolution = _final_target_resolution(snapshot)
     for key in ("watch_target", "new_entry_target", "process_target", "ascii_trace_target"):
@@ -1125,7 +1568,7 @@ def _resolution_watch_target(snapshot):
 def _resolution_display_target(snapshot):
     if _old_position_priority_active(snapshot):
         return {}
-    if not _tradable_proxy_priority_active(snapshot):
+    if not _tradable_proxy_action_active(snapshot):
         return {}
     target = _resolution_target(snapshot, "display_target") or _resolution_target(snapshot, "tradable_proxy_target")
     return target
@@ -1209,6 +1652,30 @@ def _unique_target_label(target):
     return label
 
 
+def _text_mentions_different_target(text, target):
+    text = _text_value(text)
+    target = target if isinstance(target, dict) else {}
+    if not text or not target:
+        return False
+    target_code = _text_value(target.get("code"), target.get("id"), target.get("stock_code"))
+    target_name = _text_value(target.get("name"), target.get("stock_name"))
+    mentioned_codes = set(re.findall(r"(?<!\d)(\d{6})(?!\d)", text))
+    if mentioned_codes:
+        return bool(target_code and target_code not in mentioned_codes)
+    stock_name_match = re.search(r"([\u4e00-\u9fffA-Za-z]{2,12})(?:\d{6}|09:|站上|不破|涨停|承接)", text)
+    if stock_name_match:
+        mentioned_name = stock_name_match.group(1)
+        return bool(target_name and mentioned_name and target_name not in mentioned_name and mentioned_name not in target_name)
+    return False
+
+
+def _target_scoped_trigger_text(position_decision, target):
+    trigger_text = _text_value((position_decision or {}).get("trigger_text"))
+    if _text_mentions_different_target(trigger_text, target):
+        return ""
+    return trigger_text
+
+
 def _conditional_zero_action_text(target, position_decision=None):
     label = _unique_target_label(target)
     participation_window = normalize_participation_window(
@@ -1216,13 +1683,13 @@ def _conditional_zero_action_text(target, position_decision=None):
     )
     position_decision = position_decision if isinstance(position_decision, dict) else {}
     condition = normalize_trading_time_text(
-        _text_value(position_decision.get("trigger_text"))
+        _target_scoped_trigger_text(position_decision, target)
         or _text_value(target.get("condition"))
         or "主线承接 + 个股强弱重新确认"
     )
     fallback = normalize_trading_time_text(_text_value(target.get("fallback_state")) or "不满足继续0%")
     condition_text = condition if participation_window in condition else f"{participation_window}{condition}"
-    return f"盘前0%；只看{label}，{condition_text}成立才保留观察，不能转成新增参与；{fallback}"
+    return f"盘前0%；只观察{label}，{condition_text}成立才保留观察；未出现执行资格前不新增参与；{fallback}"
 
 
 def _resolve_sniper_candidates(snapshot, candidate_snapshot):
@@ -1368,9 +1835,9 @@ def _observation_anchor_lifecycle_rows(observation_target, *, has_observation_ta
         _text_value((observation_target or {}).get("condition")) or "主线承接 + 个股强弱重新确认"
     )
     return [
-        "| 观察锚性质 | 强弱参照，不是执行目标 |",
+        "| 观察对象性质 | 强弱参照，不是执行目标 |",
         f"| 恢复评估条件 | {condition} |",
-        "| 观察锚去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |",
+        "| 观察对象去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |",
     ]
 
 
@@ -1448,6 +1915,16 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
     snapshot = snapshot or {}
     position_state = position_state or {}
     grade = position_state.get("grade")
+    if _two_layer_execution_active(snapshot):
+        condition, _ = _two_layer_execution_condition_text(snapshot)
+        return [
+            "| 明日仓位 | 条件满足才B档执行；不满足回到0% |",
+            f"| 执行目标 | {_two_layer_execution_target_label(snapshot)} |",
+            "| 执行性质 | 条件执行对象 |",
+            f"| B档条件 | {condition} |",
+            "| 不满足条件 | 不参与 |",
+            "| 责任归因 | 市场与个股条件需盘中确认 |",
+        ]
     rows = [
         f"| 明日仓位 | {position_state.get('discipline') or '0%不参与'} |",
     ]
@@ -1473,13 +1950,13 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
 
     target = _effective_unique_action_target(snapshot)
     rows.extend(
-        [
-            f"| 执行目标 | {_unique_target_label(target) if isinstance(target, dict) and (target.get('name') or target.get('code')) else '无'} |",
-            "| 观察锚 | 无 |",
-            "| 无执行目标原因 | - |",
-            "| 责任归因 | 市场与个股条件满足 |",
-        ]
-    )
+            [
+                f"| 执行目标 | {_unique_target_label(target) if isinstance(target, dict) and (target.get('name') or target.get('code')) else '无'} |",
+                "| 观察对象 | 无 |",
+                "| 无执行目标原因 | - |",
+                "| 责任归因 | 市场与个股条件满足 |",
+            ]
+        )
     return rows
 
 
@@ -1547,6 +2024,43 @@ def _t0_target_label(target):
     return name or code or "暂无"
 
 
+def _two_layer_execution_object(snapshot):
+    payload = (snapshot or {}).get("two_layer_decision_payload") or {}
+    if not isinstance(payload, dict):
+        return {}
+    front = payload.get("front_decision") or {}
+    if not isinstance(front, dict):
+        return {}
+    target = front.get("execution_object") or {}
+    if not isinstance(target, dict) or not (target.get("name") or target.get("code") or target.get("stock_code")):
+        return {}
+    identity = str(front.get("execution_identity") or "").strip()
+    position_plan = str(front.get("position_plan") or "").strip()
+    if identity != "明日执行对象" and position_plan != "B档执行":
+        return {}
+    return target
+
+
+def _two_layer_execution_target_label(snapshot):
+    target = _two_layer_execution_object(snapshot)
+    return _t0_target_label(target) if target else ""
+
+
+def _two_layer_execution_active(snapshot):
+    return bool(_two_layer_execution_object(snapshot))
+
+
+def _two_layer_execution_condition_text(snapshot):
+    payload = (snapshot or {}).get("two_layer_decision_payload") or {}
+    conditions = payload.get("b_level_conditions") if isinstance(payload, dict) else {}
+    if not isinstance(conditions, dict):
+        conditions = {}
+    active = conditions.get("active_attack") if isinstance(conditions.get("active_attack"), dict) else {}
+    window = str(active.get("window") or "09:30-09:35或09:50-10:10").strip()
+    money = str(active.get("money_confirmation") or "分时大单净流入达标").strip()
+    return f"低开承接型或主动进攻型满足；主动进攻需{money}", window
+
+
 def _account_buy_zone_text(snapshot=None, target=None):
     snapshot = snapshot or {}
     target = target or {}
@@ -1582,8 +2096,11 @@ def _account_price_condition_text(snapshot, target, position_state):
     snapshot = snapshot or {}
     target = target or {}
     position_state = position_state or {}
+    if _two_layer_execution_active(snapshot):
+        condition, _ = _two_layer_execution_condition_text(snapshot)
+        return f"{condition}；不满足回到0%"
     if position_state.get("grade") == "0":
-        return "开盘-5%附近不新开；-3%低开也只观察能否站回0轴/VWAP/MA强弱线，不能转新增参与"
+        return "开盘-5%附近不新开；-3%低开也只观察能否站回0轴/VWAP/MA强弱线；未出现执行资格前不新增参与"
     selected = _selected_position_candidate(snapshot)
     decision = _position_decision(snapshot)
     trigger_raw = _text_value(decision.get("trigger_text"))
@@ -1604,7 +2121,7 @@ def _account_price_condition_text(snapshot, target, position_state):
 
 
 def _no_t0_context_text(position_context_provided):
-    return "无昨日持仓，不涉及T0" if position_context_provided else "持仓未输入，不能定义T0对象"
+    return "无昨日持仓，不涉及明日执行对象" if position_context_provided else "持仓未输入，不能定义明日执行对象"
 
 
 def _ensure_no_trade_fallback(text):
@@ -1660,7 +2177,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     holding = _existing_position_summary(snapshot)
     main_target, main_role = _t0_main_target(snapshot, position_state)
-    proxy_priority = _tradable_proxy_priority_active(snapshot)
+    proxy_priority = _tradable_proxy_action_active(snapshot)
     proxy_target = _resolution_display_target(snapshot) if proxy_priority else {}
     original_target = _resolution_new_entry_target(snapshot) if proxy_priority else {}
     has_main_target = isinstance(main_target, dict) and bool(main_target.get("name") or main_target.get("code"))
@@ -1675,15 +2192,18 @@ def _account_status_lines(snapshot=None, final_gate=None):
     )
     zero_position_reason = ""
     if position_state.get("grade") == "0":
-        zero_context = _zero_position_no_execution_context(
-            snapshot,
-            final_gate=final_gate,
-            has_observation_target=has_main_target or _has_selected_position_candidate(snapshot),
-        )
-        zero_position_reason = (
-            _market_zero_stress_reason(snapshot, final_gate)
-            or str(zero_context.get("basis") or zero_context.get("reason") or "").strip()
-        )
+        if _two_layer_execution_active(snapshot):
+            zero_position_reason = ""
+        else:
+            zero_context = _zero_position_no_execution_context(
+                snapshot,
+                final_gate=final_gate,
+                has_observation_target=has_main_target or _has_selected_position_candidate(snapshot),
+            )
+            zero_position_reason = (
+                _market_zero_stress_reason(snapshot, final_gate)
+                or str(zero_context.get("basis") or zero_context.get("reason") or "").strip()
+            )
     capital_text = _account_capital_text(snapshot)
     account_profile = _account_profile(snapshot)
     account_hit = _knowledge_hit(snapshot, "account.unbuyable-core-anchor")
@@ -1699,10 +2219,12 @@ def _account_status_lines(snapshot=None, final_gate=None):
     )
 
     position_context_provided = _position_context_provided(snapshot)
+    two_layer_execution_label = _two_layer_execution_target_label(snapshot)
     knowledge_basis_label = ""
+    extra_account_rows = []
     position_label = position_state.get("discipline") or "0%不参与"
     price_condition = _account_price_condition_text(snapshot, main_target, position_state)
-    if actual_unbuyable_core and proxy_priority and proxy_target:
+    if actual_unbuyable_core and proxy_priority and proxy_target and position_state.get("grade") != "0":
         account_constraint = (
             f"{capital_text}；先处理旧仓，目标标的买不了一手，改用ETF替代表达"
             if holding
@@ -1712,16 +2234,27 @@ def _account_status_lines(snapshot=None, final_gate=None):
         original_label = _t0_target_label(original_target or main_target)
         proxy_label = _t0_target_label(proxy_target)
         tomorrow_action = (
-            str(_capital_priority_decision(snapshot).get("reason") or "").strip()
-            or f"目标标的{original_label}，小资金账户可用{proxy_label}替代"
+            f"先处理旧仓，买{proxy_label}"
+            if holding
+            else (
+                str(_capital_priority_decision(snapshot).get("reason") or "").strip()
+                or f"目标标的{original_label}，小资金账户可用{proxy_label}替代"
+            )
         )
         position_label = position_state.get("discipline") or "50%标准进攻"
-        primary_row_label = "明日执行目标"
-        main_label = f"{proxy_label}：{proxy_effect}替代表达"
-        secondary_row_label = "观察对象"
         identity_text = main_identity or "市场核心"
-        backup_label = f"{original_label}：{identity_text}保留观察"
-        new_entry_limit = "1"
+        if holding:
+            primary_row_label = "旧仓处理"
+            main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
+            secondary_row_label = "明日执行目标"
+            backup_label = f"{proxy_label}：{proxy_effect}替代表达"
+            extra_account_rows.append(("观察对象", f"{original_label}：{identity_text}保留观察"))
+        else:
+            primary_row_label = "明日执行目标"
+            main_label = f"{proxy_label}：{proxy_effect}替代表达"
+            secondary_row_label = "观察对象"
+            backup_label = f"{original_label}：{identity_text}保留观察"
+        new_entry_limit = "资金释放后1" if holding else "1"
         price_condition = _account_price_condition_text(snapshot, proxy_target, position_state)
     elif actual_unbuyable_core:
         account_constraint = f"{capital_text}；当前账户买不了一手"
@@ -1730,28 +2263,28 @@ def _account_status_lines(snapshot=None, final_gate=None):
         tomorrow_action = f"当前账户不参与；{target_name}仍保留{identity_text}观察"
         primary_row_label = "观察对象"
         main_label = f"{_t0_target_label(main_target)}：当前账户买不了一手，只保留观察"
-        secondary_row_label = "T0对象"
+        secondary_row_label = "明日执行目标"
         backup_label = _no_t0_context_text(position_context_provided)
         new_entry_limit = "0"
         knowledge_basis_label = str(account_hit.get("title") or "").strip()
     elif no_holding_t0_target:
         account_constraint = (
-            f"{capital_text}；无昨日持仓先看T0对象"
+            f"{capital_text}；无昨日持仓先看明日执行目标"
             if position_context_provided
-            else f"{capital_text}；未输入持仓，先确认旧仓再看T0对象"
+            else f"{capital_text}；未输入持仓，先确认旧仓再看明日执行目标"
         )
         position_label = position_state.get("discipline") or "50%标准进攻"
         tomorrow_action = (
-            "只看T0主对象，买入区间命中才新开一手"
+            "只看明日执行目标，买入区间命中才新开一手"
             if position_context_provided
-            else "先确认旧仓情况，再看T0主对象"
+            else "先确认旧仓情况，再看明日执行目标"
         )
         new_entry_limit = "1"
         price_condition = _account_price_condition_text(snapshot, main_target, position_state)
-        primary_row_label = "T0主对象"
+        primary_row_label = "明日执行目标"
         main_label = f"{_t0_target_label(main_target)}：{main_role}"
         if position_context_provided:
-            secondary_row_label = "T0备用"
+            secondary_row_label = "备用观察"
             backup_label = "暂无"
         else:
             secondary_row_label = "持仓确认"
@@ -1770,42 +2303,54 @@ def _account_status_lines(snapshot=None, final_gate=None):
         else:
             account_constraint = f"{capital_text}；已有昨日持仓优先处理"
             tomorrow_action = "先处理旧仓，不新增参与"
-            primary_row_label = "T0主对象"
+            primary_row_label = "旧仓处理"
             main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
-            secondary_row_label = "T0备用"
+            secondary_row_label = "观察对象"
             if has_main_target and _old_position_priority_active(snapshot):
-                backup_label = f"{_t0_target_label(main_target)}：观察锚，不能转成新增参与"
+                backup_label = f"{_t0_target_label(main_target)}：观察对象，未出现执行资格前不新增参与"
             else:
                 backup_label = f"{_t0_target_label(main_target)}：仅作观察对象" if has_main_target else "暂无"
             new_entry_limit = "0"
             price_condition = "已有仓按持仓预案处理；跌破失效价或09:50-10:10收不回先降风险"
     elif not position_context_provided:
-        account_constraint = f"{capital_text}；未输入持仓，先确认旧仓再看T0对象"
-        if position_state.get("grade") == "0":
+        if position_state.get("grade") == "0" and two_layer_execution_label:
+            account_constraint = f"{capital_text}；未输入持仓，执行前先确认旧仓情况"
+            tomorrow_action = "条件满足才B档执行；不满足回到0%"
+            position_label = "条件满足才B档执行；不满足回到0%"
+            new_entry_limit = "条件满足后1"
+            primary_row_label = "明日执行目标"
+            main_label = f"{two_layer_execution_label}：条件满足才B档执行"
+        elif position_state.get("grade") == "0":
+            account_constraint = f"{capital_text}；未输入持仓，先确认旧仓，再看观察对象是否重新成立"
             tomorrow_action = "0%不参与；只保留观察对象，不新开"
             new_entry_limit = "0"
             primary_row_label = "观察对象"
-            main_label = f"{_t0_target_label(main_target)}：观察锚，不是T0" if has_main_target else "暂无"
+            main_label = f"{_t0_target_label(main_target)}：观察对象，不是执行目标" if has_main_target else "暂无"
         else:
+            account_constraint = f"{capital_text}；未输入持仓，先确认旧仓再看明日执行目标"
             tomorrow_action = "先确认旧仓情况，再看明日执行目标"
             new_entry_limit = "1"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
-        secondary_row_label = "T0对象"
-        backup_label = _no_t0_context_text(position_context_provided)
+        secondary_row_label = "持仓确认" if position_state.get("grade") == "0" and two_layer_execution_label else "明日执行目标"
+        backup_label = (
+            "执行前先确认旧仓情况"
+            if position_state.get("grade") == "0" and two_layer_execution_label
+            else _no_t0_context_text(position_context_provided)
+        )
     else:
         account_constraint = f"{capital_text}；无昨日持仓先看明日对象"
         if position_state.get("grade") == "0":
             tomorrow_action = "0%不参与；只保留观察对象，不新开"
             new_entry_limit = "0"
             primary_row_label = "观察对象"
-            main_label = f"{_t0_target_label(main_target)}：观察锚，不是T0" if has_main_target else "暂无"
+            main_label = f"{_t0_target_label(main_target)}：观察对象，不是执行目标" if has_main_target else "暂无"
         else:
             tomorrow_action = "只看明日执行目标，买入区间命中才新开一手"
             new_entry_limit = "1"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
-        secondary_row_label = "T0对象"
+        secondary_row_label = "明日执行目标"
         backup_label = _no_t0_context_text(position_context_provided)
 
     lines = [
@@ -1822,9 +2367,15 @@ def _account_status_lines(snapshot=None, final_gate=None):
             f"| 明日动作 | {tomorrow_action} |",
             f"| {primary_row_label} | {main_label} |",
             f"| {secondary_row_label} | {backup_label} |",
+        ]
+    )
+    for label, value in extra_account_rows:
+        lines.append(f"| {label} | {value} |")
+    lines.extend(
+        [
             f"| 价格条件 | {price_condition} |",
             f"| 新开仓上限 | {new_entry_limit} |",
-            "| 今日不看 | T1/T2/T3只放附录观察，不同时盯多只，不为多个名单分散资金 |",
+            "| 今日不看 | 其他观察层只放附录观察，不同时盯多只，不为多个名单分散资金 |",
         ]
     )
     if knowledge_basis_label:
@@ -1836,35 +2387,42 @@ def _account_status_lines(snapshot=None, final_gate=None):
 def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     snapshot = snapshot or {}
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    two_layer_execution = _two_layer_execution_active(snapshot)
     candidate_snapshot = snapshot.get("candidate_snapshot")
     if not isinstance(candidate_snapshot, dict):
         candidate_snapshot = build_candidate_snapshot({}, market_research_snapshot=snapshot)
     front_page = candidate_snapshot.get("front_page") or {}
     is_zero_participation = position_state.get("grade") == "0"
-    observation_target = _conditional_observation_target(snapshot) if is_zero_participation else {}
+    observation_target = {} if two_layer_execution else (_conditional_observation_target(snapshot) if is_zero_participation else {})
     has_observation_target = isinstance(observation_target, dict) and bool(
         observation_target.get("name") or observation_target.get("code")
     )
     has_unique_object = (
+        two_layer_execution
+        or
         _has_unique_action_target(snapshot)
         or has_observation_target
         or str(front_page.get("unique_object") or "").strip() not in ("", "-", "暂无", "不做")
     )
-    if is_zero_participation and has_observation_target:
+    if two_layer_execution:
+        stock_state = "B档条件执行对象"
+    elif is_zero_participation and has_observation_target:
         stock_state = "0%条件观察"
     else:
         stock_state = position_state["stock_state"] if has_unique_object else position_state.get("stock_state_without_target", position_state["stock_state"])
     front_no_buy_reason = str(front_page.get("no_buy_reason") or "").strip()
     if is_zero_participation and front_no_buy_reason:
-        front_no_buy_reason = front_no_buy_reason.replace("没有唯一对象", "没有观察锚").replace("有唯一对象", "有观察锚")
-    if has_unique_object and (
+        front_no_buy_reason = front_no_buy_reason.replace("没有唯一对象", "没有观察对象").replace("有唯一对象", "有观察对象")
+    if two_layer_execution:
+        no_buy_reason = "条件未满足前不参与；条件满足才B档执行"
+    elif has_unique_object and (
         not front_no_buy_reason
         or "没有唯一对象" in front_no_buy_reason
-        or (is_zero_participation and "没有观察锚" in front_no_buy_reason)
+        or (is_zero_participation and "没有观察对象" in front_no_buy_reason)
     ):
-        no_buy_reason = "有观察锚，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有核心对象，只等固定交易窗口内条件成立；条件不满足回到0%"
+        no_buy_reason = "有观察对象，只等观察窗口确认；条件不满足继续0%" if is_zero_participation else "有核心对象，只等固定交易窗口内条件成立；条件不满足回到0%"
     else:
-        no_buy_reason = front_no_buy_reason or ("没有观察锚，完整候选仅保留在附录和快照" if is_zero_participation else "没有核心对象，完整候选仅保留在附录和快照")
+        no_buy_reason = front_no_buy_reason or ("没有观察对象，完整候选仅保留在附录和快照" if is_zero_participation else "没有核心对象，完整候选仅保留在附录和快照")
     backup_watch = front_page.get("backup_watch") if isinstance(front_page.get("backup_watch"), list) else []
     sniper_candidates = _resolve_sniper_candidates(snapshot, candidate_snapshot)
     if position_state.get("grade") == "0" or not has_unique_object:
@@ -1879,10 +2437,10 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         )
         if not has_target_in_sniper:
             sniper_candidates = []
-    sniper_title = "明日候选观察" if is_zero_participation else "明日主买与补位"
+    sniper_title = "明日条件执行对象" if two_layer_execution else ("明日候选观察" if is_zero_participation else "明日主买与补位")
     sniper_header = (
         "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |"
-        if is_zero_participation
+        if is_zero_participation and not two_layer_execution
         else "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 | 参与窗 |"
     )
     lines = [
@@ -1897,7 +2455,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
             observation_target=observation_target,
             has_observation_target=has_observation_target,
         ),
-        f"| {'观察锚' if is_zero_participation else '唯一对象'} | {_candidate_section_unique_object_label(snapshot, observation_target=observation_target, has_observation_target=has_observation_target, front_page=front_page, is_zero_participation=is_zero_participation)} |",
+        f"| {'明日执行对象' if two_layer_execution else ('观察对象' if is_zero_participation else '唯一对象')} | {_two_layer_execution_target_label(snapshot) if two_layer_execution else _candidate_section_unique_object_label(snapshot, observation_target=observation_target, has_observation_target=has_observation_target, front_page=front_page, is_zero_participation=is_zero_participation)} |",
         f"| 当前状态 | {stock_state} |",
         f"| 备用观察 | {front_page.get('backup_text') or '暂无'} |",
         f"| 今日不买原因 | {normalize_trading_time_text(no_buy_reason)} |",
@@ -1963,11 +2521,19 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
         "| 前台显示 | 完整候选 | 动作原则 |",
         "|----------|----------|----------|",
         "| {display_policy} | 完整候选单保留在结构化快照与附录 | {principle} |".format(
-            display_policy="只保留观察锚和备用观察" if is_zero_participation else "只保留唯一对象和备用观察",
+            display_policy=(
+                "只保留明日执行对象和备用观察"
+                if two_layer_execution
+                else ("只保留观察对象和备用观察" if is_zero_participation else "只保留唯一对象和备用观察")
+            ),
             principle=(
-                "最终0%时只观察，不做新增参与；观察锚重新成立也只作为盘中复核"
-                if is_zero_participation
-                else f"{OPENING_WINDOW}竞价表态、开盘前几分钟、打板/回封；{SECOND_CONFIRM_LABEL}，买后用失效价和单笔-5%底线处理风险"
+                "低开承接型或主动进攻型满足才B档执行；不满足回到0%"
+                if two_layer_execution
+                else (
+                    "最终0%时只观察，不做新增参与；观察对象重新成立也只作为盘中复核"
+                    if is_zero_participation
+                    else f"{OPENING_WINDOW}竞价表态、开盘前几分钟、打板/回封；{SECOND_CONFIRM_LABEL}，买后用失效价和单笔-5%底线处理风险"
+                )
             )
         ),
         "",
@@ -1977,6 +2543,16 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
 
 def _unique_action_target_lines(snapshot, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    if _two_layer_execution_active(snapshot):
+        target = _two_layer_execution_object(snapshot)
+        label = _t0_target_label(target)
+        condition, window = _two_layer_execution_condition_text(snapshot)
+        return [
+            "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |",
+            "|--------------|------|------|------|--------------|",
+            f"| 只看明日执行对象 | {label} | {window} | {condition} | 不满足回到0%不参与 |",
+            "",
+        ]
     is_zero_participation = position_state.get("grade") == "0"
     observation_target = _conditional_observation_target(snapshot) if is_zero_participation else {}
     target = observation_target if observation_target else _effective_unique_action_target(snapshot)
@@ -2007,7 +2583,8 @@ def _unique_action_target_lines(snapshot, final_gate=None):
         participation_window_type = "structure_confirm"
         fallback_state = "不满足回到0%"
     if is_zero_participation:
-        action_label = "只看观察锚" if observation_target else "只看观察对象"
+        action_label = "只看观察对象"
+        condition = _zero_participation_observation_condition(condition)
         return [
             "| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |",
             "|--------------|------|------|------|--------------|",
@@ -2022,13 +2599,47 @@ def _unique_action_target_lines(snapshot, final_gate=None):
     ]
 
 
+def _zero_participation_observation_condition(condition):
+    text = normalize_trading_time_text(str(condition or "").strip())
+    positive_markers = (
+        "回封/打板",
+        "打板",
+        "买入",
+        "主买",
+        "补位",
+        "新增参与",
+        "50%标准进攻",
+        "核心进攻",
+        "竞价表态 + 开盘前几分钟",
+        "竞价表态 / 开盘前几分钟",
+    )
+    background_markers = (
+        "退潮",
+        "撤退",
+        "先退出",
+        "等下一轮",
+        "风险释放",
+        "防踩踏",
+        "不新增参与",
+    )
+    if not text or any(marker in text for marker in positive_markers) or any(marker in text for marker in background_markers):
+        return "主线承接 + 个股强弱重新确认"
+    return text
+
+
 def _execution_plan_lines(snapshot=None, final_gate=None):
     decision_lines = render_reasoning_decision_lines((snapshot or {}).get("reasoning_decision"))
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
-    if position_state.get("grade") == "0":
+    if _two_layer_execution_active(snapshot):
         schedule_lines = [
-            "| 09:30-09:35 | 只看跌停扩散、主攻线承接和观察锚是否出现 | 无 | 弱仓/错仓先降风险 | 观察，不抢开盘 |",
-            "| 09:50-10:10 | 观察市场底色、主线承接、观察锚强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |",
+            "| 09:30-09:35 | 主动进攻、分时大单净流入、VWAP上方保持 | 主动进攻型满足可B档执行 | 弱仓/错仓先降风险 | 条件满足才执行 |",
+            "| 09:50-10:10 | MA5承接、VWAP/0轴收回、市场与方向同步 | 低开承接型满足可B档执行 | 窗口内处理弱仓/错仓 | 不满足回到0% |",
+            f"| {TAIL_WINDOW} | 只判断是否仍有健康承接 | 无新增追高资格 | 非电风扇不新增参与 | 例外，不是常规 |",
+        ]
+    elif position_state.get("grade") == "0":
+        schedule_lines = [
+            "| 09:30-09:35 | 只看跌停扩散、主攻线承接和观察对象是否出现 | 无 | 弱仓/错仓先降风险 | 观察，不抢开盘 |",
+            "| 09:50-10:10 | 观察市场底色、主线承接、观察对象强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |",
             f"| {TAIL_WINDOW} | 只判断是否量化电风扇行情 | 无 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     else:
@@ -2048,6 +2659,80 @@ def _execution_plan_lines(snapshot=None, final_gate=None):
     ]
 
 
+def _next_day_action_target(snapshot, position_state):
+    snapshot = snapshot or {}
+    position_state = position_state or {}
+    if _two_layer_execution_active(snapshot):
+        return _two_layer_execution_object(snapshot)
+    if position_state.get("grade") == "0":
+        return _conditional_observation_target(snapshot)
+    return _effective_unique_action_target(snapshot)
+
+
+def _next_day_action_condition(snapshot, target, position_state):
+    snapshot = snapshot or {}
+    target = target or {}
+    position_state = position_state or {}
+    if _two_layer_execution_active(snapshot):
+        condition, window = _two_layer_execution_condition_text(snapshot)
+        return f"{window}；{condition}"
+    participation_window = normalize_participation_window(target.get("participation_window"))
+    if position_state.get("grade") == "0":
+        condition = _zero_participation_observation_condition(_text_value(target.get("condition")))
+    else:
+        condition = normalize_trading_time_text(
+            _text_value(
+                (_position_decision(snapshot) or {}).get("trigger_text"),
+                target.get("condition"),
+            )
+        )
+    if not condition:
+        condition = (
+            "主线承接 + 个股强弱重新确认"
+            if position_state.get("grade") == "0"
+            else f"主线确认 + 承接 + {SECOND_CONFIRM_LABEL}"
+        )
+    return f"{participation_window}；{condition}"
+
+
+def _next_day_action_no_participation_condition(snapshot, target, position_state):
+    snapshot = snapshot or {}
+    target = target or {}
+    position_state = position_state or {}
+    if _two_layer_execution_active(snapshot):
+        return "低开承接型和主动进攻型都不满足，回到0%不参与"
+    fallback = normalize_trading_time_text(_text_value(target.get("fallback_state")))
+    if not fallback:
+        fallback = "条件未满足继续0%" if position_state.get("grade") == "0" else "不满足回到0%"
+    return _ensure_no_trade_fallback(fallback)
+
+
+def _next_day_action_old_position_text(snapshot):
+    holding = _existing_position_summary(snapshot)
+    if holding:
+        return holding.get("summary") or "已有昨日持仓，先按持仓预案处理"
+    return "持仓未输入，执行前先确认旧仓情况"
+
+
+def _next_day_action_checklist_lines(snapshot=None, final_gate=None):
+    snapshot = snapshot or {}
+    position_state = _position_state_contract(snapshot, final_gate=final_gate)
+    target = _next_day_action_target(snapshot, position_state)
+    target_label = _unique_target_label(target) if isinstance(target, dict) and (target.get("name") or target.get("code")) else "暂无"
+    return [
+        "### 明日行动清单",
+        "| 项目 | 明日动作 |",
+        "|------|----------|",
+        f"| 仓位 | {'条件满足才B档执行；不满足回到0%' if _two_layer_execution_active(snapshot) else position_state.get('discipline')} |",
+        f"| 最终对象 | {target_label} |",
+        f"| 执行/观察条件 | {_next_day_action_condition(snapshot, target, position_state)} |",
+        f"| 不参与条件 | {_next_day_action_no_participation_condition(snapshot, target, position_state)} |",
+        f"| 旧仓处理 | {_next_day_action_old_position_text(snapshot)} |",
+        "| 复盘点 | 记录09:30-09:35、09:50-10:10、14:30-14:55三段是否满足条件 |",
+        "",
+    ]
+
+
 def _final_summary_lines(report_lines, snapshot, final_gate=None):
     final_gate = final_gate or {}
     if _has_unconfirmed_attack_evidence(snapshot):
@@ -2057,19 +2742,26 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         cycle = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or (snapshot.get("state_machine") or {}).get("leading_line") or "-"
         daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
-    action = position_state["default_action"]
-    observation_target = _conditional_observation_target(snapshot) if position_state.get("grade") == "0" else {}
-    target = observation_target if observation_target else _effective_unique_action_target(snapshot)
-    if isinstance(target, dict) and (target.get("name") or target.get("code")):
-        unique_target = f"观察锚：{_unique_target_label(target)}" if observation_target else _unique_target_label(target)
-        one_line_action = (
-            _conditional_zero_action_text(target, snapshot.get("position_decision"))
-            if observation_target
-            else position_state["action_with_target"]
-        )
+    if _two_layer_execution_active(snapshot):
+        action = "条件满足才B档执行；不满足回到0%"
+        unique_target = _two_layer_execution_target_label(snapshot)
+        one_line_action = "低开承接型或主动进攻型满足才B档执行；不满足回到0%"
+        execution_style = "50% / 标准进攻"
     else:
-        unique_target = "暂无"
-        one_line_action = position_state["action_without_target"]
+        action = position_state["default_action"]
+        observation_target = _conditional_observation_target(snapshot) if position_state.get("grade") == "0" else {}
+        target = observation_target if observation_target else _effective_unique_action_target(snapshot)
+        if isinstance(target, dict) and (target.get("name") or target.get("code")):
+            unique_target = f"观察对象：{_unique_target_label(target)}" if observation_target else _unique_target_label(target)
+            one_line_action = (
+                _conditional_zero_action_text(target, snapshot.get("position_decision"))
+                if observation_target
+                else position_state["action_with_target"]
+            )
+        else:
+            unique_target = "暂无"
+            one_line_action = position_state["action_without_target"]
+        execution_style = position_state["execution_style"]
     structure_judgement = _market_structure_judgement(snapshot)
     market_background = structure_judgement.get("tomorrow_rhythm") or "先看市场基底"
     action_reason_text = str(structure_judgement.get("action_reason_text") or "").strip()
@@ -2079,7 +2771,7 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         "## 七、最终结论",
         "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |",
         "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
-        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | {market_background} | {unique_target} | {position_state['execution_style']} | {one_line_action} |",
+        f"| {action} | 不确定时不值得主动参与 | {cycle} | {daily} | {market_background} | {unique_target} | {execution_style} | {one_line_action} |",
     ]
 
 
@@ -2088,9 +2780,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     snapshot = _with_derived_cycle_layer(market_research_snapshot or {})
     lines = [f"# {target_date} a股市场分析" if target_date else "# a股市场分析", ""]
     lines.extend(_opening_tone_lines(snapshot))
-    lines.extend(_account_status_lines(snapshot, final_gate=final_gate))
-    lines.extend(_discipline_table(final_gate=final_gate, position_level=position_level, snapshot=snapshot))
-    lines.extend(_monthly_rhythm_lines(snapshot))
+    derivation_packet = _sniper_target_derivation(snapshot)
     market_base = _market_base_lines(report_lines, snapshot)
     lines.extend(market_base or ["## 二、市场基底", "| 项目 | 结论 |", "|------|------|", "| 市场状态 | 待确认 |", ""])
     structure_lines = render_market_structure_section(_market_structure_judgement(snapshot))
@@ -2102,6 +2792,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
         lines.append("")
 
     lines.append("## 三、周期与主线")
+    lines.extend(_market_sector_spine_lines(snapshot))
     _append_nonempty(lines, _cycle_calendar_lines(snapshot))
     _append_nonempty(lines, _cycle_interpretation_lines(snapshot))
     _append_nonempty(lines, _pivot_mainline_lines(snapshot))
@@ -2110,13 +2801,27 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
     lines.extend(_turnover_share_lines(snapshot))
     lines.extend(_dragon_pullback_lines(snapshot))
 
+    lines.extend(_account_status_lines(snapshot, final_gate=final_gate))
+    lines.extend(_discipline_table(final_gate=final_gate, position_level=position_level, snapshot=snapshot))
+    lines.extend(_monthly_rhythm_lines(snapshot, final_gate=final_gate))
     lines.extend(_capital_intent_lines(snapshot))
     lines.extend(_candidate_lines(report_lines, snapshot, final_gate=final_gate))
+    if not report_lines and derivation_packet:
+        compact_chain = _sniper_target_derivation_compact_section(
+            derivation_packet,
+            heading="### 最终标的传导链",
+        )
+        if compact_chain:
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.extend(compact_chain)
+            lines.append("")
     lines.extend(_execution_plan_lines(snapshot, final_gate=final_gate))
     lines.extend(_final_summary_lines(report_lines, snapshot, final_gate=final_gate))
+    lines.extend(_next_day_action_checklist_lines(snapshot, final_gate=final_gate))
     if _position_state_contract(snapshot, final_gate=final_gate).get("grade") == "0":
         lines = _sanitize_zero_position_front_page_language(lines)
     lines = _dedupe_top20_capacity_front_lines(lines)
     lines = _dedupe_repeated_front_long_cells(lines)
     lines = [line for line in lines if not any(marker in str(line) for marker in FORBIDDEN_FRONT_PAGE_MARKERS)]
-    return sanitize_front_page_text([normalize_trading_time_text(line) for line in lines])
+    return sanitize_front_page_text([_front_trade_text(normalize_trading_time_text(line)) for line in lines])

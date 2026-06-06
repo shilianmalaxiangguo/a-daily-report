@@ -881,7 +881,101 @@ class ReportRuntimeTest(unittest.TestCase):
             else:
                 report_runtime._build_calendar_ai_context = original_builder
 
-    def test_build_calendar_ai_context_normalizes_batch_other_to_concrete_sector(self):
+    def test_get_or_build_calendar_ai_context_cache_key_includes_event_summary(self):
+        calls = []
+        original_cache = report_runtime.REPORT_RUNTIME_CACHE
+        original_builder = getattr(report_runtime, "_build_calendar_ai_context", None)
+        try:
+            report_runtime.REPORT_RUNTIME_CACHE = {}
+            report_runtime._build_calendar_ai_context = (
+                lambda data, print_fn=print: calls.append(
+                    (len(data.get("calendar_events", [])), data["calendar_events"][0].get("summary", ""))
+                )
+                or {
+                    "calendar_analysis": [],
+                    "top_directions": [],
+                    "unique_sectors": [],
+                    "bullish_events": [],
+                }
+            )
+
+            base_event = {"date": "2026-06-05", "title": "某行业交流会议将于6月5日举办", "star": 3}
+            report_runtime._get_or_build_calendar_ai_context({"calendar_events": [dict(base_event, summary="")]})
+            report_runtime._get_or_build_calendar_ai_context(
+                {"calendar_events": [dict(base_event, summary="工信部发布行业高质量发展实施方案。")]}
+            )
+
+            self.assertEqual(
+                calls,
+                [
+                    (1, ""),
+                    (1, "工信部发布行业高质量发展实施方案。"),
+                ],
+            )
+        finally:
+            report_runtime.REPORT_RUNTIME_CACHE = original_cache
+            if original_builder is None:
+                delattr(report_runtime, "_build_calendar_ai_context")
+            else:
+                report_runtime._build_calendar_ai_context = original_builder
+
+    def test_get_or_build_calendar_ai_context_cache_key_includes_news_evidence_text(self):
+        calls = []
+        original_cache = report_runtime.REPORT_RUNTIME_CACHE
+        original_builder = getattr(report_runtime, "_build_calendar_ai_context", None)
+        try:
+            report_runtime.REPORT_RUNTIME_CACHE = {}
+            report_runtime._build_calendar_ai_context = (
+                lambda data, print_fn=print: calls.append(
+                    (len(data.get("calendar_events", [])), data["xuangubao_data"]["xuangubao_news"][0].get("content", ""))
+                )
+                or {
+                    "calendar_analysis": [],
+                    "top_directions": [],
+                    "unique_sectors": [],
+                    "bullish_events": [],
+                }
+            )
+
+            base_data = {
+                "target_date": "2026-06-05",
+                "calendar_events": [
+                    {"date": "2026-06-05", "title": "量子安全技术大会将于6月5日举办", "star": 3}
+                ],
+            }
+            base_news = {
+                "title": "量子安全技术大会召开",
+                "summary": "",
+                "source_date": "2026-06-05",
+            }
+            report_runtime._get_or_build_calendar_ai_context(
+                {
+                    **base_data,
+                    "xuangubao_data": {"xuangubao_news": [dict(base_news, content="工信部发布行业高质量发展实施方案。")]},
+                }
+            )
+            report_runtime._get_or_build_calendar_ai_context(
+                {
+                    **base_data,
+                    "xuangubao_data": {"xuangubao_news": [dict(base_news, content="大会讨论量子安全应用场景。")]},
+                }
+            )
+
+            self.assertEqual(
+                calls,
+                [
+                    (1, "工信部发布行业高质量发展实施方案。"),
+                    (1, "大会讨论量子安全应用场景。"),
+                ],
+            )
+        finally:
+            report_runtime.REPORT_RUNTIME_CACHE = original_cache
+            if original_builder is None:
+                delattr(report_runtime, "_build_calendar_ai_context")
+            else:
+                report_runtime._build_calendar_ai_context = original_builder
+
+    def test_build_calendar_ai_context_keeps_confirmed_policy_evidence_when_batch_returns_other(self):
         class OtherBatchClient:
             def analyze_events_batch(self, events, batch_size=8):
                 return [
@@ -913,7 +1007,6 @@ class ReportRuntimeTest(unittest.TestCase):
 
             ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
             self.assertEqual(ai_analysis["main_direction"], "政策催化")
-            self.assertNotIn("其他", ai_analysis["related_sectors"])
             self.assertEqual(result["top_directions"], [("政策催化", 1)])
             self.assertIn("政策催化", result["unique_sectors"])
         finally:
@@ -927,7 +1020,7 @@ class ReportRuntimeTest(unittest.TestCase):
             else:
                 report_runtime._llm_call_stats = original_stats
 
-    def test_build_calendar_ai_context_handles_malformed_batch_results_without_other(self):
+    def test_build_calendar_ai_context_handles_malformed_batch_results_without_policy_guess(self):
         class MalformedBatchClient:
             def analyze_events_batch(self, events, batch_size=8):
                 return [None]
@@ -949,10 +1042,10 @@ class ReportRuntimeTest(unittest.TestCase):
             )
 
             ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
-            self.assertNotEqual(ai_analysis["main_direction"], "其他")
-            self.assertTrue(ai_analysis["related_sectors"])
-            self.assertTrue(result["top_directions"])
-            self.assertTrue(result["unique_sectors"])
+            self.assertEqual(ai_analysis["main_direction"], "政策催化")
+            self.assertIn("政策催化", ai_analysis["related_sectors"])
+            self.assertEqual(result["top_directions"], [("政策催化", 1)])
+            self.assertIn("政策催化", result["unique_sectors"])
         finally:
             if original_get_llm_service is None:
                 delattr(report_runtime, "get_llm_service")
@@ -988,6 +1081,979 @@ class ReportRuntimeTest(unittest.TestCase):
             self.assertEqual(result["analysis_source"], "local_rules")
             self.assertEqual(ai_analysis["main_direction"], "人形机器人")
             self.assertIn("减速器", ai_analysis["related_sectors"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_does_not_turn_low_evidence_meeting_titles_into_policy(self):
+        class GenericPolicyBatchClient:
+            def analyze_events_batch(self, events, batch_size=8):
+                return [
+                    {
+                        "main_direction": "政策催化",
+                        "related_sectors": ["政策催化"],
+                        "trading_logic": "按会议或活动处理",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: GenericPolicyBatchClient()
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "calendar_events": [
+                        {"date": "2026-06-05", "title": "华为云创想者大会将于6月5日至6日举办", "star": 3},
+                        {"date": "2026-06-06", "title": "东风汽车：OpenVAN无人物流车品牌将于6月6日全球首发", "star": 2},
+                        {"date": "2026-06-25", "title": "第21届开源中国·开源世界高峰论坛", "star": 3},
+                    ]
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            directions = [item["ai_analysis"]["main_direction"] for item in result["calendar_analysis"]]
+            related = [sector for item in result["calendar_analysis"] for sector in item["ai_analysis"]["related_sectors"]]
+            self.assertNotIn("政策催化", directions)
+            self.assertNotIn("政策催化", related)
+            self.assertNotIn(("政策催化", 3), result["top_directions"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_uses_event_summary_as_policy_evidence(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "某行业交流会议将于6月5日举办",
+                            "summary": "工信部发布行业高质量发展实施方案。",
+                            "star": 3,
+                        }
+                    ]
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            ai_analysis = result["calendar_analysis"][0]["ai_analysis"]
+            self.assertEqual(ai_analysis["main_direction"], "政策催化")
+            self.assertIn("政策催化", ai_analysis["related_sectors"])
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_uses_same_day_xuangubao_news_as_policy_evidence(self):
+        class AcceptingEvidenceClient:
+            def __init__(self):
+                self.adjudication_calls = []
+                self.batch_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 0,
+                    "confidence": "高",
+                    "match_reason": "新闻明确对应同一场大会，并含官方文件动作",
+                    "classification_hint": "政策催化",
+                    "policy_evidence": True,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.batch_calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = AcceptingEvidenceClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            ai_analysis = item["ai_analysis"]
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertEqual(client.adjudication_calls[0][2], "2026-06-05")
+            self.assertIn("工信部", client.batch_calls[0][0]["summary"])
+            self.assertEqual(ai_analysis["main_direction"], "政策催化")
+            self.assertIn("政策催化", ai_analysis["related_sectors"])
+            self.assertEqual(item["source_evidence"]["provider"], "xuangubao.xuangubao_news")
+            self.assertEqual(item["source_evidence"]["query_date"], "2026-06-05")
+            self.assertEqual(item["source_evidence"]["source_date"], "2026-06-05")
+            self.assertEqual(item["source_evidence"]["source_url"], "")
+            self.assertTrue(item["source_evidence"]["source_url_missing"])
+            self.assertIn("工信部", item["source_evidence"]["evidence_text"])
+            self.assertEqual(item["source_evidence"]["match_confidence"], "高")
+            self.assertTrue(item["source_evidence"]["policy_evidence"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_rejects_substring_news_when_ai_decision_rejects_it(self):
+        class RejectingEvidenceClient:
+            def __init__(self):
+                self.adjudication_calls = []
+                self.batch_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": False,
+                    "evidence_index": 0,
+                    "confidence": "高",
+                    "match_reason": "只是标题词相同，新闻主体不是这场日历事件",
+                    "classification_hint": "",
+                    "policy_evidence": False,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.batch_calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = RejectingEvidenceClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部发布另一项行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertEqual(client.batch_calls[0][0]["summary"], "")
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_accepts_semantic_news_without_exact_include_when_ai_decides_match(self):
+        class SemanticEvidenceClient:
+            def __init__(self):
+                self.adjudication_calls = []
+                self.batch_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 0,
+                    "confidence": "中",
+                    "match_reason": "新闻补足标题省略的华为云主体，语义对应同一场活动",
+                    "classification_hint": "云计算",
+                    "related_sectors": ["云服务", "云基础设施"],
+                    "policy_evidence": False,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.batch_calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = SemanticEvidenceClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "创想者大会将于6月5日至6日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "华为云开发者生态活动前瞻",
+                                "summary": "华为云创想者大会聚焦云计算、云服务和AI云基础设施。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertIn("华为云开发者生态活动", client.adjudication_calls[0][1][0]["title"])
+            self.assertIn("华为云创想者大会", client.batch_calls[0][0]["summary"])
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "云计算")
+            self.assertEqual(item["source_evidence"]["match_confidence"], "中")
+            self.assertFalse(item["source_evidence"]["policy_evidence"])
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_rejects_low_confidence_news_decision(self):
+        class LowConfidenceEvidenceClient:
+            def __init__(self):
+                self.adjudication_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 0,
+                    "confidence": "低",
+                    "match_reason": "可能相关但无法确认",
+                    "classification_hint": "政策催化",
+                    "policy_evidence": True,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = LowConfidenceEvidenceClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_does_not_send_invalid_date_news_to_ai_evidence_decision(self):
+        class AcceptAnyCandidateClient:
+            def __init__(self):
+                self.adjudication_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 0,
+                    "confidence": "高",
+                    "match_reason": "测试中任何候选都会被接受",
+                    "classification_hint": "政策催化",
+                    "policy_evidence": True,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = AcceptAnyCandidateClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "前一日新闻。",
+                                "source_date": "2026-06-04",
+                            },
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "只有查询日期，缺少来源日期。",
+                                "query_date": "2026-06-05",
+                            },
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "未来事件日期新闻。",
+                                "source_date": "2026-06-25",
+                            },
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(client.adjudication_calls, [])
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_rejects_out_of_range_news_evidence_index(self):
+        class OutOfRangeIndexClient:
+            def __init__(self):
+                self.adjudication_calls = []
+                self.batch_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 99,
+                    "confidence": "高",
+                    "match_reason": "索引越界时不能采信",
+                    "classification_hint": "政策催化",
+                    "policy_evidence": True,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.batch_calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = OutOfRangeIndexClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertEqual(client.batch_calls[0][0]["summary"], "")
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_rejects_boolean_news_decision_fields(self):
+        class BooleanDecisionClient:
+            def __init__(self):
+                self.adjudication_calls = []
+                self.batch_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": True,
+                    "confidence": True,
+                    "match_reason": "布尔字段不是合格结构",
+                    "classification_hint": "政策催化",
+                    "policy_evidence": True,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.batch_calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "其他",
+                        "related_sectors": [],
+                        "trading_logic": "AI未识别明确产业链",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = BooleanDecisionClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "无关产业新闻",
+                                "summary": "同日无关新闻。",
+                                "source_date": "2026-06-05",
+                            },
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            },
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertEqual(len(client.adjudication_calls[0][1]), 2)
+            self.assertEqual(client.batch_calls[0][0]["summary"], "")
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_get_llm_service is None:
+                delattr(report_runtime, "get_llm_service")
+            else:
+                report_runtime.get_llm_service = original_get_llm_service
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_requires_report_date_for_news_evidence(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_does_not_match_generic_event_title_to_news(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "某行业交流会议将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "某行业交流会议召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在会议期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_ignores_xuangubao_news_from_other_source_date(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-04",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_uses_report_date_not_future_event_date_for_news_evidence(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-25",
+                            "title": "开源世界高峰论坛将于6月25日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "开源世界高峰论坛召开，工信部发布开源生态实施方案",
+                                "summary": "工信部在开源世界高峰论坛期间发布开源生态实施方案。",
+                                "source_date": "2026-06-25",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertNotEqual(item["ai_analysis"]["main_direction"], "政策催化")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_ignores_undated_xuangubao_news(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_does_not_treat_query_date_as_news_source_date(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "量子安全技术大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在量子安全技术大会期间发布行业高质量发展实施方案。",
+                                "query_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_does_not_match_weak_title_term_combinations(self):
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = False
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "中国行业交流大会将于6月5日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "全国行业交流活动召开，工信部发布行业高质量发展实施方案",
+                                "summary": "工信部在行业交流活动期间发布行业高质量发展实施方案。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "待确认")
+            self.assertNotIn("source_evidence", item)
+        finally:
+            if original_remote_flag is None:
+                if hasattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM"):
+                    delattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM")
+            else:
+                report_runtime.ENABLE_REMOTE_CALENDAR_LLM = original_remote_flag
+
+    def test_build_calendar_ai_context_passes_matched_xuangubao_news_to_remote_analysis(self):
+        class CapturingBatchClient:
+            def __init__(self):
+                self.calls = []
+                self.adjudication_calls = []
+
+            def adjudicate_calendar_event_news_evidence(self, event, candidates, report_date):
+                self.adjudication_calls.append((dict(event), list(candidates), report_date))
+                return {
+                    "matched": True,
+                    "evidence_index": 0,
+                    "confidence": "高",
+                    "match_reason": "同名大会新闻补充了华为云主体",
+                    "classification_hint": "云计算",
+                    "policy_evidence": False,
+                }
+
+            def analyze_events_batch(self, events, batch_size=8):
+                self.calls.append(list(events))
+                return [
+                    {
+                        "main_direction": "政策催化",
+                        "related_sectors": ["政策催化"],
+                        "trading_logic": "按会议或活动处理",
+                        "expectation": "中性",
+                        "confidence": "低",
+                    }
+                    for _ in events
+                ]
+
+        client = CapturingBatchClient()
+        original_get_llm_service = getattr(report_runtime, "get_llm_service", None)
+        original_remote_flag = getattr(report_runtime, "ENABLE_REMOTE_CALENDAR_LLM", None)
+        try:
+            report_runtime.get_llm_service = lambda: client
+            report_runtime.ENABLE_REMOTE_CALENDAR_LLM = True
+
+            result = report_runtime._build_calendar_ai_context(
+                {
+                    "target_date": "2026-06-05",
+                    "calendar_events": [
+                        {
+                            "date": "2026-06-05",
+                            "title": "创想者大会将于6月5日至6日举办",
+                            "star": 3,
+                        }
+                    ],
+                    "xuangubao_data": {
+                        "xuangubao_news": [
+                            {
+                                "title": "华为云创想者大会将于6月5日开幕",
+                                "summary": "大会聚焦云计算、云服务和AI云基础设施。",
+                                "source_date": "2026-06-05",
+                            }
+                        ]
+                    },
+                },
+                print_fn=lambda *args, **kwargs: None,
+            )
+
+            self.assertEqual(len(client.adjudication_calls), 1)
+            self.assertEqual(len(client.calls), 1)
+            self.assertIn("华为云创想者大会", client.calls[0][0]["summary"])
+            item = result["calendar_analysis"][0]
+            self.assertEqual(item["ai_analysis"]["main_direction"], "云计算")
+            self.assertEqual(item["source_evidence"]["provider"], "xuangubao.xuangubao_news")
+            self.assertNotIn("政策催化", item["ai_analysis"]["related_sectors"])
         finally:
             if original_get_llm_service is None:
                 delattr(report_runtime, "get_llm_service")
@@ -1338,6 +2404,31 @@ class ReportRuntimeTest(unittest.TestCase):
                 helpers=helpers,
                 config={},
             )
+
+    def test_render_markdown_report_runtime_passes_target_date_to_market_analysis(self):
+        class _MarketAnalysisCaptured(RuntimeError):
+            pass
+
+        captured = {}
+
+        def _capture_market_analysis(*args, **kwargs):
+            captured["target_date"] = kwargs.get("target_date")
+            raise _MarketAnalysisCaptured("captured")
+
+        helpers = _build_runtime_execution_test_helpers(
+            lambda *args, **kwargs: {},
+            build_market_and_sector_analysis_contract=_capture_market_analysis,
+        )
+
+        with self.assertRaises(_MarketAnalysisCaptured):
+            report_runtime.render_markdown_report_runtime(
+                {"total_turnover": 27791.64},
+                "2026-06-04",
+                helpers=helpers,
+                config={},
+            )
+
+        self.assertEqual(captured["target_date"], "2026-06-04")
 
     def test_render_markdown_report_runtime_passes_market_risk_context_to_execution_data(self):
         class _RiskContextCaptured(RuntimeError):
@@ -2840,9 +3931,10 @@ class ReportRuntimeTest(unittest.TestCase):
         )
         rendered = result["report"]
         required_order = [
-            "## 一、交易纪律",
             "## 二、市场基底",
             "## 三、周期与主线",
+            "## 明日账户建议",
+            "## 一、交易纪律",
             "## 四、资金意图",
             "## 五、个股解读",
             "## 六、明日执行计划",
@@ -4062,7 +5154,7 @@ assert rendered == "# migrated"
         report = result["report"]
         self.assertIn("| 明日动作 | 当前账户不参与；强核心仍保留市场核心观察 |", report)
         self.assertIn("| 观察对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", report)
-        self.assertIn("| T0对象 | 无昨日持仓，不涉及T0 |", report)
+        self.assertIn("| 明日执行目标 | 无昨日持仓，不涉及明日执行对象 |", report)
         self.assertNotIn("| T0主对象 | 强核心(000001)：当前账户买不了一手，只保留观察 |", report)
         self.assertIn("| 新增参与上限 | 0 |", report)
         self.assertIn("| 经验库依据 | 实际不可买不降低市场身份 |", report)
@@ -4250,6 +5342,17 @@ def _runtime_binding_probe(
             )
 
         self.assertTrue(result["report"].startswith("# Runtime Report 2026-04-22"))
+
+    def test_calendar_news_source_date_handles_datetime_module_binding(self):
+        import datetime as datetime_module
+
+        previous = report_runtime._install_runtime_bindings({"datetime": datetime_module})
+        try:
+            source_date = report_runtime._calendar_news_source_date({"timestamp": 1780550400})
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(source_date, "2026-06-04")
 
     def test_runtime_decision_ledger_hook_builds_and_writes_when_enabled(self):
         captured = {}
@@ -5127,6 +6230,53 @@ def _runtime_binding_probe(
         self.assertLess(report.index("## 判断纠偏与今日五项结论"), report.index("## 明日账户建议"))
         self.assertIn("| 核心候选判断 | 粤电力Ａ(000539) | 下一交易日验证是否进入资金视野 |", report)
 
+    def test_runtime_moves_candidate_verdict_summary_after_market_spine(self):
+        report = report_runtime._insert_two_layer_front_decision_panel(
+            [
+                "# 2026-06-04 a股市场分析",
+                "",
+                "### 市场阶段",
+                "| 项目 | 结论 |",
+                "",
+                "### 资金结构",
+                "| 层级 | 结论 |",
+                "",
+                "### 板块关系",
+                "| 关系 | 主攻线 |",
+                "",
+                "### 超车 / 失速 / 窗口",
+                "| 项目 | 状态 |",
+                "",
+                "### 龙头 / 核心验证",
+                "| 方向 | 核心锚 |",
+                "",
+                "## 明日账户建议",
+                "| 项目 | 结论 |",
+            ],
+            [
+                "## 日报裁决总览",
+                "| 项目 | 结论 |",
+                "|------|------|",
+                "| 最终对象 | 观察对象：豫能控股(001896) |",
+                "",
+                "### 候选胜负摘要",
+                "| 候选 | 主线/板块 | 个股结构 | 资金确认 | 账户匹配 | 风险/缺失 | 结论 |",
+                "|------|-----------|----------|----------|----------|-----------|------|",
+                "| 上海石化(600688) | 支线 | T字板 | 资金缺失 | 不适合 | 关键缺失 | 资金确认不足 |",
+                "",
+                "## 明日执行结论",
+                "| 项目 | 结论 |",
+                "|------|------|",
+                "| 明日执行对象 | 无 |",
+            ],
+        )
+        text = "\n".join(report)
+
+        self.assertLess(text.index("## 日报裁决总览"), text.index("### 市场阶段"))
+        self.assertLess(text.index("## 明日执行结论"), text.index("### 市场阶段"))
+        self.assertLess(text.index("### 龙头 / 核心验证"), text.index("### 候选胜负摘要"))
+        self.assertLess(text.index("### 候选胜负摘要"), text.index("## 明日账户建议"))
+
     def test_runtime_inserts_single_final_target_solution_before_account_advice(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {
@@ -5227,6 +6377,175 @@ def _runtime_binding_probe(
         self.assertIn("| 核心候选判断 | 工业富联(601138) | 下一交易日验证是否进入资金视野 |", report)
         self.assertLess(report.index("## 最终标的解题过程"), report.index("## 明日账户建议"))
 
+    def test_runtime_renders_two_layer_front_decision_before_account_advice(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "退潮"},
+                    "mainline_name": "电力",
+                    "position_decision": {
+                        "target_position_pct": 50,
+                        "final_action": "条件满足才B档执行；不满足回到0%",
+                    },
+                    "selected_position_candidate": {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "target_position_pct": 50,
+                        "planned_participation": {
+                            "buy_window": "09:50-10:10",
+                            "fallback_state": "条件不满足回到0%",
+                        },
+                    },
+                    "step2_bundle": {
+                        "crossline_observation_stocks": [
+                            {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                            {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                        ]
+                    },
+                    "step3_bundle": {"focus_group": [{"name": "豫能控股", "code": "001896"}]},
+                    "executable_stocks": [{"name": "豫能控股", "code": "001896"}],
+                    "market_research_snapshot": {},
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=lambda path: {"available_trade_dates": [], "by_stock_code": {}},
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front", "", "## 明日账户建议", "| 项目 | 结论 |"],
+        )
+
+        data = {
+            "target_date": "2026-06-04",
+            "best_stock": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+        }
+        result = report_runtime.render_markdown_report_runtime(
+            data,
+            "2026-06-04",
+            helpers=helpers,
+            config={},
+        )
+        report = result["report"]
+
+        self.assertIn("## 明日执行结论", report)
+        self.assertIn("| 明日执行对象 | 豫能控股(001896) |", report)
+        self.assertIn("## B档执行条件", report)
+        self.assertIn("低开承接型", report)
+        self.assertIn("主动进攻型", report)
+        self.assertIn("## 推导审计层", report)
+        self.assertIn("### Step 2：主方向与候选收缩", report)
+        self.assertIn("| 最终结果 | 豫能控股(001896) |", report)
+        self.assertNotIn("| 最终结果 | 暂无 |", report)
+        self.assertLess(report.index("## 明日执行结论"), report.index("## 判断纠偏与今日五项结论"))
+        self.assertLess(report.index("## 明日执行结论"), report.index("## 最终标的解题过程"))
+        self.assertLess(report.index("## 明日执行结论"), report.index("## 明日账户建议"))
+        self.assertEqual(data["two_layer_decision_payload"]["front_decision"]["execution_object"]["code"], "001896")
+
+    def test_runtime_derivation_chain_keeps_stale_local_candidate_as_process_only(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "混沌"},
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "best_stock": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                    "watch_anchor": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                    "selected_position_candidate": {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "candidate_role": "观察锚",
+                    },
+                    "executable_stocks": [{"name": "豫能控股", "code": "001896", "sector": "电力"}],
+                    "position_decision": {"target_position_pct": 0, "signal_grade": "0"},
+                },
+            }
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=lambda path: {"available_trade_dates": [], "by_stock_code": {}},
+            build_report_shell_contract=lambda *args, **kwargs: {
+                "report": [
+                    "## 八、详细附录",
+                    "**观察优先锚点**: 上海石化(600688)",
+                    "**先看顺序**（优先盯最能反映主线承接的对象）:",
+                    "- 👀 上海石化(600688) - 旧过程观察",
+                ]
+            },
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=lambda report, **kwargs: ["# front", "", "## 明日账户建议", "| 项目 | 结论 |"],
+            DISPLAY_MVP_MODE=False,
+        )
+
+        result = report_runtime.render_markdown_report_runtime(
+            {"exchange_monitor_today": [], "exchange_monitor_nextday": []},
+            "2026-06-04",
+            helpers=helpers,
+            config={},
+        )
+        report = result["report"]
+        front_text, appendix_text = report.split("## 八、详细附录", 1)
+
+        self.assertIn("| 明日执行对象 | 无 |", front_text)
+        self.assertIn("| 最终对象 | 观察对象：豫能控股(001896) |", front_text)
+        self.assertIn("仓位不允许B档，豫能控股(001896)只保留为观察对象", front_text)
+        self.assertNotIn("| 最终对象 | 无 |", front_text)
+        self.assertNotIn("没有可用明日执行对象，也没有观察对象", front_text)
+        self.assertIn("`-- 最终观察对象: 豫能控股(001896), 0%只观察", front_text)
+        self.assertIn("上海石化(600688): 过程候选 / 被替换", front_text)
+        self.assertIn(
+            "| 豫能控股(001896) | 观察对象 | - | - | - | - | - | - | 待计算 | 只保留观察，等风险价格补齐 |",
+            front_text,
+        )
+        self.assertIn("## 狙击手最终标的完整路径图（过程证据）", appendix_text)
+        self.assertIn("来源序号=1", appendix_text)
+        self.assertIn("来源=执行链最佳候选 候选=上海石化(600688) 身份=过程候选 去向=被替换", appendix_text)
+        self.assertIn("最终对象=豫能控股(001896) 身份=观察对象", appendix_text)
+        self.assertLess(appendix_text.index("阶段一：原始候选"), appendix_text.index("阶段二：当前核心解析"))
+        self.assertLess(appendix_text.index("阶段二：当前核心解析"), appendix_text.index("阶段三：仓位/账户修正"))
+        self.assertLess(appendix_text.index("阶段三：仓位/账户修正"), appendix_text.index("阶段四：最终对象解析"))
+        self.assertNotIn("T0 原始候选", appendix_text)
+        self.assertNotIn("T1 当前核心解析", appendix_text)
+        self.assertNotIn("T2 仓位/账户修正", appendix_text)
+        self.assertNotIn("T3 最终对象解析", appendix_text)
+        self.assertNotIn("最终观察锚: 上海石化", report)
+        self.assertNotIn("观察锚", report)
+        self.assertNotIn("豫能控股(001896) | 观察锚", report)
+        self.assertNotIn("| 明日执行对象 | 豫能控股(001896) |", report)
+
     def test_runtime_builds_final_target_resolution_for_new_entry_after_old_position_exit(self):
         captured = {}
 
@@ -5325,6 +6644,81 @@ def _runtime_binding_probe(
         self.assertIn("+-- 旧仓处理: 华电辽能(600396)", result["report"])
         self.assertIn("+-- 最终结果: 工业富联(601138)", result["report"])
 
+    def test_runtime_stores_sniper_target_derivation_packet_and_renders_compact_chain(self):
+        data = {"target_date": "2026-06-04"}
+        execution_context = {
+            "best_stock": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+            "watch_anchor": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+        }
+        market_snapshot = {
+            "selected_position_candidate": {"name": "豫能控股", "code": "001896", "sector": "电力"}
+        }
+        resolution = {
+            "watch_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+            "new_entry_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+            "display_target": {"name": "华电辽能", "code": "600396", "sector": "电力"},
+            "capital_priority_decision": {
+                "capital_priority": "old_position_t",
+                "reason": "先处理旧仓，豫能控股只保留观察锚",
+            },
+        }
+
+        packet = report_runtime._build_sniper_target_derivation_packet(
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+            final_target_resolution=resolution,
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            final_gate={"final_action": "只观察，不新增参与"},
+        )
+        report_runtime._store_runtime_sniper_target_derivation(
+            packet,
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+        )
+        compact = "\n".join(report_runtime._render_sniper_target_derivation_compact(packet))
+
+        self.assertEqual(packet["schema_version"], "sniper_target_derivation.v1")
+        self.assertEqual(packet["canonical_target"]["code"], "001896")
+        self.assertEqual(data["sniper_target_derivation"]["canonical_target"]["name"], "豫能控股")
+        self.assertEqual(execution_context["sniper_target_derivation"]["canonical_target"]["code"], "001896")
+        self.assertEqual(market_snapshot["sniper_target_derivation"]["canonical_target"]["code"], "001896")
+        self.assertIn("最终观察对象: 豫能控股(001896)", compact)
+        self.assertIn("上海石化(600688): 过程候选 / 被替换", compact)
+        self.assertNotIn("最终观察对象: 上海石化", compact)
+
+    def test_sniper_derivation_uses_proxy_as_canonical_when_display_target_is_proxy(self):
+        resolution = {
+            "watch_target": {"name": "中际旭创", "code": "300308", "sector": "通信设备"},
+            "new_entry_target": {"name": "中际旭创", "code": "300308", "sector": "通信设备"},
+            "tradable_proxy_target": {"name": "通信ETF", "code": "515880", "sector": "通信设备"},
+            "display_target": {"name": "通信ETF", "code": "515880", "sector": "通信设备"},
+            "capital_priority_decision": {
+                "capital_priority": "new_entry_after_old_exit",
+                "reason": "先处理旧仓，目标标的中际旭创(300308)，小资金账户可用通信ETF(515880)替代",
+            },
+        }
+
+        packet = report_runtime._build_sniper_target_derivation_packet(
+            data={"target_date": "2026-06-03"},
+            execution_stage_context={"best_stock": {"name": "中际旭创", "code": "300308", "sector": "通信设备"}},
+            market_research_snapshot={},
+            final_target_resolution=resolution,
+            selected_position_candidate={"name": "中际旭创", "code": "300308", "sector": "通信设备"},
+            position_decision={"target_position_pct": 50, "signal_grade": "50"},
+            final_gate={"final_action": "先处理旧仓，买通信ETF(515880)"},
+        )
+        compact = "\n".join(report_runtime._render_sniper_target_derivation_compact(packet))
+        full = "\n".join(packet["full_ascii"])
+
+        self.assertEqual(packet["canonical_target"]["code"], "515880")
+        self.assertIn("最终执行对象: 通信ETF(515880)", compact)
+        self.assertIn("阶段四：最终对象解析", full)
+        self.assertIn("最终对象=通信ETF(515880) 身份=执行对象", full)
+        self.assertNotIn("T3 最终对象解析", full)
+        self.assertNotIn("最终观察锚: 中际旭创", compact)
+
     def test_runtime_keeps_new_target_observational_when_risk_price_is_missing(self):
         selected = {
             "name": "华天科技",
@@ -5418,6 +6812,72 @@ def _runtime_binding_probe(
         self.assertIn("## 旧仓与新机会风险价格对比", rendered)
         self.assertIn("| 华电辽能(600396) | old_position |", rendered)
         self.assertIn("| 华天科技(002185) | sector_anchor | 19.16 | 18.20 / -5.01% | 17.80 / -6.99% | - | - | - | 待计算 | 只保留观察，等风险价格补齐 |", rendered)
+
+    def test_runtime_final_target_solution_wait_priority_keeps_observation_target_visible(self):
+        selected = {"name": "豫能控股", "code": "001896", "sector": "电力"}
+        lines = report_runtime._runtime_selected_target_solution_lines(
+            selected,
+            final_gate={"final_action": "0%不参与；只保留观察"},
+            mainline_turnover_summary={"current_mainline": "电力"},
+            final_target_resolution={
+                "watch_target": selected,
+                "process_target": selected,
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "空仓等待，条件未出现前不参与",
+                },
+            },
+            market_research_snapshot={
+                "two_layer_decision_payload": {
+                    "front_decision": {
+                        "execution_object": {},
+                        "execution_identity": "无明日执行对象",
+                        "position_plan": "0%不参与",
+                    },
+                    "b_level_conditions": {},
+                }
+            },
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 最终结果 | 观察对象：豫能控股(001896) |", rendered)
+        self.assertIn("+-- 最终结果: 观察对象：豫能控股(001896)", rendered)
+        self.assertIn("| 明日动作 | 0%不参与；只保留观察 |", rendered)
+        self.assertNotIn("| 最终结果 | 暂无 |", rendered)
+        self.assertNotIn("+-- 最终结果: 暂无", rendered)
+        self.assertNotIn("| 明日执行对象 | 豫能控股(001896) |", rendered)
+
+    def test_runtime_final_target_solution_wait_priority_ignores_stale_execution_object(self):
+        selected = {"name": "豫能控股", "code": "001896", "sector": "电力"}
+        lines = report_runtime._runtime_selected_target_solution_lines(
+            selected,
+            final_gate={"final_action": "0%不参与；只保留观察"},
+            mainline_turnover_summary={"current_mainline": "电力"},
+            final_target_resolution={
+                "watch_target": selected,
+                "process_target": selected,
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "空仓等待，条件未出现前不参与",
+                },
+            },
+            market_research_snapshot={
+                "two_layer_decision_payload": {
+                    "front_decision": {
+                        "execution_object": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                        "execution_identity": "明日执行对象",
+                        "position_plan": "B档执行",
+                    },
+                    "b_level_conditions": {"active_attack": {"trigger": "主动进攻型"}},
+                }
+            },
+        )
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 最终结果 | 观察对象：豫能控股(001896) |", rendered)
+        self.assertIn("| 明日动作 | 0%不参与；只保留观察 |", rendered)
+        self.assertNotIn("| 最终结果 | 上海石化(600688) |", rendered)
+        self.assertNotIn("条件满足才B档执行", rendered)
 
     def test_runtime_recovers_huadian_old_position_from_damaged_t_summary(self):
         old_position = report_runtime._runtime_old_position_for_opportunity(
@@ -5577,6 +7037,83 @@ def _runtime_binding_probe(
         self.assertIn("+-- 小资金账户: 可用通信ETF(515880)替代", lines)
         self.assertIn("+-- 替代效应: 行业板块效应", lines)
         self.assertNotIn("跟风", resolution["display_target"].get("candidate_role", ""))
+
+    def test_runtime_sequences_old_position_before_unbuyable_core_proxy(self):
+        selected = {
+            "name": "中际旭创",
+            "code": "300308",
+            "sector": "通信设备",
+            "identity": "市场核心",
+            "one_lot_amount": 16800,
+            "sniper_role": "明日主买对象",
+            "anchor_reversal_decision": "可作为主对象",
+            "primary_buy_candidate": True,
+            "sector_anchor": "中际旭创(300308)",
+            "candidate_role": "板块锚",
+            "relationship_to_anchor": "通信设备回流优先看板块锚",
+            "leader_certainty_path": "大容量核心优先，慢即是快",
+            "planned_participation": {
+                "buy_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+            },
+            "tradable_proxy_target": {
+                "name": "通信ETF",
+                "code": "515880",
+                "sector": "通信设备",
+                "proxy_effect_type": "行业板块效应",
+                "proxy_reason": "跟踪通信设备方向，不退到弱跟风个股",
+                "condition": "通信设备承接继续",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+                "execution_eligible": True,
+                "target_position_pct": 50,
+            },
+        }
+        data = {
+            "account_profile": {"cash_available": 9800},
+            "personal_position_context": {
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                },
+            },
+        }
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={"target_position_pct": 50, "signal_grade": "50"},
+            selected_position_candidate=selected,
+            data=data,
+            market_research_snapshot={},
+        )
+
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data=data,
+            selected_position_candidate=selected,
+            position_decision=position_decision,
+            market_research_snapshot={},
+        )
+        lines = "\n".join(
+            report_runtime._runtime_selected_target_solution_lines(
+                selected,
+                final_gate={"final_action": "固定交易窗口条件成立才参与，不满足回到0%"},
+                mainline_turnover_summary={"current_mainline": "通信设备"},
+                final_target_resolution=resolution,
+            )
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry_after_old_exit")
+        self.assertEqual(resolution["existing_position_target"]["code"], "600396")
+        self.assertEqual(resolution["new_entry_target"]["code"], "300308")
+        self.assertEqual(resolution["watch_target"]["code"], "300308")
+        self.assertEqual(resolution["tradable_proxy_target"]["code"], "515880")
+        self.assertEqual(resolution["display_target"]["code"], "515880")
+        self.assertIn("先处理旧仓", resolution["capital_priority_decision"]["reason"])
+        self.assertIn("小资金账户可用通信ETF(515880)替代", resolution["capital_priority_decision"]["reason"])
+        self.assertIn("| 最终结果 | 通信ETF(515880) |", lines)
+        self.assertIn("| 旧仓处理 | 华电辽能(600396) |", lines)
+        self.assertIn("| 目标标的 | 中际旭创(300308) |", lines)
+        self.assertIn("| 小资金替代表达 | 通信ETF(515880) |", lines)
+        self.assertLess(lines.index("+-- 旧仓处理"), lines.index("+-- 小资金账户"))
 
     def test_daily_judgment_front_panel_uses_anchor_primary_not_same_day_observation_records(self):
         index = {
@@ -6527,18 +8064,18 @@ def _runtime_binding_probe(
             )
 
         rendered = result["report"]
-        self.assertIn("| 唯一对象 | 000586 汇源通信（通信设备） |", rendered)
+        self.assertIn("| 明日执行对象 | 汇源通信(000586) |", rendered)
         self.assertIn("| 进攻仓位三态 | 50% |", rendered)
         self.assertIn("| 明日最大仓位 | 50% |", rendered)
-        self.assertIn("| 只看唯一对象 | 000586 汇源通信（通信设备） | 09:50-10:10 |", rendered)
-        self.assertIn("| 50%标准进攻，只做预演命中的合格对象 |", rendered)
+        self.assertIn("| 只看明日执行对象 | 汇源通信(000586) | 09:30-09:35或09:50-10:10 |", rendered)
+        self.assertIn("| 条件满足才B档执行；不满足回到0% |", rendered)
         self.assertIn("- **进攻仓位三态**: 50%标准进攻预演", rendered)
         self.assertIn("- **明天仓位放多少**: 条件50%；盘前不抢跑", rendered)
         self.assertNotIn("没有唯一对象，完整候选仅保留在附录和快照", rendered)
         self.assertNotIn("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", rendered)
         self.assertNotIn("- **进攻仓位三态**: 0%不参与", rendered)
         self.assertNotIn("盘前0%；参与窗口命中后才评估50%标准进攻", rendered)
-        self.assertNotIn("| 唯一对象 | 暂无 |", rendered)
+        self.assertNotIn("| 明日执行对象 | 无 |", rendered)
         self.assertNotIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("最终执行条件: 明日目标标的保留条件50%预演", stdout.getvalue())
         self.assertNotIn("最终执行条件: 空仓等待", stdout.getvalue())
@@ -6618,15 +8155,15 @@ def _runtime_binding_probe(
         )
         rendered = "\n".join(normalized)
 
-        self.assertIn("明日不新增参与，只观察风险是否钝化、主攻线承接和观察锚是否重新成立", rendered)
+        self.assertIn("明日不新增参与，只观察风险是否钝化、主攻线承接和观察对象是否重新成立", rendered)
         self.assertIn("- **进攻仓位三态**: 0%不参与", rendered)
         self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
         self.assertIn("0%观察，不抢跑，只保留候选观察的盘中复核路径", rendered)
         self.assertIn("- 0%不参与：最终结论不允许新增参与，只观察风险是否钝化", rendered)
-        self.assertIn("- **确认后怎么做**: 只保留观察，不能转成新增参与；未命中继续0%观察", rendered)
+        self.assertIn("- **确认后怎么做**: 只保留观察；未出现执行资格前不新增参与；未命中继续0%观察", rendered)
         self.assertIn("- **出手时怎么做**: 盘前0%只代表不抢跑；只观察，不新增参与", rendered)
         self.assertIn("- 以观察和处理持仓为主；不做新开仓", rendered)
-        self.assertIn("观察锚是否重新成立", rendered)
+        self.assertIn("观察对象是否重新成立", rendered)
         self.assertIn("重点观察复核脚本", rendered)
         self.assertIn("| 观察窗口 | 观察状态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
         self.assertIn("| 09:50-10:10 | 0%观察 | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
@@ -6659,7 +8196,7 @@ def _runtime_binding_probe(
         )
         rendered = "\n".join(normalized)
 
-        self.assertIn("只保留观察锚，不能转成新增参与", rendered)
+        self.assertIn("不新增参与；只保留观察对象；未出现执行资格前不新增参与", rendered)
         self.assertIn("重点观察复核脚本", rendered)
         self.assertIn("| 观察窗口 | 观察状态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
         self.assertNotIn("明日目标标的保留条件100%核心进攻", rendered)
@@ -6667,6 +8204,165 @@ def _runtime_binding_probe(
         self.assertNotIn("重点观察参与脚本", rendered)
         self.assertNotIn("参与窗口", rendered)
         self.assertNotIn("回封/打板", rendered)
+
+    def test_runtime_appendix_aligns_observation_anchor_with_final_watch_target(self):
+        lines = [
+            "**观察优先锚点**: 豫能控股(001896)",
+            "**先看顺序**（优先盯最能反映主线承接的对象）:",
+            "- 👀 豫能控股(001896) - 主线继续看谁，09:50-10:10观察价9.21",
+            "- 👀 华电能源(600726) - 备选观察",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"code": "600688", "name": "上海石化"},
+            position_decision={"signal_grade": "0", "target_position_pct": 0, "participation_mode": "observe_0"},
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "old_position_t"},
+                "watch_target": {"code": "600688", "name": "上海石化"},
+                "existing_position_target": {"code": "600396", "name": "华电辽能"},
+            },
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("**观察优先锚点**: 上海石化(600688)", rendered)
+        self.assertIn("- 👀 上海石化(600688) - 主线继续看谁，09:50-10:10观察价9.21", rendered)
+        self.assertNotIn("**观察优先锚点**: 豫能控股(001896)", rendered)
+        self.assertNotIn("- 👀 豫能控股(001896) - 主线继续看谁", rendered)
+
+    def test_sanitize_report_lines_aligns_appendix_anchor_from_front_page_observation_anchor(self):
+        lines = [
+            "## 五、个股解读",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 观察锚 | 600688 上海石化（炼化及贸） |",
+            "## 八、详细附录",
+            "**观察优先锚点**: 豫能控股(001896)",
+            "**先看顺序**（优先盯最能反映主线承接的对象）:",
+            "- 👀 豫能控股(001896) - 观察价9.21",
+            "- 👀 华电能源(600726) - 备选观察",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("**观察优先锚点**: 600688 上海石化（炼化及贸）", rendered)
+        self.assertIn("- 👀 600688 上海石化（炼化及贸） - 观察价9.21", rendered)
+        self.assertNotIn("**观察优先锚点**: 豫能控股(001896)", rendered)
+        self.assertNotIn("- 👀 豫能控股(001896)", rendered)
+
+    def test_sanitize_report_lines_relabels_legacy_observation_anchor_terms(self):
+        lines = [
+            "| 观察对象 | 豫能控股(001896)：观察锚，不是执行对象 |",
+            "| 只看观察锚 | 豫能控股(001896) | 09:50-10:10 | 主线承接 | 不满足继续0% |",
+            "`-- 最终观察锚: 豫能控股(001896), 0%只观察",
+            "| 0%不参与 | 不确定时不值得主动参与 | 电力 | 电力 | 观察聚焦 | 观察锚：豫能控股(001896) | 0% / 不参与 | 盘前0%；只观察豫能控股，不能转成新增参与；不满足继续0% |",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("| 观察对象 | 豫能控股(001896)：观察对象，不是执行目标 |", rendered)
+        self.assertIn("| 只看观察对象 | 豫能控股(001896) | 09:50-10:10 | 主线承接 | 不满足继续0% |", rendered)
+        self.assertIn("`-- 最终观察对象: 豫能控股(001896), 0%只观察", rendered)
+        self.assertIn("观察对象：豫能控股(001896)", rendered)
+        self.assertNotIn("观察锚", rendered)
+        self.assertNotIn("不是执行对象", rendered)
+        self.assertNotIn("不能转成新增参与", rendered)
+
+    def test_candidate_quality_process_panel_prefers_final_watch_target_over_stale_anchor_fields(self):
+        from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import (
+            build_candidate_quality_scorecard_payload,
+        )
+        from report.action_plan_nodes import build_action_plan_candidate_quality_node
+
+        payload = build_candidate_quality_scorecard_payload(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "watch_anchor": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%观察",
+                    "account_attention_load": "无持仓负担",
+                    "holding_priority_action": "无旧仓时只等参与窗口",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": {"name": "上海石化", "code": "600688"},
+                    "backup_candidate": {"name": "上海石化", "code": "600688"},
+                },
+                "candidate_quality_samples": [
+                    {"name": "上海石化", "code": "600688", "selection_quality": "中", "entry_cost_state": "确认中"},
+                ],
+                "sniper_target_derivation": {
+                    "schema_version": "sniper_target_derivation.v1",
+                    "canonical_target": {"name": "豫能控股", "code": "001896", "role": "观察锚"},
+                    "steps": [
+                        {
+                            "step_id": "T0",
+                            "label": "原始候选",
+                            "source": "execution_stage_context.watch_anchor",
+                            "candidate": {"name": "上海石化", "code": "600688"},
+                            "role": "过程候选",
+                            "decision": "被替换",
+                            "reason": "最终解析未选为观察锚",
+                        }
+                    ],
+                },
+                "final_target_resolution": {
+                    "watch_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                },
+            }
+        )
+        rendered = "\n".join(
+            build_action_plan_candidate_quality_node(
+                {
+                    "candidate_quality_panel_fields": payload["candidate_quality_panel_fields"],
+                    "candidate_quality_samples": payload["candidate_quality_samples"],
+                    "sniper_target_derivation": payload["sniper_target_derivation"],
+                    "enabled_node_keys": ["overview", "candidate_quality"],
+                }
+            )["lines"]
+        )
+
+        self.assertIn("| 补位对象 | 豫能控股(001896) |", rendered)
+        self.assertIn("| 豫能控股(001896) |", rendered)
+        self.assertIn("上海石化(600688): 过程候选 / 被替换", rendered)
+        self.assertNotIn("| 补位对象 | 上海石化(600688) |", rendered)
+
+    def test_candidate_quality_generated_panel_prefers_final_watch_target_over_stale_best_stock(self):
+        from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import (
+            build_candidate_quality_scorecard_payload,
+        )
+        from report.action_plan_nodes import build_action_plan_candidate_quality_node
+
+        payload = build_candidate_quality_scorecard_payload(
+            {
+                "trade_gate_open": False,
+                "position_level": "一档（空仓档）",
+                "step0_prediction_cn": "0%观察",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "best_stock": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                "watch_anchor": {"name": "上海石化", "code": "600688", "sector": "炼化及贸"},
+                "final_target_resolution": {
+                    "watch_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                },
+            }
+        )
+        rendered = "\n".join(
+            build_action_plan_candidate_quality_node(
+                {
+                    "candidate_quality_panel_fields": payload["candidate_quality_panel_fields"],
+                    "candidate_quality_samples": payload["candidate_quality_samples"],
+                    "sniper_target_derivation": payload["sniper_target_derivation"],
+                    "enabled_node_keys": ["overview", "candidate_quality"],
+                }
+            )["lines"]
+        )
+
+        self.assertIn("| 补位对象 | 豫能控股(001896) |", rendered)
+        self.assertIn("| 豫能控股(001896) |", rendered)
+        self.assertNotIn("上海石化", rendered)
 
     def test_runtime_attack_preview_relabels_legacy_zero_appendix_lines(self):
         lines = [
@@ -6716,10 +8412,35 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
-        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
+        self.assertIn("最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。", rendered)
+        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("普通结构才等60分钟确认", rendered)
+
+    def test_sanitize_report_lines_deduplicates_front_page_long_table_cells(self):
+        repeated = (
+            "Top20第20名128.51亿，Top20合计3842.81亿，占两市12.86%；"
+            "资金集中在大成交趋势核心，作为Top50后的补充观察，只说明资金选择方向，不单独给参与资格。"
+        )
+        lines = [
+            "## 二、市场基底",
+            "| 指标 | 数值 | 解读 |",
+            "|------|------|------|",
+            f"| Top20成交容量 | 14/20只150亿级 | {repeated} |",
+            "### 2. 市场状态结论",
+            "| 项目 | 结论 | 依据 |",
+            "|------|------|------|",
+            f"| Top20成交容量 | 容量活跃 | {repeated} |",
+            "## 八、详细附录",
+            f"| 附录说明 | {repeated} |",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+        front_text, appendix_text = rendered.split("## 八、详细附录", 1)
+
+        self.assertEqual(front_text.count(repeated), 1)
+        self.assertIn("同类说明见上方，只看本行数值变化", front_text)
+        self.assertIn(repeated, appendix_text)
 
     def test_sanitize_report_lines_marks_process_tables_as_evidence(self):
         lines = [
@@ -6768,8 +8489,8 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("观察锚：605111 新洁能（半导体）", rendered)
-        self.assertIn("只观察605111 新洁能（半导体），成立才保留观察，不能转成新增参与；不满足继续0%", rendered)
+        self.assertIn("观察对象：605111 新洁能（半导体）", rendered)
+        self.assertIn("只观察605111 新洁能（半导体），成立才保留观察；未出现执行资格前不新增参与；不满足继续0%", rendered)
         self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
         self.assertNotIn("参与窗口命中", rendered)
         self.assertIn("| 09:50-10:10 | 新洁能站上63.22且板块承接不塌 | 只观察 | 买后用60.06做失效 | 不满足继续0% |", rendered)
@@ -6856,7 +8577,7 @@ def _runtime_binding_probe(
         self.assertIn("不能因为MA3/MA5/MA10单独参与", rendered)
         self.assertIn("不是所有股票的观察理由", rendered)
         self.assertIn("| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |", rendered)
-        self.assertIn("| 主观察对象 | 暂无 |", rendered)
+        self.assertIn("| 主观察对象 | 风华高科(000636) |", rendered)
         self.assertIn("| 观察对象 | 风华高科(000636) |", rendered)
         self.assertIn("| 候选 | 账户状态 | 当前持仓 | 可卖数量 | 选股质量 | 观察位质量 | 观察上限 | 新增参与动作 |", rendered)
         self.assertIn("| 风华高科(000636) | 仅观察 | 0 | 0 | 中 | 等确认 | 观察 | 等触发条件成立 |", rendered)
@@ -6915,7 +8636,7 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("| 主观察对象 | 暂无 |", rendered)
+        self.assertIn("| 主观察对象 | 华天科技(002185) |", rendered)
         self.assertIn("新开仓0手", rendered)
         self.assertIn("| 观察对象 | 华天科技(002185) |", rendered)
         self.assertIn("| 候选 | 账户状态 | 当前持仓 | 可卖数量 | 选股质量 | 观察位质量 | 观察上限 | 新增参与动作 |", rendered)
@@ -7095,7 +8816,7 @@ def _runtime_binding_probe(
             )
 
         rendered = result["report"]
-        self.assertIn("| 观察锚 | 暂无 |", rendered)
+        self.assertIn("| 观察对象 | 暂无 |", rendered)
         self.assertIn("| 进攻仓位三态 | 0% |", rendered)
         self.assertIn("| 明日最大仓位 | 0% |", rendered)
         self.assertIn("| 0%不参与 |", rendered)

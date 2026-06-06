@@ -6,6 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+import sys
+
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from report.surface_wording import sanitize_user_visible_text
+
+
 def _m(*parts):
     return "".join(parts)
 
@@ -638,7 +645,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
-    def test_skill_docs_preserve_python314_and_tushare_gateway_runtime_contract(self):
+    def test_skill_docs_preserve_python314_and_tushare_proxy_runtime_contract(self):
         skill = self._read("SKILL.md")
         data_source_node = self._read("wiki/运行契约/日报数据源契约.md")
         verification = self._read("references/verification.md")
@@ -647,9 +654,10 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         for required in [
             "Python 3.14-first",
             "do not silently fall back to 3.11",
-            "Tushare gateway",
+            "Tushare proxy",
+            "TUSHARE_TOKEN",
             "TUSHARE_HTTP_URL",
-            "http://a.sszhixia.cn/",
+            ".env",
             "create_tushare_pro_api",
         ]:
             self.assertIn(required, combined)
@@ -775,6 +783,16 @@ class DailyReportSkillDocsTest(unittest.TestCase):
                     offenders.append(rel)
 
         self.assertEqual([], offenders)
+
+    def test_user_visible_wording_rewrites_observation_permission_language(self):
+        old_permission_word = _m("观察", "权")
+        text = f"0%观察不开新仓，只保留高优先级{old_permission_word}；普通{old_permission_word}只看承接。"
+
+        sanitized = sanitize_user_visible_text(text)
+
+        self.assertIn("高优先级观察对象", sanitized)
+        self.assertIn("普通观察对象", sanitized)
+        self.assertNotIn(old_permission_word, sanitized)
 
     def test_context_docs_wiki_and_public_reports_do_not_contain_retired_strategy_markers(self):
         forbidden = (

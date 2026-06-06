@@ -229,10 +229,48 @@ def _trace_blocking_points(trace):
     return f"缺失：{missing_data}" if missing_data else ""
 
 
+def _trace_is_observation_only(trace):
+    trace = trace or {}
+    text = "；".join(
+        str(part or "")
+        for part in [
+            trace.get("final_action"),
+            "；".join(_as_list(trace.get("branch_path", []))),
+            "；".join(_as_list(trace.get("missing_data", []))),
+        ]
+    )
+    return any(
+        marker in text
+        for marker in (
+            "只观察",
+            "不新增参与",
+            "继续不参与",
+            "停止生成动作",
+            "条件未满足",
+            "账户不适配",
+            "不能新增参与",
+            "数据缺失",
+        )
+    )
+
+
+def _trace_display_tier(trace):
+    trace = trace or {}
+    if _trace_is_observation_only(trace):
+        return "观察层"
+    tier = str(trace.get("tier") or "").strip()
+    return {
+        "T0": "执行候选",
+        "T1": "复核候选",
+        "T2": "等待候选",
+        "T3": "资料候选",
+    }.get(tier, tier or "候选")
+
+
 def _compact_trace_row(contract):
     trace = _contract_trace(contract)
     return {
-        "层级": trace.get("tier", ""),
+        "层级": _trace_display_tier(trace),
         "候选": _trace_candidate_label(contract, trace),
         "主线/板块": _trace_mainline_sector(trace),
         "板块锚反推": _trace_anchor_reversal(trace),
@@ -245,7 +283,7 @@ def _compact_trace_row(contract):
 def _full_trace_row(contract):
     trace = _contract_trace(contract)
     return {
-        "层级": trace.get("tier", ""),
+        "层级": _trace_display_tier(trace),
         "候选": _trace_candidate_label(contract, trace),
         "来源池": _join_values(trace.get("source_pools", []), separator="、"),
         "主线/板块": _trace_mainline_sector(trace),

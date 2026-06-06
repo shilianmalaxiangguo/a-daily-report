@@ -27,6 +27,7 @@ def build_pk_decision_render_sections_node(context, node_meta=None, node_lookup=
         "candidate_quality_panel_fields": context.get("candidate_quality_panel_fields"),
         "candidate_quality_contracts": context.get("candidate_quality_contracts"),
         "candidate_quality_samples": context.get("candidate_quality_samples", []),
+        "sniper_target_derivation": context.get("sniper_target_derivation"),
         "render_candidate_trace_tables": context.get("render_candidate_trace_tables", True),
         "candidate_trace_eliminated_items": context.get("candidate_trace_eliminated_items", []),
         "candidate_trace_eliminated_summary": context.get("candidate_trace_eliminated_summary"),

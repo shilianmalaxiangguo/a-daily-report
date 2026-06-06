@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timedelta, timezone
 import os
 import json
 from pathlib import Path
@@ -8,6 +9,7 @@ import re
 import time
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from llm_service import get_llm_service
 from diagnostics.helper_diagnostics_runtime import (
     build_helper_diagnostics as _build_helper_diagnostics,
     clear_helper_logs as _clear_helper_logs,
@@ -54,6 +56,16 @@ from report.market_structure_judgement import (
 )
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
 from report.surface_wording import sanitize_user_visible_text
+from report.sniper_target_derivation import (
+    build_sniper_target_derivation_packet,
+    compact_section as _sniper_target_derivation_compact_section,
+    full_section as _sniper_target_derivation_full_section,
+)
+from report.two_layer_decision_payload import (
+    build_two_layer_decision_payload,
+    render_derivation_audit_layer,
+    render_front_decision_layer,
+)
 from report.trading_time_window_contract import normalize_trading_time_text
 from domains.market_state.mainline_turnover_summary_runtime import (
     build_mainline_turnover_summary as _default_build_mainline_turnover_summary,
@@ -92,6 +104,88 @@ _APPENDIX_FRONT_PAGE_HEADING_RENAMES = {
     "## 七、最终结论": "## 结论依据",
 }
 
+_SHANGHAI_TZ = timezone(timedelta(hours=8))
+_CALENDAR_NEWS_PROVIDER = "xuangubao.xuangubao_news"
+_CALENDAR_NEWS_CANDIDATE_LIMIT = 8
+_CALENDAR_EVENT_FORM_TERMS = (
+    "将于",
+    "定于",
+    "拟定于",
+    "举办",
+    "举行",
+    "召开",
+    "开幕",
+    "启动",
+    "发布",
+    "首发",
+    "正式",
+    "大会",
+    "会议",
+    "论坛",
+    "峰会",
+    "展览",
+    "展会",
+    "交易会",
+    "博览会",
+    "交流会",
+    "品牌",
+    "第",
+    "届",
+    "全球",
+    "国际",
+    "中国",
+)
+_CALENDAR_EVENT_CUTOFF_TERMS = (
+    "将于",
+    "定于",
+    "拟定于",
+    "举办",
+    "举行",
+    "召开",
+    "开幕",
+    "启动",
+    "发布",
+    "首发",
+    "正式",
+)
+_CALENDAR_WEAK_TITLE_TERMS = {
+    "活动",
+    "行业",
+    "某行业",
+    "产业",
+    "交流",
+    "会议",
+    "大会",
+    "论坛",
+    "峰会",
+    "展会",
+    "发布会",
+    "合作",
+    "未来",
+    "生态",
+    "系列",
+    "年度",
+}
+_CALENDAR_WEAK_TITLE_PARTS = (
+    "行业",
+    "产业",
+    "交流",
+    "合作",
+    "活动",
+    "会议",
+    "大会",
+    "论坛",
+    "峰会",
+    "展会",
+    "发布会",
+    "年度",
+    "系列",
+    "中国",
+    "全球",
+    "国际",
+    "全国",
+)
+
 
 def _install_runtime_bindings(bindings):
     previous = {}
@@ -127,14 +221,16 @@ def _get_or_build_market_phase_context(data, target_date):
 
 def _calendar_event_signature(data):
     events = (data or {}).get("calendar_events") or []
-    return tuple(
+    event_signature = tuple(
         (
             str(item.get("date", "") or ""),
             str(item.get("title", "") or ""),
+            _calendar_event_summary(item),
             int(item.get("star", 0) or 0),
         )
         for item in events
     )
+    return event_signature, _calendar_xuangubao_news_signature(data)
 
 
 def _ensure_llm_call_stats():
@@ -422,7 +518,7 @@ def _number_report_tables(lines, postgres_only=False):
     return numbered
 
 
-_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。"
+_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。"
 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%标准进攻"
 
 
@@ -538,7 +634,7 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("明天唯一能买的那只", "明天唯一观察对象"),
         ("核心可买 > 龙头回看 > 主线盯盘 > 普通观察", "核心观察 > 龙头回看 > 主线盯盘 > 普通观察"),
         ("只保留重点观察谁", "只保留候选观察样本"),
-        ("重点观察优先锚点", "候选观察锚点"),
+        ("重点观察优先锚点", "候选观察优先对象"),
         ("重点观察优先", "候选观察样本"),
         ("重点观察名单全天都不给确认", "候选观察样本全天都不给确认"),
         ("首波先锋，优先做重点观察谁", "首波先锋，仅作承接观察"),
@@ -561,19 +657,35 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("补位", "观察"),
         ("实际可买", "仅观察"),
         ("动作上限", "观察上限"),
-        ("条件观察：", "观察锚："),
+        ("条件观察：", "观察对象："),
+        ("观察锚：", "观察对象："),
+        ("最终观察锚", "最终观察对象"),
         ("50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险", "0%不参与：最终结论不允许新增参与，只观察风险是否钝化"),
         ("盘前0%；固定交易窗口条件满足后才评估50%标准进攻", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
         ("盘前0%；固定交易窗口条件满足后才保留观察，不能转成新增参与", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
-        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察", "只保留观察，不能转成新增参与；未命中继续0%观察"),
+        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察", "只保留观察；未出现执行资格前不新增参与；未命中继续0%观察"),
         ("盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻", "盘前0%只代表不抢跑；只观察，不新增参与"),
         ("以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻", "以观察和处理持仓为主；不做新开仓"),
         ("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%"),
-        ("才评估50%标准进攻", "才保留观察，不能转成新增参与"),
+        ("才评估50%标准进攻", "才保留观察；未出现执行资格前不新增参与"),
         ("触发后50%标准进攻", "触发后只观察"),
         ("条件50%", "只观察"),
         ("50%标准进攻", "只观察"),
-        ("唯一对象是否", "观察锚是否"),
+        ("唯一对象是否", "观察对象是否"),
+        ("观察锚是否", "观察对象是否"),
+        ("观察锚强弱", "观察对象强弱"),
+        ("观察锚缺少", "观察对象缺少"),
+        ("观察锚不能", "观察对象不能"),
+        ("观察锚重新成立", "观察对象重新成立"),
+        ("只保留观察锚", "只保留观察对象"),
+        ("暂不保留观察锚", "暂不保留观察对象"),
+        ("没有观察锚", "没有观察对象"),
+        ("有观察锚", "有观察对象"),
+        ("只看观察锚", "只看观察对象"),
+        ("观察锚", "观察对象"),
+        ("不是执行对象", "不是执行目标"),
+        ("观察锚性质", "观察对象性质"),
+        ("观察锚去留", "观察对象去留"),
         ("✓ 溢价候选", "观察样本"),
         ("溢价候选", "观察样本"),
         ("MVP快照回退：先看次日是否继续强于市场，再按预演观察窗口确认。", "观察样本：先看是否强于市场，不预设参与。"),
@@ -583,12 +695,13 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         text = normalize_trading_time_text(str(line or ""))
         for source, target in replacements:
             text = text.replace(source, target)
-        if text.lstrip().startswith("| 0%不参与 |") and "| 观察锚：" in text:
+        if text.lstrip().startswith("| 0%不参与 |") and ("| 观察锚：" in text or "| 观察对象：" in text):
             cells = text.strip().strip("|").split("|")
             if len(cells) >= 8:
                 target = cells[5].strip()
-                label = target.replace("观察锚：", "", 1).strip()
-                cells[7] = f" 盘前0%；只观察{label}，成立才保留观察，不能转成新增参与；不满足继续0% "
+                label = target.replace("观察锚：", "", 1).replace("观察对象：", "", 1).strip()
+                cells[5] = f" 观察对象：{label} "
+                cells[7] = f" 盘前0%；只观察{label}，成立才保留观察；未出现执行资格前不新增参与；不满足继续0% "
                 text = "|" + "|".join(cells) + "|"
         if "允许进入" in text and "继续观察复核" in text:
             text = text.replace("允许进入", "只进入")
@@ -646,16 +759,136 @@ def _mark_process_evidence_line(text):
     return text
 
 
+def _front_page_observation_anchor_label(lines):
+    for line in list(lines or []):
+        text = str(line or "")
+        if not text.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in text.strip().strip("|").split("|")]
+        if len(cells) >= 2 and cells[0] in {"观察锚", "观察对象"} and cells[1] not in {"", "-", "暂无", "无"}:
+            return cells[1]
+    return ""
+
+
+def _align_appendix_observation_anchor_from_front_page(lines):
+    anchor_label = _front_page_observation_anchor_label(lines)
+    if not anchor_label:
+        return list(lines or [])
+    normalized = []
+    in_appendix = False
+    in_watch_order = False
+    first_watch_rewritten = False
+    for line in list(lines or []):
+        text = str(line or "")
+        if text == "## 八、详细附录":
+            in_appendix = True
+            in_watch_order = False
+            normalized.append(text)
+            continue
+        if not in_appendix:
+            normalized.append(text)
+            continue
+        if "**观察优先锚点**" in text:
+            prefix = text.split("**观察优先锚点**", 1)[0]
+            normalized.append(f"{prefix}**观察优先锚点**: {anchor_label}")
+            in_watch_order = False
+            continue
+        if re.match(r"^- \*\*.*观察谁\*\*:", text):
+            prefix = text.split(":", 1)[0]
+            normalized.append(f"{prefix}: {anchor_label}")
+            continue
+        if "**先看顺序**" in text:
+            in_watch_order = True
+            first_watch_rewritten = False
+            normalized.append(text)
+            continue
+        if in_watch_order and not first_watch_rewritten and "👀" in text:
+            normalized.append(re.sub(r"(?<=👀\s).*?(?=\s+-|$)", anchor_label, text, count=1))
+            first_watch_rewritten = True
+            continue
+        normalized.append(text)
+    return normalized
+
+
 def _sanitize_report_lines(lines, postgres_only=False):
     return _number_report_tables(
-        [
-            _mark_process_evidence_line(sanitize_front_page_text(line))
-            for line in _normalize_legacy_execution_framework_under_zero_participation(
-                _normalize_tomorrow_action_soft_words_under_zero_participation(_dedupe_repeated_no_trade_lines(lines))
+        _dedupe_front_page_repeated_long_table_cells(
+            _align_empty_primary_observation_rows(
+                [
+                    _mark_process_evidence_line(sanitize_front_page_text(line))
+                    for line in _normalize_legacy_execution_framework_under_zero_participation(
+                        _normalize_tomorrow_action_soft_words_under_zero_participation(
+                            _align_appendix_observation_anchor_from_front_page(_dedupe_repeated_no_trade_lines(lines))
+                        )
+                    )
+                ]
             )
-        ],
+        ),
         postgres_only=postgres_only,
     )
+
+
+def _dedupe_front_page_repeated_long_table_cells(lines):
+    cleaned = []
+    seen = set()
+    in_appendix = False
+    for line in list(lines or []):
+        text = str(line or "")
+        if text == "## 八、详细附录":
+            in_appendix = True
+            cleaned.append(text)
+            continue
+        if in_appendix or not text.startswith("|"):
+            cleaned.append(text)
+            continue
+        raw_cells = text.strip().strip("|").split("|")
+        changed = False
+        next_cells = []
+        for cell in raw_cells:
+            normalized = re.sub(r"\s+", " ", str(cell or "")).strip()
+            if len(normalized) >= 40 and normalized in seen:
+                next_cells.append(" 同类说明见上方，只看本行数值变化 ")
+                changed = True
+                continue
+            next_cells.append(cell)
+            if len(normalized) >= 40:
+                seen.add(normalized)
+        cleaned.append("|" + "|".join(next_cells) + "|" if changed else text)
+    return cleaned
+
+
+def _align_empty_primary_observation_rows(lines):
+    rows = list(lines or [])
+    aligned = []
+    index = 0
+    while index < len(rows):
+        text = str(rows[index] or "")
+        if not text.startswith("| 字段 | 内容 |"):
+            aligned.append(text)
+            index += 1
+            continue
+        panel = [text]
+        index += 1
+        while index < len(rows) and str(rows[index] or "").startswith("|"):
+            panel.append(str(rows[index] or ""))
+            index += 1
+        observation_value = ""
+        for line in panel:
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] == "观察对象" and cells[1] not in {"", "-", "暂无", "无"}:
+                observation_value = cells[1]
+                break
+        if observation_value:
+            next_panel = []
+            for line in panel:
+                cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+                if len(cells) >= 2 and cells[0] == "主观察对象" and cells[1] in {"", "-", "暂无", "无"}:
+                    cells[1] = observation_value
+                    line = "| " + " | ".join(cells) + " |"
+                next_panel.append(line)
+            panel = next_panel
+        aligned.extend(panel)
+    return aligned
 
 
 def _strip_report_table_numbers(lines):
@@ -1464,6 +1697,62 @@ def _first_runtime_text(*values):
     return ""
 
 
+def _runtime_user_visible_trade_text(value):
+    text = str(value or "")
+    stripped = text.strip()
+    exact_aliases = {
+        "unknown": "待识别",
+        "observe": "观察",
+        "watch": "观察",
+        "hold": "持有观察",
+    }
+    if stripped in exact_aliases:
+        return exact_aliases[stripped]
+    replacements = (
+        ("条件观察：", "观察对象："),
+        ("观察锚：", "观察对象："),
+        ("观察锚性质", "观察对象性质"),
+        ("观察锚去留", "观察对象去留"),
+        ("观察锚重新成立", "观察对象重新成立"),
+        ("观察锚是否", "观察对象是否"),
+        ("观察锚强弱", "观察对象强弱"),
+        ("观察锚缺少", "观察对象缺少"),
+        ("观察锚不能", "观察对象不能"),
+        ("只保留观察锚", "只保留观察对象"),
+        ("暂不保留观察锚", "暂不保留观察对象"),
+        ("没有观察锚", "没有观察对象"),
+        ("有观察锚", "有观察对象"),
+        ("只看观察锚", "只看观察对象"),
+        ("最终观察锚", "最终观察对象"),
+        ("观察锚", "观察对象"),
+        ("不能转成新增参与", "未出现执行资格前不新增参与"),
+        ("不能转新增参与", "未出现执行资格前不新增参与"),
+        ("不是执行对象", "不是执行目标"),
+    )
+    for source, target in replacements:
+        text = text.replace(source, target)
+    return sanitize_user_visible_text(text)
+
+
+def _runtime_role_text(value, default=""):
+    text = _runtime_user_visible_trade_text(value).strip()
+    if not text:
+        return default
+    aliases = {
+        "观察锚": "观察对象",
+        "观察": "观察对象",
+        "watch_anchor": "观察对象",
+        "watch": "观察对象",
+        "observe": "观察对象",
+        "observer": "观察对象",
+        "unknown": "待识别",
+        "execution_object": "执行对象",
+        "executable": "执行对象",
+        "process": "过程候选",
+    }
+    return aliases.get(text, text)
+
+
 def _runtime_stock_label(item):
     if not isinstance(item, dict):
         return ""
@@ -1805,6 +2094,16 @@ def _runtime_opportunity_comparison(
     return comparison
 
 
+def _runtime_opportunity_risk_should_block_position(opportunity_comparison):
+    comparison = opportunity_comparison if isinstance(opportunity_comparison, dict) else {}
+    old_position = comparison.get("old_position") if isinstance(comparison.get("old_position"), dict) else {}
+    old_position_key = _runtime_candidate_key(old_position)
+    if not old_position_key:
+        return False
+    decision = comparison.get("comparison") if isinstance(comparison.get("comparison"), dict) else {}
+    return int(_runtime_cell_float(decision.get("max_participation_pct")) or 0) < 50
+
+
 def _force_observation_for_opportunity_risk(position_decision, opportunity_comparison):
     updated = _force_observation_for_missing_execution_evidence(position_decision)
     comparison = opportunity_comparison if isinstance(opportunity_comparison, dict) else {}
@@ -1879,6 +2178,16 @@ def _runtime_tradable_proxy_eligible(proxy_target):
     )
 
 
+def _runtime_tradable_proxy_ready(data=None, selected_position_candidate=None, market_research_snapshot=None):
+    return _runtime_tradable_proxy_eligible(
+        _runtime_tradable_proxy_payload(
+            data=data,
+            selected_position_candidate=selected_position_candidate,
+            market_research_snapshot=market_research_snapshot,
+        )
+    )
+
+
 def _runtime_old_position_priority_active(data=None, market_research_snapshot=None):
     summary = _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot)
     return bool(summary.get("has_position") or summary.get("summary"))
@@ -1917,11 +2226,11 @@ def _build_runtime_final_target_resolution(
     new_entry_ready = bool(new_entry and target_pct >= 50)
     old_position_first = bool(existing and new_entry and not (new_entry_ready or proxy_ready))
     priority = (
-        "tradable_proxy"
-        if proxy_ready
+        "new_entry_after_old_exit"
+        if existing and (new_entry_ready or proxy_ready)
         else (
-            "new_entry_after_old_exit"
-            if existing and new_entry_ready
+            "tradable_proxy"
+            if proxy_ready
             else ("old_position_t" if old_position_first else ("new_entry" if new_entry_ready else "wait"))
         )
     )
@@ -1931,7 +2240,7 @@ def _build_runtime_final_target_resolution(
     if proxy_ready and existing:
         proxy_reason = f"先处理旧仓，{proxy_reason}"
     reason = (
-        "约1w账户先处理已有仓，新强对象只保留观察锚"
+        "约1w账户先处理已有仓，新强对象只保留观察对象"
         if old_position_first
         else (
             proxy_reason
@@ -1940,9 +2249,13 @@ def _build_runtime_final_target_resolution(
                 "新开仓对象具备执行资格，按固定交易窗口确认"
                 if priority == "new_entry"
                 else (
-                    f"先处理旧仓，买{new_entry_label}；固定交易窗口条件成立才参与，不满足回到0%"
+                    (
+                        f"先处理旧仓，目标标的{new_entry_label}，小资金账户可用{proxy_label}替代；固定交易窗口条件成立才参与，不满足回到0%"
+                        if proxy_ready
+                        else f"先处理旧仓，买{new_entry_label}；固定交易窗口条件成立才参与，不满足回到0%"
+                    )
                     if priority == "new_entry_after_old_exit"
-                    else "缺少可执行对象，保持观察"
+                    else "无明日执行对象，保持观察"
                 )
             )
         )
@@ -1950,13 +2263,14 @@ def _build_runtime_final_target_resolution(
     display = (
         existing
         if old_position_first
-        else (tradable_proxy if priority == "tradable_proxy" else (new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
+        else (tradable_proxy if proxy_ready else (new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
     )
+    watch_target = dict(new_entry) if (old_position_first or proxy_ready or (priority == "wait" and new_entry)) else {}
     return {
         "new_entry_target": dict(new_entry),
         "existing_position_target": dict(existing),
         "tradable_proxy_target": dict(tradable_proxy) if proxy_ready else {},
-        "watch_target": dict(new_entry) if (old_position_first or proxy_ready) else {},
+        "watch_target": watch_target,
         "process_target": dict(new_entry),
         "ascii_trace_target": dict(new_entry),
         "display_target": dict(display),
@@ -1980,6 +2294,134 @@ def _store_runtime_final_target_resolution(resolution, data=None, execution_stag
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
         data["execution_stage_context"] = execution_stage_context
     return stored
+
+
+def _build_sniper_target_derivation_packet(
+    *,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    final_target_resolution=None,
+    selected_position_candidate=None,
+    position_decision=None,
+    final_gate=None,
+    two_layer_decision_payload=None,
+):
+    return build_sniper_target_derivation_packet(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        final_gate=final_gate,
+        two_layer_decision_payload=two_layer_decision_payload,
+        target_date=(data or {}).get("target_date") if isinstance(data, dict) else "",
+    )
+
+
+def _store_runtime_sniper_target_derivation(packet, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(packet, dict) or not packet:
+        return {}
+    stored = dict(packet)
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["sniper_target_derivation"] = stored
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _store_runtime_two_layer_decision_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    stored = dict(payload)
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["two_layer_decision_payload"] = stored
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _insert_two_layer_front_decision_panel(report_lines, decision_lines):
+    report_lines = list(report_lines or [])
+    decision_lines = list(decision_lines or [])
+    if not decision_lines:
+        return report_lines
+    primary_lines, candidate_summary_lines = _split_candidate_verdict_summary_lines(decision_lines)
+    insert_at = 0
+    if report_lines and str(report_lines[0]).startswith("#"):
+        insert_at = 1
+        while insert_at < len(report_lines) and str(report_lines[insert_at]).strip() == "":
+            insert_at += 1
+    else:
+        insert_at = 0
+    result = report_lines[:insert_at] + [""] + primary_lines + [""] + report_lines[insert_at:]
+    if candidate_summary_lines:
+        result = _insert_candidate_verdict_summary_after_market_spine(result, candidate_summary_lines)
+    return result
+
+
+def _split_candidate_verdict_summary_lines(lines):
+    lines = list(lines or [])
+    try:
+        start = next(index for index, line in enumerate(lines) if str(line or "").strip() == "### 候选胜负摘要")
+    except StopIteration:
+        return lines, []
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        text = str(lines[index] or "")
+        if text.startswith("## "):
+            end = index
+            break
+    primary = list(lines[:start])
+    while primary and str(primary[-1] or "").strip() == "":
+        primary.pop()
+    primary.extend(lines[end:])
+    summary = list(lines[start:end])
+    while summary and str(summary[-1] or "").strip() == "":
+        summary.pop()
+    return primary, summary
+
+
+def _insert_candidate_verdict_summary_after_market_spine(report_lines, summary_lines):
+    report_lines = list(report_lines or [])
+    summary_lines = list(summary_lines or [])
+    if not summary_lines:
+        return report_lines
+    insert_at = None
+    for marker in ("## 明日账户建议", "## 一、交易纪律", "## 五、个股解读"):
+        for index, line in enumerate(report_lines):
+            if str(line or "").strip() == marker:
+                insert_at = index
+                break
+        if insert_at is not None:
+            break
+    if insert_at is None:
+        for index, line in enumerate(report_lines):
+            if str(line or "").strip() == "### 龙头 / 核心验证":
+                insert_at = index + 1
+                while insert_at < len(report_lines) and not str(report_lines[insert_at] or "").startswith("#"):
+                    insert_at += 1
+                break
+    if insert_at is None:
+        insert_at = len(report_lines)
+    while insert_at > 0 and str(report_lines[insert_at - 1] or "").strip() == "":
+        insert_at -= 1
+    return report_lines[:insert_at] + [""] + summary_lines + [""] + report_lines[insert_at:]
+
+
+def _render_sniper_target_derivation_compact(packet):
+    return _sniper_target_derivation_compact_section(packet, heading="")
 
 
 def _runtime_candidate_stock_code(item):
@@ -2187,9 +2629,9 @@ def _resolve_runtime_current_core_candidate(
 ):
     sources = []
 
-    def _add(item, source_rank):
+    def _add(item, source_rank, source_key=""):
         if isinstance(item, dict) and _runtime_candidate_key(item):
-            sources.append((dict(item), source_rank))
+            sources.append((dict(item), source_rank, source_key))
 
     for source_rank, source in (
         (110, execution_stage_context),
@@ -2199,12 +2641,18 @@ def _resolve_runtime_current_core_candidate(
         if not isinstance(source, dict):
             continue
         for key in ("current_core_candidate", "selected_position_candidate", "best_stock", "watch_anchor"):
-            _add(source.get(key), source_rank)
-    _add(selected_position_candidate, 105)
+            key_bonus = {
+                "current_core_candidate": 35,
+                "selected_position_candidate": 30,
+                "best_stock": 0,
+                "watch_anchor": -5,
+            }.get(key, 0)
+            _add(source.get(key), source_rank + key_bonus, key)
+    _add(selected_position_candidate, 140, "selected_position_candidate")
     for item in list(extreme_conviction_list or []):
-        _add(item, 90)
+        _add(item, 90, "extreme_conviction_list")
     for item in _iter_runtime_extreme_conviction_sources(data, execution_stage_context, market_research_snapshot):
-        _add(item, 85)
+        _add(item, 85, "extreme_conviction_source")
 
     if not sources:
         return {}
@@ -2216,12 +2664,13 @@ def _resolve_runtime_current_core_candidate(
     best = None
     best_score = None
     seen = set()
-    for index, (item, source_rank) in enumerate(sources):
+    for index, (item, source_rank, source_key) in enumerate(sources):
         key = _runtime_candidate_key(item)
         if key in seen:
             continue
         seen.add(key)
-        if not _is_core_judgment_candidate(item):
+        is_current_context_candidate = source_key in {"current_core_candidate", "selected_position_candidate"}
+        if not (is_current_context_candidate or _is_core_judgment_candidate(item)):
             continue
         matches_mainline = _runtime_candidate_matches_mainline(item, mainline)
         score = (
@@ -2416,7 +2865,14 @@ def _runtime_opportunity_item_label(item):
     return name or code or "-"
 
 
-def _runtime_opportunity_comparison_lines(opportunity_comparison=None):
+def _runtime_opportunity_role_action(target, role, action, two_layer_execution_object=None):
+    two_layer_key = _runtime_candidate_key(two_layer_execution_object)
+    if two_layer_key and _runtime_candidate_key(target) == two_layer_key:
+        return "条件执行对象", "条件满足才B档执行；不满足回到0%"
+    return _runtime_role_text(role), _runtime_user_visible_trade_text(action)
+
+
+def _runtime_opportunity_comparison_lines(opportunity_comparison=None, *, two_layer_execution_object=None):
     comparison = opportunity_comparison if isinstance(opportunity_comparison, dict) else {}
     old_position = comparison.get("old_position") if isinstance(comparison.get("old_position"), dict) else {}
     new_target = comparison.get("new_target") if isinstance(comparison.get("new_target"), dict) else {}
@@ -2439,10 +2895,16 @@ def _runtime_opportunity_comparison_lines(opportunity_comparison=None):
             )
         )
     if new_target:
+        role, action = _runtime_opportunity_role_action(
+            new_target,
+            new_target.get("target_role"),
+            decision.get("final_action"),
+            two_layer_execution_object,
+        )
         lines.append(
             "| {label} | {role} | {entry} | {ma5} | {ma10} | {vwap} | {invalid} | {target} | {risk_reward} | {action} |".format(
                 label=_clean_runtime_cell(_runtime_opportunity_item_label(new_target), "-"),
-                role=_clean_runtime_cell(new_target.get("target_role"), "-"),
+                role=_clean_runtime_cell(role, "-"),
                 entry=_runtime_price_text(new_target.get("observation_price")),
                 ma5=_runtime_price_risk_text(new_target.get("ma5"), new_target.get("downside_to_ma5_pct")),
                 ma10=_runtime_price_risk_text(new_target.get("ma10"), new_target.get("downside_to_ma10_pct")),
@@ -2450,7 +2912,7 @@ def _runtime_opportunity_comparison_lines(opportunity_comparison=None):
                 invalid=_runtime_price_risk_text(new_target.get("invalid_price"), new_target.get("downside_to_invalid_pct")),
                 target=_runtime_price_text(new_target.get("target_price")),
                 risk_reward=_clean_runtime_cell(new_target.get("risk_reward_state"), "-"),
-                action=_clean_runtime_cell(decision.get("final_action"), "-"),
+                action=_clean_runtime_cell(action, "-"),
             )
         )
     for extra_comparison in comparison.get("additional_target_comparisons") or []:
@@ -2460,10 +2922,16 @@ def _runtime_opportunity_comparison_lines(opportunity_comparison=None):
         extra_decision = extra_comparison.get("comparison") if isinstance(extra_comparison.get("comparison"), dict) else {}
         if not extra_target:
             continue
+        role, action = _runtime_opportunity_role_action(
+            extra_target,
+            extra_target.get("target_role"),
+            extra_decision.get("final_action"),
+            two_layer_execution_object,
+        )
         lines.append(
             "| {label} | {role} | {entry} | {ma5} | {ma10} | {vwap} | {invalid} | {target} | {risk_reward} | {action} |".format(
                 label=_clean_runtime_cell(_runtime_opportunity_item_label(extra_target), "-"),
-                role=_clean_runtime_cell(extra_target.get("target_role"), "-"),
+                role=_clean_runtime_cell(role, "-"),
                 entry=_runtime_price_text(extra_target.get("observation_price")),
                 ma5=_runtime_price_risk_text(extra_target.get("ma5"), extra_target.get("downside_to_ma5_pct")),
                 ma10=_runtime_price_risk_text(extra_target.get("ma10"), extra_target.get("downside_to_ma10_pct")),
@@ -2471,10 +2939,22 @@ def _runtime_opportunity_comparison_lines(opportunity_comparison=None):
                 invalid=_runtime_price_risk_text(extra_target.get("invalid_price"), extra_target.get("downside_to_invalid_pct")),
                 target=_runtime_price_text(extra_target.get("target_price")),
                 risk_reward=_clean_runtime_cell(extra_target.get("risk_reward_state"), "-"),
-                action=_clean_runtime_cell(extra_decision.get("final_action"), "-"),
+                action=_clean_runtime_cell(action, "-"),
             )
         )
     return lines
+
+
+def _runtime_two_layer_execution_object(*sources):
+    for source in sources:
+        payload = source.get("two_layer_decision_payload") if isinstance(source, dict) else {}
+        if not isinstance(payload, dict):
+            continue
+        front = payload.get("front_decision") if isinstance(payload.get("front_decision"), dict) else {}
+        target = front.get("execution_object") if isinstance(front.get("execution_object"), dict) else {}
+        if _runtime_candidate_key(target):
+            return target
+    return {}
 
 
 def _runtime_selected_target_solution_lines(
@@ -2487,6 +2967,11 @@ def _runtime_selected_target_solution_lines(
     final_target_resolution=None,
 ):
     final_target_resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    derivation_packet = {}
+    for source in (market_research_snapshot, execution_stage_context):
+        if isinstance(source, dict) and isinstance(source.get("sniper_target_derivation"), dict):
+            derivation_packet = source.get("sniper_target_derivation")
+            break
     priority_decision = final_target_resolution.get("capital_priority_decision") or {}
     capital_priority = _first_runtime_text(priority_decision.get("capital_priority"))
     old_position_first = capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
@@ -2503,13 +2988,35 @@ def _runtime_selected_target_solution_lines(
         if isinstance(final_target_resolution.get("display_target"), dict)
         else {}
     )
+    display_is_tradable_proxy = bool(
+        tradable_proxy_target
+        and display_target
+        and _runtime_candidate_key(display_target) == _runtime_candidate_key(tradable_proxy_target)
+    )
     existing_target = (
         final_target_resolution.get("existing_position_target")
         if isinstance(final_target_resolution.get("existing_position_target"), dict)
         else {}
     )
+    two_layer_execution_object = _runtime_two_layer_execution_object(market_research_snapshot, execution_stage_context)
     if old_position_first and watch_target:
         candidate = watch_target
+    elif wait_priority:
+        candidate = next(
+            (
+                item
+                for item in (
+                    watch_target,
+                    display_target,
+                    final_target_resolution.get("new_entry_target"),
+                    final_target_resolution.get("process_target"),
+                    final_target_resolution.get("ascii_trace_target"),
+                    candidate,
+                )
+                if isinstance(item, dict) and _runtime_candidate_key(item)
+            ),
+            candidate,
+        )
     if not isinstance(candidate, dict) or not _runtime_candidate_key(candidate):
         return []
     final_gate = final_gate if isinstance(final_gate, dict) else {}
@@ -2523,9 +3030,9 @@ def _runtime_selected_target_solution_lines(
     label = _runtime_stock_label(candidate)
     proxy_label = _runtime_stock_label(tradable_proxy_target)
     display_label = (
-        "暂无"
+        f"观察对象：{label}"
         if wait_priority
-        else (f"观察锚：{label}" if old_position_first else (_runtime_stock_label(display_target) or label))
+        else (f"观察对象：{label}" if old_position_first else (_runtime_stock_label(display_target) or label))
     )
     existing_label = _runtime_stock_label(existing_target)
     proxy_effect_type = _first_runtime_text(
@@ -2539,7 +3046,9 @@ def _runtime_selected_target_solution_lines(
         nested.get("sector_anchor"),
         label,
     )
-    candidate_role = _first_runtime_text(candidate.get("candidate_role"), nested.get("candidate_role"), "待识别")
+    candidate_role = _runtime_role_text(
+        _first_runtime_text(candidate.get("candidate_role"), nested.get("candidate_role"), "待识别")
+    )
     relationship = _first_runtime_text(candidate.get("relationship_to_anchor"), nested.get("relationship_to_anchor"))
     why_not_anchor = _first_runtime_text(candidate.get("why_not_anchor"), nested.get("why_not_anchor"))
     decision = _first_runtime_text(
@@ -2551,10 +3060,14 @@ def _runtime_selected_target_solution_lines(
     leader_path = _first_runtime_text(candidate.get("leader_certainty_path"), nested.get("leader_certainty_path"))
     limit_role = _first_runtime_text(candidate.get("limit_up_evidence_role"), nested.get("limit_up_evidence_role"))
     action = normalize_trading_time_text(
-        _first_runtime_text(
-            final_gate.get("final_action"),
-            candidate.get("final_action"),
-            "只看固定交易窗口内条件是否成立",
+        _runtime_user_visible_trade_text(
+            "条件满足才B档执行；不满足回到0%"
+            if two_layer_execution_object and not wait_priority
+            else _first_runtime_text(
+                final_gate.get("final_action"),
+                candidate.get("final_action"),
+                "只看固定交易窗口内条件是否成立",
+            )
         )
     )
 
@@ -2567,19 +3080,25 @@ def _runtime_selected_target_solution_lines(
     ]
     if capital_priority:
         lines.append(f"| 小账户资金取舍 | {_clean_runtime_cell(capital_priority)} |")
-    if tradable_proxy_priority and label and proxy_label:
+    if display_is_tradable_proxy and label and proxy_label:
         lines.append(f"| 小账户取舍说明 | 目标标的{_clean_runtime_cell(label)}，小资金账户可用{_clean_runtime_cell(proxy_label)}替代 |")
     if existing_label:
         lines.append(f"| 旧仓处理 | {_clean_runtime_cell(existing_label)} |")
-    if tradable_proxy_priority and label:
+    if display_is_tradable_proxy and label:
         lines.append(f"| 目标标的 | {_clean_runtime_cell(label)} |")
-    if tradable_proxy_priority and proxy_label:
+    if display_is_tradable_proxy and proxy_label:
         lines.append(f"| 小资金替代表达 | {_clean_runtime_cell(proxy_label)} |")
-    if tradable_proxy_priority and proxy_effect_type:
+    if display_is_tradable_proxy and proxy_effect_type:
         lines.append(f"| 替代效应 | {_clean_runtime_cell(proxy_effect_type)} |")
-    opportunity_lines = _runtime_opportunity_comparison_lines(final_target_resolution.get("opportunity_comparison"))
+    opportunity_lines = _runtime_opportunity_comparison_lines(
+        final_target_resolution.get("opportunity_comparison"),
+        two_layer_execution_object=two_layer_execution_object,
+    )
     if opportunity_lines:
         lines.extend(["", *opportunity_lines])
+    derivation_lines = _render_sniper_target_derivation_compact(derivation_packet)
+    if derivation_lines:
+        lines.extend(["", "### 最终标的传导链", "", *derivation_lines])
     lines.extend(
         [
             "",
@@ -2599,8 +3118,8 @@ def _runtime_selected_target_solution_lines(
     if existing_label:
         lines.append(f"    +-- 旧仓处理: {_clean_runtime_cell(existing_label)}")
     if old_position_first:
-        lines.append(f"    +-- 观察锚: {_clean_runtime_cell(label, '暂无')}")
-    elif tradable_proxy_priority:
+        lines.append(f"    +-- 观察对象: {_clean_runtime_cell(label, '暂无')}")
+    elif display_is_tradable_proxy:
         lines.append(f"    +-- 目标标的: {_clean_runtime_cell(label, '暂无')}")
         if proxy_label:
             lines.append(f"    +-- 小资金账户: 可用{_clean_runtime_cell(proxy_label)}替代")
@@ -2657,7 +3176,8 @@ def _normalize_runtime_stock_code(value):
 
 
 def _clean_runtime_cell(value, default=""):
-    text = " ".join(str(value or "").replace("|", "｜").split()).strip()
+    text = _runtime_user_visible_trade_text(value)
+    text = " ".join(str(text or "").replace("|", "｜").split()).strip()
     return text if text else default
 
 
@@ -3435,6 +3955,10 @@ def _build_front_page_position_decision(
         data=data,
         selected_position_candidate=selected_position_candidate,
         market_research_snapshot=market_research_snapshot,
+    ) and not _runtime_tradable_proxy_ready(
+        data=data,
+        selected_position_candidate=selected_position_candidate,
+        market_research_snapshot=market_research_snapshot,
     ):
         return _force_observation_for_unbuyable_core(position_decision)
     if _is_runtime_countertrend_attack_day(
@@ -3448,6 +3972,18 @@ def _build_front_page_position_decision(
         return _force_observation_position_decision(position_decision)
     if _is_runtime_extreme_ice_point(data=data, market_research_snapshot=market_research_snapshot, final_gate=final_gate):
         return position_decision
+    proxy_ready = bool(
+        _runtime_account_unbuyable_core_active(
+            data=data,
+            selected_position_candidate=selected_position_candidate,
+            market_research_snapshot=market_research_snapshot,
+        )
+        and _runtime_tradable_proxy_ready(
+            data=data,
+            selected_position_candidate=selected_position_candidate,
+            market_research_snapshot=market_research_snapshot,
+        )
+    )
     opportunity_comparison = _runtime_opportunity_comparison(
         data=data,
         selected_position_candidate=selected_position_candidate,
@@ -3459,7 +3995,8 @@ def _build_front_page_position_decision(
     if (
         requested_target_pct >= 50
         and opportunity_comparison
-        and int(_runtime_cell_float((opportunity_comparison.get("comparison") or {}).get("max_participation_pct")) or 0) < 50
+        and not proxy_ready
+        and _runtime_opportunity_risk_should_block_position(opportunity_comparison)
     ):
         return _force_observation_for_opportunity_risk(position_decision, opportunity_comparison)
     if existing_target_pct >= 50:
@@ -3528,7 +4065,7 @@ def _build_effective_front_page_final_gate(final_gate=None, *, selected_position
                 "can_new_entry": False,
                 "should_reduce": True,
                 "allow_attack_50_ready": False,
-                "final_action": "先处理旧仓，不新增参与；新强对象只保留观察锚",
+                "final_action": "先处理旧仓，不新增参与；新强对象只保留观察对象",
             }
         )
         return updated
@@ -3641,7 +4178,7 @@ def _normalize_zero_participation_appendix_line(line):
     if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
         text = text.replace(
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-            "明日不新增参与，只观察风险是否钝化、主攻线承接和观察锚是否重新成立",
+            "明日不新增参与，只观察风险是否钝化、主攻线承接和观察对象是否重新成立",
         )
     if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
         text = text.replace(
@@ -3651,13 +4188,13 @@ def _normalize_zero_participation_appendix_line(line):
     if "明日目标标的保留条件100%核心进攻" in text:
         text = re.sub(
             r"明日目标标的保留条件100%核心进攻：只看[^，|]+，固定交易窗口内条件成立才执行，不满足回到0%",
-            "不新增参与；只保留观察锚，不能转成新增参与",
+            "不新增参与；只保留观察对象；未出现执行资格前不新增参与",
             text,
         )
     if "明日目标标的保留条件50%预演" in text:
         text = re.sub(
             r"明日目标标的保留条件50%预演：只看[^，|]+，固定交易窗口内条件成立才执行，不满足回到0%",
-            "不新增参与；只保留观察锚，不能转成新增参与",
+            "不新增参与；只保留观察对象；未出现执行资格前不新增参与",
             text,
         )
     if "盘前0%；观察窗口命中后才评估50%标准进攻" in text:
@@ -3675,14 +4212,15 @@ def _normalize_zero_participation_appendix_line(line):
             "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
             "0%观察，不抢跑，只保留候选观察的盘中复核路径",
         )
-    text = text.replace("条件观察：", "观察锚：")
+    text = text.replace("条件观察：", "观察对象：")
+    text = text.replace("观察锚：", "观察对象：")
     text = text.replace(
         "50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险",
         "0%不参与：最终结论不允许新增参与，只观察风险是否钝化",
     )
     text = text.replace(
         "09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察",
-        "只保留观察，不能转成新增参与；未命中继续0%观察",
+        "只保留观察；未出现执行资格前不新增参与；未命中继续0%观察",
     )
     text = text.replace(
         "盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻",
@@ -3698,12 +4236,49 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("寻找参与资格", "观察")
     text = text.replace("等触发条件成立", "只观察，不新增参与")
     text = text.replace("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%")
-    text = text.replace("才评估50%标准进攻", "才保留观察，不能转成新增参与")
+    text = text.replace("才评估50%标准进攻", "才保留观察；未出现执行资格前不新增参与")
     text = text.replace("触发后50%标准进攻", "触发后只观察")
     text = text.replace("条件50%", "只观察")
     text = text.replace("50%标准进攻", "只观察")
-    text = text.replace("唯一对象是否", "观察锚是否")
+    text = text.replace("唯一对象是否", "观察对象是否")
+    text = text.replace("观察锚是否", "观察对象是否")
     return text
+
+
+def _runtime_observation_anchor_label(final_target_resolution=None):
+    if not isinstance(final_target_resolution, dict):
+        return ""
+    watch_target = final_target_resolution.get("watch_target")
+    if not isinstance(watch_target, dict) or not watch_target:
+        return ""
+    return _runtime_stock_label(watch_target) or _target_candidate_label(watch_target)
+
+
+def _align_appendix_observation_anchor_lines(lines, final_target_resolution=None):
+    anchor_label = _runtime_observation_anchor_label(final_target_resolution)
+    if not anchor_label:
+        return list(lines or [])
+    normalized = []
+    in_watch_order = False
+    first_watch_rewritten = False
+    for line in list(lines or []):
+        text = str(line or "")
+        if "**观察优先锚点**" in text:
+            prefix = text.split("**观察优先锚点**", 1)[0]
+            normalized.append(f"{prefix}**观察优先锚点**: {anchor_label}")
+            in_watch_order = False
+            continue
+        if "**先看顺序**" in text:
+            in_watch_order = True
+            first_watch_rewritten = False
+            normalized.append(text)
+            continue
+        if in_watch_order and not first_watch_rewritten and "👀" in text:
+            normalized.append(re.sub(r"(?<=👀\s).*?(?=\s+-|$)", anchor_label, text, count=1))
+            first_watch_rewritten = True
+            continue
+        normalized.append(text)
+    return normalized
 
 
 def _should_keep_zero_appendix_for_selected_target(position_decision=None):
@@ -3734,12 +4309,14 @@ def _normalize_attack_preview_appendix_lines(
         (final_target_resolution.get("capital_priority_decision") or {}).get("capital_priority")
     )
     if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t", "wait"}:
-        return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        normalized_zero_lines = [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
     has_selected_target = isinstance(selected_position_candidate, dict) and bool(
         selected_position_candidate.get("name") or selected_position_candidate.get("code")
     )
     if _has_zero_participation_context(position_decision):
-        return [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        normalized_zero_lines = [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
     if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
 
@@ -3814,7 +4391,7 @@ def _normalize_attack_preview_appendix_lines(
         text = text.replace("参与窗口", "固定交易窗口")
         text = text.replace("回封参与", "回封观察")
         normalized.append(text)
-    return normalized
+    return _align_appendix_observation_anchor_lines(normalized, final_target_resolution)
 
 
 def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_result=None, *, target_date="", execution_stage_context=None):
@@ -4560,8 +5137,339 @@ def _smart_score_event(title: str, original_star: int) -> int:
     return 2
 
 
-def _keyword_match_event_sectors(title: str) -> dict:
-    return normalize_calendar_ai_analysis({}, title, "")
+def _calendar_news_items(data):
+    xgb_data = (data or {}).get("xuangubao_data") or {}
+    news_items = xgb_data.get("xuangubao_news") or []
+    return [item for item in news_items if isinstance(item, dict)]
+
+
+def _calendar_clean_text(value) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _calendar_compact_text(value) -> str:
+    text = str(value or "").lower()
+    return re.sub(r"[\s　,，。；;：:、·（）()【】\\[\\]「」『』“”\"'《》<>—\\-_/]+", "", text)
+
+
+def _calendar_news_source_date(news) -> str:
+    if not isinstance(news, dict):
+        return ""
+    for key in ("source_date", "trade_date", "date", "created_date", "publish_date", "published_at"):
+        value = str(news.get(key) or "").strip()
+        match = re.search(r"20\d{2}-\d{2}-\d{2}", value)
+        if match:
+            return match.group(0)
+    for key in ("created_at", "time", "timestamp"):
+        raw_value = news.get(key)
+        raw_text = str(raw_value or "").strip()
+        match = re.search(r"20\d{2}-\d{2}-\d{2}", raw_text)
+        if match:
+            return match.group(0)
+        try:
+            timestamp = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if timestamp <= 0:
+            continue
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp / 1000
+        try:
+            datetime_cls = datetime.datetime if hasattr(datetime, "datetime") else datetime
+            return datetime_cls.fromtimestamp(timestamp, tz=_SHANGHAI_TZ).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            continue
+    return ""
+
+
+def _calendar_news_text(news) -> str:
+    if not isinstance(news, dict):
+        return ""
+    parts = []
+    for key in ("title", "summary", "content", "description", "detail", "source_text"):
+        value = _calendar_clean_text(news.get(key))
+        if value and value not in parts:
+            parts.append(value)
+    return " ".join(parts)
+
+
+def _calendar_xuangubao_news_signature(data):
+    return tuple(
+        (
+            _calendar_news_source_date(news),
+            _calendar_clean_text(news.get("title")),
+            _calendar_clean_text(news.get("summary")),
+            _calendar_clean_text(news.get("content")),
+            _calendar_clean_text(news.get("description")),
+            _calendar_clean_text(news.get("detail")),
+            _calendar_clean_text(news.get("source_text")),
+        )
+        for news in _calendar_news_items(data)[:80]
+    )
+
+
+def _calendar_strip_dates(text: str) -> str:
+    text = re.sub(r"20\d{2}年", "", str(text or ""))
+    text = re.sub(r"\d{1,2}月\d{1,2}日(?:至\d{1,2}日)?", "", text)
+    text = re.sub(r"\d{1,2}日至\d{1,2}日", "", text)
+    text = re.sub(r"\d{1,2}[/-]\d{1,2}", "", text)
+    return text
+
+
+def _calendar_is_specific_match_term(term: str) -> bool:
+    term = _calendar_compact_text(term)
+    if len(term) < 4 or term in _CALENDAR_WEAK_TITLE_TERMS or term.isdigit():
+        return False
+    if any(marker in term for marker in ("某", "待定", "未知")):
+        return False
+    stripped = term
+    for form_term in _CALENDAR_EVENT_FORM_TERMS:
+        stripped = stripped.replace(_calendar_compact_text(form_term), "")
+    for weak_part in _CALENDAR_WEAK_TITLE_PARTS:
+        stripped = stripped.replace(_calendar_compact_text(weak_part), "")
+    return bool(stripped and stripped not in _CALENDAR_WEAK_TITLE_TERMS and len(stripped) >= 2)
+
+
+def _calendar_title_match_terms(title: str) -> list[str]:
+    title = _calendar_strip_dates(str(title or ""))
+    normalized = _calendar_compact_text(title)
+    terms = []
+    if len(normalized) >= 8:
+        terms.append(normalized)
+
+    splitter = r"[，,。；;：:、·（）()【】\\[\\]「」『』“”\"'《》<>—\\-_/]"
+    for raw_part in re.split(splitter, title):
+        part = _calendar_compact_text(raw_part)
+        if len(part) >= 4:
+            terms.append(part)
+        cut_candidates = [
+            part.find(_calendar_compact_text(term))
+            for term in _CALENDAR_EVENT_CUTOFF_TERMS
+            if _calendar_compact_text(term) and part.find(_calendar_compact_text(term)) > 0
+        ]
+        if cut_candidates:
+            core = part[: min(cut_candidates)]
+            if len(core) >= 3:
+                terms.append(core)
+        stripped = part
+        for term in _CALENDAR_EVENT_FORM_TERMS:
+            stripped = stripped.replace(_calendar_compact_text(term), "")
+        stripped = re.sub(r"\d+", "", stripped)
+        if len(stripped) >= 3:
+            terms.append(stripped)
+
+    unique = []
+    for term in terms:
+        if _calendar_is_specific_match_term(term) and term not in unique:
+            unique.append(term)
+    return unique
+
+
+def _calendar_event_title_matches_news(title: str, news_text: str) -> bool:
+    return _calendar_news_candidate_score(title, news_text) > 0
+
+
+def _calendar_news_candidate_score(title: str, news_text: str) -> int:
+    compact_news = _calendar_compact_text(news_text)
+    if not compact_news:
+        return 0
+    compact_title = _calendar_compact_text(_calendar_strip_dates(title))
+    title_terms = _calendar_title_match_terms(title)
+    score = 0
+    if len(compact_title) >= 8 and compact_title in compact_news and title_terms:
+        score += 80 + min(len(compact_title), 40)
+    for term in title_terms:
+        if len(term) >= 4 and term in compact_news:
+            score += 20 + min(len(term), 20)
+    return score
+
+
+def _calendar_news_source_url(news) -> str:
+    if not isinstance(news, dict):
+        return ""
+    return str(news.get("url") or news.get("source_url") or news.get("link") or "").strip()
+
+
+def _calendar_xuangubao_news_candidates(event, data, *, limit: int = _CALENDAR_NEWS_CANDIDATE_LIMIT):
+    if not isinstance(event, dict):
+        return []
+    title = str(event.get("title") or "").strip()
+    report_date = str((data or {}).get("target_date") or "").strip()[:10]
+    if not title or not report_date:
+        return []
+
+    scored = []
+    fallback = []
+    for source_index, news in enumerate(_calendar_news_items(data)):
+        source_date = _calendar_news_source_date(news)
+        if source_date != report_date:
+            continue
+        evidence_text = _calendar_news_text(news)
+        if not evidence_text:
+            continue
+        candidate = {
+            "title": _calendar_clean_text(news.get("title")),
+            "summary": _calendar_clean_text(news.get("summary")),
+            "content": _calendar_clean_text(news.get("content")),
+            "description": _calendar_clean_text(news.get("description")),
+            "detail": _calendar_clean_text(news.get("detail")),
+            "source_text": _calendar_clean_text(news.get("source_text")),
+            "evidence_text": evidence_text[:500],
+            "source_date": source_date,
+            "source_url": _calendar_news_source_url(news),
+        }
+        score = _calendar_news_candidate_score(title, evidence_text)
+        entry = (score, source_index, candidate)
+        if score > 0:
+            scored.append(entry)
+        else:
+            fallback.append(entry)
+
+    ordered = sorted(scored, key=lambda item: (-item[0], item[1])) + fallback
+    candidates = []
+    for candidate_index, (score, source_index, candidate) in enumerate(ordered[:limit]):
+        candidate = dict(candidate)
+        candidate["candidate_index"] = candidate_index
+        candidate["source_index"] = source_index
+        candidate["retrieval_score"] = score
+        candidates.append(candidate)
+    return candidates
+
+
+def _calendar_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value > 0
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "yes", "y", "是", "匹配", "相关", "matched"}
+
+
+def _calendar_confidence_allows_evidence(value) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return float(value) >= 0.6
+    text = str(value or "").strip().lower()
+    return text in {"高", "中", "high", "medium", "mid", "strong", "ok"}
+
+
+def _calendar_decision_evidence_index(decision, candidate_count: int):
+    if not isinstance(decision, dict):
+        return None
+    raw_index = decision.get("evidence_index", decision.get("candidate_index", decision.get("index")))
+    if isinstance(raw_index, bool):
+        return None
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or index >= candidate_count:
+        return None
+    return index
+
+
+def _calendar_accepts_news_evidence_decision(decision, candidate_count: int):
+    if not isinstance(decision, dict):
+        return None
+    if not _calendar_bool(decision.get("matched")):
+        return None
+    if not _calendar_confidence_allows_evidence(decision.get("confidence")):
+        return None
+    return _calendar_decision_evidence_index(decision, candidate_count)
+
+
+def _calendar_adjudicate_xuangubao_source_evidence(event, candidates, report_date: str):
+    if not ENABLE_REMOTE_CALENDAR_LLM or not candidates:
+        return {}
+    try:
+        client = get_llm_service()
+    except Exception:
+        return {}
+    adjudicator = getattr(client, "adjudicate_calendar_event_news_evidence", None)
+    if not callable(adjudicator):
+        return {}
+    try:
+        result = adjudicator(
+            {
+                "date": str((event or {}).get("date") or ""),
+                "title": str((event or {}).get("title") or ""),
+                "summary": _calendar_event_summary(event),
+            },
+            candidates,
+            report_date=report_date,
+        )
+    except Exception:
+        return {}
+    return result if isinstance(result, dict) else {}
+
+
+def _calendar_match_xuangubao_source_evidence(event, data):
+    if not isinstance(event, dict):
+        return {}
+    title = str(event.get("title") or "").strip()
+    report_date = str((data or {}).get("target_date") or "").strip()[:10]
+    if not title or not report_date:
+        return {}
+
+    candidates = _calendar_xuangubao_news_candidates(event, data)
+    decision = _calendar_adjudicate_xuangubao_source_evidence(event, candidates, report_date)
+    selected_index = _calendar_accepts_news_evidence_decision(decision, len(candidates))
+    if selected_index is None:
+        return {}
+
+    candidate = candidates[selected_index]
+    source_url = str(candidate.get("source_url") or "").strip()
+    evidence = {
+        "provider": _CALENDAR_NEWS_PROVIDER,
+        "query_date": report_date,
+        "source_date": str(candidate.get("source_date") or ""),
+        "source_url": source_url,
+        "source_url_missing": not bool(source_url),
+        "evidence_text": str(candidate.get("evidence_text") or "")[:500],
+        "match_confidence": str(decision.get("confidence") or "").strip(),
+        "policy_evidence": _calendar_bool(decision.get("policy_evidence")),
+    }
+    news_title = _calendar_clean_text(candidate.get("title"))
+    if news_title:
+        evidence["title"] = news_title
+    match_reason = _calendar_clean_text(decision.get("match_reason"))
+    if match_reason:
+        evidence["match_reason"] = match_reason[:120]
+    classification_hint = _calendar_clean_text(decision.get("classification_hint"))
+    if classification_hint:
+        evidence["classification_hint"] = classification_hint[:40]
+    related_sectors = decision.get("related_sectors")
+    if isinstance(related_sectors, list):
+        evidence["related_sectors"] = [str(item).strip() for item in related_sectors if str(item or "").strip()][:5]
+    return evidence
+
+
+def _calendar_event_with_source_evidence(event, data):
+    enriched = dict(event or {})
+    evidence = _calendar_match_xuangubao_source_evidence(enriched, data)
+    if not evidence:
+        return enriched
+    evidence_text = evidence.get("evidence_text", "")
+    existing_source_text = _calendar_clean_text(enriched.get("source_text"))
+    enriched["source_text"] = " ".join(part for part in (existing_source_text, evidence_text) if part)
+    enriched["source_evidence"] = evidence
+    return enriched
+
+
+def _calendar_event_summary(event) -> str:
+    if not isinstance(event, dict):
+        return ""
+    parts = []
+    for key in ("summary", "content", "description", "detail", "source_text"):
+        value = str(event.get(key) or "").strip()
+        if value and value not in parts:
+            parts.append(value)
+    return " ".join(parts)
+
+
+def _keyword_match_event_sectors(title: str, summary: str = "") -> dict:
+    return normalize_calendar_ai_analysis({}, title, summary)
 
 
 def _normalize_calendar_batch_results(batch_results, events):
@@ -4571,14 +5479,17 @@ def _normalize_calendar_batch_results(batch_results, events):
     normalized_results = []
     for index, event in enumerate(events or []):
         title = event.get("title", "") if isinstance(event, dict) else ""
-        summary = event.get("summary", "") if isinstance(event, dict) else ""
+        summary = _calendar_event_summary(event)
         raw_result = batch_results[index] if index < len(batch_results) else None
         normalized_results.append(normalize_calendar_ai_analysis(raw_result, title, summary))
     return normalized_results
 
 
 def _build_calendar_ai_context(data, print_fn=print):
-    events = (data or {}).get("calendar_events") or []
+    events = [
+        _calendar_event_with_source_evidence(event, data)
+        for event in ((data or {}).get("calendar_events") or [])
+    ]
     if not events:
         return {
             "calendar_analysis": [],
@@ -4595,7 +5506,10 @@ def _build_calendar_ai_context(data, print_fn=print):
     total_batches = (event_count + batch_size - 1) // batch_size
 
     batch_start = time.time()
-    events_for_analysis = [{"title": event.get("title", ""), "summary": ""} for event in events]
+    events_for_analysis = [
+        {"title": event.get("title", ""), "summary": _calendar_event_summary(event)}
+        for event in events
+    ]
 
     analysis_source = "local_rules"
     remote_llm_error = ""
@@ -4618,10 +5532,16 @@ def _build_calendar_ai_context(data, print_fn=print):
         except Exception as error:
             remote_llm_error = str(error)
             print_fn(f"   ⚠️ 远程LLM失败: {error}，使用本地规则")
-            batch_results = [_keyword_match_event_sectors(event.get("title", "")) for event in events]
+            batch_results = [
+                _keyword_match_event_sectors(event.get("title", ""), _calendar_event_summary(event))
+                for event in events
+            ]
     else:
         print_fn(f"   🧭 本地规则分析 {event_count} 个财经事件（远程LLM默认关闭）")
-        batch_results = [_keyword_match_event_sectors(event.get("title", "")) for event in events]
+        batch_results = [
+            _keyword_match_event_sectors(event.get("title", ""), _calendar_event_summary(event))
+            for event in events
+        ]
 
     batch_results = _normalize_calendar_batch_results(batch_results, events)
 
@@ -4630,7 +5550,11 @@ def _build_calendar_ai_context(data, print_fn=print):
     all_sectors = []
     for index, event in enumerate(events):
         title = event.get("title", "")
-        ai_analysis = batch_results[index] if index < len(batch_results) else _keyword_match_event_sectors(title)
+        ai_analysis = (
+            batch_results[index]
+            if index < len(batch_results)
+            else _keyword_match_event_sectors(title, _calendar_event_summary(event))
+        )
         smart_star = _smart_score_event(title, event.get("star", 0))
         calendar_analysis.append(
             {
@@ -4638,6 +5562,7 @@ def _build_calendar_ai_context(data, print_fn=print):
                 "title": title,
                 "star": "⭐" * min(smart_star, 5),
                 "ai_analysis": ai_analysis,
+                **({"source_evidence": event["source_evidence"]} if event.get("source_evidence") else {}),
             }
         )
         all_directions.append(ai_analysis.get("main_direction", ""))
@@ -4996,6 +5921,7 @@ def _render_markdown_report_legacy_body(
         main_sectors_info,
         secondary_sectors_info,
         ai_group_concepts_into_chains=ai_group_concepts_into_chains,
+        target_date=target_date,
     )
     report.extend(market_and_sector_analysis.get('lines', []))
     
@@ -5562,6 +6488,34 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    two_layer_decision_payload = build_two_layer_decision_payload(
+        target_date=target_date,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        execution_stage_context=execution_stage_context,
+    )
+    _store_runtime_two_layer_decision_payload(
+        two_layer_decision_payload,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    sniper_target_derivation = _build_sniper_target_derivation_packet(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        final_gate=final_gate,
+        two_layer_decision_payload=two_layer_decision_payload,
+    )
+    _store_runtime_sniper_target_derivation(
+        sniper_target_derivation,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     final_gate_for_front_page = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
     capital_priority = final_target_resolution.get("capital_priority_decision", {}).get("capital_priority")
     capital_reason = final_target_resolution.get("capital_priority_decision", {}).get("reason")
@@ -5818,6 +6772,34 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    two_layer_decision_payload = build_two_layer_decision_payload(
+        target_date=target_date,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        execution_stage_context=execution_stage_context,
+    )
+    _store_runtime_two_layer_decision_payload(
+        two_layer_decision_payload,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    sniper_target_derivation = _build_sniper_target_derivation_packet(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        final_gate=final_gate,
+        two_layer_decision_payload=two_layer_decision_payload,
+    )
+    _store_runtime_sniper_target_derivation(
+        sniper_target_derivation,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     final_gate_for_front_page = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
     capital_priority = final_target_resolution.get("capital_priority_decision", {}).get("capital_priority")
     capital_reason = final_target_resolution.get("capital_priority_decision", {}).get("reason")
@@ -5912,6 +6894,10 @@ def _render_markdown_report_legacy_body(
         final_target_resolution=final_target_resolution,
     )
     front_page_lines = _insert_final_target_solution_front_panel(front_page_lines, final_target_solution_lines)
+    front_page_lines = _insert_two_layer_front_decision_panel(
+        front_page_lines,
+        render_front_decision_layer(two_layer_decision_payload),
+    )
     if DISPLAY_MVP_MODE:
         report = front_page_lines
     else:
@@ -5921,7 +6907,19 @@ def _render_markdown_report_legacy_body(
             position_decision=position_decision,
             final_target_resolution=final_target_resolution,
         )
-        report = front_page_lines + ["", "## 八、详细附录", ""] + _demote_appendix_headings(appendix_report)
+        derivation_appendix = _sniper_target_derivation_full_section(
+            sniper_target_derivation,
+            heading="## 狙击手最终标的完整路径图（过程证据）",
+        )
+        appendix_lines = list(derivation_appendix)
+        if appendix_lines:
+            appendix_lines.append("")
+        two_layer_derivation_lines = render_derivation_audit_layer(two_layer_decision_payload)
+        if two_layer_derivation_lines:
+            appendix_lines.extend(two_layer_derivation_lines)
+            appendix_lines.append("")
+        appendix_lines.extend(_demote_appendix_headings(appendix_report))
+        report = front_page_lines + ["", "## 八、详细附录", ""] + appendix_lines
 
     print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(front_page_final_gate.get('final_action', '未知'))}")
     _finalize_helper_diagnostics(data)
