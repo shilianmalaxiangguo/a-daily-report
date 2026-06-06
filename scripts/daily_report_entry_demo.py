@@ -91,6 +91,9 @@ from daily_report_render import (
     save_report_outputs,
     save_stock_diagnostic_output,
 )
+from report.html_report_renderer import (
+    save_daily_report_html_from_postgres,
+)
 from daily_report_snapshot_io import (
     _get_snapshot_path as run_get_snapshot_path,
     _save_data_snapshot,
@@ -3951,6 +3954,22 @@ def _daily_report_data_path_label(args):
     return "live"
 
 
+def _try_save_daily_report_html_from_postgres(target_date, *, run_mode=LEDGER_MODE_FROZEN):
+    try:
+        service = _postgres_daily_report_service()
+        path = save_daily_report_html_from_postgres(
+            target_date,
+            service,
+            root=Path(__file__).resolve().parents[1],
+            run_mode=run_mode,
+        )
+    except Exception as exc:
+        print(f"HTML 日报未生成：{exc}")
+        return None
+    print(f"HTML 日报已生成: {path}")
+    return path
+
+
 def _format_elapsed_seconds(elapsed_seconds):
     return f"{max(0.0, float(elapsed_seconds)) + 1e-9:.2f}"
 
@@ -4148,13 +4167,24 @@ def main():
             )
             save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
 
-        # 保存数据快照JSON（供复盘使用，无论是否生成报告都保存）
+        # 保存复盘快照并同步 PostgreSQL 事实（无论是否生成报告都保存）
         if data:
+            postgres_synced = False
             if args.postgres_only:
                 result = import_daily_report_data_to_postgres(target_date, data)
                 print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+                postgres_synced = True
             else:
                 _save_data_snapshot(data, target_date, mode=run_mode)
+                try:
+                    result = import_daily_report_data_to_postgres(target_date, data)
+                except Exception as exc:
+                    print(f"PostgreSQL 日报事实未同步：{exc}")
+                else:
+                    print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+                    postgres_synced = True
+            if postgres_synced and not args.no_report:
+                _try_save_daily_report_html_from_postgres(target_date, run_mode=run_mode)
             if args.publish_snap_ui:
                 publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
             else:
