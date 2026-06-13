@@ -593,6 +593,9 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("近5个已结算交易日正确率", rendered)
         self.assertIn("结算上一交易日：2026-05-29", rendered)
         self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", rendered)
+        self.assertNotIn("### 近5个已结算交易日正确率", rendered)
+        self.assertNotIn("### 结算上一交易日：2026-05-29", rendered)
+        self.assertNotIn("### 今日判断（2026-06-01，等待下一交易日验证）", rendered)
         self.assertIn("| 市场状态判断 | 混沌 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |", rendered)
 
     def test_daily_panel_renders_recent_rows_as_expected_actual_reason(self):
@@ -884,7 +887,7 @@ class DecisionStatisticsTest(unittest.TestCase):
             recent_days=5,
         )
         rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
-        settlement_block = rendered.split("### 结算上一交易日：2026-05-29", 1)[1].split("### 上一交易日未完成结算", 1)[0]
+        settlement_block = rendered.split("**结算上一交易日：2026-05-29**", 1)[1].split("**上一交易日未完成结算**", 1)[0]
 
         self.assertNotIn("待补事实", settlement_block)
         self.assertNotIn("市场状态判断", settlement_block)
@@ -898,7 +901,7 @@ class DecisionStatisticsTest(unittest.TestCase):
             "| 取消条件判断 | 正确 | 取消条件出现时回到0%不参与 | 预演作废 | 作废条件出现，原参与方案不再成立。 |",
             settlement_block,
         )
-        self.assertIn("### 上一交易日未完成结算", rendered)
+        self.assertIn("**上一交易日未完成结算**", rendered)
         self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
 
     def test_previous_day_mixed_settlement_keeps_missing_part_separate(self):
@@ -933,8 +936,8 @@ class DecisionStatisticsTest(unittest.TestCase):
             recent_days=5,
         )
         rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
-        settlement_block = rendered.split("### 结算上一交易日：2026-05-29", 1)[1].split("### 上一交易日未完成结算", 1)[0]
-        unresolved_block = rendered.split("### 上一交易日未完成结算", 1)[1].split("### 今日判断", 1)[0]
+        settlement_block = rendered.split("**结算上一交易日：2026-05-29**", 1)[1].split("**上一交易日未完成结算**", 1)[0]
+        unresolved_block = rendered.split("**上一交易日未完成结算**", 1)[1].split("**今日判断", 1)[0]
 
         self.assertIn("| 主线判断 | 正确 | - | - | 符合预期 |", settlement_block)
         self.assertNotIn("部分正确", settlement_block)

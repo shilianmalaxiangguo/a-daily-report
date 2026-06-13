@@ -26,7 +26,7 @@ _POSTGRES_ONLY_RUNTIME = False
 A股日报数据获取入口 - 严格按照SKILL.md声明使用数据源（2026-03-31重写版）
 
 严格按照SKILL.md中声明的数据源优先级调用：
-0. 基础市场事实与 snap-ui public data：Tushare-first；AkShare / iwencai 仅作为 fallback only
+0. 基础市场事实：Tushare-first；AkShare / iwencai 仅作为 fallback only
 1. 热度前十个股：Tushare ths_hot 热股（首选）→ 本地同花顺脚本 / 腾讯财经热股排行（备用）
 2. 板块热榜：Tushare ths_hot 概念板块/行业板块（首选）→ 本地同花顺板块脚本（兜底）
 3. 指数数据：Tushare index_daily（首选）→ AkShare / 同花顺问财 / 历史K线（兜底）
@@ -91,9 +91,7 @@ from daily_report_render import (
     save_report_outputs,
     save_stock_diagnostic_output,
 )
-from report.html_report_renderer import (
-    save_daily_report_html_from_postgres,
-)
+from report.markdown_report_html import render_markdown_report_file
 from daily_report_snapshot_io import (
     _get_snapshot_path as run_get_snapshot_path,
     _save_data_snapshot,
@@ -210,7 +208,6 @@ from portfolio.position_strategy_report import (
     render_position_strategy_report,
     save_position_strategy_report,
 )
-from publish.snap_ui_public_data import publish_snap_ui_public_data
 from export.sh_index_chanlun_html import (
     DEFAULT_INDEX_CODE,
     normalize_visual_payload,
@@ -3714,18 +3711,61 @@ def replay_from_snapshot(target_date, refresh_sources=None):
 
 
 def _postgres_daily_report_service():
-    service = DatabaseService.from_environment()
+    service = DatabaseService.postgres_from_environment_or_local_default()
     if not service.is_postgres_backed():
-        raise ReportCriticalDataMissingError("PostgreSQL-only 需要 A_DAILY_REPORT_DATABASE_URL 或 DATABASE_URL 指向 PostgreSQL")
+        raise ReportCriticalDataMissingError("PostgreSQL-only 未找到可用 PostgreSQL 事实库")
     return service
+
+
+def _format_postgres_fact_coverage_message(target_date, service):
+    coverage_reader = getattr(service, "daily_report_fact_coverage", None)
+    if not callable(coverage_reader):
+        return f"{target_date} PostgreSQL 日报事实缺失，停止生成"
+    coverage = coverage_reader(target_date) or {}
+    tables = coverage.get("tables") if isinstance(coverage.get("tables"), dict) else {}
+    if not tables:
+        return f"{target_date} PostgreSQL 日报事实缺失，停止生成"
+    missing_tables = [
+        table_name
+        for table_name, item in tables.items()
+        if _safe_float((item or {}).get("target_count")) <= 0
+    ]
+    latest_dates = [
+        str((item or {}).get("max_trade_date") or "").strip()
+        for item in tables.values()
+        if isinstance(item, dict) and str(item.get("max_trade_date") or "").strip()
+    ]
+    latest_date = max(latest_dates) if latest_dates else ""
+    database_name = str(coverage.get("database_name") or "").strip()
+    parts = [f"{target_date} PostgreSQL 日报事实缺失，停止生成"]
+    if database_name:
+        parts.append(f"已连接 {database_name}")
+    if missing_tables:
+        parts.append("目标日期无记录的表：" + "、".join(missing_tables))
+    if latest_date:
+        parts.append(f"当前库最新事实日期为 {latest_date}")
+    return "；".join(parts)
+
+
+def _postgres_loaded_data_has_target_facts(result, data):
+    if not isinstance(data, dict):
+        return False
+    if "target_field_count" in (result or {}):
+        if _safe_float((result or {}).get("target_field_count")) > 0:
+            return True
+    elif _safe_float((result or {}).get("field_count")) > 0:
+        return True
+    if _safe_float((result or {}).get("target_structured_fact_count")) > 0:
+        return True
+    return False
 
 
 def load_daily_report_data_from_postgres(target_date):
     service = _postgres_daily_report_service()
     result = service.load_daily_report_snapshot(target_date)
     data = result.get("data") if isinstance(result, dict) else {}
-    if not isinstance(data, dict) or not data:
-        raise ReportCriticalDataMissingError(f"{target_date} PostgreSQL 日报事实缺失，停止生成")
+    if not _postgres_loaded_data_has_target_facts(result, data):
+        raise ReportCriticalDataMissingError(_format_postgres_fact_coverage_message(target_date, service))
     csi1000 = data.get("csi1000_index") or {}
     if isinstance(csi1000, dict) and _safe_float(csi1000.get("price", csi1000.get("点位", 0))) > 0:
         data_status = data.setdefault("data_status", {})
@@ -3954,14 +3994,17 @@ def _daily_report_data_path_label(args):
     return "live"
 
 
-def _try_save_daily_report_html_from_postgres(target_date, *, run_mode=LEDGER_MODE_FROZEN):
+def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LEDGER_MODE_FROZEN, saved_report_paths=None):
     try:
-        service = _postgres_daily_report_service()
-        path = save_daily_report_html_from_postgres(
-            target_date,
-            service,
-            root=Path(__file__).resolve().parents[1],
-            run_mode=run_mode,
+        full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
+        if not full_report_path.exists():
+            raise FileNotFoundError(str(full_report_path))
+        path = render_markdown_report_file(
+            full_report_path,
+            full_report_path.with_suffix(".html"),
+            title=f"{target_date} A股日报",
+            trade_date=target_date,
+            source_label="Markdown日报",
         )
     except Exception as exc:
         print(f"HTML 日报未生成：{exc}")
@@ -4026,8 +4069,6 @@ def main():
                        help='生成单票诊断，输入股票代码，如 002364')
     parser.add_argument('--stock-name', type=str, default='',
                        help='单票诊断可选股票名称，提升可读性')
-    parser.add_argument('--publish-snap-ui', action='store_true',
-                       help='显式发布 snap-ui 静态数据并运行契约检查；默认只生成日报与快照')
     parser.add_argument('--overwrite-official', action='store_true',
                        help='显式覆盖该日期正式日报；默认保护已有正式历史')
     
@@ -4043,8 +4084,6 @@ def main():
 
     if args.postgres_only and args.replay:
         raise ReportCriticalDataMissingError("PostgreSQL-only 不能与 --replay 同时使用")
-    if args.postgres_only and args.publish_snap_ui:
-        raise ReportCriticalDataMissingError("PostgreSQL-only 不发布 snap-ui 静态数据")
     if args.import_json_to_postgres and (args.postgres_only or args.replay):
         raise ReportCriticalDataMissingError("--import-json-to-postgres 不能与 --postgres-only 或 --replay 同时使用")
 
@@ -4167,7 +4206,7 @@ def main():
             )
             save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
 
-        # 保存复盘快照并同步 PostgreSQL 事实（无论是否生成报告都保存）
+        # 同步 PostgreSQL 事实；失败时停止，避免重新写入完整 JSON 快照。
         if data:
             postgres_synced = False
             if args.postgres_only:
@@ -4175,21 +4214,22 @@ def main():
                 print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
                 postgres_synced = True
             else:
-                _save_data_snapshot(data, target_date, mode=run_mode)
                 try:
                     result = import_daily_report_data_to_postgres(target_date, data)
                 except Exception as exc:
                     print(f"PostgreSQL 日报事实未同步：{exc}")
+                    raise ReportCriticalDataMissingError(
+                        "PostgreSQL 日报事实未同步，停止生成；不会写入完整 JSON 快照。"
+                    ) from exc
                 else:
                     print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
                     postgres_synced = True
             if postgres_synced and not args.no_report:
-                _try_save_daily_report_html_from_postgres(target_date, run_mode=run_mode)
-            if args.publish_snap_ui:
-                publish_snap_ui_public_data(target_date, root=Path(__file__).resolve().parents[1])
-            else:
-                print("ℹ️ 已跳过 snap-ui 静态数据发布；如需维护前端数据，请显式传入 --publish-snap-ui。")
-
+                _try_save_daily_report_html_from_saved_markdown(
+                    target_date,
+                    run_mode=run_mode,
+                    saved_report_paths=saved_report_paths,
+                )
             elapsed_seconds = time.perf_counter() - report_started_at
             _append_daily_report_duration_log(
                 saved_report_paths,

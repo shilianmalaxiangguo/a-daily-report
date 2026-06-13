@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -122,6 +123,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "candidate_trace_eliminated_groups",
             "candidate_trace_row_fields",
             "daily_report_fact_fields",
+            "price_band_style_daily",
             "extreme_conviction_cases",
             "extreme_conviction_mentions",
             "planned_participation_steps",
@@ -134,6 +136,60 @@ class PostgresDailyFactDbTest(unittest.TestCase):
 
         self.assertNotIn("payload_json", schema)
 
+    def test_psycopg_connection_prefers_python_impl_when_unspecified(self):
+        import os
+
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            ensure_schema=False,
+        )
+
+        class FakePsycopg:
+            @staticmethod
+            def connect(database_url, **kwargs):
+                return {"database_url": database_url, "kwargs": kwargs}
+
+        class FakeRows:
+            dict_row = object()
+
+        def fake_import(name):
+            if name == "psycopg":
+                return FakePsycopg
+            if name == "psycopg.rows":
+                return FakeRows
+            raise ImportError(name)
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("storage.postgres_daily_fact_db.importlib.import_module", side_effect=fake_import):
+                conn = db._connect_with_psycopg()
+                self.assertEqual(os.environ.get("PSYCOPG_IMPL"), "python")
+
+        self.assertEqual(conn["database_url"], "postgresql://unit-test")
+        self.assertEqual(conn["kwargs"]["row_factory"], FakeRows.dict_row)
+
+    def test_psycopg_connection_preserves_explicit_impl(self):
+        import os
+
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            ensure_schema=False,
+        )
+
+        class FakePsycopg:
+            @staticmethod
+            def connect(database_url, **kwargs):
+                return {"database_url": database_url, "kwargs": kwargs}
+
+        def fake_import(name):
+            if name == "psycopg":
+                return FakePsycopg
+            raise ImportError(name)
+
+        with patch.dict(os.environ, {"PSYCOPG_IMPL": "binary"}, clear=True):
+            with patch("storage.postgres_daily_fact_db.importlib.import_module", side_effect=fake_import):
+                db._connect_with_psycopg()
+                self.assertEqual(os.environ.get("PSYCOPG_IMPL"), "binary")
+
     def test_runtime_cache_entries_schema_has_ttl_and_namespace_key(self):
         schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
 
@@ -143,6 +199,124 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertIn("expires_at timestamptz not null", schema)
         self.assertIn("primary key (namespace, cache_key, target_date)", schema)
         self.assertIn("create index if not exists idx_runtime_cache_entries_expires_at", schema)
+
+    def test_query_price_band_style_series_reads_daily_report_fact_snapshot(self):
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: _FakeConnection(),
+            ensure_schema=False,
+        )
+        snapshot = {
+            "data": {
+                "price_band_style_series": {
+                    "source": "postgres.daily_report_fact_fields",
+                    "rows": [
+                        {
+                            "trade_date": "2026-06-04",
+                            "high_price_pct": 1.2,
+                            "low_price_pct": -0.4,
+                        }
+                    ],
+                }
+            }
+        }
+
+        with patch.object(PostgresDailyFactDb, "load_daily_report_snapshot", return_value=snapshot):
+            result = db.query_price_band_style_series("2026-06-05", window_days=25)
+
+        self.assertEqual(result["source"], "postgres.daily_report_fact_fields")
+        self.assertEqual(result["rows"][0]["trade_date"], "2026-06-04")
+
+    def test_price_band_style_daily_round_trip_uses_structured_rows_before_snapshot(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.upsert_price_band_style_daily(
+            {
+                "trade_date": "2026-06-05",
+                "high_price_code": "883916.TI",
+                "low_price_code": "883960.TI",
+                "high_price_pct": -1.07,
+                "low_price_pct": -0.87,
+                "spread_pct": -0.2,
+                "style_label": "震荡",
+                "source_policy": "ths.history_line.price_band_style",
+                "source_run_id": 12,
+            }
+        )
+        conn.cursor_obj.row_batches.append(
+            [
+                {
+                    "trade_date": "2026-06-05",
+                    "high_price_code": "883916.TI",
+                    "low_price_code": "883960.TI",
+                    "high_price_pct": -1.07,
+                    "low_price_pct": -0.87,
+                    "spread_pct": -0.2,
+                    "style_label": "震荡",
+                    "source_policy": "ths.history_line.price_band_style",
+                    "source_run_id": 12,
+                }
+            ]
+        )
+
+        with patch.object(PostgresDailyFactDb, "load_daily_report_snapshot", side_effect=AssertionError("snapshot should not be read")):
+            result = db.query_price_band_style_series("2026-06-05", window_days=25)
+
+        self.assertEqual(result["source"], "postgres.price_band_style_daily")
+        self.assertEqual(result["rows"][0]["trade_date"], "2026-06-05")
+        self.assertAlmostEqual(result["rows"][0]["spread_pct"], -0.2)
+        sql = "\n".join(call[1] for call in conn.cursor_obj.calls if call[0] == "execute")
+        self.assertIn("INSERT INTO price_band_style_daily", sql)
+        self.assertIn("FROM price_band_style_daily", sql)
+
+    def test_import_daily_report_facts_writes_price_band_style_rows_to_structured_table(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        result = db.import_daily_report_facts(
+            "2026-06-05",
+            {
+                "price_band_style_series": {
+                    "source": "ths.history_line.price_band_style",
+                    "rows": [
+                        {
+                            "trade_date": "2026-06-04",
+                            "high_price_code": "883916.TI",
+                            "low_price_code": "883960.TI",
+                            "high_price_pct": 1.2,
+                            "low_price_pct": 0.2,
+                            "spread_pct": 1.0,
+                            "style_label": "震荡",
+                        },
+                        {
+                            "trade_date": "2026-06-05",
+                            "high_price_pct": -1.07,
+                            "low_price_pct": -0.87,
+                            "spread_pct": -0.2,
+                            "style_label": "震荡",
+                            "source_policy": "tushare.ths_daily.price_band_style",
+                        },
+                    ],
+                },
+            },
+        )
+
+        price_band_inserts = [
+            call for call in conn.cursor_obj.calls
+            if call[0] == "execute" and "INSERT INTO price_band_style_daily" in call[1]
+        ]
+        self.assertEqual(len(price_band_inserts), 2)
+        self.assertEqual(result["structured_counts"]["price_band_style_daily"], 2)
+        self.assertIn("price_band_style_daily", "\n".join(call[1] for call in conn.cursor_obj.calls))
 
     def test_monthly_account_ledger_schema_migrates_existing_cumulative_column(self):
         schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
@@ -1718,6 +1892,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 ("k:34:recent_hot_sector_turnover_history/#0/k:11:sector_name", "新型电力", None, None, "text"),
                 ("k:34:recent_hot_sector_turnover_history/#0/k:18:turnover_share_pct", "", 0.89, None, "number"),
             ],
+            [],
+            [],
+            [],
+            [],
             [
                 (
                     "2026-05-29",
@@ -1748,6 +1926,230 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual([row["sector_name"] for row in history], ["光通信/CPO", "通信设备"])
         self.assertEqual(history[1]["turnover_share_pct"], 9.17)
 
+    def test_load_daily_report_snapshot_uses_structured_mainline_cycle_rows_when_wide_facts_empty(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [],
+            [
+                (
+                    "2026-06-03",
+                    "电力",
+                    "火电",
+                    "",
+                    "",
+                    "主线扩散",
+                    "电力",
+                    "expand",
+                    "强化",
+                    0.8,
+                    "电力承接强于大盘",
+                    "mainline_daily",
+                    0,
+                ),
+                (
+                    "2026-06-04",
+                    "电力",
+                    "火电",
+                    "",
+                    "",
+                    "主线扩散",
+                    "电力",
+                    "expand",
+                    "强化",
+                    0.82,
+                    "大盘深跌时仍翻红",
+                    "mainline_daily",
+                    0,
+                ),
+            ],
+            [
+                (
+                    "2026-06-03",
+                    "06-01当周",
+                    "wednesday",
+                    "电力",
+                    "火电",
+                    "强化",
+                    "当前周期",
+                    "延续验证",
+                    "扩散",
+                    "观察核心承接",
+                    "电力扩散验证",
+                ),
+                (
+                    "2026-06-04",
+                    "06-01当周",
+                    "thursday",
+                    "电力",
+                    "火电",
+                    "强化",
+                    "当前周期",
+                    "延续验证",
+                    "扩散",
+                    "观察核心承接",
+                    "大盘深跌时电力承接延续",
+                ),
+            ],
+            [
+                (
+                    "2026-06-04",
+                    "当前周期",
+                    "06-03 ~ 06-04",
+                    2,
+                    "电力",
+                    "火电",
+                    "延续验证",
+                    "扩散",
+                    "强化",
+                    "观察核心承接",
+                    "华电辽能翻红，电力线仍有承接",
+                )
+            ],
+            [
+                (
+                    "2026-06-04",
+                    "all_a",
+                    10500.0,
+                    5300,
+                    "market_daily_totals",
+                    0,
+                )
+            ],
+            [
+                (
+                    "2026-06-04",
+                    "电力",
+                    1,
+                    12.6,
+                    5,
+                    2,
+                    330.0,
+                    10500.0,
+                    3.14,
+                    0.22,
+                    "sector_attack_evidence_daily",
+                    0,
+                )
+            ],
+            [
+                ("2026-06-03", "电力", 300.0, 10000.0, 3.0, "mainline_turnover_daily"),
+                ("2026-06-04", "电力", 330.0, 10500.0, 3.14, "sector_attack_evidence_daily"),
+            ],
+            [],
+            [],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-06-04")
+
+        data = loaded["data"]
+        self.assertEqual(loaded["field_count"], 0)
+        self.assertEqual(loaded["target_field_count"], 0)
+        self.assertEqual(loaded["structured_counts"]["current_mainline_history_record"], 1)
+        self.assertEqual(loaded["structured_counts"]["cycle_calendar_rows"], 1)
+        self.assertEqual(loaded["structured_counts"]["cycle_interpretation_rows"], 1)
+        self.assertEqual(loaded["structured_counts"]["sector_attack_evidence_rows"], 1)
+        self.assertEqual(loaded["structured_counts"]["market_daily_total"], 1)
+        self.assertGreaterEqual(loaded["structured_fact_count"], 7)
+        self.assertEqual(data["current_mainline_history_record"]["primary_mainline"], "电力")
+        self.assertEqual(data["recent_mainline_history"][0]["date"], "2026-06-03")
+        self.assertEqual(data["cycle_calendar_rows"][0]["wednesday"]["mainline"], "电力")
+        self.assertEqual(data["cycle_calendar_rows"][0]["thursday"]["state"], "强化")
+        self.assertEqual(data["cycle_interpretation_rows"][0]["attack_line"], "火电")
+        self.assertEqual(data["sector_attack_evidence_rows"][0]["sector_name"], "电力")
+        self.assertEqual(data["recent_hot_sector_turnover_history"][-1]["turnover_share_pct"], 3.14)
+
+    def test_load_daily_report_snapshot_does_not_treat_history_only_rows_as_target_facts(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [],
+            [
+                (
+                    "2026-05-29",
+                    "通信设备",
+                    "光通信",
+                    "",
+                    "",
+                    "主线延续",
+                    "通信设备",
+                    "trend",
+                    "强化",
+                    0.8,
+                    "历史主线记录",
+                    "mainline_daily",
+                    0,
+                ),
+            ],
+            [
+                (
+                    "2026-05-29",
+                    "05-25当周",
+                    "friday",
+                    "通信设备",
+                    "光通信",
+                    "强化",
+                    "上一周期",
+                    "延续",
+                    "",
+                    "",
+                    "历史周期记录",
+                ),
+            ],
+            [],
+            [],
+            [],
+            [
+                ("2026-05-29", "通信设备", 3062.15, 33408.58, 9.17, "mainline_turnover_daily"),
+            ],
+            [],
+            [],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-06-04")
+
+        self.assertEqual(loaded["field_count"], 0)
+        self.assertEqual(loaded["target_field_count"], 0)
+        self.assertEqual(loaded["structured_counts"]["current_mainline_history_record"], 0)
+        self.assertGreater(loaded["structured_counts"]["recent_mainline_history"], 0)
+        self.assertGreater(loaded["structured_counts"]["cycle_calendar_rows"], 0)
+        self.assertEqual(loaded["target_structured_fact_count"], 0)
+
+    def test_load_daily_report_snapshot_shell_fields_do_not_count_as_target_fields(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [
+                ("k:13:postgres_only", "", None, True, "bool"),
+            ],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-06-04")
+
+        self.assertEqual(loaded["field_count"], 1)
+        self.assertEqual(loaded["target_field_count"], 0)
+        self.assertEqual(loaded["target_structured_fact_count"], 0)
+
     def test_load_daily_report_snapshot_enriches_candidate_trace_from_structured_tables(self):
         conn = _FakeConnection()
         db = PostgresDailyFactDb(
@@ -1756,6 +2158,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ensure_schema=False,
         )
         conn.cursor_obj.row_batches = [
+            [],
+            [],
+            [],
+            [],
             [],
             [],
             [("2026-05-29", 1, "public", "2026-05-29T15:30:00", "reports/replay.md", "full")],

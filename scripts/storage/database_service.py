@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
 
-from storage.cloudflare_free_daily_db import CloudflareFreeDailyDb
 from storage.postgres_daily_fact_db import PostgresDailyFactDb
 
 __all__ = [
@@ -10,19 +10,51 @@ __all__ = [
 ]
 
 
+_DEFAULT_LOCAL_POSTGRES_DATABASES = ("a_daily_report_psql_529",)
+
+
+def _postgres_url_from_environment():
+    database_url = (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip()
+    if database_url.startswith(("postgres://", "postgresql://")):
+        return database_url
+    return ""
+
+
+def _postgres_only_runtime_configured():
+    return os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+
+
+def _local_postgres_database_exists(database_name):
+    database_name = str(database_name or "").strip()
+    if not database_name:
+        return False
+    try:
+        result = subprocess.run(
+            ["psql", "-d", database_name, "-Atqc", "select 1"],
+            text=True,
+            capture_output=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
 class DatabaseService:
     """Application-facing database service facade.
 
-    The first implementation is SQLite-backed and mirrors the Cloudflare D1
-    schema; callers should depend on this facade instead of the concrete store.
+    The fact store is PostgreSQL-backed. When PostgreSQL is unavailable, the
+    facade returns an empty service instead of falling back to retired local
+    database files.
     """
 
     def __init__(self, repository):
         self.repository = repository
-
-    @classmethod
-    def sqlite_d1_compatible(cls, db_path=None):
-        return cls(CloudflareFreeDailyDb(db_path))
 
     @classmethod
     def postgres(cls, database_url):
@@ -30,14 +62,46 @@ class DatabaseService:
 
     @classmethod
     def from_environment(cls, db_path=None):
-        database_url = (
-            os.environ.get("A_DAILY_REPORT_DATABASE_URL")
-            or os.environ.get("DATABASE_URL")
-            or ""
-        ).strip()
-        if database_url.startswith(("postgres://", "postgresql://")):
+        database_url = _postgres_url_from_environment()
+        if database_url:
             return cls(PostgresDailyFactDb(database_url))
-        return cls.sqlite_d1_compatible(db_path)
+        checker = _local_postgres_database_exists
+        for database_name in _DEFAULT_LOCAL_POSTGRES_DATABASES:
+            if checker(database_name):
+                return cls(PostgresDailyFactDb(f"postgresql:///{database_name}"))
+        return cls(None)
+
+    @classmethod
+    def postgres_from_environment_or_local_default(
+        cls,
+        *,
+        local_database_names=None,
+        database_exists=None,
+    ):
+        database_url = _postgres_url_from_environment()
+        if database_url:
+            return cls(PostgresDailyFactDb(database_url))
+        checker = database_exists or _local_postgres_database_exists
+        for database_name in local_database_names or _DEFAULT_LOCAL_POSTGRES_DATABASES:
+            if checker(database_name):
+                return cls(PostgresDailyFactDb(f"postgresql:///{database_name}"))
+        return cls(None)
+
+    @classmethod
+    def fact_store_from_environment(
+        cls,
+        db_path=None,
+        *,
+        local_database_names=None,
+        database_exists=None,
+    ):
+        service = cls.postgres_from_environment_or_local_default(
+            local_database_names=local_database_names,
+            database_exists=database_exists,
+        )
+        if getattr(service, "repository", None) is not None:
+            return service
+        return service
 
     def is_postgres_backed(self):
         checker = getattr(self.repository, "is_postgres_backed", None)
@@ -329,6 +393,12 @@ class DatabaseService:
         reader = getattr(self.repository, "load_daily_report_facts", None)
         if not callable(reader):
             reader = getattr(self.repository, "load_daily_report_snapshot", None)
+        if not callable(reader):
+            return {}
+        return reader(trade_date)
+
+    def daily_report_fact_coverage(self, trade_date):
+        reader = getattr(self.repository, "daily_report_fact_coverage", None)
         if not callable(reader):
             return {}
         return reader(trade_date)

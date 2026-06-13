@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as _dt
 import importlib
 import json
+import os
 from contextlib import contextmanager
 
 POSTGRES_SCHEMA_STATEMENTS = [
@@ -152,6 +153,21 @@ POSTGRES_SCHEMA_STATEMENTS = [
         PRIMARY KEY (index_code, trade_date, period, bar_time)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS price_band_style_daily (
+        trade_date DATE PRIMARY KEY,
+        high_price_code TEXT NOT NULL DEFAULT '',
+        low_price_code TEXT NOT NULL DEFAULT '',
+        high_price_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+        low_price_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+        spread_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+        style_label TEXT NOT NULL DEFAULT '',
+        source_policy TEXT NOT NULL DEFAULT '',
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_price_band_style_daily_trade_date ON price_band_style_daily(trade_date)",
     """
     CREATE TABLE IF NOT EXISTS sector_fund_flow_daily (
         trade_date DATE NOT NULL,
@@ -597,6 +613,7 @@ _RECENT_REPLAY_FACT_DATE_COLUMNS = (
     ("mainline_turnover_daily", "trade_date"),
     ("market_daily_totals", "trade_date"),
     ("index_minute_bars", "trade_date"),
+    ("price_band_style_daily", "trade_date"),
     ("sector_fund_flow_daily", "trade_date"),
     ("sector_attack_evidence_daily", "trade_date"),
     ("sector_diffusion_score_daily", "trade_date"),
@@ -620,6 +637,21 @@ _RECENT_REPLAY_FACT_DATE_COLUMNS = (
     ("extreme_conviction_cases", "trade_date"),
     ("extreme_conviction_mentions", "mention_trade_date"),
     ("participation_reviews", "review_trade_date"),
+)
+
+_DAILY_REPORT_FACT_COVERAGE_TABLES = (
+    "daily_report_fact_fields",
+    "mainline_daily",
+    "market_cycle_days",
+    "market_cycle_periods",
+    "sector_attack_evidence_daily",
+    "mainline_turnover_daily",
+    "market_daily_totals",
+    "price_band_style_daily",
+    "candidate_trace_artifacts",
+    "candidate_trace_rows",
+    "candidate_trace_row_fields",
+    "candidate_trace_eliminated_groups",
 )
 _RECENT_REPLAY_FACT_ORPHAN_DELETES = (
     (
@@ -646,6 +678,7 @@ _RECENT_REPLAY_WINDOW_SERIES_PATHS = (
     ("new_high_feedback", "trend_rows"),
     ("top50_turnover_share_series", "rows"),
     ("etf_turnover_series", "rows"),
+    ("price_band_style_series", "rows"),
     ("margin_pressure", "rows"),
 )
 
@@ -1019,6 +1052,20 @@ def _field_path_has_low_value_component(field_path):
     return False
 
 
+def _is_target_daily_report_fact_field_path(field_path):
+    parts = _decode_fact_path(field_path)
+    if not parts:
+        return False
+    top_level_key = _text(parts[0])
+    if top_level_key in {"postgres_only", "postgres_source"}:
+        return False
+    return not _field_path_has_low_value_component(field_path)
+
+
+def _prefer_psycopg_python_impl_when_unspecified():
+    os.environ.setdefault("PSYCOPG_IMPL", "python")
+
+
 def _iter_safe_fact_fields(value, *, parts=(), max_depth=8):
     if max_depth < 0:
         return
@@ -1271,6 +1318,7 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "new_high_feedback",
     "top50_turnover_share_series",
     "etf_turnover_series",
+    "price_band_style_series",
     "concept_fund_flow",
     "sector_fund_flow",
     "sector_change_up",
@@ -2386,6 +2434,43 @@ def _sector_fund_flow_records_from_data(trade_date, data):
     return records
 
 
+def _price_band_style_records_from_data(data):
+    series = data.get("price_band_style_series") if isinstance(data, dict) else {}
+    if not isinstance(series, dict):
+        return []
+    rows = series.get("rows")
+    if not isinstance(rows, list):
+        return []
+    default_source = _text(series.get("source") or series.get("source_policy")) or "daily_report_facts.price_band_style_series"
+    high_price_code = _text(series.get("high_price_code")) or "883916.TI"
+    low_price_code = _text(series.get("low_price_code")) or "883960.TI"
+    records = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_date = _date_or_none(row.get("trade_date") or row.get("date"))
+        if not row_date or row_date in seen:
+            continue
+        seen.add(row_date)
+        high_price_pct = _safe_float(row.get("high_price_pct"))
+        low_price_pct = _safe_float(row.get("low_price_pct"))
+        records.append(
+            {
+                "trade_date": row_date,
+                "high_price_code": _text(row.get("high_price_code")) or high_price_code,
+                "low_price_code": _text(row.get("low_price_code")) or low_price_code,
+                "high_price_pct": high_price_pct,
+                "low_price_pct": low_price_pct,
+                "spread_pct": _safe_float(row.get("spread_pct"), high_price_pct - low_price_pct),
+                "style_label": _text(row.get("style_label")),
+                "source_policy": _text(row.get("source_policy") or row.get("source")) or default_source,
+                "source_run_id": _safe_int(row.get("source_run_id")),
+            }
+        )
+    return records
+
+
 def _market_capacity_phase(window_state, mainline_regime, turnover_quality):
     window_state = _text(window_state)
     mainline_regime = _text(mainline_regime)
@@ -2419,6 +2504,7 @@ class PostgresDailyFactDb:
                 close()
 
     def _connect_with_psycopg(self):
+        _prefer_psycopg_python_impl_when_unspecified()
         try:
             psycopg = importlib.import_module("psycopg")
         except ImportError as exc:  # pragma: no cover - depends on local install
@@ -2438,6 +2524,9 @@ class PostgresDailyFactDb:
 
     def is_postgres_backed(self):
         return True
+
+    def save_provider_source_run(self, run):
+        return 0
 
     def _normalize_monthly_account_ledger(self, row):
         row = row or {}
@@ -3434,6 +3523,107 @@ class PostgresDailyFactDb:
                 }
             )
         return result
+
+    def upsert_price_band_style_daily(self, row):
+        row = row or {}
+        trade_date = _date_or_none(row.get("trade_date") or row.get("date"))
+        if not trade_date:
+            return {}
+        high_price_pct = _safe_float(row.get("high_price_pct"))
+        low_price_pct = _safe_float(row.get("low_price_pct"))
+        spread_pct = _safe_float(row.get("spread_pct"), high_price_pct - low_price_pct)
+        item = {
+            "trade_date": trade_date,
+            "high_price_code": _text(row.get("high_price_code")),
+            "low_price_code": _text(row.get("low_price_code")),
+            "high_price_pct": high_price_pct,
+            "low_price_pct": low_price_pct,
+            "spread_pct": spread_pct,
+            "style_label": _text(row.get("style_label")),
+            "source_policy": _text(row.get("source_policy") or row.get("source")),
+            "source_run_id": _safe_int(row.get("source_run_id")),
+        }
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO price_band_style_daily(
+                        trade_date, high_price_code, low_price_code,
+                        high_price_pct, low_price_pct, spread_pct, style_label,
+                        source_policy, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (trade_date) DO UPDATE SET
+                        high_price_code=EXCLUDED.high_price_code,
+                        low_price_code=EXCLUDED.low_price_code,
+                        high_price_pct=EXCLUDED.high_price_pct,
+                        low_price_pct=EXCLUDED.low_price_pct,
+                        spread_pct=EXCLUDED.spread_pct,
+                        style_label=EXCLUDED.style_label,
+                        source_policy=EXCLUDED.source_policy,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    (
+                        item["trade_date"],
+                        item["high_price_code"],
+                        item["low_price_code"],
+                        item["high_price_pct"],
+                        item["low_price_pct"],
+                        item["spread_pct"],
+                        item["style_label"],
+                        item["source_policy"],
+                        item["source_run_id"],
+                    ),
+                )
+            conn.commit()
+        return item
+
+    def _query_structured_price_band_style_series(self, end_date, *, window_days=25):
+        columns = (
+            "trade_date",
+            "high_price_code",
+            "low_price_code",
+            "high_price_pct",
+            "low_price_pct",
+            "spread_pct",
+            "style_label",
+            "source_policy",
+            "source_run_id",
+        )
+        window_days = max(_safe_int(window_days, 25), 1)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, high_price_code, low_price_code,
+                           high_price_pct, low_price_pct, spread_pct, style_label,
+                           source_policy, source_run_id
+                    FROM price_band_style_daily
+                    WHERE trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (_date_or_none(end_date), window_days),
+                )
+                rows = cursor.fetchall()
+        records = []
+        for row in reversed(rows or []):
+            item = _row_dict(row, columns)
+            records.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "high_price_code": _text(item.get("high_price_code")),
+                    "low_price_code": _text(item.get("low_price_code")),
+                    "high_price_pct": _safe_float(item.get("high_price_pct")),
+                    "low_price_pct": _safe_float(item.get("low_price_pct")),
+                    "spread_pct": _safe_float(item.get("spread_pct")),
+                    "style_label": _text(item.get("style_label")),
+                    "source_policy": _text(item.get("source_policy")),
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                }
+            )
+        return records
 
     def upsert_sector_fund_flow_daily(self, row):
         row = row or {}
@@ -5090,6 +5280,10 @@ class PostgresDailyFactDb:
         for row in sector_flow_records:
             self.upsert_sector_fund_flow_daily(row)
         structured_counts["sector_fund_flow"] = len(sector_flow_records)
+        price_band_records = _price_band_style_records_from_data(data)
+        for row in price_band_records:
+            self.upsert_price_band_style_daily(row)
+        structured_counts["price_band_style_daily"] = len(price_band_records)
         pools = _observation_pools_from_data(data)
         structured_counts["observation_pools"] = self.replace_observation_pool_items_for_trade_date(trade_date, pools)
         tracking_state = _tracking_memory_state_from_data(data)
@@ -5136,10 +5330,16 @@ class PostgresDailyFactDb:
         for row in rows or []:
             item = _row_dict(row, columns)
             _set_nested_fact_value(data, item.get("field_path"), _restore_typed_value(item))
+        target_field_count = sum(
+            1
+            for row in rows or []
+            if _is_target_daily_report_fact_field_path(_row_dict(row, columns).get("field_path"))
+        )
+        structured_counts = {}
         if isinstance(data, dict):
             with self._connect() as conn:
                 with conn.cursor() as cursor:
-                    data = self._enrich_loaded_report_data_from_structured_tables(cursor, trade_date, data)
+                    data, structured_counts = self._enrich_loaded_report_data_from_structured_tables(cursor, trade_date, data)
             monthly_context = data.get("monthly_context") if isinstance(data.get("monthly_context"), dict) else {}
             monthly_ledger = self.query_monthly_account_ledger(trade_date, account_id=monthly_context.get("account_id") or "main")
             if monthly_ledger:
@@ -5169,11 +5369,83 @@ class PostgresDailyFactDb:
         return {
             "source": f"postgresql://daily-report-facts/{trade_date}",
             "field_count": len(rows or []),
+            "target_field_count": target_field_count,
+            "structured_counts": structured_counts,
+            "structured_fact_count": sum(_safe_int(value) for value in (structured_counts or {}).values()),
+            "target_structured_fact_count": sum(
+                _safe_int((structured_counts or {}).get(key))
+                for key in (
+                    "current_mainline_history_record",
+                    "target_cycle_calendar_rows",
+                    "cycle_interpretation_rows",
+                    "sector_attack_evidence_rows",
+                    "market_daily_total",
+                    "candidate_trace_artifact",
+                )
+            ),
             "data": data,
         }
 
     def load_daily_report_facts(self, trade_date):
         return self.load_daily_report_snapshot(trade_date)
+
+    def _load_daily_report_fact_value(self, trade_date, key):
+        loaded = self.load_daily_report_snapshot(trade_date)
+        data = loaded.get("data") if isinstance(loaded, dict) else {}
+        if not isinstance(data, dict):
+            return None
+        return data.get(key)
+
+    def query_market_breadth_counts(self, trade_date):
+        value = self._load_daily_report_fact_value(trade_date, "market_stats")
+        return dict(value or {}) if isinstance(value, dict) else {}
+
+    def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+        value = self._load_daily_report_fact_value(trade_date, "turnover_rank")
+        rows = list(value or []) if isinstance(value, list) else []
+        normalized = []
+        for index, row in enumerate(rows[: max(_safe_int(limit, 50), 1)], start=1):
+            if not isinstance(row, dict):
+                continue
+            normalized.append(
+                {
+                    "rank_no": _safe_int(row.get("rank_no", row.get("rank", index)), index),
+                    "stock_code": _text(row.get("stock_code") or row.get("code")),
+                    "ts_code": _text(row.get("ts_code")),
+                    "name": _text(row.get("name") or row.get("stock_name")),
+                    "amount_yi": _safe_float(row.get("amount_yi", row.get("turnover"))),
+                    "pct_chg": _safe_float(row.get("pct_chg", row.get("change_pct"))),
+                    "trade_date": _text(row.get("trade_date")) or _text(trade_date),
+                }
+            )
+        return normalized
+
+    def query_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
+        value = self._load_daily_report_fact_value(end_date, "top50_turnover_share_series")
+        if isinstance(value, dict):
+            return dict(value)
+        return {"source": "postgres.daily_report_facts.top50_turnover_share_series", "rows": []}
+
+    def query_new_high_feedback_series(self, end_date, *, window_days=25):
+        value = self._load_daily_report_fact_value(end_date, "new_high_feedback")
+        if isinstance(value, dict):
+            return list(value.get("trend_rows") or [])
+        return []
+
+    def query_price_band_style_series(self, end_date, *, window_days=25):
+        rows = self._query_structured_price_band_style_series(end_date, window_days=window_days)
+        if rows:
+            return {"source": "postgres.price_band_style_daily", "rows": rows}
+        value = self._load_daily_report_fact_value(end_date, "price_band_style_series")
+        if isinstance(value, dict):
+            return dict(value)
+        return {"source": "postgres.daily_report_facts.price_band_style_series", "rows": []}
+
+    def query_margin_pressure_series(self, end_date, *, window_days=25):
+        value = self._load_daily_report_fact_value(end_date, "margin_pressure")
+        if isinstance(value, dict):
+            return dict(value)
+        return {"source": "postgres.daily_report_facts.margin_pressure", "rows": []}
 
     def _load_sector_attack_evidence_rows(self, cursor, trade_date):
         columns = (
@@ -5232,6 +5504,183 @@ class PostgresDailyFactDb:
                 }
             )
         return [row for row in rows if row.get("sector_name")]
+
+    def _load_structured_mainline_history_rows(self, cursor, trade_date, *, window_days=25):
+        columns = (
+            "trade_date",
+            "primary_mainline",
+            "daily_attack_line",
+            "secondary_mainline",
+            "competition_mainline",
+            "rotation_label",
+            "leading_line",
+            "state_code",
+            "market_state",
+            "confidence",
+            "rotation_summary",
+            "source_policy",
+            "source_run_id",
+        )
+        cursor.execute(
+            """
+            SELECT trade_date, primary_mainline, daily_attack_line,
+                   secondary_mainline, competition_mainline, rotation_label,
+                   leading_line, state_code, market_state, confidence,
+                   rotation_summary, source_policy, source_run_id
+            FROM mainline_daily
+            WHERE trade_date <= %s
+            ORDER BY trade_date DESC
+            LIMIT %s
+            """,
+            (trade_date, max(_safe_int(window_days, 25), 1)),
+        )
+        rows = []
+        for row in reversed(cursor.fetchall() or []):
+            item = _row_dict(row, columns)
+            item["trade_date"] = _text(item.get("trade_date"))
+            item["date"] = item["trade_date"]
+            item["source"] = _text(item.get("source_policy")) or "mainline_daily"
+            item["confidence"] = _safe_float(item.get("confidence"))
+            item["source_run_id"] = _safe_int(item.get("source_run_id"))
+            rows.append(item)
+        return [row for row in rows if row.get("date") and row.get("primary_mainline")]
+
+    def _load_structured_cycle_calendar_rows(self, cursor, trade_date, *, window_days=25):
+        columns = (
+            "trade_date",
+            "week_label",
+            "weekday_name",
+            "mainline",
+            "daily_attack_line",
+            "market_state",
+            "cycle_label",
+            "cycle_stage",
+            "transfer_state",
+            "tomorrow_validation",
+            "interpretation",
+        )
+        cursor.execute(
+            """
+            SELECT trade_date, week_label, weekday_name, mainline, daily_attack_line,
+                   market_state, cycle_label, cycle_stage, transfer_state,
+                   tomorrow_validation, interpretation
+            FROM market_cycle_days
+            WHERE trade_date <= %s
+              AND trade_date >= (%s::date - (%s::int * INTERVAL '1 day'))
+            ORDER BY trade_date ASC, weekday_name ASC
+            """,
+            (trade_date, trade_date, max(_safe_int(window_days, 25), 1) * 3),
+        )
+        rows_by_week = {}
+        for row in cursor.fetchall() or []:
+            item = _row_dict(row, columns)
+            row_date = _text(item.get("trade_date"))
+            weekday_name = _text(item.get("weekday_name"))
+            if weekday_name not in _WEEKDAY_FIELDS:
+                weekday_name = _weekday_name_for_date(row_date)
+            if not row_date or not weekday_name:
+                continue
+            week_label = _text(item.get("week_label")) or _week_label_for_date(row_date)
+            week_key = week_label or _week_label_for_date(row_date) or row_date
+            week_row = rows_by_week.setdefault(week_key, {"week_label": week_label})
+            week_row[weekday_name] = {
+                "date": row_date[5:10] if len(row_date) >= 10 else row_date,
+                "mainline": _text(item.get("mainline")),
+                "state": _text(item.get("market_state")),
+                "daily_attack_line": _text(item.get("daily_attack_line")),
+                "source": "market_cycle_days",
+            }
+        calendar_rows = []
+        for row in rows_by_week.values():
+            for field in _WEEKDAY_FIELDS:
+                row.setdefault(field, {"mainline": "-", "state": "-"})
+            calendar_rows.append(row)
+        return calendar_rows[-5:]
+
+    def _load_structured_cycle_interpretation_rows(self, cursor, trade_date):
+        columns = (
+            "trade_date",
+            "cycle_label",
+            "date_range",
+            "trading_days",
+            "mainline",
+            "attack_line",
+            "cycle_stage",
+            "transfer_state",
+            "market_state",
+            "tomorrow_validation",
+            "interpretation",
+        )
+        cursor.execute(
+            """
+            SELECT trade_date, cycle_label, date_range, trading_days,
+                   mainline, attack_line, cycle_stage, transfer_state,
+                   market_state, tomorrow_validation, interpretation
+            FROM market_cycle_periods
+            WHERE trade_date = %s
+            ORDER BY cycle_label ASC
+            """,
+            (trade_date,),
+        )
+        rows = []
+        for row in cursor.fetchall() or []:
+            item = _row_dict(row, columns)
+            rows.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "cycle_label": _text(item.get("cycle_label")),
+                    "date_range": _text(item.get("date_range")),
+                    "trading_days": f"{_safe_int(item.get('trading_days'))}日" if item.get("trading_days") not in (None, "") else "",
+                    "mainline": _text(item.get("mainline")),
+                    "attack_line": _text(item.get("attack_line")),
+                    "cycle_stage": _text(item.get("cycle_stage")),
+                    "transfer_state": _text(item.get("transfer_state")),
+                    "market_state": _text(item.get("market_state")),
+                    "tomorrow_validation": _text(item.get("tomorrow_validation")),
+                    "interpretation": _text(item.get("interpretation")),
+                    "source": "market_cycle_periods",
+                }
+            )
+        return [row for row in rows if row.get("cycle_label")]
+
+    def _load_structured_market_daily_total(self, cursor, trade_date):
+        columns = ("trade_date", "market_scope", "total_amount_yi", "stock_count", "source_policy", "source_run_id")
+        cursor.execute(
+            """
+            SELECT trade_date, market_scope, total_amount_yi, stock_count, source_policy, source_run_id
+            FROM market_daily_totals
+            WHERE trade_date = %s AND market_scope = 'all_a'
+            """,
+            (trade_date,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {}
+        item = _row_dict(row, columns)
+        return {
+            "trade_date": _text(item.get("trade_date")),
+            "market_scope": _text(item.get("market_scope")),
+            "total_amount_yi": _safe_float(item.get("total_amount_yi")),
+            "stock_count": _safe_int(item.get("stock_count")),
+            "source": _text(item.get("source_policy")) or "market_daily_totals",
+            "source_run_id": _safe_int(item.get("source_run_id")),
+        }
+
+    def _count_target_cycle_calendar_rows(self, cycle_calendar_rows, trade_date):
+        target_month_day = _text(trade_date)[5:10]
+        if not target_month_day:
+            return 0
+        count = 0
+        for week_row in cycle_calendar_rows or []:
+            if not isinstance(week_row, dict):
+                continue
+            for field in _WEEKDAY_FIELDS:
+                day_row = week_row.get(field)
+                if not isinstance(day_row, dict):
+                    continue
+                if _text(day_row.get("date")) == target_month_day and _text(day_row.get("mainline")) not in {"", "-"}:
+                    count += 1
+        return count
 
     def _hot_sector_candidates_from_loaded_data(self, data, current_attack_rows, *, limit=8):
         candidates = []
@@ -5351,10 +5800,46 @@ class PostgresDailyFactDb:
 
     def _enrich_loaded_report_data_from_structured_tables(self, cursor, trade_date, data):
         if not isinstance(data, dict):
-            return data
+            return data, {}
+        structured_counts = {}
+        mainline_history_rows = self._load_structured_mainline_history_rows(cursor, trade_date)
+        if mainline_history_rows:
+            current_record = next(
+                (row for row in reversed(mainline_history_rows) if _date_or_none(row.get("date")) == trade_date),
+                None,
+            )
+            if current_record and not data.get("current_mainline_history_record"):
+                data["current_mainline_history_record"] = current_record
+            recent_rows = [row for row in mainline_history_rows if _date_or_none(row.get("date")) != trade_date]
+            if recent_rows and not data.get("recent_mainline_history"):
+                data["recent_mainline_history"] = recent_rows
+            structured_counts["current_mainline_history_record"] = 1 if current_record else 0
+            structured_counts["recent_mainline_history"] = len(recent_rows)
+        else:
+            structured_counts["current_mainline_history_record"] = 0
+            structured_counts["recent_mainline_history"] = 0
+        cycle_calendar_rows = self._load_structured_cycle_calendar_rows(cursor, trade_date)
+        if cycle_calendar_rows and not data.get("cycle_calendar_rows"):
+            data["cycle_calendar_rows"] = cycle_calendar_rows
+        structured_counts["cycle_calendar_rows"] = len(cycle_calendar_rows)
+        structured_counts["target_cycle_calendar_rows"] = self._count_target_cycle_calendar_rows(
+            cycle_calendar_rows,
+            trade_date,
+        )
+        cycle_interpretation_rows = self._load_structured_cycle_interpretation_rows(cursor, trade_date)
+        if cycle_interpretation_rows and not data.get("cycle_interpretation_rows"):
+            data["cycle_interpretation_rows"] = cycle_interpretation_rows
+        structured_counts["cycle_interpretation_rows"] = len(cycle_interpretation_rows)
+        market_daily_total = self._load_structured_market_daily_total(cursor, trade_date)
+        if market_daily_total:
+            data.setdefault("market_daily_total", market_daily_total)
+            if _safe_float(data.get("total_turnover")) <= 0 and _safe_float(market_daily_total.get("total_amount_yi")) > 0:
+                data["total_turnover"] = _safe_float(market_daily_total.get("total_amount_yi"))
+        structured_counts["market_daily_total"] = 1 if market_daily_total else 0
         current_attack_rows = self._load_sector_attack_evidence_rows(cursor, trade_date)
         if current_attack_rows:
             data["sector_attack_evidence_rows"] = current_attack_rows
+        structured_counts["sector_attack_evidence_rows"] = len(current_attack_rows)
         candidate_names = self._hot_sector_candidates_from_loaded_data(data, current_attack_rows)
         recent_hot_rows = self._load_recent_hot_sector_turnover_history(
             cursor,
@@ -5364,10 +5849,42 @@ class PostgresDailyFactDb:
         )
         if recent_hot_rows:
             data["recent_hot_sector_turnover_history"] = recent_hot_rows
+        structured_counts["recent_hot_sector_turnover_history"] = len(recent_hot_rows)
         candidate_trace_artifact = self.load_candidate_trace_artifact(trade_date)
         if candidate_trace_artifact.get("traces"):
             data["candidate_trace_artifact"] = candidate_trace_artifact
-        return data
+        structured_counts["candidate_trace_artifact"] = 1 if candidate_trace_artifact.get("traces") else 0
+        return data, structured_counts
+
+    def daily_report_fact_coverage(self, trade_date):
+        trade_date = _date_or_none(trade_date)
+        database_name = ""
+        if self.database_url.startswith("postgresql:///"):
+            database_name = self.database_url.rsplit("/", 1)[-1]
+        tables = {}
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                for table_name in _DAILY_REPORT_FACT_COVERAGE_TABLES:
+                    cursor.execute(
+                        f"""
+                        SELECT count(*) FILTER (WHERE trade_date = %s) AS target_count,
+                               min(trade_date) AS min_trade_date,
+                               max(trade_date) AS max_trade_date
+                        FROM {table_name}
+                        """,
+                        (trade_date,),
+                    )
+                    row = cursor.fetchone()
+                    item = _row_dict(row, ("target_count", "min_trade_date", "max_trade_date"))
+                    tables[table_name] = {
+                        "target_count": _safe_int(item.get("target_count")),
+                        "min_trade_date": _text(item.get("min_trade_date")),
+                        "max_trade_date": _text(item.get("max_trade_date")),
+                    }
+        return {
+            "database_name": database_name,
+            "tables": tables,
+        }
 
     def load_candidate_trace_artifact(self, trade_date):
         trade_date = _date_or_none(trade_date)

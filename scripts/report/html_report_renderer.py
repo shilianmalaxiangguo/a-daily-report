@@ -33,22 +33,80 @@ def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _target_label(value: Any) -> str:
+def _target_label(value: Any) -> dict[str, Any] | str:
     target = _as_dict(value)
     name = target.get("stock_name") or target.get("name") or ""
     code = target.get("stock_code") or target.get("code") or target.get("id") or ""
+    label = ""
     if name and code:
-        return f"{name}({code})"
-    return str(name or code or "")
+        label = f"{name}({code})"
+    else:
+        label = str(name or code or "")
+    if not label:
+        return ""
+    return {"__html_cell_html": f'<code class="stock-ref">{_html(label)}</code>'}
+
+
+def _styled_cell(text: Any, class_name: str) -> dict[str, Any]:
+    return {"__html_cell_text": text, "__html_cell_class": class_name}
+
+
+def _format_pct(value: Any) -> str:
+    try:
+        return "{:.2f}%".format(float(str(value).replace("%", "").strip()))
+    except (TypeError, ValueError):
+        return str(value if value is not None else "")
+
+
+def _top50_share_cell(value: Any) -> dict[str, Any] | str:
+    try:
+        share = float(str(value).replace("%", "").strip())
+    except (TypeError, ValueError):
+        return "待确认"
+    if share < 18:
+        return _styled_cell(_format_pct(share), "signal-cold")
+    if share > 20:
+        return _styled_cell(_format_pct(share), "signal-hot")
+    return _format_pct(share)
+
+
+def _breadth_count_cell(value: Any, *, direction: str) -> dict[str, Any] | str:
+    try:
+        count = int(str(value).strip())
+    except (TypeError, ValueError):
+        return "待确认"
+    text = str(count)
+    if direction == "up" and count > 4000:
+        return _styled_cell(text, "signal-hot")
+    if direction == "down" and count > 4000:
+        return _styled_cell(text, "signal-cold")
+    return text
 
 
 def _cell(value: Any, *, attention: bool = False) -> str:
-    class_attr = ' class="attention"' if attention else ""
+    class_names = []
+    if attention:
+        class_names.append("attention")
+    if isinstance(value, dict) and "__html_cell_text" in value:
+        class_name = str(value.get("__html_cell_class") or "").strip()
+        if class_name:
+            class_names.append(class_name)
+        value = value.get("__html_cell_text")
+    raw_html = None
+    if isinstance(value, dict) and "__html_cell_html" in value:
+        class_name = str(value.get("__html_cell_class") or "").strip()
+        if class_name:
+            class_names.append(class_name)
+        raw_html = str(value.get("__html_cell_html") or "")
+    class_attr = f' class="{" ".join(class_names)}"' if class_names else ""
+    if raw_html is not None:
+        return f"<td{class_attr}>{raw_html}</td>"
     return f"<td{class_attr}>{_html(value)}</td>"
 
 
 def _table(headers: list[str], rows: list[list[Any]], *, attention_first_row: bool = False) -> str:
     header_html = "".join(f"<th>{_html(header)}</th>" for header in headers)
+    table_class = "reader-table is-two-column" if len(headers) == 2 else "reader-table is-wide"
     if not rows:
         body = f'<tr><td colspan="{len(headers)}">暂无数据</td></tr>'
     else:
@@ -60,7 +118,7 @@ def _table(headers: list[str], rows: list[list[Any]], *, attention_first_row: bo
             )
             body_rows.append(f"<tr>{cells}</tr>")
         body = "\n".join(body_rows)
-    return f'<div class="reader-table"><table><thead><tr>{header_html}</tr></thead><tbody>{body}</tbody></table></div>'
+    return f'<div class="{table_class}"><table><thead><tr>{header_html}</tr></thead><tbody>{body}</tbody></table></div>'
 
 
 def _yes_no(value: Any) -> str:
@@ -95,6 +153,12 @@ def _market_spine_html(view: dict[str, Any]) -> str:
         ["指数结构", market.get("index_structure") or "待确认"],
         ["含义", market.get("why_it_matters") or "待确认"],
     ]
+    if market.get("top50_turnover_share_pct") is not None:
+        rows.insert(2, ["Top50成交额占比", _top50_share_cell(market.get("top50_turnover_share_pct"))])
+    if market.get("up_count") is not None or market.get("down_count") is not None:
+        rows.insert(3, ["上涨家数", _breadth_count_cell(market.get("up_count"), direction="up")])
+        rows.insert(4, ["下跌家数", _breadth_count_cell(market.get("down_count"), direction="down")])
+        rows = [row for row in rows if row[0] != "涨跌结构"]
     return _table(["项目", "内容"], rows)
 
 
@@ -235,6 +299,7 @@ def save_daily_report_html_from_postgres(
     *,
     root: str | Path | None = None,
     run_mode: str = LEDGER_MODE_FROZEN,
+    overwrite_existing: bool = False,
 ) -> Path:
     view = build_daily_report_view(target_date, db_service, run_mode=run_mode)
-    return save_daily_report_html(view, root=root)
+    return save_daily_report_html(view, root=root, overwrite_existing=overwrite_existing)

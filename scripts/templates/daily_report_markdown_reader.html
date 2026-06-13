@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>$title</title>
+  <style>
+    :root {
+      --reader-bg: #ffffff;
+      --reader-chrome: #ffffff;
+      --reader-sidebar: #f7f7f7;
+      --reader-surface: #F3F5F7;
+      --reader-surface-strong: #E4E5E6;
+      --reader-line: #d9d9d9;
+      --reader-text: #444444;
+      --reader-heading: #444444;
+      --reader-muted: #888888;
+      --reader-muted-soft: #aaa6a6;
+      --accent: #DD4C4F;
+      --accent-red: #DD4C4F;
+      --accent-soft: #FFD5D5;
+      --accent-soft-text: #DD4C4F;
+      --signal-green: #07C160;
+      --signal-green-soft: #CDF7BD;
+      --editor-width: 1120px;
+      --outline-width: 264px;
+      color-scheme: light;
+      font-family: "AvenirNext-Regular", "Avenir Next", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--reader-chrome);
+      color: var(--reader-text);
+      font-size: 15px;
+      line-height: 1.755;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    .bear-shell {
+      display: grid;
+      grid-template-columns: minmax(224px, var(--outline-width)) minmax(0, 1fr);
+      min-height: 100vh;
+      width: 100%;
+      margin: 0;
+      background: var(--reader-bg);
+    }
+
+    .outline-sidebar {
+      border-right: 1px solid var(--reader-line);
+      background: var(--reader-sidebar);
+    }
+
+    .outline-sticky {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 18px 14px 24px;
+    }
+
+    .window-controls {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 22px;
+    }
+
+    .window-controls span {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #d6d2cd;
+    }
+
+    .outline-kicker {
+      margin: 0 0 6px;
+      color: var(--reader-muted);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+
+    .outline-title {
+      margin: 0 0 18px;
+      color: var(--reader-heading);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+
+    .outline-nav,
+    .mobile-nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .outline-nav a {
+      position: relative;
+      display: block;
+      padding: 7px 10px 7px 18px;
+      border-radius: 0;
+      color: var(--reader-muted);
+      font-size: 13px;
+      line-height: 1.35;
+      transition: color 140ms ease;
+    }
+
+    .outline-nav a.level-3 {
+      padding-left: 30px;
+      font-size: 12px;
+      color: var(--reader-muted-soft);
+    }
+
+    .outline-nav a:hover {
+      color: var(--reader-heading);
+    }
+
+    .outline-nav a.is-active::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 5px;
+      width: 3px;
+      height: 1.15em;
+      border-radius: 3px;
+      background: var(--accent);
+      transform: translateY(-50%);
+    }
+
+    .editor-pane {
+      min-width: 0;
+      background: var(--reader-bg);
+    }
+
+    .reader-document {
+      width: 100%;
+      max-width: var(--editor-width);
+      margin: 0 auto;
+      padding: 38px 2em 88px;
+    }
+
+    .reader-header {
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+    }
+
+    .reader-header h1 {
+      margin: 0 0 10px;
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 2em;
+      font-weight: 600;
+      line-height: 1.52;
+    }
+
+    .meta {
+      color: var(--reader-muted);
+      font-size: 14px;
+    }
+
+    .mobile-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .mobile-nav a {
+      padding: 5px 8px;
+      border: 1px solid var(--reader-line);
+      border-radius: 6px;
+      color: var(--reader-muted);
+      font-size: 14px;
+    }
+
+    .mobile-nav a.level-3 {
+      display: none;
+    }
+
+    .mobile-nav a:hover {
+      border-color: var(--accent-red);
+      color: var(--accent);
+    }
+
+    .markdown-body h1,
+    .markdown-body h2,
+    .markdown-body h3,
+    .markdown-body h4,
+    .markdown-body h5,
+    .markdown-body h6 {
+      color: var(--reader-text);
+      scroll-margin-top: 32px;
+    }
+
+    .markdown-body {
+      color: var(--reader-text);
+      font-size: 15px;
+      font-weight: 400;
+      line-height: 1.755;
+    }
+
+    .markdown-body h1 {
+      margin: 0 0 16px;
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 2em;
+      font-weight: 600;
+      line-height: 1.52;
+    }
+
+    .markdown-body h2 {
+      margin: 1.18em 0 0.48em;
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 1.6em;
+      font-weight: 600;
+      line-height: 1.52;
+    }
+
+    .markdown-body h3 {
+      margin: 0.94em 0 0.48em;
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 1.27em;
+      font-weight: 600;
+      line-height: 1.52;
+    }
+
+    .markdown-body h4,
+    .markdown-body h5,
+    .markdown-body h6 {
+      margin: 0.72em 0 0.48em;
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 1.08em;
+      font-weight: 600;
+    }
+
+    .markdown-body p,
+    .markdown-body ul,
+    .markdown-body blockquote,
+    .reader-table {
+      margin: 14px 0;
+    }
+
+    .markdown-body p {
+      color: var(--reader-text);
+    }
+
+    .markdown-body strong {
+      color: var(--reader-heading);
+      font-family: "AvenirNext-Bold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-weight: 700;
+    }
+
+    .markdown-body code {
+      padding: 0.25em;
+      border-radius: 0.25em;
+      background: var(--reader-surface);
+      color: var(--reader-text);
+      font-family: "Menlo-Regular", Menlo, Consolas, monospace;
+      font-size: 0.91em;
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    .markdown-body code.stock-ref {
+      display: inline-block;
+      padding: 0.12em 0.42em;
+      border: 1px solid var(--reader-line);
+      background: var(--reader-surface);
+      color: var(--reader-heading);
+      line-height: 1.45;
+      white-space: nowrap;
+    }
+
+    .markdown-body ul {
+      padding-inline-start: 2.13em;
+    }
+
+    .markdown-body li + li {
+      margin-top: 4px;
+    }
+
+    .markdown-body li::marker {
+      color: var(--accent);
+    }
+
+    blockquote {
+      position: relative;
+      padding: 0.2em 0 0.2em 2.13em;
+      border-left: 0;
+      background: transparent;
+      color: var(--reader-text);
+    }
+
+    blockquote::before {
+      content: "";
+      position: absolute;
+      top: 0.2em;
+      left: 1em;
+      width: 0.13em;
+      height: calc(100% - 0.4em);
+      border: 1px solid var(--accent);
+      border-radius: 0.33em;
+      background: var(--accent);
+    }
+
+    .markdown-body pre.fenced-code {
+      display: block;
+      margin: 14px 0;
+      padding: 0 0.5em;
+      overflow-x: auto;
+      border-radius: 0.25em;
+      background: var(--reader-surface);
+      color: var(--reader-text);
+      font-family: "Menlo-Regular", Menlo, Consolas, monospace;
+      font-size: 0.91em;
+      line-height: 1.755;
+      white-space: pre-wrap;
+    }
+
+    .markdown-body pre.fenced-code code {
+      display: block;
+      padding: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: 1em;
+    }
+
+    .markdown-body pre.fenced-code::before {
+      content: "\200B";
+    }
+
+    .markdown-body hr {
+      display: block;
+      margin: 0.88em 0;
+      border: 0;
+      border-top: 1px solid var(--reader-line);
+    }
+
+    .reader-table {
+      display: block;
+      overflow-x: auto;
+      background: var(--reader-bg);
+      -webkit-overflow-scrolling: touch;
+    }
+
+    table {
+      border-collapse: separate;
+      border-spacing: 0;
+      width: max-content;
+      min-width: min(100%, 36rem);
+      border: 1px solid var(--reader-line);
+      border-radius: 0.33em;
+      font-size: 1em;
+      line-height: 1.5;
+      table-layout: auto;
+    }
+
+    th,
+    td {
+      min-width: 5em;
+      border-right: 1px solid var(--reader-line);
+      padding: 0.37em 0.75em;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+
+    th {
+      background: var(--reader-surface);
+      color: var(--reader-muted);
+      font-family: "AvenirNext-Bold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-size: 1em;
+      font-weight: 700;
+    }
+
+    tbody tr:nth-child(odd) {
+      background: var(--reader-surface);
+    }
+
+    td:last-of-type,
+    th:last-of-type {
+      border-right: 0;
+    }
+
+    .signal-marker {
+      display: inline;
+      padding: 0.25em;
+      border-radius: 0.25em;
+      box-decoration-break: clone;
+      -webkit-box-decoration-break: clone;
+      font-family: "AvenirNext-Bold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-weight: 700;
+    }
+
+    .signal-marker.signal-hot {
+      background: var(--accent-soft);
+      color: var(--accent-soft-text);
+    }
+
+    .signal-marker.signal-cold {
+      background: var(--signal-green-soft);
+      color: var(--signal-green);
+    }
+
+    ::selection {
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
+    @media (max-width: 760px) {
+      body {
+        background: var(--reader-bg);
+      }
+
+      .bear-shell {
+        display: block;
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .outline-sidebar {
+        display: none;
+      }
+
+      .reader-document {
+        max-width: none;
+        padding: 28px 16px 52px;
+      }
+
+      .reader-header h1,
+      .markdown-body h1 {
+        font-size: 1.8em;
+      }
+
+      .markdown-body h2 {
+        font-size: 1.5em;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="bear-shell">
+    <aside class="outline-sidebar">
+      <div class="outline-sticky">
+        <div class="window-controls" aria-hidden="true"><span></span><span></span><span></span></div>
+        <p class="outline-kicker">当前日报</p>
+        <p class="outline-title">$outline_title</p>
+        $outline_nav
+      </div>
+    </aside>
+
+    <article class="editor-pane">
+      <div class="reader-document">
+        <header class="reader-header">
+          <h1>$title</h1>
+          <div class="meta">$trade_date · $source</div>
+          $mobile_nav
+        </header>
+        <div class="markdown-body">
+          $document_body
+        </div>
+      </div>
+    </article>
+  </main>
+  <script>
+    (() => {
+      const outlineMarker = "$" + "outline_nav";
+      const mobileMarker = "$" + "mobile_nav";
+      const outlineTitleMarker = "$" + "outline_title";
+      const hasTemplatePlaceholders = document.body.textContent.includes(outlineMarker);
+      if (hasTemplatePlaceholders) {
+        const outlineTitle = document.querySelector(".outline-title");
+        const headerTitle = document.querySelector(".reader-header h1");
+        const meta = document.querySelector(".meta");
+        const outlineSlot = Array.from(document.querySelectorAll(".outline-sticky"))
+          .find((node) => node.textContent.includes(outlineMarker));
+        const mobileSlot = Array.from(document.querySelectorAll(".reader-header"))
+          .find((node) => node.textContent.includes(mobileMarker));
+        const body = document.querySelector(".markdown-body");
+
+        if (outlineTitle) {
+          outlineTitle.textContent = "2026-06-05 A股日报";
+        }
+        if (headerTitle) {
+          headerTitle.textContent = "2026-06-05 A股日报";
+        }
+        if (meta) {
+          meta.textContent = "2026-06-05 · Bear 样式预览";
+        }
+        const previewNav = [
+          ["preview-overview", "日报裁决总览", "level-2 is-active"],
+          ["preview-market", "二、市场基底", "level-2"],
+          ["preview-price", "3. 价格带风格", "level-3"],
+          ["preview-new-high", "4. 创新高趋势反馈", "level-3"],
+          ["preview-action", "六、明日执行计划", "level-2"],
+        ].map(([anchor, label, className], index) => (
+          `<a class="${className}"${index === 0 ? ' aria-current="true"' : ""} href="#${anchor}" data-outline-anchor="${anchor}">${label}</a>`
+        )).join("");
+        if (outlineSlot) {
+          outlineSlot.innerHTML = outlineSlot.innerHTML
+            .replace(outlineTitleMarker, "2026-06-05 A股日报")
+            .replace(outlineMarker, `<nav class="outline-nav" aria-label="当前日报标题导航">${previewNav}</nav>`);
+        }
+        if (mobileSlot) {
+          mobileSlot.innerHTML = mobileSlot.innerHTML.replace(
+            mobileMarker,
+            `<nav class="mobile-nav" aria-label="当前日报标题导航">${previewNav}</nav>`
+          );
+        }
+        if (body) {
+          body.innerHTML = `
+            <h2 id="preview-overview">日报裁决总览</h2>
+            <p>这是一段 Bear 风格预览正文。重点数据用 <span class="signal-marker signal-hot">网易云红</span> 或 <span class="signal-marker signal-cold">荧光绿</span> 标出来，而不是把整块表格染色。</p>
+            <h2 id="preview-market">二、市场基底</h2>
+            <div class="reader-table"><table><thead><tr><th>指标</th><th>数值</th><th>解读</th></tr></thead><tbody>
+              <tr><td>Top50成交额占比</td><td class="has-signal"><span class="signal-marker signal-hot">23.28%</span></td><td>超过20%，资金活跃</td></tr>
+              <tr><td>创新高全A占比</td><td class="has-signal"><span class="signal-marker signal-cold">1.96%</span></td><td>低于2%，偏冷</td></tr>
+            </tbody></table></div>
+            <h3 id="preview-price">3. 价格带风格</h3>
+            <p>价格带当日差值超过阈值时，只高亮数字本身：<span class="signal-marker signal-hot">+2.92pct</span>。</p>
+            <h3 id="preview-new-high">4. 创新高趋势反馈</h3>
+            <p>左侧目录会跟随当前标题高亮，并自动滚动到当前项。</p>
+            <h2 id="preview-action">六、明日执行计划</h2>
+            <blockquote>最终 0% 时只观察，不新增参与。</blockquote>
+          `;
+        }
+      }
+
+      const outline = document.querySelector(".outline-sticky");
+      const nav = document.querySelector(".outline-nav");
+      const links = Array.from(document.querySelectorAll(".outline-nav a[data-outline-anchor]"));
+      const headings = links
+        .map((link) => document.getElementById(link.dataset.outlineAnchor || ""))
+        .filter(Boolean);
+      if (!outline || !nav || !links.length || !headings.length) {
+        return;
+      }
+
+      const hashAnchor = () => {
+        if (!window.location.hash) {
+          return "";
+        }
+        try {
+          return decodeURIComponent(window.location.hash.slice(1));
+        } catch (_error) {
+          return window.location.hash.slice(1);
+        }
+      };
+
+      const scrollActiveIntoOutline = (activeLink) => {
+        const outlineRect = outline.getBoundingClientRect();
+        const linkRect = activeLink.getBoundingClientRect();
+        const topPadding = 72;
+        const bottomPadding = 48;
+        const above = linkRect.top < outlineRect.top + topPadding;
+        const below = linkRect.bottom > outlineRect.bottom - bottomPadding;
+        if (!above && !below) {
+          return;
+        }
+        const linkCenter = linkRect.top - outlineRect.top + outline.scrollTop + (linkRect.height / 2);
+        const targetTop = Math.max(0, linkCenter - (outline.clientHeight / 2));
+        outline.scrollTo({ top: targetTop });
+      };
+
+      const setActive = (id) => {
+        let activeLink = null;
+        for (const link of links) {
+          const isActive = link.dataset.outlineAnchor === id;
+          link.classList.toggle("is-active", isActive);
+          if (isActive) {
+            link.setAttribute("aria-current", "true");
+          } else {
+            link.removeAttribute("aria-current");
+          }
+          if (isActive) {
+            activeLink = link;
+          }
+        }
+        if (!activeLink) {
+          return;
+        }
+        scrollActiveIntoOutline(activeLink);
+      };
+
+      const currentHeadingId = () => {
+        let current = headings[0];
+        for (const heading of headings) {
+          if (heading.getBoundingClientRect().top <= 120) {
+            current = heading;
+          } else {
+            break;
+          }
+        }
+        return current.id;
+      };
+
+      let ticking = false;
+      let forcedActiveId = "";
+
+      const syncActive = () => {
+        if (forcedActiveId) {
+          setActive(forcedActiveId);
+          return;
+        }
+        if (ticking) {
+          return;
+        }
+        ticking = true;
+        window.requestAnimationFrame(() => {
+          setActive(forcedActiveId || currentHeadingId());
+          ticking = false;
+        });
+      };
+
+      for (const link of links) {
+        link.addEventListener("click", (event) => {
+          const id = link.dataset.outlineAnchor || "";
+          const target = document.getElementById(id);
+          if (!target) {
+            return;
+          }
+          event.preventDefault();
+          forcedActiveId = id;
+          setActive(id);
+          target.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+          if (window.history && window.history.replaceState) {
+            window.history.replaceState(null, "", `#${encodeURIComponent(id)}`);
+          }
+          forcedActiveId = "";
+        });
+      }
+      const releaseForcedActive = () => {
+        if (!forcedActiveId) {
+          return;
+        }
+        forcedActiveId = "";
+        syncActive();
+      };
+      setActive(hashAnchor() || currentHeadingId());
+      window.addEventListener("scroll", syncActive, { passive: true });
+      window.addEventListener("resize", syncActive);
+      window.addEventListener("hashchange", () => {
+        setActive(hashAnchor() || currentHeadingId());
+      });
+      window.addEventListener("wheel", releaseForcedActive, { passive: true });
+      window.addEventListener("mousedown", releaseForcedActive, { passive: true });
+      window.addEventListener("touchstart", releaseForcedActive, { passive: true });
+      window.addEventListener("keydown", releaseForcedActive);
+    })();
+  </script>
+</body>
+</html>

@@ -81,6 +81,30 @@ class ProviderValue(float):
         return obj
 
 
+def _create_fact_database_service(database_service_cls=None, db_path=None):
+    if database_service_cls is None:
+        try:
+            from storage.database_service import DatabaseService
+        except Exception:  # pragma: no cover - optional runtime dependency
+            DatabaseService = None
+        database_service_cls = DatabaseService
+    if database_service_cls is None:
+        return None
+    factory = getattr(database_service_cls, "fact_store_from_environment", None)
+    if callable(factory):
+        service = factory(db_path)
+        if getattr(service, "repository", object()) is None:
+            return None
+        return service
+    factory = getattr(database_service_cls, "from_environment", None)
+    if callable(factory):
+        service = factory(db_path)
+        if getattr(service, "repository", object()) is None:
+            return None
+        return service
+    return None
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -398,27 +422,20 @@ def get_total_turnover_from_tushare_first(
             source_retry_count=retry_count,
         )
 
-    if database_service_cls is None:
-        try:
-            from storage.database_service import DatabaseService
-        except Exception:  # pragma: no cover - optional runtime dependency
-            DatabaseService = None
-        database_service_cls = DatabaseService
-    if database_service_cls is not None:
-        try:
-            service = database_service_cls.sqlite_d1_compatible(db_path)
-            row = service.query_market_daily_total(normalize_kline_date_str(target_date) or target_date, market_scope="all_a")
-            local_total = _safe_float((row or {}).get("total_amount_yi", (row or {}).get("total_turnover_yi")))
-            if local_total > 0:
-                return ProviderValue(
-                    round(local_total, 2),
-                    data_source="storage.market_daily_totals",
-                    source_endpoint="market_daily_totals",
-                    source_row_count=_safe_int((row or {}).get("stock_count"), 0),
-                    source_retry_count=retry_count,
-                )
-        except Exception:
-            pass
+    try:
+        service = _create_fact_database_service(database_service_cls, db_path)
+        row = service.query_market_daily_total(normalize_kline_date_str(target_date) or target_date, market_scope="all_a")
+        local_total = _safe_float((row or {}).get("total_amount_yi", (row or {}).get("total_turnover_yi")))
+        if local_total > 0:
+            return ProviderValue(
+                round(local_total, 2),
+                data_source="storage.market_daily_totals",
+                source_endpoint="market_daily_totals",
+                source_row_count=_safe_int((row or {}).get("stock_count"), 0),
+                source_retry_count=retry_count,
+            )
+    except Exception:
+        pass
 
     return ProviderValue(
         fallback_value,
@@ -805,15 +822,10 @@ def get_new_high_feedback_from_tushare_first(
         except Exception:
             stock_risk_map = {}
     local_service = None
-    if database_service_cls is None:
+    local_service = _create_fact_database_service(database_service_cls, db_path)
+    if local_service is not None:
         try:
-            from storage.database_service import DatabaseService
-        except Exception:  # pragma: no cover - optional runtime dependency
-            DatabaseService = None
-        database_service_cls = DatabaseService
-    if database_service_cls is not None:
-        try:
-            local_service = database_service_cls.sqlite_d1_compatible(db_path)
+            getattr(local_service, "repository", object())
         except Exception:
             local_service = None
     if not factor_rows and local_service is not None:
@@ -889,7 +901,7 @@ def get_new_high_feedback_from_tushare_first(
                 if str(date) < str(target_date_text or factor_trade_date)
             ][-24:]
             query_window_days = max(25, len(history_candidate_dates or []), 75 if candidate_date_set else 25)
-            service = local_service or (database_service_cls.sqlite_d1_compatible(db_path) if database_service_cls is not None else None)
+            service = local_service or _create_fact_database_service(database_service_cls, db_path)
             raw_history_rows = service.query_new_high_feedback_series(
                 target_date_text or factor_trade_date,
                 window_days=query_window_days,
@@ -964,7 +976,7 @@ def get_new_high_feedback_from_tushare_first(
                         build_new_high_feedback_fn=_build_new_high_for_history,
                         candidate_dates=history_candidate_dates,
                     )
-                    service = database_service_cls.sqlite_d1_compatible(db_path) if database_service_cls is not None else None
+                    service = _create_fact_database_service(database_service_cls, db_path)
                     if candidate_date_set and service is not None:
                         delete_outside_dates = getattr(service, "delete_new_high_feedback_outside_dates", None)
                         if callable(delete_outside_dates):
@@ -1015,12 +1027,8 @@ def get_top50_turnover_share_series_from_tushare_first(
     database_service_cls=None,
     fetch_stock_daily_turnover_records_fn=None,
 ):
-    if database_service_cls is None:
-        from storage.database_service import DatabaseService
-
-        database_service_cls = DatabaseService
     try:
-        service = database_service_cls.sqlite_d1_compatible(db_path)
+        service = _create_fact_database_service(database_service_cls, db_path)
         query_date = normalize_kline_date_str(target_date) or target_date
 
         def _query_series():
@@ -1285,6 +1293,14 @@ PRICE_BAND_HIGH_PRICE_CODE = "883916.TI"
 PRICE_BAND_LOW_PRICE_CODE = "883960.TI"
 
 
+def _compact_price_band_code(value):
+    text = str(value or "").strip().upper()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits[:6]
+
+
 def _price_band_spread_pct(high_pct, low_pct):
     return _safe_float(high_pct) - _safe_float(low_pct)
 
@@ -1307,6 +1323,146 @@ def _extract_price_band_pct(rows, ts_code):
             continue
         return _safe_float(_pick(row, "pct_change", "pct_chg", "change_pct", default=0.0))
     return None
+
+
+def _ths_history_line_cookie_value():
+    from akshare.datasets import get_ths_js
+    from py_mini_racer import MiniRacer
+
+    with open(get_ths_js("ths.js"), encoding="utf-8") as handle:
+        js_content = handle.read()
+    js_code = MiniRacer()
+    js_code.eval(js_content)
+    return js_code.call("v")
+
+
+def _parse_ths_price_band_history_rows(text, ts_code):
+    from akshare.utils import demjson
+
+    payload_text = str(text or "")
+    start = payload_text.find("{")
+    if start < 0:
+        return []
+    payload = demjson.decode(payload_text[start:-1])
+    data_text = str((payload or {}).get("data") or "")
+    parsed = []
+    previous_close = None
+    for raw_row in data_text.split(";"):
+        fields = raw_row.split(",")
+        if len(fields) < 5:
+            continue
+        trade_date = normalize_kline_date_str(fields[0])
+        close = _safe_float(fields[4])
+        if not trade_date or close <= 0:
+            continue
+        pct_change = 0.0
+        if previous_close and previous_close > 0:
+            pct_change = (close - previous_close) / previous_close * 100
+        parsed.append(
+            {
+                "ts_code": str(ts_code or "").strip().upper(),
+                "trade_date": trade_date,
+                "close": close,
+                "pct_change": pct_change,
+                "source": "ths.history_line",
+            }
+        )
+        previous_close = close
+    return parsed
+
+
+def fetch_ths_price_band_history(ts_code, start_date, end_date, *, timeout=10):
+    import requests
+
+    code = _compact_price_band_code(ts_code)
+    start = normalize_kline_date_str(start_date)
+    end = normalize_kline_date_str(end_date)
+    if not code or not start or not end:
+        return []
+    year_start = int(start[:4])
+    year_end = int(end[:4])
+    cookie_value = _ths_history_line_cookie_value()
+    rows = []
+    for year in range(year_start, year_end + 1):
+        url = f"https://d.10jqka.com.cn/v4/line/bk_{code}/01/{year}.js"
+        headers = {
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "http://q.10jqka.com.cn",
+            "Host": "d.10jqka.com.cn",
+            "Cookie": f"v={cookie_value}",
+        }
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        rows.extend(_parse_ths_price_band_history_rows(response.text, ts_code))
+    return [
+        row for row in rows
+        if start <= normalize_kline_date_str(row.get("trade_date")) <= end
+    ]
+
+
+def _price_band_history_pct_by_date(fetcher, ts_code, start_date, end_date):
+    if not callable(fetcher):
+        return {}
+    rows = fetcher(ts_code, start_date, end_date) or []
+    result = {}
+    for row in rows or []:
+        trade_date = normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+        if not trade_date:
+            continue
+        result[trade_date] = _safe_float(_pick(row, "pct_change", "pct_chg", "change_pct", default=0.0))
+    return result
+
+
+def _build_price_band_rows_from_history(fetcher, trade_dates, start_date, end_date, *, high_price_code, low_price_code):
+    high_by_date = _price_band_history_pct_by_date(fetcher, high_price_code, start_date, end_date)
+    low_by_date = _price_band_history_pct_by_date(fetcher, low_price_code, start_date, end_date)
+    rows = []
+    for trade_date in trade_dates or []:
+        if trade_date not in high_by_date or trade_date not in low_by_date:
+            continue
+        high_pct = high_by_date[trade_date]
+        low_pct = low_by_date[trade_date]
+        spread_pct = _price_band_spread_pct(high_pct, low_pct)
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "high_price_pct": high_pct,
+                "low_price_pct": low_pct,
+                "spread_pct": spread_pct,
+                "style_label": _price_band_style_label(spread_pct),
+            }
+        )
+    return rows
+
+
+def _save_price_band_style_rows(service, rows, *, source_policy, high_price_code, low_price_code):
+    if service is None:
+        return
+    for row in rows or []:
+        try:
+            save_run = getattr(service, "save_provider_source_run", None)
+            source_run_id = 0
+            if callable(save_run):
+                source_run_id = save_run(
+                    {
+                        "trade_date": row.get("trade_date"),
+                        "provider": source_policy.split(".", 1)[0],
+                        "endpoint": source_policy,
+                        "status": "success",
+                        "row_count": 2,
+                    }
+                )
+            service.upsert_price_band_style_daily(
+                {
+                    **dict(row or {}),
+                    "high_price_code": high_price_code,
+                    "low_price_code": low_price_code,
+                    "source_policy": source_policy,
+                    "source_run_id": source_run_id,
+                }
+            )
+        except Exception:
+            continue
 
 
 def _build_price_band_style_payload(rows, *, source="tushare.ths_daily.price_band_style"):
@@ -1376,12 +1532,81 @@ def _build_recent_price_band_style_payload(rows, *, target_date, source="storage
     return payload
 
 
+def _latest_price_band_trade_date(rows):
+    dates = [
+        normalize_kline_date_str((row or {}).get("trade_date"))
+        for row in rows or []
+        if normalize_kline_date_str((row or {}).get("trade_date"))
+    ]
+    return max(dates) if dates else ""
+
+
+def _price_band_recent_window_is_usable(latest_trade_date, target_date, trade_dates=None, *, max_stale_trade_days=1):
+    latest = normalize_kline_date_str(latest_trade_date)
+    target = normalize_kline_date_str(target_date)
+    if not latest or not target:
+        return False
+    if latest >= target:
+        return True
+    normalized_trade_dates = sorted(
+        {
+            normalize_kline_date_str(item)
+            for item in trade_dates or []
+            if normalize_kline_date_str(item) and normalize_kline_date_str(item) <= target
+        }
+    )
+    latest_dt = _parse_date(latest)
+    target_dt = _parse_date(target)
+    calendar_gap = (target_dt - latest_dt).days if latest_dt and target_dt else None
+    if normalized_trade_dates:
+        newer_trade_days = [item for item in normalized_trade_dates if latest < item <= target]
+        if len(newer_trade_days) > int(max_stale_trade_days or 1):
+            return False
+        if latest not in normalized_trade_dates and calendar_gap is not None and calendar_gap > 3:
+            return False
+        return True
+    if calendar_gap is None:
+        return False
+    return calendar_gap <= 3
+
+
+def _build_stale_price_band_style_payload(rows, *, target_date, source="storage.price_band_style_daily.recent_window", error=""):
+    target = normalize_kline_date_str(target_date) or str(target_date or "").strip()
+    latest_trade_date = _latest_price_band_trade_date(rows)
+    payload = _build_price_band_style_payload([], source=source)
+    payload.update(
+        {
+            "available": False,
+            "status": "stale_recent_window",
+            "requested_trade_date": target,
+            "latest_trade_date": latest_trade_date,
+            "rows": [],
+            "summary": (
+                f"价格带风格趋势只到 {latest_trade_date or '待确认'}，"
+                f"未覆盖 {target or '目标日'} 附近交易日；"
+                "关键数据不完整，停止生成。"
+            ),
+        }
+    )
+    if error:
+        error_text = str(error).strip()
+        display_error = error_text.rstrip("。.!！？")
+        payload["refresh_error"] = error_text
+        payload["summary"] = (
+            f"价格带风格趋势只到 {latest_trade_date or '待确认'}，"
+            f"未覆盖 {target or '目标日'} 附近交易日；刷新失败：{display_error}。"
+            "关键数据不完整，停止生成。"
+        )
+    return payload
+
+
 def get_price_band_style_series_from_tushare_first(
     target_date=None,
     *,
     window_days=25,
     fetch_tushare_open_trade_dates_fn=None,
     fetch_tushare_ths_daily_fn=None,
+    fetch_ths_price_band_history_fn=None,
     high_price_code=PRICE_BAND_HIGH_PRICE_CODE,
     low_price_code=PRICE_BAND_LOW_PRICE_CODE,
     db_path=None,
@@ -1397,15 +1622,9 @@ def get_price_band_style_series_from_tushare_first(
         or database_service_cls is not None
         or (fetch_tushare_open_trade_dates_fn is None and fetch_tushare_ths_daily_fn is None)
     )
-    if should_use_fact_db and database_service_cls is None:
+    if should_use_fact_db:
         try:
-            from storage.database_service import DatabaseService
-        except Exception:  # pragma: no cover - optional runtime dependency
-            DatabaseService = None
-        database_service_cls = DatabaseService
-    if should_use_fact_db and database_service_cls is not None:
-        try:
-            service = database_service_cls.sqlite_d1_compatible(db_path)
+            service = _create_fact_database_service(database_service_cls, db_path)
             payload = service.query_price_band_style_series(target_date_text, window_days=window_days)
             rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
             fact_rows = list(rows or [])
@@ -1421,6 +1640,10 @@ def get_price_band_style_series_from_tushare_first(
     start_date = (target_dt - datetime.timedelta(days=90)).strftime("%Y-%m-%d")
     date_fetcher = fetch_tushare_open_trade_dates_fn or fetch_tushare_open_trade_dates
     daily_fetcher = fetch_tushare_ths_daily_fn or fetch_tushare_ths_daily
+    history_fetcher = fetch_ths_price_band_history_fn
+    if history_fetcher is None and fetch_tushare_ths_daily_fn is None:
+        history_fetcher = fetch_ths_price_band_history
+    trade_dates = []
     try:
         trade_dates = [
             normalize_kline_date_str(item)
@@ -1440,10 +1663,15 @@ def get_price_band_style_series_from_tushare_first(
                 }
             except Exception:
                 existing_dates = set()
+        refresh_error = ""
         for trade_date in trade_dates:
             if service is not None and trade_date in existing_dates:
                 continue
-            daily_rows = daily_fetcher(trade_date) or []
+            try:
+                daily_rows = daily_fetcher(trade_date) or []
+            except Exception as error:
+                refresh_error = str(error)
+                continue
             high_pct = _extract_price_band_pct(daily_rows, high_price_code)
             low_pct = _extract_price_band_pct(daily_rows, low_price_code)
             if high_pct is None or low_pct is None:
@@ -1477,20 +1705,101 @@ def get_price_band_style_series_from_tushare_first(
                         "source_run_id": source_run_id,
                     }
                 )
+        history_rows = []
+        latest_collected_date = _latest_price_band_trade_date(fact_rows + rows)
+        if latest_collected_date < target_date_text:
+            try:
+                missing_trade_dates = [
+                    trade_date for trade_date in trade_dates
+                    if trade_date not in {
+                        *existing_dates,
+                        *{
+                            normalize_kline_date_str((row or {}).get("trade_date"))
+                            for row in rows or []
+                            if normalize_kline_date_str((row or {}).get("trade_date"))
+                        },
+                    }
+                ]
+                history_rows = _build_price_band_rows_from_history(
+                    history_fetcher,
+                    missing_trade_dates,
+                    start_date,
+                    target_date_text,
+                    high_price_code=high_price_code,
+                    low_price_code=low_price_code,
+                )
+            except Exception as error:
+                if not refresh_error:
+                    refresh_error = str(error)
+            if history_rows:
+                _save_price_band_style_rows(
+                    service,
+                    history_rows,
+                    source_policy="ths.history_line.price_band_style",
+                    high_price_code=high_price_code,
+                    low_price_code=low_price_code,
+                )
+                rows.extend(history_rows)
         if service is not None:
             try:
                 refreshed = service.query_price_band_style_series(target_date_text, window_days=window_days)
                 refreshed_rows = (refreshed or {}).get("rows") if isinstance(refreshed, dict) else []
                 if refreshed_rows:
-                    return _build_price_band_style_payload(
+                    refreshed_source = (refreshed or {}).get("source") or "storage.price_band_style_daily"
+                    latest_trade_date = _latest_price_band_trade_date(refreshed_rows)
+                    if latest_trade_date >= target_date_text:
+                        return _build_price_band_style_payload(
+                            refreshed_rows,
+                            source=refreshed_source,
+                        )
+                    if _price_band_recent_window_is_usable(latest_trade_date, target_date_text, trade_dates):
+                        return _build_recent_price_band_style_payload(
+                            refreshed_rows,
+                            target_date=target_date_text,
+                            source=(
+                                "storage.price_band_style_daily.recent_window"
+                                if refresh_error
+                                else refreshed_source
+                            ),
+                            error=refresh_error,
+                        )
+                    return _build_stale_price_band_style_payload(
                         refreshed_rows,
-                        source=(refreshed or {}).get("source") or "storage.price_band_style_daily",
+                        target_date=target_date_text,
+                        source=refreshed_source,
+                        error=refresh_error or "价格带接口未返回目标日附近数据",
                     )
             except Exception:
                 pass
-        return _build_price_band_style_payload(rows)
+        if rows:
+            latest_trade_date = _latest_price_band_trade_date(rows)
+            source = "ths.history_line.price_band_style" if history_rows and latest_trade_date >= target_date_text else "tushare.ths_daily.price_band_style"
+            if latest_trade_date < target_date_text and not _price_band_recent_window_is_usable(latest_trade_date, target_date_text, trade_dates):
+                return _build_stale_price_band_style_payload(
+                    rows,
+                    target_date=target_date_text,
+                    source=source,
+                    error=refresh_error or "价格带接口未返回目标日附近数据",
+                )
+            if latest_trade_date < target_date_text:
+                return _build_recent_price_band_style_payload(
+                    rows,
+                    target_date=target_date_text,
+                    source=source,
+                )
+        payload = _build_price_band_style_payload(rows, source="ths.history_line.price_band_style" if history_rows else "tushare.ths_daily.price_band_style")
+        if refresh_error and not payload.get("available"):
+            payload["error"] = refresh_error
+        return payload
     except Exception as error:
         if fact_rows:
+            latest_trade_date = _latest_price_band_trade_date(fact_rows)
+            if not _price_band_recent_window_is_usable(latest_trade_date, target_date_text, trade_dates):
+                return _build_stale_price_band_style_payload(
+                    fact_rows,
+                    target_date=target_date_text,
+                    error=str(error),
+                )
             return _build_recent_price_band_style_payload(
                 fact_rows,
                 target_date=target_date_text,
@@ -1556,15 +1865,9 @@ def get_margin_pressure_from_tushare_first(
             and fetch_tushare_open_trade_dates_fn is None
         )
     )
-    if should_use_fact_db and database_service_cls is None:
+    if should_use_fact_db:
         try:
-            from storage.database_service import DatabaseService
-        except Exception:  # pragma: no cover - optional runtime dependency
-            DatabaseService = None
-        database_service_cls = DatabaseService
-    if should_use_fact_db and database_service_cls is not None:
-        try:
-            service = database_service_cls.sqlite_d1_compatible(db_path)
+            service = _create_fact_database_service(database_service_cls, db_path)
             payload = service.query_margin_pressure_series(
                 target_date_text,
                 window_days=max(int(calibration_days or 250), int(window_days or 25)),
@@ -1687,7 +1990,55 @@ def get_turnover_rank_from_tushare_first(
     fetch_stock_name_map_fn=None,
     fetch_stock_industry_map_fn=None,
     legacy_get_turnover_rank_fn=None,
+    db_path=None,
+    database_service_cls=None,
 ):
+    def _load_name_and_industry_maps():
+        name_map_loader = fetch_stock_name_map_fn or fetch_stock_name_map
+        industry_map_loader = fetch_stock_industry_map_fn or fetch_stock_industry_map
+        try:
+            name_map = name_map_loader() if callable(name_map_loader) else {}
+        except Exception:
+            name_map = {}
+        try:
+            industry_map = industry_map_loader() if callable(industry_map_loader) else {}
+        except Exception:
+            industry_map = {}
+        return name_map, industry_map
+
+    def _ranked_from_rows(rows, *, source):
+        rows = [row for row in (rows or []) if _safe_float((row or {}).get("amount_yi")) > 0]
+        rows.sort(
+            key=lambda row: (
+                _safe_int((row or {}).get("rank_no"), 0) if _safe_int((row or {}).get("rank_no"), 0) > 0 else 999999,
+                -_safe_float((row or {}).get("amount_yi")),
+                str((row or {}).get("stock_code") or (row or {}).get("ts_code") or ""),
+            )
+        )
+        if not rows:
+            return []
+        name_map, industry_map = _load_name_and_industry_maps()
+        ranked = []
+        for rank, row in enumerate(rows[: max(int(limit or 50), 1)], start=1):
+            stock_code = str(row.get("stock_code") or "").strip()
+            ts_code = str(row.get("ts_code") or "").strip().upper()
+            code = stock_code or (ts_code.split(".", 1)[0] if "." in ts_code else ts_code)
+            name = _lookup_by_code(name_map, row, row.get("name") or code)
+            sector = _lookup_by_code(industry_map, row, "未知")
+            ranked.append(
+                {
+                    "rank": rank,
+                    "code": code,
+                    "name": name,
+                    "turnover": _safe_float(row.get("amount_yi")),
+                    "change_pct": _safe_float(row.get("pct_chg")),
+                    "sector": sector or "未知",
+                    "data_source": source,
+                    "trade_date": row.get("trade_date"),
+                }
+            )
+        return ranked
+
     fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
     try:
         rows = [row for row in (fetcher(target_date) or []) if _safe_float((row or {}).get("amount_yi")) > 0]
@@ -1698,42 +2049,26 @@ def get_turnover_rank_from_tushare_first(
             )
         )
         if rows:
-            name_map_loader = fetch_stock_name_map_fn or fetch_stock_name_map
-            industry_map_loader = fetch_stock_industry_map_fn or fetch_stock_industry_map
-            try:
-                name_map = name_map_loader() if callable(name_map_loader) else {}
-            except Exception:
-                name_map = {}
-            try:
-                industry_map = industry_map_loader() if callable(industry_map_loader) else {}
-            except Exception:
-                industry_map = {}
-
-            ranked = []
-            for rank, row in enumerate(rows[: max(int(limit or 50), 1)], start=1):
-                stock_code = str(row.get("stock_code") or "").strip()
-                ts_code = str(row.get("ts_code") or "").strip().upper()
-                code = stock_code or (ts_code.split(".", 1)[0] if "." in ts_code else ts_code)
-                name = _lookup_by_code(name_map, row, row.get("name") or code)
-                sector = _lookup_by_code(industry_map, row, "未知")
-                ranked.append(
-                    {
-                        "rank": rank,
-                        "code": code,
-                        "name": name,
-                        "turnover": _safe_float(row.get("amount_yi")),
-                        "change_pct": _safe_float(row.get("pct_chg")),
-                        "sector": sector or "未知",
-                        "data_source": "tushare.daily",
-                        "trade_date": row.get("trade_date"),
-                    }
-                )
-            return ranked
+            return _ranked_from_rows(rows, source="tushare.daily")
     except Exception:
         pass
 
     if callable(legacy_get_turnover_rank_fn):
-        return legacy_get_turnover_rank_fn(target_date=target_date, limit=limit) or []
+        legacy_rows = legacy_get_turnover_rank_fn(target_date=target_date, limit=limit) or []
+        if legacy_rows:
+            return legacy_rows
+    try:
+        service = _create_fact_database_service(database_service_cls, db_path)
+        local_rows = service.query_turnover_rank_rows(
+            normalize_kline_date_str(target_date) or target_date,
+            limit=max(int(limit or 50), 1),
+            rank_scope="all_a",
+        )
+        ranked = _ranked_from_rows(local_rows, source="storage.turnover_rank_daily")
+        if ranked:
+            return ranked
+    except Exception:
+        pass
     return []
 
 

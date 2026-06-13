@@ -1004,9 +1004,9 @@ def render_daily_judgment_review_panel_lines(panel):
     recent_end = _clean_text(panel.get("recent_end_date"))
     recent_days = int(panel.get("recent_days") or 0)
     if recent_start and recent_end:
-        lines.append(f"### 近{recent_days}个已结算交易日正确率（{recent_start}至{recent_end}）")
+        lines.append(f"**近{recent_days}个已结算交易日正确率（{recent_start}至{recent_end}）**")
     else:
-        lines.append("### 近5个已结算交易日正确率")
+        lines.append("**近5个已结算交易日正确率**")
     lines.append("| 判断项 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |")
     lines.append("|--------|--------|----------|------|------|------|")
     for row in list(panel.get("recent_rows") or []):
@@ -1025,7 +1025,7 @@ def render_daily_judgment_review_panel_lines(panel):
         )
     previous_date = _clean_text(panel.get("previous_trade_date"))
     lines.append("")
-    lines.append(f"### 结算上一交易日：{previous_date or '待补事实'}")
+    lines.append(f"**结算上一交易日：{previous_date or '待补事实'}**")
     resolved_previous_rows = [row for row in list(panel.get("previous_rows") or []) if _has_settlement(row)]
     unresolved_previous_rows = [
         row for row in list(panel.get("previous_rows") or []) if int(row.get("missing_fact_count") or 0) > 0
@@ -1049,7 +1049,7 @@ def render_daily_judgment_review_panel_lines(panel):
         )
     if unresolved_previous_rows:
         lines.append("")
-        lines.append("### 上一交易日未完成结算")
+        lines.append("**上一交易日未完成结算**")
         lines.append("| 判断项 | 状态 | 缺少事实 |")
         lines.append("|--------|------|----------|")
         for row in unresolved_previous_rows:
@@ -1062,7 +1062,7 @@ def render_daily_judgment_review_panel_lines(panel):
             )
     target_date = _clean_text(panel.get("target_date"))
     lines.append("")
-    lines.append(f"### 今日判断（{target_date or '待补事实'}，等待下一交易日验证）")
+    lines.append(f"**今日判断（{target_date or '待补事实'}，等待下一交易日验证）**")
     lines.append("| 判断项 | 今日结论 | 下一交易日验证点 |")
     lines.append("|--------|----------|------------------|")
     for row in list(panel.get("today_rows") or []):

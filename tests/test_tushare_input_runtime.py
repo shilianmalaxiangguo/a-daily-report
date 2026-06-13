@@ -401,7 +401,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
     def test_margin_pressure_ignores_cached_incomplete_target_row_after_market_balance_fallback(self):
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return cls()
 
             def query_margin_pressure_series(self, end_date, *, window_days=25):
@@ -480,7 +480,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
     def test_margin_pressure_uses_fact_db_previous_trade_date_when_online_refresh_times_out(self):
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return cls()
 
             def query_margin_pressure_series(self, end_date, *, window_days=25):
@@ -631,7 +631,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -657,6 +657,57 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 ("save_run", "2026-05-20", 2),
                 ("upsert", "2026-05-20", 1.2, -0.4, 9),
                 ("query", "2026-05-20", 25, True),
+            ],
+        )
+
+    def test_price_band_style_series_uses_fact_store_factory(self):
+        calls = []
+
+        class FakeService:
+            rows = []
+
+            def query_price_band_style_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return {"source": "fake.fact_store.price_band", "rows": list(self.rows)}
+
+            def save_provider_source_run(self, payload):
+                calls.append(("save_run", payload["trade_date"], payload["row_count"]))
+                return 17
+
+            def upsert_price_band_style_daily(self, row):
+                calls.append(("upsert", row["trade_date"], row["source_run_id"]))
+                self.rows = [dict(row)]
+                return row
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("fact_store", db_path))
+                return service
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-05-20",
+            window_days=1,
+            database_service_cls=FakeDatabaseService,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: ["2026-05-20"],
+            fetch_tushare_ths_daily_fn=lambda trade_date: [
+                {"ts_code": "883916.TI", "trade_date": "20260520", "pct_change": 1.2},
+                {"ts_code": "883960.TI", "trade_date": "20260520", "pct_change": -0.4},
+            ],
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-05-20")
+        self.assertEqual(
+            calls,
+            [
+                ("fact_store", None),
+                ("query", "2026-05-20", 1),
+                ("save_run", "2026-05-20", 2),
+                ("upsert", "2026-05-20", 17),
+                ("query", "2026-05-20", 1),
             ],
         )
 
@@ -688,7 +739,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -724,7 +775,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return FakeService()
 
@@ -734,7 +785,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             db_path="daily.db",
             database_service_cls=FakeDatabaseService,
             fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: ["2026-05-27", "2026-05-28"],
-            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(Exception("no permission")),
+            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(Exception("no permission。")),
         )
 
         self.assertTrue(result["available"])
@@ -744,13 +795,212 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual([row["trade_date"] for row in result["rows"]], ["2026-05-26", "2026-05-27"])
         self.assertIn("最近可用窗口", result["summary"])
 
+    def test_price_band_style_series_rejects_stale_recent_fact_window_when_refresh_has_no_permission(self):
+        calls = []
+
+        class FakeService:
+            def query_price_band_style_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return {
+                    "source": "storage.price_band_style_daily",
+                    "rows": [
+                        {"trade_date": "2026-05-26", "high_price_pct": -1.91, "low_price_pct": -1.27},
+                        {"trade_date": "2026-05-27", "high_price_pct": -1.55, "low_price_pct": -1.87},
+                    ],
+                }
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return FakeService()
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-06-05",
+            window_days=2,
+            db_path="daily.db",
+            database_service_cls=FakeDatabaseService,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-05-27",
+                "2026-05-28",
+                "2026-05-29",
+                "2026-06-01",
+                "2026-06-02",
+                "2026-06-03",
+                "2026-06-04",
+                "2026-06-05",
+            ],
+            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(Exception("no permission。")),
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["status"], "stale_recent_window")
+        self.assertEqual(result["requested_trade_date"], "2026-06-05")
+        self.assertEqual(result["latest_trade_date"], "2026-05-27")
+        self.assertEqual(result["rows"], [])
+        self.assertIn("未覆盖 2026-06-05 附近交易日", result["summary"])
+        self.assertIn("no permission", result["refresh_error"])
+        self.assertNotIn("。。", result["summary"])
+
+    def test_price_band_style_series_rejects_stale_recent_fact_window_when_refresh_returns_empty_rows(self):
+        calls = []
+
+        class FakeService:
+            def query_price_band_style_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return {
+                    "source": "storage.price_band_style_daily",
+                    "rows": [
+                        {"trade_date": "2026-05-26", "high_price_pct": -1.91, "low_price_pct": -1.27},
+                        {"trade_date": "2026-05-27", "high_price_pct": -1.55, "low_price_pct": -1.87},
+                    ],
+                }
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return FakeService()
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-06-05",
+            window_days=2,
+            db_path="daily.db",
+            database_service_cls=FakeDatabaseService,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-05-27",
+                "2026-05-28",
+                "2026-05-29",
+                "2026-06-01",
+                "2026-06-02",
+                "2026-06-03",
+                "2026-06-04",
+                "2026-06-05",
+            ],
+            fetch_tushare_ths_daily_fn=lambda trade_date: [],
+        )
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["status"], "stale_recent_window")
+        self.assertEqual(result["requested_trade_date"], "2026-06-05")
+        self.assertEqual(result["latest_trade_date"], "2026-05-27")
+        self.assertEqual(result["rows"], [])
+        self.assertIn("未覆盖 2026-06-05 附近交易日", result["summary"])
+
+    def test_price_band_style_series_uses_ths_history_fallback_when_ths_daily_has_no_permission(self):
+        calls = []
+        trade_dates = ["2026-06-03", "2026-06-04", "2026-06-05"]
+        history_rows = {
+            "883916.TI": [
+                {"trade_date": "2026-06-03", "pct_change": 1.0},
+                {"trade_date": "2026-06-04", "pct_change": 1.2},
+                {"trade_date": "2026-06-05", "pct_change": -1.07},
+            ],
+            "883960.TI": [
+                {"trade_date": "2026-06-03", "pct_change": 0.1},
+                {"trade_date": "2026-06-04", "pct_change": 0.2},
+                {"trade_date": "2026-06-05", "pct_change": -0.87},
+            ],
+        }
+
+        def fetch_history(ts_code, start_date, end_date):
+            calls.append(("history", ts_code, start_date, end_date))
+            return history_rows[ts_code]
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-06-05",
+            window_days=3,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: trade_dates,
+            fetch_tushare_ths_daily_fn=lambda trade_date: (_ for _ in ()).throw(Exception("no permission。")),
+            fetch_ths_price_band_history_fn=fetch_history,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "ths.history_line.price_band_style")
+        self.assertEqual([row["trade_date"] for row in result["rows"]], trade_dates)
+        self.assertAlmostEqual(result["rows"][-1]["high_price_pct"], -1.07)
+        self.assertAlmostEqual(result["rows"][-1]["low_price_pct"], -0.87)
+        self.assertAlmostEqual(result["rows"][-1]["spread_pct"], -0.2)
+        self.assertEqual(calls, [("history", "883916.TI", "2026-03-07", "2026-06-05"), ("history", "883960.TI", "2026-03-07", "2026-06-05")])
+
+    def test_price_band_style_history_fallback_does_not_overwrite_tushare_success_rows(self):
+        calls = []
+        trade_dates = ["2026-06-04", "2026-06-05"]
+        service_rows = []
+
+        class FakeService:
+            def query_price_band_style_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days, len(service_rows)))
+                return {"source": "storage.price_band_style_daily", "rows": list(service_rows)}
+
+            def save_provider_source_run(self, payload):
+                calls.append(("save_run", payload["trade_date"], payload["endpoint"]))
+                return 7
+
+            def upsert_price_band_style_daily(self, row):
+                calls.append(("upsert", row["trade_date"], row["source_policy"], row["high_price_pct"]))
+                service_rows[:] = [
+                    existing for existing in service_rows
+                    if existing["trade_date"] != row["trade_date"]
+                ] + [dict(row)]
+                service_rows.sort(key=lambda item: item["trade_date"])
+                return row
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return service
+
+        def fetch_daily(trade_date):
+            if trade_date == "2026-06-04":
+                return [
+                    {"ts_code": "883916.TI", "trade_date": "20260604", "pct_change": 1.2},
+                    {"ts_code": "883960.TI", "trade_date": "20260604", "pct_change": 0.2},
+                ]
+            raise Exception("no permission。")
+
+        def fetch_history(ts_code, start_date, end_date):
+            calls.append(("history", ts_code, start_date, end_date))
+            if ts_code == "883916.TI":
+                return [
+                    {"trade_date": "2026-06-04", "pct_change": 9.9},
+                    {"trade_date": "2026-06-05", "pct_change": -1.07},
+                ]
+            return [
+                {"trade_date": "2026-06-04", "pct_change": 8.8},
+                {"trade_date": "2026-06-05", "pct_change": -0.87},
+            ]
+
+        result = get_price_band_style_series_from_tushare_first(
+            "2026-06-05",
+            window_days=2,
+            db_path="daily.db",
+            database_service_cls=FakeDatabaseService,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: trade_dates,
+            fetch_tushare_ths_daily_fn=fetch_daily,
+            fetch_ths_price_band_history_fn=fetch_history,
+        )
+
+        self.assertTrue(result["available"])
+        row_by_date = {row["trade_date"]: row for row in result["rows"]}
+        self.assertAlmostEqual(row_by_date["2026-06-04"]["high_price_pct"], 1.2)
+        self.assertAlmostEqual(row_by_date["2026-06-05"]["high_price_pct"], -1.07)
+        history_upserts = [
+            call for call in calls
+            if call[0] == "upsert" and call[2] == "ths.history_line.price_band_style"
+        ]
+        self.assertEqual([call[1] for call in history_upserts], ["2026-06-05"])
+
     def test_top50_turnover_share_series_uses_existing_database_service(self):
         calls = []
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
-                calls.append(("sqlite_d1_compatible", db_path))
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("fact_store_from_environment", db_path))
                 return cls()
 
             def query_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
@@ -778,7 +1028,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("sqlite_d1_compatible", "daily.db"),
+                ("fact_store_from_environment", "daily.db"),
                 ("query", "2026-05-18", 25, 50, "all_a"),
             ],
         )
@@ -790,8 +1040,8 @@ class TushareInputRuntimeTest(unittest.TestCase):
             refreshed = False
 
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
-                calls.append(("sqlite_d1_compatible", db_path))
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("fact_store_from_environment", db_path))
                 return cls()
 
             def query_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
@@ -840,7 +1090,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("sqlite_d1_compatible", "daily.db"),
+                ("fact_store_from_environment", "daily.db"),
                 ("query", "2026-05-20", 25, 50, "all_a", False),
                 ("save_run", "2026-05-20", 1),
                 ("upsert", 1, 7),
@@ -921,7 +1171,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeNoDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return None
 
         result = get_new_high_feedback_from_tushare_first(
@@ -978,7 +1228,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return FakeService()
 
@@ -1031,7 +1281,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return FakeService()
 
@@ -1083,7 +1333,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return FakeService()
 
@@ -1133,7 +1383,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return FakeService()
 
         result = get_new_high_feedback_from_tushare_first(
@@ -1152,7 +1402,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return cls()
 
@@ -1209,7 +1459,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -1269,7 +1519,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -1340,7 +1590,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -1419,7 +1669,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -1714,7 +1964,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 service_paths.append(db_path)
                 return cls()
 
@@ -1907,6 +2157,51 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result[0]["code"], "300750")
         self.assertEqual(fallback_calls, [("2026-05-13", 2)])
+
+    def test_turnover_rank_uses_local_fact_rows_when_online_sources_empty(self):
+        fallback_calls = []
+
+        class FakeService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return cls()
+
+            def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+                return [
+                    {
+                        "rank_no": 1,
+                        "stock_code": "603986",
+                        "ts_code": "603986.SH",
+                        "amount_yi": 293.02,
+                        "pct_chg": 5.2,
+                        "trade_date": trade_date,
+                    },
+                    {
+                        "rank_no": 2,
+                        "stock_code": "300308",
+                        "ts_code": "300308.SZ",
+                        "amount_yi": 275.95,
+                        "pct_chg": -1.4,
+                        "trade_date": trade_date,
+                    },
+                ][:limit]
+
+        result = get_turnover_rank_from_tushare_first(
+            "2026-06-04",
+            limit=2,
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [],
+            legacy_get_turnover_rank_fn=lambda target_date=None, limit=50: fallback_calls.append((target_date, limit)) or [],
+            fetch_stock_name_map_fn=lambda: {"603986": "兆易创新", "300308": "中际旭创"},
+            fetch_stock_industry_map_fn=lambda: {"603986": "半导体", "300308": "通信设备"},
+            database_service_cls=FakeService,
+        )
+
+        self.assertEqual([item["code"] for item in result], ["603986", "300308"])
+        self.assertEqual(result[0]["name"], "兆易创新")
+        self.assertEqual(result[0]["sector"], "半导体")
+        self.assertEqual(result[0]["turnover"], 293.02)
+        self.assertEqual(result[0]["data_source"], "storage.turnover_rank_daily")
+        self.assertEqual(fallback_calls, [("2026-06-04", 2)])
 
     def test_stock_hot_rank_uses_tushare_ths_hot_before_legacy_fallback(self):
         fallback_calls = []
