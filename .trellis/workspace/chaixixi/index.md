@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 3
+- **Total Sessions**: 4
 - **Last Active**: 2026-06-13
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~119 | Active |
+| `journal-1.md` | ~152 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 4 | 2026-06-13 | 板块资金扩散生成前审计 Spec | `68fd9304` | `codex/sector-capital-flow-preflight-spec` |
 | 3 | 2026-06-13 | 日报淘汰赛证据链与反伪精确收口 | `44e62da0` | `develop` |
 | 2 | 2026-06-03 | Article-informed daily report revision | `fdef59bd` | `develop` |
 | 1 | 2026-05-31 | PostgreSQL primary fact migration | `1089b6c0`, `e990a185`, `ee22fe56`, `81fff63a` | `develop` |

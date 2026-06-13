@@ -117,3 +117,36 @@ Added opportunity-cost comparison for old-position versus snapshot opportunities
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: 板块资金扩散生成前审计 Spec
+
+**Date**: 2026-06-13
+**Task**: 板块资金扩散生成前审计 Spec
+**Branch**: `codex/sector-capital-flow-preflight-spec`
+
+### Summary
+
+固化日报生成前的板块资金扩散流程：新增 backend Spec Mermaid 合同，同步反伪精确 Wiki、LLM Wiki context/router，并补充防回退测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `68fd9304` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
