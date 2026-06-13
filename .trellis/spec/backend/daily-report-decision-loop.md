@@ -352,6 +352,213 @@ The table states that the current covered sample is 42 trading days from 2026-03
 
 Why correct: the user can separate current evidence from the next data-expansion objective.
 
+## Scenario: Sector Capital Diffusion Pre-Generation Review
+
+### 1. Scope / Trigger
+
+Use this contract before changing report generation, selection workflow,
+candidate-pool construction, elimination-bracket rendering, or final-target
+resolution.
+
+This scenario fixes the daily-report thinking order:
+
+- First principle: short-term price is the temporary balance of capital flow,
+  chip distribution, liquidity, and expectation.
+- Sector first: the report starts from market capital structure and sector
+  capital diffusion, not from the limit-up pool or a single-stock score.
+- Capital carrier: the object is the stock repeatedly bought and accepted inside
+  that sector. It may be a limit-up high marker, trend-capacity core, sector
+  anchor/center, or branch leader.
+- Quant-era edge: the report does not compete with algorithms on speed. It reads
+  their visible behavior: turnover concentration, repeated acceptance, pullback
+  support, close quality, and exit traces.
+- Final action: only the final resolution layer may produce the current action.
+
+### 2. Signatures
+
+Any new generation-before-review payload should use this shape:
+
+```python
+{
+    "schema_version": "pre_generation_sector_capital_review.v1",
+    "target_date": "YYYY-MM-DD",
+    "derivation_contract": "sector_capital_diffusion_first.v1",
+    "mermaid": "str",
+    "stages": [
+        {
+            "id": "market_capital_structure",
+            "label": "市场资金结构",
+            "evidence": ["str"],
+            "survivors": ["sector name | stock code"],
+            "eliminated": [
+                {"name": "str", "reason": "str", "next_recovery_condition": "str"}
+            ],
+            "missing_fields": ["str"],
+        }
+    ],
+    "capital_carriers": [
+        {
+            "code": "str",
+            "name": "str",
+            "sector": "str",
+            "role": "limit_up_marker | trend_capacity_core | sector_anchor | sector_center | branch_leader | process_evidence",
+            "quant_participation_trace": ["str"],
+            "price_action_confirmation": ["str"],
+            "counter_evidence": ["str"],
+            "account_fit": "qualified | observation | not_qualified | incomplete",
+            "action_qualification": "qualified | observation | not_qualified | incomplete",
+            "reason": "str",
+        }
+    ],
+    "final_action": {
+        "position_pct": 0 | 50 | 100,
+        "target": {"code": "str", "name": "str"} | {},
+        "action_text": "str",
+        "source": "final_target_resolution | selection_workflow.final | str",
+    },
+}
+```
+
+The required Mermaid review template is:
+
+```mermaid
+flowchart TD
+  A["第一性原理: 短期价格=资金流+筹码分布动态平衡"] --> B["市场资金结构"]
+  B --> C["板块资金扩散"]
+  C --> D["板块内资金载体"]
+  D --> E{"载体角色"}
+  E --> E1["涨停高标"]
+  E --> E2["趋势容量核心"]
+  E --> E3["板块锚/中军"]
+  E --> E4["分支龙头"]
+  E1 --> F["量化参与痕迹"]
+  E2 --> F
+  E3 --> F
+  E4 --> F
+  F --> G["价格行为确认"]
+  G --> H["反证与风险"]
+  H --> I["账户/盈亏比/时间窗口"]
+  I --> J["唯一明日动作"]
+```
+
+### 3. Contracts
+
+- Generation and debugging must first draw or enumerate the Mermaid chain above
+  before selecting tomorrow's object.
+- The limit-up pool, hot ranks, LHB rows, turnover bursts, and legacy score-like
+  fields are evidence of capital behavior. They are not the starting point and
+  cannot independently create action qualification.
+- A good capital carrier does not need to limit up every day. It must prove that
+  the sector's funds repeatedly look back: pullbacks are accepted, volume does
+  not break the structure, shrinkage does not kill the trend, and competing
+  lines do not absorb the same capital.
+- Candidate filtering must explain every stage in bracket language: input count,
+  eliminated names, eliminated reasons, survivor names, and the condition for a
+  removed name to recover.
+- Role classification must preserve multiple carrier types: limit-up marker,
+  trend-capacity core, sector anchor/center, and branch leader.
+- Quant participation traces must be observable facts or conservative labels:
+  sector turnover share, repeated volume, VWAP/key-line support, pullback
+  acceptance, close quality, back-row feedback, and exit traces.
+- Price action decides whether the funding trace is accepted. Volume and hot
+  rank raise attention; price acceptance, follow-through, pullback quality, and
+  nearby invalid price decide whether the object can move beyond observation.
+- Counter-evidence must be processed before account fit: failed seal count, late
+  reseal, high turnover, long upper shadow, weak close, back-row collapse,
+  capacity core losing VWAP/key lines, or account damage.
+- The final stage must produce one current action or observation conclusion. If
+  several modules nominate different stocks, they remain process evidence until
+  the final layer resolves one object or stays at 0%.
+- Missing market, sector, carrier-role, quant-trace, price-action, or
+  account-fit evidence must stay visible in `missing_fields`; do not fill the
+  gap with current-only data, old leader memory, or a high-looking score.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Report starts from limit-up pool or score ranking | Rebuild the review from market capital structure and sector diffusion first |
+| Sector diffusion is absent but one stock looks strong | Keep the stock as process evidence or observation; do not create action qualification |
+| Sector diffusion is present but no capital carrier is identified | Stop the affected selection conclusion and list missing carrier-role evidence |
+| Candidate is not limit-up but shows repeated sector acceptance and capacity | Allow it into the carrier-role layer as trend-capacity core or sector anchor |
+| Candidate is limit-up but cannot explain sector capital diffusion | Keep it as limit-up marker or process evidence only |
+| Quant participation trace is described with a made-up exact score | Replace it with observable facts such as turnover share, close quality, support, and exit trace |
+| Multiple modules output different tomorrow targets | Keep all as process candidates and let final resolution output one action or 0% |
+| Price action shows failed seals, late reseal, high turnover, or weak close | State the exact risk reason at the price-action/risk layer |
+| Account or invalid-price distance is not suitable | Keep market identity if valid, but render account fit as observation or not qualified |
+| Historical replay lacks same-date sector or price facts | Preserve missing fields; do not refill with current market facts |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good sector carrier | Sector share expands, core holds, branch leader repeats acceptance, price confirms | Carrier enters final comparison; action still waits for account and time-window fit |
+| Good non-limit-up carrier | Trend-capacity core is not limit-up but keeps volume, support, and close quality | It remains a valid observation or action candidate after price and account checks |
+| Good explicit elimination | Candidate passes sector and role but has late reseal plus high turnover | Layer states the exact risk reason and keeps final action conservative |
+| Base missing trace | Sector is plausible but quant participation traces are incomplete | Keep missing fields visible; no invented exact score or automatic action |
+| Bad limit-up-first | A hot-list limit-up becomes tomorrow's object without sector diffusion proof | Demote it to process evidence and restart from sector diffusion |
+| Bad multi-target drift | Each report module names a different tomorrow target | Final report shows one final object or 0%, with the others labeled as process evidence |
+
+### 6. Tests Required
+
+When implementation changes this contract, add or update tests that assert:
+
+- `tests.test_selection_workflow` or successor runtime tests cover the Mermaid
+  stage order from market capital structure through unique final action.
+- `tests.test_elimination_tournament` covers per-layer input, eliminated,
+  survivor, and final-action counts for sector-first selection.
+- `tests.test_candidate_bundle_runtime` covers non-limit-up trend-capacity cores
+  staying eligible for observation when sector diffusion and price acceptance are
+  present.
+- `tests.test_llm_wiki_context` covers the principle that report generation
+  starts from sector capital diffusion and capital carriers, not from score
+  ranking.
+- `tests.test_llm_wiki_router` covers routing of "板块资金扩散", "资金载体",
+  and "量化参与痕迹" to the anti-fake-precision first-principle node.
+
+For spec/wiki-only changes, run the focused LLM Wiki tests plus `git diff
+--check`. For rendered-report behavior changes, also run a target-date replay
+and the report acceptance audit.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+涨停池里分数最高的股票 -> 明日标的。
+```
+
+Why wrong: this starts from a stock list and subjective ranking. It hides the
+sector capital path and can recreate multiple module-level targets.
+
+#### Correct
+
+```text
+市场资金结构 -> 板块资金扩散 -> 板块内资金载体 -> 量化参与痕迹 -> 价格行为确认 -> 反证/账户/时间窗口 -> 唯一明日动作。
+```
+
+Why correct: the object is derived from the sector's visible capital behavior,
+and only the final layer can produce the current action.
+
+#### Wrong
+
+```text
+好股必须每天涨停；不涨停就不是核心。
+```
+
+Why wrong: trend-capacity cores and sector anchors may be repeatedly bought
+without daily limit-up. The key question is whether funds keep accepting the
+stock inside the selected sector.
+
+#### Correct
+
+```text
+好股不一定每天涨停，但必须证明板块资金反复回看、回撤有人接、放量不崩、缩量不死。
+```
+
+Why correct: it keeps the report aligned with sector diffusion and capital
+carrier behavior instead of one-day surface form.
+
 ## Scenario: Sector-First Quant Bifurcation And A-Share Price-Action Localization
 
 ### 1. Scope / Trigger

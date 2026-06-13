@@ -248,7 +248,7 @@ class LlmWikiRouterTest(unittest.TestCase):
     def test_routes_anti_fake_precision_first_principle(self):
         hits = route_llm_wiki_knowledge(
             {
-                "question": "日报选股不要伪精确评分，也不要用加权总分或成功率替代淘汰赛条件链；按布鲁克斯价格行为和第一性原理重看",
+                "question": "日报选股不要伪精确评分，也不要用加权总分或成功率替代淘汰赛条件链；先从板块资金扩散找资金载体，看量化参与痕迹，再按布鲁克斯价格行为和第一性原理重看",
             },
             scenario="candidate_quality",
         )
@@ -264,8 +264,12 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("成功率", hit["triggered_by"])
         self.assertIn("淘汰赛", hit["triggered_by"])
         self.assertIn("条件链", hit["triggered_by"])
+        self.assertIn("板块资金扩散", hit["triggered_by"])
+        self.assertIn("资金载体", hit["triggered_by"])
+        self.assertIn("量化参与痕迹", hit["triggered_by"])
         self.assertIn("事实数值保留", hit["impact"])
         self.assertIn("主观判断不能写成精确分", hit["impact"])
+        self.assertIn("板块资金扩散找资金载体", hit["impact"])
         self.assertEqual(hit["report_slot"], "选股原则")
         self.assertEqual(hit["confidence"], "verified")
 
