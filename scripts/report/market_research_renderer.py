@@ -112,7 +112,7 @@ def render_gem_breathing_step2_section(context):
         return lines
     lines.extend(
         [
-            "| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 预判强度 | 明日原则 |",
+            "| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 条件档位 | 明日原则 |",
             "|------|------|------|------|------------|----------|----------|----------|",
         ]
     )
@@ -120,7 +120,7 @@ def render_gem_breathing_step2_section(context):
         lines.append(
             f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
             f"{item.get('tier', '-') or '-'} | {sanitize_user_visible_text(item.get('abnormal_summary', item.get('note', '-')) or '-')} | "
-            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和09:50-10:10窗口，不满足继续观察 |"
+            f"{item.get('selection_priority_tier') or item.get('tier') or '条件待确认'} | 先看右侧确认和09:50-10:10窗口，不满足继续观察 |"
         )
     lines.append("")
     return lines

@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/06-13-sector-first-elimination-html/design.md", "reason": "Parent report generation data flow"}
+{"file": ".trellis/tasks/06-13-daily-generation-elimination-html/prd.md", "reason": "Generation integration acceptance criteria"}
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Report generation and ledger conventions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Acceptance audit and report output quality"}

@@ -1,0 +1,4 @@
+{"file": ".trellis/tasks/06-13-sector-first-elimination-html/design.md", "reason": "Parent design and data flow contract"}
+{"file": ".trellis/tasks/06-13-elimination-evidence-contract/prd.md", "reason": "Child payload requirements and acceptance criteria"}
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Daily report decision and ledger conventions"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend quality and report output conventions"}

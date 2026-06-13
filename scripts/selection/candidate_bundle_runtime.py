@@ -112,6 +112,112 @@ def _first_number(item, *keys):
     return 0.0
 
 
+def _candidate_selection_priority_sort_key(item):
+    item = item or {}
+    priority = item.get("selection_priority")
+    if isinstance(priority, dict):
+        return tuple(priority.get(key, 0) for key in ("source", "board", "base", "acceptance", "order"))
+    return (
+        _safe_float(item.get("tomorrow_strength", 0), 0),
+        _safe_float(item.get("base_strength_score", item.get("score", 0)), 0),
+        0,
+        0,
+        0,
+    )
+
+
+def _base_condition_tier(base_strength):
+    base_strength = _safe_float(base_strength, 0)
+    if base_strength >= 85:
+        return 3, "高辨识度来源"
+    if base_strength >= 70:
+        return 2, "中高辨识度来源"
+    if base_strength >= 50:
+        return 1, "普通候选来源"
+    return 0, "低辨识度来源"
+
+
+def _board_condition_tier(lb_count, base_strength):
+    base_tier, _ = _base_condition_tier(base_strength)
+    if lb_count >= 3:
+        return 4, "三板以上高标"
+    if lb_count == 2:
+        return 3, "二板连板"
+    if lb_count == 1 and base_tier >= 2:
+        return 2, "首板且来源辨识度较高"
+    if base_tier >= 1:
+        return 1, "非连板普通候选"
+    return 0, "仅观察候选"
+
+
+def _abnormal_condition_tier(abnormal_item, abnormal_adjustment):
+    follow_state = str((abnormal_item or {}).get("follow_state") or "").strip()
+    if follow_state == "跌不下去":
+        return 3, "异动后承接强"
+    if follow_state == "缩量消化":
+        return 2, "异动后缩量消化"
+    if follow_state == "新异动待观察":
+        return 1, "新异动待确认"
+    if follow_state == "已经转弱":
+        return -1, "异动后承接转弱"
+    adjustment = _safe_float(abnormal_adjustment, 0)
+    if adjustment > 0:
+        return 1, "异动证据待确认"
+    if adjustment < 0:
+        return -1, "异动证据转弱"
+    return 0, "无异动承接证据"
+
+
+def _source_condition_tier(item):
+    source_tier = str((item or {}).get("source_tier") or "").strip()
+    source = str((item or {}).get("source") or "").strip()
+    candidate_role = str((item or {}).get("candidate_role") or "").strip()
+    if candidate_role in {"板块锚", "大容量中军", "分支龙头", "主线核心"}:
+        return 3, candidate_role
+    if source == "recent_extreme_conviction_mention":
+        return 0, source
+    if source_tier == "extreme_conviction":
+        return 3, source_tier
+    if source_tier == "anchor_reversal_source":
+        return 2, source_tier
+    if source:
+        return 1, source
+    return 0, "普通来源"
+
+
+def _selection_priority_label(priority):
+    if not isinstance(priority, dict):
+        return "待补证据"
+    board = priority.get("board", 0)
+    acceptance = priority.get("acceptance", 0)
+    source = priority.get("source", 0)
+    if board >= 4 or (board >= 3 and acceptance >= 2):
+        return "高标强承接"
+    if source >= 3 and acceptance >= 2:
+        return "板块核心承接"
+    if board >= 2 or acceptance >= 2 or source >= 2:
+        return "候选观察"
+    if acceptance < 0:
+        return "转弱观察"
+    return "低优先观察"
+
+
+def _build_candidate_selection_priority(item, *, lb_count, abnormal_item, abnormal_adjustment, source_order):
+    base_tier, base_reason = _base_condition_tier(item.get("score", 0))
+    board_tier, board_reason = _board_condition_tier(lb_count, item.get("score", 0))
+    acceptance_tier, acceptance_reason = _abnormal_condition_tier(abnormal_item, abnormal_adjustment)
+    source_tier, source_reason = _source_condition_tier(item)
+    priority = {
+        "board": board_tier,
+        "acceptance": acceptance_tier,
+        "source": source_tier,
+        "base": base_tier,
+        "order": -int(source_order),
+    }
+    reasons = [board_reason, acceptance_reason, source_reason, base_reason]
+    return priority, "；".join(reason for reason in reasons if reason)
+
+
 def _infer_sector_from_reason(text):
     text = str(text or "")
     if "长鑫" in text or "国产芯片" in text:
@@ -550,12 +656,12 @@ def _build_hot_capacity_anchor_candidates(
             continue
 
         if turnover_rank <= 3 or hot_rank <= 5 or turnover >= 100:
-            score = 92
+            item["capacity_tier"] = "一线容量锚"
         elif turnover_rank <= 10 or hot_rank <= 15 or turnover >= 50:
-            score = 86
+            item["capacity_tier"] = "容量核心"
         else:
-            score = 78
-        item["score"] = max(_safe_float(item.get("score", 0), 0), score)
+            item["capacity_tier"] = "容量观察"
+        item.setdefault("score", item.get("legacy_score", 0))
         item["source"] = "hot_capacity_anchor_source"
         item["source_tier"] = "anchor_reversal_source"
         item["candidate_role"] = "大容量中军"
@@ -945,7 +1051,7 @@ def build_candidate_bundle_contract(
     )
 
     evaluated_stocks = []
-    for stock in evaluation_source_stocks:
+    for source_order, stock in enumerate(evaluation_source_stocks):
         item = dict(stock)
         code = item.get("code", "")
         normalized_code = normalize_stock_code(code)
@@ -958,7 +1064,7 @@ def build_candidate_bundle_contract(
         _apply_trade_narrative_sector(item)
         base_score = item.get("score", 0)
         abnormal_item = abnormal_watch_map.get(code, {}) or abnormal_watch_map.get(normalized_code, {})
-        abnormal_bonus, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
+        abnormal_adjustment, abnormal_summary, abnormal_rule = get_abnormal_rank_adjustment(abnormal_item)
         lb_info = lb_stocks_map.get(code, {})
         if item.get("reason") in (None, "") and lb_info.get("涨停原因"):
             item["reason"] = lb_info.get("涨停原因")
@@ -969,18 +1075,13 @@ def build_candidate_bundle_contract(
         _normalize_candidate_sector(item)
         _apply_trade_narrative_sector(item)
         lb_count = lb_info.get("连板数", 0)
-        tomorrow_strength = base_score
-
         if lb_count >= 3:
-            tomorrow_strength += 25
             core_level = "🔥🔥 高标核心"
             tmr_forecast = f"{lb_count}进{lb_count+1}，若竞价高开可能继续"
         elif lb_count == 2:
-            tomorrow_strength += 20
             core_level = "🔥 连板核心"
             tmr_forecast = "2进3，观察竞价是否超预期"
         elif lb_count == 1 and base_score >= 70:
-            tomorrow_strength += 15
             core_level = "⭐ 首板强芯"
             tmr_forecast = "首板形态好，明日有连板预期"
         elif base_score >= 50:
@@ -990,12 +1091,11 @@ def build_candidate_bundle_contract(
             core_level = "○ 观察备选"
             tmr_forecast = "需看明日竞价强弱"
 
-        tomorrow_strength += abnormal_bonus
-        if abnormal_bonus >= 18 and "高标核心" not in core_level and "连板核心" not in core_level:
+        if abnormal_adjustment >= 18 and "高标核心" not in core_level and "连板核心" not in core_level:
             core_level = "🔥 异动抗跌核心"
-        elif abnormal_bonus >= 10 and core_level in ["✓ 溢价候选", "○ 观察备选"]:
+        elif abnormal_adjustment >= 10 and core_level in ["✓ 溢价候选", "○ 观察备选"]:
             core_level = "⭐ 抗跌观察芯"
-        elif abnormal_bonus < 0:
+        elif abnormal_adjustment < 0:
             core_level = "○ 转弱观察"
 
         if abnormal_item:
@@ -1008,12 +1108,22 @@ def build_candidate_bundle_contract(
             elif abnormal_item.get("follow_state") == "新异动待观察":
                 tmr_forecast = f"{tmr_forecast}；异动刚出现，先看次日承接"
 
-        item["tomorrow_strength"] = tomorrow_strength
+        selection_priority, selection_priority_reason = _build_candidate_selection_priority(
+            item,
+            lb_count=lb_count,
+            abnormal_item=abnormal_item,
+            abnormal_adjustment=abnormal_adjustment,
+            source_order=source_order,
+        )
+        item["selection_priority"] = selection_priority
+        item["selection_priority_tier"] = _selection_priority_label(selection_priority)
+        item["selection_priority_reason"] = selection_priority_reason
+        item["tomorrow_strength"] = base_score
         item["base_strength_score"] = base_score
         item["core_level"] = core_level
         item["tmr_forecast"] = tmr_forecast
         item["连板数"] = lb_count
-        item["abnormal_bonus"] = abnormal_bonus
+        item["abnormal_bonus"] = abnormal_adjustment
         item["abnormal_summary"] = abnormal_summary
         item["abnormal_rule"] = abnormal_rule
         item["abnormal_follow_state"] = abnormal_item.get("follow_state", "")
@@ -1025,13 +1135,10 @@ def build_candidate_bundle_contract(
         evaluated_stocks.append(item)
 
     evaluated_stocks.sort(
-        key=lambda item: (
-            item.get("tomorrow_strength", 0),
-            item.get("base_strength_score", item.get("score", 0)),
-        ),
+        key=_candidate_selection_priority_sort_key,
         reverse=True,
     )
-    _append_log(logs, "candidate_scoring", "success", "已完成候选评分与排序", evaluated_count=len(evaluated_stocks))
+    _append_log(logs, "candidate_condition_sorting", "success", "已完成候选条件链排序", evaluated_count=len(evaluated_stocks))
 
     if primary_mainline:
         mainline_evaluated_stocks, crossline_evaluated_stocks = split_candidates_by_mainline(

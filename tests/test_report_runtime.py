@@ -3366,6 +3366,45 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertIn("缺少独立参与证据", position_decision["sizing_reason"])
         self.assertNotIn("50%条件执行", position_decision["sizing_reason"])
 
+    def test_runtime_core_candidate_uses_condition_priority_not_weighted_score(self):
+        selected = {
+            "name": "已解析对象",
+            "code": "600001",
+            "sector": "电力",
+            "sniper_role": "明日补位对象",
+            "anchor_reversal_decision": "可作为补位",
+            "candidate_role": "板块锚",
+        }
+        score_like_competitor = {
+            "name": "加分候选",
+            "code": "600002",
+            "sector": "电力",
+            "sniper_role": "明日主买对象",
+            "anchor_reversal_decision": "可作为主对象",
+            "candidate_role": "板块锚",
+            "primary_buy_candidate": True,
+            "repair_priority": "优先修复",
+            "score": 999,
+            "tomorrow_strength": 999,
+        }
+
+        resolved = report_runtime._resolve_runtime_current_core_candidate(
+            data={
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
+                "mainline_turnover_summary": {"current_mainline": "电力"},
+            },
+            execution_stage_context={
+                "position_decision": {"target_position_pct": 50, "signal_grade": "50"},
+                "mainline_turnover_summary": {"current_mainline": "电力"},
+                "selected_position_candidate": dict(selected),
+                "extreme_conviction_list": [dict(score_like_competitor)],
+            },
+            selected_position_candidate=dict(selected),
+            extreme_conviction_list=[dict(score_like_competitor)],
+        )
+
+        self.assertEqual(resolved["code"], "600001")
+
     def test_front_page_position_decision_keeps_countertrend_attack_observation_only(self):
         position_decision = report_runtime._build_front_page_position_decision(
             position_decision={
@@ -5280,7 +5319,8 @@ assert rendered == "# migrated"
         self.assertIn("account.unbuyable-core-anchor", ids)
         self.assertIn("candidate.quality-action-layer", ids)
         self.assertIn("实际不可买不降低市场身份", result["report"])
-        self.assertIn("先挣分、再扣分、再看动作上限", result["report"])
+        self.assertIn("候选质量条件链与动作上限", result["report"])
+        self.assertIn("旧分数只作兼容字段", result["report"])
 
     def test_runtime_front_page_uses_account_knowledge_hit_for_real_action(self):
         from report.report_document_builder import (
@@ -7696,6 +7736,40 @@ def _runtime_binding_probe(
         self.assertEqual(packet["canonical_target"], {})
         self.assertEqual(packet["canonical_source"], "selection_workflow.final.execution_object")
         self.assertEqual(packet["final_action"]["position_pct"], 0)
+
+    def test_runtime_elimination_tournament_preserves_replay_variant(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "和远气体", "code": "002971", "sector": "化工原料"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "sector": "化工原料",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+
+        payload = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data={"selection_workflow": workflow},
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+
+        self.assertEqual(payload["variant"], "replay")
 
     def test_runtime_derivation_chain_keeps_stale_local_candidate_as_process_only(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):

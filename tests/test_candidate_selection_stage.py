@@ -276,11 +276,11 @@ class CandidateSelectionStageTest(unittest.TestCase):
                 "build_step2_candidate_bundle": lambda *args, **kwargs: {
                     "evaluated_stocks": [],
                     "core_stocks": [
-                        {"name": "机器人一号", "code": "000001", "sector": "机器人", "tomorrow_strength": 92},
-                        {"name": "机器人二号", "code": "000002", "sector": "机器人", "tomorrow_strength": 88},
+                        {"name": "机器人一号", "code": "000001", "sector": "机器人", "selection_priority_tier": "高标强承接"},
+                        {"name": "机器人二号", "code": "000002", "sector": "机器人", "selection_priority_tier": "候选观察"},
                     ],
                     "secondary_stocks": [
-                        {"name": "机器人三号", "code": "000003", "sector": "机器人", "tomorrow_strength": 76},
+                        {"name": "机器人三号", "code": "000003", "sector": "机器人", "selection_priority_tier": "低优先观察"},
                     ],
                     "ignored_stocks": [],
                     "crossline_observation_stocks": [],
@@ -297,8 +297,8 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("**明日核心方向预判**: 机器人（主线内3只，最强样本92分）", rendered)
-        self.assertIn("综合分只用于个股排序，不累加成板块分", rendered)
+        self.assertIn("**明日核心方向预判**: 机器人（主线内3只，最高条件档位：高标强承接）", rendered)
+        self.assertIn("条件链只用于个股排序，不累加成板块分", rendered)
         self.assertNotIn("主线内强度256分", rendered)
         self.assertNotIn("板块强度256分", rendered)
 
@@ -880,7 +880,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
                             "sector": "军工",
                             "tier": "白银弹性",
                             "abnormal_summary": _m("均线", "粘合"),
-                            "tomorrow_strength": 76,
+                            "selection_priority_tier": "弹性观察",
                         }
                     ],
                     "filtered_out_gem_candidates": [],
@@ -898,7 +898,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("**明日核心方向预判**: 军工", rendered)
         self.assertIn("主线侧翼弹性层", rendered)
-        self.assertIn("| 1 | 创业弹性 | 300001 | 军工 | 白银弹性 | 波动收敛，等待量价温和放大后的右侧确认 | 76分 |", rendered)
+        self.assertIn("| 1 | 创业弹性 | 300001 | 军工 | 白银弹性 | 波动收敛，等待量价温和放大后的右侧确认 | 弹性观察 |", rendered)
         self.assertNotIn(_m("均线", "粘合"), rendered)
 
     def test_candidate_selection_runtime_can_render_only_enabled_nodes(self):

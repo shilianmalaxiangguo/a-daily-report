@@ -1008,6 +1008,201 @@ Store the same packet under:
   process evidence.
 - Acceptance audit tests for matching and mismatching chain final targets.
 
+## Scenario: Elimination Tournament And Anti-Fake-Precision Selection Contract
+
+### 1. Scope / Trigger
+
+Use this contract when changing daily-report candidate pools, candidate sorting,
+final-target resolution, elimination payloads, companion HTML, or acceptance
+checks that compare the Markdown report with the companion artifact.
+
+The goal is to make the sector-first decision path auditable without turning
+subjective trading judgment into fake exact math.
+
+### 2. Signatures
+
+Runtime candidate rows may preserve legacy numeric fields for compatibility,
+but the current ordering contract must write explicit condition priority:
+
+```python
+{
+    "code": "002971",
+    "name": "和远气体",
+    "sector": "化工原料",
+    "selection_priority": {
+        "source": 3,
+        "board": 2,
+        "base": 1,
+        "acceptance": -1,
+        "order": -4,
+    },
+    "selection_priority_tier": "板块核心承接 | 候选观察 | 转弱观察 | str",
+    "selection_priority_reason": "str",
+    "tomorrow_strength": "legacy numeric value only",
+    "base_strength_score": "legacy numeric value only",
+}
+```
+
+`elimination_tournament.v1` is the companion payload consumed by the HTML
+renderer and audit:
+
+```python
+{
+    "schema_version": "elimination_tournament.v1",
+    "trade_date": "YYYY-MM-DD",
+    "variant": "replay | frozen | live | str",
+    "final_action": {
+        "label": "0%不参与 | 50%条件执行 | 100%核心进攻 | str",
+        "position_pct": 0,
+        "target": {"code": "str", "name": "str"} | {},
+        "source": "final_target_resolution | selection_workflow.final | str",
+    },
+    "layers": [
+        {
+            "id": "sector | sector_role | anchor_reversal | price_action | account | final",
+            "title": "str",
+            "input_count": 0,
+            "eliminated_count": 0,
+            "survivor_count": 0,
+            "entries": [
+                {
+                    "stock_code": "str",
+                    "stock_name": "str",
+                    "sector": "str",
+                    "status": "survived | eliminated | final_action | process_only | sector_reference",
+                    "reason": "str",
+                    "next_basis": "str",
+                    "elimination_basis": "str",
+                }
+            ],
+            "note": "str",
+        }
+    ],
+}
+```
+
+The report command should save the companion HTML beside the Markdown full
+report when this payload exists. Acceptance audit may receive the HTML as a
+companion artifact and compare its final action with the Markdown front page.
+
+### 3. Contracts
+
+- Factual numbers may remain: price change, turnover, turnover share, limit-up
+  count, failed-seal count, seal amount, turnover rate, time window, account
+  cash, invalid price, sample count, and coverage dates.
+- Subjective trading judgment must not be rendered as an exact composite score,
+  exact success rate, weighted sum, or score-looking confidence that creates the
+  final target.
+- Legacy fields such as `score`, `tomorrow_strength`, and
+  `base_strength_score` may remain only as compatibility inputs or old-data
+  display values. They must not be the primary ordering source for tomorrow's
+  object.
+- Candidate ordering must prefer explicit condition priority: sector/source
+  role, board evidence after role is valid, price-action acceptance, base source
+  quality, and original source order as the last tie breaker.
+- Final-target resolution must use condition and role priority, not additive
+  subjective points. A selected/current object with valid role evidence must not
+  be displaced by a high numeric score in another process candidate.
+- The elimination payload must show each layer's input count, eliminated count,
+  survivor count, entries, and reason text. Counts and entry statuses must be
+  internally consistent.
+- Every eliminated row must say why it lost at that layer. Do not render a bare
+  "淘汰" when the source facts can identify the reason.
+- Missing evidence must stay explicit in `reason`, `elimination_basis`, or layer
+  `note`; do not invent a price-action or account reason to make the bracket
+  look complete.
+- The companion HTML is explanatory only. It must not select another tomorrow
+  target or override `final_target_resolution` / `selection_workflow.final`.
+- When the final action is 0%, process candidates may remain in the bracket as
+  process evidence, but the final layer must not turn them into new-entry
+  targets.
+- For a 2026-06-12-style sample, 和远气体 may pass sector identity and role
+  layers, but if price-action evidence says `炸板57次且尾盘才回封，高换手板`,
+  the price-action/risk layer must state that exact risk reason and keep the
+  final action at `0%不参与`.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Candidate has `selection_priority` | Sort by condition priority tuple, not by `tomorrow_strength` |
+| Candidate lacks `selection_priority` in old data | Use conservative compatibility ordering and keep the row as process evidence unless role evidence is explicit |
+| Numeric score is high but role is follower/catch-up/arbitrage | Keep it behind sector anchor / branch leader / capacity core evidence |
+| Final Markdown says `0%不参与` and companion final action is positive | Acceptance audit returns `elimination_tournament_final_conflict` |
+| Companion HTML lacks readable JSON payload | Acceptance audit returns `elimination_tournament_payload_missing` |
+| Layer counts do not match entry statuses | Treat payload as invalid and fix the builder/test before shipping |
+| A row is eliminated with no reason and no missing-data note | Render evidence-missing text instead of a bare elimination label |
+| Historical replay lacks same-date risk or price-action evidence | Keep the row as missing detail; do not fetch current-only data for that historical reason |
+| 和远气体-style risk facts exist | Show the failed-seal / late-reseal / high-turnover reason in the price-action layer |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good condition priority | Low score sector anchor with acceptance evidence competes with high score follower | Sector anchor ranks ahead; follower remains process evidence |
+| Good 0% bracket | Final object is empty, but process candidates exist | HTML shows process path and final layer says `0%不参与` |
+| Good explicit risk reason | 和远气体 has `炸板57次且尾盘才回封，高换手板` | Price-action layer eliminates it with that reason |
+| Base missing detail | Old replay has candidate identity but no price-action evidence | Layer note says evidence is missing; no invented risk reason |
+| Bad fake precision | Report says candidate wins because `综合分86` or `成功率72%` | Replace with condition-chain reason and factual values only |
+| Bad multi-target drift | One module renders a different tomorrow target from the bracket final action | Audit must fail or renderer must relabel it as process evidence |
+
+### 6. Tests Required
+
+- `tests.test_candidate_bundle_runtime` must cover condition priority outranking
+  legacy score fields.
+- `tests.test_report_runtime` must cover runtime current-core resolution using
+  condition/role priority instead of weighted score.
+- `tests.test_elimination_tournament` must cover payload shape, layer counts,
+  final action source, missing-evidence handling, and the 2026-06-12 和远气体
+  path.
+- `tests.test_daily_report_markdown_html` or an equivalent renderer test must
+  cover companion artifact rendering when generated from Markdown flow.
+- `tests.test_report_acceptance_audit` must cover zero-position companion
+  consistency, positive-final conflict, and unreadable payload detection.
+
+For rendered-report behavior changes, run a target-date replay generation and
+audit the generated Markdown with the companion HTML.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+和远气体被淘汰。
+```
+
+Why wrong: the user cannot tell whether the sector-first chain is wrong, the
+price-action judgment is wrong, or the renderer lost evidence.
+
+#### Correct
+
+```text
+和远气体通过板块和角色层，但在价格行为层不取得新增参与资格：炸板57次且尾盘才回封，高换手板。
+```
+
+Why correct: the chain shows what survived, where it failed, and which fact the
+user can challenge.
+
+#### Wrong
+
+```text
+High weighted score + strong-looking probability -> tomorrow target.
+```
+
+Why wrong: weighted subjective values hide the actual market/sector/role/risk
+reasoning and can recreate multiple final targets.
+
+#### Correct
+
+```text
+Market and sector first, then role versus anchor, then counter-evidence, then
+Brooks-style price acceptance and account fit; only the final layer may produce
+the current action.
+```
+
+Why correct: factual values support the decision, while subjective judgment
+stays in visible conditions and elimination reasons.
+
 ## Full Attack Roadmap
 
 ### Phase 1: Honest Coverage And Stable Closed Loop

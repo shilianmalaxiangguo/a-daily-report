@@ -1973,6 +1973,39 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_allows_elimination_html_matching_zero_position(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="elimination-tournament">
+        <h1>2026-06-12 明日标的选股淘汰赛</h1>
+        <script type="application/json" id="elimination-payload">
+        {"final_action": {"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}}
+        </script>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertNotIn("elimination_tournament_final_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertNotIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_elimination_html_positive_final_when_report_is_zero_position(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="elimination-tournament">
+        <h1>2026-06-12 明日标的选股淘汰赛</h1>
+        <script type="application/json" id="elimination-payload">
+        {"final_action": {"label": "50%条件执行", "position_pct": 50, "target": {"name": "和远气体", "code": "002971"}}}
+        </script>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn("elimination_tournament_final_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_missing_execution_windows(self):
         bad = GOOD_MARKDOWN.replace(
             "| 09:30-09:35 | 竞价强弱、主攻线承接 | 默认无 | 处理风险 | 不抢开盘 |\n",

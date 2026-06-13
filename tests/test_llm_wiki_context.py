@@ -23,6 +23,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
         self.assertIn("wiki/交易思想/价格行为与能量框架.md", context["source_paths"])
         self.assertIn("wiki/交易思想/布鲁克斯价格行为趋势.md", context["source_paths"])
+        self.assertIn("wiki/交易思想/反伪精确第一性原理.md", context["source_paths"])
         self.assertIn("wiki/交易思想/启动板与趋势持股短板.md", context["source_paths"])
         self.assertIn("wiki/交易思想/极度看好参与时机.md", context["source_paths"])
         self.assertIn("wiki/交易思想/交易错题本.md", context["source_paths"])
@@ -168,8 +169,9 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("公告风险处理 -> 减持、强制执行、司法冻结、质押风险会让均线支撑降级为观察位", context["field_mappings"])
         self.assertIn("炒作预期降维 -> 问董秘/互动易澄清命中当前上涨发动机时加重扣分，未命中当前主线/候选理由/概念标签时只提示；强核心观察，非核心或弱势不进极度看好", context["field_mappings"])
         self.assertIn("当前上涨发动机自动推导 -> 从市场主线、候选理由、概念标签、选股宝关联板块和热门原因提取current_driver_tags，再判断澄清是否命中", context["field_mappings"])
-        self.assertIn("候选质量评分 -> 先挣分、再扣分、再动作上限；分数服务排序，动作上限决定最多能做什么", context["field_mappings"])
-        self.assertIn("今日总决策面板 -> 市场情绪、账户后台任务负担、今日新增上限、持仓优先动作、主买对象、补位对象、禁止动作和忽略清单先于单票评分", context["field_mappings"])
+        self.assertIn("候选质量条件链 -> 先看市场和板块，再看角色、风险、恢复条件和动作上限；条件链决定最多能做什么", context["field_mappings"])
+        self.assertIn("今日总决策面板 -> 市场情绪、账户后台任务负担、今日新增上限、持仓优先动作、主买对象、补位对象、禁止动作和忽略清单先于单票排序", context["field_mappings"])
+        self.assertNotIn("候选质量评分 -> 先挣分、再扣分、再动作上限；分数服务排序，动作上限决定最多能做什么", context["field_mappings"])
         self.assertIn("候选主表 -> 当前持仓、可卖数量、不可卖数量、仓位性质、账户状态、计划仓位档、实际仓位、仓位偏离、周期身份、选股质量、买点质量、风险项、成本项、动作上限、持仓动作、新开仓动作、恢复条件、取关条件、最晚复核", context["field_mappings"])
         self.assertIn("账户状态 -> 实际可买/实际不可买；只决定账户是否参与，不改变市场核心、池内身份或周期身份", context["field_mappings"])
         self.assertIn("仓位表达 -> 计划仓位档记录0/50/100策略意图，实际仓位记录一手颗粒度后的账户落点，仓位偏离说明低配或超配", context["field_mappings"])
@@ -1005,6 +1007,29 @@ class LlmWikiContextTest(unittest.TestCase):
             "final_target_resolution",
         ]:
             self.assertIn(required, spec_text)
+
+    def test_anti_fake_precision_principle_enters_llm_wiki(self):
+        context = build_llm_wiki_context()
+        field_mappings = context["field_mappings"]
+        wiki_text = (ROOT / "wiki/交易思想/反伪精确第一性原理.md").read_text(encoding="utf-8")
+
+        for required in [
+            "事实数值可以保留",
+            "主观交易判断不能伪装成精确分数",
+            "排序必须来自条件链",
+            "缺少关键证据时，结论是观察或不参与",
+            "不能只写“淘汰了”",
+            "本轮按条件链排序，不使用主观加权分。",
+            "最终对象必须完整通过淘汰赛路径",
+        ]:
+            self.assertIn(required, wiki_text)
+
+        for required in [
+            "反伪精确第一性原理 -> 事实数值保留，主观判断不写成精确分；明日对象按市场板块、角色、反证、价格行为、账户条件逐层淘汰",
+            "条件链优先 -> 排序必须来自可见事实、合理推断、反方证据和明日动作，不用加权总分替代解释",
+            "证据不足处理 -> 没有价格接受或反证解除时，不取得新增参与资格，只观察恢复条件",
+        ]:
+            self.assertIn(required, field_mappings)
 
 
 if __name__ == "__main__":

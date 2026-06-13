@@ -43,6 +43,10 @@ from report.decision_statistics import (
     render_daily_judgment_review_panel_lines as _default_render_daily_judgment_review_panel_lines,
     render_five_judgment_statistics_lines as _default_render_five_judgment_statistics_lines,
 )
+from report.elimination_tournament import (
+    build_elimination_tournament_payload,
+    store_elimination_tournament_payload as _default_store_elimination_tournament_payload,
+)
 from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
 from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
@@ -2885,6 +2889,52 @@ def _store_runtime_two_layer_decision_payload(payload, data=None, execution_stag
     return stored
 
 
+def _build_runtime_elimination_tournament_payload(
+    *,
+    target_date="",
+    run_mode="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    selection_workflow=None,
+    final_target_resolution=None,
+    position_decision=None,
+):
+    context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
+    data = data if isinstance(data, dict) else {}
+    return build_elimination_tournament_payload(
+        trade_date=target_date or data.get("target_date"),
+        variant=run_mode or data.get("run_mode") or data.get("ledger_mode") or "",
+        selection_workflow=selection_workflow or _runtime_selection_workflow(
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        ),
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        candidate_traces=context.get("candidate_traces") or data.get("candidate_traces"),
+        decision_ledger=data.get("decision_ledger_snapshot") or data.get("decision_ledger"),
+        risk_groups={
+            "focus_group": context.get("focus_group", []) or [],
+            "keep_group": context.get("keep_group", []) or [],
+            "delete_group": context.get("delete_group", []) or [],
+        },
+    )
+
+
+def _store_runtime_elimination_tournament_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    stored = _default_store_elimination_tournament_payload(payload, data, execution_stage_context, market_research_snapshot)
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
 def _runtime_final_resolution_waits_without_watch_target(final_target_resolution=None):
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
@@ -3303,42 +3353,60 @@ def _runtime_mainline_from_sources(*sources):
     return ""
 
 
-def _runtime_candidate_action_rank(item):
+def _runtime_candidate_action_priority(item):
     if not isinstance(item, dict):
-        return -1000
+        return (-2, 0, 0, 0)
     nested = _runtime_anchor_payload(item)
     decision = _first_runtime_text(item.get("anchor_reversal_decision"), nested.get("anchor_reversal_decision"))
     sniper_role = _first_runtime_text(item.get("sniper_role"))
     candidate_role = _first_runtime_text(item.get("candidate_role"), nested.get("candidate_role"))
     repair_priority = _first_runtime_text(item.get("repair_priority"), nested.get("repair_priority"))
-    score = 0
-    if decision == "不参与":
-        score -= 500
-    elif decision == "降级观察":
-        score -= 120
-    elif decision == "可作为主对象":
-        score += 90
+
+    if decision == "可作为主对象":
+        decision_priority = 4
     elif decision == "可作为补位":
-        score += 45
+        decision_priority = 3
+    elif decision == "降级观察":
+        decision_priority = 1
+    elif decision == "不参与":
+        decision_priority = 0
+    else:
+        decision_priority = 2
+
+    explicit_role_priority = 0
+    if decision == "不参与":
+        explicit_role_priority = -2
+    elif decision == "降级观察":
+        explicit_role_priority = -1
     if bool(item.get("primary_buy_candidate")):
-        score += 80
+        explicit_role_priority = max(explicit_role_priority, 4)
     if bool(item.get("backup_buy_candidate")):
-        score += 35
+        explicit_role_priority = max(explicit_role_priority, 3)
     if sniper_role == "明日主买对象":
-        score += 70
+        explicit_role_priority = max(explicit_role_priority, 4)
     elif sniper_role == "明日补位对象":
-        score += 30
+        explicit_role_priority = max(explicit_role_priority, 3)
     elif "候选观察" in sniper_role or "修复观察" in sniper_role:
-        score -= 20
+        explicit_role_priority = min(explicit_role_priority, -1)
+
     if candidate_role == "板块锚":
-        score += 35
+        role_priority = 4
     elif candidate_role in {"分支龙头", "大容量中军"}:
-        score += 18
+        role_priority = 3
+    elif candidate_role == "主线核心":
+        role_priority = 3
+    elif candidate_role:
+        role_priority = 1
+    else:
+        role_priority = 0
+
     if repair_priority == "优先修复":
-        score += 20
+        repair_priority_rank = 2
     elif repair_priority == "次优先修复":
-        score += 10
-    return score
+        repair_priority_rank = 1
+    else:
+        repair_priority_rank = 0
+    return (decision_priority, explicit_role_priority, role_priority, repair_priority_rank)
 
 
 def _runtime_candidate_has_positive_core_evidence(item):
@@ -3380,11 +3448,11 @@ def _resolve_runtime_current_core_candidate(
             break
     zero_position = _has_zero_participation_context(position_decision)
 
-    def _add(item, source_rank, source_key=""):
+    def _add(item, source_priority, source_key=""):
         if isinstance(item, dict) and _runtime_candidate_key(item):
-            sources.append((dict(item), source_rank, source_key))
+            sources.append((dict(item), source_priority, source_key))
 
-    for source_rank, source in (
+    for source_priority, source in (
         (110, execution_stage_context),
         (100, data),
         (95, market_research_snapshot),
@@ -3398,7 +3466,7 @@ def _resolve_runtime_current_core_candidate(
                 "best_stock": 0,
                 "watch_anchor": -5,
             }.get(key, 0)
-            _add(source.get(key), source_rank + key_bonus, key)
+            _add(source.get(key), source_priority + key_bonus, key)
     _add(selected_position_candidate, 140, "selected_position_candidate")
     for item in list(extreme_conviction_list or []):
         _add(item, 90, "extreme_conviction_list")
@@ -3413,10 +3481,10 @@ def _resolve_runtime_current_core_candidate(
         data,
     )
     best = None
-    best_score = None
+    best_priority = None
     seen = set()
     selected_key = _runtime_candidate_key(selected_position_candidate)
-    for index, (item, source_rank, source_key) in enumerate(sources):
+    for index, (item, source_priority, source_key) in enumerate(sources):
         key = _runtime_candidate_key(item)
         if key in seen:
             continue
@@ -3443,15 +3511,15 @@ def _resolve_runtime_current_core_candidate(
         if not (is_current_context_candidate or _is_core_judgment_candidate(item)):
             continue
         matches_mainline = _runtime_candidate_matches_mainline(item, mainline)
-        score = (
-            (300 if matches_mainline else 0)
-            + _runtime_candidate_action_rank(item)
-            + source_rank
-            - index
+        priority = (
+            1 if matches_mainline else 0,
+            source_priority,
+            _runtime_candidate_action_priority(item),
+            -index,
         )
-        if best_score is None or score > best_score:
+        if best_priority is None or priority > best_priority:
             best = item
-            best_score = score
+            best_priority = priority
     if best is not None:
         return best
     return {}
@@ -7101,6 +7169,7 @@ def _render_markdown_report_legacy_body(
     print("=" * 60)
     _clear_helper_logs()
     data['target_date'] = target_date
+    data['run_mode'] = run_mode
     
     report_shell = build_report_shell_contract(
         target_date,
@@ -7871,6 +7940,22 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    elimination_tournament_payload = _build_runtime_elimination_tournament_payload(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        selection_workflow=selection_workflow,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        run_mode=run_mode,
+    )
+    _store_runtime_elimination_tournament_payload(
+        elimination_tournament_payload,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
         execution_stage_context=execution_stage_context,
         stage_lookup=execution_stage_result.get("stage_lookup"),
@@ -8192,6 +8277,22 @@ def _render_markdown_report_legacy_body(
     )
     _store_runtime_sniper_target_derivation(
         sniper_target_derivation,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    elimination_tournament_payload = _build_runtime_elimination_tournament_payload(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        selection_workflow=selection_workflow,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        run_mode=run_mode,
+    )
+    _store_runtime_elimination_tournament_payload(
+        elimination_tournament_payload,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,

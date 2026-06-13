@@ -532,6 +532,52 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
             html,
         )
 
+    def test_heat_core_change_column_uses_row_limit_label_when_pool_table_is_absent(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 日报",
+                    "",
+                    "### 附录：四、热度核心结果",
+                    "| 排名 | 股票 | 代码 | 热度分(w) | 所属板块 | 涨跌幅 | 收盘价 | 连板标签 |",
+                    "|------|------|------|-----------|----------|--------|--------|----------|",
+                    "| 1 | 达实智能 | 002421 | 2766.1w | IT服务Ⅱ | -10.02% | 4.40 | 跌停 |",
+                    "| 2 | 洛阳钼业 | 603993 | 1874.6w | 工业金属 | +10.02% | 19.11 | 首板涨停 |",
+                    "| 3 | 未入池样本 | 301111 | 800.0w | 测试板块 | +20.00% | 20.00 |  |",
+                    "| 4 | 否定样本 | 301112 | 700.0w | 测试板块 | +20.00% | 21.00 | 未涨停 |",
+                    "| 5 | 旧涨停标签样本 | 603993 | 1874.6w | 工业金属 | +3.45% | 17.37 | 首板涨停 |",
+                ]
+            ),
+            title="日报",
+            trade_date="2026-06-12",
+        )
+
+        self.assertIn(
+            "<tr><td>1</td><td><code class=\"stock-ref\">达实智能</code></td><td><code class=\"stock-ref\">002421</code></td><td>2766.1w</td><td>IT服务Ⅱ</td>"
+            '<td class="has-signal"><span class="signal-marker signal-cold">-10.02%</span></td><td>4.40</td><td>跌停</td></tr>',
+            html,
+        )
+        self.assertIn(
+            "<tr><td>2</td><td><code class=\"stock-ref\">洛阳钼业</code></td><td><code class=\"stock-ref\">603993</code></td><td>1874.6w</td><td>工业金属</td>"
+            '<td class="has-signal"><span class="signal-marker signal-hot">+10.02%</span></td><td>19.11</td><td>首板涨停</td></tr>',
+            html,
+        )
+        self.assertIn(
+            "<tr><td>3</td><td><code class=\"stock-ref\">未入池样本</code></td><td><code class=\"stock-ref\">301111</code></td><td>800.0w</td><td>测试板块</td>"
+            "<td>+20.00%</td><td>20.00</td><td></td></tr>",
+            html,
+        )
+        self.assertIn(
+            "<tr><td>4</td><td><code class=\"stock-ref\">否定样本</code></td><td><code class=\"stock-ref\">301112</code></td><td>700.0w</td><td>测试板块</td>"
+            "<td>+20.00%</td><td>21.00</td><td>未涨停</td></tr>",
+            html,
+        )
+        self.assertIn(
+            "<tr><td>5</td><td><code class=\"stock-ref\">旧涨停标签样本</code></td><td><code class=\"stock-ref\">603993</code></td><td>1874.6w</td><td>工业金属</td>"
+            "<td>+3.45%</td><td>17.37</td><td>首板涨停</td></tr>",
+            html,
+        )
+
     def test_lhb_change_column_uses_limit_status_color(self):
         html = render_markdown_report_html(
             "\n".join(

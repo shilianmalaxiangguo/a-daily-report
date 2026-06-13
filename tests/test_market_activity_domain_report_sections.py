@@ -102,6 +102,42 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 1 | 华工科技 | 000988 | 23.0w | 光通信 | +10.00% |", rendered)
         self.assertNotIn("| HS |", rendered)
 
+    def test_hot_rank_table_prefers_current_limit_pool_status_over_stale_hot_tag(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [
+                    {"name": "昊华科技", "code": "600378", "rate": 26262000, "popularity_tag": "3天2板"},
+                    {"name": "洛阳钼业", "code": "603993", "rate": 18746000, "popularity_tag": "首板涨停"},
+                    {"name": "旧标签样本", "code": "000001", "rate": 16000000, "popularity_tag": "持续上榜"},
+                    {"name": "旧涨停标签样本", "code": "000002", "rate": 15000000, "popularity_tag": "首板涨停"},
+                    {"name": "创业板样本", "code": "300001", "rate": 14000000, "popularity_tag": ""},
+                ],
+                "zt_pool": [{"name": "洛阳钼业", "code": "603993", "limit_status": "涨停"}],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-06-12",
+            stock_full_info={
+                "600378": {"change_pct": -10.0, "high": 63.25, "low": 57.15, "open": 63.18, "close": 57.15},
+                "603993": {"change_pct": 10.02, "high": 19.11, "low": 18.00, "open": 18.36, "close": 19.11},
+                "000001": {"change_pct": 2.0, "high": 12.0, "low": 10.0, "open": 10.5, "close": 11.0},
+                "000002": {"change_pct": 3.45, "high": 17.60, "low": 16.41, "open": 16.60, "close": 17.37},
+                "300001": {"change_pct": 10.0, "high": 20.00, "low": 18.00, "open": 18.50, "close": 19.80},
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "测试板块",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("普通形态", 0, "普通"),
+            enabled_node_keys=["hot_rank_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 昊华科技 | 600378 | 2626.2w | 测试板块 | -10.00% | 63.25 | 57.15 | 63.18 | 57.15 | 跌停 |", rendered)
+        self.assertIn("| 2 | 洛阳钼业 | 603993 | 1874.6w | 测试板块 | +10.02% | 19.11 | 18.00 | 18.36 | 19.11 | 涨停 |", rendered)
+        self.assertIn("| 3 | 旧标签样本 | 000001 | 1600.0w | 测试板块 | +2.00% | 12.00 | 10.00 | 10.50 | 11.00 | 持续上榜 |", rendered)
+        self.assertIn("| 4 | 旧涨停标签样本 | 000002 | 1500.0w | 测试板块 | +3.45% | 17.60 | 16.41 | 16.60 | 17.37 | - |", rendered)
+        self.assertIn("| 5 | 创业板样本 | 300001 | 1400.0w | 测试板块 | +10.00% | 20.00 | 18.00 | 18.50 | 19.80 | - |", rendered)
+
     def test_hot_rank_table_renders_top50_rows_when_sample_available(self):
         hot_rank_rows = [
             {"name": f"热股{idx}", "code": f"000{idx:03d}", "rate": 230000, "popularity_tag": "热榜"}

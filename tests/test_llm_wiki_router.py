@@ -245,6 +245,30 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertEqual(hit["report_slot"], "价格行为判断")
         self.assertEqual(hit["confidence"], "reviewed")
 
+    def test_routes_anti_fake_precision_first_principle(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "日报选股不要伪精确评分，也不要用加权总分或成功率替代淘汰赛条件链；按布鲁克斯价格行为和第一性原理重看",
+            },
+            scenario="candidate_quality",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("principle.anti-fake-precision", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "principle.anti-fake-precision")
+        self.assertEqual(hit["prior"], "first-principles-prior")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/反伪精确第一性原理.md")
+        self.assertIn("伪精确", hit["triggered_by"])
+        self.assertIn("评分", hit["triggered_by"])
+        self.assertIn("加权", hit["triggered_by"])
+        self.assertIn("成功率", hit["triggered_by"])
+        self.assertIn("淘汰赛", hit["triggered_by"])
+        self.assertIn("条件链", hit["triggered_by"])
+        self.assertIn("事实数值保留", hit["impact"])
+        self.assertIn("主观判断不能写成精确分", hit["impact"])
+        self.assertEqual(hit["report_slot"], "选股原则")
+        self.assertEqual(hit["confidence"], "verified")
+
     def test_routes_supply_chain_bottleneck_research_framework(self):
         hits = route_llm_wiki_knowledge(
             {

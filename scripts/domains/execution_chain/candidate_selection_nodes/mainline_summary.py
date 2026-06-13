@@ -5,6 +5,10 @@ from report.mainline_turnover_summary_support import (
 )
 
 
+def _condition_tier(item):
+    return str((item or {}).get("selection_priority_tier") or (item or {}).get("tier") or "条件待确认").strip()
+
+
 def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_candidates=None, display_mvp_mode=False):
     gem_observation_stocks = gem_observation_stocks or []
     filtered_out_gem_candidates = filtered_out_gem_candidates or []
@@ -29,7 +33,7 @@ def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_c
 
     lines.extend(
         [
-            "| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 预判强度 | 明日原则 |",
+            "| 序号 | 股票 | 代码 | 板块 | 预启动层级 | 当前线索 | 条件档位 | 明日原则 |",
             "|------|------|------|------|------------|----------|----------|----------|",
         ]
     )
@@ -37,7 +41,7 @@ def _render_gem_breathing_step2_lines(gem_observation_stocks, filtered_out_gem_c
         lines.append(
             f"| {i} | {item.get('name', '-')} | {item.get('code', '-')} | {item.get('sector', '-')} | "
             f"{item.get('tier', '-') or '-'} | {sanitize_user_visible_text(item.get('abnormal_summary', item.get('note', '-')) or '-')} | "
-            f"{item.get('tomorrow_strength', 0)}分 | 先看右侧确认和09:50-10:10窗口，不满足继续观察 |"
+            f"{_condition_tier(item)} | 先看右侧确认和09:50-10:10窗口，不满足继续观察 |"
         )
     lines.append("")
     return lines
@@ -59,7 +63,6 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
     filtered_out_gem_candidates = context.get("filtered_out_gem_candidates", []) or []
     primary_mainline = str(context.get("primary_mainline", "") or "").strip()
     display_mvp_mode = bool(context.get("display_mvp_mode", False))
-    safe_float = context["safe_float"]
     attack_summary = resolve_mainline_attack_evidence_summary(context)
     capacity_summary = resolve_mainline_capacity_regime_summary(context)
     confirmed_attack_line = (
@@ -72,12 +75,12 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
     countertrend_attack = bool(confirmed_attack_line and share_trend_label == "逆势试攻")
 
     core_sectors = {}
-    sector_best_strength = {}
+    sector_best_tier = {}
     for stock in core_stocks + secondary_stocks:
         sector = stock.get("sector", "其他")
         core_sectors[sector] = core_sectors.get(sector, 0) + 1
-        strength = safe_float(stock.get("tomorrow_strength", 0))
-        sector_best_strength[sector] = max(sector_best_strength.get(sector, 0), strength)
+        tier = _condition_tier(stock)
+        sector_best_tier.setdefault(sector, tier)
 
     lines = []
     if no_confirmed_attack:
@@ -111,7 +114,7 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         if not matching_stocks and effective_mainline == primary_mainline:
             matching_stocks = list(core_stocks + secondary_stocks)
         mainline_count = len(matching_stocks)
-        mainline_best_strength = max((safe_float(stock.get("tomorrow_strength", 0)) for stock in matching_stocks), default=0)
+        mainline_best_tier = _condition_tier(matching_stocks[0]) if matching_stocks else "条件待确认"
         if countertrend_attack:
             lines.append(f"**明日核心方向预判**: {effective_mainline}（局部逆势活跃只按观察处理）")
             lines.append("> **明日纪律**: 放量杀跌里先防踩踏，只看次日承接修复，不把局部强势当成参与资格。")
@@ -127,12 +130,12 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
             )
             lines.append("")
             return {"lines": lines, "exports": {}, "module_logs": []}
-        lines.append(f"**明日核心方向预判**: {effective_mainline}（主线内{mainline_count}只，最强样本{int(mainline_best_strength)}分）")
-        lines.append(f"> **明日纪律**: 认准'{effective_mainline}'，只在主线里等最强对象自己走出来；综合分只用于个股排序，不累加成板块分。")
+        lines.append(f"**明日核心方向预判**: {effective_mainline}（主线内{mainline_count}只，最高条件档位：{mainline_best_tier}）")
+        lines.append(f"> **明日纪律**: 认准'{effective_mainline}'，只在主线里等最强对象自己走出来；条件链只用于个股排序，不累加成板块分。")
         if crossline_observation_stocks:
             strongest_crossline = sorted(
                 crossline_observation_stocks,
-                key=lambda item: (safe_float(item.get("tomorrow_strength", 0)), safe_float(item.get("score", 0))),
+                key=lambda item: tuple((item.get("selection_priority") or {}).get(key, 0) for key in ("board", "acceptance", "source", "base", "order")),
                 reverse=True,
             )[0]
             lines.append(
@@ -151,10 +154,10 @@ def build_candidate_selection_mainline_summary_node(context, node_meta=None, nod
         return {"lines": lines, "exports": {}, "module_logs": []}
 
     if core_sectors:
-        sorted_sectors = sorted(core_sectors.items(), key=lambda item: (item[1], sector_best_strength[item[0]]), reverse=True)
+        sorted_sectors = sorted(core_sectors.items(), key=lambda item: item[1], reverse=True)
         main_sector = sorted_sectors[0]
-        lines.append(f"**明日核心方向预判**: {main_sector[0]}（{main_sector[1]}只，最强样本{int(sector_best_strength.get(main_sector[0], 0))}分）")
-        lines.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，只看该板块核心是否满足参与条件；综合分不累加成板块分。")
+        lines.append(f"**明日核心方向预判**: {main_sector[0]}（{main_sector[1]}只，最高条件档位：{sector_best_tier.get(main_sector[0], '条件待确认')}）")
+        lines.append(f"> **明日纪律**: 认准'{main_sector[0]}'，明日若该板块竞价强势，只看该板块核心是否满足参与条件；条件链不累加成板块分。")
         lines.extend(
             _render_gem_breathing_step2_section(
                 context,

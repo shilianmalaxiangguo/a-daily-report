@@ -174,6 +174,40 @@ def _limit_status_tag(status_text):
     return ""
 
 
+def _has_explicit_limit_word(value):
+    text = str(value or "").strip()
+    if not text:
+        return False
+    negative_markers = (
+        "未涨停",
+        "非涨停",
+        "不涨停",
+        "没有涨停",
+        "并非涨停",
+        "未跌停",
+        "非跌停",
+        "不跌停",
+        "没有跌停",
+        "并非跌停",
+    )
+    if any(marker in text for marker in negative_markers):
+        return False
+    return "涨停" in text or "跌停" in text
+
+
+def _limit_tag_from_change_pct(change_pct, stock_code=""):
+    if change_pct is None:
+        return ""
+    code = normalize_stock_code(stock_code)
+    if code.startswith(("3", "688")):
+        return ""
+    if change_pct >= 9.8:
+        return "涨停"
+    if change_pct <= -9.8:
+        return "跌停"
+    return ""
+
+
 def _limit_tag_from_rows(rows):
     for row in rows:
         if not isinstance(row, dict):
@@ -328,7 +362,11 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
                     status_tag = "跌停"
                 elif matched_zt:
                     status_tag = "涨停"
-            tag = stock.get("popularity_tag") or _limit_tag_from_rows(matched_lianban + matched_zt + matched_dt) or status_tag or "-"
+            pool_tag = _limit_tag_from_rows(matched_dt + matched_zt + matched_lianban)
+            popularity_tag = stock.get("popularity_tag") or ""
+            if _has_explicit_limit_word(popularity_tag) and not (status_tag or pool_tag):
+                popularity_tag = ""
+            tag = status_tag or pool_tag or _limit_tag_from_change_pct(change_pct, code) or popularity_tag or "-"
             sector = get_stock_sector(
                 name,
                 code,

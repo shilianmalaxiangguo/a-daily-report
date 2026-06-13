@@ -206,7 +206,7 @@ assert bundle == {"core_stocks": []}
         self.assertEqual(result["crossline_observation_stocks"][0]["code"], "000002")
         self.assertEqual(result["gem_observation_stocks"][0]["code"], "300001")
         self.assertEqual(result["extreme_conviction_list"][0]["code"], "000001")
-        self.assertTrue(any(log["step"] == "candidate_scoring" for log in result["module_logs"]))
+        self.assertTrue(any(log["step"] == "candidate_condition_sorting" for log in result["module_logs"]))
 
     def test_candidate_bundle_sort_does_not_count_abnormal_bonus_twice(self):
         result = build_candidate_bundle_contract(
@@ -236,7 +236,47 @@ assert bundle == {"core_stocks": []}
 
         self.assertEqual([item["code"] for item in result["evaluated_stocks"][:2]], ["000001", "000002"])
         self.assertEqual(result["evaluated_stocks"][0]["tomorrow_strength"], 70)
-        self.assertEqual(result["evaluated_stocks"][1]["tomorrow_strength"], 70)
+        self.assertEqual(result["evaluated_stocks"][1]["tomorrow_strength"], 60)
+        self.assertIn("selection_priority", result["evaluated_stocks"][0])
+
+    def test_candidate_bundle_condition_priority_beats_legacy_score(self):
+        result = build_candidate_bundle_contract(
+            data={"lianban_data": {"stocks": []}},
+            exit_analysis={"sector_name": "电力"},
+            candidates=[],
+            watchlist=[
+                {
+                    "name": "高分后排",
+                    "code": "000001",
+                    "sector": "电力",
+                    "score": 99,
+                    "reason": "低位补涨 / 跟风样本",
+                },
+                {
+                    "name": "板块锚",
+                    "code": "000002",
+                    "sector": "电力",
+                    "score": 60,
+                    "candidate_role": "板块锚",
+                    "reason": "板块锚 / 大容量趋势核心",
+                },
+            ],
+            abnormal_watch_map={"000002": {"follow_state": "缩量消化"}},
+            dragon_stocks=[],
+            normalize_stock_code=lambda code: str(code or ""),
+            get_abnormal_rank_adjustment=lambda item: (
+                0,
+                item.get("follow_state", ""),
+                "rule",
+            ),
+            split_candidates_by_mainline=lambda stocks, mainline_name: (stocks, []),
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_extreme_conviction_list=lambda *args, **kwargs: [],
+        )
+
+        self.assertEqual(result["evaluated_stocks"][0]["code"], "000002")
+        self.assertEqual(result["evaluated_stocks"][0]["selection_priority_tier"], "板块核心承接")
 
     def test_candidate_bundle_enriches_core_stock_with_price_shape_and_volume_anomaly(self):
         result = build_candidate_bundle_contract(

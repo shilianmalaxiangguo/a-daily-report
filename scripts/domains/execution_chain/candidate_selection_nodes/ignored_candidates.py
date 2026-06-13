@@ -3,10 +3,10 @@ def build_candidate_selection_ignored_candidates_node(context, node_meta=None, n
     if not ignored_stocks:
         return {"lines": [], "exports": {}, "module_logs": []}
 
-    lines = [f"**暂不关注**: {len(ignored_stocks)}只（预判明日强度不足）"]
+    lines = [f"**暂不关注**: {len(ignored_stocks)}只（条件链不足）"]
     for stock in ignored_stocks[:3]:
         lines.append(
-            f"- {stock.get('name')}({stock.get('code')}) - 强度{stock.get('tomorrow_strength', 0)}分 - "
+            f"- {stock.get('name')}({stock.get('code')}) - {stock.get('selection_priority_tier', '条件待确认')} - "
             f"{stock.get('abnormal_summary', '无明显异动')} - {stock.get('tmr_forecast', '')}"
         )
     lines.append("")

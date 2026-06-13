@@ -1093,6 +1093,26 @@ def _row_limit_status_signal(headers: list[str], row: list[str]) -> str:
     return ""
 
 
+def _row_explicit_limit_status_signal(headers: list[str], row: list[str], change_pct: float | None = None) -> str:
+    for header_index, header_value in enumerate(headers):
+        if header_index >= len(row):
+            continue
+        header_text = _table_header_text(header_value)
+        if header_text not in {"连板标签", "涨停标签", "涨停状态", "状态"}:
+            continue
+        text = _table_header_text(row[header_index])
+        if "涨停" not in text and "跌停" not in text:
+            continue
+        signal = _heat_core_status_signal(text)
+        if signal == "signal-hot" and change_pct is not None and change_pct < 9.8:
+            continue
+        if signal == "signal-cold" and change_pct is not None and change_pct > -9.8:
+            continue
+        if signal:
+            return signal
+    return ""
+
+
 def _heat_core_limit_signal(
     headers: list[str],
     row: list[str],
@@ -1110,6 +1130,10 @@ def _heat_core_limit_signal(
         return "signal-hot"
     if code in limit_pools.down:
         return "signal-cold"
+    change_pct = _numeric_percent(row[cell_index]) if cell_index < len(row) else None
+    row_signal = _row_explicit_limit_status_signal(headers, row, change_pct)
+    if row_signal:
+        return row_signal
     return ""
 
 

@@ -121,6 +121,33 @@ class ReportAcceptanceAuditCliTest(unittest.TestCase):
                 path.unlink()
             tmp_dir.rmdir()
 
+    def test_cli_flags_elimination_html_mismatch_when_companion_html_is_given(self):
+        tmp_dir = ROOT / "reports" / "_audit_cli_test"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        report_path = tmp_dir / "zero_report.md"
+        html_path = tmp_dir / "elimination.html"
+        report_path.write_text(zero_position_report(), encoding="utf-8")
+        html_path.write_text(
+            """
+            <!doctype html>
+            <meta name="artifact" content="elimination-tournament">
+            <h1>2026-06-12 明日标的选股淘汰赛</h1>
+            <script type="application/json" id="elimination-payload">
+            {"final_action": {"label": "50%条件执行", "position_pct": 50, "target": {"name": "和远气体", "code": "002971"}}}
+            </script>
+            """,
+            encoding="utf-8",
+        )
+        try:
+            completed = run_audit_cli(report_path, "--companion-html", html_path)
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("elimination_tournament_final_conflict", completed.stdout)
+        finally:
+            for path in tmp_dir.glob("*"):
+                path.unlink()
+            tmp_dir.rmdir()
+
     def test_direct_script_cli_works_without_manual_pythonpath(self):
         tmp_dir = ROOT / "reports" / "_audit_cli_test"
         tmp_dir.mkdir(parents=True, exist_ok=True)

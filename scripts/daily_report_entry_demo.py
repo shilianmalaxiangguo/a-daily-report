@@ -94,6 +94,7 @@ from daily_report_render import (
     save_stock_diagnostic_output,
 )
 from report.markdown_report_html import render_markdown_report_file
+from report.elimination_tournament import save_elimination_tournament_html
 from report.html_report_renderer import save_daily_report_html
 from report.html_report_view import build_daily_report_view, missing_required_fact_labels
 from daily_report_snapshot_io import (
@@ -4125,6 +4126,26 @@ def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LED
     return path
 
 
+def _try_save_elimination_tournament_html(data, target_date, *, saved_report_paths=None):
+    try:
+        payload = (data or {}).get("elimination_tournament_payload")
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("淘汰赛 payload 缺失")
+        full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
+        if not full_report_path.exists():
+            raise FileNotFoundError(str(full_report_path))
+        path = save_elimination_tournament_html(
+            payload,
+            full_report_path,
+            trade_date=target_date,
+        )
+    except Exception as exc:
+        print(f"选股淘汰赛HTML未生成：{exc}")
+        return None
+    print(f"选股淘汰赛HTML已生成: {path}")
+    return path
+
+
 def _assert_html_required_facts_complete(data, target_date, *, run_mode=LEDGER_MODE_FROZEN, db_service=None):
     if db_service is None:
         return assert_report_required_facts_complete(data, target_date, run_mode=run_mode)
@@ -4403,6 +4424,11 @@ def main():
                 mode=run_mode,
                 overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
                 postgres_only=bool(args.postgres_only),
+            )
+            _try_save_elimination_tournament_html(
+                data,
+                target_date,
+                saved_report_paths=saved_report_paths,
             )
             chanlun_html_path = save_sh_index_chanlun_html_report(
                 target_date,

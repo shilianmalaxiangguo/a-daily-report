@@ -471,6 +471,68 @@ def _extract_chanlun_tomorrow_decision_values(companion_html):
     return values
 
 
+def _extract_elimination_tournament_payload(companion_html):
+    text = str(companion_html or "")
+    if "elimination-tournament" not in text and "明日标的选股淘汰赛" not in text:
+        return None
+    match = re.search(
+        r'<script\b[^>]*id=["\']elimination-payload["\'][^>]*>(?P<payload>.*?)</script>',
+        text,
+        re.I | re.S,
+    )
+    if not match:
+        return {}
+    payload_text = html.unescape(match.group("payload")).strip()
+    if not payload_text:
+        return {}
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _audit_elimination_tournament_consistency(lines, companion_html):
+    payload = _extract_elimination_tournament_payload(companion_html)
+    if payload is None:
+        return None
+    if not payload:
+        return [
+            _finding(
+                "elimination_tournament_payload_missing",
+                "elimination companion HTML is missing readable payload",
+            )
+        ]
+    front = _front_page_lines(lines)
+    final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+    final_target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
+    final_identity = _target_identity(
+        final_target.get("code") or final_target.get("name") or ""
+    )
+    final_pct = _parse_percent_int(str(final_action.get("position_pct", "")))
+    if final_pct is None:
+        final_pct = _parse_percent_int(final_action.get("label", ""))
+    if _final_summary_is_zero_position(front):
+        if (final_pct or 0) == 0 and not final_identity:
+            return []
+        return [
+            _finding(
+                "elimination_tournament_final_conflict",
+                "final summary is 0%不参与, but elimination companion HTML contains a positive final action",
+            )
+        ]
+    front_target = _extract_final_unique_target(front)
+    front_identity = _target_identity(front_target)
+    if front_identity and final_identity and front_identity != final_identity:
+        return [
+            _finding(
+                "elimination_tournament_final_conflict",
+                f"front-page final target {front_target} conflicts with elimination companion HTML final target {final_identity}",
+            )
+        ]
+    return []
+
+
 def _audit_front_page_headings(lines):
     findings = []
     front = _front_page_lines(lines)
@@ -1864,6 +1926,9 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
 def _audit_chanlun_tomorrow_decision_consistency(lines, companion_html):
     if companion_html is None:
         return []
+    elimination_findings = _audit_elimination_tournament_consistency(lines, companion_html)
+    if elimination_findings is not None:
+        return elimination_findings
     front = _front_page_lines(lines)
     if not _final_summary_is_zero_position(front):
         return []

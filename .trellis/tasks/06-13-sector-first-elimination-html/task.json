@@ -1,0 +1,28 @@
+{
+  "id": "sector-first-elimination-html",
+  "name": "sector-first-elimination-html",
+  "title": "板块先行选股淘汰赛HTML与日报同步生成",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "chaixixi",
+  "assignee": "chaixixi",
+  "createdAt": "2026-06-13",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "develop",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "06-13-elimination-evidence-contract"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
