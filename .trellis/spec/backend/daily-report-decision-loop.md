@@ -1511,6 +1511,10 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
   complete chain.
 - `final_action` must be copied from the already-resolved final object. A 0%
   final action must keep all process candidates as observation/process evidence.
+- Derived layers must only receive survivors from the previous layer. If a
+  stock is eliminated in `price_action`, later layers such as
+  `cycle_probability_window` and `counter_evidence_account` must show zero
+  input instead of repeating the same stock as another eliminated row.
 - Companion HTML must include readable embedded JSON for audit and must show
   per-layer input, eliminated, and survivor counts.
 - Companion HTML must show `decision_list` and `idiot_index_review`. These
@@ -1529,6 +1533,7 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
 | Markdown final action is 0% but companion target is positive | Keep report invalid until the companion is relabeled as observation |
 | Companion HTML lacks readable JSON payload | Return a companion-payload-missing finding |
 | Layer counts disagree with entry statuses | Fix payload builder or renderer before shipping |
+| Later derived layer repeats a stock already eliminated by `price_action` | Keep later layer input empty; preserve the original price-action reason where the stock actually failed |
 | `elimination_tournament_payload` is missing | Render the fixed Mermaid and explicit missing-layer notes; do not synthesize winners |
 | Source containers disagree | Prefer `final_target_resolution`, then `selection_workflow.final`; record the chosen source |
 | `decision_list` or `idiot_index_review` is missing | Build the default explanatory rows from layers/final action; do not leave the user with only a long bracket |
@@ -1542,8 +1547,10 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
 | Good decision list | Layer rows exist | HTML shows decision item, conclusion, evidence, counter-evidence, tomorrow check, and action |
 | Good idiot-index review | Costly old report layers exist | HTML classifies them as high/middle/low process-efficiency issues and states compress/merge/downgrade/keep action |
 | Good positive action | Final object names one 50% target | Companion final action names the same target and source |
+| Good price-action stop | Price-action layer eliminates 和远气体 for failed seal / late reseal / high turnover | Cycle and account layers show zero input; the price-action row keeps the explicit risk reason |
 | Base incomplete evidence | Older replay lacks layer evidence | Mermaid renders, layer notes state missing detail, final action still comes from runtime truth |
 | Bad second target | Companion picks a different stock from process rows | Audit fails or renderer relabels the row as process evidence |
+| Bad repeated elimination | Price-action layer eliminates a stock, then cycle/account layers eliminate the same stock again | Replace later rows with zero-input layers so the bracket shows where the path actually stopped |
 | Bad hidden final | HTML shows counts but no readable JSON payload | Audit returns a companion-payload-missing finding |
 | Bad fake efficiency math | Idiot-index table computes a formula that affects selection | Remove the formula and keep it as process-efficiency commentary only |
 
@@ -1552,7 +1559,8 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
 - `tests.test_elimination_tournament` covers
   `sector_capital_preflight.v1` shape, Mermaid text, final-action source,
   decision list, idiot-index review list, and zero-position process-candidate
-  handling.
+  handling, including the rule that later derived layers do not repeat a
+  stock already eliminated by price-action evidence.
 - `tests.test_daily_report_entry_html_output` covers companion path naming and
   save behavior beside replay/official Markdown paths.
 - `tests.test_report_runtime` covers runtime storage in all available context

@@ -4152,9 +4152,21 @@ def _try_save_elimination_tournament_html(data, target_date, *, saved_report_pat
 
 def _try_save_sector_capital_preflight_html(data, target_date, *, saved_report_paths=None):
     try:
+        source_payloads = {
+            key: value
+            for key, value in {
+                "selection_workflow": (data or {}).get("selection_workflow"),
+                "final_target_resolution": (data or {}).get("final_target_resolution"),
+                "two_layer_decision_payload": (data or {}).get("two_layer_decision_payload"),
+                "sniper_target_derivation": (data or {}).get("sniper_target_derivation"),
+                "elimination_tournament_payload": (data or {}).get("elimination_tournament_payload"),
+            }.items()
+            if isinstance(value, dict) and value
+        }
         payload = build_sector_capital_preflight_payload(
             trade_date=target_date,
             sector_capital_preflight=(data or {}).get("sector_capital_preflight"),
+            source_payloads=source_payloads,
             elimination_tournament_payload=(data or {}).get("elimination_tournament_payload"),
         )
         if not isinstance(payload, dict) or not payload:

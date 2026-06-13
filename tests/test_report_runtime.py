@@ -417,7 +417,7 @@ class ReportRuntimeTest(unittest.TestCase):
             "|------|--------|----------|--------|",
             "| 第1周期 | 2026-05-01~2026-05-29 | 18 | 半导体 |",
             "",
-            "**明日极度看好近25日跟踪表**",
+            "**历史过程复盘：明日极度看好近25日跟踪表**",
             "| 入选日 | 股票 | 代码 | 所属方向 | 复盘状态 |",
             "|--------|------|------|----------|----------|",
             "| 2026-05-29 | 新洁能 | 605111 | 半导体 | 跟踪中 |",
@@ -440,7 +440,7 @@ class ReportRuntimeTest(unittest.TestCase):
             "|------|------|------|",
             "| 2026-05-29 | 电力 | 0.9% |",
             "",
-            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
+            "**历史过程复盘：明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
             "| 入选日 | 股票 | 代码 | 所属方向 |",
             "|--------|------|------|----------|",
             "| 2026-05-29 | 粤电力Ａ | 000539 | 电力 |",
@@ -450,7 +450,7 @@ class ReportRuntimeTest(unittest.TestCase):
         rendered = "\n".join(numbered)
 
         self.assertIn("### 主线成交额占比趋势\n**T-002（PSQL）**", rendered)
-        self.assertIn("**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:\n**T-003（PSQL）**", rendered)
+        self.assertIn("**历史过程复盘：明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:\n**T-003（PSQL）**", rendered)
 
     def test_number_report_tables_marks_pivot_and_sector_flow_contexts(self):
         lines = [
@@ -6133,7 +6133,7 @@ def _runtime_binding_probe(
         rendered = result["report"]
 
         self.assertIn("**过程观察25日跟踪表**", rendered)
-        self.assertIn("**明日极度看好近25日跟踪表**", rendered)
+        self.assertIn("**历史过程复盘：明日极度看好近25日跟踪表**", rendered)
         self.assertIn("**重点观察历史回测表**", rendered)
         self.assertIn("| 京能电力 | 600578 | D2/25 | 2026-05-11 | 2026-05-12 | 竞价表态 + 回封观察 | 09:30-09:35 | 预演命中 | 次日看是否继续强于市场 | 有效跌破日K MA20取消幻想 |", rendered)
         self.assertIn("| 2026-05-11 | 京能电力 | 600578 |", rendered)
@@ -6415,7 +6415,7 @@ def _runtime_binding_probe(
         )
 
         self.assertIn("**过程观察25日跟踪表**", result["report"])
-        self.assertIn("**明日极度看好近25日跟踪表**", result["report"])
+        self.assertIn("**历史过程复盘：明日极度看好近25日跟踪表**", result["report"])
         self.assertIn("**重点观察历史回测表**", result["report"])
         self.assertIn("| 京能电力 | 600578 | D2/25 |", result["report"])
 
@@ -7954,6 +7954,66 @@ def _runtime_binding_probe(
         self.assertEqual(stored["trade_date"], "2026-06-12")
         self.assertEqual(stored["layers"][-1]["id"], "final_action")
 
+    def test_sector_capital_preflight_front_summary_renders_tournament_rows(self):
+        payload = {
+            "schema_version": "sector_capital_preflight.v1",
+            "final_action": {
+                "label": "0%不参与",
+                "source": "selection_workflow.final",
+                "reason": "最终没有新增参与对象，动作=0%不参与",
+            },
+            "layers": [
+                {
+                    "id": "market_capital_structure",
+                    "title": "市场资金结构",
+                    "input_count": 3,
+                    "eliminated_count": 1,
+                    "survivor_count": 2,
+                    "eliminated": [
+                        {
+                            "stock_label": "旧记忆股(000001)",
+                            "elimination_basis": "旧龙头记忆只能作为过程证据",
+                        }
+                    ],
+                    "survivors": [
+                        {"stock_label": "和远气体(002971)", "next_basis": "进入板块资金扩散层"},
+                        {"stock_label": "云南锗业(002428)", "next_basis": "进入板块资金扩散层"},
+                    ],
+                },
+                {
+                    "id": "price_action",
+                    "title": "价格行为确认",
+                    "input_count": 1,
+                    "eliminated_count": 1,
+                    "survivor_count": 0,
+                    "eliminated": [
+                        {
+                            "stock_label": "和远气体(002971)",
+                            "risk_evidence": "炸板57次且尾盘才回封；高换手连板",
+                            "elimination_basis": "炸板57次且尾盘才回封；高换手连板",
+                        }
+                    ],
+                    "survivors": [],
+                },
+                {
+                    "id": "final_action",
+                    "title": "唯一明日动作",
+                    "input_count": 1,
+                    "eliminated_count": 0,
+                    "survivor_count": 0,
+                    "entries": [{"stock_label": "无执行对象", "status": "final_action"}],
+                },
+            ],
+        }
+
+        rendered = "\n".join(report_runtime._render_sector_capital_preflight_front_summary(payload))
+
+        self.assertIn("## 板块资金扩散淘汰赛", rendered)
+        self.assertIn("| 市场资金结构 | 3 | 1 | 2（和远气体(002971)、云南锗业(002428)） | 旧记忆股(000001): 旧龙头记忆只能作为过程证据 | 进入板块资金扩散层 |", rendered)
+        self.assertIn("| 价格行为确认 | 1 | 1 | 0（无） | 和远气体(002971): 炸板57次且尾盘才回封；高换手连板 | 进入下一层复核 |", rendered)
+        self.assertIn("**最终动作**：0%不参与；来源=selection_workflow.final", rendered)
+        self.assertIn("不单独生成明日标的", rendered)
+
     def test_runtime_derivation_chain_keeps_stale_local_candidate_as_process_only(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {
@@ -9347,7 +9407,7 @@ def _runtime_binding_probe(
                     config={},
                 )
 
-        mention_section = result["report"].split("**明日极度看好近25日跟踪表**", 1)[1].split(
+        mention_section = result["report"].split("**历史过程复盘：明日极度看好近25日跟踪表**", 1)[1].split(
             "**重点观察历史回测表**", 1
         )[0]
         self.assertIn("当前可复盘样本：31条，覆盖2026-05-01至2026-05-30", mention_section)
@@ -9769,7 +9829,7 @@ def _runtime_binding_probe(
             config={},
         )
 
-        self.assertIn("**明日极度看好近25日跟踪表**", result["report"])
+        self.assertIn("**历史过程复盘：明日极度看好近25日跟踪表**", result["report"])
         self.assertIn("| 2026-05-12 | 京能电力 | 600578 |", result["report"])
         self.assertNotIn("| 2026-05-12 | 冷却股 | 000003 |", result["report"])
 
@@ -10647,6 +10707,8 @@ def _runtime_binding_probe(
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
             "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0%不参与 | 0%：没有合格标的就不参与 |",
+            "| 明日核心标的 | 1+0 / 4只 |",
+            "| PK决胜局（期望值模型） | 1+0 / 4只 |",
             "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |",
             "- **明天重点候选**: 1只（形态健康，允许进入Step 4继续筛到可买股）",
             "- **接着做什么**: 进入Step 4，为候选组预计算买点并筛出明天唯一能买的那只",
@@ -10702,14 +10764,17 @@ def _runtime_binding_probe(
         self.assertIn("主观理解只用于观察，不用于提前参与", rendered)
         self.assertIn("不参与任何方向：无论题材多热，都先等环境重新打开", rendered)
         self.assertIn("当前条件不允许新增参与", rendered)
+        self.assertIn("| 过程核心样本回放 | 1+0 / 4只 |", rendered)
+        self.assertIn("| 过程候选最终复核 | 无当前对象；个股仅保留在过程候选回放 |", rendered)
         self.assertIn("无新增参与止损", rendered)
         self.assertIn("非电风扇不在14:30-14:55新增参与", rendered)
         self.assertIn("| 明日观察位预计算 | 不新增参与，只保留候选观察样本 |", rendered)
         self.assertIn("真允许参与时，只保留唯一动作；不允许时，只保留观察。", rendered)
         self.assertIn("当前先不新增参与", rendered)
-        self.assertIn("本轮不做PK参与结论", rendered)
+        self.assertIn("本轮不做参与结论", rendered)
         self.assertIn("大盘环境没有给到参与条件", rendered)
         self.assertIn("降低明日主动参与预期", rendered)
+        self.assertIn("本轮不做参与结论", rendered)
         self.assertIn("| 09:50-10:10 | 暂无唯一对象，不做新增参与 | 无 | 无新增参与止损 | 不做 |", rendered)
         self.assertIn("不把局部强势当成参与资格", rendered)
         self.assertIn("**最终动作表**（只展示真正具备参与资格的对象）:", rendered)
@@ -10741,6 +10806,8 @@ def _runtime_binding_probe(
         self.assertNotIn("无新仓止损", rendered)
         self.assertNotIn("允许出手", rendered)
         self.assertNotIn("PK出手结论", rendered)
+        self.assertNotIn("明日核心标的", rendered)
+        self.assertNotIn("PK决胜局", rendered)
         self.assertNotIn("出手条件", rendered)
         self.assertNotIn("主动出手预期", rendered)
         self.assertNotIn("10:00左右买", rendered)
@@ -10753,6 +10820,76 @@ def _runtime_binding_probe(
         self.assertNotIn("补位对象", rendered)
         self.assertNotIn("实际可买", rendered)
         self.assertNotIn("动作上限", rendered)
+
+    def test_zero_participation_relabels_extreme_tracking_as_historical_process(self):
+        lines = [
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0%不参与 | 0%：没有合格标的就不参与 |",
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
+            "#### 附录A：明日极度看好列表",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("**历史过程复盘：明日极度看好近25日跟踪表**", rendered)
+        self.assertIn("#### 附录A：历史过程观察列表（原明日极度看好）", rendered)
+
+    def test_zero_participation_relabels_step2_core_target_words_as_process_replay(self):
+        lines = [
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0%不参与 | 0%：没有合格标的就不参与 |",
+            "- **接着做什么**: 进入Step 2，从观察池识别明日核心标的",
+            "##### 附录：Step 2 - 明日核心标的",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("- **接着做什么**: 进入Step 2，从观察池回放过程观察样本", rendered)
+        self.assertIn("##### 附录：Step 2 - 过程观察样本", rendered)
+        self.assertNotIn("明日核心标的", rendered)
+
+    def test_zero_participation_relabels_pk_stage_title_as_process_review(self):
+        lines = [
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 唯一重点对象 | 明日执行风格 | 一句话动作 |",
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|",
+            "| 0%不参与 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | 暂无 | 0%不参与 | 0%：没有合格标的就不参与 |",
+            "##### 附录：Step 5 - PK决胜局（期望值模型）",
+        ]
+
+        rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
+
+        self.assertIn("##### 附录：Step 5 - 过程候选最终复核", rendered)
+        self.assertNotIn("PK决胜局", rendered)
+
+    def test_insert_sector_capital_preflight_front_summary_places_tournament_before_execution_section(self):
+        payload = {
+            "schema_version": "sector_capital_preflight.v1",
+            "final_action": {
+                "label": "0%不参与",
+                "source": "selection_workflow.final",
+                "reason": "最终没有新增参与对象，动作=0%不参与",
+            },
+            "layers": [
+                {
+                    "id": "market_capital_structure",
+                    "title": "市场资金结构",
+                    "input_count": 1,
+                    "eliminated_count": 1,
+                    "survivor_count": 0,
+                    "eliminated": [{"stock_label": "和远气体(002971)", "risk_evidence": "炸板57次且尾盘才回封"}],
+                    "survivors": [],
+                }
+            ],
+        }
+        report_lines = ["# 标题", "", "## 明日执行结论", "**T-001**"]
+
+        inserted = report_runtime._insert_sector_capital_preflight_front_summary(report_lines, payload)
+        rendered = "\n".join(inserted)
+
+        self.assertIn("## 板块资金扩散淘汰赛", rendered)
+        self.assertLess(rendered.index("## 板块资金扩散淘汰赛"), rendered.index("## 明日执行结论"))
 
     def test_zero_appendix_clears_candidate_quality_panel_targets_when_final_wait_has_no_target(self):
         lines = [

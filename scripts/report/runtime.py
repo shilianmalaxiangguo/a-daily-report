@@ -660,6 +660,20 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("出手指令", "参与指令"),
         ("筛出明天唯一能买的那只", "筛出明天唯一观察对象"),
         ("明天唯一能买的那只", "明天唯一观察对象"),
+        ("进入Step 2，从观察池识别明日核心标的", "进入Step 2，从观察池回放过程观察样本"),
+        ("##### 附录：Step 2 - 明日核心标的", "##### 附录：Step 2 - 过程观察样本"),
+        ("从观察池继续缩到明日核心、次核心和跨线观察", "从观察池回放过程样本、板块锚和跨线观察"),
+        ("主线最强的留核心，跨线观察只留观察", "只解释谁曾进入筛选，跨线观察仍只留观察"),
+        ("**明日核心方向预判**", "**过程核心方向回放**"),
+        ("##### 附录：Step 5 - PK决胜局（期望值模型）", "##### 附录：Step 5 - 过程候选最终复核"),
+        ("PK决胜局（期望值模型）", "过程候选最终复核"),
+        ("明日核心标的", "过程核心样本回放"),
+        ("本轮不做PK参与结论", "本轮不做参与结论"),
+        (
+            "**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
+            "**历史过程复盘：明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:",
+        ),
+        ("#### 附录A：明日极度看好列表", "#### 附录A：历史过程观察列表（原明日极度看好）"),
         ("**明日继续观察**", "**过程候选回看**"),
         ("⏳明日继续观察", "只作过程回放，不新增参与"),
         ("跨线继续看谁", "跨线回看样本"),
@@ -742,6 +756,11 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
                 cells[5] = f" 观察对象：{label} "
                 cells[7] = f" 盘前0%；只观察{label}，成立才保留观察；未出现执行资格前不新增参与；不满足继续0% "
                 text = "|" + "|".join(cells) + "|"
+        if text.strip().startswith("|"):
+            cells = [cell.strip() for cell in text.strip().strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] == "过程候选最终复核":
+                cells[1] = "无当前对象；个股仅保留在过程候选回放"
+                text = "| " + " | ".join(cells) + " |"
         if "允许进入" in text and "继续观察复核" in text:
             text = text.replace("允许进入", "只进入")
         text = text.replace("继续继续观察复核", "继续观察复核")
@@ -760,7 +779,9 @@ _PROCESS_EVIDENCE_LINE_TITLES = (
     "历史过程观察样本去向",
     "过程观察25日跟踪表",
     "明日极度看好近25日跟踪表",
+    "历史过程复盘：明日极度看好近25日跟踪表",
     "重点观察历史回测表",
+    "历史过程观察列表",
     "明日观察池",
     "明天观察池",
     "异动后观察池",
@@ -3175,6 +3196,104 @@ def _insert_two_layer_front_decision_panel(report_lines, decision_lines):
     if candidate_summary_lines:
         result = _insert_candidate_verdict_summary_after_market_spine(result, candidate_summary_lines)
     return result
+
+
+def _preflight_entry_labels(entries, *, limit=3):
+    labels = []
+    for entry in list(entries or []):
+        if not isinstance(entry, dict):
+            continue
+        label = _clean_runtime_cell(entry.get("stock_label") or entry.get("stock_name") or "")
+        if not label or label == "无执行对象":
+            continue
+        if label not in labels:
+            labels.append(label)
+        if len(labels) >= limit:
+            break
+    return "、".join(labels) if labels else "无"
+
+
+def _preflight_elimination_reason(layer):
+    for entry in list((layer or {}).get("eliminated") or []):
+        if not isinstance(entry, dict):
+            continue
+        label = _clean_runtime_cell(entry.get("stock_label") or entry.get("stock_name") or "")
+        basis = _clean_runtime_cell(
+            entry.get("risk_evidence")
+            or entry.get("elimination_basis")
+            or entry.get("reason")
+            or ""
+        )
+        if label and basis:
+            return f"{label}: {basis}"
+    note = _clean_runtime_cell((layer or {}).get("note") or "")
+    return note or "无"
+
+
+def _render_sector_capital_preflight_front_summary(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    layers = [layer for layer in list(payload.get("layers") or []) if isinstance(layer, dict)]
+    if not layers:
+        return []
+    final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+    lines = [
+        "## 板块资金扩散淘汰赛",
+        "| 层级 | 输入 | 淘汰 | 剩余 | 关键理由 | 下一层依据 |",
+        "|---|---:|---|---|---|---|",
+    ]
+    for layer in layers:
+        title = _clean_runtime_cell(layer.get("title") or layer.get("id") or "复核层")
+        input_count = int(layer.get("input_count") or len(layer.get("entries") or []))
+        eliminated_count = int(layer.get("eliminated_count") or len(layer.get("eliminated") or []))
+        survivor_count = int(layer.get("survivor_count") or len(layer.get("survivors") or []))
+        survivors = _preflight_entry_labels(layer.get("survivors") or [])
+        reason = _preflight_elimination_reason(layer)
+        next_basis = ""
+        for entry in list(layer.get("survivors") or layer.get("entries") or []):
+            if isinstance(entry, dict):
+                next_basis = _clean_runtime_cell(entry.get("next_basis") or "")
+                if next_basis:
+                    break
+        if not next_basis:
+            next_basis = "收口到最终动作" if layer.get("id") == "final_action" else "进入下一层复核"
+        lines.append(
+            f"| {title} | {input_count} | {eliminated_count} | {survivor_count}（{survivors}） | {reason} | {next_basis} |"
+        )
+    label = _clean_runtime_cell(final_action.get("label") or "0%不参与")
+    source = _clean_runtime_cell(final_action.get("source") or "selection_workflow.final")
+    reason = _clean_runtime_cell(final_action.get("reason") or "最终动作来自统一淘汰赛收口")
+    lines.extend(
+        [
+            "",
+            f"> **最终动作**：{label}；来源={source}；{reason}",
+            "> **读法**：上表只解释板块路径、资金载体和淘汰理由；涨停、热榜、分数和旧记忆只作过程证据，不单独生成明日标的。",
+            "",
+        ]
+    )
+    return lines
+
+
+def _insert_sector_capital_preflight_front_summary(report_lines, payload):
+    report_lines = list(report_lines or [])
+    summary_lines = _render_sector_capital_preflight_front_summary(payload)
+    if not summary_lines:
+        return report_lines
+    for line in report_lines:
+        if str(line or "").strip() == "## 板块资金扩散淘汰赛":
+            return report_lines
+    insert_at = 0
+    for marker in ("## 明日执行结论", "## 判断纠偏与今日五项结论"):
+        for index, line in enumerate(report_lines):
+            if str(line or "").strip() == marker:
+                insert_at = index
+                while insert_at > 0 and str(report_lines[insert_at - 1] or "").strip() == "":
+                    insert_at -= 1
+                return report_lines[:insert_at] + [""] + summary_lines + report_lines[insert_at:]
+    if report_lines and str(report_lines[0]).startswith("#"):
+        insert_at = 1
+        while insert_at < len(report_lines) and str(report_lines[insert_at]).strip() == "":
+            insert_at += 1
+    return report_lines[:insert_at] + [""] + summary_lines + report_lines[insert_at:]
 
 
 def _split_candidate_verdict_summary_lines(lines):
@@ -5716,7 +5835,14 @@ def _normalize_empty_final_action_plan_lines(lines, final_target_resolution=None
 
         if stripped.startswith("|"):
             cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-            if len(cells) >= 2 and cells[0] in {"今日关注标的", "明天观察池", "PK决胜局（期望值模型）"}:
+            cells = [
+                {
+                    "明日核心标的": "过程核心样本回放",
+                    "PK决胜局（期望值模型）": "过程候选最终复核",
+                }.get(cell, cell)
+                for cell in cells
+            ]
+            if len(cells) >= 2 and cells[0] in {"今日关注标的", "明天观察池", "过程候选最终复核"}:
                 cells[1] = "无当前对象；个股仅保留在过程候选回放"
                 text = "| " + " | ".join(cells) + " |"
             elif "观察资格" in cells and "明天具体怎么做" in cells:
@@ -8576,6 +8702,10 @@ def _render_markdown_report_legacy_body(
     front_page_lines = _insert_two_layer_front_decision_panel(
         front_page_lines,
         render_front_decision_layer(two_layer_decision_payload),
+    )
+    front_page_lines = _insert_sector_capital_preflight_front_summary(
+        front_page_lines,
+        sector_capital_preflight_payload,
     )
     if DISPLAY_MVP_MODE:
         report = front_page_lines

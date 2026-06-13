@@ -63,6 +63,7 @@ PROCESS_EVIDENCE_TITLES = (
     "历史过程观察样本去向",
     "过程观察25日跟踪表",
     "明日极度看好近25日跟踪表",
+    "历史过程复盘：明日极度看好近25日跟踪表",
     "重点观察历史回测表",
     "明日观察池",
     "明天观察池",
@@ -292,6 +293,7 @@ MARKET_STATUS_HEADER = "| 项目 | 结论 | 依据 |"
 MARGIN_PRESSURE_FRONT_HEADER = "| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 状态 |"
 MARGIN_PRESSURE_APPENDIX_HEADER = "| 日期 | 融资余额 | 两市成交额 | 融资承接比 | 压力差 | 状态 | 较前日 |"
 EXTREME_CONVICTION_TRACKING_HEADING = "**明日极度看好近25日跟踪表**"
+EXTREME_CONVICTION_TRACKING_HISTORICAL_HEADING = "**历史过程复盘：明日极度看好近25日跟踪表**"
 EXTREME_CONVICTION_TRACKING_HEADER = "| 入选日 | 股票 | 代码 | 排名 | 所属方向 | 观察位窗口 | 复盘状态 | 历史复盘动作 | 作废线 | 记录ID |"
 NEW_STOCK_VISIBILITY_HEADING = "### 附录A：新股周期判定"
 NEW_STOCK_VISIBILITY_MARKERS = (
@@ -1642,11 +1644,15 @@ def _audit_market_base_readability(lines):
 
 def _audit_extreme_conviction_tracking(lines):
     text = "\n".join(lines)
-    if EXTREME_CONVICTION_TRACKING_HEADING not in text or EXTREME_CONVICTION_TRACKING_HEADER not in lines:
+    has_heading = (
+        EXTREME_CONVICTION_TRACKING_HEADING in text
+        or EXTREME_CONVICTION_TRACKING_HISTORICAL_HEADING in text
+    )
+    if not has_heading or EXTREME_CONVICTION_TRACKING_HEADER not in lines:
         return [
             _finding(
                 "extreme_conviction_tracking_missing",
-                "report must render 明日极度看好近25日跟踪表 from structured ledger data",
+                "report must render historical 明日极度看好近25日跟踪表 from structured ledger data",
             )
         ]
     findings = []

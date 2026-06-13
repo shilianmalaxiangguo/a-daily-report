@@ -570,6 +570,36 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertEqual(payload["decision_list"][0]["item"], "市场能否进攻")
         self.assertEqual(payload["decision_list"][-1]["item"], "账户是否适配")
         self.assertEqual(payload["idiot_index_review"][0]["step"], "涨停池起点")
+
+    def test_sector_capital_preflight_quant_trace_does_not_eliminate_price_risk_early(self):
+        source = self._payload()
+        price_layer = next(layer for layer in source["layers"] if layer["id"] == "price_action")
+        price_layer["entries"][0]["risk_evidence"] = "炸板57次且尾盘才回封；高换手连板"
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-06-12",
+            variant="replay",
+            elimination_tournament_payload=source,
+        )
+
+        quant_layer = next(layer for layer in payload["layers"] if layer["id"] == "quant_trace")
+        price_layer = next(layer for layer in payload["layers"] if layer["id"] == "price_action")
+        cycle_layer = next(layer for layer in payload["layers"] if layer["id"] == "cycle_probability_window")
+        counter_layer = next(layer for layer in payload["layers"] if layer["id"] == "counter_evidence_account")
+        quant_entry = next(item for item in quant_layer["entries"] if item["stock_code"] == "002971")
+        price_entry = next(item for item in price_layer["entries"] if item["stock_code"] == "002971")
+
+        self.assertEqual(quant_entry["status"], "survived")
+        self.assertEqual(quant_entry["next_basis"], "进入价格行为确认层")
+        self.assertEqual(quant_layer["survivor_count"], 1)
+        self.assertEqual(quant_layer["eliminated_count"], 0)
+        self.assertEqual(price_entry["status"], "eliminated")
+        self.assertIn("炸板57次且尾盘才回封", price_entry["risk_evidence"])
+        self.assertEqual(price_layer["survivor_count"], 0)
+        self.assertEqual(cycle_layer["input_count"], 0)
+        self.assertEqual(cycle_layer["eliminated_count"], 0)
+        self.assertEqual(counter_layer["input_count"], 0)
+        self.assertEqual(counter_layer["eliminated_count"], 0)
         self.assertEqual(payload["idiot_index_review"][0]["action"], "降为证据层，不作起点")
 
     def test_sector_capital_preflight_existing_payload_keeps_observational_final_action(self):

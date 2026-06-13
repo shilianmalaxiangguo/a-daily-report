@@ -438,6 +438,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             full_path = Path(tempdir) / "2026-06-05_A股日报_完整版_replay.md"
             full_path.write_text("# 2026-06-05 A股日报", encoding="utf-8")
             data = self._valid_data()
+            data["selection_workflow"] = {
+                "schema_version": "selection_workflow.v1",
+                "target_date": "2026-06-05",
+                "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+            }
+            data["final_target_resolution"] = {
+                "capital_priority_decision": {"capital_priority": "wait", "reason": "无明日执行对象，保持观察"}
+            }
+            data["two_layer_decision_payload"] = {"schema_version": "two_layer_daily_decision.v1"}
+            data["sniper_target_derivation"] = {"schema_version": "sniper_target_derivation.v1"}
 
             path = daily_report_entry_demo._try_save_sector_capital_preflight_html(
                 data,
@@ -451,6 +461,19 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertIn('meta name="artifact" content="sector-capital-preflight"', html)
         embedded = _embedded_json_payload(html, "sector-capital-preflight-payload")
         self.assertEqual(embedded["schema_version"], "sector_capital_preflight.v1")
+        self.assertEqual(embedded["source_payloads"]["selection_workflow"]["schema_version"], "selection_workflow.v1")
+        self.assertEqual(
+            embedded["source_payloads"]["final_target_resolution"]["capital_priority_decision"]["capital_priority"],
+            "wait",
+        )
+        self.assertEqual(
+            embedded["source_payloads"]["two_layer_decision_payload"]["schema_version"],
+            "two_layer_daily_decision.v1",
+        )
+        self.assertEqual(
+            embedded["source_payloads"]["sniper_target_derivation"]["schema_version"],
+            "sniper_target_derivation.v1",
+        )
         self.assertIn("0%不参与", html)
 
     def test_markdown_audit_failure_stops_before_runtime_artifact_persistence(self):

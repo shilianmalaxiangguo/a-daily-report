@@ -1077,8 +1077,7 @@ def _build_quant_trace_layer(role_layer, price_layer):
     for entry in role_entries:
         key = stock_key(entry.get("stock"))
         price_entry = price_by_key.get(key, {})
-        price_status = clean_text(price_entry.get("status"))
-        if entry.get("status") == "survived" and price_status != "eliminated":
+        if entry.get("status") == "survived":
             status = "survived"
             reason = "重心抬高、回踩承接和放量不崩进入价格行为复核"
             next_basis = "进入价格行为确认层"
@@ -1124,6 +1123,8 @@ def _build_cycle_probability_window_layer(price_layer, final_action):
     final_position = _safe_int(final_action.get("position_pct"), default=0)
     entries = []
     for entry in _entries_for_layer(price_layer):
+        if entry.get("status") != "survived":
+            continue
         if entry.get("status") == "survived" and final_position > 0:
             status = "survived"
             reason = "市场、板块、资金载体和价格行为同向，进入账户/盈亏比复核"
@@ -1161,6 +1162,8 @@ def _build_counter_evidence_account_layer(cycle_layer, account_layer, final_acti
     account_by_key = {stock_key(entry.get("stock")): entry for entry in account_entries if stock_key(entry.get("stock"))}
     entries = []
     for entry in _entries_for_layer(cycle_layer):
+        if entry.get("status") != "survived":
+            continue
         key = stock_key(entry.get("stock"))
         account_entry = account_by_key.get(key, {})
         if account_entry:
