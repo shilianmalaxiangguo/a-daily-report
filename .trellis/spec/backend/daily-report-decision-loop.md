@@ -196,6 +196,10 @@ Use this contract when changing:
 - Final action must be easier to find than process evidence.
 - Final action must include `position_plan_pct`, a participation window or `no_trade`, confirmation conditions, and cancellation conditions.
 - A 0% result is valid only when the report explains no qualified target, weak market, invalid trend chain, failed cancellation condition, account mismatch, old-position handling, or incomplete key data.
+- When a report carries `selection_workflow.derivation_contract = "sector_first_strict.v1"`, the front page and report payload must treat `selection_workflow.final` as the only source of the final execution object. If that final object is empty or `position_pct <= 0`, older `selected_position_candidate` / `unique_action_target` values may remain as observation evidence, but they must not reappear as a new execution object.
+- When `selection_workflow.final` is empty or final position is 0%, process-candidate action text must be observation-only at every layer: candidate generation, Step 2 tables, action-plan context, appendix tables, final Markdown sanitation, and HTML source text. Phrases such as `命中才参与`, `后再参与`, or `继续强就只做它` are invalid in process-candidate rows under a 0% final result; render `只观察承接，不新增参与` or `只作过程回放，不新增参与` instead.
+- Next-day attribution must keep execution, final observation, process candidate, and historical evidence in separate settlement buckets. A process candidate that rises or reaches limit-up the next day can count only as `process_candidate_hit`; it must not count as `execution_hit` unless it was `final_target_resolution.new_entry_target` and the report position was above 0%.
+- Sector-first critical inputs must be part of the report preflight failure set. Missing market, sector, leader, price-action, or account-execution inputs must stop generation and list the missing items before any report artifacts are saved.
 - 50% and 100% results require a planned participation record. If no record exists, render the item as observation and record the missing field.
 - Review labels must be derived from explicit next-day facts. If facts are missing, use `待补事实` instead of inventing a result.
 - Metrics may summarize past judgments, but they must not create tomorrow's action without the report action contract.
@@ -234,6 +238,9 @@ Use this contract when changing:
 | Market-state row has only a qualitative report label | Keep it as `待补事实`; do not infer correctness |
 | Core-candidate first target fails while backup/follower enters attention | Mark core candidate wrong; put backup/follower visibility in `actual`, not in correctness |
 | Core-candidate row already has a stale resolved result | Recompute and replace the same `report_date` plus `judgment_type` row from latest auditable facts |
+| Sector-first chain is missing market, sector, leader, price-action, or account-execution inputs | Stop generation and list the missing items before saving report artifacts |
+| Final result is 0% or empty but process table contains participation-style wording | Rewrite the row to observation/process-review wording and keep the candidate out of current/final object fields |
+| Process candidate is +10% next day but was not the new-entry target | Count it as `process_candidate_hit`; keep `execution_hit_count` at 0 |
 | Report date has a previous trading day | Render the previous trading day's five judgment settlement before today's new five judgment rows |
 | Previous trading day has only partial settlement facts | Render resolved rows in the settlement table and missing rows in a separate unresolved section |
 | Current trading day judgment has no next-day facts yet | Render the judgment and verification point, but do not count it in accuracy |
@@ -250,6 +257,8 @@ Use this contract when changing:
 | Good database recent rows | 41 covered ledger rows, 25 rows displayed from database | Render 41 covered rows/date range and state the table displays the recent 25-day cycle |
 | Good five-judgment table | explicit `judgment_reviews` plus participation review rows | Render five rows with independent accuracy and mistake text |
 | Base five-judgment table | no market-state settlement evidence | Market-state row renders `待补事实` and does not affect accuracy |
+| Good empty-final appendix | final object empty, process candidate keeps price/sector evidence | All action cells say observation/process review; no current object or participation-style action appears |
+| Good process-candidate follow-up | process candidate limit-up next day while report position was 0% | Process bucket records a hit; execution bucket stays 0 |
 | Bad fake precision | report shows 0.00% or exact metric without source date | metric removed or marked missing |
 | Bad language-only judgment | strong wording exists but no fields | no performance credit until fieldized |
 | Bad five-judgment inference | market state inferred from `market_branch` text | keep missing until settlement evidence exists |
@@ -270,6 +279,9 @@ When implementation changes this contract, add or update tests that assert:
 - front-page daily judgment panel renders recent five settled trading days, previous trading day settlement, and current trading day judgment separately,
 - decision-ledger index records preserve `validation`, `selection_result`, and `judgment_reviews` when present,
 - database-backed tracking rows still render coverage from the full ledger index,
+- `tests.test_candidate_selection_stage` covers zero-position process-candidate action text such as `命中才参与` being rewritten to observation-only wording,
+- `tests.test_daily_report_render` covers final Markdown sanitation for old frozen text where a 0% report still contains stale process-candidate participation wording,
+- `tests.test_next_day_attribution` covers process-candidate hits staying out of execution hit counts,
 - 60/120-day wording is not rendered until coverage supports it.
 
 For a report behavior change, also run a replay sample and the report acceptance audit against the generated replay markdown.
@@ -295,6 +307,38 @@ Why correct: the decision can be replayed, reviewed, and measured without changi
 #### Wrong
 
 ```text
+The front page finds a stale `unique_action_target` after `selection_workflow.final` is empty and still shows it as tomorrow's execution object.
+```
+
+Why wrong: the final object is no longer sourced from the stale field. When the sector-first final object is empty or 0%, old candidates can only stay as observation evidence.
+
+#### Correct
+
+```text
+The front page shows no new execution object when `selection_workflow.final` is empty or 0%, and the report stops early if sector-first critical inputs are missing.
+```
+
+Why correct: the final execution object remains single-sourced, and missing inputs are visible before any report artifact is saved.
+
+#### Wrong
+
+```text
+A 0% report says 和远气体 is only a process candidate, but the Step 2 appendix row says "回封或结构确认命中才参与".
+```
+
+Why wrong: the row is still giving a participation-style action after the final result has removed participation qualification.
+
+#### Correct
+
+```text
+The same row keeps 和远气体 as process evidence and renders "只观察承接，不新增参与". If it rises the next day, attribution records only `process_candidate_hit`.
+```
+
+Why correct: process evidence can be reviewed without becoming a current execution object or execution hit.
+
+#### Wrong
+
+```text
 A statistics table says it reviewed 120 days because that is the desired horizon, while only 42 official reports exist.
 ```
 
@@ -307,6 +351,287 @@ The table states that the current covered sample is 42 trading days from 2026-03
 ```
 
 Why correct: the user can separate current evidence from the next data-expansion objective.
+
+## Scenario: Sector-First Quant Bifurcation And A-Share Price-Action Localization
+
+### 1. Scope / Trigger
+
+Use this contract when changing `selection_workflow.v1`, market/sector/leader
+derivation, market-emotion-line handling, Brooks price-action checks,
+candidate lifecycle rendering, or replay boundaries for final daily-report
+participation.
+
+This scenario converts the trading view into executable fields:
+
+- A-share reports must read the market from sector paths first, not from a
+  single stock form.
+- Heavy algorithmic participation is treated as an observable market condition,
+  not a fixed numeric cause. Record narrow-pool attack, turnover concentration,
+  sector spread, back-row acceptance, line rotation, and exit evidence instead
+  of encoding an external market-share percentage.
+- Mr. Market hot/cold extremes are context. They do not create participation by
+  themselves.
+- Brooks price action is localized for A-shares: volume is capital expression,
+  while price acceptance, follow-through, pullback behavior, and risk math decide
+  whether the candidate can move beyond observation.
+
+### 2. Signatures
+
+When `derivation_contract = "sector_first_strict.v1"`, keep the existing
+top-level fields and extend them with observable bifurcation and localized
+price-action fields when source facts exist:
+
+```python
+{
+    "schema_version": "selection_workflow.v1",
+    "derivation_contract": "sector_first_strict.v1",
+    "source_dates": {
+        "report_date": "YYYY-MM-DD",
+        "snapshot_date": "YYYY-MM-DD | None",
+        "sector_source_date": "YYYY-MM-DD | None",
+        "price_source_date": "YYYY-MM-DD | None",
+    },
+    "market_layer": {
+        "market_atmosphere": "str",
+        "profit_effect": "str",
+        "volume_quality": "str",
+        "turnover_quality": "str | None",
+        "risk_preference": "str",
+        "narrow_pool_attack": "bool | str | None",
+        "quant_bifurcation": "bool | str | None",
+        "allow_sector_diagnosis": "bool",
+        "missing_fields": ["str"],
+    },
+    "sector_layer": {
+        "selected_direction": "str | None",
+        "sector_path_selected": "bool",
+        "sector_fermentation": "str",
+        "sector_emotion": "str",
+        "turnover_expansion": "str",
+        "backrow_acceptance": "str",
+        "second_wave_high_group": "str | bool | None",
+        "competition_line_state": "str | None",
+        "quant_still_present_evidence": ["str"],
+        "quant_exit_evidence": ["str"],
+    },
+    "emotion_line_layer": {
+        "enabled": "bool",
+        "leader": {"code": "str | None", "name": "str | None"},
+        "capacity_evidence": ["str"],
+        "public_participation_evidence": ["str"],
+        "divergence_acceptance": "str | None",
+        "missing_fields": ["str"],
+    },
+    "leader_layer": {
+        "leader_source": "sector_fermentation | emotion_line | pending",
+        "leader": {"code": "str | None", "name": "str | None"} | "str",
+        "market_selected_evidence": ["str"],
+        "why_not_sector_anchor": "str | None",
+        "why_not_backrow_or_old_leader": "str | None",
+    },
+    "candidate_pool": [
+        {
+            "candidate": {"code": "str", "name": "str"},
+            "candidate_origin": "sector_first | emotion_line | holding_risk | manual_observation | legacy_signal_only",
+            "new_entry_qualified": "bool",
+            "status": "str",
+            "eliminated_at": "N0..N9 | None",
+            "blocking_reasons": ["str"],
+            "brooks_price_action_judge": {
+                "status": "accepted | needs_second_confirmation | price_rejected | risk_first | insufficient",
+                "verdict": "str",
+                "volume_signal": "str",
+                "participation_effect": "str",
+            },
+        }
+    ],
+    "price_action_layer": {
+        "volume_as_capital_expression": "str",
+        "volume_price_quadrant": "accepted | rejected | pending | risk_first",
+        "trend_range_spectrum": "strong_trend | trend | broad_channel | trading_range | tight_range | unknown",
+        "bar_close_quality": "strong_close | mid_close | weak_close | unknown",
+        "follow_through_confirmation": "confirmed | missing | failed | pending",
+        "breakout_failure_test": "passed | failed | pending | not_applicable",
+        "second_entry_confirmation": "confirmed | missing | not_required | pending",
+        "late_entry_no_chase": "bool | str",
+        "trader_equation": {
+            "success_probability": "str | float | None",
+            "target_space": "str | float | None",
+            "failure_loss": "str | float | None",
+            "position_damage": "str | float | None",
+        },
+        "signal_not_qualification": "bool",
+    },
+    "final": {
+        "execution_object": {"code": "str", "name": "str"} | {},
+        "position_pct": 0 | 50 | 100,
+        "action_text": "str",
+        "failure_conditions": ["str"],
+    },
+    "missing_fields": ["str"],
+}
+```
+
+Current builders may store some price-action summary under `N7.passes_forward`
+while a fuller `price_action_layer` is being added. New work in this area must
+either populate the field from target-date facts or list the missing field; it
+must not silently substitute a live quote or old candidate memory.
+
+### 3. Contracts
+
+- Index strength with weak breadth is a split-market condition. Mark
+  `market_layer.narrow_pool_attack` or `market_layer.quant_bifurcation`; do not
+  upgrade it into broad market participation quality.
+- `sector_layer.selected_direction` and `sector_path_selected` must be resolved
+  before a new-entry leader can be resolved. The lower layer must prove that it
+  accepted the higher-layer fund choice.
+- A single limit-up, T-board, one-line limit-up, hot-rank row, theme label, or
+  old leader memory may explain process evidence only. It cannot create
+  `new_entry_qualified=True` without sector spread and price acceptance.
+- A hot extreme requires continuation evidence: turnover expansion, sector
+  spread, core acceptance after divergence, and a close or pullback that keeps
+  the invalid price nearby.
+- A cold extreme requires exhaustion evidence: selling pressure fades, the core
+  line reappears, back-row acceptance improves, and the candidate stays close
+  enough to the invalid price. Panic alone is not a participation condition.
+- For trading ranges and broad channels, the first breakout is pending until
+  follow-through or a second-entry confirmation appears. Strong trend pullbacks
+  are first treated as pullbacks or observation, not as trend reversal.
+- Volume is a funding expression. It can raise attention and identify sector
+  fermentation, but only price acceptance can move the candidate toward final
+  participation.
+- The market-emotion line may be used in broad selloff, narrow-pool attack, or
+  obvious crowding environments, but it needs scarcity recognition, capacity,
+  public participation, and divergence acceptance. If a required emotion-line
+  fact is missing, record it in `missing_fields` and keep the final action at
+  0% unless another fully qualified sector path wins.
+- If the market-emotion line and sector mainline point to different candidates,
+  render a comparison. When price action and account conditions do not clearly
+  choose one, final position must stay below 100%.
+- Historical replay must preserve target-date boundaries through `source_dates`.
+  If same-date sector or price facts are absent, keep them missing and stop the
+  affected conclusion instead of filling it with current data.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Index rises while advancing names are weak and turnover is concentrated in a few paths | Record narrow-pool attack / bifurcation; do not render broad participation improvement |
+| Sector turnover share expands, sector width spreads, core diverges then holds, and back rows still accept | Set `sector_path_selected=True` and record `quant_still_present_evidence` |
+| Sector turnover share falls, back rows fail, and the core falls back below same-date VWAP or key moving average | Record `quant_exit_evidence`; block or downgrade new-entry participation |
+| Single stock has limit-up, T-board, or one-line limit-up without sector spread and back-row acceptance | Keep it as process evidence or observation; `new_entry_qualified=False` |
+| Sector spreads first, then a capacity core holds while the flexible carrier makes new highs | Allow leader derivation, then continue through price action and account execution |
+| Broad selloff or narrow-pool attack produces a market-emotion leader | Enable `emotion_line_layer` only with capacity, public participation, and divergence acceptance facts |
+| Market-emotion line and sector mainline are both strong but point to different stocks | Render comparison; if final proof is not decisive, do not output 100% |
+| Volume expands, close is strong, sector confirms, and pullback does not break the invalid price | Candidate may enter final comparison; still require account, time window, and risk math |
+| Volume expands but price forms a long upper shadow or weak close | Render capital expression not accepted by price; do not create participation |
+| First counter-trend bar appears inside a strong trend | Render pullback or observation first; do not call it reversal without follow-through |
+| Early participation is missed and price is far from the invalid price | Set no-chase / late-entry risk; final action is capped at observation or smaller size |
+| Any required market, sector, emotion-line, leader, price-action, or account-execution fact is missing | Stop the affected report conclusion, list missing fields, and do not use hot lists or old leader memory as a replacement |
+| Historical replay lacks same-date sector or price facts | Preserve the missing field; do not call a current-only source for that historical date |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good sector-first leader | Sector expands, back rows accept, capacity core holds, price confirms | Candidate enters final comparison with 50% or 100% only if account conditions also pass |
+| Good split-market warning | Index is red, but breadth is weak and turnover concentrates in one or two paths | Report shows split-market context and keeps non-selected paths as observation |
+| Base hot extreme | Theme surges but follow-through and pullback facts are pending | Report records heat and waits for confirmation; final action remains 0% if no qualified target exists |
+| Base cold extreme | Panic appears but selling pressure has not faded | Report records cold context without treating fear as opportunity |
+| Bad old entry | A T-board row becomes the final object because it appears on a hot list | Candidate is rejected as a new-entry source and kept only as process evidence |
+| Bad pure Brooks import | A broad-channel first breakout is treated as a standalone buy point | Candidate stays pending until follow-through, second entry, and risk math exist |
+| Bad live replay fill | A historical report fills missing sector acceptance with current market facts | Replay keeps the field missing and stops the affected conclusion |
+
+### 6. Tests Required
+
+When implementation changes this scenario, add or update tests that assert:
+
+- `tests.test_selection_workflow` covers index strength with weak breadth setting
+  narrow-pool attack without broad participation upgrade.
+- `tests.test_selection_workflow` covers sector turnover expansion plus back-row
+  acceptance setting `sector_path_selected=True`.
+- `tests.test_selection_workflow` covers single limit-up / T-board / one-line
+  limit-up remaining process evidence when sector spread is absent.
+- `tests.test_selection_workflow` covers quant exit evidence blocking new-entry
+  participation when back rows fail and the core loses same-date VWAP or key
+  moving average.
+- `tests.test_selection_workflow` covers market-emotion-line capacity, public
+  participation, divergence acceptance, and conflict with the sector mainline.
+- `tests.test_selection_workflow` covers volume rejection as capital expression
+  without participation.
+- `tests.test_selection_workflow` covers first counter-trend bars in strong
+  trends as observation before reversal proof.
+- `tests.test_selection_workflow` covers late entry far from the invalid price
+  setting no-chase / 0% behavior.
+- `tests.test_report_runtime` and `tests.test_front_page_v2_renderer` cover
+  single-source final object rendering from `selection_workflow.final`.
+- `tests.test_report_acceptance_audit` covers 0% final reports that still carry
+  process rows, ensuring those rows stay observation-only.
+
+For rendered report changes, run a target-date replay and
+`scripts/report/report_acceptance_audit.py` against the generated replay
+markdown. For spec-only changes, a diff review plus forbidden-word scan is the
+required verification.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+The index rises, one hot-list stock has a T-board, and the report makes it the next execution object.
+```
+
+Why wrong: index strength and a single stock form do not prove broad
+participation, sector acceptance, or price acceptance.
+
+#### Correct
+
+```text
+The report marks a narrow-pool attack, identifies the selected sector path,
+checks sector spread and back-row acceptance, then asks whether price accepted
+the move before assigning any participation.
+```
+
+Why correct: the stock is derived from the market and sector path before Brooks
+price-action and account conditions are applied.
+
+#### Wrong
+
+```text
+The report says the market is cold, therefore fear is opportunity and a low-price candidate should be bought.
+```
+
+Why wrong: a cold extreme is only context. It still needs selling-pressure
+exhaustion, sector recovery, invalid-price proximity, and risk math.
+
+#### Correct
+
+```text
+The report records the cold extreme, then waits for the core line to reappear,
+back rows to accept, and price to stay close enough to the invalid price.
+```
+
+Why correct: the report turns emotion into observable conditions before any
+final action.
+
+#### Wrong
+
+```text
+The report treats a large volume bar as the buy reason.
+```
+
+Why wrong: volume is capital expression, not final qualification.
+
+#### Correct
+
+```text
+The report records the volume bar as capital expression, then requires a strong
+close, follow-through or second entry, and a valid trader equation before
+allowing participation.
+```
+
+Why correct: Brooks price action is used as price acceptance and risk math,
+not as a replacement for the sector-first decision loop.
 
 ## Scenario: Opportunity Comparison Snapshot Sources
 
