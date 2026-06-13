@@ -85,6 +85,10 @@ def _safe_float(value, default=0.0):
         return float(default)
 
 
+def _text(value):
+    return str(value or "").strip()
+
+
 def _safe_int(value, default=0):
     try:
         if value in (None, ""):

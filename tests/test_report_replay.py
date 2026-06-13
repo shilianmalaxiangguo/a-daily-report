@@ -8,7 +8,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from replay.report_replay import build_replay_snapshot_contract
+from replay.report_replay import build_replay_snapshot_contract, _ensure_replay_price_band_style_series, _ensure_replay_stock_quotes
 from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
 
 
@@ -102,6 +102,78 @@ class _NoArgTencentFinanceData:
 
 
 class ReportReplayTest(unittest.TestCase):
+    def setUp(self):
+        def _offline_xuangubao(target_date, helpers):
+            fetcher = (helpers or {}).get("fetch_xuangubao_data")
+            if callable(fetcher):
+                try:
+                    return fetcher(target_date=target_date) or {}
+                except TypeError as error:
+                    if "target_date" not in str(error):
+                        raise
+                    return fetcher() or {}
+            return {
+                "xuangubao_news": [],
+                "xuangubao_plates": [],
+                "xuangubao_limit_up_reasons": [],
+                "diagnostics": {"test": "offline"},
+            }
+
+        def _offline_wanzhu(target_date, helpers):
+            fetcher = (helpers or {}).get("fetch_wanzhu_top10")
+            if callable(fetcher):
+                return list(fetcher(target_date) or [])
+            return []
+
+        def _offline_lhb(target_date, helpers):
+            fetcher = (helpers or {}).get("get_lhb_snapshot_from_tushare")
+            if callable(fetcher):
+                try:
+                    return fetcher(target_date=target_date) or {}
+                except TypeError as error:
+                    if "target_date" not in str(error):
+                        raise
+                    return fetcher(target_date) or {}
+            return {}
+
+        def _offline_default_mainline_helpers():
+            helpers = self._original_load_default_mainline_helpers()
+            helpers.update(
+                {
+                    "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                    "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                    "get_sector_turnover_snapshot_from_ths": lambda sector_name, target_date="", total_turnover=0: {},
+                    "get_wind_a_from_tushare": lambda target_date: {},
+                    "get_market_daily_total_from_fact_db": lambda target_date: {},
+                    "get_market_total_turnover_from_fact_db": lambda target_date: 0,
+                    "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
+                    "get_market_breadth_from_fact_db": lambda target_date: {},
+                    "query_new_high_feedback_series": lambda end_date, window_days=25: [],
+                    "get_new_high_feedback_from_tushare": lambda target_date=None, **kwargs: {},
+                    "get_price_band_style_series_from_tushare": lambda target_date=None, **kwargs: {},
+                }
+            )
+            return helpers
+
+        import replay.report_replay as replay_runtime
+
+        self._original_load_default_mainline_helpers = replay_runtime._load_default_mainline_helpers
+        self._offline_replay_patches = [
+            patch(
+                "replay.report_replay._load_default_mainline_helpers",
+                side_effect=_offline_default_mainline_helpers,
+            ),
+            patch(
+                "replay.report_replay._fetch_replay_xuangubao_data",
+                side_effect=_offline_xuangubao,
+            ),
+            patch("replay.report_replay._fetch_replay_wanzhu_top10", side_effect=_offline_wanzhu),
+            patch("replay.report_replay._fetch_replay_lhb_snapshot", side_effect=_offline_lhb),
+        ]
+        for replay_patch in self._offline_replay_patches:
+            replay_patch.start()
+        self.addCleanup(lambda: [replay_patch.stop() for replay_patch in reversed(self._offline_replay_patches)])
+
     def _load_module(self):
         try:
             return __import__("replay.report_replay", fromlist=["report_replay"])
@@ -188,6 +260,28 @@ def _replay_probe(target_date, refresh_sources=None):
             contract_mock.call_args.kwargs["helpers"]["get_etf_turnover_series_from_sina"],
             etf_fetcher,
         )
+
+    def test_default_replay_helpers_use_fact_store_without_retired_local_db_path(self):
+        replay_runtime = self._load_module()
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [{"trade_date": "2026-06-04", "new_high_count": 188}]
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("fact_store", db_path))
+                return FakeService()
+
+        with patch("storage.database_service.DatabaseService", FakeDatabaseService):
+            helpers = self._original_load_default_mainline_helpers()
+            rows = helpers["query_new_high_feedback_series"]("2026-06-05", window_days=25)
+
+        self.assertEqual(rows[0]["new_high_count"], 188)
+        self.assertEqual(calls, [("fact_store", None), ("query", "2026-06-05", 25)])
 
     def test_build_replay_snapshot_contract_refreshes_calendar_and_indices(self):
         snapshot = {
@@ -400,13 +494,13 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertTrue(data["data_status"]["涨停池"])
         self.assertTrue(data["step_status"]["涨停跌停数据获取"])
         self.assertEqual(len(data["integrated_hot_list"]), 1)
-        self.assertEqual(len(data["xuangubao_data"]["xuangubao_plates"]), 1)
+        self.assertEqual(data["xuangubao_data"], {})
         self.assertEqual(len(data["wanzhu_top10"]), 1)
         self.assertEqual(data["lianban_data"][0]["code"], "601991")
         self.assertEqual(data["lianban_data"][0]["lianban_days"], 1)
         self.assertEqual(data["lianban_data"][0]["sector"], "电力")
         self.assertTrue(data["data_status"]["整合热榜"])
-        self.assertTrue(data["data_status"]["选股通盘中异动"])
+        self.assertFalse(data["data_status"]["选股通盘中异动"])
         self.assertTrue(data["data_status"]["顽主杯热门前十"])
         self.assertTrue(data["step_status"]["连板梯队提取"])
         by_step = {
@@ -417,8 +511,9 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(by_step["request.integrated_hot_rank"]["status"], "success")
         self.assertEqual(by_step["request.integrated_hot_rank"]["details"]["provider"], "primary_hot_rank.derived")
         self.assertFalse(by_step["request.integrated_hot_rank"]["details"]["fallback_used"])
-        self.assertEqual(by_step["request.xuangubao"]["details"]["plate_count"], 1)
-        self.assertEqual(by_step["request.xuangubao"]["details"]["diagnostic_note"], "newsflash=非法的token")
+        self.assertEqual(by_step["request.xuangubao"]["status"], "degraded")
+        self.assertEqual(by_step["request.xuangubao"]["details"]["plate_count"], 0)
+        self.assertEqual(by_step["request.xuangubao"]["details"]["diagnostic_note"], "target_date_news_missing")
         self.assertEqual(by_step["request.wanzhu_top10"]["details"]["stock_count"], 1)
         self.assertEqual(by_step["request.lianban_snapshot"]["status"], "success")
         self.assertIn("顽主杯热门前十获取", [row[0] for row in data["timer_summary"]["steps"]])
@@ -688,6 +783,60 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(xgb_log["status"], "success")
         self.assertEqual(xgb_log["details"]["news_count"], 1)
 
+    def test_build_replay_snapshot_contract_rejects_xuangubao_refresh_without_target_news(self):
+        snapshot = {
+            "hot_rank_top30": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "integrated_hot_list": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "xuangubao_data": {
+                "xuangubao_news": [],
+                "xuangubao_plates": [],
+                "xuangubao_limit_up_reasons": [],
+                "diagnostics": {"newsflash": "missing token"},
+            },
+            "wanzhu_top10": [{"rank": 1, "code": "601991", "name": "大唐发电"}],
+            "lianban_data": [],
+            "indices": [{"code": "sh000001"}],
+            "data_status": {
+                "整合热榜": True,
+                "选股通盘中异动": False,
+                "顽主杯热门前十": True,
+            },
+            "step_status": {
+                "整合热榜获取": True,
+                "选股通盘中异动获取": False,
+                "顽主杯热门前十获取": True,
+                "连板梯队提取": True,
+                "主要指数获取": True,
+            },
+            "module_logs": [],
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-18",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "fetch_xuangubao_data": lambda target_date=None: {
+                    "xuangubao_news": [],
+                    "xuangubao_plates": [{"name": "当前板块"}],
+                    "xuangubao_limit_up_reasons": [{"symbol": "600676.SS"}],
+                    "diagnostics": {"newsflash": "missing target-date news"},
+                }
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(data["xuangubao_data"]["xuangubao_plates"], [])
+        self.assertEqual(data["xuangubao_data"]["xuangubao_limit_up_reasons"], [])
+        self.assertFalse(data["data_status"]["选股通盘中异动"])
+        xgb_log = next(log for log in data["module_logs"] if log.get("step") == "request.xuangubao")
+        self.assertEqual(xgb_log["status"], "degraded")
+        self.assertEqual(xgb_log["details"]["diagnostic_note"], "target_date_news_missing")
+
     def test_build_replay_snapshot_contract_returns_not_found_when_snapshot_missing(self):
         result = build_replay_snapshot_contract(
             "2026-04-22",
@@ -806,7 +955,7 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(result["data"]["current_mainline_history_record"]["primary_mainline"], "半导体")
         self.assertEqual(result["data"]["recent_mainline_history"][0]["primary_mainline"], "电力")
         self.assertEqual(result["data"]["current_sector_turnover_snapshot"]["turnover_share_pct"], 18.1)
-        self.assertEqual(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"], 0.0)
+        self.assertIsNone(result["data"]["recent_sector_turnover_history"][0]["turnover_share_pct"])
         self.assertEqual(result["data"]["recent_sector_turnover_history"][1]["turnover_share_pct"], 15.8)
         self.assertEqual(result["data"]["mainline_turnover_summary"]["current_mainline"], "半导体")
         self.assertEqual(
@@ -1091,6 +1240,241 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(top_summary["double_mainline_summary"]["daily_attack_line"], "人形机器人")
         self.assertEqual(research_summary["share_trend_label"], "逆势试攻")
         self.assertNotIn("主线切换为人形机器人", research_summary["conclusion"])
+
+    def test_build_replay_snapshot_contract_keeps_split_cycle_and_daily_attack_labels(self):
+        resolved_summary = {
+            "current_mainline": "人形机器人",
+            "previous_mainline": "半导体",
+            "share_trend_label": "逆势试攻",
+            "conclusion": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线切换处理",
+            "data_text": "近期被记录方向分列：2026-05-20 半导体 13.6%；2026-05-21 人形机器人 2.5%；这些是各自板块点位，不做连续涨跌判断",
+            "action_text": "只观察承接，不新增参与",
+            "double_mainline_summary": {
+                "cycle_mainline": "半导体",
+                "daily_attack_line": "人形机器人",
+                "relationship": "人形机器人只是放量杀跌中的观察主攻线，不按周期主线处理",
+                "tomorrow_action": "只观察承接，不新增参与",
+            },
+            "mainline_attack_evidence_summary": {
+                "attack_state": "confirmed_attack",
+                "primary_line": "人形机器人",
+                "confirmation_evidence": "人形机器人资金净流入靠前，涨停更集中",
+            },
+            "turnover_share_trend_rows": [
+                {
+                    "date": "2026-05-20",
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "半导体",
+                    "mainline_turnover": "4050.00亿",
+                    "market_turnover": "29764.59亿",
+                    "share": "13.61%",
+                },
+                {
+                    "date": "2026-05-21",
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "人形机器人",
+                    "mainline_turnover": "880.00亿",
+                    "market_turnover": "35072.80亿",
+                    "share": "2.51%",
+                },
+            ],
+        }
+        snapshot = {
+            "market_research_snapshot": {
+                "observation": {"turnover": 35072.8},
+                "mainline_turnover_summary": dict(resolved_summary),
+            },
+            "current_mainline_history_record": {
+                "date": "2026-05-21",
+                "primary_mainline": "人形机器人",
+                "leading_line": "人形机器人",
+                "rotation_label": "逆势攻击",
+                "rotation_summary": "人形机器人资金净流入靠前，涨停更集中",
+            },
+            "recent_mainline_history": [
+                {"date": "2026-05-20", "primary_mainline": "半导体", "daily_attack_line": "半导体"},
+            ],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-05-21",
+                "sector_name": "人形机器人",
+                "sector_turnover": 880.0,
+                "total_turnover": 35072.8,
+                "turnover_share_pct": 2.51,
+            },
+            "recent_sector_turnover_history": [
+                {
+                    "date": "2026-05-20",
+                    "sector_name": "半导体",
+                    "cycle_mainline": "半导体",
+                    "daily_attack_line": "半导体",
+                    "sector_turnover": 4050.0,
+                    "total_turnover": 29764.59,
+                    "turnover_share_pct": 13.61,
+                }
+            ],
+            "mainline_turnover_summary": dict(resolved_summary),
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 35072.8,
+        }
+
+        def _unexpected_rebuild(**kwargs):
+            raise AssertionError("已拆分的周期主线和当天主攻线不应触发重建")
+
+        result = build_replay_snapshot_contract(
+            "2026-05-21",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "build_mainline_turnover_summary": _unexpected_rebuild,
+                "load_recent_mainline_history": (
+                    lambda target_date, lookback_days=25, max_scan_days=60: [
+                        {"date": "2026-05-20", "primary_mainline": "半导体", "daily_attack_line": "半导体"}
+                    ]
+                ),
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+            },
+        )
+
+        top_rows = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        research_rows = result["data"]["market_research_snapshot"]["mainline_turnover_summary"]["turnover_share_trend_rows"]
+        self.assertEqual(top_rows[-1]["cycle_mainline"], "半导体")
+        self.assertEqual(top_rows[-1]["daily_attack_line"], "人形机器人")
+        self.assertEqual(research_rows[-1]["cycle_mainline"], "半导体")
+        self.assertEqual(research_rows[-1]["daily_attack_line"], "人形机器人")
+
+    def test_build_replay_snapshot_contract_passes_tag_snapshot_into_mainline_rebuild(self):
+        snapshot = {
+            "market_research_snapshot": {
+                "observation": {"turnover": 31006.9},
+                "realtime_tag_evidence_snapshot": {
+                    "adopted_labels": ["国产芯片替代", "AI算力基础设施"],
+                    "groups": [
+                        {
+                            "采用名称": "国产芯片替代",
+                            "当日主攻分支": "国产芯片替代",
+                            "表层行业名": ["半导体", "元器件"],
+                            "关系判断": "父子",
+                        },
+                        {
+                            "采用名称": "AI算力基础设施",
+                            "当日主攻分支": "AI算力基础设施",
+                            "表层行业名": ["算力租赁"],
+                            "关系判断": "分支",
+                        },
+                    ],
+                },
+            },
+            "realtime_tag_evidence_snapshot": {
+                "adopted_labels": ["国产芯片替代", "AI算力基础设施"],
+                "groups": [
+                    {
+                        "采用名称": "国产芯片替代",
+                        "当日主攻分支": "国产芯片替代",
+                        "表层行业名": ["半导体", "元器件"],
+                        "关系判断": "父子",
+                    },
+                    {
+                        "采用名称": "AI算力基础设施",
+                        "当日主攻分支": "AI算力基础设施",
+                        "表层行业名": ["算力租赁"],
+                        "关系判断": "分支",
+                    },
+                ],
+            },
+            "current_mainline_history_record": {
+                "date": "2026-06-05",
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+            },
+            "recent_mainline_history": [
+                {"date": "2026-05-29", "primary_mainline": "电力", "daily_attack_line": "电力"},
+            ],
+            "current_sector_turnover_snapshot": {
+                "date": "2026-06-05",
+                "sector_name": "半导体",
+                "sector_turnover": 4154.85,
+                "total_turnover": 31006.9,
+                "turnover_share_pct": 13.4,
+            },
+            "recent_sector_turnover_history": [
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "电力",
+                    "cycle_mainline": "电力",
+                    "daily_attack_line": "电力",
+                    "sector_turnover": 296.49,
+                    "total_turnover": 33408.58,
+                    "turnover_share_pct": 0.9,
+                }
+            ],
+            "mainline_turnover_summary": {
+                "current_mainline": "",
+                "turnover_share_trend_rows": [],
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+            "total_turnover": 31006.9,
+        }
+        captured = {}
+
+        def _build_summary(**kwargs):
+            captured.update(kwargs)
+            snapshot_arg = kwargs.get("realtime_tag_evidence_snapshot") or {}
+            return {
+                "current_mainline": "",
+                "previous_mainline": "电力",
+                "share_trend_label": "分化",
+                "conclusion": "主线待确认，暂不输出成交额占比结论",
+                "double_mainline_summary": {
+                    "cycle_mainline": "-",
+                    "daily_attack_line": " / ".join(snapshot_arg.get("adopted_labels") or []),
+                    "relationship": "当日观察分支，不按周期主线处理",
+                    "tomorrow_action": "先看资金是否继续选择",
+                },
+                "mainline_attack_evidence_summary": {"attack_state": "chaotic_rotation"},
+                "turnover_share_trend_rows": [
+                    {
+                        "date": "2026-06-05",
+                        "cycle_mainline": "半导体",
+                        "daily_attack_line": " / ".join(snapshot_arg.get("adopted_labels") or []),
+                        "mainline_turnover": "4154.85亿",
+                        "market_turnover": "31006.90亿",
+                        "share": "13.4%",
+                    }
+                ],
+            }
+
+        result = build_replay_snapshot_contract(
+            "2026-06-05",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "build_mainline_turnover_summary": _build_summary,
+                "load_recent_mainline_history": (
+                    lambda target_date, lookback_days=25, max_scan_days=60: [
+                        {"date": "2026-05-29", "primary_mainline": "电力", "daily_attack_line": "电力"}
+                    ]
+                ),
+                "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+            },
+        )
+
+        self.assertIn("realtime_tag_evidence_snapshot", captured)
+        self.assertEqual(captured["realtime_tag_evidence_snapshot"]["adopted_labels"], ["国产芯片替代", "AI算力基础设施"])
+        row = result["data"]["mainline_turnover_summary"]["turnover_share_trend_rows"][-1]
+        self.assertEqual(row["cycle_mainline"], "半导体")
+        self.assertEqual(row["daily_attack_line"], "国产芯片替代 / AI算力基础设施")
 
     def test_build_replay_snapshot_contract_refills_zero_total_turnover_from_fact_db(self):
         snapshot = {
@@ -1435,6 +1819,91 @@ def _replay_probe(target_date, refresh_sources=None):
         by_step = {item.get("step"): item for item in result["data"].get("module_logs", [])}
         self.assertEqual(by_step["request.price_band_style_series"]["details"]["provider"], "storage.price_band_style_daily")
 
+    def test_ensure_replay_price_band_style_series_removes_stale_snapshot_when_refresh_returns_unavailable(self):
+        stale_rows = [
+            {"trade_date": f"2026-05-{day:02d}", "high_price_pct": -1.55, "low_price_pct": -1.87}
+            for day in range(3, 28)
+        ]
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "price_band_style_series": {
+                "available": True,
+                "source": "storage.price_band_style_daily.recent_window",
+                "rows": stale_rows,
+            },
+            "data_status": {"主要指数": True, "价格带风格趋势": True},
+            "step_status": {"主要指数获取": True, "价格带风格趋势获取": True},
+            "module_logs": [],
+        }
+
+        result = _ensure_replay_price_band_style_series(
+            snapshot,
+            "2026-06-05",
+            safe_float=lambda value: float(value or 0),
+            helpers={
+                "get_price_band_style_series_from_tushare": lambda target_date: {
+                    "available": False,
+                    "status": "stale_recent_window",
+                    "source": "storage.price_band_style_daily.recent_window",
+                    "requested_trade_date": "2026-06-05",
+                    "latest_trade_date": "2026-05-27",
+                    "rows": [],
+                    "summary": "价格带风格趋势只到 2026-05-27，未覆盖 2026-06-05 附近交易日；关键数据不完整，停止生成。",
+                },
+            },
+        )
+
+        price_band = result["price_band_style_series"]
+        self.assertFalse(price_band["available"])
+        self.assertEqual(price_band["rows"], [])
+        self.assertEqual(price_band["latest_trade_date"], "2026-05-27")
+        self.assertFalse(result["data_status"]["价格带风格趋势"])
+        self.assertFalse(result["step_status"]["价格带风格趋势获取"])
+        by_step = {item.get("step"): item for item in result.get("module_logs", [])}
+        self.assertEqual(by_step["request.price_band_style_series"]["status"], "degraded")
+
+    def test_ensure_replay_price_band_style_series_rejects_nonempty_stale_refresh_rows(self):
+        stale_rows = [
+            {"trade_date": f"2026-05-{day:02d}", "high_price_pct": -1.55, "low_price_pct": -1.87}
+            for day in range(3, 28)
+        ]
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "price_band_style_series": {
+                "available": True,
+                "source": "storage.price_band_style_daily.recent_window",
+                "rows": stale_rows,
+            },
+            "data_status": {"主要指数": True, "价格带风格趋势": True},
+            "step_status": {"主要指数获取": True, "价格带风格趋势获取": True},
+            "module_logs": [],
+        }
+
+        result = _ensure_replay_price_band_style_series(
+            snapshot,
+            "2026-06-05",
+            safe_float=lambda value: float(value or 0),
+            helpers={
+                "get_price_band_style_series_from_tushare": lambda target_date: {
+                    "available": True,
+                    "source": "storage.price_band_style_daily.recent_window",
+                    "requested_trade_date": "2026-06-05",
+                    "latest_trade_date": "2026-05-27",
+                    "rows": stale_rows,
+                    "summary": "最近可用窗口（截至2026-05-27）：近25个交易日价格带风格。",
+                },
+            },
+        )
+
+        price_band = result["price_band_style_series"]
+        self.assertFalse(price_band["available"])
+        self.assertEqual(price_band["rows"], [])
+        self.assertEqual(price_band["latest_trade_date"], "2026-05-27")
+        self.assertFalse(result["data_status"]["价格带风格趋势"])
+        self.assertFalse(result["step_status"]["价格带风格趋势获取"])
+        by_step = {item.get("step"): item for item in result.get("module_logs", [])}
+        self.assertEqual(by_step["request.price_band_style_series"]["status"], "degraded")
+
     def test_build_replay_snapshot_contract_rebuilds_mainline_turnover_when_history_labels_drift(self):
         snapshot = {
             "current_mainline_history_record": {"date": "2026-05-20", "primary_mainline": "半导体"},
@@ -1580,7 +2049,8 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(rows[-1]["date"], "2026-05-20")
         self.assertEqual(rows[1]["cycle_mainline"], "电力")
         self.assertEqual(rows[1]["mainline_turnover"], "数据暂缺")
-        self.assertIn("近25个交易日主线成交额占比趋势", result["data"]["mainline_turnover_summary"]["turnover_share_trend_summary"])
+        self.assertIn("近25个交易日小周期成交额记录", result["data"]["mainline_turnover_summary"]["turnover_share_trend_summary"])
+        self.assertIn("不作为大周期主线切换确认", result["data"]["mainline_turnover_summary"]["turnover_share_trend_summary"])
 
     def test_build_replay_snapshot_contract_rebuilds_short_mainline_turnover_summary(self):
         recent_mainline_history = [
@@ -1688,10 +2158,31 @@ def _replay_probe(target_date, refresh_sources=None):
             "turnover_rank": [],
             "turnover_over_100b": [],
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
+            "csi1000_index": {
+                "name": "中证1000",
+                "code": "000852",
+                "price": 6123.45,
+                "change_pct": 1.1,
+                "data_source": "tushare.index_daily",
+                "trade_date": "2026-05-13",
+            },
+            "hot_rank_top50": [
+                {
+                    "rank": index,
+                    "code": f"{index:06d}",
+                    "name": f"目标日热榜样本{index}",
+                    "data_source": "postgresql.daily_report_facts",
+                    "trade_date": "2026-05-13",
+                }
+                for index in range(1, 51)
+            ],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
             "data_status": {
                 "两市成交额": False,
                 "主要指数": True,
                 "中证全指": False,
+                "中证1000": True,
                 "成交额排名": False,
                 "选股通盘中异动": True,
             },
@@ -1699,6 +2190,7 @@ def _replay_probe(target_date, refresh_sources=None):
                 "两市成交额获取": False,
                 "主要指数获取": True,
                 "中证全指获取": False,
+                "中证1000获取": True,
                 "成交额排名获取": False,
                 "选股通盘中异动获取": True,
             },
@@ -1716,6 +2208,13 @@ def _replay_probe(target_date, refresh_sources=None):
                     "status": "degraded",
                     "message": "中证全指为空或无效",
                     "details": {"provider": "akshare.stock_zh_index_daily_em"},
+                },
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "message": "已获取中证1000",
+                    "details": {"provider": "tushare.index_daily", "price": 6123.45},
                 },
                 {
                     "module": "domains.market_activity.request",
@@ -1801,7 +2300,10 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(provider_by_step["request.turnover_rank"], "tushare.daily")
         self.assertEqual(provider_by_step["request.wind_a"], "akshare.stock_zh_index_daily_em")
         degraded_steps = [item["step"] for item in data["request_diagnostics"]["degraded"]]
-        self.assertEqual(degraded_steps, ["request.wind_a"])
+        self.assertEqual(degraded_steps, ["request.wind_a", "request.stock_quotes"])
+        stock_quote_log = next(item for item in data["module_logs"] if item.get("step") == "request.stock_quotes")
+        self.assertEqual(stock_quote_log["status"], "degraded")
+        self.assertEqual(stock_quote_log["details"]["provider"], "snapshot.stock_full_info")
         preflight = build_report_preflight(data, "2026-05-13")
         self.assertEqual(preflight["failures"], ["中证全指"])
 
@@ -1846,6 +2348,12 @@ def _replay_probe(target_date, refresh_sources=None):
             ],
             "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
         }
+
+        hot_rank_calls = []
+
+        def _date_safe_hot_rank(*, target_date=None, limit=50):
+            hot_rank_calls.append((target_date, limit))
+            return hot_rank_rows[:limit]
 
         result = build_replay_snapshot_contract(
             "2026-05-28",
@@ -1930,6 +2438,12 @@ def _replay_probe(target_date, refresh_sources=None):
             {"rank": index, "code": f"{index:06d}", "name": f"热股{index}", "concepts": ["CPO"] if index <= 4 else ["电力"]}
             for index in range(1, 51)
         ]
+        hot_rank_calls = []
+
+        def _date_safe_hot_rank(*, target_date=None, limit=50):
+            hot_rank_calls.append((target_date, limit))
+            return hot_rank_rows[:limit]
+
         result = build_replay_snapshot_contract(
             "2026-05-28",
             refresh_sources=["noop"],
@@ -1942,11 +2456,12 @@ def _replay_probe(target_date, refresh_sources=None):
                 "get_market_daily_total_from_fact_db": lambda target_date: {},
                 "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
                 "get_wind_a_from_tushare": lambda target_date: {},
-                "get_stock_hot_rank": lambda target_date=None, limit=50: hot_rank_rows[:limit],
+                "get_stock_hot_rank": _date_safe_hot_rank,
             },
         )
 
         data = result["data"]
+        self.assertEqual(hot_rank_calls, [("2026-05-28", 50)])
         self.assertEqual(len(data["hot_rank_top50"]), 50)
         self.assertEqual(data["hot_rank_sample_size"], 50)
         self.assertTrue(data["data_status"]["热度前50个股"])
@@ -1963,6 +2478,138 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(by_step["request.integrated_hot_rank"]["details"]["integrated_count"], 50)
         preflight = build_report_preflight(data, "2026-05-28")
         self.assertNotIn("热度前50个股", preflight["failures"])
+
+    def test_build_replay_snapshot_contract_does_not_refill_hot_rank_without_date_safe_helper(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29873.26,
+            "turnover_rank": [{"code": "300308", "data_source": "tushare.daily"}],
+            "wind_a_alternative": {"price": 6480.47, "data_source": "tushare.index_daily"},
+            "market_stats": {"up_count": 3018, "down_count": 2365},
+            "hot_rank_top30": [
+                {"rank": index, "code": f"{index:06d}", "name": f"热股{index}", "concepts": ["CPO"]}
+                for index in range(1, 31)
+            ],
+            "hot_rank_sample_size": 30,
+            "hot_rank_sample_target": 50,
+            "integrated_hot_list": [],
+            "tag_distribution": {},
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": False,
+                "整合热榜": False,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "涨停跌停数据获取": True,
+                "热度前50个股获取": False,
+                "整合热榜获取": False,
+                "选股通盘中异动获取": True,
+            },
+            "module_logs": [],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+        }
+
+        result = build_replay_snapshot_contract(
+            "2026-05-28",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": lambda target_date: {},
+                "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
+                "get_wind_a_from_tushare": lambda target_date: {},
+            },
+        )
+
+        data = result["data"]
+        self.assertNotIn("hot_rank_top50", data)
+        self.assertEqual(data["hot_rank_sample_size"], 30)
+        self.assertEqual(data["hot_rank_sample_target"], 50)
+        self.assertFalse(data["data_status"]["热度前50个股"])
+        by_step = {item["step"]: item for item in data["module_logs"] if item.get("step") == "request.hot_rank.primary"}
+        self.assertEqual(by_step["request.hot_rank.primary"]["status"], "degraded")
+        self.assertEqual(by_step["request.hot_rank.primary"]["details"]["provider"], "target_date_hot_rank_only")
+
+    def test_build_replay_snapshot_contract_rejects_legacy_current_hot_rank_helper(self):
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "total_turnover": 29873.26,
+            "turnover_rank": [{"code": "300308", "data_source": "tushare.daily"}],
+            "wind_a_alternative": {"price": 6480.47, "data_source": "tushare.index_daily"},
+            "market_stats": {"up_count": 3018, "down_count": 2365},
+            "hot_rank_top30": [
+                {"rank": index, "code": f"{index:06d}", "name": f"热股{index}", "concepts": ["CPO"]}
+                for index in range(1, 31)
+            ],
+            "hot_rank_sample_size": 30,
+            "hot_rank_sample_target": 50,
+            "integrated_hot_list": [],
+            "tag_distribution": {},
+            "data_status": {
+                "两市成交额": True,
+                "主要指数": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": False,
+                "整合热榜": False,
+            },
+            "step_status": {
+                "两市成交额获取": True,
+                "主要指数获取": True,
+                "中证全指获取": True,
+                "成交额排名获取": True,
+                "涨停跌停数据获取": True,
+                "热度前50个股获取": False,
+                "整合热榜获取": False,
+                "选股通盘中异动获取": True,
+            },
+            "module_logs": [],
+            "xuangubao_data": {"xuangubao_news": [{"title": "今日新闻"}]},
+        }
+        calls = []
+
+        def _legacy_current_hot_rank(num=50):
+            calls.append(num)
+            return [
+                {"rank": index, "code": f"{index:06d}", "name": f"当前热股{index}"}
+                for index in range(1, 51)
+            ]
+
+        result = build_replay_snapshot_contract(
+            "2026-05-28",
+            refresh_sources=["noop"],
+            load_data_snapshot=lambda target_date: (snapshot, ""),
+            tencent_factory=lambda: _FakeTencentFinanceData([]),
+            get_major_indices_from_iwencai=lambda target_date="": [],
+            safe_float=lambda value: float(value or 0),
+            print_fn=lambda *args, **kwargs: None,
+            helpers={
+                "get_market_daily_total_from_fact_db": lambda target_date: {},
+                "get_turnover_rank_from_fact_db": lambda target_date, limit=50: [],
+                "get_wind_a_from_tushare": lambda target_date: {},
+                "get_stock_hot_rank": _legacy_current_hot_rank,
+            },
+        )
+
+        data = result["data"]
+        self.assertEqual(calls, [])
+        self.assertNotIn("hot_rank_top50", data)
+        self.assertEqual(data["hot_rank_sample_size"], 30)
+        by_step = {item["step"]: item for item in data["module_logs"] if item.get("step") == "request.hot_rank.primary"}
+        self.assertEqual(by_step["request.hot_rank.primary"]["status"], "degraded")
+        self.assertEqual(by_step["request.hot_rank.primary"]["details"]["provider"], "target_date_hot_rank_only")
 
     def test_build_replay_snapshot_contract_refills_empty_lhb_from_tushare(self):
         snapshot = {
@@ -2105,6 +2752,7 @@ def _replay_probe(target_date, refresh_sources=None):
                         "low": 155.74,
                         "open": 158.09,
                         "close": 169.85,
+                        "trade_date": target_date,
                         "data_source": "tushare.daily",
                     }
                 },
@@ -2121,6 +2769,394 @@ def _replay_probe(target_date, refresh_sources=None):
             if item.get("step") == "request.stock_quotes"
         }
         self.assertEqual(by_step["request.stock_quotes"]["details"]["stock_count"], 2)
+
+    def test_replay_stock_quotes_refresh_all_report_stock_sources(self):
+        snapshot = {
+            "stock_full_info": {},
+            "hot_rank_top50": [{"rank": 46, "code": "sh600255", "name": "鑫科材料", "rate": 12155000}],
+            "hot_rank_top30": [],
+            "lhb_net_buy_top10": [],
+            "lhb_net_sell_top10": [],
+            "lianban_data": [],
+            "display_observation_candidates": [{"code": "001896", "name": "豫能控股"}],
+            "module_logs": [],
+        }
+        captured_codes = []
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: (
+                    captured_codes.extend(sorted(codes))
+                    or {
+                        "001896": {
+                            "name": "豫能控股",
+                            "change_pct": -1.41,
+                            "high": 21.50,
+                            "low": 19.00,
+                            "open": 19.87,
+                            "close": 19.60,
+                            "zt_status": "正常",
+                            "trade_date": target_date,
+                            "data_source": "tushare.daily",
+                        },
+                        "600255": {
+                            "name": "鑫科材料",
+                            "change_pct": 2.67,
+                            "high": 4.83,
+                            "low": 4.30,
+                            "open": 4.35,
+                            "close": 4.61,
+                            "zt_status": "正常",
+                            "trade_date": target_date,
+                            "data_source": "tushare.daily",
+                        }
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(captured_codes, ["001896", "600255"])
+        self.assertEqual(data["stock_full_info"]["001896"]["close"], 19.60)
+        self.assertEqual(data["stock_full_info"]["600255"]["close"], 4.61)
+        self.assertEqual(data["hot_rank_top50"][0]["change_pct"], 2.67)
+        self.assertEqual(data["hot_rank_top50"][0]["high"], 4.83)
+        self.assertEqual(data["hot_rank_top50"][0]["close"], 4.61)
+        self.assertEqual(data["display_observation_candidates"][0]["change_pct"], -1.41)
+        self.assertEqual(data["display_observation_candidates"][0]["close"], 19.60)
+
+    def test_replay_stock_quotes_refreshes_incomplete_existing_quote(self):
+        snapshot = {
+            "stock_full_info": {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": 0,
+                    "high": 0,
+                    "low": 0,
+                    "open": 0,
+                    "close": 0,
+                    "data_source": "old.snapshot",
+                }
+            },
+            "display_observation_candidates": [{"code": "001896", "name": "豫能控股"}],
+            "module_logs": [],
+        }
+        captured_codes = []
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: (
+                    captured_codes.extend(sorted(codes))
+                    or {
+                        "001896": {
+                            "name": "豫能控股",
+                            "change_pct": -1.41,
+                            "high": 21.50,
+                            "low": 19.00,
+                            "open": 19.87,
+                            "close": 19.60,
+                            "zt_status": "正常",
+                            "trade_date": target_date,
+                            "data_source": "tushare.daily",
+                        }
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(captured_codes, ["001896"])
+        self.assertEqual(data["stock_full_info"]["001896"]["change_pct"], -1.41)
+        self.assertEqual(data["stock_full_info"]["001896"]["close"], 19.60)
+        self.assertEqual(data["display_observation_candidates"][0]["change_pct"], -1.41)
+        self.assertEqual(data["display_observation_candidates"][0]["close"], 19.60)
+
+    def test_replay_stock_quotes_rejects_refill_without_target_date_proof(self):
+        snapshot = {
+            "stock_full_info": {},
+            "display_observation_candidates": [{"code": "001896", "name": "豫能控股"}],
+            "module_logs": [],
+        }
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": -1.41,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                        "data_source": "tushare.daily",
+                    }
+                },
+            },
+        )
+
+        self.assertNotIn("001896", data["stock_full_info"])
+        self.assertNotIn("change_pct", data["display_observation_candidates"][0])
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.stock_quotes"
+        }
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["rejected_codes"], ["001896"])
+
+    def test_replay_stock_quotes_rejects_refill_from_wrong_trade_date(self):
+        snapshot = {
+            "stock_full_info": {},
+            "display_observation_candidates": [{"code": "001896", "name": "豫能控股"}],
+            "module_logs": [],
+        }
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": 3.21,
+                        "high": 22.00,
+                        "low": 20.00,
+                        "open": 20.50,
+                        "close": 21.80,
+                        "trade_date": "2026-06-09",
+                        "data_source": "tushare.daily",
+                    }
+                },
+            },
+        )
+
+        self.assertNotIn("001896", data["stock_full_info"])
+        self.assertNotIn("change_pct", data["display_observation_candidates"][0])
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.stock_quotes"
+        }
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["rejected_codes"], ["001896"])
+
+    def test_replay_stock_quotes_without_fetcher_clears_undated_snapshot_quote_fields(self):
+        snapshot = {
+            "stock_full_info": {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": -1.41,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                    "data_source": "old.snapshot",
+                }
+            },
+            "display_observation_candidates": [
+                {
+                    "code": "001896",
+                    "name": "豫能控股",
+                    "change_pct": -1.41,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                }
+            ],
+            "module_logs": [],
+        }
+
+        data = _ensure_replay_stock_quotes(snapshot, "2026-06-08", helpers={})
+
+        self.assertNotIn("001896", data["stock_full_info"])
+        self.assertEqual(data["display_observation_candidates"][0]["name"], "豫能控股")
+        self.assertNotIn("change_pct", data["display_observation_candidates"][0])
+        self.assertNotIn("close", data["display_observation_candidates"][0])
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.stock_quotes"
+        }
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["provider"], "snapshot.stock_full_info")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["rejected_codes"], ["001896"])
+
+    def test_replay_stock_quotes_fetcher_error_clears_undated_snapshot_quote_fields(self):
+        snapshot = {
+            "stock_full_info": {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": -1.41,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                    "data_source": "old.snapshot",
+                }
+            },
+            "display_observation_candidates": [
+                {
+                    "code": "001896",
+                    "name": "豫能控股",
+                    "change_pct": -1.41,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                }
+            ],
+            "module_logs": [],
+        }
+
+        def raise_fetch_error(_codes, _target_date):
+            raise RuntimeError("quote source unavailable")
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={"fetch_stock_batch_quote_info": raise_fetch_error},
+        )
+
+        self.assertNotIn("001896", data["stock_full_info"])
+        self.assertEqual(data["display_observation_candidates"][0]["name"], "豫能控股")
+        self.assertNotIn("change_pct", data["display_observation_candidates"][0])
+        self.assertNotIn("close", data["display_observation_candidates"][0])
+        by_step = {
+            item["step"]: item
+            for item in data["module_logs"]
+            if item.get("step") == "request.stock_quotes"
+        }
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["rejected_codes"], ["001896"])
+
+    def test_replay_stock_quotes_refreshes_partial_zero_ohlc_and_undated_quote(self):
+        snapshot = {
+            "stock_full_info": {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": 0.0,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                    "data_source": "old.snapshot",
+                },
+                "002585": {
+                    "name": "双星新材",
+                    "change_pct": 0.0,
+                    "high": 10.50,
+                    "low": 9.80,
+                    "open": 9.87,
+                    "close": 10.20,
+                    "trade_date": "2026-06-08",
+                    "data_source": "tushare.daily",
+                },
+                "600255": {
+                    "name": "鑫科材料",
+                    "change_pct": 0.0,
+                    "high": 0,
+                    "low": 4.30,
+                    "open": 4.35,
+                    "close": 4.61,
+                    "data_source": "old.snapshot",
+                },
+            },
+            "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+            "display_observation_candidates": [{"code": "002585", "name": "双星新材"}],
+            "watch_anchor": {"code": "600255", "name": "鑫科材料"},
+            "module_logs": [],
+        }
+        captured_codes = []
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: (
+                    captured_codes.extend(sorted(codes))
+                    or {
+                        "001896": {
+                            "name": "豫能控股",
+                            "change_pct": -1.41,
+                            "high": 21.50,
+                            "low": 19.00,
+                            "open": 19.87,
+                            "close": 19.60,
+                            "trade_date": "2026-06-08",
+                            "data_source": "tushare.daily",
+                        },
+                        "600255": {
+                            "name": "鑫科材料",
+                            "change_pct": 2.67,
+                            "high": 4.83,
+                            "low": 4.30,
+                            "open": 4.35,
+                            "close": 4.61,
+                            "trade_date": "2026-06-08",
+                            "data_source": "tushare.daily",
+                        }
+                    }
+                ),
+            },
+        )
+
+        self.assertEqual(captured_codes, ["001896", "600255"])
+        self.assertEqual(data["stock_full_info"]["001896"]["trade_date"], "2026-06-08")
+        self.assertEqual(data["stock_full_info"]["002585"]["change_pct"], 0.0)
+        self.assertEqual(data["selected_position_candidate"]["close"], 19.60)
+        self.assertEqual(data["stock_full_info"]["600255"]["high"], 4.83)
+        self.assertEqual(data["watch_anchor"]["change_pct"], 2.67)
+
+    def test_replay_stock_quotes_refreshes_existing_quote_from_wrong_trade_date(self):
+        snapshot = {
+            "stock_full_info": {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": 3.21,
+                    "high": 22.00,
+                    "low": 20.00,
+                    "open": 20.50,
+                    "close": 21.80,
+                    "trade_date": "2026-06-09",
+                    "data_source": "old.snapshot",
+                }
+            },
+            "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+            "module_logs": [],
+        }
+        captured = {}
+
+        data = _ensure_replay_stock_quotes(
+            snapshot,
+            "2026-06-08",
+            helpers={
+                "fetch_stock_batch_quote_info": lambda codes, target_date: captured.update(
+                    {"codes": sorted(codes), "target_date": target_date}
+                )
+                or {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": -1.41,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                        "trade_date": "2026-06-08",
+                        "data_source": "tushare.daily",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(captured, {"codes": ["001896"], "target_date": "2026-06-08"})
+        self.assertEqual(data["stock_full_info"]["001896"]["trade_date"], "2026-06-08")
+        self.assertEqual(data["selected_position_candidate"]["change_pct"], -1.41)
+        self.assertEqual(data["selected_position_candidate"]["close"], 19.60)
 
     def test_build_replay_snapshot_contract_derives_lianban_from_replayed_limit_pool(self):
         snapshot = {
@@ -2355,11 +3391,32 @@ def _replay_probe(target_date, refresh_sources=None):
             "indices": [{"code": "sh000001"}],
             "total_turnover": 32642.12,
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
+            "csi1000_index": {
+                "name": "中证1000",
+                "code": "000852",
+                "price": 6123.45,
+                "change_pct": 1.1,
+                "data_source": "tushare.index_daily",
+                "trade_date": "2026-05-13",
+            },
             "turnover_rank": [{"code": "601318", "data_source": "tushare.daily"}],
+            "hot_rank_top50": [
+                {
+                    "rank": index,
+                    "code": f"{index:06d}",
+                    "name": f"目标日热榜样本{index}",
+                    "data_source": "postgresql.daily_report_facts",
+                    "trade_date": "2026-05-13",
+                }
+                for index in range(1, 51)
+            ],
+            "hot_rank_sample_size": 50,
+            "hot_rank_sample_target": 50,
             "data_status": {
                 "两市成交额": True,
                 "主要指数": True,
                 "中证全指": False,
+                "中证1000": True,
                 "成交额排名": True,
                 "选股通盘中异动": True,
             },
@@ -2367,6 +3424,7 @@ def _replay_probe(target_date, refresh_sources=None):
                 "两市成交额获取": True,
                 "主要指数获取": True,
                 "中证全指获取": False,
+                "中证1000获取": True,
                 "成交额排名获取": True,
                 "选股通盘中异动获取": True,
             },
@@ -2384,6 +3442,13 @@ def _replay_probe(target_date, refresh_sources=None):
                     "status": "degraded",
                     "message": "中证全指为空或无效",
                     "details": {"provider": "akshare.stock_zh_index_daily_em"},
+                },
+                {
+                    "module": "domains.market_state.request",
+                    "step": "request.csi1000",
+                    "status": "success",
+                    "message": "已获取中证1000",
+                    "details": {"provider": "tushare.index_daily", "price": 6123.45},
                 },
                 {
                     "module": "domains.market_activity.request",
@@ -2462,9 +3527,18 @@ def _replay_probe(target_date, refresh_sources=None):
             "step_status": {"主要指数获取": True},
         }
 
-        def _build_report_outputs(data, target_date, supplementary_perspective="", has_personal_positions=False, run_mode="frozen", position_report_text=""):
+        def _build_report_outputs(
+            data,
+            target_date,
+            supplementary_perspective="",
+            has_personal_positions=False,
+            run_mode="frozen",
+            position_report_text="",
+            persist_runtime_artifacts=True,
+        ):
             captured["target_date"] = target_date
             captured["run_mode"] = run_mode
+            captured["persist_runtime_artifacts"] = persist_runtime_artifacts
             captured["mainline"] = data["current_mainline_history_record"]["primary_mainline"]
             captured["share_pct"] = data["current_sector_turnover_snapshot"]["turnover_share_pct"]
             mainline_line = (
@@ -2476,7 +3550,7 @@ def _replay_probe(target_date, refresh_sources=None):
                 REPORT_VARIANT_SUMMARY: "# 执行摘要\n" + mainline_line,
             }
 
-        with TemporaryDirectory() as output_dir:
+        with TemporaryDirectory() as output_dir, patch("daily_report_render.assert_report_required_facts_complete", return_value={}):
             result = replay_runtime.build_replay_report_outputs_contract(
                 "2026-04-23",
                 refresh_sources=["noop"],
@@ -2488,6 +3562,11 @@ def _replay_probe(target_date, refresh_sources=None):
                 save_report_outputs=save_report_outputs,
                 output_dir=output_dir,
                 print_fn=lambda *args, **kwargs: None,
+                helpers={
+                    "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                    "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                    "has_resolved_mainline_turnover_summary": lambda summary: True,
+                },
             )
 
             full_path = Path(result["saved_paths"][REPORT_VARIANT_FULL])
@@ -2501,10 +3580,60 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertTrue(result["found"])
         self.assertEqual(captured["target_date"], "2026-04-23")
         self.assertEqual(captured["run_mode"], "replay")
+        self.assertFalse(captured["persist_runtime_artifacts"])
         self.assertEqual(captured["mainline"], "电力")
         self.assertEqual(captured["share_pct"], 2.7)
         self.assertTrue(any(log["step"] == "render.report_outputs" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "save.report_outputs" for log in result["module_logs"]))
+
+    def test_replay_report_outputs_contract_stops_before_save_when_required_facts_missing(self):
+        replay_runtime = self._load_module()
+        calls = []
+        snapshot = {
+            "analysis": {
+                "mainline_history_record": {
+                    "date": "2026-04-23",
+                    "primary_mainline": "电力",
+                },
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        def _build_report_outputs(*args, **kwargs):
+            calls.append("build")
+            self.assertFalse(kwargs["persist_runtime_artifacts"])
+            return {REPORT_VARIANT_FULL: "# 完整版"}
+
+        def _save_report_outputs(*args, **kwargs):
+            calls.append("save")
+            raise AssertionError("report save should not run")
+
+        with TemporaryDirectory() as output_dir, patch(
+            "daily_report_render.assert_report_required_facts_complete",
+            side_effect=RuntimeError("2026-04-23 日报关键数据不完整，停止生成：主线证据"),
+        ):
+            with self.assertRaises(RuntimeError):
+                replay_runtime.build_replay_report_outputs_contract(
+                    "2026-04-23",
+                    refresh_sources=["noop"],
+                    load_data_snapshot=lambda target_date: (snapshot, ""),
+                    tencent_factory=lambda: _FakeTencentFinanceData([]),
+                    get_major_indices_from_iwencai=lambda target_date="": [],
+                    safe_float=lambda value: float(value or 0),
+                    build_report_outputs=_build_report_outputs,
+                    save_report_outputs=_save_report_outputs,
+                    output_dir=output_dir,
+                    print_fn=lambda *args, **kwargs: None,
+                    helpers={
+                        "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                        "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                        "has_resolved_mainline_turnover_summary": lambda summary: True,
+                    },
+                )
+
+        self.assertEqual(calls, ["build"])
 
 
 if __name__ == "__main__":

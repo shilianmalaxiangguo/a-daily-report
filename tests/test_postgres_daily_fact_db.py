@@ -95,6 +95,265 @@ class _FakeConnection:
         return False
 
 
+class _MemoryDailyFactCursor:
+    def __init__(self, state):
+        self.state = state
+        self.last_rows = []
+
+    def execute(self, sql, params=None):
+        normalized_sql = " ".join(str(sql).split())
+        params = tuple(params or ())
+        self.last_rows = []
+        if "INSERT INTO stock_daily_quotes_recent" in normalized_sql:
+            (
+                trade_date,
+                ts_code,
+                stock_code,
+                market,
+                name,
+                open_price,
+                high,
+                low,
+                close,
+                pct_chg,
+                vol,
+                amount_yi,
+                source_run_id,
+            ) = params
+            self.state["quotes"][(trade_date, ts_code)] = {
+                "trade_date": trade_date,
+                "ts_code": ts_code,
+                "stock_code": stock_code,
+                "market": market,
+                "name": name,
+                "open": open_price,
+                "high": high,
+                "low": low,
+                "close": close,
+                "pct_chg": pct_chg,
+                "vol": vol,
+                "amount_yi": amount_yi,
+                "source_run_id": source_run_id,
+            }
+        elif "SELECT COALESCE(SUM(amount_yi), 0) AS total_amount_yi, COUNT(*) AS stock_count FROM stock_daily_quotes_recent" in normalized_sql:
+            trade_date = params[0]
+            rows = [row for row in self.state["quotes"].values() if row["trade_date"] == trade_date]
+            self.last_rows = [{"total_amount_yi": sum(float(row["amount_yi"]) for row in rows), "stock_count": len(rows)}]
+        elif "INSERT INTO market_daily_totals" in normalized_sql:
+            trade_date, market_scope, total_amount_yi, stock_count, source_policy, source_run_id = params
+            self.state["totals"][(trade_date, market_scope)] = {
+                "trade_date": trade_date,
+                "market_scope": market_scope,
+                "total_amount_yi": total_amount_yi,
+                "stock_count": stock_count,
+                "source_policy": source_policy,
+                "source_run_id": source_run_id,
+            }
+        elif "SELECT total_amount_yi FROM market_daily_totals" in normalized_sql:
+            trade_date, market_scope = params
+            row = self.state["totals"].get((trade_date, market_scope))
+            self.last_rows = [{"total_amount_yi": row["total_amount_yi"]}] if row else []
+        elif "SELECT COUNT(*) AS total_count, COUNT(*) FILTER (WHERE pct_chg > 0) AS up_count" in normalized_sql:
+            trade_date = params[0]
+            rows = [row for row in self.state["quotes"].values() if row["trade_date"] == trade_date]
+            self.last_rows = [
+                {
+                    "total_count": len(rows),
+                    "up_count": len([row for row in rows if float(row["pct_chg"]) > 0]),
+                    "down_count": len([row for row in rows if float(row["pct_chg"]) < 0]),
+                    "flat_count": len([row for row in rows if float(row["pct_chg"]) == 0]),
+                    "zt_count": len([row for row in rows if float(row["pct_chg"]) >= 9.8]),
+                    "dt_count": len([row for row in rows if float(row["pct_chg"]) <= -9.8]),
+                }
+            ]
+        elif "SELECT trade_date, ts_code, stock_code, name, amount_yi FROM stock_daily_quotes_recent" in normalized_sql:
+            trade_date, limit = params
+            rows = [
+                row for row in self.state["quotes"].values()
+                if row["trade_date"] == trade_date and float(row["amount_yi"]) > 0
+            ]
+            rows = sorted(rows, key=lambda row: (-float(row["amount_yi"]), row["ts_code"]))[: int(limit)]
+            self.last_rows = [
+                {
+                    "trade_date": row["trade_date"],
+                    "ts_code": row["ts_code"],
+                    "stock_code": row["stock_code"],
+                    "name": row["name"],
+                    "amount_yi": row["amount_yi"],
+                }
+                for row in rows
+            ]
+        elif "DELETE FROM turnover_rank_daily" in normalized_sql:
+            trade_date, rank_scope = params
+            self.state["ranks"] = [
+                row for row in self.state["ranks"]
+                if not (row["trade_date"] == trade_date and row["rank_scope"] == rank_scope)
+            ]
+        elif "INSERT INTO turnover_rank_daily" in normalized_sql:
+            (
+                trade_date,
+                rank_scope,
+                rank_no,
+                ts_code,
+                stock_code,
+                name,
+                amount_yi,
+                total_amount_yi,
+                amount_share_pct,
+                source_run_id,
+            ) = params
+            self.state["ranks"].append(
+                {
+                    "trade_date": trade_date,
+                    "rank_scope": rank_scope,
+                    "rank_no": rank_no,
+                    "ts_code": ts_code,
+                    "stock_code": stock_code,
+                    "name": name,
+                    "amount_yi": amount_yi,
+                    "total_amount_yi": total_amount_yi,
+                    "amount_share_pct": amount_share_pct,
+                    "source_run_id": source_run_id,
+                }
+            )
+        elif "SELECT DISTINCT trade_date FROM turnover_rank_daily" in normalized_sql:
+            end_date, rank_scope, window_days = params
+            dates = sorted(
+                {
+                    row["trade_date"]
+                    for row in self.state["ranks"]
+                    if row["trade_date"] <= end_date and row["rank_scope"] == rank_scope
+                },
+                reverse=True,
+            )[: int(window_days)]
+            self.last_rows = [{"trade_date": date} for date in dates]
+        elif "SELECT COALESCE(SUM(amount_yi), 0) AS top_amount_yi, COALESCE(MAX(total_amount_yi), 0) AS market_amount_yi FROM turnover_rank_daily" in normalized_sql:
+            trade_date, rank_scope, limit = params
+            rows = [
+                row for row in self.state["ranks"]
+                if row["trade_date"] == trade_date
+                and row["rank_scope"] == rank_scope
+                and int(row["rank_no"]) <= int(limit)
+            ]
+            self.last_rows = [
+                {
+                    "top_amount_yi": sum(float(row["amount_yi"]) for row in rows),
+                    "market_amount_yi": max([float(row["total_amount_yi"]) for row in rows] or [0.0]),
+                }
+            ]
+        elif "SELECT DISTINCT source_run_id FROM turnover_rank_daily" in normalized_sql:
+            trade_date, rank_scope, limit = params
+            ids = sorted(
+                {
+                    int(row["source_run_id"])
+                    for row in self.state["ranks"]
+                    if row["trade_date"] == trade_date
+                    and row["rank_scope"] == rank_scope
+                    and int(row["rank_no"]) <= int(limit)
+                    and int(row["source_run_id"]) > 0
+                }
+            )
+            self.last_rows = [{"source_run_id": value} for value in ids]
+        elif "SELECT trade_date, rank_scope, rank_no, ts_code, stock_code, name, amount_yi, total_amount_yi, amount_share_pct, source_run_id FROM turnover_rank_daily" in normalized_sql:
+            trade_date, rank_scope, limit = params
+            rows = [
+                row for row in self.state["ranks"]
+                if row["trade_date"] == trade_date
+                and row["rank_scope"] == rank_scope
+                and int(row["rank_no"]) <= int(limit)
+            ]
+            self.last_rows = sorted(rows, key=lambda row: row["rank_no"])
+        elif "SELECT trade_date, ts_code, stock_code, market, name, open, high, low, close, pct_chg, vol, amount_yi FROM stock_daily_quotes_recent WHERE trade_date = %s AND high > 0" in normalized_sql:
+            trade_date = params[0]
+            self.last_rows = [
+                dict(row) for row in self.state["quotes"].values()
+                if row["trade_date"] == trade_date and float(row["high"]) > 0
+            ]
+        elif "SELECT COUNT(DISTINCT trade_date) AS available_trade_days FROM stock_daily_quotes_recent WHERE trade_date < %s" in normalized_sql:
+            trade_date = params[0]
+            self.last_rows = [
+                {
+                    "available_trade_days": len(
+                        {row["trade_date"] for row in self.state["quotes"].values() if row["trade_date"] < trade_date}
+                    )
+                }
+            ]
+        elif "SELECT stock_code, MAX(high) AS previous_high FROM stock_daily_quotes_recent" in normalized_sql:
+            trade_date = params[0]
+            stock_codes = set(params[1:])
+            by_code = {}
+            for row in self.state["quotes"].values():
+                if row["trade_date"] < trade_date and row["stock_code"] in stock_codes and float(row["high"]) > 0:
+                    by_code[row["stock_code"]] = max(float(row["high"]), by_code.get(row["stock_code"], 0.0))
+            self.last_rows = [
+                {"stock_code": stock_code, "previous_high": previous_high}
+                for stock_code, previous_high in by_code.items()
+            ]
+        elif "SELECT COUNT(*) AS total_count FROM stock_daily_quotes_recent WHERE trade_date = %s" in normalized_sql:
+            trade_date = params[0]
+            self.last_rows = [
+                {"total_count": len([row for row in self.state["quotes"].values() if row["trade_date"] == trade_date])}
+            ]
+        elif "INSERT INTO new_high_feedback_daily" in normalized_sql:
+            (
+                trade_date,
+                new_high_count,
+                all_a_share_pct,
+                leading_sectors,
+                sector_distribution_json,
+                top_stocks_json,
+                source_policy,
+                source_run_id,
+            ) = params
+            self.state["new_high"][trade_date] = {
+                "trade_date": trade_date,
+                "new_high_count": new_high_count,
+                "all_a_share_pct": all_a_share_pct,
+                "leading_sectors": leading_sectors,
+                "sector_distribution_json": sector_distribution_json,
+                "top_stocks_json": top_stocks_json,
+                "source_policy": source_policy,
+                "source_run_id": source_run_id,
+            }
+        elif "SELECT trade_date, new_high_count, all_a_share_pct, leading_sectors, sector_distribution_json, top_stocks_json, source_policy, source_run_id FROM new_high_feedback_daily" in normalized_sql:
+            end_date, window_days = params
+            rows = [row for row in self.state["new_high"].values() if row["trade_date"] <= end_date]
+            self.last_rows = sorted(rows, key=lambda row: row["trade_date"], reverse=True)[: int(window_days)]
+        return self
+
+    def executemany(self, sql, rows):
+        for row in rows or []:
+            self.execute(sql, row)
+        return self
+
+    def fetchall(self):
+        return list(self.last_rows)
+
+    def fetchone(self):
+        return self.last_rows[0] if self.last_rows else None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _MemoryDailyFactConnection:
+    def __init__(self):
+        self.state = {"quotes": {}, "totals": {}, "ranks": [], "new_high": {}}
+        self.commit_count = 0
+
+    def cursor(self, *args, **kwargs):
+        return _MemoryDailyFactCursor(self.state)
+
+    def commit(self):
+        self.commit_count += 1
+
+    def close(self):
+        pass
+
+
 class PostgresDailyFactDbTest(unittest.TestCase):
     def test_schema_has_three_migration_batches_without_blob_primary_store(self):
         schema = "\n".join(POSTGRES_SCHEMA_STATEMENTS).lower()
@@ -133,8 +392,333 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             "runtime_cache_entries",
         ):
             self.assertIn(f"create table if not exists {table_name}", schema)
+        for table_name in (
+            "stock_daily_quotes_recent",
+            "turnover_rank_daily",
+            "new_high_feedback_daily",
+        ):
+            self.assertIn(f"create table if not exists {table_name}", schema)
 
         self.assertNotIn("payload_json", schema)
+
+    def test_stock_daily_quotes_rebuild_top50_share_series(self):
+        conn = _MemoryDailyFactConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        inserted = db.upsert_stock_daily_quotes_recent(
+            [
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601138.SH",
+                    "stock_code": "601138",
+                    "name": "工业富联",
+                    "amount_yi": 420.0,
+                    "high": 50,
+                    "close": 48,
+                    "pct_chg": 2.1,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601991.SH",
+                    "stock_code": "601991",
+                    "name": "大唐发电",
+                    "amount_yi": 180.0,
+                    "high": 8,
+                    "close": 7.8,
+                    "pct_chg": 1.4,
+                },
+            ],
+            source_run_id=11,
+        )
+        total = db.rebuild_market_daily_total("2026-06-08", source_run_id=11)
+        ranks = db.rebuild_turnover_rank_daily("2026-06-08", rank_limit=100, source_run_id=11)
+        series = db.query_top_turnover_share_series("2026-06-08", window_days=25, limit=50)
+
+        self.assertEqual(inserted, 2)
+        self.assertEqual(total["total_amount_yi"], 600.0)
+        self.assertEqual([row["stock_code"] for row in ranks], ["601138", "601991"])
+        self.assertEqual(series["source"], "storage.turnover_rank_daily")
+        self.assertEqual(series["rows"][0]["trade_date"], "2026-06-08")
+        self.assertEqual(series["rows"][0]["top_amount_yi"], 600.0)
+        self.assertEqual(series["rows"][0]["market_amount_yi"], 600.0)
+        self.assertEqual(series["rows"][0]["share_pct"], 100.0)
+        self.assertEqual(series["source_run_ids"], [11])
+
+    def test_query_market_breadth_counts_prefers_structured_recent_quotes(self):
+        conn = _MemoryDailyFactConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        db.upsert_stock_daily_quotes_recent(
+            [
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "name": "平安银行",
+                    "amount_yi": 100.0,
+                    "high": 12.0,
+                    "close": 11.0,
+                    "pct_chg": 2.1,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "000002.SZ",
+                    "stock_code": "000002",
+                    "name": "万科A",
+                    "amount_yi": 80.0,
+                    "high": 9.0,
+                    "close": 8.0,
+                    "pct_chg": -1.2,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "000003.SZ",
+                    "stock_code": "000003",
+                    "name": "平盘样本",
+                    "amount_yi": 20.0,
+                    "high": 5.0,
+                    "close": 5.0,
+                    "pct_chg": 0.0,
+                },
+            ],
+            source_run_id=11,
+        )
+
+        with patch.object(
+            PostgresDailyFactDb,
+            "_load_daily_report_fact_value",
+            return_value={"up_count": 111, "down_count": 222, "source": "daily_report_fact_fields"},
+        ):
+            result = db.query_market_breadth_counts("2026-06-08")
+
+        self.assertEqual(result["up_count"], 1)
+        self.assertEqual(result["down_count"], 1)
+        self.assertEqual(result["flat_count"], 1)
+        self.assertEqual(result["stock_count"], 3)
+        self.assertEqual(result["source"], "storage.stock_daily_quotes_recent")
+
+    def test_top50_share_series_merges_structured_target_date_with_previous_report_window(self):
+        conn = _MemoryDailyFactConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        previous_rows = [
+            {
+                "trade_date": trade_date,
+                "top_amount_yi": 5000.0 + index,
+                "market_amount_yi": 30000.0,
+                "share_pct": 18.0 + index / 10.0,
+            }
+            for index, trade_date in enumerate(_RECENT_25_TRADING_DATES_THROUGH_2026_05_29)
+        ]
+        db.upsert_stock_daily_quotes_recent(
+            [
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601138.SH",
+                    "stock_code": "601138",
+                    "name": "工业富联",
+                    "amount_yi": 420.0,
+                    "high": 50,
+                    "close": 48,
+                    "pct_chg": 2.1,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601991.SH",
+                    "stock_code": "601991",
+                    "name": "大唐发电",
+                    "amount_yi": 180.0,
+                    "high": 8,
+                    "close": 7.8,
+                    "pct_chg": 1.4,
+                },
+            ],
+            source_run_id=11,
+        )
+        db.rebuild_market_daily_total("2026-06-08", source_run_id=11)
+        db.rebuild_turnover_rank_daily("2026-06-08", rank_limit=100, source_run_id=11)
+
+        with patch.object(
+            PostgresDailyFactDb,
+            "_load_daily_report_fact_value",
+            return_value={"source": "postgres.daily_report_facts.top50_turnover_share_series", "rows": previous_rows},
+        ):
+            series = db.query_top_turnover_share_series("2026-06-08", window_days=25, limit=50)
+
+        self.assertEqual(series["source"], "storage.turnover_rank_daily+postgres.daily_report_facts.top50_turnover_share_series")
+        self.assertEqual(len(series["rows"]), 25)
+        self.assertEqual(series["rows"][0]["trade_date"], "2026-04-23")
+        self.assertEqual(series["rows"][-1]["trade_date"], "2026-06-08")
+        self.assertEqual(series["rows"][-1]["top_amount_yi"], 600.0)
+        self.assertEqual(series["rows"][-1]["market_amount_yi"], 600.0)
+        self.assertEqual(series["rows"][-1]["share_pct"], 100.0)
+
+    def test_top50_share_series_looks_back_to_latest_previous_report_window(self):
+        conn = _MemoryDailyFactConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        previous_rows = [
+            {
+                "trade_date": trade_date,
+                "top_amount_yi": 5000.0 + index,
+                "market_amount_yi": 30000.0,
+                "share_pct": 18.0 + index / 10.0,
+            }
+            for index, trade_date in enumerate(_RECENT_25_TRADING_DATES_THROUGH_2026_05_29)
+        ]
+        encoded_rows = []
+        for index, row in enumerate(previous_rows):
+            for key, value in row.items():
+                encoded_rows.append((
+                    f"k:27:top50_turnover_share_series/k:4:rows/#{index}/k:{len(key)}:{key}",
+                    value if isinstance(value, str) else "",
+                    None if isinstance(value, str) else value,
+                    None,
+                    "text" if isinstance(value, str) else "number",
+                ))
+        db.upsert_stock_daily_quotes_recent(
+            [
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601138.SH",
+                    "stock_code": "601138",
+                    "name": "工业富联",
+                    "amount_yi": 420.0,
+                    "high": 50,
+                    "close": 48,
+                    "pct_chg": 2.1,
+                },
+            ],
+            source_run_id=11,
+        )
+        db.rebuild_market_daily_total("2026-06-08", source_run_id=11)
+        db.rebuild_turnover_rank_daily("2026-06-08", rank_limit=100, source_run_id=11)
+        original_execute = _MemoryDailyFactCursor.execute
+
+        def execute_with_previous_report_window(cursor, sql, params=None):
+            normalized_sql = " ".join(str(sql).split())
+            if "SELECT max(trade_date) AS trade_date FROM daily_report_fact_fields" in normalized_sql:
+                cursor.last_rows = [{"trade_date": "2026-06-05"}]
+                return cursor
+            if "FROM daily_report_fact_fields" in normalized_sql and "field_path LIKE" in normalized_sql:
+                cursor.last_rows = [
+                    {
+                        "field_path": field_path,
+                        "value_text": value_text,
+                        "value_number": value_number,
+                        "value_bool": value_bool,
+                        "value_kind": value_kind,
+                    }
+                    for field_path, value_text, value_number, value_bool, value_kind in encoded_rows
+                ]
+                return cursor
+            return original_execute(cursor, sql, params)
+
+        with patch.object(_MemoryDailyFactCursor, "execute", execute_with_previous_report_window):
+            series = db.query_top_turnover_share_series("2026-06-08", window_days=25, limit=50)
+
+        self.assertEqual(series["source"], "storage.turnover_rank_daily+postgres.daily_report_facts.top50_turnover_share_series")
+        self.assertEqual(len(series["rows"]), 25)
+        self.assertEqual(series["rows"][0]["trade_date"], "2026-04-23")
+        self.assertEqual(series["rows"][-1]["trade_date"], "2026-06-08")
+
+    def test_new_high_feedback_rebuilds_from_postgres_recent_quotes(self):
+        conn = _MemoryDailyFactConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        history_rows = [
+            {"trade_date": f"2026-05-{day:02d}", "new_high_count": 1, "all_a_share_pct": 50.0}
+            for day in range(1, 26)
+        ]
+        quote_rows = []
+        for index, date in enumerate([row["trade_date"] for row in history_rows], start=1):
+            quote_rows.append(
+                {
+                    "trade_date": date,
+                    "ts_code": "601138.SH",
+                    "stock_code": "601138",
+                    "name": "工业富联",
+                    "high": 40.0 + index / 100,
+                    "close": 39.0,
+                    "pct_chg": 0.1,
+                    "amount_yi": 100.0,
+                }
+            )
+            quote_rows.append(
+                {
+                    "trade_date": date,
+                    "ts_code": "601991.SH",
+                    "stock_code": "601991",
+                    "name": "大唐发电",
+                    "high": 9.0,
+                    "close": 8.8,
+                    "pct_chg": 0.1,
+                    "amount_yi": 20.0,
+                }
+            )
+        quote_rows.extend(
+            [
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601138.SH",
+                    "stock_code": "601138",
+                    "name": "工业富联",
+                    "high": 45.0,
+                    "close": 44.5,
+                    "pct_chg": 4.2,
+                    "amount_yi": 520.0,
+                },
+                {
+                    "trade_date": "2026-06-08",
+                    "ts_code": "601991.SH",
+                    "stock_code": "601991",
+                    "name": "大唐发电",
+                    "high": 8.5,
+                    "close": 8.2,
+                    "pct_chg": -1.0,
+                    "amount_yi": 80.0,
+                },
+            ]
+        )
+        db.upsert_stock_daily_quotes_recent(quote_rows, source_run_id=12)
+
+        feedback = db.build_new_high_feedback_from_recent_quotes(
+            "2026-06-08",
+            stock_basic_map={
+                "601138": {"name": "工业富联", "industry": "AI算力基础设施", "list_date": "20180608"},
+                "601991": {"name": "大唐发电", "industry": "电力", "list_date": "20061220"},
+            },
+            stock_risk_map={},
+            history_rows=history_rows,
+            lookback_days=25,
+        )
+        stored = db.upsert_new_high_feedback_daily(feedback)
+        series = db.query_new_high_feedback_series("2026-06-08", window_days=25)
+
+        self.assertTrue(feedback["available"])
+        self.assertEqual(feedback["source"], "storage.stock_daily_quotes_recent.high_break")
+        self.assertEqual(feedback["new_high_count"], 1)
+        self.assertEqual(feedback["leading_sectors"], "AI算力基础设施")
+        self.assertEqual(feedback["trend_rows"][-1]["trade_date"], "2026-06-08")
+        self.assertEqual(stored["trade_date"], "2026-06-08")
+        self.assertEqual(series[-1]["trade_date"], "2026-06-08")
+        self.assertEqual(series[-1]["new_high_count"], 1)
 
     def test_psycopg_connection_prefers_python_impl_when_unspecified(self):
         import os
@@ -1649,6 +2233,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             {
                 "data_status": {"两市成交额": True, "中证全指": True},
                 "total_turnover": 33408.58,
+                "tag_distribution": {"光纤概念": 8, "共封装光学(CPO)": 7},
+                "integrated_hot_list_sample_size": 50,
+                "integrated_hot_list_sample_target": 50,
+                "hot_rank_sample_size": 50,
+                "hot_rank_sample_target": 50,
                 "turnover_rank": [
                     {
                         "code": "601991",
@@ -1716,6 +2305,16 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     "rows": [{"trade_date": "2026-05-28", "margin_turnover_ratio_pct": 98.4}],
                     "calibration_rows": [{"trade_date": "2025-01-01", "margin_turnover_ratio_pct": 80.0}],
                 },
+                "lhb_inst_detail": [
+                    {
+                        "trade_date": "2026-05-29",
+                        "code": "002837",
+                        "exalter": "机构专用",
+                        "seat_type": "机构",
+                        "net_buy_yi": 0.7,
+                    }
+                ],
+                "lhb_inst_detail_status": "available",
                 "sector_quadrant": {"quadrants": {"highStrong": [{"sector": "电力", "stocks": [{"code": "raw"}]}]}},
                 "sector_ai_analysis": {"sector_tree": {"电力": {"raw": "skip"}}, "sector_count": 148},
                 "entry_cycle_calibration": {"cases": [{"code": "000001", "day_rows": [{"date": "raw"}]}]},
@@ -1801,6 +2400,11 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         field_paths = {row[1] for row in inserted}
         self.assertTrue(any("000001.SH" in path for path in field_paths))
         self.assertTrue(any("csi1000_index" in path and "price" in path for path in field_paths))
+        self.assertTrue(any("tag_distribution" in path and "光纤概念" in path for path in field_paths))
+        self.assertTrue(any("integrated_hot_list_sample_size" in path for path in field_paths))
+        self.assertTrue(any("integrated_hot_list_sample_target" in path for path in field_paths))
+        self.assertTrue(any("hot_rank_sample_size" in path for path in field_paths))
+        self.assertTrue(any("hot_rank_sample_target" in path for path in field_paths))
         self.assertFalse(any("huge_cache" in str(row) for row in inserted))
         self.assertFalse(any("runtime.cache" in str(row) for row in inserted))
         self.assertFalse(any("appendix_b" in str(row) for row in inserted))
@@ -1832,6 +2436,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertFalse(any("sector_evidence_rows" in str(row) for row in inserted))
         self.assertFalse(any("sector_attack_evidence_rows" in str(row) for row in inserted))
         self.assertTrue(any("new_high_feedback/k:14:new_high_count" in path for path in field_paths))
+        self.assertTrue(any("lhb_inst_detail" in path and "exalter" in path for path in field_paths))
+        self.assertTrue(any("lhb_inst_detail_status" in path for path in field_paths))
         self.assertTrue(any("margin_pressure/k:21:latest_pressure_label" in path for path in field_paths))
         self.assertTrue(any("extreme_conviction_list" in path and "risk_reward_plan" in path for path in field_paths))
         self.assertTrue(any("candidate_trace_artifact" in path and "trace_count" in path for path in field_paths))
@@ -1857,6 +2463,9 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ("k:7:indices/k:9:000001.SH/k:5:price", "", 4068.57, None, "number"),
             ("k:13:csi1000_index/k:4:name", "中证1000", None, None, "text"),
             ("k:13:csi1000_index/k:5:price", "", 6123.4, None, "number"),
+            ("k:15:lhb_inst_detail/#0/k:4:code", "002837", None, None, "text"),
+            ("k:15:lhb_inst_detail/#0/k:7:exalter", "机构专用", None, None, "text"),
+            ("k:22:lhb_inst_detail_status", "available", None, None, "text"),
             ("k:22:exchange_monitor_today/#0/k:4:code", "000001", None, None, "text"),
             ("k:24:exchange_monitor_nextday/#0/k:4:code", "000002", None, None, "text"),
         ], [], []]
@@ -1869,9 +2478,77 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["data"]["market_stats"]["up_count"], 1542)
         self.assertEqual(loaded["data"]["indices"]["000001.SH"]["price"], 4068.57)
         self.assertEqual(loaded["data"]["csi1000_index"]["price"], 6123.4)
+        self.assertEqual(loaded["data"]["lhb_inst_detail"][0]["exalter"], "机构专用")
+        self.assertEqual(loaded["data"]["lhb_inst_detail_status"], "available")
         self.assertEqual(loaded["data"]["exchange_monitor_today"][0]["code"], "000001")
         self.assertEqual(loaded["data"]["exchange_monitor_nextday"][0]["code"], "000002")
-        self.assertEqual(loaded["field_count"], 15)
+        self.assertEqual(loaded["field_count"], 18)
+
+    def test_save_daily_report_snapshot_derives_hot_tag_distribution_from_hot_rank_rows(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.save_daily_report_snapshot(
+            "2026-06-08",
+            {
+                "integrated_hot_list": [
+                    {"code": "600522", "name": "中天科技", "tags": ["光纤概念", "铜缆高速连接"]},
+                    {"code": "600487", "name": "亨通光电", "concepts": ["光纤概念", "F5G概念"]},
+                ],
+                "hot_rank_top50": [
+                    {"code": "600522", "name": "中天科技", "concepts": ["光纤概念"]},
+                    {"code": "600487", "name": "亨通光电", "concepts": ["光纤概念"]},
+                ],
+            },
+        )
+
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        field_paths = {row[1] for row in inserted}
+        distribution_rows = [row for row in inserted if "tag_distribution" in row[1]]
+
+        self.assertTrue(any("tag_distribution" in path and "光纤概念" in path for path in field_paths))
+        self.assertTrue(any(row[3] == 2.0 for row in distribution_rows))
+        self.assertTrue(any("integrated_hot_list_sample_size" in path for path in field_paths))
+        self.assertTrue(any("integrated_hot_list_sample_target" in path for path in field_paths))
+        self.assertTrue(any("hot_rank_sample_size" in path for path in field_paths))
+        self.assertTrue(any("hot_rank_sample_target" in path for path in field_paths))
+
+    def test_save_daily_report_snapshot_derives_hot_tags_from_largest_hot_rank_sample(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.save_daily_report_snapshot(
+            "2026-06-08",
+            {
+                "integrated_hot_list": [{"code": "000001", "name": "小样本", "tags": ["小样本"]}],
+                "hot_rank_top50": [
+                    {"code": "600522", "name": "中天科技", "concepts": ["光纤概念"]},
+                    {"code": "600487", "name": "亨通光电", "concepts": ["光纤概念"]},
+                ],
+            },
+        )
+
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        distribution_rows = [row for row in inserted if "tag_distribution" in row[1]]
+
+        self.assertTrue(any("光纤概念" in row[1] and row[3] == 2.0 for row in distribution_rows))
+        self.assertFalse(any("小样本" in row[1] for row in distribution_rows))
 
     def test_load_daily_report_snapshot_enriches_hot_sector_history_from_structured_tables(self):
         conn = _FakeConnection()
@@ -1896,6 +2573,10 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             [],
             [],
             [],
+            [],
+            [],
+            [],
+            [],
             [
                 (
                     "2026-05-29",
@@ -1916,6 +2597,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 ("2026-05-28", "光通信/CPO", 8841.18, 29873.26, 29.6, "mainline_turnover_daily"),
                 ("2026-05-29", "通信设备", 3062.15, 33408.58, 9.17, "sector_attack_evidence_daily"),
             ],
+            [],
+            [],
         ]
 
         loaded = db.load_daily_report_snapshot("2026-05-29")
@@ -2020,6 +2703,13 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                     0,
                 )
             ],
+            [(5400, 2600, 2500, 300, 80, 12)],
+            [
+                ("2026-06-04", "all_a", 1, "600578.SH", "600578", "京能电力", 90.0, 10500.0, 0.86, 0),
+                ("2026-06-04", "all_a", 2, "001896.SZ", "001896", "豫能控股", 80.0, 10500.0, 0.76, 0),
+            ],
+            [("sh000985", "2026-06-04", 5000.0, 5100.0, 4980.0, 5088.8, 100.0, 200.0, "postgresql.index_daily_bars", 0)],
+            [("sh000852", "2026-06-04", 6000.0, 6120.0, 5980.0, 6108.6, 100.0, 200.0, "postgresql.index_daily_bars", 0)],
             [
                 (
                     "2026-06-04",
@@ -2054,14 +2744,68 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["structured_counts"]["cycle_interpretation_rows"], 1)
         self.assertEqual(loaded["structured_counts"]["sector_attack_evidence_rows"], 1)
         self.assertEqual(loaded["structured_counts"]["market_daily_total"], 1)
+        self.assertEqual(loaded["structured_counts"]["market_stats_from_quotes"], 1)
+        self.assertEqual(loaded["structured_counts"]["turnover_rank_daily"], 2)
+        self.assertEqual(loaded["structured_counts"]["wind_a_alternative_index_daily_bar"], 1)
+        self.assertEqual(loaded["structured_counts"]["csi1000_index_daily_bar"], 1)
         self.assertGreaterEqual(loaded["structured_fact_count"], 7)
         self.assertEqual(data["current_mainline_history_record"]["primary_mainline"], "电力")
         self.assertEqual(data["recent_mainline_history"][0]["date"], "2026-06-03")
         self.assertEqual(data["cycle_calendar_rows"][0]["wednesday"]["mainline"], "电力")
         self.assertEqual(data["cycle_calendar_rows"][0]["thursday"]["state"], "强化")
         self.assertEqual(data["cycle_interpretation_rows"][0]["attack_line"], "火电")
+        self.assertEqual(data["market_stats"]["up_count"], 2600)
+        self.assertEqual(data["turnover_rank"][0]["code"], "600578")
+        self.assertEqual(data["wind_a_alternative"]["price"], 5088.8)
+        self.assertEqual(data["csi1000_index"]["price"], 6108.6)
         self.assertEqual(data["sector_attack_evidence_rows"][0]["sector_name"], "电力")
         self.assertEqual(data["recent_hot_sector_turnover_history"][-1]["turnover_share_pct"], 3.14)
+
+    def test_load_daily_report_snapshot_market_total_only_does_not_count_as_target_spine(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        conn.cursor_obj.row_batches = [
+            [],
+            [],
+            [],
+            [],
+            [
+                (
+                    "2026-06-08",
+                    "all_a",
+                    28234.29,
+                    5515,
+                    "stock_sum",
+                    0,
+                )
+            ],
+            [(5515, 899, 4591, 25, 82, 86)],
+            [
+                ("2026-06-08", "all_a", 1, "300308.SZ", "300308", "", 389.23, 28234.29, 1.38, 0),
+            ],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        ]
+
+        loaded = db.load_daily_report_snapshot("2026-06-08")
+
+        self.assertEqual(loaded["field_count"], 0)
+        self.assertEqual(loaded["target_field_count"], 0)
+        self.assertEqual(loaded["structured_counts"]["market_daily_total"], 1)
+        self.assertEqual(loaded["structured_counts"]["market_stats_from_quotes"], 1)
+        self.assertEqual(loaded["structured_counts"]["turnover_rank_daily"], 1)
+        self.assertEqual(loaded["target_structured_fact_count"], 0)
+        self.assertEqual(loaded["data"]["total_turnover"], 28234.29)
+        self.assertEqual(loaded["data"]["market_stats"]["down_count"], 4591)
+        self.assertEqual(loaded["data"]["turnover_rank"][0]["code"], "300308")
 
     def test_load_daily_report_snapshot_does_not_treat_history_only_rows_as_target_facts(self):
         conn = _FakeConnection()
@@ -2164,8 +2908,13 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             [],
             [],
             [],
+            [],
+            [],
+            [],
+            [],
             [("2026-05-29", 1, "public", "2026-05-29T15:30:00", "reports/replay.md", "full")],
             [("601991", "大唐发电", "T0", "新型电力", "电力", "继续观察", "结构化轨迹完整", "触发条件", "失败条件")],
+            [],
             [],
             [],
         ]
@@ -2360,6 +3109,84 @@ class PostgresDailyFactDbTest(unittest.TestCase):
 
         self.assertTrue(any("sector_internal_analysis" in path and "turnover_trend" in path for path in field_paths))
         self.assertTrue(any("sector_internal_analysis" in path and "quant_environment" in path for path in field_paths))
+
+    def test_save_daily_report_snapshot_preserves_sector_first_runtime_packets(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+        selection_workflow = {
+            "schema_version": "selection_workflow.v1",
+            "derivation_contract": "sector_first_strict.v1",
+            "nodes": [
+                {"id": "N1", "summary": "市场分歧，继续看板块"},
+                {"id": "N7", "summary": "价格未形成买入资格"},
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action": "0%不参与",
+            },
+        }
+        final_target_resolution = {
+            "schema_version": "final_target_resolution.v1",
+            "capital_priority_decision": {
+                "capital_priority": "wait",
+                "reason": "条件未满足",
+            },
+            "final_action": {
+                "position_pct": 0,
+                "action": "0%不参与",
+            },
+        }
+        two_layer_payload = {
+            "schema_version": "two_layer_decision_payload.v1",
+            "final_object": {"identity": "无"},
+        }
+        sniper_packet = {
+            "schema_version": "sniper_target_derivation.v1",
+            "canonical_target": {},
+            "final_action": {"position_pct": 0, "action": "0%不参与"},
+        }
+
+        db.save_daily_report_snapshot(
+            "2026-06-11",
+            {
+                "selection_workflow": selection_workflow,
+                "final_target_resolution": final_target_resolution,
+                "two_layer_decision_payload": two_layer_payload,
+                "sniper_target_derivation": sniper_packet,
+                "execution_stage_context": {
+                    "selection_workflow": selection_workflow,
+                    "final_target_resolution": final_target_resolution,
+                    "two_layer_decision_payload": two_layer_payload,
+                    "sniper_target_derivation": sniper_packet,
+                },
+                "market_research_snapshot": {
+                    "selection_workflow": selection_workflow,
+                    "final_target_resolution": final_target_resolution,
+                    "two_layer_decision_payload": two_layer_payload,
+                    "sniper_target_derivation": sniper_packet,
+                },
+            },
+        )
+
+        inserted = next(
+            call[2]
+            for call in conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        field_paths = {row[1] for row in inserted}
+
+        self.assertTrue(any("selection_workflow" in path and "derivation_contract" in path for path in field_paths))
+        self.assertTrue(any("selection_workflow" in path and "final" in path and "position_pct" in path for path in field_paths))
+        self.assertTrue(any("final_target_resolution" in path and "capital_priority_decision" in path for path in field_paths))
+        self.assertTrue(any("two_layer_decision_payload" in path and "final_object" in path for path in field_paths))
+        self.assertTrue(any("sniper_target_derivation" in path and "final_action" in path for path in field_paths))
+        self.assertTrue(any("execution_stage_context" in path and "selection_workflow" in path for path in field_paths))
+        self.assertTrue(any("market_research_snapshot" in path and "final_target_resolution" in path for path in field_paths))
 
 
 if __name__ == "__main__":

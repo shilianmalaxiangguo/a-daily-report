@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 
 __all__ = [
@@ -7,6 +8,67 @@ __all__ = [
 ]
 
 _MISSING = object()
+_REPORT_STOCK_LIST_KEYS = {
+    "hot_rank_top30",
+    "hot_rank_top50",
+    "integrated_hot_list",
+    "turnover_rank",
+    "turnover_over_100b",
+    "lhb_net_buy_top10",
+    "lhb_net_sell_top10",
+    "lianban_data",
+    "zt_pool",
+    "dt_pool",
+    "volume_anomalies",
+    "trade_signals",
+    "watchlist",
+    "candidates",
+    "dragon_stocks",
+    "extreme_conviction_list",
+    "display_observation_candidates",
+    "observation_candidates",
+    "abnormal_watch_pool",
+    "high_lianban_stocks",
+    "waiting_stocks",
+    "scored_executable_stocks",
+    "recent_extreme_conviction_mentions",
+    "recent_extreme_conviction_mentions_for_review",
+    "gem_breathing_candidates",
+    "filtered_out_gem_breathing_candidates",
+    "knowledge_compounding_candidates",
+    "core_candidates",
+    "backup_candidates",
+}
+_REPORT_STOCK_OBJECT_KEYS = {
+    "selected_position_candidate",
+    "current_core_candidate",
+    "best_stock",
+    "runner_up",
+    "watch_target",
+    "watch_anchor",
+    "new_entry_target",
+    "display_target",
+    "canonical_target",
+    "old_position",
+    "new_target",
+    "front_page_selected_position_candidate",
+    "primary_buy_candidate",
+    "backup_candidate",
+    "target",
+    "candidate",
+}
+_REPORT_STOCK_CONTAINER_KEYS = {
+    "execution_stage_context",
+    "market_research_snapshot",
+    "candidate_snapshot",
+    "candidate_quality_panel_fields",
+    "candidate_quality_samples",
+    "step2_bundle",
+    "final_target_resolution",
+    "sniper_target_derivation",
+    "opportunity_comparison",
+    "additional_target_comparisons",
+}
 
 
 def _load_default_mainline_helpers():
@@ -37,10 +99,8 @@ def _load_default_mainline_helpers():
     )
     from storage.database_service import DatabaseService
 
-    fact_db_path = Path(__file__).resolve().parents[2] / "data" / "cloudflare_free_daily.db"
-
     def _query_new_high_feedback_series(end_date, window_days=25):
-        service = DatabaseService.sqlite_d1_compatible(fact_db_path)
+        service = DatabaseService.fact_store_from_environment()
         return service.query_new_high_feedback_series(end_date, window_days=window_days)
 
     return {
@@ -61,7 +121,7 @@ def _load_default_mainline_helpers():
         "get_wind_a_from_tushare": get_wind_a_from_tushare_first,
         "get_new_high_feedback_from_tushare": lambda target_date=None, **kwargs: get_new_high_feedback_from_tushare_first(
             target_date=target_date,
-            db_path=fact_db_path,
+            database_service_cls=DatabaseService,
             fetch_tushare_open_trade_dates_fn=fetch_tushare_open_trade_dates,
             **kwargs,
         ),
@@ -169,6 +229,38 @@ def _daily_attack_text(record, fallback=""):
     return str((record or {}).get("daily_attack_line") or (record or {}).get("attack_line") or fallback or "").strip()
 
 
+def _is_countertrend_attack_record(record):
+    text = " ".join(
+        str((record or {}).get(key) or "")
+        for key in (
+            "rotation_label",
+            "rotation_summary",
+            "market_state",
+            "state",
+            "mainline_process",
+            "mainline_regime",
+        )
+    )
+    return "逆势攻击" in text or "放量杀跌" in text or "逆势试攻" in text
+
+
+def _expected_cycle_mainline(expected_label):
+    if isinstance(expected_label, dict):
+        return str(
+            expected_label.get("cycle_mainline")
+            or expected_label.get("primary_mainline")
+            or expected_label.get("mainline")
+            or ""
+        ).strip()
+    return str(expected_label or "").strip()
+
+
+def _expected_daily_attack_line(expected_label, fallback=""):
+    if isinstance(expected_label, dict):
+        return str(expected_label.get("daily_attack_line") or expected_label.get("attack_line") or fallback or "").strip()
+    return str(fallback or expected_label or "").strip()
+
+
 def _load_recent_mainline_history_for_cycle_calendar(loader, target_date):
     try:
         return loader(target_date, lookback_days=25, max_scan_days=60)
@@ -235,9 +327,9 @@ def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_hist
                 "sector_name": mainline,
                 "cycle_mainline": mainline,
                 "daily_attack_line": _daily_attack_text(record, mainline) or mainline,
-                "sector_turnover": 0.0,
-                "total_turnover": 0.0,
-                "turnover_share_pct": 0.0,
+                "sector_turnover": None,
+                "total_turnover": None,
+                "turnover_share_pct": None,
                 "source_status": "history_missing",
             }
         )
@@ -246,6 +338,75 @@ def _fill_turnover_placeholders_for_mainline_history(recent_sector_turnover_hist
 
 def _trend_row_date(row):
     return str((row or {}).get("date") or (row or {}).get("trade_date") or "").strip()
+
+
+def _replay_price_band_latest_trade_date(rows):
+    dates = [_trend_row_date(row) for row in rows or [] if _trend_row_date(row)]
+    return max(dates) if dates else ""
+
+
+def _replay_date_gap_days(later_date, earlier_date):
+    try:
+        later = datetime.datetime.strptime(str(later_date or ""), "%Y-%m-%d").date()
+        earlier = datetime.datetime.strptime(str(earlier_date or ""), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return (later - earlier).days
+
+
+def _replay_price_band_rows_near_target(rows, target_date):
+    latest_trade_date = _replay_price_band_latest_trade_date(rows)
+    target = str(target_date or "").strip()
+    if not latest_trade_date or not target:
+        return False
+    if latest_trade_date >= target:
+        return True
+    gap_days = _replay_date_gap_days(target, latest_trade_date)
+    return gap_days is not None and gap_days <= 3
+
+
+def _build_replay_unavailable_price_band_series(series, target_date):
+    source = dict(series or {})
+    latest_trade_date = source.get("latest_trade_date") or _replay_price_band_latest_trade_date(source.get("rows") or [])
+    requested_trade_date = source.get("requested_trade_date") or str(target_date or "").strip()
+    source.update(
+        {
+            "available": False,
+            "status": "stale_recent_window",
+            "requested_trade_date": requested_trade_date,
+            "latest_trade_date": latest_trade_date,
+            "rows": [],
+            "summary": (
+                f"价格带风格趋势只到 {latest_trade_date or '待确认'}，"
+                f"未覆盖 {requested_trade_date or '目标日'} 附近交易日；"
+                "关键数据不完整，停止生成。"
+            ),
+        }
+    )
+    return source
+
+
+def _store_replay_unavailable_price_band_series(snapshot_data, series, target_date):
+    unavailable = _build_replay_unavailable_price_band_series(series, target_date)
+    snapshot_data["price_band_style_series"] = unavailable
+    data_status = snapshot_data.setdefault("data_status", {})
+    step_status = snapshot_data.setdefault("step_status", {})
+    data_status["价格带风格趋势"] = False
+    step_status["价格带风格趋势获取"] = False
+    _replace_request_module_log(
+        snapshot_data,
+        module="input.runtime",
+        step="request.price_band_style_series",
+        status="degraded",
+        message="价格带风格趋势关键数据不完整，停止生成",
+        provider=unavailable.get("source") or "storage.price_band_style_daily",
+        target_keys=["price_band_style_series"],
+        row_count=0,
+        latest_trade_date=unavailable.get("latest_trade_date") or "",
+        requested_trade_date=unavailable.get("requested_trade_date") or target_date,
+    )
+    _refresh_request_diagnostics(snapshot_data)
+    return snapshot_data
 
 
 def _new_high_feedback_needs_refresh(feedback, target_date):
@@ -434,9 +595,14 @@ def _price_band_style_series_needs_refresh(series, target_date):
 def _ensure_replay_price_band_style_series(snapshot_data, target_date, safe_float, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
+    helpers = helpers or {}
+    if (
+        "price_band_style_series" not in snapshot_data
+        and not helpers.get("_force_price_band_style_series_refresh")
+    ):
+        return snapshot_data
     if not _price_band_style_series_needs_refresh(snapshot_data.get("price_band_style_series"), target_date):
         return snapshot_data
-    helpers = helpers or {}
     fetcher = helpers.get("get_price_band_style_series_from_tushare")
     if not callable(fetcher):
         return snapshot_data
@@ -446,24 +612,33 @@ def _ensure_replay_price_band_style_series(snapshot_data, target_date, safe_floa
         if "target_date" not in str(error):
             raise
         series = fetcher(target_date) or {}
-    if not isinstance(series, dict) or not series.get("rows"):
+    if not isinstance(series, dict):
         return snapshot_data
+
+    rows = series.get("rows") or []
+    if not rows and series.get("available") is False:
+        return _store_replay_unavailable_price_band_series(snapshot_data, series, target_date)
+    if not rows:
+        return snapshot_data
+    if not _replay_price_band_rows_near_target(rows, target_date):
+        return _store_replay_unavailable_price_band_series(snapshot_data, series, target_date)
 
     snapshot_data["price_band_style_series"] = series
     data_status = snapshot_data.setdefault("data_status", {})
     step_status = snapshot_data.setdefault("step_status", {})
-    data_status["价格带风格趋势"] = bool(series.get("available", True))
-    step_status["价格带风格趋势获取"] = bool(series.get("available", True))
+    is_available = bool(series.get("available", True))
+    data_status["价格带风格趋势"] = is_available
+    step_status["价格带风格趋势获取"] = is_available
     _mark_replayed_step_success(snapshot_data, "价格带风格趋势获取", safe_float)
     _replace_request_module_log(
         snapshot_data,
         module="input.runtime",
         step="request.price_band_style_series",
-        status="success",
-        message="已刷新价格带风格趋势",
+        status="success" if is_available else "degraded",
+        message="已刷新价格带风格趋势" if is_available else "价格带风格趋势关键数据不完整，停止生成",
         provider=series.get("source") or "storage.price_band_style_daily",
         target_keys=["price_band_style_series"],
-        row_count=len(series.get("rows") or []),
+        row_count=len(rows),
     )
     _refresh_request_diagnostics(snapshot_data)
     return snapshot_data
@@ -565,14 +740,27 @@ def _summary_has_attack_evidence(summary):
 
 def _expected_mainline_by_date(recent_mainline_history, current_record, target_date):
     expected = {}
+    previous_cycle_mainline = ""
     for record in recent_mainline_history or []:
         record_date = _date_text(record)
-        mainline = _mainline_text(record)
-        if record_date and mainline:
-            expected[record_date] = mainline
+        cycle_mainline = _mainline_text(record)
+        if record_date and cycle_mainline:
+            expected[record_date] = {
+                "cycle_mainline": cycle_mainline,
+                "daily_attack_line": _daily_attack_text(record, cycle_mainline) or cycle_mainline,
+            }
+            previous_cycle_mainline = cycle_mainline
     current_mainline = _mainline_text(current_record)
     if target_date and current_mainline:
-        expected[str(target_date)] = current_mainline
+        cycle_mainline = (
+            previous_cycle_mainline
+            if _is_countertrend_attack_record(current_record) and previous_cycle_mainline
+            else current_mainline
+        )
+        expected[str(target_date)] = {
+            "cycle_mainline": cycle_mainline,
+            "daily_attack_line": _daily_attack_text(current_record, current_mainline) or current_mainline,
+        }
     return expected
 
 
@@ -583,15 +771,17 @@ def _summary_trend_rows_misaligned(summary, expected_by_date):
     if not rows:
         return True
     rows_by_date = {_date_text(row): row for row in rows if _date_text(row)}
-    for row_date, expected_mainline in (expected_by_date or {}).items():
+    for row_date, expected_label in (expected_by_date or {}).items():
         if row_date not in rows_by_date:
             return True
         row = rows_by_date[row_date]
         cycle_mainline = str(row.get("cycle_mainline") or row.get("primary_mainline") or row.get("sector_name") or "").strip()
         daily_attack_line = str(row.get("daily_attack_line") or row.get("attack_line") or cycle_mainline or "").strip()
-        if cycle_mainline and cycle_mainline != expected_mainline:
+        expected_cycle_mainline = _expected_cycle_mainline(expected_label)
+        expected_daily_attack_line = _expected_daily_attack_line(expected_label, expected_cycle_mainline)
+        if expected_cycle_mainline and cycle_mainline and cycle_mainline != expected_cycle_mainline:
             return True
-        if daily_attack_line and daily_attack_line != expected_mainline:
+        if expected_daily_attack_line and daily_attack_line and daily_attack_line != expected_daily_attack_line:
             return True
     return False
 
@@ -600,7 +790,7 @@ def _sector_history_misaligned(recent_sector_turnover_history, expected_by_date)
     rows_by_date = {_date_text(row): row for row in recent_sector_turnover_history or [] if _date_text(row)}
     if not expected_by_date:
         return False
-    for row_date, expected_mainline in expected_by_date.items():
+    for row_date, expected_label in expected_by_date.items():
         row = rows_by_date.get(row_date)
         if not row:
             return True
@@ -611,7 +801,8 @@ def _sector_history_misaligned(recent_sector_turnover_history, expected_by_date)
             or row.get("turnover_scope_label")
             or ""
         ).strip()
-        if row_mainline and row_mainline != expected_mainline:
+        expected_cycle_mainline = _expected_cycle_mainline(expected_label)
+        if expected_cycle_mainline and row_mainline and row_mainline != expected_cycle_mainline:
             return True
     return False
 
@@ -759,6 +950,13 @@ def _ensure_report_mainline_atoms(snapshot_data, target_date, helpers=None):
             "current_sector_turnover_snapshot": snapshot_data.get("current_sector_turnover_snapshot") or {},
             "recent_sector_turnover_history": snapshot_data.get("recent_sector_turnover_history") or [],
         }
+        realtime_tag_evidence_snapshot = (
+            snapshot_data.get("realtime_tag_evidence_snapshot")
+            or market_research_snapshot.get("realtime_tag_evidence_snapshot")
+            or {}
+        )
+        if realtime_tag_evidence_snapshot:
+            build_kwargs["realtime_tag_evidence_snapshot"] = realtime_tag_evidence_snapshot
         if sector_attack_evidence_rows:
             build_kwargs["sector_attack_evidence_rows"] = sector_attack_evidence_rows
         snapshot_data["mainline_turnover_summary"] = helpers["build_mainline_turnover_summary"](
@@ -890,6 +1088,16 @@ def _normalize_replay_quote_code(raw_code):
     return digits.zfill(6) if digits else ""
 
 
+def _normalize_replay_quote_trade_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text[:10]
+
+
 def _normalize_replay_stock_info_map(stock_full_info):
     normalized = {}
     for raw_code, info in (stock_full_info or {}).items():
@@ -897,6 +1105,16 @@ def _normalize_replay_stock_info_map(stock_full_info):
         if code and isinstance(info, dict):
             normalized[code] = dict(info)
     return normalized
+
+
+def _replay_report_stock_code(row):
+    if not isinstance(row, dict):
+        return ""
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code", "ts_code", "full_code", "股票代码", "证券代码"):
+        code = _normalize_replay_quote_code(row.get(key))
+        if code:
+            return code
+    return ""
 
 
 def _patch_replay_quote_fields(row, info):
@@ -920,22 +1138,143 @@ def _patch_replay_quote_fields(row, info):
     return patched
 
 
+def _iter_replay_report_stock_rows(payload, *, depth=0):
+    if depth > 5:
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_replay_report_stock_rows(item, depth=depth + 1)
+        return
+    if not isinstance(payload, dict):
+        return
+    if _replay_report_stock_code(payload):
+        yield payload
+    for key, value in payload.items():
+        if key in _REPORT_STOCK_LIST_KEYS or key in _REPORT_STOCK_OBJECT_KEYS or key in _REPORT_STOCK_CONTAINER_KEYS:
+            yield from _iter_replay_report_stock_rows(value, depth=depth + 1)
+
+
 def _collect_replay_quote_codes(snapshot_data):
-    codes = set()
-    for key in ("hot_rank_top30", "turnover_rank", "turnover_over_100b", "lhb_net_buy_top10", "lhb_net_sell_top10", "lianban_data"):
-        for item in snapshot_data.get(key) or []:
-            if not isinstance(item, dict):
-                continue
-            code = _normalize_replay_quote_code(
-                item.get("code")
-                or item.get("代码")
-                or item.get("stock_code")
-                or item.get("symbol")
-                or item.get("prod_code")
-            )
-            if code:
-                codes.add(code)
-    return codes
+    return {
+        code
+        for row in _iter_replay_report_stock_rows(snapshot_data)
+        for code in (_replay_report_stock_code(row),)
+        if code
+    }
+
+
+def _has_replay_report_stock_rows(payload):
+    return any(True for _row in _iter_replay_report_stock_rows(payload))
+
+
+def _replay_quote_info_complete(info, *, target_date=None):
+    if not isinstance(info, dict):
+        return False
+    normalized_target = _normalize_replay_quote_trade_date(target_date)
+    if normalized_target:
+        source_date = ""
+        for key in ("trade_date", "source_date", "query_date", "date"):
+            source_date = _normalize_replay_quote_trade_date(info.get(key))
+            if source_date:
+                break
+        if not source_date:
+            return False
+        if source_date and source_date != normalized_target:
+            return False
+    if info.get("change_pct") in (None, ""):
+        return False
+    price_values = [info.get(key) for key in ("open", "high", "low", "close")]
+    if any(value in (None, "") for value in price_values):
+        return False
+    try:
+        numeric_prices = [float(value) for value in price_values]
+    except (TypeError, ValueError):
+        return False
+    return all(value > 0 for value in numeric_prices)
+
+
+def _patch_replay_report_stock_quote_sources(payload, stock_full_info, *, depth=0):
+    if depth > 5:
+        return payload
+    if isinstance(payload, list):
+        return [_patch_replay_report_stock_quote_sources(item, stock_full_info, depth=depth + 1) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+
+    patched = dict(payload)
+    code = _replay_report_stock_code(patched)
+    if code:
+        patched = _patch_replay_quote_fields(patched, stock_full_info.get(code, {}))
+    for key, value in list(patched.items()):
+        if key in _REPORT_STOCK_LIST_KEYS or key in _REPORT_STOCK_OBJECT_KEYS or key in _REPORT_STOCK_CONTAINER_KEYS:
+            patched[key] = _patch_replay_report_stock_quote_sources(value, stock_full_info, depth=depth + 1)
+    return patched
+
+
+def _clear_replay_report_stock_quote_fields(payload, invalid_codes, *, depth=0):
+    if depth > 5:
+        return payload
+    if isinstance(payload, list):
+        return [_clear_replay_report_stock_quote_fields(item, invalid_codes, depth=depth + 1) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+
+    cleared = dict(payload)
+    code = _replay_report_stock_code(cleared)
+    if code in invalid_codes:
+        for key in ("change_pct", "high", "low", "open", "close", "zt_status"):
+            cleared.pop(key, None)
+    for key, value in list(cleared.items()):
+        if key in _REPORT_STOCK_LIST_KEYS or key in _REPORT_STOCK_OBJECT_KEYS or key in _REPORT_STOCK_CONTAINER_KEYS:
+            cleared[key] = _clear_replay_report_stock_quote_fields(value, invalid_codes, depth=depth + 1)
+    return cleared
+
+
+def _apply_replay_quote_payload_update(snapshot_data, updated_snapshot):
+    for key, value in updated_snapshot.items():
+        if (
+            key in _REPORT_STOCK_LIST_KEYS
+            or key in _REPORT_STOCK_OBJECT_KEYS
+            or key in _REPORT_STOCK_CONTAINER_KEYS
+        ) and _has_replay_report_stock_rows(snapshot_data.get(key)):
+            snapshot_data[key] = value
+    return snapshot_data
+
+
+def _mark_replay_stock_quotes_degraded(snapshot_data, *, message, refresh_codes, rejected_codes=None, provider="tushare.daily"):
+    _replace_request_module_log(
+        snapshot_data,
+        module="domains.market_activity.request",
+        step="request.stock_quotes",
+        status="degraded",
+        message=message,
+        provider=provider,
+        target_keys=["stock_full_info"],
+        requested_count=len(refresh_codes),
+        rejected_count=len(rejected_codes or []),
+        rejected_codes=list(rejected_codes or []),
+    )
+    _refresh_request_diagnostics(snapshot_data)
+
+
+def _degrade_replay_stock_quotes(snapshot_data, stock_full_info, target_date, *, refresh_codes, message, provider, rejected_codes=None):
+    snapshot_data["stock_full_info"] = {
+        code: info
+        for code, info in stock_full_info.items()
+        if _replay_quote_info_complete(info, target_date=target_date)
+    }
+    _apply_replay_quote_payload_update(
+        snapshot_data,
+        _clear_replay_report_stock_quote_fields(snapshot_data, set(refresh_codes)),
+    )
+    _mark_replay_stock_quotes_degraded(
+        snapshot_data,
+        message=message,
+        refresh_codes=refresh_codes,
+        rejected_codes=rejected_codes or refresh_codes,
+        provider=provider,
+    )
+    return snapshot_data
 
 
 def _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=None):
@@ -944,55 +1283,94 @@ def _ensure_replay_stock_quotes(snapshot_data, target_date, helpers=None):
     helpers = helpers or {}
     stock_full_info = _normalize_replay_stock_info_map(snapshot_data.get("stock_full_info") or {})
     wanted_codes = _collect_replay_quote_codes(snapshot_data)
-    missing_codes = sorted(wanted_codes - set(stock_full_info.keys()))
-    if not missing_codes:
+    refresh_codes = sorted(
+        code for code in wanted_codes if not _replay_quote_info_complete(stock_full_info.get(code), target_date=target_date)
+    )
+    if not refresh_codes:
         snapshot_data["stock_full_info"] = stock_full_info
         return snapshot_data
 
     fetcher = helpers.get("fetch_stock_batch_quote_info")
     if not callable(fetcher):
-        try:
-            from market_data.tushare_turnover_service import fetch_stock_batch_quote_info as fetcher
-        except Exception:
-            fetcher = None
-    if not callable(fetcher):
-        return snapshot_data
+        return _degrade_replay_stock_quotes(
+            snapshot_data,
+            stock_full_info,
+            target_date,
+            message="replay 股票行情缺少目标日期证明，保留缺失",
+            refresh_codes=refresh_codes,
+            provider="snapshot.stock_full_info",
+        )
 
     try:
-        fetched = fetcher(missing_codes, target_date)
+        fetched = fetcher(refresh_codes, target_date)
     except TypeError as error:
         if "target_date" not in str(error):
             raise
-        fetched = fetcher(missing_codes)
+        fetched = fetcher(refresh_codes)
+    except Exception:
+        return _degrade_replay_stock_quotes(
+            snapshot_data,
+            stock_full_info,
+            target_date,
+            message="replay 股票行情回补失败，保留缺失",
+            refresh_codes=refresh_codes,
+            provider="tushare.daily",
+        )
     fetched_info = _normalize_replay_stock_info_map(fetched)
     patched_codes = []
-    for code in missing_codes:
+    rejected_codes = []
+    for code in refresh_codes:
         info = fetched_info.get(code)
-        if info:
+        if info and _replay_quote_info_complete(info, target_date=target_date):
             stock_full_info[code] = info
             patched_codes.append(code)
+        elif info:
+            rejected_codes.append(code)
     if not patched_codes:
-        snapshot_data["stock_full_info"] = stock_full_info
+        snapshot_data["stock_full_info"] = {
+            code: info
+            for code, info in stock_full_info.items()
+            if _replay_quote_info_complete(info, target_date=target_date)
+        }
+        if rejected_codes:
+            _apply_replay_quote_payload_update(
+                snapshot_data,
+                _clear_replay_report_stock_quote_fields(snapshot_data, set(refresh_codes)),
+            )
+            _mark_replay_stock_quotes_degraded(
+                snapshot_data,
+                message="replay 股票行情回补未能证明目标日期，保留缺失",
+                refresh_codes=refresh_codes,
+                rejected_codes=rejected_codes,
+            )
         return snapshot_data
 
-    snapshot_data["stock_full_info"] = stock_full_info
-    for key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
-        patched_rows = []
-        for item in snapshot_data.get(key) or []:
-            code = _normalize_replay_quote_code((item or {}).get("code"))
-            patched_rows.append(_patch_replay_quote_fields(item, stock_full_info.get(code, {})))
-        snapshot_data[key] = patched_rows
+    snapshot_data["stock_full_info"] = {
+        code: info
+        for code, info in stock_full_info.items()
+        if _replay_quote_info_complete(info, target_date=target_date)
+    }
+    patched_snapshot = _patch_replay_report_stock_quote_sources(snapshot_data, stock_full_info)
+    _apply_replay_quote_payload_update(snapshot_data, patched_snapshot)
+    if rejected_codes:
+        _apply_replay_quote_payload_update(
+            snapshot_data,
+            _clear_replay_report_stock_quote_fields(snapshot_data, set(rejected_codes)),
+        )
 
     _replace_request_module_log(
         snapshot_data,
         module="domains.market_activity.request",
         step="request.stock_quotes",
-        status="success",
-        message="已回补 replay 快照股票行情缺口",
+        status="degraded" if rejected_codes else "success",
+        message="已回补 replay 快照股票行情缺口" if not rejected_codes else "已回补部分 replay 快照股票行情；未能证明目标日期的数据保留缺失",
         provider="tushare.daily",
-        target_keys=["stock_full_info", "lhb_net_buy_top10", "lhb_net_sell_top10"],
+        target_keys=["stock_full_info"],
         stock_count=len(stock_full_info),
         patched_count=len(patched_codes),
+        requested_count=len(refresh_codes),
+        rejected_count=len(rejected_codes),
+        rejected_codes=rejected_codes,
     )
     _refresh_request_diagnostics(snapshot_data)
     return snapshot_data
@@ -1215,18 +1593,10 @@ def _fetch_replay_hot_rank(target_date, helpers, target):
         try:
             return list(fetcher(target_date=target_date, limit=target) or [])
         except TypeError as error:
-            if "target_date" not in str(error) and "limit" not in str(error):
+            if "target_date" not in str(error) and "limit" not in str(error) and "unexpected keyword" not in str(error):
                 raise
-            try:
-                return list(fetcher(target_date, target) or [])
-            except TypeError:
-                return list(fetcher(target_date) or [])
-    try:
-        from ths_hot_stock import fetch_ths_hot_stock
-
-        return list(fetch_ths_hot_stock(num=target) or [])
-    except Exception:
-        return []
+            return []
+    return []
 
 
 def _ensure_replay_hot_rank_top50(snapshot_data, target_date, safe_float, helpers=None):
@@ -1249,7 +1619,7 @@ def _ensure_replay_hot_rank_top50(snapshot_data, target_date, safe_float, helper
             step="request.hot_rank.primary",
             status="degraded",
             message="热榜样本不足",
-            provider="ths_hot_stock",
+            provider="target_date_hot_rank_only",
             target_keys=["hot_rank_top50", "hot_rank_top30"],
             hot_rank_count=len(rows),
             required_count=target,
@@ -1780,18 +2150,36 @@ def _ensure_replay_advanced_activity(snapshot_data):
 
 
 def _apply_replay_limit_pool_snapshot(snapshot_data, pool_snapshot, safe_float):
-    zt_pool = list((pool_snapshot or {}).get("zt_pool") or [])
-    dt_pool = list((pool_snapshot or {}).get("dt_pool") or [])
-    market_stats = dict((pool_snapshot or {}).get("market_stats") or {})
+    existing_zt_pool = list(snapshot_data.get("zt_pool") or [])
+    existing_dt_pool = list(snapshot_data.get("dt_pool") or [])
+    zt_pool = list((pool_snapshot or {}).get("zt_pool") or []) or existing_zt_pool
+    dt_pool = list((pool_snapshot or {}).get("dt_pool") or []) or existing_dt_pool
+    market_stats = dict((pool_snapshot or {}).get("market_stats") or {}) or dict(snapshot_data.get("market_stats") or {})
     if not (zt_pool or dt_pool or market_stats):
         return False
 
     snapshot_data["zt_pool"] = zt_pool
     snapshot_data["dt_pool"] = dt_pool
-    snapshot_data["limit_up_codes"] = list((pool_snapshot or {}).get("limit_up_codes") or [row.get("代码") for row in zt_pool if isinstance(row, dict) and row.get("代码")])
-    snapshot_data["limit_down_codes"] = list((pool_snapshot or {}).get("limit_down_codes") or [row.get("代码") for row in dt_pool if isinstance(row, dict) and row.get("代码")])
-    snapshot_data["zt_pool_by_sector"] = (pool_snapshot or {}).get("zt_pool_by_sector") or _build_sector_bucket(zt_pool, include_zt_type=True)
-    snapshot_data["dt_pool_by_sector"] = (pool_snapshot or {}).get("dt_pool_by_sector") or _build_sector_bucket(dt_pool)
+    snapshot_data["limit_up_codes"] = list(
+        (pool_snapshot or {}).get("limit_up_codes")
+        or snapshot_data.get("limit_up_codes")
+        or [row.get("代码") for row in zt_pool if isinstance(row, dict) and row.get("代码")]
+    )
+    snapshot_data["limit_down_codes"] = list(
+        (pool_snapshot or {}).get("limit_down_codes")
+        or snapshot_data.get("limit_down_codes")
+        or [row.get("代码") for row in dt_pool if isinstance(row, dict) and row.get("代码")]
+    )
+    snapshot_data["zt_pool_by_sector"] = (
+        (pool_snapshot or {}).get("zt_pool_by_sector")
+        or snapshot_data.get("zt_pool_by_sector")
+        or _build_sector_bucket(zt_pool, include_zt_type=True)
+    )
+    snapshot_data["dt_pool_by_sector"] = (
+        (pool_snapshot or {}).get("dt_pool_by_sector")
+        or snapshot_data.get("dt_pool_by_sector")
+        or _build_sector_bucket(dt_pool)
+    )
     snapshot_data["market_stats"] = market_stats
 
     data_status = snapshot_data.setdefault("data_status", {})
@@ -1900,35 +2288,55 @@ def _ensure_replay_decision_sources(snapshot_data, target_date, safe_float, help
                 }
                 news_count = xgb_news_count
             else:
-                next_xgb_data = refreshed_xgb_data
-            snapshot_data["xuangubao_data"] = next_xgb_data
-            _sync_replay_source_status(
-                snapshot_data,
-                data_label="选股通盘中异动",
-                step_label="选股通盘中异动获取",
-                timer_label="选股通盘中异动获取",
-                safe_float=safe_float,
-            )
-            _replace_request_module_log(
-                snapshot_data,
-                module="domains.monitoring.request",
-                step="request.xuangubao",
-                status="success",
-                message="已回补选股通盘中异动",
-                provider="xuangubao.fetch_xuangubao_data",
-                target_keys=["xuangubao_data"],
-                optional=True,
-                news_count=news_count,
-                plate_count=plate_count,
-                limit_up_reason_count=limit_up_reason_count,
-                diagnostic_note="; ".join(
-                    f"{key}={value}"
-                    for key, value in ((refreshed_xgb_data or {}).get("diagnostics", {}) or {}).items()
-                    if value not in (None, "", {})
-                ),
-                diagnostics=(refreshed_xgb_data or {}).get("diagnostics", {}),
-            )
-            changed = True
+                next_xgb_data = None
+            if next_xgb_data is None:
+                _replace_request_module_log(
+                    snapshot_data,
+                    module="domains.monitoring.request",
+                    step="request.xuangubao",
+                    status="degraded",
+                    message="选股通刷新未返回目标日新闻，保留缺口",
+                    provider="xuangubao.fetch_xuangubao_data",
+                    target_keys=["xuangubao_data"],
+                    optional=True,
+                    news_count=0,
+                    plate_count=0,
+                    limit_up_reason_count=0,
+                    diagnostic_note="target_date_news_missing",
+                    diagnostics=(refreshed_xgb_data or {}).get("diagnostics", {}),
+                )
+                snapshot_data.setdefault("data_status", {})["选股通盘中异动"] = False
+                snapshot_data.setdefault("step_status", {})["选股通盘中异动获取"] = False
+                changed = True
+            else:
+                snapshot_data["xuangubao_data"] = next_xgb_data
+                _sync_replay_source_status(
+                    snapshot_data,
+                    data_label="选股通盘中异动",
+                    step_label="选股通盘中异动获取",
+                    timer_label="选股通盘中异动获取",
+                    safe_float=safe_float,
+                )
+                _replace_request_module_log(
+                    snapshot_data,
+                    module="domains.monitoring.request",
+                    step="request.xuangubao",
+                    status="success",
+                    message="已回补选股通盘中异动",
+                    provider="xuangubao.fetch_xuangubao_data",
+                    target_keys=["xuangubao_data"],
+                    optional=True,
+                    news_count=news_count,
+                    plate_count=plate_count,
+                    limit_up_reason_count=limit_up_reason_count,
+                    diagnostic_note="; ".join(
+                        f"{key}={value}"
+                        for key, value in ((refreshed_xgb_data or {}).get("diagnostics", {}) or {}).items()
+                        if value not in (None, "", {})
+                    ),
+                    diagnostics=(refreshed_xgb_data or {}).get("diagnostics", {}),
+                )
+                changed = True
         elif xgb_news_count > 0:
             _sync_replay_source_status(
                 snapshot_data,
@@ -2174,6 +2582,8 @@ def build_replay_snapshot_contract(
     runtime_helpers = {**_load_default_mainline_helpers(), **explicit_helpers}
     if "query_new_high_feedback_series" in explicit_helpers:
         runtime_helpers["_use_default_query_new_high_feedback_series"] = False
+    if "get_price_band_style_series_from_tushare" in explicit_helpers:
+        runtime_helpers["_force_price_band_style_series_refresh"] = True
     snapshot_data = _ensure_replay_critical_tushare_facts(
         snapshot_data,
         target_date,
@@ -2333,7 +2743,11 @@ def build_replay_report_outputs_contract(
             has_personal_positions=has_personal_positions,
             run_mode="replay",
             position_report_text=position_report_text,
+            persist_runtime_artifacts=False,
         )
+        from daily_report_render import assert_report_required_facts_complete
+
+        assert_report_required_facts_complete(replay_data, resolved_target_date, run_mode="replay")
     except Exception as exc:
         _append_log(logs, "render.report_outputs", "error", "生成 replay 报告产物失败", error=str(exc))
         raise

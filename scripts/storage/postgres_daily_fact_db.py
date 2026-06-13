@@ -97,6 +97,56 @@ POSTGRES_SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS stock_daily_quotes_recent (
+        trade_date DATE NOT NULL,
+        ts_code TEXT NOT NULL,
+        stock_code TEXT NOT NULL DEFAULT '',
+        market TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        open DOUBLE PRECISION NOT NULL DEFAULT 0,
+        high DOUBLE PRECISION NOT NULL DEFAULT 0,
+        low DOUBLE PRECISION NOT NULL DEFAULT 0,
+        close DOUBLE PRECISION NOT NULL DEFAULT 0,
+        pct_chg DOUBLE PRECISION NOT NULL DEFAULT 0,
+        vol DOUBLE PRECISION NOT NULL DEFAULT 0,
+        amount_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, ts_code)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_stock_daily_quotes_recent_trade_code ON stock_daily_quotes_recent(trade_date, stock_code)",
+    "CREATE INDEX IF NOT EXISTS idx_stock_daily_quotes_recent_code_date_high ON stock_daily_quotes_recent(stock_code, trade_date, high)",
+    """
+    CREATE TABLE IF NOT EXISTS turnover_rank_daily (
+        trade_date DATE NOT NULL,
+        rank_scope TEXT NOT NULL,
+        rank_no INTEGER NOT NULL,
+        ts_code TEXT NOT NULL,
+        stock_code TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL DEFAULT '',
+        amount_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
+        total_amount_yi DOUBLE PRECISION NOT NULL DEFAULT 0,
+        amount_share_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trade_date, rank_scope, rank_no)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS new_high_feedback_daily (
+        trade_date DATE PRIMARY KEY,
+        new_high_count INTEGER NOT NULL DEFAULT 0,
+        all_a_share_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+        leading_sectors TEXT NOT NULL DEFAULT '',
+        sector_distribution_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        top_stocks_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+        source_policy TEXT NOT NULL DEFAULT '',
+        source_run_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS monthly_account_ledger (
         trade_date DATE NOT NULL,
         account_id TEXT NOT NULL DEFAULT 'main',
@@ -647,6 +697,9 @@ _DAILY_REPORT_FACT_COVERAGE_TABLES = (
     "sector_attack_evidence_daily",
     "mainline_turnover_daily",
     "market_daily_totals",
+    "stock_daily_quotes_recent",
+    "index_daily_bars",
+    "turnover_rank_daily",
     "price_band_style_daily",
     "candidate_trace_artifacts",
     "candidate_trace_rows",
@@ -700,6 +753,30 @@ def _normalize_index_code(value):
     if digits.startswith("399"):
         return f"sz{digits}"
     return f"sh{digits}"
+
+
+def _split_stock_code_market(row):
+    row = row or {}
+    stock_code = _text(row.get("stock_code") or row.get("code"))
+    market = _text(row.get("market")).upper()
+    ts_code = _text(row.get("ts_code")).upper()
+    if not stock_code and ts_code:
+        if "." in ts_code:
+            left, right = ts_code.split(".", 1)
+            stock_code = "".join(ch for ch in left if ch.isdigit()).zfill(6)
+            market = market or right[:2].upper()
+        else:
+            stock_code = "".join(ch for ch in ts_code if ch.isdigit()).zfill(6)
+    if not market and stock_code:
+        if stock_code.startswith(("8", "4", "9")):
+            market = "BJ"
+        elif stock_code.startswith(("6", "5")):
+            market = "SH"
+        else:
+            market = "SZ"
+    if not ts_code and stock_code and market:
+        ts_code = f"{stock_code}.{market}"
+    return stock_code, market, ts_code
 
 
 def _normalize_month_key(*, trade_date="", month_key=""):
@@ -1311,6 +1388,11 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "hot_rank_top50",
     "hot_rank_top30",
     "integrated_hot_list",
+    "tag_distribution",
+    "integrated_hot_list_sample_size",
+    "integrated_hot_list_sample_target",
+    "hot_rank_sample_size",
+    "hot_rank_sample_target",
     "calendar_events",
     "xuangubao_data",
     "wanzhu_top10",
@@ -1328,6 +1410,8 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "lhb_analysis",
     "lhb_net_buy_top10",
     "lhb_net_sell_top10",
+    "lhb_inst_detail",
+    "lhb_inst_detail_status",
     "xueqiu_hot_rank_top100",
     "xueqiu_hot_stock_arguments",
     "data_status",
@@ -1361,6 +1445,10 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "personal_position_context",
     "position_context_provided",
     "selected_position_candidate",
+    "selection_workflow",
+    "final_target_resolution",
+    "two_layer_decision_payload",
+    "sniper_target_derivation",
 )
 
 _EXECUTION_CONTEXT_FACT_KEYS = (
@@ -1383,6 +1471,10 @@ _EXECUTION_CONTEXT_FACT_KEYS = (
     "tracking_memory_status",
     "candidate_traces",
     "candidate_trace_artifact",
+    "selection_workflow",
+    "final_target_resolution",
+    "two_layer_decision_payload",
+    "sniper_target_derivation",
     "extreme_conviction_list",
     "recent_extreme_conviction_mentions",
     "special_probe_verdict",
@@ -1428,6 +1520,10 @@ _MARKET_RESEARCH_FACT_KEYS = (
     "candidate_snapshot",
     "observation",
     "extreme_conviction_list",
+    "selection_workflow",
+    "final_target_resolution",
+    "two_layer_decision_payload",
+    "sniper_target_derivation",
 )
 
 
@@ -1511,6 +1607,57 @@ def _compact_stock_list(items, limit=80):
     if not isinstance(items, list):
         return items
     return [_compact_stock_item(item) for item in items[: max(int(limit or 0), 0)]]
+
+
+def _hot_rank_rows_for_tag_projection(data):
+    data = data or {}
+    candidates = []
+    for key in ("integrated_hot_list", "hot_rank_top50", "hot_rank_top30"):
+        rows = data.get(key)
+        if isinstance(rows, list) and rows:
+            normalized_rows = [item for item in rows if isinstance(item, dict)]
+            if normalized_rows:
+                candidates.append(normalized_rows)
+    if candidates:
+        return max(candidates, key=len)
+    return []
+
+
+def _tags_from_hot_rank_item(item):
+    tags = []
+    for key in ("tags", "concepts", "sector_tags"):
+        value = item.get(key) if isinstance(item, dict) else None
+        if isinstance(value, list):
+            tags.extend(_text(tag) for tag in value if _text(tag))
+    if not tags:
+        sector = _text(item.get("sector") or item.get("sector_name")) if isinstance(item, dict) else ""
+        if sector:
+            tags.append(sector)
+    return tags
+
+
+def _derive_hot_tag_projection(data):
+    rows = _hot_rank_rows_for_tag_projection(data)
+    if not rows:
+        return {}
+    sample_rows = rows[:100]
+    tag_distribution = {}
+    for item in sample_rows:
+        for tag in _tags_from_hot_rank_item(item):
+            tag_distribution[tag] = tag_distribution.get(tag, 0) + 1
+    result = {}
+    if not data.get("tag_distribution") and tag_distribution:
+        result["tag_distribution"] = tag_distribution
+    if data.get("integrated_hot_list_sample_size") in (None, "") and isinstance(data.get("integrated_hot_list"), list):
+        result["integrated_hot_list_sample_size"] = len(data.get("integrated_hot_list") or [])
+    if data.get("integrated_hot_list_sample_target") in (None, "") and isinstance(data.get("integrated_hot_list"), list):
+        result["integrated_hot_list_sample_target"] = 100 if len(data.get("integrated_hot_list") or []) >= 100 else 50
+    hot_rank_rows = data.get("hot_rank_top50") if isinstance(data.get("hot_rank_top50"), list) else data.get("hot_rank_top30")
+    if data.get("hot_rank_sample_size") in (None, "") and isinstance(hot_rank_rows, list):
+        result["hot_rank_sample_size"] = len(hot_rank_rows)
+    if data.get("hot_rank_sample_target") in (None, "") and isinstance(hot_rank_rows, list):
+        result["hot_rank_sample_target"] = 100 if len(hot_rank_rows) >= 100 else 50
+    return result
 
 
 def _compact_extreme_conviction_item(item):
@@ -2140,6 +2287,9 @@ def _compact_execution_context(context):
 
 def _build_daily_report_fact_projection(data):
     data = data or {}
+    derived_hot_tags = _derive_hot_tag_projection(data)
+    if derived_hot_tags:
+        data = {**data, **derived_hot_tags}
     projection = {}
     for key in _DAILY_REPORT_FACT_TOP_LEVEL_KEYS:
         if key not in data:
@@ -2527,6 +2677,66 @@ class PostgresDailyFactDb:
 
     def save_provider_source_run(self, run):
         return 0
+
+    def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
+        normalized_rows = []
+        for row in rows or []:
+            row = row or {}
+            trade_date = _date_or_none(row.get("trade_date") or row.get("date"))
+            stock_code, market, ts_code = _split_stock_code_market(row)
+            amount_yi = _safe_float(row.get("amount_yi", row.get("turnover_yi", row.get("turnover"))))
+            if amount_yi <= 0 and row.get("amount_raw_qianyuan") not in (None, ""):
+                amount_yi = _safe_float(row.get("amount_raw_qianyuan")) / 100000.0
+            if amount_yi <= 0 and row.get("amount") not in (None, ""):
+                amount_yi = _safe_float(row.get("amount")) / 100000.0
+            if not trade_date or not ts_code or amount_yi <= 0:
+                continue
+            normalized_rows.append(
+                (
+                    trade_date,
+                    ts_code,
+                    stock_code,
+                    market,
+                    _text(row.get("name") or row.get("stock_name")),
+                    _safe_float(row.get("open")),
+                    _safe_float(row.get("high")),
+                    _safe_float(row.get("low")),
+                    _safe_float(row.get("close")),
+                    _safe_float(row.get("pct_chg", row.get("pct_change", row.get("change_pct")))),
+                    _safe_float(row.get("vol", row.get("volume"))),
+                    amount_yi,
+                    _safe_int(row.get("source_run_id"), _safe_int(source_run_id)),
+                )
+            )
+        if not normalized_rows:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO stock_daily_quotes_recent(
+                        trade_date, ts_code, stock_code, market, name, open, high, low,
+                        close, pct_chg, vol, amount_yi, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (trade_date, ts_code) DO UPDATE SET
+                        stock_code=EXCLUDED.stock_code,
+                        market=EXCLUDED.market,
+                        name=EXCLUDED.name,
+                        open=EXCLUDED.open,
+                        high=EXCLUDED.high,
+                        low=EXCLUDED.low,
+                        close=EXCLUDED.close,
+                        pct_chg=EXCLUDED.pct_chg,
+                        vol=EXCLUDED.vol,
+                        amount_yi=EXCLUDED.amount_yi,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    normalized_rows,
+                )
+            conn.commit()
+        return len(normalized_rows)
 
     def _normalize_monthly_account_ledger(self, row):
         row = row or {}
@@ -3079,6 +3289,148 @@ class PostgresDailyFactDb:
         if item:
             item["trade_date"] = _text(item.get("trade_date"))
         return item
+
+    def rebuild_market_daily_total(self, trade_date, *, market_scope="all_a", source_run_id=0):
+        trade_date = _date_or_none(trade_date)
+        market_scope = _text(market_scope) or "all_a"
+        if not trade_date:
+            return {}
+        columns = ("total_amount_yi", "stock_count")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COALESCE(SUM(amount_yi), 0) AS total_amount_yi, COUNT(*) AS stock_count
+                    FROM stock_daily_quotes_recent
+                    WHERE trade_date = %s
+                    """,
+                    (trade_date,),
+                )
+                row = cursor.fetchone()
+                item = _row_dict(row, columns)
+                total = {
+                    "trade_date": trade_date,
+                    "market_scope": market_scope,
+                    "total_amount_yi": _safe_float(item.get("total_amount_yi")),
+                    "stock_count": _safe_int(item.get("stock_count")),
+                    "source_policy": "stock_sum",
+                    "source_run_id": _safe_int(source_run_id),
+                }
+                cursor.execute(
+                    """
+                    INSERT INTO market_daily_totals(
+                        trade_date, market_scope, total_amount_yi, stock_count,
+                        source_policy, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (trade_date, market_scope) DO UPDATE SET
+                        total_amount_yi=EXCLUDED.total_amount_yi,
+                        stock_count=EXCLUDED.stock_count,
+                        source_policy=EXCLUDED.source_policy,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    (
+                        total["trade_date"],
+                        total["market_scope"],
+                        total["total_amount_yi"],
+                        total["stock_count"],
+                        total["source_policy"],
+                        total["source_run_id"],
+                    ),
+                )
+            conn.commit()
+        return total
+
+    def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
+        trade_date = _date_or_none(trade_date)
+        rank_scope = _text(rank_scope) or "all_a"
+        rank_limit = max(_safe_int(rank_limit, 100), 1)
+        if not trade_date:
+            return []
+        total_columns = ("total_amount_yi",)
+        quote_columns = ("trade_date", "ts_code", "stock_code", "name", "amount_yi")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT total_amount_yi
+                    FROM market_daily_totals
+                    WHERE trade_date = %s AND market_scope = %s
+                    """,
+                    (trade_date, rank_scope),
+                )
+                total_row = _row_dict(cursor.fetchone(), total_columns)
+                total_amount = _safe_float(total_row.get("total_amount_yi"))
+                cursor.execute(
+                    """
+                    SELECT trade_date, ts_code, stock_code, name, amount_yi
+                    FROM stock_daily_quotes_recent
+                    WHERE trade_date = %s
+                    ORDER BY amount_yi DESC, ts_code ASC
+                    LIMIT %s
+                    """,
+                    (trade_date, rank_limit),
+                )
+                quote_rows = [_row_dict(row, quote_columns) for row in cursor.fetchall()]
+                cursor.execute(
+                    "DELETE FROM turnover_rank_daily WHERE trade_date = %s AND rank_scope = %s",
+                    (trade_date, rank_scope),
+                )
+                ranks = []
+                for index, row in enumerate(quote_rows, start=1):
+                    amount_yi = _safe_float(row.get("amount_yi"))
+                    share = amount_yi / total_amount * 100.0 if total_amount > 0 else 0.0
+                    ranks.append(
+                        {
+                            "trade_date": _text(row.get("trade_date")),
+                            "rank_scope": rank_scope,
+                            "rank_no": index,
+                            "ts_code": _text(row.get("ts_code")),
+                            "stock_code": _text(row.get("stock_code")),
+                            "name": _text(row.get("name")),
+                            "amount_yi": amount_yi,
+                            "total_amount_yi": total_amount,
+                            "amount_share_pct": share,
+                            "source_run_id": _safe_int(source_run_id),
+                        }
+                    )
+                if ranks:
+                    cursor.executemany(
+                        """
+                        INSERT INTO turnover_rank_daily(
+                            trade_date, rank_scope, rank_no, ts_code, stock_code, name,
+                            amount_yi, total_amount_yi, amount_share_pct, source_run_id
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, rank_scope, rank_no) DO UPDATE SET
+                            ts_code=EXCLUDED.ts_code,
+                            stock_code=EXCLUDED.stock_code,
+                            name=EXCLUDED.name,
+                            amount_yi=EXCLUDED.amount_yi,
+                            total_amount_yi=EXCLUDED.total_amount_yi,
+                            amount_share_pct=EXCLUDED.amount_share_pct,
+                            source_run_id=EXCLUDED.source_run_id,
+                            updated_at=now()
+                        """,
+                        [
+                            (
+                                item["trade_date"],
+                                item["rank_scope"],
+                                item["rank_no"],
+                                item["ts_code"],
+                                item["stock_code"],
+                                item["name"],
+                                item["amount_yi"],
+                                item["total_amount_yi"],
+                                item["amount_share_pct"],
+                                item["source_run_id"],
+                            )
+                            for item in ranks
+                        ],
+                    )
+            conn.commit()
+        return ranks
 
     def upsert_index_daily_bars(self, index_code, rows, *, source_policy="", source_run_id=0):
         index_code = _normalize_index_code(index_code)
@@ -5379,7 +5731,6 @@ class PostgresDailyFactDb:
                     "target_cycle_calendar_rows",
                     "cycle_interpretation_rows",
                     "sector_attack_evidence_rows",
-                    "market_daily_total",
                     "candidate_trace_artifact",
                 )
             ),
@@ -5396,11 +5747,62 @@ class PostgresDailyFactDb:
             return None
         return data.get(key)
 
+    def _load_latest_daily_report_fact_value_before_or_on(self, trade_date, key):
+        trade_date = _date_or_none(trade_date)
+        key = _text(key)
+        if not trade_date or not key:
+            return None
+        prefix = _encode_fact_path_part(key)
+        columns = ("field_path", "value_text", "value_number", "value_bool", "value_kind")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT max(trade_date) AS trade_date
+                    FROM daily_report_fact_fields
+                    WHERE trade_date <= %s
+                      AND (field_path = %s OR field_path LIKE %s)
+                    """,
+                    (trade_date, prefix, prefix + "/%"),
+                )
+                latest_row = cursor.fetchone()
+                latest_date = _text(_row_dict(latest_row, ("trade_date",)).get("trade_date"))
+                if not latest_date:
+                    return None
+                cursor.execute(
+                    """
+                    SELECT field_path, value_text, value_number, value_bool, value_kind
+                    FROM daily_report_fact_fields
+                    WHERE trade_date = %s
+                      AND (field_path = %s OR field_path LIKE %s)
+                    ORDER BY field_path ASC
+                    """,
+                    (latest_date, prefix, prefix + "/%"),
+                )
+                rows = cursor.fetchall()
+        data = {}
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            _set_nested_fact_value(data, item.get("field_path"), _restore_typed_value(item))
+        return data.get(key) if isinstance(data, dict) else None
+
     def query_market_breadth_counts(self, trade_date):
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                structured = self._load_structured_market_stats_from_quotes(cursor, trade_date)
+        if structured:
+            return structured
         value = self._load_daily_report_fact_value(trade_date, "market_stats")
         return dict(value or {}) if isinstance(value, dict) else {}
 
     def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+        structured = self._query_structured_turnover_rank_rows(
+            trade_date,
+            limit=limit,
+            rank_scope=rank_scope,
+        )
+        if structured:
+            return structured
         value = self._load_daily_report_fact_value(trade_date, "turnover_rank")
         rows = list(value or []) if isinstance(value, list) else []
         normalized = []
@@ -5420,17 +5822,569 @@ class PostgresDailyFactDb:
             )
         return normalized
 
+    def _load_structured_target_index_daily_bar(self, cursor, trade_date, index_code):
+        trade_date = _date_or_none(trade_date)
+        index_code = _normalize_index_code(index_code)
+        if not trade_date or not index_code:
+            return {}
+        columns = (
+            "index_code",
+            "trade_date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "source_policy",
+            "source_run_id",
+        )
+        cursor.execute(
+            """
+            SELECT index_code, trade_date, open, high, low, close,
+                   volume, amount, source_policy, source_run_id
+            FROM index_daily_bars
+            WHERE index_code = %s
+              AND trade_date = %s
+            """,
+            (index_code, trade_date),
+        )
+        item = _row_dict(cursor.fetchone(), columns)
+        if not item:
+            return {}
+        close = _safe_float(item.get("close"))
+        if close <= 0:
+            return {}
+        return {
+            "code": index_code,
+            "trade_date": _text(item.get("trade_date")) or trade_date,
+            "date": _text(item.get("trade_date")) or trade_date,
+            "open": _safe_float(item.get("open")),
+            "high": _safe_float(item.get("high")),
+            "low": _safe_float(item.get("low")),
+            "close": close,
+            "price": close,
+            "volume": _safe_float(item.get("volume")),
+            "amount": _safe_float(item.get("amount")),
+            "data_source": "postgresql.index_daily_bars",
+            "source": _text(item.get("source_policy")) or "postgresql.index_daily_bars",
+            "source_run_id": _safe_int(item.get("source_run_id")),
+        }
+
+    def _load_structured_turnover_rank_rows_with_cursor(self, cursor, trade_date, *, limit=50, rank_scope="all_a"):
+        trade_date = _date_or_none(trade_date)
+        rank_scope = _text(rank_scope) or "all_a"
+        limit = max(_safe_int(limit, 50), 1)
+        if not trade_date:
+            return []
+        columns = (
+            "trade_date",
+            "rank_scope",
+            "rank_no",
+            "ts_code",
+            "stock_code",
+            "name",
+            "amount_yi",
+            "total_amount_yi",
+            "amount_share_pct",
+            "source_run_id",
+        )
+        cursor.execute(
+            """
+            SELECT trade_date, rank_scope, rank_no, ts_code, stock_code, name,
+                   amount_yi, total_amount_yi, amount_share_pct, source_run_id
+            FROM turnover_rank_daily
+            WHERE trade_date = %s AND rank_scope = %s AND rank_no <= %s
+            ORDER BY rank_no ASC
+            """,
+            (trade_date, rank_scope, limit),
+        )
+        rows = []
+        for row in cursor.fetchall() or []:
+            item = _row_dict(row, columns)
+            rows.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "rank_scope": _text(item.get("rank_scope")),
+                    "rank_no": _safe_int(item.get("rank_no")),
+                    "rank": _safe_int(item.get("rank_no")),
+                    "ts_code": _text(item.get("ts_code")),
+                    "stock_code": _text(item.get("stock_code")),
+                    "code": _text(item.get("stock_code")),
+                    "name": _text(item.get("name")),
+                    "amount_yi": _safe_float(item.get("amount_yi")),
+                    "turnover": _safe_float(item.get("amount_yi")),
+                    "total_amount_yi": _safe_float(item.get("total_amount_yi")),
+                    "amount_share_pct": _safe_float(item.get("amount_share_pct")),
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                    "data_source": "storage.turnover_rank_daily",
+                }
+            )
+        return rows
+
+    def _load_structured_market_stats_from_quotes(self, cursor, trade_date):
+        trade_date = _date_or_none(trade_date)
+        if not trade_date:
+            return {}
+        columns = ("total_count", "up_count", "down_count", "flat_count", "zt_count", "dt_count")
+        cursor.execute(
+            """
+            SELECT COUNT(*) AS total_count,
+                   COUNT(*) FILTER (WHERE pct_chg > 0) AS up_count,
+                   COUNT(*) FILTER (WHERE pct_chg < 0) AS down_count,
+                   COUNT(*) FILTER (WHERE pct_chg = 0) AS flat_count,
+                   COUNT(*) FILTER (WHERE pct_chg >= 9.8) AS zt_count,
+                   COUNT(*) FILTER (WHERE pct_chg <= -9.8) AS dt_count
+            FROM stock_daily_quotes_recent
+            WHERE trade_date = %s
+            """,
+            (trade_date,),
+        )
+        item = _row_dict(cursor.fetchone(), columns)
+        total_count = _safe_int(item.get("total_count"))
+        up_count = _safe_int(item.get("up_count"))
+        down_count = _safe_int(item.get("down_count"))
+        if total_count <= 0 or up_count <= 0 or down_count <= 0:
+            return {}
+        return {
+            "up_count": up_count,
+            "down_count": down_count,
+            "flat_count": _safe_int(item.get("flat_count")),
+            "total_count": total_count,
+            "stock_count": total_count,
+            "zt_count": _safe_int(item.get("zt_count")),
+            "dt_count": _safe_int(item.get("dt_count")),
+            "data_source": "storage.stock_daily_quotes_recent",
+            "source": "storage.stock_daily_quotes_recent",
+        }
+
+    def _query_structured_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+        trade_date = _date_or_none(trade_date)
+        rank_scope = _text(rank_scope) or "all_a"
+        limit = max(_safe_int(limit, 50), 1)
+        if not trade_date:
+            return []
+        columns = (
+            "trade_date",
+            "rank_scope",
+            "rank_no",
+            "ts_code",
+            "stock_code",
+            "name",
+            "amount_yi",
+            "total_amount_yi",
+            "amount_share_pct",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, rank_scope, rank_no, ts_code, stock_code, name,
+                           amount_yi, total_amount_yi, amount_share_pct, source_run_id
+                    FROM turnover_rank_daily
+                    WHERE trade_date = %s AND rank_scope = %s AND rank_no <= %s
+                    ORDER BY rank_no ASC
+                    """,
+                    (trade_date, rank_scope, limit),
+                )
+                rows = cursor.fetchall()
+        result = []
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            result.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "rank_scope": _text(item.get("rank_scope")),
+                    "rank_no": _safe_int(item.get("rank_no")),
+                    "ts_code": _text(item.get("ts_code")),
+                    "stock_code": _text(item.get("stock_code")),
+                    "name": _text(item.get("name")),
+                    "amount_yi": _safe_float(item.get("amount_yi")),
+                    "total_amount_yi": _safe_float(item.get("total_amount_yi")),
+                    "amount_share_pct": _safe_float(item.get("amount_share_pct")),
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                    "data_source": "storage.turnover_rank_daily",
+                }
+            )
+        return result
+
     def query_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
+        structured = self._query_structured_top_turnover_share_series(
+            end_date,
+            window_days=window_days,
+            limit=limit,
+            rank_scope=rank_scope,
+        )
         value = self._load_daily_report_fact_value(end_date, "top50_turnover_share_series")
+        if structured.get("rows"):
+            rows = list(structured.get("rows") or [])
+            required_window_rows = max(_safe_int(window_days, 30), 1)
+            previous_rows = []
+            previous_source = ""
+            if len(rows) < required_window_rows and isinstance(value, dict):
+                previous_rows = list(value.get("rows") or [])
+                previous_source = _text(value.get("source")) or "postgres.daily_report_facts.top50_turnover_share_series"
+            if len(rows) < required_window_rows and not previous_rows:
+                latest_value = self._load_latest_daily_report_fact_value_before_or_on(
+                    end_date,
+                    "top50_turnover_share_series",
+                )
+                if isinstance(latest_value, dict):
+                    previous_rows = list(latest_value.get("rows") or [])
+                    previous_source = _text(latest_value.get("source")) or "postgres.daily_report_facts.top50_turnover_share_series"
+            if previous_rows:
+                by_date = {}
+                for row in previous_rows + rows:
+                    trade_date = _text((row or {}).get("trade_date") or (row or {}).get("date"))
+                    if not trade_date:
+                        continue
+                    item = dict(row or {})
+                    item["trade_date"] = trade_date
+                    by_date[trade_date] = item
+                merged_rows = [by_date[trade_date] for trade_date in sorted(by_date)][-required_window_rows:]
+                merged = dict(structured)
+                merged["source"] = "+".join(part for part in (structured.get("source"), previous_source) if part)
+                merged["rows"] = merged_rows
+                return merged
+            return structured
         if isinstance(value, dict):
             return dict(value)
         return {"source": "postgres.daily_report_facts.top50_turnover_share_series", "rows": []}
 
+    def _query_structured_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
+        end_date = _date_or_none(end_date)
+        window_days = max(_safe_int(window_days, 30), 1)
+        limit = max(_safe_int(limit, 50), 1)
+        rank_scope = _text(rank_scope) or "all_a"
+        if not end_date:
+            return {"source": "storage.turnover_rank_daily", "rows": []}
+        date_columns = ("trade_date",)
+        amount_columns = ("top_amount_yi", "market_amount_yi")
+        source_columns = ("source_run_id",)
+        rows = []
+        source_run_ids = set()
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT DISTINCT trade_date
+                    FROM turnover_rank_daily
+                    WHERE trade_date <= %s AND rank_scope = %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (end_date, rank_scope, window_days),
+                )
+                date_rows = [_row_dict(row, date_columns) for row in cursor.fetchall()]
+                dates = [_text(row.get("trade_date")) for row in reversed(date_rows) if _text(row.get("trade_date"))]
+                for trade_date in dates:
+                    cursor.execute(
+                        """
+                        SELECT COALESCE(SUM(amount_yi), 0) AS top_amount_yi,
+                               COALESCE(MAX(total_amount_yi), 0) AS market_amount_yi
+                        FROM turnover_rank_daily
+                        WHERE trade_date = %s AND rank_scope = %s AND rank_no <= %s
+                        """,
+                        (trade_date, rank_scope, limit),
+                    )
+                    amount_row = _row_dict(cursor.fetchone(), amount_columns)
+                    cursor.execute(
+                        """
+                        SELECT DISTINCT source_run_id
+                        FROM turnover_rank_daily
+                        WHERE trade_date = %s AND rank_scope = %s AND rank_no <= %s
+                        """,
+                        (trade_date, rank_scope, limit),
+                    )
+                    for source_row in cursor.fetchall() or []:
+                        item = _row_dict(source_row, source_columns)
+                        source_run_id = _safe_int(item.get("source_run_id"))
+                        if source_run_id > 0:
+                            source_run_ids.add(source_run_id)
+                    top_amount = _safe_float(amount_row.get("top_amount_yi"))
+                    market_amount = _safe_float(amount_row.get("market_amount_yi"))
+                    rows.append(
+                        {
+                            "trade_date": trade_date,
+                            "top_amount_yi": top_amount,
+                            "market_amount_yi": market_amount,
+                            "share_pct": top_amount / market_amount * 100.0 if market_amount > 0 else 0.0,
+                        }
+                    )
+        return {
+            "source": "storage.turnover_rank_daily",
+            "query_window": {
+                "end_date": end_date,
+                "window_days": window_days,
+                "rank_limit": limit,
+                "rank_scope": rank_scope,
+            },
+            "source_run_ids": sorted(source_run_ids),
+            "rows": rows,
+        }
+
     def query_new_high_feedback_series(self, end_date, *, window_days=25):
+        structured = self._query_structured_new_high_feedback_series(end_date, window_days=window_days)
+        if structured:
+            return structured
         value = self._load_daily_report_fact_value(end_date, "new_high_feedback")
         if isinstance(value, dict):
             return list(value.get("trend_rows") or [])
         return []
+
+    def upsert_new_high_feedback_daily(self, row):
+        row = row or {}
+        trend_rows = row.get("trend_rows") if isinstance(row.get("trend_rows"), list) else []
+        fallback_trend_row = trend_rows[-1] if trend_rows and isinstance(trend_rows[-1], dict) else {}
+        trade_date = _date_or_none(
+            row.get("trade_date")
+            or row.get("date")
+            or fallback_trend_row.get("trade_date")
+            or fallback_trend_row.get("date")
+        )
+        if not trade_date:
+            return {}
+        item = {
+            "trade_date": trade_date,
+            "new_high_count": _safe_int(row.get("new_high_count")),
+            "all_a_share_pct": _safe_float(row.get("all_a_share_pct")),
+            "leading_sectors": _text(row.get("leading_sectors")),
+            "sector_distribution_json": json.dumps(row.get("sector_distribution") or [], ensure_ascii=False),
+            "top_stocks_json": json.dumps(row.get("top_stocks") or [], ensure_ascii=False),
+            "source_policy": _text(row.get("source_policy") or row.get("source")),
+            "source_run_id": _safe_int(row.get("source_run_id")),
+        }
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO new_high_feedback_daily(
+                        trade_date, new_high_count, all_a_share_pct, leading_sectors,
+                        sector_distribution_json, top_stocks_json, source_policy, source_run_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+                    ON CONFLICT (trade_date) DO UPDATE SET
+                        new_high_count=EXCLUDED.new_high_count,
+                        all_a_share_pct=EXCLUDED.all_a_share_pct,
+                        leading_sectors=EXCLUDED.leading_sectors,
+                        sector_distribution_json=EXCLUDED.sector_distribution_json,
+                        top_stocks_json=EXCLUDED.top_stocks_json,
+                        source_policy=EXCLUDED.source_policy,
+                        source_run_id=EXCLUDED.source_run_id,
+                        updated_at=now()
+                    """,
+                    (
+                        item["trade_date"],
+                        item["new_high_count"],
+                        item["all_a_share_pct"],
+                        item["leading_sectors"],
+                        item["sector_distribution_json"],
+                        item["top_stocks_json"],
+                        item["source_policy"],
+                        item["source_run_id"],
+                    ),
+                )
+            conn.commit()
+        return item
+
+    def _query_structured_new_high_feedback_series(self, end_date, *, window_days=25):
+        end_date = _date_or_none(end_date)
+        window_days = max(_safe_int(window_days, 25), 1)
+        if not end_date:
+            return []
+        columns = (
+            "trade_date",
+            "new_high_count",
+            "all_a_share_pct",
+            "leading_sectors",
+            "sector_distribution_json",
+            "top_stocks_json",
+            "source_policy",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, new_high_count, all_a_share_pct, leading_sectors,
+                           sector_distribution_json, top_stocks_json, source_policy, source_run_id
+                    FROM new_high_feedback_daily
+                    WHERE trade_date <= %s
+                    ORDER BY trade_date DESC
+                    LIMIT %s
+                    """,
+                    (end_date, window_days),
+                )
+                rows = cursor.fetchall()
+        result = []
+        for row in reversed(rows or []):
+            item = _row_dict(row, columns)
+            sector_distribution = item.get("sector_distribution_json")
+            top_stocks = item.get("top_stocks_json")
+            if isinstance(sector_distribution, str):
+                try:
+                    sector_distribution = json.loads(sector_distribution)
+                except json.JSONDecodeError:
+                    sector_distribution = []
+            if isinstance(top_stocks, str):
+                try:
+                    top_stocks = json.loads(top_stocks)
+                except json.JSONDecodeError:
+                    top_stocks = []
+            result.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "new_high_count": _safe_int(item.get("new_high_count")),
+                    "all_a_share_pct": _safe_float(item.get("all_a_share_pct")),
+                    "leading_sectors": _text(item.get("leading_sectors")),
+                    "sector_distribution": sector_distribution if isinstance(sector_distribution, list) else [],
+                    "top_stocks": top_stocks if isinstance(top_stocks, list) else [],
+                    "source": _text(item.get("source_policy")),
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                }
+            )
+        return result
+
+    def build_new_high_feedback_from_recent_quotes(
+        self,
+        trade_date,
+        *,
+        stock_basic_map=None,
+        stock_risk_map=None,
+        history_rows=None,
+        all_a_denominator=5000,
+        recent_listing_days=365,
+        lookback_days=250,
+    ):
+        from domains.market_activity.new_high_runtime import build_new_high_feedback_snapshot
+
+        trade_date = _date_or_none(trade_date)
+        if not trade_date:
+            return {}
+        stock_basic_map = stock_basic_map or {}
+        stock_risk_map = stock_risk_map or {}
+        lookback_days = max(_safe_int(lookback_days, 250), 1)
+        quote_columns = (
+            "trade_date",
+            "ts_code",
+            "stock_code",
+            "market",
+            "name",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pct_chg",
+            "vol",
+            "amount_yi",
+        )
+        coverage_columns = ("available_trade_days",)
+        history_columns = ("stock_code", "previous_high")
+        count_columns = ("total_count",)
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT trade_date, ts_code, stock_code, market, name, open, high, low,
+                           close, pct_chg, vol, amount_yi
+                    FROM stock_daily_quotes_recent
+                    WHERE trade_date = %s AND high > 0
+                    """,
+                    (trade_date,),
+                )
+                target_rows = [_row_dict(row, quote_columns) for row in cursor.fetchall()]
+                if not target_rows:
+                    return {}
+                cursor.execute(
+                    """
+                    SELECT COUNT(DISTINCT trade_date) AS available_trade_days
+                    FROM stock_daily_quotes_recent
+                    WHERE trade_date < %s
+                    """,
+                    (trade_date,),
+                )
+                coverage = _row_dict(cursor.fetchone(), coverage_columns)
+                available_trade_days = _safe_int(coverage.get("available_trade_days"))
+                if available_trade_days < lookback_days:
+                    return {
+                        "available": False,
+                        "status": "insufficient_history",
+                        "source": "storage.stock_daily_quotes_recent.high_break",
+                        "message": f"本地日线历史不足，只有 {available_trade_days} 个历史交易日，不能重建 {lookback_days} 日新高反馈。",
+                        "new_high_count": 0,
+                        "all_a_share_pct": 0.0,
+                        "sector_distribution": [],
+                        "top_stocks": [],
+                        "trend_rows": list(history_rows or [])[-25:],
+                    }
+                stock_codes = [_text(row.get("stock_code")) for row in target_rows if _text(row.get("stock_code"))]
+                historical_high_by_code = {}
+                if stock_codes:
+                    placeholders = ", ".join(["%s"] * len(stock_codes))
+                    cursor.execute(
+                        f"""
+                        SELECT stock_code, MAX(high) AS previous_high
+                        FROM stock_daily_quotes_recent
+                        WHERE trade_date < %s
+                          AND stock_code IN ({placeholders})
+                          AND high > 0
+                        GROUP BY stock_code
+                        """,
+                        (trade_date, *stock_codes),
+                    )
+                    historical_high_by_code = {
+                        _text(item.get("stock_code")): _safe_float(item.get("previous_high"))
+                        for item in (_row_dict(row, history_columns) for row in cursor.fetchall())
+                    }
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) AS total_count
+                    FROM stock_daily_quotes_recent
+                    WHERE trade_date = %s
+                    """,
+                    (trade_date,),
+                )
+                count_row = _row_dict(cursor.fetchone(), count_columns)
+        factor_rows = []
+        for row in target_rows:
+            stock_code = _text(row.get("stock_code"))
+            previous_high = historical_high_by_code.get(stock_code, 0.0)
+            if previous_high <= 0 or _safe_float(row.get("high")) < previous_high:
+                continue
+            factor_rows.append(
+                {
+                    "ts_code": _text(row.get("ts_code")),
+                    "stock_code": stock_code,
+                    "trade_date": trade_date.replace("-", ""),
+                    "name": _text(row.get("name")),
+                    "open": _safe_float(row.get("open")),
+                    "high": _safe_float(row.get("high")),
+                    "low": _safe_float(row.get("low")),
+                    "close": _safe_float(row.get("close")),
+                    "pct_chg": _safe_float(row.get("pct_chg")),
+                    "amount_yi": _safe_float(row.get("amount_yi")),
+                    "topdays": lookback_days,
+                }
+            )
+        denominator = _safe_int(count_row.get("total_count")) or all_a_denominator
+        snapshot = build_new_high_feedback_snapshot(
+            factor_rows,
+            stock_basic_map=stock_basic_map,
+            stock_risk_map=stock_risk_map,
+            target_date=trade_date,
+            topdays_threshold=lookback_days,
+            all_a_denominator=denominator,
+            recent_listing_days=recent_listing_days,
+            history_rows=history_rows,
+        )
+        if not snapshot.get("available"):
+            return snapshot
+        snapshot["source"] = "storage.stock_daily_quotes_recent.high_break"
+        snapshot["source_policy"] = "storage.stock_daily_quotes_recent.high_break"
+        snapshot["topdays_threshold"] = lookback_days
+        snapshot["message"] = "Tushare 技术因子未返回时，使用本地日线历史高点重建阶段新高反馈。"
+        return snapshot
 
     def query_price_band_style_series(self, end_date, *, window_days=25):
         rows = self._query_structured_price_band_style_series(end_date, window_days=window_days)
@@ -5836,6 +6790,33 @@ class PostgresDailyFactDb:
             if _safe_float(data.get("total_turnover")) <= 0 and _safe_float(market_daily_total.get("total_amount_yi")) > 0:
                 data["total_turnover"] = _safe_float(market_daily_total.get("total_amount_yi"))
         structured_counts["market_daily_total"] = 1 if market_daily_total else 0
+        market_stats = self._load_structured_market_stats_from_quotes(cursor, trade_date)
+        if market_stats and not data.get("market_stats"):
+            data["market_stats"] = market_stats
+        structured_counts["market_stats_from_quotes"] = 1 if market_stats else 0
+        turnover_rank_rows = self._load_structured_turnover_rank_rows_with_cursor(
+            cursor,
+            trade_date,
+            limit=50,
+            rank_scope="all_a",
+        )
+        if turnover_rank_rows and not data.get("turnover_rank"):
+            data["turnover_rank"] = turnover_rank_rows
+        structured_counts["turnover_rank_daily"] = len(turnover_rank_rows)
+        wind_a_bar = self._load_structured_target_index_daily_bar(cursor, trade_date, "sh000985")
+        if wind_a_bar and not data.get("wind_a_alternative"):
+            data["wind_a_alternative"] = {
+                **wind_a_bar,
+                "name": "中证全指",
+            }
+        structured_counts["wind_a_alternative_index_daily_bar"] = 1 if wind_a_bar else 0
+        csi1000_bar = self._load_structured_target_index_daily_bar(cursor, trade_date, "sh000852")
+        if csi1000_bar and not data.get("csi1000_index"):
+            data["csi1000_index"] = {
+                **csi1000_bar,
+                "name": "中证1000",
+            }
+        structured_counts["csi1000_index_daily_bar"] = 1 if csi1000_bar else 0
         current_attack_rows = self._load_sector_attack_evidence_rows(cursor, trade_date)
         if current_attack_rows:
             data["sector_attack_evidence_rows"] = current_attack_rows
