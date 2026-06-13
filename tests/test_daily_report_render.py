@@ -25,6 +25,7 @@ from daily_report_render import (
     build_report_preflight,
     build_run_log_text,
     finalize_run_log_text,
+    persist_report_runtime_artifacts,
     render_report_preflight_lines,
     generate_markdown_report,
     generate_markdown_report_from_sections,
@@ -32,7 +33,113 @@ from daily_report_render import (
     save_report_outputs,
 )
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
-from report.decision_ledger import build_decision_ledger_snapshot, write_decision_ledger_artifacts
+from report.decision_ledger import (
+    build_decision_ledger_index,
+    build_decision_ledger_snapshot,
+    build_extreme_conviction_mention_rows,
+    write_decision_ledger_artifacts,
+)
+
+
+def _complete_report_facts(overrides=None):
+    overrides = dict(overrides or {})
+    data = {
+        "data_status": {
+            "两市成交额": True,
+            "中证全指": True,
+            "中证1000": True,
+            "成交额排名": True,
+            "大盘涨跌统计": True,
+            "热度前50个股": True,
+        },
+        "step_status": {
+            "涨停跌停数据获取": True,
+            "热度前50个股获取": True,
+        },
+        "total_turnover": 12345.67,
+        "wind_a_alternative": {
+            "price": 6686.86,
+            "change_pct": 1.2,
+            "data_source": "tushare.index_daily",
+        },
+        "csi1000_index": {
+            "price": 6123.45,
+            "change_pct": 1.1,
+            "data_source": "tushare.index_daily",
+        },
+        "turnover_rank": [
+            {"code": f"{index:06d}", "data_source": "tushare.daily"}
+            for index in range(1, 51)
+        ],
+        "market_stats": {"up_count": 2600, "down_count": 2100, "zt_count": 102, "dt_count": 8},
+        "hot_rank_top50": [{"code": f"{index:06d}"} for index in range(1, 51)],
+        "hot_rank_sample_size": 50,
+        "hot_rank_sample_target": 50,
+        "module_logs": [
+            {
+                "step": "request.total_turnover",
+                "status": "success",
+                "details": {"provider": "tushare.daily", "total_turnover": 12345.67, "row_count": 1},
+            },
+            {
+                "step": "request.wind_a",
+                "status": "success",
+                "details": {"provider": "tushare.index_daily", "price": 6686.86, "row_count": 1},
+            },
+            {
+                "step": "request.csi1000",
+                "status": "success",
+                "details": {"provider": "tushare.index_daily", "price": 6123.45, "row_count": 1},
+            },
+            {
+                "step": "request.turnover_rank",
+                "status": "success",
+                "details": {"provider": "tushare.daily", "row_count": 50},
+            },
+            {
+                "step": "request.market_stats",
+                "status": "success",
+                "details": {"provider": "tushare.daily", "row_count": 1},
+            },
+            {
+                "step": "request.hot_rank.primary",
+                "status": "success",
+                "details": {"provider": "tushare.ths_hot", "hot_rank_count": 50},
+            },
+        ],
+    }
+    for key in ("data_status", "step_status"):
+        if isinstance(overrides.get(key), dict):
+            data[key].update(overrides.pop(key))
+    if "module_logs" in overrides:
+        data["module_logs"] = overrides.pop("module_logs")
+    data.update(overrides)
+    return data
+
+
+class _DecisionLedgerMemoryFactStore:
+    def __init__(self, index=None):
+        self.index = index or {}
+        self.mentions = []
+
+    def is_postgres_backed(self):
+        return True
+
+    def read_decision_ledger_index(self, end_date=None, window_days=25):
+        return self.index
+
+    def replace_decision_ledger_snapshot(self, snapshot):
+        self.index = build_decision_ledger_index(snapshot, previous_index=self.index)
+        self.mentions = build_extreme_conviction_mention_rows(
+            self.index,
+            end_date=snapshot.get("trade_date"),
+            window_days=25,
+            exclude_a_kill=False,
+        )
+        return {"mentions": len(self.mentions), "cases": len((snapshot or {}).get("cases") or [])}
+
+    def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+        return [dict(row) for row in self.mentions]
 
 
 class DailyReportRenderTest(unittest.TestCase):
@@ -55,8 +162,9 @@ class DailyReportRenderTest(unittest.TestCase):
             self.assertEqual(target_path.read_text(encoding="utf-8"), "# new")
 
     def test_build_report_outputs_suppresses_helper_diagnostics_for_summary_render(self):
+        data = _complete_report_facts({"foo": "bar"})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
-            outputs = build_report_outputs({"foo": "bar"}, "2026-04-22", emit_preflight=False)
+            outputs = build_report_outputs(data, "2026-04-22", emit_preflight=False)
 
         self.assertIn(REPORT_VARIANT_FULL, outputs)
         self.assertIn(REPORT_VARIANT_SUMMARY, outputs)
@@ -84,14 +192,40 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
 
     def test_build_report_outputs_forwards_postgres_only_runtime_config(self):
+        data = _complete_report_facts({"postgres_only": True})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
-            build_report_outputs({"postgres_only": True}, "2026-05-29", emit_preflight=False)
+            build_report_outputs(data, "2026-05-29", emit_preflight=False)
 
         self.assertTrue(render_mock.call_args_list[0].kwargs["postgres_only"])
         self.assertTrue(render_mock.call_args_list[1].kwargs["postgres_only"])
 
+    def test_build_report_outputs_sanitizes_final_markdown_variants(self):
+        data = _complete_report_facts({"postgres_only": True})
+        stale_full_report = "\n".join(
+            [
+                "## 日报裁决总览",
+                "| 项目 | 结论 |",
+                "|------|------|",
+                "| 仓位姿态 | 0%不参与 |",
+                "| 最终对象 | 无 |",
+                "**明日继续观察**（1只，等观察位出现）:",
+                "- ⏳ 和远气体(002971) - 过程候选，等观察位出现，09:50-10:10观察价52.75",
+                "| 1 | 和远气体(002971) | 化工原料 | 板块锚 | 承接确认 | T字板 | 先看竞价承接，回封或结构确认命中才参与 |",
+            ]
+        )
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=[stale_full_report, "# summary"]):
+            outputs = build_report_outputs(data, "2026-06-11", emit_preflight=False)
+
+        rendered = outputs[REPORT_VARIANT_FULL]
+        self.assertIn("**过程候选回看**（1只，仅保留过程回看）:（过程证据）", rendered)
+        self.assertIn("过程候选，仅保留过程回看", rendered)
+        self.assertIn("只观察承接，不新增参与", rendered)
+        self.assertNotIn("等观察位出现", rendered)
+        self.assertNotIn("命中才参与", rendered)
+        self.assertNotIn("**明日继续观察**", rendered)
+
     def test_build_report_outputs_returns_lightweight_evidence_and_run_log_variants(self):
-        data = {"sections": [{"title": "A股市场分析", "content": "正文"}]}
+        data = _complete_report_facts({"sections": [{"title": "A股市场分析", "content": "正文"}]})
         full_report = "# full\n\n正文\n\n## 八、详细附录\n\n附录正文"
         with patch("daily_report_render._render_report_with_display_mode", side_effect=[full_report, "# summary"]):
             outputs = build_report_outputs(data, "2026-05-31", emit_preflight=False)
@@ -202,7 +336,7 @@ Top50长趋势表不该进入轻量版
 **T-027**
 | 时间窗口 | 要看什么 | 观察资格 | 卖出/风控 | 结论 |
 |----------|----------|----------|-----------|------|
-| 09:50-10:10 | 观察市场底色、主线承接、观察锚强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |
+| 09:50-10:10 | 观察市场底色、主线承接、观察对象强弱 | 无 | 窗口内处理弱仓/错仓 | 条件未同时满足继续0% |
 
 ## 七、最终结论
 | 明日结论 | 一句话动作 |
@@ -305,20 +439,65 @@ Top50长趋势表不该进入轻量版
             self.assertNotIn("保存路径将在写入后由主流程打印", run_log)
 
     def test_build_report_outputs_persists_decision_ledger_before_replay_full_render(self):
+        data = _complete_report_facts({"foo": "bar"})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
-            build_report_outputs({"foo": "bar"}, "2026-04-22", run_mode="replay", emit_preflight=False)
+            build_report_outputs(data, "2026-04-22", run_mode="replay", emit_preflight=False)
 
         self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
         self.assertTrue(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
 
+    def test_build_report_outputs_can_render_without_runtime_artifact_persistence(self):
+        data = _complete_report_facts({"foo": "bar"})
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
+            build_report_outputs(
+                data,
+                "2026-04-22",
+                run_mode="replay",
+                emit_preflight=False,
+                persist_runtime_artifacts=False,
+            )
+
+        self.assertFalse(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
+        self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+        self.assertFalse(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
+        self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
+
+    def test_persist_report_runtime_artifacts_reuses_report_runtime_context(self):
+        data = {
+            "execution_stage_context": {
+                "extreme_conviction_list": [{"code": "000001"}],
+                "candidate_traces": [{"code": "000001"}],
+                "candidate_trace_eliminated_summary": [{"reason": "条件未满足"}],
+            },
+            "market_research_snapshot": {"market_branch": "冰点修复"},
+        }
+        decision_result = {"case_count": 1, "tracking_lines": ["记录已写入"]}
+        trace_result = {"trace_count": 1}
+
+        with patch("report.runtime._maybe_persist_decision_ledger", return_value=decision_result) as decision_mock, \
+             patch("report.runtime._prune_decision_ledger_result_for_current_extreme_list", return_value=decision_result) as prune_mock, \
+             patch("report.runtime._maybe_persist_candidate_traces", return_value=trace_result) as trace_mock:
+            result = persist_report_runtime_artifacts(data, "2026-06-08", run_mode="replay")
+
+        self.assertIs(result["decision_ledger_artifacts"], decision_result)
+        self.assertIs(result["candidate_trace_artifact"], trace_result)
+        self.assertIs(data["decision_ledger_artifacts"], decision_result)
+        self.assertIs(data["candidate_trace_artifact"], trace_result)
+        self.assertIs(data["execution_stage_context"]["candidate_trace_artifact"], trace_result)
+        decision_mock.assert_called_once()
+        prune_mock.assert_called_once()
+        trace_mock.assert_called_once()
+        self.assertEqual(trace_mock.call_args.kwargs["run_mode"], "replay")
+
     def test_build_report_outputs_keeps_private_position_report_out_of_daily_reports(self):
         private_position_text = "\n## 持仓策略\n| 上峰水泥 | 100.0% | 私密动作 |\n"
+        data = _complete_report_facts({"foo": "bar"})
 
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]):
             outputs = build_report_outputs(
-                {"foo": "bar"},
+                data,
                 "2026-05-19",
                 position_report_text=private_position_text,
                 emit_preflight=False,
@@ -332,7 +511,7 @@ Top50长趋势表不该进入轻量版
         self.assertNotIn("100.0%", outputs[REPORT_VARIANT_SUMMARY])
 
     def test_build_report_outputs_passes_structured_position_context_without_private_report_text(self):
-        data = {
+        data = _complete_report_facts({
             "personal_position_context": {
                 "account_profile": {"capital_text": "1w本金；总资产10126.52；当日盈利126.52（+1.27%）"},
                 "existing_position_summary": {
@@ -340,7 +519,7 @@ Top50长趋势表不该进入轻量版
                     "summary": "持有晶方科技(603005)1手，成本43.835；先处理旧仓",
                 },
             }
-        }
+        })
 
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
             outputs = build_report_outputs(
@@ -384,6 +563,7 @@ Top50长趋势表不该进入轻量版
                 "2026-05-18",
                 mode=LEDGER_MODE_REPLAY,
                 output_dir=str(root),
+                sync_replay_decision_ledger=True,
             )
 
             snapshot = json.loads((root / "data" / "decision-ledger" / "2026-05-18.json").read_text(encoding="utf-8"))
@@ -399,9 +579,38 @@ Top50长趋势表不该进入轻量版
         self.assertNotIn("600850", index["by_stock_code"])
         self.assertNotIn("603082", index["by_stock_code"])
 
-    def test_save_replay_outputs_keeps_existing_decision_ledger_when_final_markdown_has_no_list(self):
-        from storage.database_service import DatabaseService
+    def test_save_replay_outputs_does_not_sync_decision_ledger_by_default(self):
+        stale_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-05-18",
+            extreme_conviction_list=[
+                {"code": "600850", "name": "电科数字", "sector": "数据中心", "conviction_reason": "旧名单"},
+            ],
+            market_branch="旧结果",
+            sector_relationship_state="旧结果",
+        )
+        fresh_report = """
+**极度看好名单**（只保留最心动的少数，每只都绑定参与窗口）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 极看理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|
+| 1 | 合百集团 | 000417 | 股权转让 | 板块锚定龙 | 板块锚定龙 | 只盯分歧后的转强 |
+"""
 
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(stale_snapshot, root_dir=root)
+
+            save_report_outputs(
+                {REPORT_VARIANT_FULL: fresh_report, REPORT_VARIANT_SUMMARY: "# summary"},
+                "2026-05-18",
+                mode=LEDGER_MODE_REPLAY,
+                output_dir=str(root),
+            )
+
+            snapshot = json.loads((root / "data" / "decision-ledger" / "2026-05-18.json").read_text(encoding="utf-8"))
+
+        self.assertEqual([case["stock_code"] for case in snapshot["cases"]], ["600850"])
+
+    def test_save_replay_outputs_keeps_existing_decision_ledger_when_final_markdown_has_no_list(self):
         existing_snapshot = build_decision_ledger_snapshot(
             trade_date="2026-05-22",
             extreme_conviction_list=[
@@ -411,7 +620,7 @@ Top50长趋势表不该进入轻量版
                     "sector": "元器件",
                     "source_tier": "extreme_conviction",
                     "execution_eligibility": "observation_only",
-                    "attack_state": "0%观察",
+                    "attack_state": "0%不参与",
                     "conviction_reason": "形态健康，但最终0%只观察承接",
                 }
             ],
@@ -421,7 +630,8 @@ Top50长趋势表不该进入轻量版
 
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            write_decision_ledger_artifacts(existing_snapshot, root_dir=root)
+            service = _DecisionLedgerMemoryFactStore()
+            write_decision_ledger_artifacts(existing_snapshot, root_dir=root, database_service=service)
 
             save_report_outputs(
                 {
@@ -431,10 +641,10 @@ Top50长趋势表不该进入轻量版
                 "2026-05-22",
                 mode=LEDGER_MODE_REPLAY,
                 output_dir=str(root),
+                sync_replay_decision_ledger=True,
             )
 
             snapshot = json.loads((root / "data" / "decision-ledger" / "2026-05-22.json").read_text(encoding="utf-8"))
-            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
             rows = service.query_extreme_conviction_mentions("2026-05-22", window_days=25)
 
         self.assertEqual([case["stock_code"] for case in snapshot["cases"]], ["000636"])
@@ -523,30 +733,7 @@ Top50长趋势表不该进入轻量版
         self.assertIsNone(os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"))
 
     def test_build_report_outputs_can_suppress_preflight_output(self):
-        data = {
-            "data_status": {
-                "两市成交额": True,
-                "中证全指": True,
-                "中证1000": True,
-                "成交额排名": True,
-            },
-            "total_turnover": 12345.67,
-            "wind_a_alternative": {"price": 6686.86, "data_source": "tushare.index_daily"},
-            "csi1000_index": {"price": 6123.45, "data_source": "tushare.index_daily"},
-            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
-            "module_logs": [
-                {
-                    "step": "request.total_turnover",
-                    "status": "success",
-                    "details": {"provider": "tushare.daily", "total_turnover": 12345.67},
-                },
-                {
-                    "step": "request.csi1000",
-                    "status": "success",
-                    "details": {"provider": "tushare.index_daily", "price": 6123.45},
-                },
-            ],
-        }
+        data = _complete_report_facts()
 
         stdout = io.StringIO()
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]):
@@ -575,7 +762,7 @@ Top50长趋势表不该进入轻量版
 
         render_mock.assert_not_called()
         message = str(error.exception)
-        self.assertIn("日报生成已终止", message)
+        self.assertIn("关键数据不完整，停止生成", message)
         self.assertIn("两市成交额", message)
         self.assertIn("中证全指", message)
         self.assertIn("成交额排名", message)
@@ -844,8 +1031,8 @@ Top50长趋势表不该进入轻量版
         render_mock.assert_not_called()
         self.assertIn("两市成交额", str(error.exception))
 
-    def test_report_preflight_fails_when_index_or_turnover_rank_provider_is_not_tushare(self):
-        data = {
+    def test_report_preflight_accepts_turnover_rank_fallback_but_rejects_index_provider(self):
+        data = _complete_report_facts({
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
@@ -878,15 +1065,54 @@ Top50长趋势表不该进入轻量版
                     "details": {"provider": "eastmoney.turnover_rank", "row_count": 50},
                 },
             ],
-        }
+        })
 
         preflight = build_report_preflight(data, "2026-05-13")
 
         self.assertEqual(preflight["status"], "failed")
-        self.assertEqual(preflight["failures"], ["中证全指", "中证1000", "成交额排名"])
+        self.assertEqual(preflight["failures"], ["中证全指", "中证1000"])
+
+    def test_report_preflight_accepts_akshare_turnover_rank_fallback(self):
+        data = _complete_report_facts({
+            "turnover_rank": [
+                {"code": f"{index:06d}", "data_source": "akshare.stock_zh_a_spot_em"}
+                for index in range(1, 51)
+            ],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "storage.market_daily_totals", "row_count": 5515}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily", "price": 6119.24}},
+                {"step": "request.csi1000", "status": "success", "details": {"provider": "tushare.index_daily", "price": 8081.26}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "akshare.stock_zh_a_spot_em", "row_count": 50}},
+                {"step": "request.market_stats", "status": "success", "details": {"provider": "storage.stock_daily_quotes_recent", "row_count": 5515}},
+                {"step": "request.hot_rank.primary", "status": "success", "details": {"provider": "tushare.ths_hot", "hot_rank_count": 50}},
+            ],
+        })
+
+        preflight = build_report_preflight(data, "2026-06-11")
+
+        self.assertEqual(preflight["status"], "success")
+        self.assertNotIn("成交额排名", preflight["failures"])
+
+    def test_report_preflight_accepts_structured_postgres_turnover_rank_source(self):
+        data = _complete_report_facts({
+            "turnover_rank": [{"code": "300308", "data_source": "storage.turnover_rank_daily"} for _ in range(50)],
+            "module_logs": [
+                {"step": "request.total_turnover", "status": "success", "details": {"provider": "storage.market_daily_totals", "row_count": 5515}},
+                {"step": "request.wind_a", "status": "success", "details": {"provider": "tushare.index_daily", "price": 6119.24}},
+                {"step": "request.csi1000", "status": "success", "details": {"provider": "tushare.index_daily", "price": 8081.26}},
+                {"step": "request.turnover_rank", "status": "success", "details": {"provider": "storage.turnover_rank_daily", "row_count": 50}},
+                {"step": "request.market_stats", "status": "success", "details": {"provider": "storage.stock_daily_quotes_recent", "row_count": 5515}},
+                {"step": "request.hot_rank.primary", "status": "success", "details": {"provider": "tushare.ths_hot", "hot_rank_count": 50}},
+            ],
+        })
+
+        preflight = build_report_preflight(data, "2026-06-08")
+
+        self.assertEqual(preflight["status"], "success")
+        self.assertNotIn("成交额排名", preflight["failures"])
 
     def test_report_preflight_accepts_positive_total_turnover_from_legacy_provider(self):
-        data = {
+        data = _complete_report_facts({
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
@@ -919,7 +1145,7 @@ Top50长趋势表不该进入轻量版
                     "details": {"provider": "tushare.daily", "row_count": 50},
                 },
             ],
-        }
+        })
 
         preflight = build_report_preflight(data, "2026-05-18")
 
@@ -962,7 +1188,7 @@ Top50长趋势表不该进入轻量版
         self.assertIn("创新高趋势反馈", preflight["failures"])
 
     def test_report_preflight_echoes_new_high_recent_trend_rows(self):
-        data = {
+        data = _complete_report_facts({
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
@@ -1016,14 +1242,14 @@ Top50长趋势表不该进入轻量版
                     },
                 },
             ],
-        }
+        })
 
         preflight = build_report_preflight(data, "2026-05-20")
         lines = render_report_preflight_lines(preflight)
         rendered = "\n".join(lines)
 
-        self.assertIn("创新高趋势反馈: success", rendered)
-        self.assertIn("row_count=3", rendered)
+        self.assertIn("创新高趋势反馈: 成功", rendered)
+        self.assertIn("记录数=3", rendered)
         self.assertIn("创新高近25个交易日:", rendered)
         self.assertIn("2026-05-18 132 2.64% +19 元器件、半导体、化工原料", rendered)
         self.assertIn("2026-05-20 169 3.38% +5 半导体、元器件、专用机械", rendered)
@@ -1117,6 +1343,33 @@ Top50长趋势表不该进入轻量版
         }
 
         preflight = build_report_preflight(data, "2026-05-22")
+
+        self.assertEqual(preflight["status"], "failed")
+        self.assertIn("ETF两市成交额趋势", preflight["failures"])
+
+    def test_report_preflight_fails_when_etf_turnover_series_has_coverage_anomaly(self):
+        data = _complete_report_facts(
+            {
+                "data_status": {"ETF两市成交额趋势": True},
+                "step_status": {"ETF两市成交额趋势获取": True},
+                "etf_turnover_series": {
+                    "available": True,
+                    "coverage_anomaly": True,
+                    "coverage_status": "partial",
+                    "coverage_anomaly_reason": "目标日有成交ETF数520只，样本覆盖不足",
+                    "rows": [{"trade_date": "2026-06-11", "etf_turnover_yi": 665.8}],
+                },
+                "module_logs": [
+                    {
+                        "step": "request.etf_turnover_series",
+                        "status": "success",
+                        "details": {"provider": "sina.etf.daily_amount", "row_count": 25},
+                    },
+                ],
+            }
+        )
+
+        preflight = build_report_preflight(data, "2026-06-11")
 
         self.assertEqual(preflight["status"], "failed")
         self.assertIn("ETF两市成交额趋势", preflight["failures"])
@@ -1361,11 +1614,11 @@ Top50长趋势表不该进入轻量版
                     build_report_outputs(data, "2026-05-13")
 
         output = stdout.getvalue()
-        self.assertIn("日报关键数据 preflight: failed / 2026-05-13", output)
-        self.assertIn("两市成交额: failed", output)
+        self.assertIn("关键数据检查: 失败 / 2026-05-13", output)
+        self.assertIn("两市成交额: 失败", output)
 
     def test_report_preflight_renders_critical_fields_with_provider_and_row_count(self):
-        data = {
+        data = _complete_report_facts({
             "data_status": {
                 "两市成交额": True,
                 "中证全指": True,
@@ -1398,13 +1651,13 @@ Top50长趋势表不该进入轻量版
                     "details": {"provider": "tushare.daily", "row_count": 50},
                 },
             ],
-        }
+        })
 
         preflight = build_report_preflight(data, "2026-05-13")
         lines = render_report_preflight_lines(preflight)
 
         self.assertEqual(preflight["status"], "success")
-        self.assertIn("日报关键数据 preflight: success", lines[0])
+        self.assertIn("关键数据检查: 成功", lines[0])
         self.assertTrue(any("两市成交额" in line and "tushare.daily" in line and "12345.67" in line for line in lines))
         self.assertTrue(any("中证全指" in line and "tushare.index_daily" in line and "6686.86" in line for line in lines))
         self.assertTrue(any("中证1000" in line and "tushare.index_daily" in line and "6123.45" in line for line in lines))
@@ -1483,8 +1736,8 @@ Top50长趋势表不该进入轻量版
     def test_generate_markdown_report_from_sections_deduplicates_no_trade_and_filters_draft_explanations(self):
         rendered = generate_markdown_report_from_sections(
             {
-                "preamble": "⛔ 当前先不开新仓: 一档（空仓档），本轮不做PK出手结论。",
-                "execution": "⛔ 当前先不开新仓: 一档（空仓档），本轮不做PK出手结论。\n为什么要看这块：这是草稿解释。\n结论：空仓等待。",
+                "preamble": "⛔ 当前先不开新仓: 0%不参与，本轮不做PK出手结论。",
+                "execution": "⛔ 当前先不开新仓: 0%不参与，本轮不做PK出手结论。\n为什么要看这块：这是草稿解释。\n结论：空仓等待。",
             }
         )
 

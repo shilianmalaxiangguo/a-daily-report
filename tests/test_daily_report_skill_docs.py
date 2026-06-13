@@ -1,4 +1,3 @@
-import json
 import unittest
 from pathlib import Path
 
@@ -22,17 +21,6 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         path = ROOT / relative_path
         self.assertTrue(path.exists(), f"Missing required skill doc: {relative_path}")
         return path.read_text(encoding="utf-8")
-
-    def _latest_public_report_paths(self):
-        index_path = ROOT / "snap-ui" / "public" / "data" / "daily-reports" / "index.json"
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        latest = (index.get("reports") or [{}])[0]
-        paths = []
-        for variant in latest.get("availableVariants") or []:
-            content_path = ((latest.get("variants") or {}).get(variant) or {}).get("contentPath")
-            if content_path:
-                paths.append(ROOT / "snap-ui" / "public" / content_path.lstrip("/"))
-        return paths
 
     def test_skill_routes_natural_language_intents_and_references(self):
         skill = self._read("SKILL.md")
@@ -150,9 +138,9 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "Legacy conservative sizing is removed",
             "0/50/100 only",
             "Do not answer uncertainty by shrinking every opportunity",
-            "0% / 不参与",
-            "50% / 标准进攻",
-            "100% / 核心进攻",
+            "0%不参与",
+            "50%条件执行",
+            "100%核心进攻",
             "scenario cancellation",
             "invalidation price",
         ]:
@@ -179,7 +167,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "ten_confirm",
             "tail_exception",
             "no_trade",
-            "snap-ui must consume `planned_participation` from the decision-ledger artifact",
+            "Report and replay surfaces must consume `planned_participation` from the decision-ledger artifact",
             "case-level and mention-level",
             "compare tomorrow's behavior against the designed scenario",
             "跟踪周期",
@@ -211,7 +199,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "missed_action_worked",
             "participation_review_status",
             "判断账本索引",
-            "snap-ui",
+            "report and replay lists",
         ]:
             self.assertIn(required, combined)
 
@@ -223,7 +211,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "fetch_recent_price_bars",
             "lookback_days=120",
             "recent_bars",
-            "重点观察25日跟踪表",
+            "过程观察25日跟踪表",
             "明日极度看好近25日跟踪表",
             "附录A：明日极度看好列表",
             "附录A：龙回头观察池",
@@ -619,7 +607,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             "Tushare-first",
             "快速稳定高效",
             "fresh daily generation",
-            "snap-ui public data",
+            "PostgreSQL",
             "akshare",
             "iwencai",
             "fallback only",
@@ -662,40 +650,10 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         ]:
             self.assertIn(required, combined)
 
-    def test_cloudflare_module_mime_reflection_is_recorded(self):
-        reflection = self._read("docs/ops/reflections/2026-05-13-cloudflare-pages-module-mime.md")
-
-        for required in [
-            "Cloudflare Pages",
-            "module MIME",
-            "text/html",
-            "application/javascript",
-            "clean .output and dist",
-            "verify-pages-module-assets",
-            "do not manually redeploy before identifying the bad asset URL",
-        ]:
-            self.assertIn(required, reflection)
-
-    def test_llm_wiki_contains_snap_ui_publish_contract(self):
-        wiki_readme = self._read("wiki/README.md")
-        publish_node = self._read("wiki/运行契约/snap-ui发布契约.md")
-        combined = "\n".join([wiki_readme, publish_node])
-
-        for required in [
-            "Cloudflare Pages",
-            "module MIME",
-            "application/javascript",
-            "verify-pages-module-assets",
-            "clean .output and dist",
-            "develop",
-            "tests/unit/publicStaticDataContract.test.ts",
-        ]:
-            self.assertIn(required, combined)
-
     def test_daily_report_entry_docstring_keeps_tushare_as_primary_source(self):
         entry = self._read("scripts/daily_report_entry_demo.py")
 
-        self.assertIn("基础市场事实与 snap-ui public data：Tushare-first", entry)
+        self.assertIn("基础市场事实：Tushare-first", entry)
         self.assertIn("指数数据：Tushare index_daily（首选）", entry)
         self.assertIn("两市成交额：Tushare daily amount（首选）", entry)
         self.assertIn("板块热榜：Tushare ths_hot", entry)
@@ -786,7 +744,7 @@ class DailyReportSkillDocsTest(unittest.TestCase):
 
     def test_user_visible_wording_rewrites_observation_permission_language(self):
         old_permission_word = _m("观察", "权")
-        text = f"0%观察不开新仓，只保留高优先级{old_permission_word}；普通{old_permission_word}只看承接。"
+        text = f"0%不参与不开新仓，只保留高优先级{old_permission_word}；普通{old_permission_word}只看承接。"
 
         sanitized = sanitize_user_visible_text(text)
 
@@ -806,10 +764,10 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             _m("开", "火"),
             _m("不", "开", "火"),
             _m("均线", "粘合"),
-            _m("B档", "30%"),
+            _m("50%执行", "30%"),
             _m("A-档", "50%"),
             _m("A", "档", "80%", "-100%"),
-            _m("30%", "条件试错"),
+            _m("3", "0%", "条件", "试错"),
             _m("30%", "试错"),
             _m("最多", "30%"),
             _m("最多", "半仓"),
@@ -830,7 +788,6 @@ class DailyReportSkillDocsTest(unittest.TestCase):
             ROOT / "wiki",
             ROOT / "docs" / "trellis" / "specs",
             ROOT / "docs" / "trellis" / "plans",
-            *self._latest_public_report_paths(),
         ]
         offenders = []
         for root in roots:

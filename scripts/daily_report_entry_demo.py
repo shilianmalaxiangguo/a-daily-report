@@ -82,9 +82,11 @@ from daily_report_render import (
     _get_stock_diagnostic_output_path,
     _inject_report_variant_banner,
     _render_report_with_display_mode,
+    assert_report_required_facts_complete,
     build_report_outputs,
     build_report_preflight,
     finalize_run_log_text,
+    persist_report_runtime_artifacts,
     render_report_preflight_lines,
     ReportCriticalDataMissingError,
     save_report_output,
@@ -92,6 +94,8 @@ from daily_report_render import (
     save_stock_diagnostic_output,
 )
 from report.markdown_report_html import render_markdown_report_file
+from report.html_report_renderer import save_daily_report_html
+from report.html_report_view import build_daily_report_view, missing_required_fact_labels
 from daily_report_snapshot_io import (
     _get_snapshot_path as run_get_snapshot_path,
     _save_data_snapshot,
@@ -3755,9 +3759,114 @@ def _postgres_loaded_data_has_target_facts(result, data):
             return True
     elif _safe_float((result or {}).get("field_count")) > 0:
         return True
-    if _safe_float((result or {}).get("target_structured_fact_count")) > 0:
+    structured_counts = (result or {}).get("structured_counts")
+    if not isinstance(structured_counts, dict):
+        structured_counts = {}
+    report_spine_count = sum(
+        _safe_float(structured_counts.get(key))
+        for key in (
+            "current_mainline_history_record",
+            "target_cycle_calendar_rows",
+            "cycle_interpretation_rows",
+            "sector_attack_evidence_rows",
+            "candidate_trace_artifact",
+        )
+    )
+    if report_spine_count > 0:
         return True
     return False
+
+
+def _stock_identity_present(value):
+    if not isinstance(value, dict):
+        return False
+    code = str(value.get("code") or value.get("stock_code") or value.get("symbol") or "").strip()
+    name = str(value.get("name") or value.get("stock_name") or value.get("名称") or "").strip()
+    return bool(code or name)
+
+
+def _selection_workflow_has_runtime_evidence(workflow):
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    if _stock_identity_present(execution_object):
+        return True
+    for item in workflow.get("candidate_pool") or []:
+        if not isinstance(item, dict):
+            continue
+        stock = item.get("stock") if isinstance(item.get("stock"), dict) else item
+        if _stock_identity_present(stock):
+            return True
+    return False
+
+
+def _first_dict_from_sources(key, *sources):
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        value = source.get(key)
+        if isinstance(value, dict) and value:
+            return value
+    return {}
+
+
+def _restore_postgres_sector_first_runtime_facts(data, target_date):
+    if not isinstance(data, dict):
+        return data
+    execution_context = data.get("execution_stage_context")
+    if not isinstance(execution_context, dict):
+        execution_context = {}
+        data["execution_stage_context"] = execution_context
+    market_snapshot = data.get("market_research_snapshot")
+    if not isinstance(market_snapshot, dict):
+        market_snapshot = {}
+        data["market_research_snapshot"] = market_snapshot
+
+    existing_workflow = _first_dict_from_sources("selection_workflow", data, execution_context, market_snapshot)
+    existing_resolution = _first_dict_from_sources("final_target_resolution", data, execution_context, market_snapshot)
+    if existing_workflow and existing_resolution:
+        return data
+
+    try:
+        from report import runtime as report_runtime
+    except (ImportError, ModuleNotFoundError):
+        return data
+
+    position_decision = _first_dict_from_sources("position_decision", data, execution_context, market_snapshot)
+    selected_candidate = _first_dict_from_sources("selected_position_candidate", data, execution_context, market_snapshot)
+    workflow = existing_workflow or report_runtime._build_runtime_selection_workflow(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_context,
+        market_research_snapshot=market_snapshot,
+        selected_position_candidate=selected_candidate,
+        position_decision=position_decision,
+    )
+    if not _selection_workflow_has_runtime_evidence(workflow):
+        return data
+
+    workflow = report_runtime._store_runtime_selection_workflow(
+        workflow,
+        data=data,
+        execution_stage_context=execution_context,
+        market_research_snapshot=market_snapshot,
+    )
+    resolution = existing_resolution or report_runtime._build_runtime_final_target_resolution(
+        data=data,
+        selected_position_candidate=selected_candidate,
+        position_decision=position_decision,
+        market_research_snapshot=market_snapshot,
+        execution_stage_context=execution_context,
+    )
+    report_runtime._store_runtime_final_target_resolution(
+        resolution,
+        data=data,
+        execution_stage_context=execution_context,
+        market_research_snapshot=market_snapshot,
+        phase="postgres_preflight",
+    )
+    return data
 
 
 def load_daily_report_data_from_postgres(target_date):
@@ -3777,6 +3886,7 @@ def load_daily_report_data_from_postgres(target_date):
     data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True
+    _restore_postgres_sector_first_runtime_facts(data, target_date)
     return data
 
 
@@ -3851,9 +3961,11 @@ def _postgres_index_bar_service():
         or os.environ.get("DATABASE_URL")
         or ""
     ).strip()
-    if not database_url.startswith(("postgres://", "postgresql://")):
-        return None
-    service = DatabaseService.from_environment()
+    service = (
+        DatabaseService.postgres(database_url)
+        if database_url.startswith(("postgres://", "postgresql://"))
+        else DatabaseService.from_environment()
+    )
     return service if service.is_postgres_backed() else None
 
 
@@ -4013,6 +4125,96 @@ def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LED
     return path
 
 
+def _assert_html_required_facts_complete(data, target_date, *, run_mode=LEDGER_MODE_FROZEN, db_service=None):
+    if db_service is None:
+        return assert_report_required_facts_complete(data, target_date, run_mode=run_mode)
+
+    class _ChartHtmlFactService:
+        def load_daily_report_snapshot(self, _target_date):
+            return {
+                "source": (data or {}).get("postgres_source") or f"in-memory.daily-report/{_target_date}",
+                "field_count": (data or {}).get("postgres_field_count") or (1 if data else 0),
+                "target_field_count": (data or {}).get("postgres_field_count") or (1 if data else 0),
+                "data": data if isinstance(data, dict) else {},
+            }
+
+        def daily_report_fact_coverage(self, _target_date):
+            reader = getattr(db_service, "daily_report_fact_coverage", None)
+            if callable(reader):
+                return reader(_target_date) or {}
+            return {
+                "tables": {
+                    "in_memory_daily_report": {
+                        "target_count": 1 if data else 0,
+                        "max_trade_date": _target_date if data else "",
+                    }
+                }
+            }
+
+        def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+            reader = getattr(db_service, "query_extreme_conviction_mentions", None)
+            if callable(reader):
+                return reader(end_date, window_days=window_days, include_a_kill=include_a_kill) or []
+            mentions = (data or {}).get("extreme_conviction_mentions") or (data or {}).get("candidate_mentions") or []
+            return mentions if isinstance(mentions, list) else []
+
+        def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+            reader = getattr(db_service, "query_market_daily_total", None)
+            if not callable(reader):
+                return {}
+            return reader(trade_date, market_scope=market_scope) or {}
+
+        def query_market_breadth_counts(self, trade_date):
+            reader = getattr(db_service, "query_market_breadth_counts", None)
+            if not callable(reader):
+                return {}
+            return reader(trade_date) or {}
+
+    view = build_daily_report_view(target_date, _ChartHtmlFactService(), run_mode=run_mode)
+    missing = missing_required_fact_labels(view)
+    if missing:
+        raise ReportCriticalDataMissingError(
+            "{} 日报关键数据不完整，停止生成：{}".format(target_date, "、".join(missing))
+        )
+    return view
+
+
+def _try_save_daily_report_chart_html(
+    data,
+    target_date,
+    *,
+    run_mode=LEDGER_MODE_FROZEN,
+    overwrite_existing=False,
+    db_service=None,
+):
+    try:
+        view = _assert_html_required_facts_complete(data, target_date, run_mode=run_mode, db_service=db_service)
+        path = save_daily_report_html(
+            view,
+            root=Path(__file__).resolve().parents[1],
+            overwrite_existing=overwrite_existing,
+        )
+        if path is None:
+            print("HTML 日报未生成：HTML 写入未返回路径")
+            return None
+    except ReportCriticalDataMissingError as exc:
+        print(f"HTML 日报未生成：{exc}")
+        return None
+    except Exception as exc:
+        print(f"HTML 日报未生成：{exc}")
+        return None
+    print(f"HTML 日报已生成: {path}")
+    return path
+
+
+def _try_persist_report_runtime_artifacts(data, target_date, *, run_mode=LEDGER_MODE_FROZEN):
+    try:
+        return persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
+    except Exception as exc:
+        print(f"运行期产物写入失败，已保留日报正文生成：{exc}")
+        return None
+
+
 def _format_elapsed_seconds(elapsed_seconds):
     return f"{max(0.0, float(elapsed_seconds)) + 1e-9:.2f}"
 
@@ -4160,6 +4362,7 @@ def main():
                 has_personal_positions=has_personal_positions,
                 run_mode=run_mode,
                 position_report_text="",
+                persist_runtime_artifacts=False,
             )
             tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
             chanlun_html = _build_sh_index_chanlun_html_for_audit(
@@ -4171,6 +4374,29 @@ def main():
                 report_outputs.get(REPORT_VARIANT_RUN_LOG, ""),
                 audit_result,
             )
+
+        postgres_synced = False
+        if data:
+            if args.postgres_only:
+                result = import_daily_report_data_to_postgres(target_date, data)
+                print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+                postgres_synced = True
+            else:
+                try:
+                    result = import_daily_report_data_to_postgres(target_date, data)
+                except Exception as exc:
+                    print(f"PostgreSQL 日报事实未同步：{exc}")
+                    raise ReportCriticalDataMissingError(
+                        "PostgreSQL 日报事实未同步，停止生成；不会写入日报或完整 JSON 快照。"
+                    ) from exc
+                else:
+                    print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
+                    postgres_synced = True
+
+        if postgres_synced and not args.no_report and data:
+            _try_persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
+
+        if not args.no_report and data:
             saved_report_paths = save_report_outputs(
                 report_outputs,
                 target_date,
@@ -4206,24 +4432,8 @@ def main():
             )
             save_stock_diagnostic_output(stock_report, target_date, args.stock, mode=run_mode)
 
-        # 同步 PostgreSQL 事实；失败时停止，避免重新写入完整 JSON 快照。
+        # 事实同步成功后才允许生成 Bear HTML 或记录耗时，避免留下半成品日报。
         if data:
-            postgres_synced = False
-            if args.postgres_only:
-                result = import_daily_report_data_to_postgres(target_date, data)
-                print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
-                postgres_synced = True
-            else:
-                try:
-                    result = import_daily_report_data_to_postgres(target_date, data)
-                except Exception as exc:
-                    print(f"PostgreSQL 日报事实未同步：{exc}")
-                    raise ReportCriticalDataMissingError(
-                        "PostgreSQL 日报事实未同步，停止生成；不会写入完整 JSON 快照。"
-                    ) from exc
-                else:
-                    print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
-                    postgres_synced = True
             if postgres_synced and not args.no_report:
                 _try_save_daily_report_html_from_saved_markdown(
                     target_date,

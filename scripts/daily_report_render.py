@@ -17,6 +17,7 @@ from typing import Any, Dict
 import types
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from report.html_report_view import build_daily_report_view, missing_required_fact_labels
 try:
     import daily_report_analysis_utils as analysis_utils
 except ImportError:  # pragma: no cover - local compatibility shim for this repo snapshot
@@ -40,7 +41,16 @@ CRITICAL_REPORT_DATA_FIELDS = (
 CRITICAL_TUSHARE_PROVIDER_PREFIXES = {
     "wind_a_alternative": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
     "csi1000_index": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
-    "turnover_rank": ("tushare.", "postgresql.daily_report_facts", "postgresql."),
+    "turnover_rank": (
+        "tushare.",
+        "postgresql.daily_report_facts",
+        "postgresql.",
+        "storage.turnover_rank_daily",
+        "eastmoney.turnover_rank",
+        "eastmoney.push2.clist",
+        "iwencai.",
+        "akshare.stock_zh_a_spot_em",
+    ),
 }
 DECISION_CRITICAL_REPORT_DATA_FIELDS = (
     ("整合热榜", "整合热榜获取", ("request.integrated_hot_rank",), "integrated_hot_list", False),
@@ -56,6 +66,13 @@ DECISION_CRITICAL_REPORT_DATA_FIELDS = (
     ("雪球A股24小时热榜", "雪球A股24小时热榜获取", ("request.xueqiu_hot_rank",), "xueqiu_hot_rank_top100", False),
     ("雪球热榜AI解释", "雪球热榜AI解释获取", ("request.xueqiu_hot_stock_arguments",), "xueqiu_hot_stock_arguments", False),
     ("融资承接压力", "融资承接压力获取", ("request.margin_pressure",), "margin_pressure", False),
+)
+SECTOR_FIRST_CRITICAL_INPUTS = (
+    ("市场输入", ("market_state_snapshot", "market_research_snapshot", "mainline_turnover_summary")),
+    ("板块发酵输入", ("sector_trend_snapshot", "mainline_turnover_summary", "current_sector_turnover_snapshot")),
+    ("龙头确认输入", ("selected_position_candidate", "current_core_candidate", "final_target_resolution")),
+    ("价格行为输入", ("selection_workflow", "selected_position_candidate", "current_core_candidate")),
+    ("账户执行输入", ("position_decision", "final_target_resolution", "front_page_final_gate")),
 )
 FAILED_REQUEST_STATUSES = {"error", "degraded"}
 ALLOW_EMPTY_DATA_STATUS_LABELS = {
@@ -85,6 +102,8 @@ __all__ = [
     "build_report_preflight",
     "render_report_preflight_lines",
     "build_report_outputs",
+    "assert_report_required_facts_complete",
+    "persist_report_runtime_artifacts",
     "save_report_output",
     "save_report_outputs",
     "save_stock_diagnostic_output",
@@ -173,10 +192,10 @@ def _critical_payload_valid(data, payload_key):
         return _safe_float(payload.get("up_count")) > 0 and _safe_float(payload.get("down_count")) > 0
     if payload_key == "hot_rank_top50":
         target = int(_safe_float(data.get("hot_rank_sample_target"), 50) or 50)
-        sample_size = int(_safe_float(data.get("hot_rank_sample_size"), 0))
-        if sample_size <= 0:
-            sample_size = len(data.get("hot_rank_top50") or data.get("hot_rank_top30") or [])
-        return sample_size >= target
+        rows = data.get("hot_rank_top50") or data.get("hot_rank_top30") or []
+        if not isinstance(rows, (list, tuple)):
+            return False
+        return len(rows) >= target
     return True
 
 
@@ -194,10 +213,9 @@ def _critical_data_failures(data):
     data_status = data.get("data_status") or {}
     failures = []
     for label, payload_key in CRITICAL_REPORT_DATA_FIELDS:
-        if not _critical_field_tracked(data, label, payload_key):
-            continue
         if data_status.get(label) is False or not _critical_payload_valid(data, payload_key):
             failures.append(label)
+    failures.extend(_sector_first_input_failures(data))
     return failures
 
 
@@ -273,6 +291,17 @@ def _xuangubao_summary_count(payload):
     )
 
 
+def _etf_turnover_series_has_coverage_anomaly(payload):
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("coverage_anomaly") is True or str(payload.get("coverage_status") or "") == "partial":
+        return True
+    rows = payload.get("rows") or payload.get("trend_rows") or []
+    if not isinstance(rows, (list, tuple)):
+        return False
+    return any(isinstance(row, dict) and row.get("coverage_anomaly") is True for row in rows)
+
+
 def _row_count_for_step(data, step, payload_key):
     for log in (data.get("module_logs") or []):
         if not isinstance(log, dict) or log.get("step") != step:
@@ -337,7 +366,11 @@ def _decision_payload_valid(data, payload_key, allow_empty):
     if payload_key == "top50_turnover_share_series":
         return isinstance(payload, dict) and bool(payload.get("rows") or [])
     if payload_key == "etf_turnover_series":
-        return isinstance(payload, dict) and bool(payload.get("rows") or [])
+        return (
+            isinstance(payload, dict)
+            and bool(payload.get("rows") or [])
+            and not _etf_turnover_series_has_coverage_anomaly(payload)
+        )
     if payload_key == "concept_fund_flow":
         if not isinstance(payload, dict):
             return False
@@ -493,6 +526,121 @@ def _dedupe_labels(labels):
     return deduped
 
 
+def _as_mapping(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _has_meaningful_payload(value):
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_has_meaningful_payload(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_has_meaningful_payload(item) for item in value)
+    return bool(str(value).strip())
+
+
+def _sector_first_sources(data):
+    data = data if isinstance(data, dict) else {}
+    context = _as_mapping(data.get("execution_stage_context"))
+    snapshot = _as_mapping(data.get("market_research_snapshot"))
+    workflow = data.get("selection_workflow") or context.get("selection_workflow") or snapshot.get("selection_workflow")
+    if workflow and "selection_workflow" not in data:
+        data = {**data, "selection_workflow": workflow}
+    return data, context, snapshot
+
+
+def _sector_first_chain_tracked(data):
+    data, context, snapshot = _sector_first_sources(data)
+    workflow = data.get("selection_workflow")
+    if isinstance(workflow, dict) and (
+        workflow.get("derivation_contract") == "sector_first_strict.v1"
+        or workflow.get("schema_version") == "selection_workflow.v1"
+    ):
+        return True
+    tracked_keys = {
+        "market_state_snapshot",
+        "mainline_turnover_summary",
+        "current_sector_turnover_snapshot",
+        "recent_sector_turnover_history",
+        "sector_trend_snapshot",
+        "sector_trend_snapshot_step1",
+        "leader_memory_bank",
+        "selected_position_candidate",
+        "current_core_candidate",
+        "position_decision",
+        "final_target_resolution",
+        "sniper_target_derivation",
+    }
+    return any(key in source for source in (data, context, snapshot) for key in tracked_keys)
+
+
+def _sector_first_payload_for_key(data, context, snapshot, key):
+    if key == "selection_workflow":
+        workflow = data.get(key) or context.get(key) or snapshot.get(key)
+        if isinstance(workflow, dict) and set(workflow.keys()) <= {"schema_version", "derivation_contract"}:
+            return {}
+        return workflow
+    if key == "front_page_final_gate":
+        return (
+            data.get(key)
+            or context.get(key)
+            or snapshot.get(key)
+            or _as_mapping(snapshot.get("final_gate"))
+        )
+    if key == "market_research_snapshot":
+        payload = data.get(key) or context.get(key) or snapshot.get(key)
+        if isinstance(payload, dict) and set(payload.keys()) <= {"selection_workflow", "sector_first_missing_fields", "missing_fields"}:
+            return {}
+        return payload
+    if key == "selected_position_candidate":
+        candidate_snapshot = _as_mapping(snapshot.get("candidate_snapshot"))
+        return data.get(key) or context.get(key) or snapshot.get(key) or candidate_snapshot.get(key)
+    if key == "current_core_candidate":
+        candidate_snapshot = _as_mapping(snapshot.get("candidate_snapshot"))
+        return data.get(key) or context.get(key) or snapshot.get(key) or candidate_snapshot.get(key)
+    return data.get(key) or context.get(key) or snapshot.get(key)
+
+
+def _sector_first_input_failures(data):
+    if not _sector_first_chain_tracked(data):
+        return []
+    data, context, snapshot = _sector_first_sources(data)
+    failures = []
+    for label, keys in SECTOR_FIRST_CRITICAL_INPUTS:
+        if not any(
+            _has_meaningful_payload(_sector_first_payload_for_key(data, context, snapshot, key))
+            for key in keys
+        ):
+            failures.append(label)
+    return failures
+
+
+def _build_sector_first_critical_checks(data):
+    if not _sector_first_chain_tracked(data):
+        return []
+    data, context, snapshot = _sector_first_sources(data)
+    checks = []
+    for label, keys in SECTOR_FIRST_CRITICAL_INPUTS:
+        present_keys = [
+            key
+            for key in keys
+            if _has_meaningful_payload(_sector_first_payload_for_key(data, context, snapshot, key))
+        ]
+        checks.append(
+            {
+                "label": label,
+                "step_label": "板块优先推导",
+                "payload_key": ",".join(keys),
+                "status": "success" if present_keys else "failed",
+                "provider": "sector_first_strict.v1",
+                "row_count": len(present_keys),
+                "step_status": bool(present_keys),
+            }
+        )
+    return checks
+
+
 def _build_registered_status_failure_checks(data, known_labels=None):
     data = data or {}
     known = set(known_labels or [])
@@ -593,7 +741,9 @@ def build_report_preflight(data, target_date):
                 provider = getattr(payload, "data_source", "")
         provider_failed = tracked and not _provider_allowed_for_critical_payload(payload_key, provider)
         status = "未采集"
-        if tracked:
+        if label in failures:
+            status = "failed"
+        elif tracked:
             status = "failed" if label in failures or provider_failed else "success"
         checks.append(
             {
@@ -606,6 +756,8 @@ def build_report_preflight(data, target_date):
                 "data_status": data_status.get(label),
             }
         )
+    sector_first_checks = _build_sector_first_critical_checks(data)
+    checks.extend(sector_first_checks)
     decision_checks = _build_decision_critical_checks(data) + _build_quant_factor_checks(data)
     known_labels = [check["label"] for check in checks + decision_checks]
     decision_checks.extend(_build_registered_status_failure_checks(data, known_labels=known_labels))
@@ -627,36 +779,37 @@ def build_report_preflight(data, target_date):
 def render_report_preflight_lines(preflight):
     preflight = preflight or {}
     lines = [
-        "日报关键数据 preflight: {} / {}".format(
-            preflight.get("status", "unknown"),
+        "关键数据检查: {} / {}".format(
+            _run_log_status(preflight.get("status", "unknown")),
             preflight.get("target_date", ""),
         )
     ]
     for check in preflight.get("checks") or []:
         lines.append(
-            "- {label}: {status} | provider={provider} | value={value} | row_count={row_count}".format(
+            "- {label}: {status} | 来源={provider} | 数值={value} | 记录数={row_count}".format(
                 label=check.get("label", ""),
-                status=check.get("status", ""),
+                status=_run_log_status(check.get("status", "")),
                 provider=check.get("provider", "unknown"),
                 value=check.get("value", ""),
                 row_count=check.get("row_count", ""),
             )
         )
     if preflight.get("decision_checks"):
-        lines.append("决策数据 preflight:")
+        lines.append("决策数据检查:")
         for check in preflight.get("decision_checks") or []:
             lines.append(
-                "- {label}: {status} | provider={provider} | row_count={row_count} | step_status={step_status}".format(
+                "- {label}: {status} | 来源={provider} | 记录数={row_count} | 采集结果={step_status}".format(
                     label=check.get("label", ""),
-                    status=check.get("status", ""),
+                    status=_run_log_status(check.get("status", "")),
                     provider=check.get("provider", "unknown"),
                     row_count=check.get("row_count", ""),
-                    step_status=check.get("step_status", ""),
+                    step_status=_run_log_status(check.get("step_status", "")),
                 )
             )
             lines.extend(check.get("echo_lines") or [])
     if preflight.get("failures"):
-        lines.append("失败字段: {}".format("、".join(preflight.get("failures") or [])))
+        failures = "、".join(preflight.get("failures") or [])
+        lines.append("关键数据不完整，停止生成；缺失项：{}；请优先修复数据缺失问题".format(failures))
     return lines
 
 
@@ -882,7 +1035,7 @@ def _render_run_log_overview_table(preflight, target_date):
         [
             ("日期", target_date),
             ("关键数据检查", _run_log_status(preflight.get("status", "unknown"))),
-            ("失败字段", _preflight_failures_text(preflight)),
+            ("缺失项", _preflight_failures_text(preflight)),
         ],
     )
 
@@ -902,7 +1055,7 @@ def _render_run_log_key_data_table(preflight):
         )
     if not rows:
         rows.append(("无", "-", "-", "-", "-", "-"))
-    return _markdown_table(["指标", "状态", "provider", "数值", "行数", "data_status"], rows)
+    return _markdown_table(["指标", "状态", "来源", "数值", "记录数", "采集状态"], rows)
 
 
 def _decision_check_note(check):
@@ -933,7 +1086,7 @@ def _render_run_log_decision_data_table(preflight):
         )
     if not rows:
         rows.append(("无", "-", "-", "-", "-", "-"))
-    return _markdown_table(["指标", "状态", "provider", "行数", "步骤状态", "备注"], rows)
+    return _markdown_table(["指标", "状态", "来源", "记录数", "采集结果", "备注"], rows)
 
 
 def _parse_dash_detail_line(line):
@@ -1043,9 +1196,9 @@ def _raise_if_critical_data_missing(data, target_date, preflight=None):
     if not failures:
         return
     raise ReportCriticalDataMissingError(
-        "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
-            target_date,
+        "关键数据不完整，停止生成：{}。\n日期：{}\n{}".format(
             "、".join(failures),
+            target_date,
             "\n".join(render_report_preflight_lines(preflight)),
         )
     )
@@ -1207,6 +1360,7 @@ def build_report_outputs(
     run_mode: str = LEDGER_MODE_FROZEN,
     position_report_text: str = "",
     emit_preflight: bool = True,
+    persist_runtime_artifacts: bool = True,
 ):
     preflight = build_report_preflight(data, target_date)
     if emit_preflight:
@@ -1223,9 +1377,9 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
-        persist_decision_ledger=True,
+        persist_decision_ledger=bool(persist_runtime_artifacts),
         decision_ledger_root_dir=str(_module_dir().parent),
-        persist_candidate_traces=True,
+        persist_candidate_traces=bool(persist_runtime_artifacts),
         candidate_trace_root_dir=str(_module_dir().parent),
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
@@ -1247,6 +1401,8 @@ def build_report_outputs(
         shared_runtime_cache=shared_runtime_cache,
         postgres_only=postgres_only,
     )
+    full_report = _sanitize_final_report_text(full_report, postgres_only=postgres_only)
+    summary_report = _sanitize_final_report_text(summary_report, postgres_only=postgres_only)
 
     return {
         REPORT_VARIANT_FULL: _inject_report_variant_banner(full_report, REPORT_VARIANT_FULL),
@@ -1255,6 +1411,139 @@ def build_report_outputs(
         REPORT_VARIANT_EVIDENCE_APPENDIX: build_evidence_appendix_text(full_report, target_date),
         REPORT_VARIANT_RUN_LOG: build_run_log_text(preflight, target_date),
     }
+
+
+def _sanitize_final_report_text(report_text: str, *, postgres_only: bool = False) -> str:
+    try:
+        from report import runtime as report_runtime
+    except (ImportError, ModuleNotFoundError):
+        return str(report_text or "")
+    sanitizer = getattr(report_runtime, "_sanitize_report_lines", None)
+    if not callable(sanitizer):
+        return str(report_text or "")
+    return "\n".join(
+        sanitizer(
+            str(report_text or "").splitlines(),
+            postgres_only=postgres_only,
+        )
+    )
+
+
+def persist_report_runtime_artifacts(
+    data: Dict[str, Any],
+    target_date: str,
+    run_mode: str = LEDGER_MODE_FROZEN,
+):
+    """Persist render-time artifacts after required report facts are verified."""
+
+    if not isinstance(data, dict):
+        return {}
+
+    execution_stage_context = data.get("execution_stage_context")
+    if not isinstance(execution_stage_context, dict):
+        execution_stage_context = {}
+    market_research_snapshot = data.get("market_research_snapshot")
+    if not isinstance(market_research_snapshot, dict):
+        market_research_snapshot = {}
+
+    try:
+        from report import runtime as report_runtime
+    except (ImportError, ModuleNotFoundError):
+        return {}
+
+    missing = object()
+    previous_values = {
+        "persist_decision_ledger": getattr(report_runtime, "persist_decision_ledger", missing),
+        "persist_candidate_traces": getattr(report_runtime, "persist_candidate_traces", missing),
+        "decision_ledger_root_dir": getattr(report_runtime, "decision_ledger_root_dir", missing),
+        "candidate_trace_root_dir": getattr(report_runtime, "candidate_trace_root_dir", missing),
+        "decision_ledger_postgres_only": getattr(report_runtime, "decision_ledger_postgres_only", missing),
+    }
+
+    root_dir = str(_module_dir().parent)
+    postgres_only = bool(data.get("postgres_only"))
+    try:
+        report_runtime.persist_decision_ledger = True
+        report_runtime.persist_candidate_traces = True
+        report_runtime.decision_ledger_root_dir = root_dir
+        report_runtime.candidate_trace_root_dir = root_dir
+        report_runtime.decision_ledger_postgres_only = postgres_only
+        decision_ledger_result = report_runtime._maybe_persist_decision_ledger(
+            data=data,
+            target_date=target_date,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
+        if isinstance(decision_ledger_result, dict):
+            decision_ledger_result = report_runtime._prune_decision_ledger_result_for_current_extreme_list(
+                decision_ledger_result,
+                target_date=target_date,
+                execution_stage_context=execution_stage_context,
+            )
+            data["decision_ledger_artifacts"] = decision_ledger_result
+        candidate_trace_result = report_runtime._maybe_persist_candidate_traces(
+            data=data,
+            target_date=target_date,
+            execution_stage_context=execution_stage_context,
+            run_mode=run_mode,
+        )
+        if isinstance(candidate_trace_result, dict):
+            data["candidate_trace_artifact"] = candidate_trace_result
+            execution_stage_context["candidate_trace_artifact"] = candidate_trace_result
+        return {
+            "decision_ledger_artifacts": decision_ledger_result,
+            "candidate_trace_artifact": candidate_trace_result,
+        }
+    finally:
+        for key, value in previous_values.items():
+            if value is missing:
+                try:
+                    delattr(report_runtime, key)
+                except AttributeError:
+                    pass
+            else:
+                setattr(report_runtime, key, value)
+
+
+class _InMemoryDailyReportHtmlFactService:
+    def __init__(self, data):
+        self.data = data if isinstance(data, dict) else {}
+
+    def load_daily_report_snapshot(self, target_date):
+        return {
+            "source": f"in-memory.daily-report/{target_date}",
+            "field_count": 1 if self.data else 0,
+            "target_field_count": 1 if self.data else 0,
+            "data": self.data,
+        }
+
+    def daily_report_fact_coverage(self, target_date):
+        return {
+            "tables": {
+                "in_memory_daily_report": {
+                    "target_count": 1 if self.data else 0,
+                    "max_trade_date": target_date if self.data else "",
+                }
+            }
+        }
+
+    def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+        mentions = self.data.get("extreme_conviction_mentions") or self.data.get("candidate_mentions") or []
+        return mentions if isinstance(mentions, list) else []
+
+
+def assert_report_required_facts_complete(data, target_date, *, run_mode=LEDGER_MODE_FROZEN):
+    view = build_daily_report_view(
+        target_date,
+        _InMemoryDailyReportHtmlFactService(data),
+        run_mode=run_mode,
+    )
+    missing = missing_required_fact_labels(view)
+    if missing:
+        raise ReportCriticalDataMissingError(
+            "{} 日报关键数据不完整，停止生成：{}".format(target_date, "、".join(missing))
+        )
+    return view
 
 
 def save_report_output(
@@ -1290,6 +1579,7 @@ def save_report_outputs(
     output_dir: str | None = None,
     overwrite_existing: bool = False,
     postgres_only: bool = False,
+    sync_replay_decision_ledger: bool = False,
 ):
     saved_paths = {}
     for variant, report_text in (report_outputs or {}).items():
@@ -1314,7 +1604,7 @@ def save_report_outputs(
                 overwrite_existing=overwrite_existing,
             )
     _backfill_run_log_saved_paths(saved_paths)
-    if mode == LEDGER_MODE_REPLAY:
+    if mode == LEDGER_MODE_REPLAY and sync_replay_decision_ledger:
         _sync_replay_decision_ledger_from_full_report(
             saved_paths,
             target_date,
