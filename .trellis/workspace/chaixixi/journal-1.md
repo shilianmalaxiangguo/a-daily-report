@@ -84,3 +84,36 @@ Added opportunity-cost comparison for old-position versus snapshot opportunities
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: 日报淘汰赛证据链与反伪精确收口
+
+**Date**: 2026-06-13
+**Task**: 日报淘汰赛证据链与反伪精确收口
+**Branch**: `develop`
+
+### Summary
+
+为日报主链加入淘汰赛 payload 与 companion HTML，收口最终对象只能来自 final_target_resolution/selection_workflow.final；把反伪精确第一性原理写入 llm wiki 与 backend spec，并用 focused tests 与 2026-06-12 replay companion audit 验证和远气体在价格行为层因炸板57次且尾盘才回封、高换手连板被淘汰。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `44e62da0` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
