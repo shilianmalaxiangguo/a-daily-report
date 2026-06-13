@@ -2006,6 +2006,137 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("elimination_tournament_final_conflict", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_allows_sector_capital_preflight_html_matching_zero_position(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}'
+        )
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertNotIn("sector_capital_preflight_final_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertNotIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_flags_incomplete_sector_capital_preflight_payload(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-06-12 板块资金扩散生成前复核</h1>
+        <script type="application/json" id="sector-capital-preflight-payload">
+        {"schema_version": "sector_capital_preflight.v1", "final_action": {"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}}
+        </script>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("sector_capital_preflight_layers_missing", codes)
+        self.assertIn("sector_capital_preflight_decision_list_missing", codes)
+        self.assertIn("sector_capital_preflight_idiot_index_missing", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_sector_capital_preflight_positive_final_when_report_is_zero_position(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-06-12 板块资金扩散生成前复核</h1>
+        <script type="application/json" id="sector-capital-preflight-payload">
+        {"schema_version": "sector_capital_preflight.v1", "final_action": {"label": "50%条件执行", "position_pct": 50, "target": {"name": "和远气体", "code": "002971"}}}
+        </script>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn("sector_capital_preflight_final_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_missing_sector_capital_preflight_payload(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-06-12 板块资金扩散生成前复核</h1>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn("sector_capital_preflight_payload_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def _sector_capital_preflight_html(self, *, final_action):
+        layer_ids = (
+            "market_capital_structure",
+            "sector_capital_diffusion",
+            "capital_carrier",
+            "carrier_role",
+            "quant_trace",
+            "price_action",
+            "cycle_probability_window",
+            "counter_evidence_account",
+            "final_action",
+        )
+        layers = ",".join(
+            (
+                '{"id":"%s","input_count":1,"eliminated_count":0,"survivor_count":1,'
+                '"entries":[{"stock_code":"002971","stock_name":"和远气体","sector":"化工原料",'
+                '"status":"survived","reason":"板块资金扩散","next_basis":"进入下一层","elimination_basis":""}]}'
+            )
+            % layer_id
+            for layer_id in layer_ids[:-1]
+        )
+        layers += (
+            ',{"id":"final_action","input_count":1,"eliminated_count":0,"survivor_count":0,'
+            '"entries":[{"stock_code":"","stock_name":"无执行对象","sector":"","status":"final_action",'
+            '"reason":"0%不参与","next_basis":"","elimination_basis":""}]}'
+        )
+        decisions = ",".join(
+            '{"item":"%s","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"}'
+            % item
+            for item in (
+                "市场能否进攻",
+                "哪个板块被选择",
+                "谁是资金载体",
+                "是否有量化参与痕迹",
+                "价格行为是否接受",
+                "周期概率窗口是否打开",
+                "账户是否适配",
+            )
+        )
+        return f"""
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-06-12 板块资金扩散生成前复核</h1>
+        <script type="application/json" id="sector-capital-preflight-payload">
+        {{
+          "schema_version": "sector_capital_preflight.v1",
+          "derivation_contract": "sector_capital_diffusion_first.v1",
+          "mermaid": "周期概率窗口 唯一明日动作或不参与 白痴指数复核 压缩/合并/降级低价值高成本层",
+          "final_action": {final_action},
+          "decision_list": [{decisions}],
+          "idiot_index_review": [{{"step":"涨停池起点","cost_proxy":"高","decision_value":"低","idiot_index_signal":"高","action":"降为证据层"}}],
+          "layers": [{layers}]
+        }}
+        </script>
+        """
+
+    def test_audit_flags_sector_capital_preflight_position_mismatch(self):
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-04-24 板块资金扩散生成前复核</h1>
+        <script type="application/json" id="sector-capital-preflight-payload">
+        {"schema_version": "sector_capital_preflight.v1", "final_action": {"label": "100%核心进攻", "position_pct": 100, "target": {"name": "富瀚微", "code": "300613"}}}
+        </script>
+        """
+
+        result = audit_report_markdown(GOOD_MARKDOWN, companion_html=html)
+
+        self.assertIn("sector_capital_preflight_final_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_missing_execution_windows(self):
         bad = GOOD_MARKDOWN.replace(
             "| 09:30-09:35 | 竞价强弱、主攻线承接 | 默认无 | 处理风险 | 不抢开盘 |\n",

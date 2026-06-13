@@ -492,15 +492,35 @@ def _extract_elimination_tournament_payload(companion_html):
     return payload if isinstance(payload, dict) else {}
 
 
-def _audit_elimination_tournament_consistency(lines, companion_html):
-    payload = _extract_elimination_tournament_payload(companion_html)
+def _extract_sector_capital_preflight_payload(companion_html):
+    text = str(companion_html or "")
+    if "sector-capital-preflight" not in text and "板块资金扩散生成前复核" not in text:
+        return None
+    match = re.search(
+        r'<script\b[^>]*id=["\']sector-capital-preflight-payload["\'][^>]*>(?P<payload>.*?)</script>',
+        text,
+        re.I | re.S,
+    )
+    if not match:
+        return {}
+    payload_text = html.unescape(match.group("payload")).strip()
+    if not payload_text:
+        return {}
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _audit_companion_final_action_consistency(lines, payload, *, artifact_label, missing_code, conflict_code):
     if payload is None:
         return None
     if not payload:
         return [
             _finding(
-                "elimination_tournament_payload_missing",
-                "elimination companion HTML is missing readable payload",
+                missing_code,
+                f"{artifact_label} companion HTML is missing readable payload",
             )
         ]
     front = _front_page_lines(lines)
@@ -517,20 +537,180 @@ def _audit_elimination_tournament_consistency(lines, companion_html):
             return []
         return [
             _finding(
-                "elimination_tournament_final_conflict",
-                "final summary is 0%不参与, but elimination companion HTML contains a positive final action",
+                conflict_code,
+                f"final summary is 0%不参与, but {artifact_label} companion HTML contains a positive final action",
             )
         ]
     front_target = _extract_final_unique_target(front)
     front_identity = _target_identity(front_target)
+    front_pct = _parse_percent_int(_extract_final_execution_style(front))
+    if front_pct is not None and final_pct is not None and front_pct != final_pct:
+        return [
+            _finding(
+                conflict_code,
+                f"front-page final position {front_pct}% conflicts with {artifact_label} companion HTML final position {final_pct}%",
+            )
+        ]
+    if front_identity and not final_identity and (front_pct or 0) > 0:
+        return [
+            _finding(
+                conflict_code,
+                f"front-page final target {front_target} is missing from {artifact_label} companion HTML final action",
+            )
+        ]
     if front_identity and final_identity and front_identity != final_identity:
         return [
             _finding(
-                "elimination_tournament_final_conflict",
-                f"front-page final target {front_target} conflicts with elimination companion HTML final target {final_identity}",
+                conflict_code,
+                f"front-page final target {front_target} conflicts with {artifact_label} companion HTML final target {final_identity}",
             )
         ]
     return []
+
+
+def _audit_elimination_tournament_consistency(lines, companion_html):
+    return _audit_companion_final_action_consistency(
+        lines,
+        _extract_elimination_tournament_payload(companion_html),
+        artifact_label="elimination",
+        missing_code="elimination_tournament_payload_missing",
+        conflict_code="elimination_tournament_final_conflict",
+    )
+
+
+REQUIRED_SECTOR_CAPITAL_PREFLIGHT_LAYERS = (
+    "market_capital_structure",
+    "sector_capital_diffusion",
+    "capital_carrier",
+    "carrier_role",
+    "quant_trace",
+    "price_action",
+    "cycle_probability_window",
+    "counter_evidence_account",
+    "final_action",
+)
+
+
+REQUIRED_SECTOR_CAPITAL_PREFLIGHT_DECISIONS = (
+    "市场能否进攻",
+    "哪个板块被选择",
+    "谁是资金载体",
+    "是否有量化参与痕迹",
+    "价格行为是否接受",
+    "周期概率窗口是否打开",
+    "账户是否适配",
+)
+
+
+def _audit_sector_capital_preflight_payload_contract(payload):
+    if payload is None or not payload:
+        return []
+    findings = []
+    if payload.get("derivation_contract") != "sector_capital_diffusion_first.v1":
+        findings.append(
+            _finding(
+                "sector_capital_preflight_contract_missing",
+                "sector capital preflight payload is missing sector-capital-first derivation contract",
+            )
+        )
+    mermaid = str(payload.get("mermaid") or "")
+    for text in ("周期概率窗口", "唯一明日动作或不参与", "白痴指数复核", "压缩/合并/降级低价值高成本层"):
+        if text not in mermaid:
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_mermaid_incomplete",
+                    f"sector capital preflight Mermaid is missing: {text}",
+                )
+            )
+    layers = payload.get("layers") if isinstance(payload.get("layers"), list) else []
+    layer_ids = [str(layer.get("id") or "") for layer in layers if isinstance(layer, dict)]
+    missing_layers = [layer_id for layer_id in REQUIRED_SECTOR_CAPITAL_PREFLIGHT_LAYERS if layer_id not in layer_ids]
+    if missing_layers:
+        findings.append(
+            _finding(
+                "sector_capital_preflight_layers_missing",
+                "sector capital preflight payload is missing layers: " + ", ".join(missing_layers),
+            )
+        )
+    for layer in layers:
+        if not isinstance(layer, dict):
+            continue
+        entries = layer.get("entries") if isinstance(layer.get("entries"), list) else []
+        eliminated = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "eliminated"]
+        survivors = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "survived"]
+        if int(layer.get("input_count") or 0) != len(entries):
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_layer_count_mismatch",
+                    f"sector capital preflight layer {layer.get('id')} input_count does not match entries",
+                )
+            )
+        if int(layer.get("eliminated_count") or 0) != len(eliminated):
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_layer_count_mismatch",
+                    f"sector capital preflight layer {layer.get('id')} eliminated_count does not match entries",
+                )
+            )
+        if int(layer.get("survivor_count") or 0) != len(survivors):
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_layer_count_mismatch",
+                    f"sector capital preflight layer {layer.get('id')} survivor_count does not match entries",
+                )
+            )
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("status") == "final_action":
+                continue
+            missing_entry_fields = [
+                key
+                for key in ("stock_code", "stock_name", "sector", "status", "reason", "next_basis", "elimination_basis")
+                if key not in entry
+            ]
+            if missing_entry_fields:
+                findings.append(
+                    _finding(
+                        "sector_capital_preflight_entry_fields_missing",
+                        f"sector capital preflight layer {layer.get('id')} entry is missing fields: "
+                        + ", ".join(missing_entry_fields),
+                    )
+                )
+    decision_list = payload.get("decision_list") if isinstance(payload.get("decision_list"), list) else []
+    decision_items = [str(item.get("item") or "") for item in decision_list if isinstance(item, dict)]
+    missing_decisions = [item for item in REQUIRED_SECTOR_CAPITAL_PREFLIGHT_DECISIONS if item not in decision_items]
+    if missing_decisions:
+        findings.append(
+            _finding(
+                "sector_capital_preflight_decision_list_missing",
+                "sector capital preflight decision list is missing: " + ", ".join(missing_decisions),
+            )
+        )
+    idiot_rows = payload.get("idiot_index_review") if isinstance(payload.get("idiot_index_review"), list) else []
+    if not idiot_rows:
+        findings.append(
+            _finding(
+                "sector_capital_preflight_idiot_index_missing",
+                "sector capital preflight payload is missing idiot-index review rows",
+            )
+        )
+    return findings
+
+
+def _audit_sector_capital_preflight_consistency(lines, companion_html):
+    payload = _extract_sector_capital_preflight_payload(companion_html)
+    findings = _audit_companion_final_action_consistency(
+        lines,
+        payload,
+        artifact_label="sector capital preflight",
+        missing_code="sector_capital_preflight_payload_missing",
+        conflict_code="sector_capital_preflight_final_conflict",
+    )
+    if findings is None:
+        return None
+    findings.extend(_audit_sector_capital_preflight_payload_contract(payload))
+    return findings
 
 
 def _audit_front_page_headings(lines):
@@ -1929,6 +2109,9 @@ def _audit_chanlun_tomorrow_decision_consistency(lines, companion_html):
     elimination_findings = _audit_elimination_tournament_consistency(lines, companion_html)
     if elimination_findings is not None:
         return elimination_findings
+    preflight_findings = _audit_sector_capital_preflight_consistency(lines, companion_html)
+    if preflight_findings is not None:
+        return preflight_findings
     front = _front_page_lines(lines)
     if not _final_summary_is_zero_position(front):
         return []

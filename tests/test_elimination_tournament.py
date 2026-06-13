@@ -1,3 +1,6 @@
+import html as html_lib
+import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -7,8 +10,22 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.elimination_tournament import build_elimination_tournament_payload
+from report.elimination_tournament import build_sector_capital_preflight_payload
 from report.elimination_tournament import elimination_tournament_html_path
 from report.elimination_tournament import render_elimination_tournament_html
+from report.elimination_tournament import render_sector_capital_preflight_html
+from report.elimination_tournament import sector_capital_preflight_html_path
+
+
+def _embedded_json_payload(rendered_html, script_id):
+    match = re.search(
+        rf'<script type="application/json" id="{script_id}">(.*?)</script>',
+        rendered_html,
+        re.S,
+    )
+    if not match:
+        return {}
+    return json.loads(html_lib.unescape(match.group(1)))
 
 
 class EliminationTournamentPayloadTest(unittest.TestCase):
@@ -499,6 +516,167 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertEqual(
             str(path),
             str(ROOT / "reports" / "replay" / "2026-06-12_明日标的选股淘汰赛.html"),
+        )
+
+    def test_sector_capital_preflight_payload_reuses_elimination_final_action(self):
+        source = self._payload()
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-06-12",
+            variant="replay",
+            elimination_tournament_payload=source,
+        )
+
+        self.assertEqual(payload["schema_version"], "sector_capital_preflight.v1")
+        self.assertEqual(payload["derivation_contract"], "sector_capital_diffusion_first.v1")
+        self.assertEqual(payload["final_action"], source["final_action"])
+        self.assertIn("selection_workflow", payload["source_payloads"])
+        self.assertEqual(payload["source_payloads"]["elimination_tournament_payload"]["schema_version"], "elimination_tournament.v1")
+        self.assertIn("flowchart TD", payload["mermaid"])
+        for label in (
+            "周期概率窗口",
+            "唯一明日动作或不参与",
+            "白痴指数复核",
+            "压缩/合并/降级低价值高成本层",
+            "下一轮优化",
+        ):
+            self.assertIn(label, payload["mermaid"])
+        self.assertEqual(
+            [layer["id"] for layer in payload["layers"]],
+            [
+                "market_capital_structure",
+                "sector_capital_diffusion",
+                "capital_carrier",
+                "carrier_role",
+                "quant_trace",
+                "price_action",
+                "cycle_probability_window",
+                "counter_evidence_account",
+                "final_action",
+            ],
+        )
+        self.assertEqual(payload["layers"][0]["source_layer_id"], "sector")
+        self.assertEqual(payload["layers"][-1]["entries"][0]["stock"], {})
+        self.assertEqual(payload["layers"][-1]["entries"][0]["stock_name"], "无执行对象")
+        for layer in payload["layers"]:
+            self.assertEqual(layer["input_count"], len(layer["entries"]))
+            self.assertEqual(layer["eliminated_count"], len(layer["eliminated"]))
+            self.assertEqual(layer["survivor_count"], len(layer["survivors"]))
+            for entry in layer["entries"]:
+                self.assertIn("stock_code", entry)
+                self.assertIn("stock_name", entry)
+                self.assertIn("sector", entry)
+                self.assertNotIn("risk_row", entry)
+        self.assertEqual(payload["decision_list"][0]["item"], "市场能否进攻")
+        self.assertEqual(payload["decision_list"][-1]["item"], "账户是否适配")
+        self.assertEqual(payload["idiot_index_review"][0]["step"], "涨停池起点")
+        self.assertEqual(payload["idiot_index_review"][0]["action"], "降为证据层，不作起点")
+
+    def test_sector_capital_preflight_existing_payload_keeps_observational_final_action(self):
+        stale_preflight = {
+            "schema_version": "sector_capital_preflight.v1",
+            "trade_date": "2026-06-12",
+            "variant": "replay",
+            "final_action": {
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"name": "和远气体", "code": "002971"},
+                "source": "stale_preflight",
+            },
+            "layers": [],
+        }
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-06-12",
+            variant="replay",
+            sector_capital_preflight=stale_preflight,
+            elimination_tournament_payload=self._payload(),
+        )
+
+        self.assertEqual(payload["final_action"]["label"], "0%不参与")
+        self.assertEqual(payload["final_action"]["position_pct"], 0)
+        self.assertEqual(payload["final_action"]["target"], {})
+        self.assertEqual(payload["final_action"]["source"], "selection_workflow.final")
+        self.assertEqual(payload["source_payloads"]["elimination_tournament_payload"]["schema_version"], "elimination_tournament.v1")
+        self.assertEqual(payload["source_artifact"], "elimination_tournament.v1")
+
+    def test_sector_capital_preflight_html_renders_mermaid_layers_and_payload(self):
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-06-12",
+            variant="replay",
+            elimination_tournament_payload=self._payload(),
+        )
+
+        html = render_sector_capital_preflight_html(payload)
+
+        self.assertIn('meta name="artifact" content="sector-capital-preflight"', html)
+        self.assertIn("板块资金扩散生成前复核", html)
+        self.assertIn("生成前复核流程", html)
+        self.assertIn("flowchart TD", html)
+        self.assertIn("相关决策列表", html)
+        self.assertIn("白痴指数复核表", html)
+        self.assertIn("市场能否进攻", html)
+        self.assertIn("涨停池起点", html)
+        self.assertIn("降为证据层，不作起点", html)
+        self.assertIn("市场资金结构", html)
+        self.assertIn("板块资金扩散", html)
+        self.assertIn("板块内资金载体", html)
+        self.assertIn("量化参与痕迹", html)
+        self.assertIn("周期概率窗口", html)
+        self.assertIn("反方证据与账户/盈亏比/时间窗口", html)
+        self.assertIn("价格行为确认", html)
+        self.assertIn("唯一明日动作", html)
+        self.assertIn('id="sector-capital-preflight-payload"', html)
+        embedded = _embedded_json_payload(html, "sector-capital-preflight-payload")
+        self.assertEqual(embedded["schema_version"], "sector_capital_preflight.v1")
+        self.assertEqual(embedded["derivation_contract"], "sector_capital_diffusion_first.v1")
+        self.assertEqual(embedded["final_action"]["label"], "0%不参与")
+        self.assertEqual(embedded["decision_list"][0]["item"], "市场能否进攻")
+        self.assertEqual(embedded["idiot_index_review"][0]["step"], "涨停池起点")
+        self.assertEqual(embedded["layers"][0]["id"], "market_capital_structure")
+        self.assertEqual(embedded["layers"][-1]["id"], "final_action")
+        self.assertIn("stock_code", embedded["layers"][0]["entries"][0])
+        self.assertIn("<strong>本层输入 1 只：</strong>和远气体(002971)", html)
+        self.assertIn("无执行对象", html)
+        self.assertIn("0%不参与", html)
+
+    def test_sector_capital_preflight_final_layer_uses_input_entries(self):
+        source = self._payload()
+        final_layer = next(layer for layer in source["layers"] if layer["id"] == "final_resolution")
+        final_layer["input_count"] = 1
+        final_layer["input_entries"] = [
+            {
+                "stock_label": "和远气体(002971)",
+                "stock": {"name": "和远气体", "code": "002971", "sector": "化工原料"},
+                "sector": "化工原料",
+                "sector_role": "板块锚",
+                "status": "survived",
+                "reason": "上一轮晋级，进入最终动作复核",
+                "next_basis": "最终收口层",
+            }
+        ]
+
+        payload = build_sector_capital_preflight_payload(
+            trade_date="2026-06-12",
+            variant="replay",
+            elimination_tournament_payload=source,
+        )
+
+        html = render_sector_capital_preflight_html(payload)
+        final_layer_html = html.split('id="preflight-layer-final_action"', 1)[1]
+
+        self.assertIn("<strong>本层输入 1 只：</strong>和远气体(002971)", final_layer_html)
+        self.assertIn("上一轮晋级，进入最终动作复核", final_layer_html)
+
+    def test_sector_capital_preflight_path_follows_saved_markdown_parent(self):
+        path = sector_capital_preflight_html_path(
+            ROOT / "reports" / "replay" / "2026-06-12_A股日报_完整版_replay.md",
+            "2026-06-12",
+        )
+
+        self.assertEqual(
+            str(path),
+            str(ROOT / "reports" / "replay" / "2026-06-12_板块资金扩散生成前复核.html"),
         )
 
 

@@ -7771,6 +7771,94 @@ def _runtime_binding_probe(
 
         self.assertEqual(payload["variant"], "replay")
 
+    def test_runtime_stores_sector_capital_preflight_payload_on_all_contexts(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "和远气体", "code": "002971", "sector": "化工原料"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "sector": "化工原料",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "front_observation_qualified": True,
+                    "front_observation_reason": "板块锚可保留为前台观察",
+                    "observation_layer": "front_observation",
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+
+        elimination = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data={"selection_workflow": workflow},
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+        data = {
+            "target_date": "2026-06-12",
+            "selection_workflow": workflow,
+            "final_target_resolution": {"capital_priority_decision": {"capital_priority": "wait"}},
+            "two_layer_decision_payload": {"schema_version": "two_layer_daily_decision.v1"},
+            "sniper_target_derivation": {"schema_version": "sniper_target_derivation.v1"},
+            "elimination_tournament_payload": elimination,
+        }
+        execution_context = {"selection_workflow": workflow}
+        market_snapshot = {}
+
+        payload = report_runtime._build_runtime_sector_capital_preflight_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+            elimination_tournament_payload=elimination,
+        )
+        stored = report_runtime._store_runtime_sector_capital_preflight_payload(
+            payload,
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+        )
+
+        self.assertEqual(payload["schema_version"], "sector_capital_preflight.v1")
+        self.assertEqual(stored["final_action"]["label"], "0%不参与")
+        self.assertEqual(stored["final_action"]["position_pct"], 0)
+        self.assertIn("flowchart TD", stored["mermaid"])
+        self.assertIn("selection_workflow", stored["source_payloads"])
+        self.assertEqual(stored["source_payloads"]["selection_workflow"], workflow)
+        self.assertEqual(
+            stored["source_payloads"]["final_target_resolution"],
+            {"capital_priority_decision": {"capital_priority": "wait"}},
+        )
+        self.assertEqual(
+            stored["source_payloads"]["two_layer_decision_payload"]["schema_version"],
+            "two_layer_daily_decision.v1",
+        )
+        self.assertEqual(
+            stored["source_payloads"]["sniper_target_derivation"]["schema_version"],
+            "sniper_target_derivation.v1",
+        )
+        self.assertEqual(
+            stored["source_payloads"]["elimination_tournament_payload"]["schema_version"],
+            "elimination_tournament.v1",
+        )
+        self.assertIs(data["sector_capital_preflight"], stored)
+        self.assertIs(execution_context["sector_capital_preflight"], stored)
+        self.assertIs(market_snapshot["sector_capital_preflight"], stored)
+        self.assertEqual(stored["trade_date"], "2026-06-12")
+        self.assertEqual(stored["layers"][-1]["id"], "final_action")
+
     def test_runtime_derivation_chain_keeps_stale_local_candidate_as_process_only(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
             return {

@@ -1,3 +1,6 @@
+import html as html_lib
+import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -8,6 +11,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import daily_report_entry_demo
+
+
+def _embedded_json_payload(rendered_html, script_id):
+    match = re.search(
+        rf'<script type="application/json" id="{script_id}">(.*?)</script>',
+        rendered_html,
+        re.S,
+    )
+    if not match:
+        return {}
+    return json.loads(html_lib.unescape(match.group(1)))
 
 
 class DailyReportEntryHtmlOutputTest(unittest.TestCase):
@@ -55,6 +69,19 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                     "final_action": "0%不参与",
                     "can_new_entry": False,
                 }
+            },
+            "elimination_tournament_payload": {
+                "schema_version": "elimination_tournament.v1",
+                "trade_date": "2026-06-05",
+                "variant": "frozen",
+                "final_action": {
+                    "label": "0%不参与",
+                    "position_pct": 0,
+                    "target": {},
+                    "source": "selection_workflow.final",
+                    "reason": "无明日执行对象，保持观察",
+                },
+                "layers": [],
             },
         }
 
@@ -257,6 +284,57 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         save_markdown_mock.assert_called_once()
         self.assertEqual(order, ["markdown", "chanlun", "html"])
 
+    def test_main_saves_sector_capital_preflight_after_markdown(self):
+        order = []
+
+        def save_outputs(*args, **kwargs):
+            order.append("markdown")
+            return {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"}
+
+        def sync_postgres(*args, **kwargs):
+            order.append("sync")
+            return {"source": "postgresql://daily-report-facts/2026-06-05", "field_count": 8}
+
+        def persist_runtime_artifacts(*args, **kwargs):
+            order.append("runtime_artifacts")
+            return {"decision_ledger_artifacts": {}, "candidate_trace_artifact": None}
+
+        def save_elimination(*args, **kwargs):
+            order.append("elimination")
+            return Path("/tmp/elimination.html")
+
+        def save_preflight(*args, **kwargs):
+            order.append("preflight")
+            return Path("/tmp/preflight.html")
+
+        def save_chanlun(*args, **kwargs):
+            order.append("chanlun")
+            return Path("/tmp/chanlun.html")
+
+        def save_html(*args, **kwargs):
+            order.append("html")
+            return Path("/tmp/2026-06-05_A股日报_完整版.html")
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
+             patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
+             patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
+             patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", side_effect=persist_runtime_artifacts), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", side_effect=save_outputs), \
+             patch.object(daily_report_entry_demo, "_try_save_elimination_tournament_html", side_effect=save_elimination), \
+             patch.object(daily_report_entry_demo, "_try_save_sector_capital_preflight_html", side_effect=save_preflight), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", side_effect=save_chanlun), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", side_effect=sync_postgres), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html):
+            daily_report_entry_demo.main()
+
+        self.assertEqual(order, ["sync", "runtime_artifacts", "markdown", "elimination", "preflight", "chanlun", "html"])
+
     def test_chart_html_fact_missing_still_saves_bear_html(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
@@ -354,6 +432,26 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             "2026-06-08",
             run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
         )
+
+    def test_sector_capital_preflight_html_saved_after_markdown(self):
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-06-05_A股日报_完整版_replay.md"
+            full_path.write_text("# 2026-06-05 A股日报", encoding="utf-8")
+            data = self._valid_data()
+
+            path = daily_report_entry_demo._try_save_sector_capital_preflight_html(
+                data,
+                "2026-06-05",
+                saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+            )
+
+            html = path.read_text(encoding="utf-8")
+
+        self.assertEqual(path.name, "2026-06-05_板块资金扩散生成前复核.html")
+        self.assertIn('meta name="artifact" content="sector-capital-preflight"', html)
+        embedded = _embedded_json_payload(html, "sector-capital-preflight-payload")
+        self.assertEqual(embedded["schema_version"], "sector_capital_preflight.v1")
+        self.assertIn("0%不参与", html)
 
     def test_markdown_audit_failure_stops_before_runtime_artifact_persistence(self):
         data = self._valid_data()

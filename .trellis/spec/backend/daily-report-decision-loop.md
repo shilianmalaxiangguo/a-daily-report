@@ -1410,6 +1410,178 @@ the current action.
 Why correct: factual values support the decision, while subjective judgment
 stays in visible conditions and elimination reasons.
 
+## Scenario: Sector Capital Preflight Companion Contract
+
+### 1. Scope / Trigger
+
+Use this contract when report generation stores or saves
+`sector_capital_preflight.v1`, including runtime payload construction,
+companion HTML rendering, and acceptance audit support.
+
+The companion answers one question: before reading the final report, can the
+user see how market capital structure flowed into sector diffusion, carrier
+roles, price-action evidence, counter-evidence, account fit, and the one final
+action already produced by the report's decision layer?
+
+### 2. Signatures
+
+`sector_capital_preflight.v1` must be derived from existing runtime truth:
+
+```python
+{
+    "schema_version": "sector_capital_preflight.v1",
+    "trade_date": "YYYY-MM-DD",
+    "variant": "replay | frozen | live | str",
+    "derivation_contract": "sector_capital_diffusion_first.v1",
+    "source_payloads": {
+        "selection_workflow": "dict | missing",
+        "final_target_resolution": "dict | missing",
+        "two_layer_decision_payload": "dict | missing",
+        "sniper_target_derivation": "dict | missing",
+        "elimination_tournament_payload": "dict | missing",
+    },
+    "mermaid": "flowchart TD ...",
+    "final_action": {
+        "label": "0%不参与 | 50%条件执行 | 100%核心进攻 | str",
+        "position_pct": 0 | 50 | 100,
+        "target": {"code": "str", "name": "str"} | {},
+        "source": "final_target_resolution | selection_workflow.final | str",
+    },
+    "decision_list": [
+        {
+            "item": "市场能否进攻 | 哪个板块被选择 | 谁是资金载体 | 是否有量化参与痕迹 | 价格行为是否接受 | 周期概率窗口是否打开 | 账户是否适配",
+            "conclusion": "str",
+            "evidence": "str",
+            "counter_evidence": "str",
+            "tomorrow_check": "str",
+            "action": "str",
+        }
+    ],
+    "idiot_index_review": [
+        {
+            "step": "str",
+            "cost_proxy": "str",
+            "decision_value": "str",
+            "idiot_index_signal": "高 | 中 | 低 | str",
+            "action": "str",
+        }
+    ],
+    "layers": [
+        {
+            "id": "market_capital_structure | sector_capital_diffusion | capital_carrier | quant_trace | price_action | counter_evidence_account | final_action",
+            "title": "str",
+            "input_count": 0,
+            "eliminated_count": 0,
+            "survivor_count": 0,
+            "entries": [
+                {
+                    "stock_code": "str",
+                    "stock_name": "str",
+                    "sector": "str",
+                    "status": "survived | eliminated | process_only | final_action | sector_reference",
+                    "reason": "str",
+                    "next_basis": "str",
+                    "elimination_basis": "str",
+                }
+            ],
+            "note": "str",
+        }
+    ],
+}
+```
+
+Companion path convention:
+
+```python
+sector_capital_preflight_html_path(report_markdown_path) -> "<date>_板块资金扩散生成前复核.html"
+save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
+```
+
+### 3. Contracts
+
+- The payload is explanatory only. It must not re-rank candidates, create a
+  second tomorrow target, or overwrite `selection_workflow.final`,
+  `final_target_resolution`, or `two_layer_decision_payload`.
+- Runtime must store the same payload in `data`, `execution_stage_context`, and
+  `market_research_snapshot` when those containers are available, so Markdown,
+  HTML, and audit code read one object.
+- The payload must prefer `elimination_tournament_payload` for layer rows when
+  it exists, then attach the sector-first Mermaid and source-payload metadata.
+  If layer evidence is incomplete, render missing detail instead of inventing a
+  complete chain.
+- `final_action` must be copied from the already-resolved final object. A 0%
+  final action must keep all process candidates as observation/process evidence.
+- Companion HTML must include readable embedded JSON for audit and must show
+  per-layer input, eliminated, and survivor counts.
+- Companion HTML must show `decision_list` and `idiot_index_review`. These
+  sections explain where conclusions came from and which report layers are
+  costly versus useful; they must not re-rank candidates or create a new final
+  object.
+- Acceptance audit must treat a positive companion final action conflicting
+  with Markdown 0% as a report error, and must flag unreadable embedded JSON as
+  a companion error.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Companion final action differs from Markdown/front-page final action | Return a consistency finding before publishing |
+| Markdown final action is 0% but companion target is positive | Keep report invalid until the companion is relabeled as observation |
+| Companion HTML lacks readable JSON payload | Return a companion-payload-missing finding |
+| Layer counts disagree with entry statuses | Fix payload builder or renderer before shipping |
+| `elimination_tournament_payload` is missing | Render the fixed Mermaid and explicit missing-layer notes; do not synthesize winners |
+| Source containers disagree | Prefer `final_target_resolution`, then `selection_workflow.final`; record the chosen source |
+| `decision_list` or `idiot_index_review` is missing | Build the default explanatory rows from layers/final action; do not leave the user with only a long bracket |
+| Idiot-index rows contain score-like formulas | Replace with high/middle/low cost-value classification and handling action |
+
+### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good visible chain | Final object 0%, process candidates present | HTML shows each layer and ends at `0%不参与` with no new target |
+| Good decision list | Layer rows exist | HTML shows decision item, conclusion, evidence, counter-evidence, tomorrow check, and action |
+| Good idiot-index review | Costly old report layers exist | HTML classifies them as high/middle/low process-efficiency issues and states compress/merge/downgrade/keep action |
+| Good positive action | Final object names one 50% target | Companion final action names the same target and source |
+| Base incomplete evidence | Older replay lacks layer evidence | Mermaid renders, layer notes state missing detail, final action still comes from runtime truth |
+| Bad second target | Companion picks a different stock from process rows | Audit fails or renderer relabels the row as process evidence |
+| Bad hidden final | HTML shows counts but no readable JSON payload | Audit returns a companion-payload-missing finding |
+| Bad fake efficiency math | Idiot-index table computes a formula that affects selection | Remove the formula and keep it as process-efficiency commentary only |
+
+### 6. Tests Required
+
+- `tests.test_elimination_tournament` covers
+  `sector_capital_preflight.v1` shape, Mermaid text, final-action source,
+  decision list, idiot-index review list, and zero-position process-candidate
+  handling.
+- `tests.test_daily_report_entry_html_output` covers companion path naming and
+  save behavior beside replay/official Markdown paths.
+- `tests.test_report_runtime` covers runtime storage in all available context
+  containers without changing the final object.
+- `tests.test_report_acceptance_audit` covers readable JSON extraction,
+  companion/Markdown final-action consistency, and positive-final conflict.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```text
+The companion reviews process rows, chooses the strongest one, and prints it as
+tomorrow's new target even though the report final action is 0%.
+```
+
+Why wrong: the companion becomes a second decision surface and reintroduces the
+multi-module target drift the user explicitly rejected.
+
+#### Correct
+
+```text
+The companion shows why each process row survived or failed, then copies the
+already-resolved final action: 0%不参与.
+```
+
+Why correct: the user can audit the sector-first chain without losing the single
+final-action contract.
+
 ## Full Attack Roadmap
 
 ### Phase 1: Honest Coverage And Stable Closed Loop

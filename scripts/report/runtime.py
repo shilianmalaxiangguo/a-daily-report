@@ -45,6 +45,7 @@ from report.decision_statistics import (
 )
 from report.elimination_tournament import (
     build_elimination_tournament_payload,
+    build_sector_capital_preflight_payload,
     store_elimination_tournament_payload as _default_store_elimination_tournament_payload,
 )
 from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
@@ -2922,10 +2923,97 @@ def _build_runtime_elimination_tournament_payload(
     )
 
 
+def _build_runtime_sector_capital_preflight_payload(
+    *,
+    target_date="",
+    run_mode="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    selection_workflow=None,
+    final_target_resolution=None,
+    two_layer_decision_payload=None,
+    sniper_target_derivation=None,
+    elimination_tournament_payload=None,
+):
+    data = data if isinstance(data, dict) else {}
+    execution_stage_context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
+    market_research_snapshot = market_research_snapshot if isinstance(market_research_snapshot, dict) else {}
+
+    def _first_payload(*sources):
+        for source in sources:
+            if isinstance(source, dict) and source:
+                return source
+        return {}
+
+    selection_workflow = _first_payload(
+        selection_workflow,
+        data.get("selection_workflow"),
+        execution_stage_context.get("selection_workflow"),
+        market_research_snapshot.get("selection_workflow"),
+    )
+    final_target_resolution = _first_payload(
+        final_target_resolution,
+        data.get("final_target_resolution"),
+        execution_stage_context.get("final_target_resolution"),
+        market_research_snapshot.get("final_target_resolution"),
+    )
+    two_layer_decision_payload = _first_payload(
+        two_layer_decision_payload,
+        data.get("two_layer_decision_payload"),
+        execution_stage_context.get("two_layer_decision_payload"),
+        market_research_snapshot.get("two_layer_decision_payload"),
+    )
+    sniper_target_derivation = _first_payload(
+        sniper_target_derivation,
+        data.get("sniper_target_derivation"),
+        execution_stage_context.get("sniper_target_derivation"),
+        market_research_snapshot.get("sniper_target_derivation"),
+    )
+    elimination_tournament_payload = _first_payload(
+        elimination_tournament_payload,
+        data.get("elimination_tournament_payload"),
+        execution_stage_context.get("elimination_tournament_payload"),
+        market_research_snapshot.get("elimination_tournament_payload"),
+    )
+    payload = build_sector_capital_preflight_payload(
+        trade_date=target_date or data.get("target_date"),
+        variant=run_mode or data.get("run_mode") or data.get("ledger_mode") or "",
+        source_payloads={
+            "selection_workflow": selection_workflow,
+            "final_target_resolution": final_target_resolution,
+            "two_layer_decision_payload": two_layer_decision_payload,
+            "sniper_target_derivation": sniper_target_derivation,
+            "elimination_tournament_payload": elimination_tournament_payload,
+        },
+        elimination_tournament_payload=elimination_tournament_payload,
+    )
+    if not payload:
+        return {}
+    stored = dict(payload)
+    return stored
+
+
 def _store_runtime_elimination_tournament_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
     if not isinstance(payload, dict) or not payload:
         return {}
     stored = _default_store_elimination_tournament_payload(payload, data, execution_stage_context, market_research_snapshot)
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _store_runtime_sector_capital_preflight_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    stored = dict(payload)
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["sector_capital_preflight"] = stored
     if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
         data["market_research_snapshot"] = market_research_snapshot
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
@@ -7956,6 +8044,20 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    sector_capital_preflight_payload = _build_runtime_sector_capital_preflight_payload(
+        target_date=target_date,
+        run_mode=run_mode,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        elimination_tournament_payload=elimination_tournament_payload,
+    )
+    _store_runtime_sector_capital_preflight_payload(
+        sector_capital_preflight_payload,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
         execution_stage_context=execution_stage_context,
         stage_lookup=execution_stage_result.get("stage_lookup"),
@@ -8293,6 +8395,20 @@ def _render_markdown_report_legacy_body(
     )
     _store_runtime_elimination_tournament_payload(
         elimination_tournament_payload,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    sector_capital_preflight_payload = _build_runtime_sector_capital_preflight_payload(
+        target_date=target_date,
+        run_mode=run_mode,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        elimination_tournament_payload=elimination_tournament_payload,
+    )
+    _store_runtime_sector_capital_preflight_payload(
+        sector_capital_preflight_payload,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
