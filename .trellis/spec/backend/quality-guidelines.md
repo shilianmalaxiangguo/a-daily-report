@@ -30,6 +30,81 @@ Questions to answer:
 
 ## Required Patterns
 
+### Daily Report Calendar Event Evidence Contract
+
+Calendar event classification must be evidence-first. Do not use `政策催化`
+as the fallback when a title is vague, when a remote model returns `其他`, or
+when a remote model returns a generic low-confidence policy label.
+
+- Classify by the event subject first: examples include cloud, digital
+  finance, data elements, unmanned logistics vehicles, industrial gases, and
+  open-source software ecosystems.
+- Use `政策催化` only when the title or same-event summary/content contains
+  explicit policy, regulator, official document, rule, plan, standard,
+  implementation, or official-department evidence.
+- Words such as `会议`, `大会`, `论坛`, `展会`, `发布`, `启动`, and `开幕` are event
+  forms, not policy evidence by themselves.
+- Calendar rows may use existing same-row `summary`, `content`,
+  `description`, `detail`, or `source_text` as source evidence. If a new live
+  search or news lookup is added, it must be cached with source URL, query
+  date, source date, and evidence text before it can affect historical replay.
+- Calendar analysis may use existing `xuangubao_data.xuangubao_news` rows only
+  as a same-report-date candidate pool. Title substring or include checks are
+  candidate retrieval only; they must not be the final evidence decision. A
+  news row can enter `calendar_analysis[].source_evidence` only after a
+  structured AI evidence decision returns `matched == True`, a valid
+  `evidence_index`, and non-low confidence. Undated, query-date-only, or
+  different-date news must not affect classification. Matched output should
+  include provider, query date, source date, source URL, evidence text, match
+  confidence, and policy-evidence status; when the source has no URL, keep a
+  stable empty `source_url` plus `source_url_missing == True`.
+- The report event table must not render run-ahead wording from event-form
+  words alone. Low-evidence neutral rows remain observation/confirmation rows.
+
+Required tests:
+
+- `tests.test_calendar_events_infer` must cover vague/low-evidence conference,
+  forum, expo, product-launch, and malformed-LLM cases.
+- `tests.test_report_runtime` must cover summary-sensitive calendar cache
+  signatures, report-date news evidence candidate retrieval, AI evidence
+  acceptance/rejection, undated/query-date-only/different-date news rejection,
+  and source-evidence normalization.
+- `tests.test_calendar_section_node_runtime` must cover neutral low-evidence
+  meetings rendering as observation rather than run-ahead/execution wording.
+
+### ETF Turnover Coverage Contract
+
+`etf_turnover_series` is a sampled aggregation of per-ETF turnover. A 25-row
+series is not sufficient evidence by itself; the target-date sample must also
+prove coverage quality before the report can use it for institutional-capacity
+judgment.
+
+- `get_etf_turnover_series_from_sina_first(...)` must default to
+  `overall_timeout_seconds=120` for live collection. Shorter one-shot fetches
+  can return a smooth but incomplete sample and understate the final turnover.
+- The returned payload must include coverage metadata:
+  `coverage_status`, `coverage_anomaly`, `coverage_ratio`,
+  `overall_coverage_ratio`, `coverage_reference_count`,
+  `latest_covered_etf_count`, and `total_etf_universe_count`.
+- Mark the payload partial when the target-date covered ETF count is below 70%
+  of the recent prior-sample median, or when the target-date covered ETF count
+  is below 95% of the extracted ETF sample pool.
+- A partial ETF payload must set `data_status["ETF两市成交额趋势"] == False` and
+  `step_status["ETF两市成交额趋势获取"] == False`.
+- Report preflight must reject partial ETF payloads even if a request log says
+  the fetch succeeded and `rows` has 25 entries.
+- Market overview must not derive `机构容量放大 / 机构容量中性 / 机构容量中性偏收缩`
+  from a partial ETF payload. It should render sample insufficiency and stop
+  using that payload for capacity judgment.
+
+Required tests:
+
+- `tests.test_tushare_input_runtime.TushareInputRuntimeTest.test_etf_turnover_series_flags_latest_coverage_collapse`
+- `tests.test_tushare_input_runtime.TushareInputRuntimeTest.test_etf_turnover_series_flags_low_overall_universe_coverage`
+- `tests.test_input_runtime.InputRuntimeTest.test_run_input_runtime_rejects_etf_turnover_coverage_anomaly`
+- `tests.test_daily_report_render.DailyReportRenderTest.test_report_preflight_fails_when_etf_turnover_series_has_coverage_anomaly`
+- `tests.test_market_overview_nodes.MarketOverviewNodesTest.test_market_base_marks_etf_turnover_coverage_anomaly_as_review_needed`
+
 ### T0 Account Advice Contract
 
 The front-page `T0` row is the next-day account action layer. It is not a
@@ -44,6 +119,9 @@ synonym for existing holdings.
   trend, incomplete key data, account mismatch, old-position handling, or risk
   reduction. Do not use 0% as the default when a candidate already has a fixed
   trading window and invalidation condition.
+- When `final_action` forces 0% and an observation anchor still exists, the
+  rendered `不参与依据` must still include a strong reason. Do not let a bare
+  “空仓等待 / 禁止参与” sentence stand alone as the only basis.
 - Runtime front-page normalization must check candidate evidence before turning
   a previous 0% context into observation-only output. Extreme downside,
   countertrend attack, and account-unbuyable cases may still remain 0%.
@@ -64,6 +142,15 @@ synonym for existing holdings.
 - Account-buyability checks must use concrete `cash_available` and
   `one_lot_amount` facts when present. A missing knowledge hit must not allow an
   account that cannot buy one lot to be rendered as 50%/100% participation.
+- If `opportunity_comparison.v1` is present and
+  `comparison.max_participation_pct < 50`, front-page position repair must force
+  observation even when there is no old position. Missing risk price or
+  unresolved risk/reward cannot remain paired with a 50%/100% next-day action.
+
+Required tests:
+
+- `tests.test_report_runtime.ReportRuntimeTest.test_runtime_keeps_new_target_observational_when_risk_price_is_missing_without_old_position`
+- `tests.test_report_acceptance_audit.ReportAcceptanceAuditTest.test_audit_flags_positive_participation_with_incomplete_opportunity_risk`
 
 ### Daily Report Action Plan Presentation Contract
 
@@ -188,6 +275,20 @@ pool.
   process evidence. It must not keep a legacy board/reseal action sentence that
   implies new participation; use `participation_window == "no_trade"` or an
   explicit no-new-entry action surface.
+- When `anchor_reversal_decision in {"降级观察", "不参与"}` rewrites
+  `participation_window` to `no_trade`, rebuild every derived execution field
+  from that no-trade window: `participation_window_type == "no_trade"`,
+  `entry_timing == "no_trade"`, `buy_window == "none"`,
+  `ordinary_structure_confirm_allowed == False`, `required_steps ==
+  ["只观察，不新增参与"]`, and `ma_reversion_probe_allowed == False`. Do not leave
+  a stale `09:50-10:10` structure-confirm window on an observation-only row.
+- A `no_trade` row must also overwrite old intraday script fields such as
+  `auction_script`, `first_minutes_script`, `board_script`, `reseal_script`,
+  `intraday_yellow_line_probe`, `intraday_average_line_cross_probe`,
+  `zero_axis_reclaim_probe`, and `daily_ma_entry_probe` with observation-only
+  wording. These fields may be consumed directly by report or ledger surfaces,
+  so stale board/reseal, small-trial, or buy-qualification wording is a report
+  correctness bug even when the top-level participation fields look correct.
 - If the sector anchor has failed, low catch-up, arbitrage, and follower samples
   must render `anchor_reversal_decision == "不参与"` and
   `repair_priority == "风险放大"`; they are not cheaper substitutes for the
@@ -202,6 +303,11 @@ pool.
 - Limit-up, multi-board, T-board, next-day limit-up probability, and inertia
   score can improve confidence only after the candidate has a valid anchor role.
   They are evidence, not the source of a main-buy identity.
+- When `anchor_reversal_decision in {"降级观察", "不参与"}`, the candidate must
+  also render `leader_speed_tier_code == "not_leader"` and
+  `leader_speed_tier == "观察样本"`. Do not leave an old
+  `extreme_acceleration`, `strong_trend`, or `large_capacity_trend` label on a
+  downgraded limit-up / T-board sample.
 - An identified sector anchor with repeatable acceptance, capacity evidence, or
   `MA5入/MA7清/MA5T` may enter the final comparison even when the current-day
   actual rise is small. The MA path is an execution anchor; it must not bypass
@@ -243,11 +349,13 @@ pool.
 | Candidate is its own crossline anchor while a current mainline anchor exists | Compare against the current mainline anchor; downgrade unless it explains why not the mainline anchor |
 | Candidate is a large-capacity center or branch leader with `why_not_anchor` | `可作为补位`, `次优先修复` |
 | Sector anchor has capacity/acceptance/MA binding but small actual rise | Keep it eligible for main/backup comparison |
+| Candidate has `MA5 < MA7` and has not reclaimed MA7 with volume-backed high-close reversal | Keep it in repair observation; capacity, sector-anchor, or core labels must not promote it to main/backup comparison |
 | Mainline anchor is in `dragon_stocks` but not watchlist / limit-up pool | Add it to evaluated candidates before scoring |
 | Static industry is `通信设备` but same-day evidence says AI server / NVIDIA / data-center capacity | Preserve `raw_sector == "通信设备"`, set `trade_narrative_sector == "AI算力基础设施"`, and search the narrative-sector anchor first |
 | Limit-up laggard scores, probability, or inertia rank higher than the known anchor | Anchor still ranks first; laggard stays observation |
 | Candidate is low catch-up, arbitrage, or follower | `降级观察`, no main or backup identity |
 | Downgraded candidate previously had a board/reseal action sentence | Replace with observation-only wording and no new participation |
+| Downgraded candidate already had structure-confirm execution fields | Rebuild no-trade execution fields; no stale `09:50-10:10` window |
 | Sector anchor has failed and candidate is low catch-up, arbitrage, or follower | `不参与`, `repair_priority == "风险放大"` |
 | Sector anchor is missing | `降级观察`, `repair_priority == "待识别"` |
 | Candidate-quality sees `降级观察` or `不参与` | Render `不参与` and `只观察，不新增参与` |
@@ -264,6 +372,7 @@ pool.
 |---|---|---|
 | Good anchor | 大唐发电 is the sector anchor | main object, first repair priority |
 | Good slow anchor | 大唐发电 rises only about 1% but has acceptance and `MA5入/MA7清/MA5T` | main comparison remains valid |
+| Base MA5 below MA7 repair | 长电科技-like capacity candidate has `MA5 < MA7`, no volume-backed MA7 reclaim, and only a repair candle | repair observation; not main/backup |
 | Good source expansion | 大唐发电 is supplied by `dragon_stocks` while 京能电力 is the watchlist limit-up laggard | 大唐发电 enters evaluation and ranks as main object |
 | Good narrative migration | 工业富联 has static industry `通信设备` plus same-day evidence `英伟达AI平台` / `AI服务器` | display sector becomes `AI算力基础设施`, `raw_sector` remains `通信设备`, and its anchor is 工业富联 |
 | Good backup | 华电辽能 has an explicit reason to choose it over 大唐发电 | backup object |
@@ -330,6 +439,138 @@ better than watching the anchor, keep it as observation.
 Use limit-up as supporting evidence only after anchor identity is valid. When a
 known sector anchor has repeatable acceptance and MA binding, keep it in the
 main comparison even if the daily actual rise is modest.
+```
+
+### Daily Report Front Observation Qualification Contract
+
+The final report has two different object layers:
+
+- `final.execution_object`: the only source of next-day new-entry execution.
+- `final_target_resolution.watch_target`: a front-page observation object that
+  may be tracked when the final position is `0%`, but must not become new-entry
+  execution.
+
+Candidate rows must carry a machine-readable front-observation qualification so
+runtime code does not infer front-page identity from source order, weak status
+labels, or old fallback fields.
+
+#### 1. Scope / Trigger
+
+Use this contract when changing:
+
+- `scripts/report/selection_workflow.py`
+- `scripts/report/runtime.py`
+- front-page selected candidate resolution
+- candidate pool adapters from extreme-conviction, decision-ledger, or snapshot
+  records
+- Mermaid / audit pages that explain final object identity
+
+#### 2. Signatures
+
+Every `selection_workflow.v1["candidate_pool"][]` row must include:
+
+```python
+{
+    "stock": {"name": "str", "code": "str", "sector": "str"},
+    "status": "最终执行对象 | 降级观察 | 不参与 | 过程候选",
+    "reversal_decision": "可作为主对象 | 可作为补位 | 降级观察 | 不参与 | str",
+    "sector_role": "str",
+    "front_observation_qualified": True | False,
+    "front_observation_reason": "str",
+    "observation_layer": "execution_object | front_observation | process_observation",
+}
+```
+
+`_runtime_selection_workflow_observation_target(workflow)` returns the first
+candidate whose `front_observation_qualified is True`; rows with
+`front_observation_qualified is False` must be skipped even when their status is
+`降级观察`.
+
+#### 3. Contracts
+
+- `_candidate_source_rows(...)` must prepend the explicit
+  `selected_position_candidate` before raw candidate pools, then dedupe by stock
+  key. This preserves the already-resolved runtime object before source-order
+  fallback rows.
+- `front_observation_qualified == True` means front-page observation only. It
+  does not imply new-entry execution and must not populate `new_entry_target`
+  when final position is `0%`.
+- `front_observation_qualified == False` means process evidence only. Runtime,
+  front-page rendering, and candidate-quality panels must keep it outside the
+  final observation object.
+- A `可作为主对象` row with a core role such as `板块锚`, `主线核心`, or
+  `明日主买对象` may keep front-observation qualification when the final position
+  is `0%`.
+- A `降级观察` row may keep front-observation qualification only when its role
+  still explains front-page tracking, such as `大容量中军`, `分支龙头`,
+  `主线核心`, or `板块锚`.
+- Roles such as `观察样本`, `跟风样本`, `过程候选`, `低位补涨`, `套利工具`, and
+  `候选观察补充` default to process evidence.
+- Missing sector-anchor evidence, inability to explain why not to choose the
+  sector anchor, or a row that is only strong by limit-up / score / source-order
+  evidence must stay process evidence.
+- Legacy workflow rows without `front_observation_qualified` may only use the
+  conservative compatibility path: `reversal_decision == "可作为主对象"` plus a
+  core role, or an explicit current observation role that is not process-only.
+- `_resolve_runtime_current_core_candidate(...)` must not let weak `best_stock`
+  or `watch_anchor` fallback override a selected candidate unless that fallback
+  has positive current core evidence.
+
+#### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| `final.position_pct == 0` and qualified front observation exists | `watch_target` may be set; `new_entry_target` stays empty |
+| Candidate is `降级观察 + 观察样本 + 本板块锚未识别` | `front_observation_qualified == False`; process evidence only |
+| Candidate is `降级观察 + 大容量中军 + 主线内核` | may be front observation; still not new-entry execution |
+| Candidate is `可作为主对象 + 板块锚`, but final position is `0%` | may be front observation; execution stays empty |
+| Explicit selected object is also in raw pools | selected row wins source order; raw duplicate is skipped |
+| Weak `best_stock` differs from selected object and has no positive core evidence | selected object is kept |
+| Old workflow row lacks qualification field | use conservative compatibility path only |
+
+#### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good front observation | 雅克科技 is `降级观察 + 大容量中军 + 主线内核` | `watch_target=雅克科技`, `new_entry_target={}` |
+| Good explicit selected | 中船特气 is explicit selected and raw pool first item is 双星新材 | selected object stays ahead of raw fallback |
+| Good anchor observation | 豫能控股 is `可作为主对象 + 板块锚`, final position `0%` | front-page observation allowed; no new-entry execution |
+| Bad process promotion | 双星新材 is `降级观察 + 观察样本 + 本板块锚未识别` | skipped for `watch_target` |
+| Bad weak fallback | `best_stock` is 双星新材, selected object is 中船特气, best stock has no core evidence | best stock does not override selected |
+| Bad 0% execution | report has no execution object but a watch target exists | no execution hit, no `new_entry_target` |
+
+#### 6. Tests Required
+
+- `tests.test_selection_workflow.SelectionWorkflowTest.test_front_observation_qualification_separates_yake_from_shuangxing_process_sample`
+- `tests.test_selection_workflow.SelectionWorkflowTest.test_limit_up_without_reversal_cannot_be_final_object`
+- `tests.test_report_runtime.ReportRuntimeTest.test_final_target_resolution_skips_process_observation_and_keeps_front_observation`
+- `tests.test_report_runtime.ReportRuntimeTest.test_front_page_selected_candidate_keeps_explicit_observation_before_extreme_fallback`
+- `tests.test_report_runtime.ReportRuntimeTest.test_runtime_final_resolution_keeps_workflow_core_as_watch_target_when_position_is_zero`
+- `tests.test_report_runtime.ReportRuntimeTest.test_zero_participation_downgraded_anchor_sample_does_not_become_final_watch_target`
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```text
+status == 降级观察 -> first candidate in source order becomes watch_target.
+```
+
+```text
+best_stock exists -> overwrite selected_position_candidate even without current
+core evidence.
+```
+
+Correct:
+
+```text
+candidate_pool row writes front_observation_qualified. Runtime consumes that
+field first; process-only rows stay appendix/process evidence.
+```
+
+```text
+Explicit selected candidate enters the candidate pool first. Weak fallback rows
+can only override it with positive current core evidence.
 ```
 
 (To be filled by the team)

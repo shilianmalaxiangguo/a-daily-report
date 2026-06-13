@@ -9,6 +9,8 @@
 /snapshots/**
 /logs/
 /logs/**
+/output/
+/output/**
 /.generated/
 /.generated/**
 /.worktrees/
@@ -30,6 +32,7 @@
 /wiki/.obsidian/
 /wiki/.obsidian/**
 /wiki/*.canvas
+/wiki/*.base
 .DS_Store
 
 # Python caches
@@ -47,3 +50,10 @@ __pycache__/
 /scripts/.workbuddy/**
 /scripts/.codebuddy/
 /scripts/.codebuddy/**
+
+# Local agent/session artifacts
+/.superpowers/
+/.superpowers/**
+/.serena/
+/.serena/**
+/.agents/skills/superpowers

@@ -65,7 +65,7 @@ the compounded month series without defaulting missing returns to zero.
   or an empty list; do not rebuild by scanning `snapshots/*.json` or
   `snapshots/replay/*_replay.json`.
 - Monthly account lookup should use `DatabaseService.from_environment()` when a
-  repository may be PostgreSQL-backed. Do not hard-code the local SQLite path
+  repository may be PostgreSQL-backed. Do not hard-code retired local database paths
   when the database URL is already configured.
 - JSON archives are allowed only as one-time import seeds, official replay
   archives, or explicit manual repair inputs. They are not a daily report hot

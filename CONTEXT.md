@@ -1,6 +1,6 @@
 # Daily Report Decision Context
 
-This context names the domain concepts used by the daily-report engine and snap-ui review cockpit. It exists to keep trading judgment, report language, and feedback tracking from drifting into generic stock-list or prediction wording.
+This context names the domain concepts used by the daily-report engine, replay, and local judgment ledger. It exists to keep trading judgment, report language, and feedback tracking from drifting into generic stock-list or prediction wording.
 
 ## Language
 
@@ -93,12 +93,12 @@ The end-of-cycle acceptance standard that classifies a judgment sample's 25-trad
 _Avoid_: 随口复盘, 只看涨跌
 
 **本地判断账本**:
-A testable local artifact produced by the daily-report flow before any Cloudflare D1 synchronization.
+A testable local artifact produced by the daily-report flow before PostgreSQL import and replay review.
 _Avoid_: 直接线上写入, 不可重跑数据
 
 **判断账本路径**:
 The canonical machine-readable artifact location for local judgment ledger files: `data/decision-ledger/`.
-_Avoid_: reports, snap-ui/public/data
+_Avoid_: reports, frontend public data
 
 **判断账本快照**:
 A per-trade-date judgment ledger artifact that records the decision samples, states, and planned participation generated for that report date.
@@ -145,8 +145,8 @@ _Avoid_: 读后感, 玄学解释
 - A **判断样本** is evaluated through one **趋势命运** for each cycle.
 - A **趋势命运** must end with one **周期复盘验收** conclusion.
 - A **趋势命运** may produce one or more **迭代修正** entries.
-- A **本地判断账本** is produced and tested before D1 receives synchronized decision records.
-- A **判断账本路径** keeps source artifacts in `data/decision-ledger/` before snap-ui export.
+- A **本地判断账本** is produced, tested, and imported into PostgreSQL-backed replay facts.
+- A **判断账本路径** keeps source artifacts in `data/decision-ledger/` before report and replay consumption.
 - A **判断账本路径** contains one **判断账本索引** and many **判断账本快照** files.
 - A **判断账本快照** is keyed by report trade date.
 - A **判断账本快照** must persist each core sample's **预演情境** as machine-readable `planned_participation`, including participation window, position state, auction, first-minutes, board, reseal, missed-entry, and cancellation.
@@ -155,7 +155,7 @@ _Avoid_: 读后感, 玄学解释
 - `participation_review` uses fact fields such as `auction_matched`, `first_minutes_accepted`, `board_sealed`, `reseal_success`, `sector_supported`, `cancellation_triggered`, `primary_unavailable`, and `missed_action_worked`.
 - **参与预演复盘** must classify the design quality as **预演命中**, **预演作废**, **错过后方案命中**, **预演过早**, or waiting for more facts.
 - A **判断账本索引** exposes latest trade date, available trade dates, and one **股票周期索引**.
-- A **判断账本索引** carries `participation_review_status` and a compact `participation_review` summary so snap-ui can list **参与预演复盘** quality without loading every snapshot first.
+- A **判断账本索引** carries `participation_review_status` and a compact `participation_review` summary so report and replay lists can show **参与预演复盘** quality without loading every snapshot first.
 - A **市场演变分支** explains why a **判断样本** may become active, remain pending, or be removed.
 - A **主线容量** informs **主线格局** by estimating whether current turnover can support no line, one focused line, two lines, or bull-market multi-line behavior.
 - A **主线格局** is judged before **主线确认** so a low-volume rotation market can remain **无主线** instead of forcing a weak **主攻线**.
@@ -171,7 +171,7 @@ _Avoid_: 读后感, 玄学解释
 
 ## Example Dialogue
 
-> **Dev:** "If three stocks all look good, should D1 mark all three as winners or losers tomorrow?"
+> **Dev:** "If three stocks all look good, should the durable fact store mark all three as winners or losers tomorrow?"
 > **Domain expert:** "No. They are **判断样本**. Each one belongs to a possible **市场演变分支**; the review should record which branch the market selected and whether our sample removal or retention logic was right."
 
 > **Dev:** "Can we rank the stock only by its K-line setup?"
@@ -201,10 +201,10 @@ _Avoid_: 读后感, 玄学解释
 - "被市场选择" must not mean a stock rose alone or a sector rose alone. Resolved: use **市场选择确认** only when sector and stock evidence confirm together.
 - "确认" must not be a timeless label. Resolved: every **市场选择确认** needs dated **确认证据**.
 - "复盘" must not be uncontrolled commentary. Resolved: every 25-trading-day cycle ends with one **周期复盘验收** conclusion.
-- "D1" must not be the first write target for new decision logic. Resolved: produce a testable **本地判断账本** first, then synchronize to D1 after validation.
+- "Durable storage" must not be the first write target for new decision logic. Resolved: produce a testable **本地判断账本** first, then import to PostgreSQL after validation.
 - "判断账本" must not be mixed with human-readable reports or frontend publish artifacts. Resolved: source files live under **判断账本路径**.
 - "总账" must not begin as one ever-growing file. Resolved: use daily **判断账本快照** files plus one **判断账本索引**.
-- "索引" must not only mean latest date. Resolved: include **股票周期索引** so snap-ui can inspect one stock across reports and cycles.
+- "索引" must not only mean latest date. Resolved: include **股票周期索引** so report and replay surfaces can inspect one stock across reports and cycles.
 - "参与脚本" must not remain only in Markdown. Resolved: store it as `planned_participation` in **判断账本快照** so later review can compare the designed scenario with the next-day market path.
 - "参与预演复盘" must not become free-form hindsight. Resolved: store `participation_review` only from explicit next-day facts and controlled labels such as **预演命中**, **预演作废**, **错过后方案命中**, and **预演过早**.
-- "`participation_review` only in daily snapshots" must not hide review quality from snap-ui lists. Resolved: expose `participation_review_status` in **判断账本索引** as the lightweight list field.
+- "`participation_review` only in daily snapshots" must not hide review quality from report and replay lists. Resolved: expose `participation_review_status` in **判断账本索引** as the lightweight list field.
