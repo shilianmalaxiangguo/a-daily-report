@@ -566,7 +566,7 @@ def _classify_strategy_record_attribution_legacy_body(record, as_of_date):
             attribution.update({
                 "category": "special_probe_lag",
                 "label": "特殊探针已先行但仍停在观察层",
-                "reason": "特殊标的反馈已经明显走强，但系统仍停在0%观察层，说明探针到执行层的切换偏慢。",
+                "reason": "特殊标的反馈已经明显走强，但系统仍停在0%不参与层，说明探针到执行层的切换偏慢。",
             })
         elif (
             observed_return is not None
@@ -935,7 +935,7 @@ def _classify_gem_breathing_week_sample_legacy_body(record, as_of_date):
         and (latest_low < void_price or latest_close < void_price)
     )
     conditional_upgrade = bool(
-        target_position_pct >= 30
+        target_position_pct > 0
         or participation_mode == "attack_50_ready"
         or (action_type == "execute" and target_position_pct > 0)
     )
@@ -970,8 +970,8 @@ def _classify_gem_breathing_week_sample_legacy_body(record, as_of_date):
     price_map = " / ".join(price_map_parts) if price_map_parts else "-"
 
     if conditional_upgrade:
-        status_label = "已升级到50%标准进攻预演"
-        note = "这条20cm合同已经进入50%标准进攻预演，不再只是纯观察样本。"
+        status_label = "已升级到50%条件执行"
+        note = "这条20cm合同已经进入50%条件执行，不再只是纯观察样本。"
     elif voided:
         status_label = "窗口内失守作废"
         note = f"盘中跌破{void_price:.2f}作废价，合同应按失效处理。" if void_price is not None else "合同已经失效。"
@@ -1118,7 +1118,7 @@ def _build_self_calibration_summary_legacy_body(
             "area": "环境过滤",
             "bias": "偏严",
             "why": "多次出现“环境过滤过严 / 个股对了但环境条件未满足 / 介入周期偏慢”，说明当前环境过滤与介入升级都挡掉了部分有效观察对象。",
-            "action": "先不要直接放开买入资格，而是在二档下保留更明确的高优先级重点观察谁；对已经给出次日确认成功的唯一对象，要单独复盘介入周期是否偏慢。",
+            "action": "先不要直接放开买入资格，而是在0%不参与下保留更明确的高优先级重点观察谁；对已经给出次日确认成功的唯一对象，要单独复盘介入周期是否偏慢。",
         })
     elif defense_correct >= max(2, gate_too_strict):
         suggestions.append({
@@ -1142,7 +1142,7 @@ def _build_self_calibration_summary_legacy_body(
         action_parts = []
         if gem_week_sample_count > 0:
             why_parts.append(
-                f"本周{gem_week_sample_count}只创业板20cm合同样本里，升级到50%标准进攻预演只有{gem_week_upgrade_count}只，"
+                f"本周{gem_week_sample_count}只创业板20cm合同样本里，升级到50%条件执行只有{gem_week_upgrade_count}只，"
                 f"窗口内作废{gem_week_voided}只，窗口到期{gem_week_expired}只。"
             )
         if gem_chain_bias_count >= 1:
@@ -1150,10 +1150,10 @@ def _build_self_calibration_summary_legacy_body(
                 f"已经出现{gem_chain_bias_count}只“20cm右侧确认偏慢”，说明创业板20cm预启动样本在走成右侧确认/再突破后，系统仍停在观察层。"
             )
             action_parts.append(
-                f"优先回放升级偏慢{gem_chain_bias_count}只样本，逐个检查右侧确认位、再突破位与50%标准进攻预演之间的升级链，不要长期停在只观察。"
+                f"优先回放升级偏慢{gem_chain_bias_count}只样本，逐个检查右侧确认位、再突破位与50%条件执行之间的升级链，不要长期停在只观察。"
             )
         else:
-            action_parts.append("继续盯住右侧确认位到50%标准进攻预演之间的升级链，避免20cm样本长期堆在观察层。")
+            action_parts.append("继续盯住右侧确认位到50%条件执行之间的升级链，避免20cm样本长期堆在观察层。")
         if gem_week_voided >= gem_week_upgrade_count and gem_week_voided > 0:
             action_parts.append("同时复盘作废价是否过松或对象本身边界不清，避免把不该留在高优先级观察里的20cm样本拖太久。")
         if gem_week_expired > 0:
@@ -1162,7 +1162,7 @@ def _build_self_calibration_summary_legacy_body(
             "area": "创业板20cm升级链",
             "bias": "偏慢",
             "why": "".join(why_parts) or "创业板20cm升级链仍偏慢。",
-            "action": "".join(action_parts) or "继续复盘创业板20cm从观察到50%标准进攻预演的升级链。",
+            "action": "".join(action_parts) or "继续复盘创业板20cm从观察到50%条件执行的升级链。",
         })
 
     if state_misread >= 1:
@@ -1366,7 +1366,7 @@ def _build_gem_structure_cycle_cards_legacy_body(records, as_of_date, limit=6):
 
     status_priority = {
         "再突破成功但升级偏慢": 5,
-        "已升级到50%标准进攻预演": 4,
+        "已升级到50%条件执行": 4,
         "已走成再突破": 3,
         "已触发右侧确认": 2,
         "仍在观察窗口": 1,
@@ -1546,7 +1546,7 @@ def _build_system_graduation_dashboard_legacy_body(records, cycle_reviews, sourc
     if strict_cycles >= 1:
         next_actions.append("重点复盘“过滤偏严”的周期，判断环境条件是否错杀了主线机会。")
     if gem_sample_count > 0 and gem_upgrade_lag >= 1:
-        next_actions.append(f"优先修正创业板20cm从右侧确认到50%标准进攻预演的升级链；本周升级偏慢{gem_upgrade_lag}只，不能继续长期停在观察层。")
+        next_actions.append(f"优先修正创业板20cm从右侧确认到50%条件执行的升级链；本周升级偏慢{gem_upgrade_lag}只，不能继续长期停在观察层。")
     if gem_sample_count > 0 and gem_voided_count >= gem_upgrade_count and gem_voided_count > 0:
         next_actions.append("复盘创业板20cm合同的作废价与样本筛法，避免高优先级观察样本大量在窗口内失效。")
     if not next_actions:

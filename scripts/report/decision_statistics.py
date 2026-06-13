@@ -760,6 +760,8 @@ def _is_core_judgment_candidate(item):
 
 
 def _current_core_candidates(index, target_date, current_context):
+    if (current_context or {}).get("suppress_core_candidate_fallback"):
+        return []
     candidates = []
     current_items = []
     for item in list((current_context or {}).get("core_candidates") or []):
@@ -787,6 +789,8 @@ def _current_core_candidates(index, target_date, current_context):
 
 
 def _planned_payloads(index, target_date, current_context):
+    if (current_context or {}).get("suppress_participation_fallback"):
+        return []
     payloads = []
     for item in list((current_context or {}).get("core_candidates") or []):
         if isinstance(item, dict):

@@ -217,7 +217,7 @@ def _build_strategy_factor_snapshot_legacy_body(
     if selection_target_position == 50 and best_stock:
         selection_anchor_type = '明天唯一能买的那只'
     elif selection_target_position == 30 and selected_candidate:
-        selection_anchor_type = '50%标准进攻预演'
+        selection_anchor_type = '50%条件执行'
     else:
         selection_anchor_type = context.get('watch_anchor_type', '')
 
@@ -355,10 +355,10 @@ def _build_strategy_plan_context_legacy_body(
         action_type = 'execute'
         plan_stock = best_stock
         anchor_type = '明天唯一能买的那只'
-    elif target_position_pct == 30 and (best_stock or watch_anchor):
+    elif 0 < target_position_pct < 50 and (best_stock or watch_anchor):
         action_type = 'execute'
         plan_stock = best_stock or watch_anchor
-        anchor_type = '50%标准进攻预演'
+        anchor_type = '50%条件执行'
     elif best_stock:
         action_type = 'watch_only'
         plan_stock = best_stock
@@ -431,11 +431,11 @@ def _build_strategy_plan_context_legacy_body(
     trigger_text = ''
     if action_type == 'execute' and plan_stock:
         confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
-        if target_position_pct == 30:
+        if 0 < target_position_pct < 50:
             if confirm_price:
-                trigger_text = f"50%标准进攻预演：09:50-10:10窗口内站上{confirm_price:.2f}且条件成立后再执行"
+                trigger_text = f"50%条件执行：09:50-10:10窗口内站上{confirm_price:.2f}且条件成立后再执行"
             else:
-                trigger_text = "50%标准进攻预演：固定交易窗口内条件成立后再执行，普通结构只看09:50-10:10窗口"
+                trigger_text = "50%条件执行：固定交易窗口内条件成立后再执行，普通结构只看09:50-10:10窗口"
         elif confirm_price:
             trigger_text = f"09:50-10:10站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
         elif entry_low is not None and entry_high is not None:

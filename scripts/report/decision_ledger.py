@@ -324,7 +324,7 @@ def _position_plan_pct(planned=None, fallback=None):
 def _position_plan_label(position_plan_pct):
     labels = {
         0: "0%不参与",
-        50: "50%标准进攻",
+        50: "50%条件执行",
         100: "100%核心进攻",
     }
     return labels.get(position_plan_pct, "仓位三态待补")
@@ -687,7 +687,7 @@ def _parse_markdown_tables_after_heading(lines, heading_text):
     index = table_start
     while index < len(lines):
         stripped = str(lines[index] or "").strip()
-        if "参与脚本" in stripped:
+        if "参与脚本" in stripped or "复核脚本" in stripped:
             break
         if tables and stripped.startswith("#"):
             break
@@ -1538,6 +1538,10 @@ def _parse_participation_scripts(lines):
         "极度看好参与脚本",
         "重点观察参与脚本",
         "重点观察复核脚本",
+        "过程观察参与脚本",
+        "过程观察复核脚本",
+        "观察样本参与脚本",
+        "观察样本复核脚本",
     )
     if not header:
         return []
@@ -1670,12 +1674,12 @@ def _parse_sniper_role_rows(header, rows):
 
 def _parse_candidate_list_rows(header, rows, participation_scripts):
     rank_idx = _header_index(header, "优先级", "排名")
-    name_idx = _header_index(header, "股票", "名称")
+    name_idx = _header_index(header, "股票", "名称", "标的")
     code_idx = _header_index(header, "代码", "股票代码")
     sector_idx = _header_index(header, "所属板块", "板块", "所属方向")
-    core_identity_idx = _header_index(header, "核心身份")
+    core_identity_idx = _header_index(header, "核心身份", "板块锚与身份")
     layer_idx = _header_index(header, "执行分层")
-    reason_idx = _header_index(header, "观察理由", "极看理由", "理由")
+    reason_idx = _header_index(header, "观察理由", "极看理由", "理由", "板块锚与身份", "承接结果", "速度证据")
     rule_idx = _header_index(header, "明日原则", "原则")
 
     items = []
@@ -1685,6 +1689,10 @@ def _parse_candidate_list_rows(header, rows, participation_scripts):
 
         code = _normalize_stock_code(_cell(code_idx))
         name = _clean_text(_cell(name_idx), code)
+        if name_idx >= 0 and not code:
+            parsed_name, parsed_code = _parse_stock_label_with_code(_cell(name_idx))
+            name = parsed_name or name
+            code = parsed_code or code
         if not code and not name:
             continue
         try:
@@ -1738,6 +1746,8 @@ def parse_extreme_conviction_list_from_markdown(markdown_text):
         lines,
         "极度看好名单",
         "重点观察名单",
+        "过程观察名单",
+        "龙头资格反推结果",
     )
 
     if not tables:
@@ -2290,8 +2300,7 @@ def _load_local_stock_kline_fact(root, record, trade_date):
     if not stock_code:
         return None
     candidates = [
-        root / "data" / "snap-ui" / "stock-klines" / f"{trade_date}-{stock_code}.json",
-        root / "snap-ui" / "public" / "data" / "snap-ui" / "stock-klines" / f"{trade_date}-{stock_code}.json",
+        root / "data" / "market-facts" / "stock-klines" / f"{trade_date}-{stock_code}.json",
     ]
     for path in candidates:
         payload = _read_json_if_exists(path)
@@ -2307,8 +2316,7 @@ def _load_local_stock_minute_fact(root, record, trade_date):
     if not stock_code:
         return {}
     candidates = [
-        root / "data" / "snap-ui" / "stock-minute-bars" / f"{trade_date}-{stock_code}.json",
-        root / "snap-ui" / "public" / "data" / "snap-ui" / "stock-minute-bars" / f"{trade_date}-{stock_code}.json",
+        root / "data" / "market-facts" / "stock-minute-bars" / f"{trade_date}-{stock_code}.json",
     ]
     for path in candidates:
         payload = _read_json_if_exists(path)
@@ -2481,9 +2489,9 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
                 }
             )
 
-    lines = ["**重点观察25日跟踪表**（只展示仍在周期内的样本）:"]
+    lines = ["**过程观察25日跟踪表**（只展示仍在周期内的样本）:"]
     if not rows:
-        lines.append("- 暂无仍在25日周期内的重点观察样本。")
+        lines.append("- 暂无仍在25日周期内的过程观察样本。")
         lines.append("")
         return lines
 
@@ -3732,11 +3740,12 @@ def write_decision_ledger_artifacts(
         or os.environ.get("DATABASE_URL")
         or ""
     ).strip().startswith(("postgres://", "postgresql://"))
-    if service is None:
+    if service is None and postgres_configured:
         try:
             from storage.database_service import DatabaseService
 
-            service = DatabaseService.from_environment(root / "data" / "cloudflare_free_daily.db")
+            service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+            service = service_factory() if callable(service_factory) else DatabaseService.from_environment()
         except Exception as exc:
             if postgres_configured:
                 return {
@@ -3835,12 +3844,8 @@ def write_decision_ledger_artifacts(
     if write_json_archive:
         _write_json(snapshot_path, merged_snapshot)
         _write_json(index_path, index)
-    if not service_is_postgres:
+    if not service_is_postgres and service is not None:
         try:
-            if service is None:
-                from storage.database_service import DatabaseService
-
-                service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
             current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
             recent_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=25, exclude_a_kill=False)
             service.replace_extreme_conviction_mentions_for_trade_date(

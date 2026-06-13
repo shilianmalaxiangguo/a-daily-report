@@ -141,6 +141,37 @@ class StrategyTrackingStoreTest(unittest.TestCase):
             self.assertEqual(saved, "postgresql://strategy_performance/frozen")
             self.assertEqual(json.loads(ledger_path.read_text(encoding="utf-8"))["records"][0]["report_date"], "json")
 
+    def test_postgres_only_runtime_accepts_database_service_local_default(self):
+        store = self._load_store_module()
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def load_strategy_performance_ledger(self, mode="frozen"):
+                return {"version": "v-test", "mode": mode, "records": [{"report_date": "postgres"}]}
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            ledger_path = Path(tempdir) / "strategy_performance.json"
+            ledger_path.write_text(json.dumps({"records": [{"report_date": "json"}]}), encoding="utf-8")
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    loaded = store.load_strategy_performance_ledger(
+                        mode="frozen",
+                        helpers={
+                            "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                            "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                        },
+                    )
+
+            self.assertEqual(loaded["records"][0]["report_date"], "postgres")
+            self.assertEqual(json.loads(ledger_path.read_text(encoding="utf-8"))["records"][0]["report_date"], "json")
+
     def test_postgres_configured_factor_snapshot_uses_database_service(self):
         store = self._load_store_module()
 
@@ -307,39 +338,59 @@ class StrategyTrackingStoreTest(unittest.TestCase):
     def test_postgres_only_runtime_without_database_rejects_legacy_ledger_file(self):
         store = self._load_store_module()
 
+        class StubService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
         with tempfile.TemporaryDirectory() as tempdir:
             ledger_path = Path(tempdir) / "strategy_performance.json"
             ledger_path.write_text(json.dumps({"records": [{"report_date": "json"}]}), encoding="utf-8")
-            with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
-                with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only strategy tracking storage"):
-                    store.load_strategy_performance_ledger(
-                        mode="frozen",
-                        helpers={
-                            "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
-                            "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
-                        },
-                    )
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only strategy tracking storage"):
+                        store.load_strategy_performance_ledger(
+                            mode="frozen",
+                            helpers={
+                                "_get_strategy_performance_path": lambda mode="frozen": str(ledger_path),
+                                "STRATEGY_PERFORMANCE_LEDGER_VERSION": "v-test",
+                            },
+                        )
             self.assertEqual(json.loads(ledger_path.read_text(encoding="utf-8"))["records"][0]["report_date"], "json")
 
     def test_postgres_only_runtime_without_database_rejects_legacy_factor_snapshot(self):
         store = self._load_store_module()
 
+        class StubService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
         with tempfile.TemporaryDirectory() as tempdir:
             snapshot_path = Path(tempdir) / "2026-05-29.json"
-            with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
-                with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only strategy tracking storage"):
-                    store.save_factor_snapshot(
-                        "2026-05-29",
-                        {"foo": "bar"},
-                        mode="frozen",
-                        helpers={
-                            "_get_factor_snapshot_path": lambda target_date, mode="frozen": str(snapshot_path),
-                            "_make_serializable": lambda value: value,
-                            "STRATEGY_FACTOR_SNAPSHOT_VERSION": "snapshot-v1",
-                            "LEDGER_MODE_FROZEN": "frozen",
-                            "LEDGER_MODE_REPLAY": "replay",
-                        },
-                    )
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only strategy tracking storage"):
+                        store.save_factor_snapshot(
+                            "2026-05-29",
+                            {"foo": "bar"},
+                            mode="frozen",
+                            helpers={
+                                "_get_factor_snapshot_path": lambda target_date, mode="frozen": str(snapshot_path),
+                                "_make_serializable": lambda value: value,
+                                "STRATEGY_FACTOR_SNAPSHOT_VERSION": "snapshot-v1",
+                                "LEDGER_MODE_FROZEN": "frozen",
+                                "LEDGER_MODE_REPLAY": "replay",
+                            },
+                        )
             self.assertFalse(snapshot_path.exists())
 
     def test_legacy_load_ledger_wrapper_delegates_to_store(self):

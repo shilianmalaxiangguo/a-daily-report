@@ -58,8 +58,6 @@ def _configured_postgres_service():
     postgres_required = _postgres_only_runtime() or _postgres_database_configured()
     if not postgres_required:
         return None
-    if _postgres_only_runtime() and not _postgres_database_configured():
-        raise RuntimeError("PostgreSQL-only strategy tracking storage requires PostgreSQL")
     if service_cls is None:
         raise RuntimeError("PostgreSQL strategy tracking storage requires DatabaseService")
     service = service_cls.from_environment()

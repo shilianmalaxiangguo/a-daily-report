@@ -77,7 +77,7 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
                 "market_energy_state": "修复",
                 "trigger_text": ACTION_TEXT,
                 "factor_snapshot": {
-                    "environment": {"score": 8, "position_level": "三档", "gate_status": "execute_50"},
+                    "environment": {"score": 8, "position_level": "50%条件执行", "gate_status": "execute_50"},
                     "structure": {"score": 7, "signal_type": "突破", "signal_status": "有效"},
                     "mainline": {"score": 9, "name": "军工"},
                     "memory": {"score": 5, "trusted_tracking_count": 2, "leader_memory_count": 1},
@@ -303,7 +303,7 @@ class StrategyPerformanceRendererTest(unittest.TestCase):
         self.assertIn("上影阳线", rendered)
         self.assertIn("主池明细 - 博杰股份(002975)", rendered)
         self.assertIn("副池明细 - 石大胜华(603026)", rendered)
-        self.assertIn("观察锚点", rendered)
+        self.assertIn("观察价位", rendered)
         self.assertIn("容忍带", rendered)
         self.assertIn("失真线", rendered)
         self.assertIn("趋势延续，继续跟踪", rendered)

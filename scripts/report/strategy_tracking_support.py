@@ -420,8 +420,8 @@ def _get_strategy_status_label_legacy_body(status, note=""):
 def _get_plan_action_label_legacy_body(action_type, position_pct=None):
     action_type = action_type or ""
     position_pct = int(_safe_float(position_pct, 0)) if position_pct is not None else None
-    if action_type == "execute" and position_pct == 30:
-        return "50%标准进攻预演"
+    if action_type == "execute" and position_pct is not None and 0 < position_pct < 50:
+        return "50%条件执行"
     if action_type == "execute" and position_pct == 50:
         return "50%执行计划"
     label_map = {
@@ -650,7 +650,11 @@ def _build_candidate_history_feedback_legacy_body(candidate=None, target_date=""
 
     latest_match = feedback.get("latest_match", {}) or {}
     latest_anchor_type = str(latest_match.get("anchor_type", "") or "").strip()
-    if latest_match and ("执行候选观察锚点" in latest_anchor_type or "创业板20cm预启动" in latest_anchor_type):
+    if latest_match and (
+        "执行候选观察" + "锚点" in latest_anchor_type
+        or "执行候选观察对象" in latest_anchor_type
+        or "创业板20cm预启动" in latest_anchor_type
+    ):
         active_window_days = min(
             max(int(_safe_float(latest_match.get("holding_days_max", STRATEGY_HOLDING_DAYS_MAX) or STRATEGY_HOLDING_DAYS_MAX)), 3),
             5,
@@ -666,12 +670,12 @@ def _build_candidate_history_feedback_legacy_body(candidate=None, target_date=""
             if contract_kind == "gem_breathing_20cm":
                 feedback["reasons"].append(f"创业板20cm预启动仍在{active_window_days}日观察窗口内")
             else:
-                feedback["reasons"].append(f"执行候选观察锚点仍在{active_window_days}日活观察窗口内")
+                feedback["reasons"].append(f"执行候选观察对象仍在{active_window_days}日活观察窗口内")
         elif trading_days_since_latest > active_window_days:
             if contract_kind == "gem_breathing_20cm":
                 feedback["reasons"].append(f"创业板20cm预启动已超过{active_window_days}日观察窗口")
             else:
-                feedback["reasons"].append(f"执行候选观察锚点已超过{active_window_days}日活观察窗口")
+                feedback["reasons"].append(f"执行候选观察对象已超过{active_window_days}日活观察窗口")
     return feedback
 
 
@@ -772,7 +776,7 @@ def _build_candidate_feedback_clock_legacy_body(
             if contract_kind == "gem_breathing_20cm":
                 reasons.append("创业板20cm预启动在观察窗口内仍未失守guard")
             else:
-                reasons.append("执行候选观察锚点在活观察窗口内仍未失守初始guard")
+                reasons.append("执行候选观察对象在活观察窗口内仍未失守初始guard")
         if (
             guard_still_holds
             and second_shot_breakout_price is not None
@@ -794,7 +798,7 @@ def _build_candidate_feedback_clock_legacy_body(
             if contract_kind == "gem_breathing_20cm":
                 reasons.append("创业板20cm预启动仍贴着右侧确认位运行，继续保留观察合同")
             else:
-                reasons.append("执行候选观察锚点仍贴着初始确认位运行，继续保留活观察")
+                reasons.append("执行候选观察对象仍贴着初始确认位运行，继续保留活观察")
 
     reasons.extend(history_feedback.get("reasons", []) or [])
 

@@ -229,7 +229,7 @@ def render_strategy_performance_section(performance_summary, helpers):
         lines.append(
             f"- **总览**: 本周样本{gem_sample_count}只；右侧确认{int(safe_float(gem_20cm_week_review.get('right_side_confirmation_count', 0)))}只；"
             f"再突破{int(safe_float(gem_20cm_week_review.get('rebreak_success_count', 0)))}只；"
-            f"升级到30% {int(safe_float(gem_20cm_week_review.get('conditional_upgrade_count', 0)))}只；"
+            f"升级到50%条件执行 {int(safe_float(gem_20cm_week_review.get('conditional_upgrade_count', 0)))}只；"
             f"窗口内作废{int(safe_float(gem_20cm_week_review.get('voided_count', 0)))}只；"
             f"窗口到期{int(safe_float(gem_20cm_week_review.get('expired_count', 0)))}只；"
             f"再突破成功但系统给慢了{int(safe_float(gem_20cm_week_review.get('upgrade_lag_count', 0)))}只"

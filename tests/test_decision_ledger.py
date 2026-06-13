@@ -34,6 +34,32 @@ from domains.execution_chain.candidate_selection_nodes.conviction_list import (
 )
 
 
+class _DecisionLedgerMemoryFactStore:
+    def __init__(self, index=None):
+        self.index = index or {}
+        self.mentions = []
+
+    def is_postgres_backed(self):
+        return True
+
+    def read_decision_ledger_index(self, end_date=None, window_days=25):
+        return self.index
+
+    def replace_decision_ledger_snapshot(self, snapshot):
+        previous_index = self.index
+        self.index = build_decision_ledger_index(snapshot, previous_index=previous_index)
+        self.mentions = build_extreme_conviction_mention_rows(
+            self.index,
+            end_date=snapshot.get("trade_date"),
+            window_days=25,
+            exclude_a_kill=False,
+        )
+        return {"mentions": len(self.mentions), "cases": len((snapshot or {}).get("cases") or [])}
+
+    def query_extreme_conviction_mentions(self, end_date, *, window_days=25, include_a_kill=False):
+        return [dict(row) for row in self.mentions]
+
+
 class DecisionLedgerTest(unittest.TestCase):
     def test_parses_extreme_conviction_table_from_markdown_report(self):
         markdown = """
@@ -1477,7 +1503,7 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertFalse(stock_records[0]["cycle_closed"])
         self.assertEqual([item["mention_trade_date"] for item in stock_records[0]["mentions"]], ["2026-05-12", "2026-05-13"])
 
-    def test_index_keeps_participation_review_summary_for_snap_ui(self):
+    def test_index_keeps_participation_review_summary_for_report_lists(self):
         snapshot = build_decision_ledger_snapshot(
             trade_date="2026-05-12",
             extreme_conviction_list=[
@@ -1567,7 +1593,7 @@ class DecisionLedgerTest(unittest.TestCase):
         lines = render_extreme_conviction_tracking_lines(index, max_rows=5)
         rendered = "\n".join(lines)
 
-        self.assertIn("**重点观察25日跟踪表**", rendered)
+        self.assertIn("**过程观察25日跟踪表**", rendered)
         self.assertIn("| 股票 | 代码 | 周期日 | 首次入选 | 最近复盘 | 计划窗口 | 观察位窗口 | 预演复盘 | 历史复盘动作 | 作废线 |", rendered)
         self.assertNotIn("买入窗口", rendered)
         self.assertIn("| 京能电力 | 600578 | D2/25 | 2026-05-14 | 2026-05-15 | 竞价表态 + 回封参与 | 09:30-09:35 | 预演命中 | 历史复盘：次日先看是否继续强于市场 | 有效跌破日K MA20取消幻想 |", rendered)
@@ -2423,8 +2449,6 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertNotIn("浙江世宝", rendered)
 
     def test_zero_position_extreme_observation_mentions_stay_in_tracking_rows(self):
-        from storage.database_service import DatabaseService
-
         snapshot = build_decision_ledger_snapshot(
             trade_date="2026-05-22",
             extreme_conviction_list=[
@@ -2435,7 +2459,7 @@ class DecisionLedgerTest(unittest.TestCase):
                     "sniper_role": "候选观察",
                     "source_tier": "extreme_conviction",
                     "execution_eligibility": "observation_only",
-                    "attack_state": "0%观察",
+                    "attack_state": "0%不参与",
                     "participation_window": "09:50-10:10观察",
                     "conviction_reason": "形态健康，但最终0%只观察承接",
                 }
@@ -2455,16 +2479,19 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertNotIn("暂无近25个交易日内的明日极度看好样本", rendered)
 
         with TemporaryDirectory() as tempdir:
-            write_decision_ledger_artifacts(snapshot, root_dir=Path(tempdir), review_market_facts_by_stock_code={})
-            service = DatabaseService.sqlite_d1_compatible(Path(tempdir) / "data" / "cloudflare_free_daily.db")
+            service = _DecisionLedgerMemoryFactStore()
+            write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=Path(tempdir),
+                database_service=service,
+                review_market_facts_by_stock_code={},
+            )
             db_rows = service.query_extreme_conviction_mentions("2026-05-22", window_days=25)
 
         self.assertEqual([row["stock_code"] for row in db_rows], ["000636"])
         self.assertEqual(db_rows[0]["mention_trade_date"], "2026-05-22")
 
     def test_writer_syncs_recent_mention_rows_from_index_into_fact_db(self):
-        from storage.database_service import DatabaseService
-
         previous_index = {
             "artifact_version": 1,
             "latest_trade_date": "2026-05-19",
@@ -2512,8 +2539,13 @@ class DecisionLedgerTest(unittest.TestCase):
             ledger_dir.mkdir(parents=True)
             (ledger_dir / "index.json").write_text(json.dumps(previous_index, ensure_ascii=False), encoding="utf-8")
 
-            write_decision_ledger_artifacts(current, root_dir=root, review_market_facts_by_stock_code={})
-            service = DatabaseService.sqlite_d1_compatible(root / "data" / "cloudflare_free_daily.db")
+            service = _DecisionLedgerMemoryFactStore(previous_index)
+            write_decision_ledger_artifacts(
+                current,
+                root_dir=root,
+                database_service=service,
+                review_market_facts_by_stock_code={},
+            )
             rows = service.query_extreme_conviction_mentions("2026-05-20", window_days=25)
 
         self.assertEqual([row["stock_code"] for row in rows], ["000586", "603005"])
@@ -2528,9 +2560,15 @@ class DecisionLedgerTest(unittest.TestCase):
             sector_relationship_state="半导体主攻",
         )
 
-        with TemporaryDirectory() as tempdir, patch("storage.database_service.DatabaseService.sqlite_d1_compatible") as factory:
+        with TemporaryDirectory() as tempdir, patch(
+            "storage.database_service.DatabaseService.fact_store_from_environment"
+        ) as factory, patch.dict(os.environ, {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
             factory.side_effect = RuntimeError("database unavailable")
-            result = write_decision_ledger_artifacts(snapshot, root_dir=Path(tempdir), review_market_facts_by_stock_code={})
+            result = write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=Path(tempdir),
+                review_market_facts_by_stock_code={},
+            )
 
         self.assertEqual(result["fact_db_sync"]["status"], "failed")
         self.assertEqual(result["fact_db_sync"]["error_type"], "RuntimeError")
@@ -2549,7 +2587,7 @@ class DecisionLedgerTest(unittest.TestCase):
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             with patch.dict(os.environ, {"A_DAILY_REPORT_DATABASE_URL": "postgresql://unit/report"}, clear=False):
-                with patch("storage.database_service.DatabaseService.from_environment") as factory:
+                with patch("storage.database_service.DatabaseService.fact_store_from_environment") as factory:
                     factory.side_effect = RuntimeError("database unavailable")
                     result = write_decision_ledger_artifacts(
                         snapshot,
@@ -2801,7 +2839,7 @@ class DecisionLedgerTest(unittest.TestCase):
 
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            kline_dir = root / "data" / "snap-ui" / "stock-klines"
+            kline_dir = root / "data" / "market-facts" / "stock-klines"
             kline_dir.mkdir(parents=True)
             (kline_dir / "2026-05-14-600578.json").write_text(
                 json.dumps(
@@ -2850,7 +2888,7 @@ class DecisionLedgerTest(unittest.TestCase):
 
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            kline_dir = root / "data" / "snap-ui" / "stock-klines"
+            kline_dir = root / "data" / "market-facts" / "stock-klines"
             kline_dir.mkdir(parents=True)
             (kline_dir / "2026-05-15-600578.json").write_text(
                 json.dumps(
@@ -2899,8 +2937,8 @@ class DecisionLedgerTest(unittest.TestCase):
 
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            kline_dir = root / "data" / "snap-ui" / "stock-klines"
-            minute_dir = root / "data" / "snap-ui" / "stock-minute-bars"
+            kline_dir = root / "data" / "market-facts" / "stock-klines"
+            minute_dir = root / "data" / "market-facts" / "stock-minute-bars"
             kline_dir.mkdir(parents=True)
             minute_dir.mkdir(parents=True)
             (kline_dir / "2026-05-15-600578.json").write_text(

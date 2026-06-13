@@ -102,7 +102,7 @@ review_payload = {"items": []}
 
 with patch.object(daily_report_entry_demo, "run_backfill_strategy_record_market_context", return_value=backfill_payload) as backfill_mock, \
      patch.object(daily_report_entry_demo, "run_get_strategy_status_label", return_value="待评估") as status_mock, \
-     patch.object(daily_report_entry_demo, "run_get_plan_action_label", return_value="50%标准进攻预演") as action_mock, \
+     patch.object(daily_report_entry_demo, "run_get_plan_action_label", return_value="50%条件执行") as action_mock, \
      patch.object(daily_report_entry_demo, "run_summarize_ev_signal_review", return_value=review_payload) as review_mock, \
      patch.object(daily_report_entry_demo, "run_compound_returns", return_value=0.06) as compound_mock:
     backfill_result = daily_report_entry_demo._backfill_strategy_record_market_context({"report_date": "2026-04-23"})
@@ -126,7 +126,7 @@ assert compound_mock.call_args[0][0] == [0.02, 0.03]
 assert "helpers" not in compound_mock.call_args.kwargs
 assert backfill_result == backfill_payload
 assert status_result == "待评估"
-assert action_result == "50%标准进攻预演"
+assert action_result == "50%条件执行"
 assert review_result == review_payload
 assert compound_result == 0.06
 """
@@ -193,7 +193,7 @@ def _support_probe(records, start_date, end_date):
         action_watch = support.get_plan_action_label("watch_only", None)
 
         self.assertEqual(status_label, "待评估（等待确认）")
-        self.assertEqual(action_30, "50%标准进攻预演")
+        self.assertEqual(action_30, "50%条件执行")
         self.assertEqual(action_50, "50%执行计划")
         self.assertEqual(action_watch, "仅观察")
 
@@ -413,7 +413,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
                 {"code": "000001", "abnormal_setup_signal_id": "burst_hold"},
                 "2026-04-23",
                 "watch_anchor",
-                "执行候选观察锚点",
+                "执行候选观察对象",
             )
 
         self.assertEqual(result["matched_records"], 0)
@@ -470,14 +470,14 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
             result = support.build_candidate_feedback_clock(
                 {
                     "code": "000001",
-                    "watch_anchor_type": "执行候选观察锚点",
+                    "watch_anchor_type": "执行候选观察对象",
                     "permission_label": PERMISSION_LABEL,
                     "report_day_close": 11.4,
                     "report_day_high": 11.5,
                     "report_day_low": 10.6,
                     "decision_stack": {"trigger_score": 88},
                 },
-                "执行候选观察锚点",
+                "执行候选观察对象",
                 {"leading_line": "机器人"},
                 "机器人",
                 "2026-04-23",
@@ -506,7 +506,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
                     "action_type": "watch_only",
                     "stock_code": "000001",
                     "abnormal_setup_signal_id": "burst_hold",
-                    "anchor_type": "执行候选观察锚点",
+                    "anchor_type": "执行候选观察对象",
                     "holding_days_max": 4,
                     "confirm_price_60m": 10.8,
                     "confirm_support_60m": 10.1,
@@ -519,7 +519,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
                     "action_type": "execute",
                     "stock_code": "000001",
                     "abnormal_setup_signal_id": "burst_hold",
-                    "anchor_type": "执行候选观察锚点",
+                    "anchor_type": "执行候选观察对象",
                     "holding_days_max": 4,
                     "confirm_price_60m": 10.6,
                     "confirm_support_60m": 10.0,
@@ -534,7 +534,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
             {"code": "000001", "abnormal_setup_signal_id": "burst_hold"},
             "2026-04-23",
             "watch_anchor",
-            "执行候选观察锚点",
+            "执行候选观察对象",
             helpers={
                 "normalize_stock_code": lambda value: value,
                 "_normalize_kline_date_str": lambda value: value,
@@ -562,7 +562,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
         self.assertTrue(result["active_watch"])
         self.assertEqual(result["contract_kind"], "execute_anchor")
         self.assertIn("历史连续候选反馈确认成立", result["reasons"])
-        self.assertIn("执行候选观察锚点仍在4日活观察窗口内", result["reasons"])
+        self.assertIn("执行候选观察对象仍在4日活观察窗口内", result["reasons"])
 
     def test_build_candidate_feedback_clock_marks_second_shot_ready_inside_active_window(self):
         support = self._load_support_module()
@@ -570,7 +570,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
         result = support.build_candidate_feedback_clock(
             {
                 "code": "000001",
-                "watch_anchor_type": "执行候选观察锚点",
+                "watch_anchor_type": "执行候选观察对象",
                 "permission_label": PERMISSION_LABEL,
                 "abnormal_setup_signal_id": "burst_hold",
                 "minute_plan": {"confirm_price_60m": 11.0, "confirm_support_60m": 10.3},
@@ -579,7 +579,7 @@ def _candidate_feedback_clock_probe(candidate=None, watch_anchor_type='', state_
                 "report_day_low": 10.6,
                 "decision_stack": {"trigger_score": 88},
             },
-            "执行候选观察锚点",
+            "执行候选观察对象",
             {"leading_line": "机器人"},
             "机器人",
             "2026-04-23",

@@ -101,7 +101,7 @@ with patch.object(daily_report_entry_demo, "run_build_strategy_factor_snapshot",
         {},
         {},
         {},
-        "三档",
+        "50%条件执行",
         "环境打开",
         {"best_stock": {"name": "军工一号"}},
     )
@@ -188,7 +188,7 @@ def _strategy_factor_snapshot_probe(
                 {},
                 {},
                 {},
-                "三档",
+                "50%条件执行",
                 "环境打开",
                 {"best_stock": {"name": "军工一号"}},
                 helpers={"runtime_test_helper": lambda target_date, reason, name: (target_date, reason, name)},
@@ -231,10 +231,10 @@ def _strategy_plan_context_probe(
                 {},
                 {},
                 {},
-                "三档",
+                "50%条件执行",
                 "环境打开",
                 best_stock={"name": "军工一号"},
-                watch_anchor={"name": "观察锚点"},
+                watch_anchor={"name": "观察对象"},
                 watch_anchor_type="继续看谁",
                 factor_snapshot={"factor": "snapshot"},
                 helpers={
@@ -246,7 +246,7 @@ def _strategy_plan_context_probe(
                 },
             )
 
-        self.assertEqual(result["anchor"], ("军工一号", "观察锚点", "继续看谁"))
+        self.assertEqual(result["anchor"], ("军工一号", "观察对象", "继续看谁"))
         self.assertEqual(result["factor"], {"factor": "snapshot"})
 
     def test_strategy_performance_book_runtime_exposes_helper_bindings(self):

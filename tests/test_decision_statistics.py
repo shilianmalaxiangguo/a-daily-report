@@ -788,6 +788,29 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertNotIn("亨通光电", rows["core_candidate"]["today_judgment"])
         self.assertNotIn("中天科技", rows["core_candidate"]["today_judgment"])
 
+    def test_daily_panel_suppresses_core_candidate_when_final_result_has_no_execution_object(self):
+        panel = build_daily_judgment_review_panel(
+            {"available_trade_dates": ["2026-06-09", "2026-06-10"], "by_stock_code": {}},
+            "2026-06-10",
+            current_context={
+                "market_state": "混沌",
+                "mainline": "无确认主线",
+                "core_candidates": [
+                    {
+                        "name": "双星新材",
+                        "code": "002585",
+                        "sniper_role": "明日主买对象",
+                        "anchor_reversal_decision": "可作为主对象",
+                    }
+                ],
+                "suppress_core_candidate_fallback": True,
+            },
+            recent_days=5,
+        )
+        rows = {row["judgment_type"]: row for row in panel["today_rows"]}
+
+        self.assertEqual(rows["core_candidate"]["today_judgment"], "待补事实")
+
     def test_daily_panel_normalizes_empty_today_mainline_to_chaotic_market_state(self):
         index = {
             "available_trade_dates": ["2026-05-29", "2026-06-01"],
