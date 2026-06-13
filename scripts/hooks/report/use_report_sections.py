@@ -84,7 +84,7 @@ def build_ai_friction_knowledge_note(request):
 
 def _format_structured_knowledge_update(update):
     topic = str(update.get("topic", "") or "").strip()
-    if topic != "市场结构判断":
+    if topic not in {"市场结构判断", "题材生命周期证据层"}:
         return []
     new_insight = str(update.get("new_insight", "") or "").strip()
     fact_basis = str(update.get("fact_basis", "") or "").strip()

@@ -24,6 +24,10 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
 from domains.execution_chain.pk_decision_stage import build_pk_decision_runtime as _build_pk_decision_runtime
 from knowledge.llm_wiki_context import build_llm_wiki_context
 from knowledge.llm_wiki_router import build_llm_wiki_fact_tags, route_llm_wiki_knowledge
+from knowledge.topic_lifecycle import (
+    build_topic_lifecycle_knowledge_update,
+    build_topic_lifecycle_snapshot,
+)
 from report.calendar_section_nodes import render_calendar_section
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.decision_board_nodes import render_decision_board_section
@@ -7171,6 +7175,52 @@ def _attach_market_structure_judgement(data):
     return judgement
 
 
+def _append_runtime_knowledge_update(data, update):
+    if not isinstance(data, dict) or not isinstance(update, dict) or not update:
+        return []
+    existing_updates = data.get("knowledge_updates")
+    updates = []
+    if isinstance(existing_updates, list):
+        updates = [item for item in existing_updates if isinstance(item, dict)]
+    data["knowledge_updates"] = updates
+    topic = update.get("topic")
+    if topic:
+        replaced = False
+        for index, item in enumerate(updates):
+            if isinstance(item, dict) and item.get("topic") == topic:
+                updates[index] = update
+                replaced = True
+                break
+        if not replaced:
+            updates.append(update)
+    else:
+        updates.append(update)
+    return updates
+
+
+def _attach_topic_lifecycle_snapshot(data):
+    if not isinstance(data, dict):
+        return {}
+    try:
+        snapshot = build_topic_lifecycle_snapshot(data)
+    except (TypeError, ValueError, KeyError):
+        return {}
+    if not isinstance(snapshot, dict) or not snapshot.get("cards"):
+        return {}
+    data["topic_lifecycle"] = snapshot
+    data.setdefault("knowledge", {})["topic_lifecycle"] = snapshot
+    market_snapshot = data.get("market_research_snapshot")
+    if isinstance(market_snapshot, dict):
+        market_snapshot["topic_lifecycle"] = snapshot
+        data["market_research_snapshot"] = market_snapshot
+    execution_context = data.get("execution_stage_context")
+    if isinstance(execution_context, dict):
+        execution_context["topic_lifecycle"] = snapshot
+        data["execution_stage_context"] = execution_context
+    _append_runtime_knowledge_update(data, build_topic_lifecycle_knowledge_update(snapshot))
+    return snapshot
+
+
 def _attach_llm_wiki_knowledge_hits(data, llm_wiki_context):
     if not isinstance(data, dict) or not isinstance(llm_wiki_context, dict):
         return []
@@ -7219,6 +7269,7 @@ def render_markdown_report_runtime(
         )
     finally:
         _restore_runtime_bindings(previous)
+    _attach_topic_lifecycle_snapshot(data)
     knowledge_note_lines = build_knowledge_update_note(data if isinstance(data, dict) else {})
     if knowledge_note_lines:
         report = "\n".join([report.rstrip(), "", *knowledge_note_lines]).strip()

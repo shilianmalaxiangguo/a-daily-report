@@ -17,6 +17,10 @@ from typing import Any, Dict
 import types
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from knowledge.topic_lifecycle import (
+    build_topic_lifecycle_snapshot,
+    write_topic_lifecycle_artifact,
+)
 from report.html_report_view import build_daily_report_view, missing_required_fact_labels
 try:
     import daily_report_analysis_utils as analysis_utils
@@ -1490,9 +1494,22 @@ def persist_report_runtime_artifacts(
         if isinstance(candidate_trace_result, dict):
             data["candidate_trace_artifact"] = candidate_trace_result
             execution_stage_context["candidate_trace_artifact"] = candidate_trace_result
+        topic_lifecycle_snapshot = data.get("topic_lifecycle")
+        if not isinstance(topic_lifecycle_snapshot, dict) or not topic_lifecycle_snapshot.get("cards"):
+            try:
+                topic_lifecycle_snapshot = build_topic_lifecycle_snapshot(data)
+            except (TypeError, ValueError, KeyError):
+                topic_lifecycle_snapshot = {}
+            if isinstance(topic_lifecycle_snapshot, dict) and topic_lifecycle_snapshot.get("cards"):
+                data["topic_lifecycle"] = topic_lifecycle_snapshot
+        topic_lifecycle_result = None
+        if isinstance(topic_lifecycle_snapshot, dict) and topic_lifecycle_snapshot.get("cards"):
+            topic_lifecycle_result = write_topic_lifecycle_artifact(topic_lifecycle_snapshot, root_dir=root_dir)
+            data["topic_lifecycle_artifact"] = topic_lifecycle_result
         return {
             "decision_ledger_artifacts": decision_ledger_result,
             "candidate_trace_artifact": candidate_trace_result,
+            "topic_lifecycle_artifact": topic_lifecycle_result,
         }
     finally:
         for key, value in previous_values.items():

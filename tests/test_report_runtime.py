@@ -5476,6 +5476,101 @@ assert rendered == "# migrated"
         self.assertIn("新增判断：指数新高不等于真实赚钱效应改善", report)
         self.assertEqual(data["market_structure_judgement"]["tomorrow_rhythm"], "低频聚焦")
 
+    def test_render_markdown_report_runtime_appends_topic_lifecycle_note(self):
+        data = {
+            "trade_date": "2026-06-14",
+            "realtime_tag_evidence_snapshot": {
+                "groups": [
+                    {
+                        "采用名称": "PCB电子材料",
+                        "大方向": "AI算力基础设施",
+                        "当日主攻分支": "PCB电子材料",
+                        "表层行业名": ["PCB", "电子材料"],
+                        "辅助名称": ["AI服务器PCB"],
+                        "资金证据": "资金指向：PCB电子材料",
+                        "扩散证据": "同分支多只个股上涨",
+                    }
+                ]
+            },
+            "candidate_traces": [
+                {
+                    "stock_name": "胜宏科技",
+                    "stock_code": "300476",
+                    "sector": "PCB电子材料",
+                    "mainline": "AI算力基础设施",
+                    "final_action": "沿PCB电子材料核心承接继续观察",
+                    "anchor_reversal": {
+                        "candidate_role": "趋势核心",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "anchor_reversal_reason": "核心承接稳定",
+                    },
+                }
+            ],
+        }
+
+        with patch("report.runtime._render_markdown_report_legacy_body", return_value="# runtime report"):
+            result = report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-06-14",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        report = result["report"]
+        self.assertEqual(data["topic_lifecycle"]["cards"][0]["lifecycle_phase"], "主攻期")
+        self.assertIn("## 知识复利提示", report)
+        self.assertIn("题材生命周期证据层", [item["topic"] for item in data["knowledge_updates"]])
+        self.assertIn("PCB电子材料处于主攻期", report)
+        self.assertNotIn("7天", report)
+        self.assertNotIn("辩论", report)
+
+    def test_topic_lifecycle_uses_late_candidate_trace_evidence(self):
+        data = {
+            "trade_date": "2026-06-14",
+            "realtime_tag_evidence_snapshot": {
+                "groups": [
+                    {
+                        "采用名称": "PCB电子材料",
+                        "大方向": "AI算力基础设施",
+                        "当日主攻分支": "PCB电子材料",
+                        "表层行业名": ["PCB", "电子材料"],
+                        "资金证据": "资金指向：PCB电子材料",
+                        "扩散证据": "同分支多只个股上涨",
+                    }
+                ]
+            },
+            "execution_stage_context": {},
+        }
+
+        def _render_body(current_data, *_args, **_kwargs):
+            current_data["execution_stage_context"]["candidate_traces"] = [
+                {
+                    "stock_name": "胜宏科技",
+                    "stock_code": "300476",
+                    "sector": "PCB电子材料",
+                    "mainline": "AI算力基础设施",
+                    "final_action": "沿PCB电子材料核心承接继续观察",
+                    "anchor_reversal": {
+                        "candidate_role": "趋势核心",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "anchor_reversal_reason": "核心承接稳定",
+                    },
+                }
+            ]
+            return "# runtime report"
+
+        with patch("report.runtime._render_markdown_report_legacy_body", side_effect=_render_body):
+            report_runtime.render_markdown_report_runtime(
+                data,
+                "2026-06-14",
+                helpers={"DISPLAY_MVP_MODE": False},
+                config={},
+            )
+
+        card = data["topic_lifecycle"]["cards"][0]
+        self.assertEqual(card["lifecycle_phase"], "主攻期")
+        self.assertTrue(card["evidence"]["core_stocks"])
+
     def test_render_markdown_report_runtime_normalizes_non_list_knowledge_updates(self):
         data = {
             "indices": {"创业板指": {"涨跌幅": 1.2}},

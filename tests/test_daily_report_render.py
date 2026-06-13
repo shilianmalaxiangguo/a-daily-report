@@ -491,6 +491,55 @@ Top50长趋势表不该进入轻量版
         trace_mock.assert_called_once()
         self.assertEqual(trace_mock.call_args.kwargs["run_mode"], "replay")
 
+    def test_persist_report_runtime_artifacts_writes_topic_lifecycle(self):
+        data = {
+            "trade_date": "2026-06-14",
+            "realtime_tag_evidence_snapshot": {
+                "groups": [
+                    {
+                        "采用名称": "PCB电子材料",
+                        "大方向": "AI算力基础设施",
+                        "当日主攻分支": "PCB电子材料",
+                        "表层行业名": ["PCB", "电子材料"],
+                        "资金证据": "资金指向：PCB电子材料",
+                        "扩散证据": "同分支多只个股上涨",
+                    }
+                ]
+            },
+            "execution_stage_context": {
+                "candidate_traces": [
+                    {
+                        "stock_name": "胜宏科技",
+                        "stock_code": "300476",
+                        "sector": "PCB电子材料",
+                        "mainline": "AI算力基础设施",
+                        "final_action": "沿PCB电子材料核心承接继续观察",
+                        "anchor_reversal": {
+                            "candidate_role": "趋势核心",
+                            "anchor_reversal_decision": "可作为主对象",
+                            "anchor_reversal_reason": "核心承接稳定",
+                        },
+                    }
+                ]
+            },
+            "market_research_snapshot": {},
+        }
+
+        with TemporaryDirectory() as tempdir, \
+             patch("daily_report_render._module_dir", return_value=Path(tempdir) / "scripts"), \
+             patch("report.runtime._maybe_persist_decision_ledger", return_value=None), \
+             patch("report.runtime._maybe_persist_candidate_traces", return_value=None):
+            result = persist_report_runtime_artifacts(data, "2026-06-14", run_mode="replay")
+            snapshot_path = Path(result["topic_lifecycle_artifact"]["snapshot_path"])
+            index_path = Path(result["topic_lifecycle_artifact"]["index_path"])
+            stored_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+            stored_index = json.loads(index_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(stored_snapshot["trade_date"], "2026-06-14")
+        self.assertEqual(stored_snapshot["cards"][0]["lifecycle_phase"], "主攻期")
+        self.assertEqual(stored_index["latest_trade_date"], "2026-06-14")
+        self.assertIn("topic_lifecycle_artifact", data)
+
     def test_build_report_outputs_keeps_private_position_report_out_of_daily_reports(self):
         private_position_text = "\n## 持仓策略\n| 上峰水泥 | 100.0% | 私密动作 |\n"
         data = _complete_report_facts({"foo": "bar"})
