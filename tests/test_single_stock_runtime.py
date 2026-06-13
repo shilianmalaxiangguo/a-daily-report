@@ -385,7 +385,7 @@ def _single_stock_markdown_probe(data, target_date, stock_code, stock_name='', r
             build_market_phase_context=lambda data, target_date, emit_logs=False: {
                 "exit_analysis": {},
                 "final_gate": {"can_new_entry": True, "final_action": "允许强势跟随"},
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "main_sectors_info": [{"name": "军工"}],
                 "secondary_sectors_info": [],
                 "main_sectors": ["军工"],

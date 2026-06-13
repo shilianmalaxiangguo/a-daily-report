@@ -12,6 +12,7 @@ def _m(*parts):
 from domains.execution_chain.entry_plan_node_runtime import run_entry_plan_nodes
 from domains.execution_chain.entry_plan_nodes.conclusion import build_entry_plan_conclusion_node
 from domains.execution_chain.entry_plan_nodes.stop_anchor import build_entry_plan_stop_anchor_node
+from domains.execution_chain.entry_plan_nodes.trigger_summary import build_entry_plan_trigger_summary_node
 from execution.entry_cycle_stop_runtime import build_entry_cycle_stop_policy
 
 
@@ -54,7 +55,7 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
 
     def test_legacy_conditional_gate_renders_50_attack_window_not_30_trial(self):
         base_context = {
-            "position_level": "二档（防守档）",
+            "position_level": "0%不参与",
             "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
             "build_stop_execution_plan": lambda *args, **kwargs: {},
             "build_trade_price_focus": lambda *args, **kwargs: {},
@@ -69,19 +70,18 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         stop_lines = "\n".join(build_entry_plan_stop_anchor_node(base_context)["lines"])
         conclusion_lines = "\n".join(build_entry_plan_conclusion_node(base_context)["lines"])
 
-        self.assertIn("50%标准进攻", stop_lines)
-        self.assertIn("50%标准进攻", conclusion_lines)
+        self.assertIn("50%条件执行", stop_lines)
+        self.assertIn("50%条件执行", conclusion_lines)
         self.assertIn("固定交易窗口内条件成立", stop_lines)
         self.assertIn("固定交易窗口内条件成立", conclusion_lines)
-        self.assertNotIn(_m("30%", "条件试错"), stop_lines)
-        self.assertNotIn(_m("30%", "条件试错"), conclusion_lines)
-        self.assertNotIn("二档（防守档）", stop_lines)
-        self.assertNotIn("二档（防守档）", conclusion_lines)
-        self.assertNotIn("二档（防守档）禁止买入", stop_lines)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错"), stop_lines)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错"), conclusion_lines)
+        self.assertIn("0%不参与", conclusion_lines)
+        self.assertNotIn("0%不参与禁止买入", stop_lines)
 
     def test_stop_anchor_relabels_zero_position_new_position_stop(self):
         context = {
-            "position_level": "一档（空仓档）",
+            "position_level": "0%不参与",
             "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
             "build_stop_execution_plan": lambda *args, **kwargs: {},
             "build_trade_price_focus": lambda *args, **kwargs: {},
@@ -96,9 +96,43 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         self.assertIn("无需设置新增参与止损", rendered)
         self.assertNotIn("新仓止损", rendered)
 
+    def test_trigger_summary_renders_process_waiting_as_replay_not_current_object(self):
+        context = {
+            "position_level": "0%不参与",
+            "final_gate": {"can_new_entry": False},
+            "executable_stocks": [],
+            "waiting_stocks": [
+                {
+                    "name": "和远气体",
+                    "code": "002971",
+                    "permission_label": "重点过程候选",
+                    "reason": "当前最终对象为空，只回放推导",
+                    "minute_plan": {"confirm_price_60m": 52.75},
+                    "stop_plan": {"effective_stop": 50.11},
+                }
+            ],
+            "untradable_stocks": [],
+            "rejected_stocks": [],
+            "build_stop_execution_plan": lambda *args, **kwargs: {},
+            "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                "key_zone_display": "关键位/带50.11（支撑/失效）",
+            },
+            "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+            "append_price_focus_note": lambda report_lines, price_focus: None,
+            "append_observation_price_focus_note": lambda report_lines, price_focus: None,
+            "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+        }
+
+        rendered = "\n".join(build_entry_plan_trigger_summary_node(context)["lines"])
+
+        self.assertIn("**过程候选回看**（1只，不作为明日对象）:", rendered)
+        self.assertIn("重点过程候选", rendered)
+        self.assertNotIn("**明日继续观察**", rendered)
+        self.assertNotIn("等观察位出现", rendered)
+
     def test_entry_conclusion_names_layered_participation_windows_not_universal_wait(self):
         context = {
-            "position_level": "三档（进攻档）",
+            "position_level": "50%条件执行",
             "final_gate": {"can_new_entry": True},
             "keep_group": [],
             "executable_stocks": [{"name": "大唐发电", "code": "601991"}],
@@ -118,7 +152,7 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
 
     def test_stop_anchor_renders_entry_cycle_stop_policy_instead_of_uniform_five_percent(self):
         context = {
-            "position_level": "二档（防守档）",
+            "position_level": "0%不参与",
             "final_gate": {"can_new_entry": True},
             "build_stop_execution_plan": lambda *args, **kwargs: {},
             "build_trade_price_focus": lambda minute_plan, stop_plan: {
@@ -203,7 +237,7 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
             )
 
         context = {
-            "position_level": "二档（防守档）",
+            "position_level": "0%不参与",
             "final_gate": {"can_new_entry": True},
             "build_stop_execution_plan": lambda *args, **kwargs: {},
             "build_trade_price_focus": lambda minute_plan, stop_plan: {

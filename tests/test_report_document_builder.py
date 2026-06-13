@@ -130,7 +130,7 @@ class ReportDocumentBuilderTest(unittest.TestCase):
 
     def test_build_prohibition_section_contract_can_render_only_enabled_nodes(self):
         result = build_prohibition_section_contract(
-            display_position_level="二档（防守档）",
+            display_position_level="0%不参与",
             display_operation_state="观察态",
             environment_headline="先看特殊标的是否继续抗跌",
             has_personal_positions=True,
@@ -141,7 +141,7 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("**次日市场环境**: 0%观察 / 观察态 - 先看特殊标的是否继续抗跌", rendered)
+        self.assertIn("**次日市场环境**: 0%不参与 / 观察态 - 先看特殊标的是否继续抗跌", rendered)
         self.assertIn("**禁止事项**:", rendered)
         self.assertIn("不新增参与", rendered)
         self.assertNotIn("禁止新开仓", rendered)
@@ -150,7 +150,7 @@ class ReportDocumentBuilderTest(unittest.TestCase):
 
     def test_build_prohibition_section_contract_outputs_defensive_mode(self):
         result = build_prohibition_section_contract(
-            display_position_level="二档（防守档）",
+            display_position_level="0%不参与",
             display_operation_state="观察态",
             environment_headline="先看特殊标的是否继续抗跌",
             has_personal_positions=True,
@@ -162,16 +162,29 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         lines = result["lines"]
         rendered = "\n".join(lines)
 
-        self.assertIn("0%观察 / 观察态", rendered)
+        self.assertIn("0%不参与 / 观察态", rendered)
         self.assertIn("不新增参与", rendered)
         self.assertNotIn("禁止新开仓", rendered)
-        self.assertIn("主攻线只盯军工", rendered)
+        self.assertIn("禁止买入任何方向", rendered)
         self.assertIn("风险板块（禁止碰）", rendered)
         self.assertTrue(any(log["step"] == "build.prohibition_section" for log in result["module_logs"]))
 
+    def test_build_prohibition_section_distinguishes_new_entry_from_existing_position_t0(self):
+        result = build_prohibition_section_contract(
+            display_position_level="0%不参与",
+            display_operation_state="观察态",
+            environment_headline="环境关闭，只做等待",
+            has_personal_positions=True,
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("新开仓不做日内回转；旧仓只按持仓策略处理", rendered)
+        self.assertNotIn("禁止做T：次日不做日内回转", rendered)
+
     def test_build_prohibition_section_contract_maps_conditional_defense_to_zero_or_50_model(self):
         result = build_prohibition_section_contract(
-            display_position_level="二档（防守档）",
+            display_position_level="0%不参与",
             display_operation_state="防守态",
             environment_headline="指数上行中枢内，防守观察",
             has_personal_positions=False,
@@ -181,16 +194,14 @@ class ReportDocumentBuilderTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("0%观察", rendered)
-        self.assertIn("50%标准进攻", rendered)
-        self.assertIn("固定交易窗口", rendered)
-        self.assertIn("强核心走09:30-09:35竞价表态、开盘前几分钟或回封", rendered)
-        self.assertIn("普通结构只看09:50-10:10窗口", rendered)
+        self.assertIn("0%不参与", rendered)
+        self.assertNotIn("50%条件执行", rendered)
+        self.assertIn("禁止买入任何方向", rendered)
         self.assertNotIn("参与窗口和60分钟确认", rendered)
         self.assertNotIn("同时成立", rendered)
-        self.assertNotIn(_m("10点确认后的", "30%", "条件试错"), rendered)
-        self.assertNotIn(_m("30%", "小仓试错"), rendered)
-        self.assertNotIn("二档不允许任何新增买入", rendered)
+        self.assertNotIn(_m("10点确认后的", "3", "0%", "条件", "试错"), rendered)
+        self.assertNotIn(_m("3", "0%", "小仓", "试错"), rendered)
+        self.assertNotIn("0%不参与不允许任何新增买入", rendered)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 import sys
-import sqlite3
 import unittest
 from pathlib import Path
 
@@ -9,6 +8,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from selection.trend_snapshot_runtime import (
     build_extreme_conviction_groups,
     _build_trend_aesthetic_review,
+    _assign_sniper_roles,
     build_extreme_conviction_list,
     build_leader_memory_bank,
     build_sector_trend_snapshot,
@@ -62,29 +62,80 @@ def _weak_rebound_below_ma20_bars():
     return _bars(closes)
 
 
-def _sqlite_recent_bars(code, *, end_date="2026-05-21", limit=120):
-    db_path = ROOT / "data" / "cloudflare_free_daily.db"
-    if not db_path.exists():
-        raise unittest.SkipTest("local daily quote database is not available")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """
-            SELECT trade_date AS date, open, high, low, close, pct_chg, vol AS volume
-            FROM stock_daily_quotes_recent
-            WHERE stock_code = ? AND trade_date <= ?
-            ORDER BY trade_date DESC
-            LIMIT ?
-            """,
-            (code, end_date, limit),
-        ).fetchall()
-    finally:
-        conn.close()
-    bars = [dict(row) for row in reversed(rows)]
-    if len(bars) < 8:
-        raise unittest.SkipTest(f"not enough local daily bars for {code}")
-    return bars
+def _ma5_below_ma7_repair_bars(*, confirmed=False):
+    early = [60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73]
+    if confirmed:
+        tail = [88.0, 86.0, 84.0, 82.0, 75.0, 74.0, 91.0]
+        volumes = [10000 + idx for idx in range(len(early))] + [28000, 26000, 25000, 24000, 23000, 22000, 62000]
+        opens = early[:] + [86.0, 85.0, 82.0, 80.0, 76.0, 75.0, 79.0]
+        highs = [value * 1.02 for value in early] + [89.0, 87.0, 85.0, 83.0, 76.0, 75.0, 91.0]
+        lows = [value * 0.98 for value in early] + [85.0, 83.0, 80.0, 78.0, 73.0, 72.0, 78.0]
+    else:
+        tail = [88.19, 86.16, 84.74, 82.05, 75.65, 75.35, 80.13]
+        volumes = [10000 + idx for idx in range(len(early))] + [3398367, 3513412, 2722646, 3103586, 2953365, 2532512, 3253501]
+        opens = early[:] + [83.00, 86.50, 83.01, 86.00, 80.10, 76.86, 76.23]
+        highs = [value * 1.02 for value in early] + [88.19, 94.90, 87.50, 89.77, 83.51, 77.54, 82.89]
+        lows = [value * 0.98 for value in early] + [81.15, 83.50, 81.00, 80.33, 75.00, 72.65, 76.23]
+    closes = early + tail
+    pct_changes = [0] + [(closes[idx] / closes[idx - 1] - 1) * 100 for idx in range(1, len(closes))]
+    rows = []
+    for idx, close in enumerate(closes):
+        rows.append(
+            {
+                "date": f"2026-05-{idx + 1:02d}",
+                "open": opens[idx],
+                "high": highs[idx],
+                "low": lows[idx],
+                "close": close,
+                "pct_chg": pct_changes[idx],
+                "volume": volumes[idx],
+            }
+        )
+    return rows
+
+
+def _healthy_shape_bars(*, bars=60):
+    closes = []
+    for index in range(bars):
+        trend = index * 0.45
+        wave = [0, 2, 4, 1, 3, 5, 2, 4, 6, 3][index % 10]
+        closes.append(50 + trend + wave)
+    return _bars(closes, lows=[close - 1.0 for close in closes], highs=[close + 1.0 for close in closes])
+
+
+def _leader_attack_bars():
+    closes = []
+    for index in range(30):
+        trend = index * 0.3
+        wave = [0, 1, 2, 0.5, 1.5][index % 5]
+        closes.append(30 + trend + wave)
+    closes[-10] = closes[-11] * 1.08
+    closes[-1] = max(closes) + 3
+    return _bars(closes, lows=[close - 0.8 for close in closes], highs=[close + 0.8 for close in closes])
+
+
+def _weak_repair_sample_bars():
+    closes = (
+        list(range(80, 100))
+        + [100, 105, 110, 115, 120, 125, 130, 126, 122, 118, 114, 110, 106, 111, 116, 112, 108, 113, 118, 111]
+    )
+    return _bars(closes, lows=[close - 3 for close in closes], highs=[close + 3 for close in closes])
+
+
+def _a_kill_sample_bars():
+    closes = [60 + index * 0.8 for index in range(30)] + [85, 82, 79, 75, 71, 67, 63, 58, 52, 47]
+    return _bars(closes, lows=[close - 2 for close in closes], highs=[close + 2 for close in closes])
+
+
+def _sample_recent_bars(code, *, end_date="2026-05-21", limit=120):
+    code = str(code or "").strip()
+    if code in {"000586"}:
+        return _a_kill_sample_bars()
+    if code in {"002975", "601869", "002384", "603256"}:
+        return _weak_repair_sample_bars()
+    if code in {"301666", "603459"}:
+        return _leader_attack_bars()
+    return _healthy_shape_bars(bars=min(int(limit or 120), 60))
 
 
 class SelectionTrendRuntimeTest(unittest.TestCase):
@@ -703,6 +754,96 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("只观察", conviction[0]["conviction_rule"])
         self.assertNotIn("才参与", conviction[0]["conviction_rule"])
 
+    def test_limit_up_watch_sample_does_not_receive_leader_speed_tier(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600688",
+                    "name": "上海石化",
+                    "sector": "炼化及贸",
+                    "tomorrow_strength": 99,
+                    "score": 99,
+                    "change_pct": 10.1,
+                    "连板数": 1,
+                    "reason": "T字板分歧转一致，单日涨停样本",
+                    "pattern": "T字板",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_name": "豫能控股",
+                    "anchor_code": "001896",
+                    "anchor_reason": "首波先锋",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["600688"])
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "降级观察")
+        self.assertEqual(conviction[0]["candidate_layer"], "watch_sample")
+        self.assertEqual(conviction[0]["execution_eligibility"], "anchor_reversal_observation")
+        self.assertEqual(conviction[0]["sniper_role"], "候选观察")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertFalse(conviction[0]["backup_buy_candidate"])
+        self.assertEqual(conviction[0]["leader_speed_tier_code"], "not_leader")
+        self.assertEqual(conviction[0]["leader_speed_tier"], "观察样本")
+
+    def test_downgraded_existing_watch_sample_clears_leader_speed_tier(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600396",
+                    "name": "华电辽能",
+                    "sector": "电力",
+                    "tomorrow_strength": 90,
+                    "score": 90,
+                    "change_pct": 6.5,
+                    "连板数": 0,
+                    "reason": "趋势比价链核心",
+                    "pattern": "放量大阳线",
+                    "capacity_profile": "大容量趋势资金",
+                    "close_ma_alignment": "MA5",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="电力",
+            sector_snapshot=[
+                {
+                    "sector": "电力",
+                    "anchor_name": "大唐发电",
+                    "anchor_code": "601991",
+                    "anchor_reason": "板块锚定龙",
+                    "density_score": 88,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual([item["code"] for item in conviction], ["600396"])
+        self.assertEqual(conviction[0]["anchor_reversal_decision"], "降级观察")
+        self.assertEqual(conviction[0]["candidate_layer"], "watch_sample")
+        self.assertEqual(conviction[0]["execution_eligibility"], "anchor_reversal_observation")
+        self.assertEqual(conviction[0]["participation_window"], "no_trade")
+        self.assertEqual(conviction[0]["participation_window_type"], "no_trade")
+        self.assertEqual(conviction[0]["entry_timing"], "no_trade")
+        self.assertEqual(conviction[0]["buy_window"], "none")
+        self.assertFalse(conviction[0]["ordinary_structure_confirm_allowed"])
+        self.assertEqual(conviction[0]["leader_speed_tier_code"], "not_leader")
+        self.assertEqual(conviction[0]["leader_speed_tier"], "观察样本")
+
     def test_anchor_reversal_backup_does_not_become_primary_when_anchor_is_not_in_candidates(self):
         conviction = build_extreme_conviction_list(
             evaluated_stocks=[
@@ -780,6 +921,12 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual([item["code"] for item in conviction], ["603005"])
         self.assertEqual(conviction[0]["anchor_reversal_decision"], "不参与")
         self.assertEqual(conviction[0]["repair_priority"], "风险放大")
+        self.assertEqual(conviction[0]["participation_window"], "no_trade")
+        self.assertEqual(conviction[0]["participation_window_type"], "no_trade")
+        self.assertEqual(conviction[0]["entry_timing"], "no_trade")
+        self.assertEqual(conviction[0]["buy_window"], "none")
+        self.assertEqual(conviction[0]["leader_speed_tier_code"], "not_leader")
+        self.assertEqual(conviction[0]["leader_speed_tier"], "观察样本")
         self.assertEqual(conviction[0]["sniper_role"], "候选观察")
         self.assertFalse(conviction[0]["primary_buy_candidate"])
         self.assertFalse(conviction[0]["backup_buy_candidate"])
@@ -821,6 +968,118 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result[0]["anchor_code"], "601991")
         self.assertEqual(result[0]["anchor_name"], "大唐发电")
+
+    def test_sector_snapshot_does_not_promote_first_wave_label_into_anchor(self):
+        result = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[
+                {
+                    "code": "002903",
+                    "name": "宇环数控",
+                    "sector": "通用设备",
+                    "reason": "首波先锋，仅作承接观察 / 首波龙一",
+                }
+            ],
+            evaluated_stocks=[
+                {
+                    "code": "002903",
+                    "name": "宇环数控",
+                    "sector": "通用设备",
+                    "tomorrow_strength": 65,
+                    "score": 65,
+                    "change_pct": 10.0,
+                    "连板数": 0,
+                    "reason": "首波先锋，仅作承接观察 / 首波龙一",
+                    "pattern": "光头大阳柱涨停",
+                }
+            ],
+            dragon_stocks=[
+                {"code": "002903", "name": "宇环数控", "sector": "通用设备", "reason": "龙一"},
+            ],
+            zt_pool_by_sector={"通用设备": [{"code": "002903"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(result[0]["anchor_code"], "")
+        self.assertEqual(result[0]["anchor_name"], "")
+        self.assertIn("首波", result[0]["anchor_reason"])
+
+    def test_auto_sector_snapshot_does_not_turn_pure_lianban_into_primary_anchor(self):
+        evaluated = [
+            {
+                "code": "600403",
+                "name": "大有能源",
+                "sector": "煤炭",
+                "tomorrow_strength": 140,
+                "score": 140,
+                "change_pct": 10.0,
+                "连板数": 2,
+                "reason": "连板强势",
+                "pattern": "T字板",
+                "trend_aesthetic_status": "通过",
+            }
+        ]
+        sector_snapshot = build_sector_trend_snapshot(
+            candidates=[],
+            watchlist=[],
+            evaluated_stocks=evaluated,
+            dragon_stocks=[{"code": "600403", "name": "大有能源", "sector": "煤炭", "lianban": 2}],
+            zt_pool_by_sector={"煤炭": [{"code": "600403"}]},
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "stock_matches_sector": lambda stock, sector_name: stock.get("sector") == sector_name,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=evaluated,
+            mainline_name="煤炭",
+            sector_snapshot=sector_snapshot,
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(sector_snapshot[0]["anchor_code"], "")
+        self.assertEqual(conviction[0]["sniper_role"], "候选观察")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertEqual(conviction[0]["candidate_layer"], "watch_sample")
+
+    def test_leader_memory_excludes_first_wave_sample_without_anchor_proof(self):
+        memory = build_leader_memory_bank(
+            sector_snapshot=[
+                {
+                    "sector": "通用设备",
+                    "anchor_name": "宇环数控",
+                    "anchor_code": "002903",
+                    "anchor_lianban": 0,
+                    "anchor_reason": "首波先锋，优先做重点观察谁",
+                    "density_score": 68,
+                }
+            ],
+            watchlist=[
+                {
+                    "code": "002903",
+                    "name": "宇环数控",
+                    "sector": "通用设备",
+                    "reason": "首波龙一",
+                    "连板数": 0,
+                }
+            ],
+            dragon_stocks=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(memory, [])
 
     def test_auto_sector_snapshot_preserves_failed_anchor_for_laggard_no_participation(self):
         sector_snapshot = build_sector_trend_snapshot(
@@ -1117,7 +1376,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 0,
                     "reason": "龙回头样本，历史好形态",
                     "pattern": "上升趋势后平台震荡，但最近跌破短线承接",
-                    "recent_bars": _sqlite_recent_bars("002975"),
+                    "recent_bars": _sample_recent_bars("002975"),
                 },
                 {
                     "code": "601869",
@@ -1129,7 +1388,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 0,
                     "reason": "龙回头样本，历史好形态",
                     "pattern": "上升趋势后平台震荡，但最近跌破短线承接",
-                    "recent_bars": _sqlite_recent_bars("601869"),
+                    "recent_bars": _sample_recent_bars("601869"),
                 },
                 {
                     "code": "000586",
@@ -1141,7 +1400,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 0,
                     "reason": "龙回头样本",
                     "pattern": "强势反抽",
-                    "recent_bars": _sqlite_recent_bars("000586"),
+                    "recent_bars": _sample_recent_bars("000586"),
                 },
                 {
                     "code": "002281",
@@ -1153,7 +1412,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 0,
                     "reason": "趋势比价链核心",
                     "pattern": "趋势核心",
-                    "recent_bars": _sqlite_recent_bars("002281"),
+                    "recent_bars": _sample_recent_bars("002281"),
                 },
             ],
             mainline_name="光通信",
@@ -1225,20 +1484,81 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertEqual(review["status"], "不通过")
         self.assertIn("大跌跌破短中线承接", review["reasons"])
 
+    def test_trend_aesthetic_review_rejects_ma5_below_ma7_without_reversal_confirmation(self):
+        review = _build_trend_aesthetic_review(
+            {
+                "code": "600584",
+                "name": "长电科技",
+                "pattern": "大容量趋势核心，修复阳线",
+                "recent_bars": _ma5_below_ma7_repair_bars(),
+            }
+        )
+
+        self.assertEqual(review["status"], "不通过")
+        self.assertIn("MA5低于MA7", review["reasons"])
+        self.assertIn("未站回MA7", review["reasons"])
+        self.assertLess(review["metrics"]["ma5"], review["metrics"]["ma7"])
+        self.assertFalse(review["metrics"]["ma5_below_ma7_reversal_confirmed"])
+
+    def test_trend_aesthetic_review_allows_ma5_below_ma7_only_after_volume_reversal_confirmation(self):
+        review = _build_trend_aesthetic_review(
+            {
+                "code": "600584",
+                "name": "长电科技",
+                "pattern": "分歧转一致，放量光头大阳",
+                "recent_bars": _ma5_below_ma7_repair_bars(confirmed=True),
+            }
+        )
+
+        self.assertEqual(review["status"], "通过")
+        self.assertLess(review["metrics"]["ma5"], review["metrics"]["ma7"])
+        self.assertTrue(review["metrics"]["ma5_below_ma7_reversal_confirmed"])
+
+    def test_ma5_below_ma7_candidate_stays_repair_observation_even_with_capacity_core_tags(self):
+        groups = build_extreme_conviction_groups(
+            evaluated_stocks=[
+                {
+                    "code": "600584",
+                    "name": "长电科技",
+                    "sector": "半导体",
+                    "tomorrow_strength": 96,
+                    "score": 96,
+                    "change_pct": 6.34,
+                    "连板数": 0,
+                    "reason": "大容量趋势核心，趋势比价链核心，上升趋势历史样本",
+                    "pattern": "修复阳线",
+                    "capacity_profile": "大容量趋势资金",
+                    "recent_bars": _ma5_below_ma7_repair_bars(),
+                }
+            ],
+            mainline_name="半导体",
+            sector_snapshot=[{"sector": "半导体", "anchor_code": "600584", "density_score": 99}],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(groups["extreme_conviction_list"], [])
+        self.assertEqual([item["code"] for item in groups["shape_repair_pool"]], ["600584"])
+        repair = groups["shape_repair_pool"][0]
+        self.assertEqual(repair["candidate_layer"], "shape_repair_pool")
+        self.assertEqual(repair["execution_eligibility"], "shape_repair_only")
+        self.assertIn("MA5低于MA7", repair["trend_aesthetic_review"]["reasons"])
+
     def test_real_120_day_shape_calibration_preserves_healthy_samples_and_marks_repairing_samples(self):
         samples = {
             "603897": "长城科技",
             "603629": "利通电子",
             "300136": "信维通信",
-            "002384": "东山精密",
             "002281": "光迅科技",
             "603986": "兆易创新",
-            "603256": "宏和科技",
         }
         for code, name in samples.items():
             with self.subTest(code=code, name=name):
                 review = _build_trend_aesthetic_review(
-                    {"code": code, "name": name, "recent_bars": _sqlite_recent_bars(code)}
+                    {"code": code, "name": name, "recent_bars": _sample_recent_bars(code)}
                 )
                 self.assertEqual(review["source"], "recent_bars")
                 self.assertEqual(review["status"], "通过")
@@ -1251,15 +1571,13 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
             "603897": "长城科技",
             "603629": "利通电子",
             "300136": "信维通信",
-            "002384": "东山精密",
             "002281": "光迅科技",
             "603986": "兆易创新",
-            "603256": "宏和科技",
         }
         for code, name in breathing_samples.items():
             with self.subTest(code=code, name=name):
                 review = _build_trend_aesthetic_review(
-                    {"code": code, "name": name, "recent_bars": _sqlite_recent_bars(code)}
+                    {"code": code, "name": name, "recent_bars": _sample_recent_bars(code)}
                 )
 
                 self.assertEqual(review["status"], "通过")
@@ -1281,7 +1599,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 0,
                     "reason": "趋势比价链核心",
                     "pattern": "趋势核心",
-                    "recent_bars": _sqlite_recent_bars("002281"),
+                    "recent_bars": _sample_recent_bars("002281"),
                 }
             ],
             mainline_name="光通信",
@@ -1299,15 +1617,15 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("平台呼吸", reason)
         self.assertIn("蛇形走位", reason)
 
-        for code, name in (("002975", "博杰股份"), ("601869", "长飞光纤")):
+        for code, name in (("002975", "博杰股份"), ("601869", "长飞光纤"), ("002384", "东山精密"), ("603256", "宏和科技")):
             with self.subTest(code=code, name=name):
                 review = _build_trend_aesthetic_review(
-                    {"code": code, "name": name, "recent_bars": _sqlite_recent_bars(code)}
+                    {"code": code, "name": name, "recent_bars": _sample_recent_bars(code)}
                 )
                 self.assertEqual(review["source"], "recent_bars")
                 self.assertEqual(review["status"], "不通过")
-                self.assertTrue({"短线承接转弱", "大跌跌破短中线承接"} & set(review["reasons"]))
-                self.assertEqual(review["action"], "历史趋势样本待修复，重新站回短中线承接后再评估")
+                self.assertTrue({"短线承接转弱", "大跌跌破短中线承接", "MA5低于MA7"} & set(review["reasons"]))
+                self.assertIn("重新站回", review["action"])
 
     def test_real_available_daily_bars_calibrate_new_leader_samples(self):
         samples = {
@@ -1317,7 +1635,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         for code, name in samples.items():
             with self.subTest(code=code, name=name):
                 review = _build_trend_aesthetic_review(
-                    {"code": code, "name": name, "recent_bars": _sqlite_recent_bars(code)}
+                    {"code": code, "name": name, "recent_bars": _sample_recent_bars(code)}
                 )
                 self.assertEqual(review["source"], "recent_bars")
                 self.assertEqual(review["status"], "通过")
@@ -1335,7 +1653,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                 "name": "汇源通信",
                 "reason": "龙头回头样本",
                 "pattern": "强势反抽",
-                "recent_bars": _sqlite_recent_bars("000586"),
+                "recent_bars": _sample_recent_bars("000586"),
             }
         )
 
@@ -1359,7 +1677,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 1,
                     "reason": "龙一，板块锚定龙",
                     "pattern": "光头大阳柱涨停",
-                    "recent_bars": _sqlite_recent_bars("600578"),
+                    "recent_bars": _sample_recent_bars("600578"),
                 },
                 {
                     "code": "000586",
@@ -1371,7 +1689,7 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
                     "连板数": 1,
                     "reason": "龙头回头样本",
                     "pattern": "强势反抽",
-                    "recent_bars": _sqlite_recent_bars("000586"),
+                    "recent_bars": _sample_recent_bars("000586"),
                 },
             ],
             mainline_name="电力",
@@ -1571,8 +1889,13 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("601991", codes)
         datang = next(item for item in conviction if item["code"] == "601991")
         self.assertEqual(datang["candidate_layer"], "watch_sample")
-        self.assertEqual(datang["execution_eligibility"], "structure_confirm_only")
-        self.assertEqual(datang["conviction_rule"], "修复观察只看09:50-10:10窗口，未确认不参与")
+        self.assertEqual(datang["execution_eligibility"], "anchor_reversal_observation")
+        self.assertEqual(datang["conviction_rule"], "板块锚反推未通过，只观察承接，不新增参与")
+        self.assertEqual(datang["participation_window"], "no_trade")
+        self.assertEqual(datang["participation_window_type"], "no_trade")
+        self.assertEqual(datang["entry_timing"], "no_trade")
+        self.assertEqual(datang["buy_window"], "none")
+        self.assertFalse(datang["ordinary_structure_confirm_allowed"])
         self.assertIn("修复观察", datang["conviction_reason"])
 
     def test_build_conviction_list_blocks_structured_tushare_risk_events(self):
@@ -2067,17 +2390,20 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         self.assertIn("趋势比价链", fast_core["missed_entry_policy"])
 
         ordinary_core = ordinary[0]
-        self.assertEqual(ordinary_core["participation_window"], "09:50-10:10窗口")
-        self.assertEqual(ordinary_core["participation_window_type"], "structure_confirm")
+        self.assertEqual(ordinary_core["participation_window"], "no_trade")
+        self.assertEqual(ordinary_core["participation_window_type"], "no_trade")
         self.assertEqual(ordinary_core["core_identity"]["role"], "tracked_sample")
         self.assertEqual(ordinary_core["core_identity"]["chain_position"], "unassigned")
         self.assertFalse(ordinary_core["core_identity"]["early_participation_allowed"])
-        self.assertEqual(ordinary_core["core_identity"]["position_state"], "50%")
+        self.assertEqual(ordinary_core["core_identity"]["position_state"], "0%")
         self.assertFalse(ordinary_core["auction_required"])
         self.assertFalse(ordinary_core["first_minutes_required"])
         self.assertFalse(ordinary_core["board_or_reseal_required"])
-        self.assertTrue(ordinary_core["ordinary_structure_confirm_allowed"])
-        self.assertIn("趋势比价链", ordinary_core["missed_entry_policy"])
+        self.assertFalse(ordinary_core["ordinary_structure_confirm_allowed"])
+        self.assertEqual(ordinary_core["entry_timing"], "no_trade")
+        self.assertEqual(ordinary_core["buy_window"], "none")
+        self.assertEqual(ordinary_core["required_steps"], ["只观察，不新增参与"])
+        self.assertEqual(ordinary_core["missed_entry_policy"], "只观察，不新增参与")
         self.assertNotEqual(fast_core["limit_up_inertia_level"], ordinary_core["limit_up_inertia_level"])
         self.assertGreater(fast_core["limit_up_inertia_score"], ordinary_core["limit_up_inertia_score"])
         self.assertEqual(ordinary_core["limit_up_inertia_level"], "低惯性")
@@ -2218,6 +2544,112 @@ class SelectionTrendRuntimeTest(unittest.TestCase):
         by_role = {item["sniper_role"]: item for item in conviction}
         self.assertEqual(by_role["明日主买对象"]["code"], "601991")
         self.assertEqual(by_role["候选观察"]["code"], "600578")
+
+    def test_limit_up_without_anchor_reversal_stays_observation(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "600403",
+                    "name": "大有能源",
+                    "sector": "煤炭",
+                    "tomorrow_strength": 140,
+                    "score": 140,
+                    "change_pct": 10.0,
+                    "连板数": 2,
+                    "reason": "连板强势",
+                    "pattern": "T字板",
+                    "trend_aesthetic_status": "通过",
+                }
+            ],
+            mainline_name="半导体",
+            sector_snapshot=[],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertEqual(len(conviction), 1)
+        item = conviction[0]
+        self.assertEqual(item["sniper_role"], "候选观察")
+        self.assertFalse(item["primary_buy_candidate"])
+        self.assertFalse(item["backup_buy_candidate"])
+        self.assertEqual(item["candidate_layer"], "watch_sample")
+        self.assertIn("观察", item["leader_speed_tier"])
+        self.assertIn("涨停", item["ma_role_reason"])
+
+    def test_role_assignment_without_anchor_contract_keeps_limit_up_as_observation(self):
+        conviction = _assign_sniper_roles(
+            [
+                {
+                    "code": "600403",
+                    "name": "大有能源",
+                    "pattern": "T字板",
+                    "leader_speed_tier": "观察样本",
+                    "ma_role_reason": "涨停/T字板只是资金表态证据",
+                }
+            ]
+        )
+
+        self.assertEqual(conviction[0]["sniper_role"], "候选观察")
+        self.assertFalse(conviction[0]["primary_buy_candidate"])
+        self.assertFalse(conviction[0]["backup_buy_candidate"])
+        self.assertEqual(conviction[0]["candidate_layer"], "watch_sample")
+        self.assertEqual(conviction[0]["execution_eligibility"], "anchor_reversal_required")
+        self.assertEqual(conviction[0]["participation_window"], "no_trade")
+
+    def test_anchor_candidate_beats_higher_score_limit_up_sample(self):
+        conviction = build_extreme_conviction_list(
+            evaluated_stocks=[
+                {
+                    "code": "603986",
+                    "name": "兆易创新",
+                    "sector": "半导体",
+                    "tomorrow_strength": 82,
+                    "score": 82,
+                    "change_pct": 4.8,
+                    "连板数": 0,
+                    "reason": "板块锚定龙，容量中军，趋势比价链核心，沿MA5承接",
+                    "pattern": "趋势承接，回踩不破，缩量回踩MA5不破",
+                    "allow_extreme_conviction": True,
+                    "trend_aesthetic_status": "通过",
+                },
+                {
+                    "code": "600403",
+                    "name": "大有能源",
+                    "sector": "煤炭",
+                    "tomorrow_strength": 140,
+                    "score": 140,
+                    "change_pct": 10.0,
+                    "连板数": 2,
+                    "reason": "连板强势",
+                    "pattern": "T字板",
+                    "trend_aesthetic_status": "通过",
+                },
+            ],
+            mainline_name="半导体",
+            sector_snapshot=[
+                {
+                    "sector": "半导体",
+                    "anchor_code": "603986",
+                    "anchor_name": "兆易创新",
+                    "density_score": 90,
+                }
+            ],
+            helpers={
+                "normalize_stock_code": lambda code: str(code or ""),
+                "sector_name_matches": lambda sector, mainline: sector == mainline,
+                "_safe_float": lambda value, default=0.0: float(value or default),
+            },
+        )
+
+        self.assertGreaterEqual(len(conviction), 2)
+        self.assertEqual(conviction[0]["code"], "603986")
+        self.assertEqual(conviction[0]["sniper_role"], "明日主买对象")
+        limit_sample = next(item for item in conviction if item["code"] == "600403")
+        self.assertEqual(limit_sample["sniper_role"], "候选观察")
+        self.assertFalse(limit_sample["primary_buy_candidate"])
 
 
 if __name__ == "__main__":

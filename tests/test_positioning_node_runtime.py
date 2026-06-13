@@ -14,7 +14,7 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
             {
                 "enabled_node_keys": ["header", "environment_status", "state_basis"],
                 "compact": False,
-                "display_position_level": "二档（防守档）",
+                "display_position_level": "0%不参与",
                 "display_operation_state": "观察态",
                 "display_position_reason": "中枢内震荡且市场偏弱，应清仓或极轻仓观望",
                 "get_execution_framework_text": lambda: "日线定环境，60分钟定买点，30分钟定止损",
@@ -42,7 +42,7 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("## 📈 明天仓位怎么放（基于日线结构中枢）", rendered)
-        self.assertIn("### 🟡 明日市场环境：二档（防守档） / 观察态", rendered)
+        self.assertIn("### 🟡 明日市场环境：0%不参与 / 观察态", rendered)
         self.assertIn("**状态依据**：中枢内震荡且市场偏弱，应清仓或极轻仓观望", rendered)
         self.assertNotIn("**ASCII结构图**", rendered)
         self.assertNotIn("**识别出 1 个结构中枢**", rendered)
@@ -103,9 +103,9 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和观察锚是否重新成立。", rendered)
+        self.assertIn("**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。", rendered)
         self.assertIn("不新增参与", rendered)
-        self.assertIn("只观察指数图形、主攻线承接和观察锚是否重新成立", rendered)
+        self.assertIn("只观察指数图形、主攻线承接和观察对象是否重新成立", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("分层参与，买入后", rendered)
 

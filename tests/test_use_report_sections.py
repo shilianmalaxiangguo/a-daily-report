@@ -36,7 +36,7 @@ class UseReportSectionsTest(unittest.TestCase):
                     "execution_permission": {"label": "attack_50_ready"},
                     "action_plan": {
                         "action_label": "execute_50",
-                        "headline": "沿军工进入50%标准进攻",
+                        "headline": "沿军工进入50%条件执行",
                         "trigger": "次日完成竞价表态、开盘承接或结构确认参与窗口",
                         "rationale": "环境未坏，主线清晰",
                     },
@@ -64,8 +64,8 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertIn("阶段看板", sections["observation"])
         self.assertIn("selection_focus", sections["observation"])
         self.assertIn("先选边站队，再等确认", sections["observation"])
-        self.assertIn("沿军工进入50%标准进攻", sections["execution"])
-        self.assertNotIn(_m("30%", "条件试错"), sections["execution"])
+        self.assertIn("沿军工进入50%条件执行", sections["execution"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), sections["execution"])
         self.assertNotIn("attack_50_ready", sections["execution"])
         self.assertNotIn(_m("执行", "门", "控"), sections["observation"] + sections["execution"])
         self.assertNotIn(_m("环境", "放", "行"), sections["observation"] + sections["execution"])

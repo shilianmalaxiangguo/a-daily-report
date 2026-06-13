@@ -28,7 +28,7 @@ class EntryPlanStageTest(unittest.TestCase):
             {
                 "target_date": "2026-04-22",
                 "mainline_name": "军工",
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "final_gate": {"can_new_entry": True},
                 "focus_group": [{"name": "军工一号", "code": "000001", "change": 9.9, "close": 10.0, "volume": 1000}],
                 "keep_group": [],
@@ -92,7 +92,7 @@ class EntryPlanStageTest(unittest.TestCase):
         self.assertIn("> **怎么执行**：先把价格区间和纪律定好，盘中只按“先09:50-10:10窗口，再看失效价和单笔-5%底线”执行。", rendered)
         self.assertIn("**买点判断**", rendered)
         self.assertIn("**结论**:", rendered)
-        self.assertIn("继续进入Step 5", rendered)
+        self.assertIn("进入Step 5，只允许一只执行对象留下来", rendered)
         self.assertEqual(len(result["exports"]["executable_stocks"]), 1)
         self.assertEqual(result["exports"]["executable_stocks"][0]["code"], "000001")
         self.assertEqual(result["exports"]["conviction_codes"], {"000001"})
@@ -105,7 +105,7 @@ class EntryPlanStageTest(unittest.TestCase):
             {
                 "target_date": "2026-04-22",
                 "mainline_name": "军工",
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "final_gate": {"can_new_entry": True},
                 "focus_group": [{"name": "军工一号", "code": "000001", "change": 9.9, "close": 10.0, "volume": 1000}],
                 "keep_group": [],
@@ -169,6 +169,75 @@ class EntryPlanStageTest(unittest.TestCase):
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("**交易优先级纪律**", rendered)
         self.assertNotIn("**明日止损锚定**", rendered)
+
+    def test_entry_plan_process_candidate_is_rendered_as_replay(self):
+        result = build_entry_plan_runtime(
+            {
+                "target_date": "2026-06-11",
+                "mainline_name": "半导体",
+                "position_level": "0%不参与",
+                "final_gate": {"can_new_entry": False},
+                "focus_group": [{"name": "和远气体", "code": "002971", "change": 2.5, "close": 52.75, "volume": 1000}],
+                "keep_group": [],
+                "delete_group": [],
+                "extreme_conviction_list": [],
+                "leader_memory_bank": [],
+                "market_research_snapshot": {"state_machine": {"leading_line": "半导体"}},
+                "quant_system_available": False,
+                "stop_prior_low_trading_days": 3,
+                "normalize_stock_code": lambda code: str(code or "").strip(),
+                "get_execution_framework_text": lambda: "只观察指数图形、主攻线承接和过程候选回放",
+                "get_trade_permission": lambda *args, **kwargs: {
+                    "permission_label": "重点过程候选",
+                    "permission_reason": "当前最终对象为空，只回放推导",
+                    "can_execute": False,
+                },
+                "fetch_recent_price_bars": lambda code, target_date, lookback_days=4: [],
+                "evaluate_live_tradability": lambda stock, target_date, recent_bars=None: {
+                    "can_trade": True,
+                    "report_day_is_one_word": False,
+                },
+                "build_intraday_execution_plan": lambda code, target_date, entry_price, signal_type=None, fallback_stop=None: {
+                    "confirm_price_60m": 52.75,
+                    "stop_plan": {"effective_stop": 50.11},
+                },
+                "build_stop_execution_plan": lambda entry_price, stop_loss=None, structure_label=None: {
+                    "effective_stop": 50.11,
+                },
+                "enrich_stop_plan_with_reference_anchors": lambda stop_plan, code, target_date, recent_bars=None: stop_plan,
+                "build_waiting_stock_plan": lambda stock_item, target_date, **kwargs: {
+                    **stock_item,
+                    "name": stock_item.get("name"),
+                    "code": stock_item.get("code"),
+                    "reason": kwargs.get("reason") or stock_item.get("condition"),
+                    "minute_plan": {"confirm_price_60m": 52.75},
+                    "stop_plan": {"effective_stop": 50.11},
+                },
+                "finalize_waiting_candidate": lambda waiting_item, stock, permission: {
+                    **waiting_item,
+                    "permission_label": permission.get("permission_label", ""),
+                    "observation_layer": "process_observation",
+                },
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "key_zone_display": "关键位/带50.11（支撑/失效）",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "append_price_focus_note": lambda report_lines, price_focus: None,
+                "append_observation_price_focus_note": lambda report_lines, price_focus: None,
+                "compose_observation_focus_text": lambda confirm_text, price_focus_text: f"09:50-10:10观察价{confirm_text}；{price_focus_text}",
+                "build_front_structure_layer_text": lambda **kwargs: "最终对象为空，只作过程回看",
+            },
+            {"label": "Step 4", "title": "明日观察位预计算"},
+            enabled_node_keys=["entry_judgement", "trigger_summary", "conclusion"],
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| 和远气体 | 002971 | 重点过程候选 |", rendered)
+        self.assertIn("只作过程回放，不新增参与", rendered)
+        self.assertIn("**过程候选回看**（1只，不作为明日对象）:", rendered)
+        self.assertNotIn("⏳明日继续观察", rendered)
+        self.assertNotIn("**明日继续观察**", rendered)
 
 
 if __name__ == "__main__":

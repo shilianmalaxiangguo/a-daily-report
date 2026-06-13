@@ -120,7 +120,7 @@ from unittest.mock import patch
 with patch.object(daily_report_entry_demo, "run_build_bridge_prep_context", return_value={"active": False}) as bridge_mock, \
      patch.object(daily_report_entry_demo, "run_build_front_follow_action_text", return_value="只做核心") as follow_mock, \
      patch.object(daily_report_entry_demo, "run_build_front_structure_layer_text", return_value="结构只看唯一动作") as structure_mock:
-    daily_report_entry_demo._build_bridge_prep_context(position_level="二档（防守档）")
+    daily_report_entry_demo._build_bridge_prep_context(position_level="0%不参与")
     daily_report_entry_demo._build_front_follow_action_text(final_gate={"can_new_entry": True})
     daily_report_entry_demo._build_front_structure_layer_text(final_gate={"can_new_entry": True})
 
@@ -165,7 +165,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             result = support.render_core_mvp_digest(
                 {"state_machine": {}},
                 {"final_action": "只做核心"},
-                "三档（进攻档）",
+                "50%条件执行",
                 "环境修复",
                 build_gem_textbook_next_step_text=lambda *args, **kwargs: "只观察",
                 build_alignment_pool_text=lambda **kwargs: "月度站队池：军工",
@@ -218,11 +218,11 @@ assert "helpers" not in structure_mock.call_args.kwargs
             final_gate={"can_new_entry": True, "final_action": "只做核心"},
             best_stock={"name": "军工一号", "code": "000001"},
             watch_anchor_type="明天唯一能买的那只",
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
             target_date="2026-04-22",
             helpers={
-                "_front_position_guard_label": lambda position_level="": "进攻档",
+                "_front_position_guard_label": lambda position_level="": "50%条件执行",
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
                 "_build_position_sizing_decision": lambda **kwargs: {
                     "target_position_pct": 50,
@@ -248,7 +248,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 final_gate={"can_new_entry": True, "final_action": "只做核心"},
                 best_stock={"name": "军工一号", "code": "000001"},
                 watch_anchor_type="明天唯一能买的那只",
-                position_level="三档（进攻档）",
+                position_level="50%条件执行",
                 state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
                 target_date="2026-04-22",
                 helpers={
@@ -266,7 +266,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
         result = builder(
             final_gate={"can_new_entry": True},
             best_stock={"name": "军工一号", "code": "000001"},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             state_machine_snapshot={"leading_line": "军工"},
             target_date="2026-04-22",
             helpers={
@@ -278,11 +278,11 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "不为新故事切掉旧事实",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
-                "_front_position_guard_label": lambda position_level="": "进攻档",
+                "_front_position_guard_label": lambda position_level="": "50%条件执行",
             },
         )
 
-        self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%执行仓，09:50-10:10站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
+        self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%条件执行，09:50-10:10站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
 
     def test_front_follow_action_text_passes_focus_keep_counts_to_position_sizing(self):
         support = self._load_module()
@@ -295,7 +295,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             watch_anchor_type="明天唯一能买的那只",
             focus_group=[{"name": "军工一号", "code": "000001"}],
             keep_group=[{"name": "军工二号", "code": "000002"}],
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
             target_date="2026-04-22",
             helpers={
@@ -313,7 +313,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
         self.assertEqual(captured_final_gate["candidate_count"], 2)
         self.assertEqual(captured_final_gate["unique_target_count"], 2)
         self.assertIn("50%执行", result)
-        self.assertNotIn(_m("30%", "条件试错"), result)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错"), result)
 
     def test_front_summary_support_maps_legacy_30_position_to_50_attack_window(self):
         support = self._load_module()
@@ -325,13 +325,13 @@ assert "helpers" not in structure_mock.call_args.kwargs
             watch_anchor_type="",
             focus_group=[{"name": "军工一号", "code": "000001"}],
             keep_group=[],
-            position_level="二档（防守档）",
+            position_level="0%不参与",
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
             target_date="2026-04-22",
             special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
             helpers={
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
-                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "固定交易窗口内条件成立"},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 50, "trigger_text": "固定交易窗口内条件成立"},
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
@@ -344,25 +344,25 @@ assert "helpers" not in structure_mock.call_args.kwargs
             best_stock=None,
             watch_anchor=None,
             watch_anchor_type="",
-            position_level="二档（防守档）",
+            position_level="0%不参与",
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
             target_date="2026-04-22",
             special_probe_verdict={"probe_state": "probe_crossline_upgrade_ready"},
             helpers={
                 "_build_bridge_prep_context": lambda **kwargs: {"active": False},
-                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 30, "trigger_text": "固定交易窗口内条件成立"},
+                "_build_position_sizing_decision": lambda **kwargs: {"target_position_pct": 50, "trigger_text": "固定交易窗口内条件成立"},
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
-                "_front_position_guard_label": lambda position_level="": "0%观察",
+                "_front_position_guard_label": lambda position_level="": "0%不参与",
             },
         )
 
         rendered = f"{follow_text}\n{structure_text}"
-        self.assertIn("50%标准进攻", rendered)
-        self.assertIn("固定交易窗口", rendered)
-        self.assertNotIn(_m("30%", "条件试错"), rendered)
-        self.assertNotIn(_m("30%", "条件试错仓"), rendered)
+        self.assertNotIn("50%条件执行", rendered)
+        self.assertIn("缩小范围", rendered)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错"), rendered)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错仓"), rendered)
 
     def test_front_structure_layer_text_deduplicates_same_code_for_position_sizing(self):
         support = self._load_module()
@@ -375,7 +375,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             best_stock={"name": "军工一号", "code": "000001"},
             watch_anchor=None,
             watch_anchor_type="明天唯一能买的那只",
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             state_machine_snapshot={"execution_bias": "allow_execute", "leading_line": "军工"},
             target_date="2026-04-22",
             helpers={
@@ -387,7 +387,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 "_build_execute_anchor_window_text": lambda **kwargs: "",
                 "_build_philosophy_constraint_text": lambda **kwargs: "",
                 "_safe_float": lambda value, default=0.0: default if value in (None, "") else float(value),
-                "_front_position_guard_label": lambda position_level="": "进攻档",
+                "_front_position_guard_label": lambda position_level="": "50%条件执行",
             },
         )
 
@@ -398,7 +398,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
         support = self._load_module()
 
         result = support.build_bridge_prep_context(
-            position_level="二档（防守档）",
+            position_level="0%不参与",
             final_gate={"can_new_entry": False},
             watch_anchor={
                 "name": "军工一号",
@@ -421,7 +421,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
         self.assertEqual(result["candidate_label"], "军工一号(000001)")
         self.assertIn("12.34", result["upgrade_text"])
         self.assertIn("11.80", result["upgrade_text"])
-        self.assertNotIn("防守档", result["summary_text"])
+        self.assertNotIn("旧防守口径", result["summary_text"])
 
     def test_front_summary_support_formats_candidate_preview_and_guard_label(self):
         support = self._load_module()
@@ -432,9 +432,9 @@ assert "helpers" not in structure_mock.call_args.kwargs
             limit=2,
         )
         self.assertEqual(preview, "军工一号 / 机器人一号")
-        self.assertEqual(support.front_position_guard_label("二档（防守档）"), "0%观察")
-        self.assertEqual(support.front_position_guard_label("三档（进攻档）"), "50%进攻")
-        self.assertEqual(support.front_position_guard_label(""), "当前档位")
+        self.assertEqual(support.front_position_guard_label("0%不参与"), "0%不参与")
+        self.assertEqual(support.front_position_guard_label("50%条件执行"), "50%条件执行")
+        self.assertEqual(support.front_position_guard_label(""), "当前仓位")
 
 
 if __name__ == "__main__":

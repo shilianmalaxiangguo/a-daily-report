@@ -24,7 +24,7 @@ class UseReportStagesTest(unittest.TestCase):
                     "execution_permission": {"label": "attack_50_ready"},
                     "action_plan": {
                         "action_label": "conditional_entry",
-                        "headline": "沿军工进入50%标准进攻预演",
+                        "headline": "沿军工进入50%条件执行",
                         "trigger": "次日完成参与窗口确认",
                     },
                 },

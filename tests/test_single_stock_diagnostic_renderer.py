@@ -19,7 +19,7 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
                 "target_date": "2026-04-22",
                 "name": "军工一号",
                 "code": "000001",
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "final_action": "允许强势跟随",
                 "mainline_name": "军工",
                 "driver_type": "主升",
@@ -64,7 +64,7 @@ class SingleStockDiagnosticRendererTest(unittest.TestCase):
 
         self.assertIn("# 2026-04-22 单票诊断 - 军工一号(000001)", markdown)
         self.assertIn("## 一、市场层", markdown)
-        self.assertIn("- **环境档位**: 三档（进攻档）", markdown)
+        self.assertIn("- **环境档位**: 50%条件执行", markdown)
         self.assertIn("## 二、个股层", markdown)
         self.assertIn("- **执行资格**: 资格", markdown)
         self.assertNotIn(_m("执行", "权限"), markdown)

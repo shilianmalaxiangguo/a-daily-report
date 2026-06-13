@@ -80,17 +80,78 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
         load_json.assert_not_called()
         save_json.assert_not_called()
 
-    def test_postgres_only_runtime_without_database_rejects_json_state(self):
-        with patch.object(runtime, "_load_tracking_memory_state") as load_json:
-            with patch.object(runtime, "_save_tracking_memory_state") as save_json:
-                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
-                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only tracking memory storage"):
-                        refresh_tracking_memory(
+    def test_postgres_only_runtime_accepts_database_service_local_default(self):
+        saved = {}
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def load_tracking_memory_state(self):
+                return {
+                    "items": [
+                        {
+                            "code": "601991",
+                            "name": "大唐发电",
+                            "sector": "电力",
+                            "status": "tentative",
+                            "first_seen_date": "2026-05-28",
+                            "last_seen_date": "2026-05-28",
+                            "confirmations": 1,
+                            "failures": 0,
+                            "appearances": 1,
+                        }
+                    ]
+                }
+
+            def save_tracking_memory_state(self, state):
+                saved.update(state)
+                return len(state.get("items") or [])
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with patch.object(runtime, "DatabaseService", StubDatabaseService, create=True):
+            with patch.object(runtime, "_load_tracking_memory_state") as load_json:
+                with patch.object(runtime, "_save_tracking_memory_state") as save_json:
+                    with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                        result = refresh_tracking_memory(
                             "2026-05-29",
                             watchlist=[{"code": "601991", "name": "大唐发电", "sector": "电力"}],
-                            leader_memory_bank=[],
+                            leader_memory_bank=[
+                                {"code": "601991", "name": "大唐发电", "sector": "电力", "remember_score": 90}
+                            ],
                             abnormal_watch_pool=[],
                         )
+
+        self.assertEqual(result["today_validated_items"][0]["code"], "601991")
+        self.assertEqual(saved["updated_at"], "2026-05-29")
+        load_json.assert_not_called()
+        save_json.assert_not_called()
+
+    def test_postgres_only_runtime_without_database_rejects_json_state(self):
+        class StubService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with patch.object(runtime, "DatabaseService", StubDatabaseService, create=True):
+            with patch.object(runtime, "_load_tracking_memory_state") as load_json:
+                with patch.object(runtime, "_save_tracking_memory_state") as save_json:
+                    with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                        with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only tracking memory storage"):
+                            refresh_tracking_memory(
+                                "2026-05-29",
+                                watchlist=[{"code": "601991", "name": "大唐发电", "sector": "电力"}],
+                                leader_memory_bank=[],
+                                abnormal_watch_pool=[],
+                            )
 
         load_json.assert_not_called()
         save_json.assert_not_called()
@@ -183,7 +244,7 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
                         "failures": 0,
                         "appearances": 1,
                         "sources": ["abnormal_watch", "leader_memory", "watchlist"],
-                        "last_reason": "首波先锋，优先做观察锚点 / 5连板已被资金记住",
+                        "last_reason": "首波先锋，优先做观察对象 / 5连板已被资金记住",
                         "follow_state": "新异动待观察",
                         "evidence_score": 6,
                     },
@@ -223,7 +284,7 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
                         "failures": 0,
                         "appearances": 1,
                         "sources": ["abnormal_watch", "leader_memory", "watchlist"],
-                        "last_reason": "首波先锋，优先做观察锚点 / 5连板已被资金记住",
+                        "last_reason": "首波先锋，优先做观察对象 / 5连板已被资金记住",
                         "follow_state": "新异动待观察",
                         "evidence_score": 6,
                     },
@@ -295,7 +356,7 @@ class TrackingMemoryRuntimeTest(unittest.TestCase):
                         "failures": 0,
                         "appearances": 1,
                         "sources": ["abnormal_watch", "leader_memory", "watchlist"],
-                        "last_reason": "首波先锋，优先做观察锚点 / 5连板已被资金记住",
+                        "last_reason": "首波先锋，优先做观察对象 / 5连板已被资金记住",
                         "inactive_reason": "连续多日未再次入池，转入冷却回看",
                         "evidence_score": 6,
                     },

@@ -86,7 +86,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
                 },
             },
             final_gate={"final_action": "只做核心"},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             position_reason="环境修复",
             exit_analysis={"sector_name": "军工", "overall_level": "低风险"},
             execution_framework_text="等参与窗口确认",
@@ -147,7 +147,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="重点观察谁",
             abnormal_probe_group={"fallback_watch_anchor": {"name": "观察股", "code": "000009"}},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             target_date="2026-04-22",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
@@ -205,7 +205,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="",
             abnormal_probe_group={},
             final_gate={"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
-            position_level="二档（防守档）",
+            position_level="0%不参与",
             target_date="2026-04-24",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "半导体",
@@ -228,8 +228,8 @@ class FrontSummaryBuilderTest(unittest.TestCase):
 
         self.assertIn("0%不参与", payload["no_trade_text"])
         self.assertIn("没有唯一对象", payload["no_trade_text"])
-        self.assertNotIn(_m("30%", "条件试错"), payload["no_trade_text"])
-        self.assertNotIn("B档", payload["no_trade_text"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), payload["no_trade_text"])
+        self.assertNotIn("50%执行", payload["no_trade_text"])
         self.assertNotIn("只保留市场研究与观察权", payload["no_trade_text"])
 
     def test_render_mvp_focus_summary_contract_passes_focus_keep_counts_to_position_sizing(self):
@@ -253,7 +253,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="明天唯一能买的那只",
             abnormal_probe_group={},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             target_date="2026-04-22",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
@@ -289,7 +289,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             keep_group=[{"name": "军工一号", "code": "000001", "sector": "军工", "direction": "低空经济"}],
             best_stock={"name": "军工一号", "code": "000001"},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             target_date="2026-04-22",
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
             split_abnormal_watch_pool=lambda pool: (pool or [], []),
@@ -335,7 +335,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="重点观察谁",
             abnormal_probe_group={},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             target_date="2026-04-22",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
@@ -383,7 +383,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="重点观察谁",
             abnormal_probe_group={},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             target_date="2026-04-22",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",
@@ -428,7 +428,7 @@ class FrontSummaryBuilderTest(unittest.TestCase):
             watch_anchor_type="重点观察谁",
             abnormal_probe_group={"fallback_watch_anchor": {"name": "普通观察", "code": "000009"}},
             final_gate={"can_new_entry": False},
-            position_level="二档（防守档）",
+            position_level="0%不参与",
             target_date="2026-04-22",
             compact=False,
             resolve_primary_mainline_name=lambda *args, **kwargs: "军工",

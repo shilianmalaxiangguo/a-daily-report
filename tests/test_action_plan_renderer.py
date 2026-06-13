@@ -6,7 +6,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
-from report.action_plan_nodes import build_action_plan_candidate_quality_node
+from report.action_plan_nodes import (
+    build_action_plan_candidate_quality_node,
+    build_action_plan_observation_blocks_node,
+    build_action_plan_table_node,
+)
+from domains.execution_chain.pk_decision_nodes.action_plan_context import build_action_plan_context_payload
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
     evaluate_candidate_quality_sample_contract,
@@ -27,7 +32,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                     }
                 ],
                 "position_section_lines": [
-                    "- **市场环境档位**: 二档（防守档）",
+                    "- **市场环境档位**: 0%不参与",
                     "- **明日裁决**: 🟡 中性",
                     "- **怎么执行**: 日线定环境，60分钟定买点，30分钟定止损",
                     "- **现在到底是什么状态**: 防守观察",
@@ -91,7 +96,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                     }
                 ],
                 "position_section_lines": [
-                    "- **市场环境档位**: 三档（进攻档）",
+                    "- **市场环境档位**: 50%条件执行",
                 ],
                 "pre_market_lines": [
                     "- 设价格预警",
@@ -182,7 +187,7 @@ class ActionPlanRendererTest(unittest.TestCase):
             {
                 "action_rows": [
                     {
-                        "action": "只看观察锚",
+                        "action": "只看观察对象",
                         "name": "华电能源",
                         "code": "600726",
                         "trigger": "09:50-10:10承接确认",
@@ -284,7 +289,7 @@ class ActionPlanRendererTest(unittest.TestCase):
         lines = render_action_plan_section(
             {
                 "candidate_quality_panel_fields": {
-                    "market_emotion_label": "0%观察",
+                    "market_emotion_label": "0%不参与",
                     "account_attention_load": "无持仓负担",
                     "holding_priority_action": "无旧仓时只等参与窗口",
                     "daily_new_entry_limit": 0,
@@ -296,14 +301,14 @@ class ActionPlanRendererTest(unittest.TestCase):
                 ],
                 "sniper_target_derivation": {
                     "schema_version": "sniper_target_derivation.v1",
-                    "canonical_target": {"name": "豫能控股", "code": "001896", "role": "观察锚"},
+                    "canonical_target": {"name": "豫能控股", "code": "001896", "role": "观察对象"},
                     "final_action": {"position_pct": 0, "action": "只观察，不新增参与"},
                     "compact_ascii": [
                         "原始候选",
                         "|",
                         "+-- 上海石化(600688): 过程候选 / 被替换",
                         "|",
-                        "`-- 最终观察锚: 豫能控股(001896), 0%只观察",
+                        "`-- 最终观察对象: 豫能控股(001896), 0%只观察",
                     ],
                     "steps": [
                         {
@@ -312,7 +317,7 @@ class ActionPlanRendererTest(unittest.TestCase):
                             "candidate": {"name": "上海石化", "code": "600688"},
                             "role": "过程候选",
                             "decision": "被替换",
-                            "reason": "最终解析未选为观察锚",
+                            "reason": "最终解析未选为观察对象",
                         }
                     ],
                 },
@@ -329,11 +334,92 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertNotIn("| 主买对象 | 上海石化(600688) |", rendered)
         self.assertNotIn("| 补位对象 | 上海石化(600688) |", rendered)
 
+    def test_candidate_quality_node_does_not_promote_downgraded_anchor_sample_to_panel_target(self):
+        result = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "0%不参与",
+                    "account_attention_load": "有持仓需先处理",
+                    "holding_priority_action": "先处理旧仓，再看新增",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": None,
+                    "backup_candidate": {"name": "大有能源", "code": "600403"},
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "大有能源",
+                        "code": "600403",
+                        "sector": "煤炭开采",
+                        "selection_quality": "中",
+                        "entry_cost_state": "等确认",
+                        "candidate_role": "观察样本",
+                        "anchor_reversal_decision": "降级观察",
+                        "anchor_reversal_reason": "未证明比板块锚更值得参与",
+                        "final_action": "只观察，不新增参与",
+                    }
+                ],
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| 补位对象 | 暂无 |", rendered)
+        self.assertNotIn("| 补位对象 | 大有能源(600403) |", rendered)
+        self.assertNotIn("| 主买对象 | 大有能源(600403) |", rendered)
+        self.assertIn("| 大有能源(600403) |", rendered)
+
+    def test_candidate_quality_node_filters_prebuilt_panel_downgraded_target(self):
+        panel = build_daily_quality_decision_panel(
+            market_emotion_label="0%不参与",
+            account_attention_load="有持仓需先处理",
+            holding_priority_action="先处理旧仓，再看新增",
+            daily_new_entry_limit=0,
+            backup_candidate={"name": "大有能源", "code": "600403"},
+        )
+
+        result = build_action_plan_candidate_quality_node(
+            {
+                "candidate_quality_panel": panel,
+                "candidate_quality_contracts": [
+                    evaluate_candidate_quality_sample_contract(
+                        {
+                            "name": "大有能源",
+                            "code": "600403",
+                            "sector": "煤炭开采",
+                            "selection_quality": "中",
+                            "entry_cost_state": "等确认",
+                            "candidate_role": "观察样本",
+                            "anchor_reversal_decision": "降级观察",
+                            "final_action": "只观察，不新增参与",
+                        }
+                    )
+                ],
+                "candidate_quality_samples": [
+                    {
+                        "name": "大有能源",
+                        "code": "600403",
+                        "sector": "煤炭开采",
+                        "candidate_role": "观察样本",
+                        "anchor_reversal_decision": "降级观察",
+                    }
+                ],
+                "enabled_node_keys": ["overview", "candidate_quality"],
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| 补位对象 | 暂无 |", rendered)
+        self.assertNotIn("| 补位对象 | 大有能源(600403) |", rendered)
+        self.assertIn("| 大有能源(600403) |", rendered)
+
     def test_candidate_quality_node_uses_final_resolution_when_derivation_packet_is_empty(self):
         result = build_action_plan_candidate_quality_node(
             {
                 "candidate_quality_panel_fields": {
-                    "market_emotion_label": "0%观察",
+                    "market_emotion_label": "0%不参与",
                     "account_attention_load": "无持仓负担",
                     "holding_priority_action": "无旧仓时只等观察窗口",
                     "daily_new_entry_limit": 0,
@@ -361,7 +447,7 @@ class ActionPlanRendererTest(unittest.TestCase):
         result = build_action_plan_candidate_quality_node(
             {
                 "candidate_quality_panel_fields": {
-                    "market_emotion_label": "0%观察",
+                    "market_emotion_label": "0%不参与",
                     "account_attention_load": "无持仓负担",
                     "holding_priority_action": "无旧仓时只等观察窗口",
                     "daily_new_entry_limit": 0,
@@ -683,6 +769,229 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertIn("候选选股轨迹", rendered)
         self.assertEqual(result["context"]["candidate_traces"][0]["stock_code"], "002185")
         self.assertEqual(result["context"]["candidate_trace_eliminated_summary"][0]["reason"], "主线不匹配")
+
+    def test_action_plan_nodes_ignore_stale_rows_when_selection_workflow_final_is_empty(self):
+        context = {
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "final": {
+                    "execution_object": {},
+                    "position_pct": 0,
+                    "action_text": "0%不参与",
+                },
+                "candidate_pool": [
+                    {
+                        "stock": {"name": "和远气体", "code": "002971", "sector": "化学制品"},
+                        "identity": "过程候选",
+                        "front_observation_qualified": True,
+                        "observation_layer": "process_observation",
+                    }
+                ],
+            },
+            "action_rows": [
+                {
+                    "action": "⏳ 确认后执行预案",
+                    "name": "和远气体",
+                    "code": "002971",
+                    "trigger": "09:50-10:10站上52.75",
+                    "risk_window": "50.11",
+                }
+            ],
+            "observation_priority_lines": [
+                "- 👀 和远气体(002971) - 观察对象，09:50-10:10观察价待盘中确认"
+            ],
+            "backup_observation_lines": [
+                "- ⏳ 康强电子(002119) - 等观察位出现，09:50-10:10观察价待盘中确认"
+            ],
+        }
+
+        table_text = "\n".join(build_action_plan_table_node(context)["lines"])
+        blocks_text = "\n".join(build_action_plan_observation_blocks_node(context)["lines"])
+
+        self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", table_text)
+        self.assertNotIn("确认后执行预案", table_text)
+        self.assertNotIn("和远气体", table_text)
+        self.assertEqual("", blocks_text)
+
+    def test_action_plan_nodes_reject_process_watch_target_even_when_code_exists(self):
+        context = {
+            "final_target_resolution": {
+                "watch_target": {
+                    "name": "和远气体",
+                    "code": "002971",
+                    "front_observation_qualified": True,
+                    "observation_layer": "process_observation",
+                    "identity": "过程候选",
+                },
+                "capital_priority_decision": {"capital_priority": "wait"},
+            },
+            "action_rows": [
+                {
+                    "action": "⏳ 确认后执行预案",
+                    "name": "和远气体",
+                    "code": "002971",
+                    "trigger": "09:50-10:10站上52.75",
+                    "risk_window": "50.11",
+                }
+            ],
+            "observation_priority_lines": [
+                "- 👀 和远气体(002971) - 观察对象，09:50-10:10观察价待盘中确认"
+            ],
+        }
+
+        table_text = "\n".join(build_action_plan_table_node(context)["lines"])
+        blocks_text = "\n".join(build_action_plan_observation_blocks_node(context)["lines"])
+
+        self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", table_text)
+        self.assertNotIn("确认后执行预案", table_text)
+        self.assertNotIn("和远气体", table_text)
+        self.assertEqual("", blocks_text)
+
+    def test_action_plan_nodes_treat_wait_zero_watch_target_as_no_current_object(self):
+        context = {
+            "final_target_resolution": {
+                "watch_target": {
+                    "name": "和远气体",
+                    "code": "002971",
+                    "sector": "化学制品",
+                    "front_observation_qualified": True,
+                },
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "空仓等待，禁止参与",
+                },
+            },
+            "position_decision": {"target_position_pct": 0, "signal_grade": "0"},
+            "action_rows": [
+                {
+                    "action": "⏳ 确认后执行预案",
+                    "name": "和远气体",
+                    "code": "002971",
+                    "trigger": "09:50-10:10站上52.75",
+                    "risk_window": "50.11",
+                }
+            ],
+            "observation_priority_lines": [
+                "- 👀 和远气体(002971) - 观察对象，09:50-10:10观察价待盘中确认"
+            ],
+            "backup_observation_lines": [
+                "- ⏳ 康强电子(002119) - 等观察位出现，09:50-10:10观察价待盘中确认"
+            ],
+        }
+
+        table_text = "\n".join(build_action_plan_table_node(context)["lines"])
+        blocks_text = "\n".join(build_action_plan_observation_blocks_node(context)["lines"])
+
+        self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", table_text)
+        self.assertNotIn("确认后执行预案", table_text)
+        self.assertNotIn("和远气体", table_text)
+        self.assertEqual("", blocks_text)
+
+    def test_reused_action_plan_payload_is_cleared_when_final_workflow_is_empty(self):
+        payload = build_action_plan_context_payload(
+            {
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "和远气体", "code": "002971"},
+                            "identity": "过程候选",
+                            "front_observation_qualified": True,
+                            "observation_layer": "process_observation",
+                        }
+                    ],
+                },
+                "action_plan_context_payload": {
+                    "action_rows": [
+                        {
+                            "action": "⏳ 确认后执行预案",
+                            "name": "和远气体",
+                            "code": "002971",
+                            "trigger": "09:50-10:10站上52.75",
+                            "risk_window": "50.11",
+                        }
+                    ],
+                    "observation_priority_lines": [
+                        "- 👀 和远气体(002971) - 观察对象，09:50-10:10观察价待盘中确认"
+                    ],
+                    "backup_observation_lines": [
+                        "- ⏳ 康强电子(002119) - 等观察位出现，09:50-10:10观察价待盘中确认"
+                    ],
+                    "position_section_lines": [],
+                    "pre_market_lines": [],
+                    "opening_lines": [],
+                    "first_hour_lines": [],
+                    "intraday_lines": [],
+                    "closing_lines": [],
+                    "alert_rows": [],
+                    "action_plan_context_diagnostics": {},
+                },
+            }
+        )
+
+        rendered_rows = "\n".join(
+            f"{row.get('action')} {row.get('name')} {row.get('trigger')}"
+            for row in payload.get("action_rows", [])
+        )
+
+        self.assertIn("暂无执行预案", rendered_rows)
+        self.assertIn("当前最终对象为空，只回放过程候选，不新增参与", rendered_rows)
+        self.assertEqual([], payload.get("observation_priority_lines"))
+        self.assertEqual([], payload.get("backup_observation_lines"))
+        self.assertNotIn("确认后执行预案", rendered_rows)
+        self.assertNotIn("和远气体", rendered_rows)
+
+    def test_zero_final_context_time_table_keeps_process_candidates_observation_only(self):
+        payload = build_action_plan_context_payload(
+            {
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "和远气体", "code": "002971"},
+                            "identity": "过程候选",
+                            "front_observation_qualified": True,
+                            "observation_layer": "process_observation",
+                        }
+                    ],
+                },
+                "position_level": "0%不参与",
+                "step0_prediction_cn": "🚫 暂不跟随",
+                "final_gate": {"allow_attack_50_ready": True},
+                "display_observation_candidates": [
+                    {
+                        "name": "和远气体",
+                        "code": "002971",
+                        "watch_anchor_type": "重点观察名单",
+                        "minute_plan": {"confirm_price_60m": 52.75},
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(
+            payload.get("position_section_lines", [])
+            + payload.get("opening_lines", [])
+            + payload.get("first_hour_lines", [])
+            + payload.get("intraday_lines", [])
+        )
+
+        self.assertIn("候选只保留过程回看", rendered)
+        self.assertIn("也只记为过程证据；不新增参与", rendered)
+        self.assertIn("确认后也只保留观察", rendered)
+        self.assertNotIn("观察唯一对象", rendered)
+        self.assertNotIn("按09:30-09:35窗口处理", rendered)
+        self.assertNotIn("固定交易窗口内条件成立后才评估50%条件执行", rendered)
 
 
 if __name__ == "__main__":

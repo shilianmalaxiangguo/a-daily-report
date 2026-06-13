@@ -42,7 +42,7 @@ class PkDecisionRendererTest(unittest.TestCase):
                     }
                 ],
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "display_pending_candidates": [],
                 "display_observation_candidates": [],
                 "conclusion_lines": [
@@ -70,9 +70,9 @@ class PkDecisionRendererTest(unittest.TestCase):
                 "stage_label": "Step 5",
                 "stage_title": "PK决胜局（期望值模型）",
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "observation_lines": [
-                    "**观察优先锚点**: 军工观察(000002)",
+                    "**观察优先对象**: 军工观察(000002)",
                     "- **原因**: 先看承接",
                 ],
                 "conclusion_lines": ["**结论**:", "- **明天能不能开仓**: 不开新仓"],
@@ -80,7 +80,7 @@ class PkDecisionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertEqual(rendered.count("**⛔ 当前先不开新仓**: 一档（空仓档），本轮不做PK出手结论。"), 1)
+        self.assertEqual(rendered.count("**⛔ 当前先不开新仓**: 0%不参与，本轮不做PK出手结论。"), 1)
 
     def test_render_pk_section_can_render_only_enabled_nodes(self):
         lines = render_pk_decision_section(

@@ -44,8 +44,27 @@ class BoardTagAnalysisBuilderTest(unittest.TestCase):
 
         rendered = "\n".join(result["lines"])
         self.assertIn("## 十一、板块标签分析", rendered)
+        self.assertIn("### 标签热度排行榜", rendered)
+        self.assertIn("| 1 | 军工 | 6 | 60% | `####################` |", rendered)
+        self.assertIn("| 2 | 机器人 | 4 | 40% | `#############` |", rendered)
         self.assertIn("**主热方向**：军工", rendered)
         self.assertTrue(any(log["step"] == "render.board_tag_analysis" for log in result["module_logs"]))
+
+    def test_build_board_tag_analysis_sections_contract_limits_rank_rows_without_other_bucket(self):
+        result = build_board_tag_analysis_sections_contract(
+            data={
+                "tag_distribution": {f"标签{index:02d}": 1 for index in range(1, 15)},
+                "status_distribution": {},
+                "high_lianban_stocks": [],
+            },
+            analyze_sector_distribution=None,
+            enabled_node_keys=["tag_rank_chart"],
+        )
+
+        rendered = "\n".join(str(line or "") for line in result["lines"])
+        self.assertIn("### 标签热度排行榜", rendered)
+        self.assertIn("| 12 | 标签12 | 1 | 7.1% | `####################` |", rendered)
+        self.assertNotIn("其他", rendered)
 
     def test_build_board_tag_analysis_sections_contract_falls_back_when_ai_summary_is_empty(self):
         result = build_board_tag_analysis_sections_contract(

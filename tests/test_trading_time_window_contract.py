@@ -91,12 +91,16 @@ class TradingTimeWindowContractTest(unittest.TestCase):
         payload = {
             "summary": "60分钟确认后评估",
             "steps": ["形成参与窗口后评估"],
+            "target_position_pct": 50,
+            "turnover_share_pct": 18.1,
         }
 
         self.assertEqual(
             {
                 "summary": "09:50-10:10窗口满足条件后评估",
                 "steps": ["09:50-10:10窗口内条件成立后评估"],
+                "target_position_pct": 50,
+                "turnover_share_pct": 18.1,
             },
             normalize_trading_time_text(payload),
         )

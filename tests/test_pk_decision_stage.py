@@ -16,6 +16,7 @@ from domains.execution_chain.pk_decision_stage import (
     format_closed_gate_buy_limit_text,
 )
 from domains.execution_chain.pk_decision_nodes.action_plan_context import build_pk_decision_action_plan_context_node
+from domains.execution_chain.pk_decision_nodes.probe_position import build_pk_decision_probe_position_node
 from domains.execution_chain.pk_decision_nodes.observation_pool import build_pk_decision_observation_pool_node
 from domains.execution_chain.pk_decision_nodes.pk_context import build_pk_decision_pk_context_node
 from domains.execution_chain.pk_decision_nodes.watch_anchor import build_pk_decision_watch_anchor_node
@@ -108,11 +109,11 @@ class PkDecisionStageTest(unittest.TestCase):
 
     def test_conditional_defense_gate_formats_as_participation_window_not_absolute_ban(self):
         self.assertEqual(
-            format_closed_gate_buy_limit_text("二档（防守档）", {"allow_attack_50_ready": True}),
+            format_closed_gate_buy_limit_text("0%不参与", {"allow_attack_50_ready": True}),
             "等固定交易窗口内条件成立；未确认按0%不参与",
         )
         self.assertEqual(
-            format_closed_gate_buy_limit_text("一档（空仓档）", {"allow_attack_50_ready": False}),
+            format_closed_gate_buy_limit_text("0%不参与", {"allow_attack_50_ready": False}),
             "保持空仓，不新增参与",
         )
 
@@ -159,8 +160,8 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
-                "step0_prediction_cn": "0%观察",
+                "position_level": "0%不参与",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
                 "has_personal_positions": True,
                 "best_stock": {"name": "晶方科技", "code": "603005"},
@@ -209,7 +210,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction_cn": "退潮防守",
                 "final_gate": {"can_new_entry": False},
                 "has_personal_positions": False,
@@ -247,7 +248,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction_cn": "退潮防守",
                 "final_gate": {"can_new_entry": False},
                 "has_personal_positions": False,
@@ -308,13 +309,71 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["watch_anchor"]["code"], "000009")
         self.assertEqual(result["exports"]["watch_anchor_type"], "重点观察谁")
 
+    def test_pk_decision_probe_position_prefers_leader_like_candidate_over_watch_sample(self):
+        result = build_pk_decision_probe_position_node(
+            {
+                "target_date": "2026-06-04",
+                "trade_gate_open": False,
+                "mainline_name": "电力",
+                "best_stock": None,
+                "watch_anchor": {
+                    "name": "上海石化",
+                    "code": "600688",
+                    "watch_source": "watch_anchor",
+                    "candidate_layer": "watch_sample",
+                    "execution_eligibility": "observation_only",
+                },
+                "watch_anchor_type": "跨线重点观察谁",
+                "display_observation_candidates": [
+                    {
+                        "name": "上海石化",
+                        "code": "600688",
+                        "watch_source": "watch_anchor",
+                        "candidate_layer": "watch_sample",
+                        "execution_eligibility": "observation_only",
+                    },
+                    {
+                        "name": "华电辽能",
+                        "code": "600396",
+                        "watch_source": "keep_group_watch",
+                        "leader_speed_tier": "大容量趋势龙头",
+                        "leader_certainty_path": "板块锚定龙 / 承接修复后再看",
+                        "conviction_reason": "板块锚定龙 / 首波先锋",
+                    },
+                ],
+                "leader_memory_bank": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "remember_score": 98.0,
+                        "remember_reason": "首波先锋，优先做重点观察谁 / 热榜第7 / 2连板已被资金记住",
+                    },
+                    {
+                        "name": "华电辽能",
+                        "code": "600396",
+                        "remember_score": 97.0,
+                        "remember_reason": "首波先锋，优先做重点观察谁 / 热榜第4 / 2连板已被资金记住",
+                    },
+                ],
+                "build_abnormal_probe_group": lambda *args, **kwargs: {"fallback_watch_anchor": {}},
+                "build_special_probe_verdict": lambda **kwargs: {"probe_state": "", "summary_text": ""},
+                "build_position_sizing_decision": lambda **kwargs: {
+                    "target_position_pct": 0,
+                    "candidate_feedback_ready": False,
+                },
+                "safe_float": lambda value, default=0.0: float(default if value in (None, "") else value),
+            }
+        )
+
+        self.assertEqual(result["exports"]["selected_position_candidate"]["code"], "001896")
+
     def test_pk_decision_runtime_exports_probe_position_and_front_texts(self):
         candidate = {"name": "军工一号", "code": "000001"}
         result = build_pk_decision_runtime(
             {
                 "target_date": "2026-04-22",
                 "run_mode": "replay",
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "position_reason": "环境允许参与",
                 "display_mvp_mode": False,
                 "high_board_count": 2,
@@ -549,10 +608,10 @@ class PkDecisionStageTest(unittest.TestCase):
                 "render_pk_decision_section": render_pk,
                 "render_action_plan_section": render_action,
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "position_reason": "只处理旧仓",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": True},
                 "has_personal_positions": True,
                 "mainline_name": "电力储能",
@@ -609,7 +668,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(result["exports"]["selected_position_candidate"]["code"], "600726")
         pk_text = "\n".join(captured["pk"]["observation_lines"] + captured["pk"]["conclusion_lines"])
         action_text = "\n".join(captured["action"]["observation_priority_lines"] + captured["action"]["pre_market_lines"])
-        self.assertIn("观察优先锚点**: 华电能源(600726)", pk_text)
+        self.assertIn("观察优先对象**: 华电能源(600726)", pk_text)
         self.assertIn("盘前不抢跑**: 华电能源(600726)", pk_text)
         self.assertLess(action_text.index("华电能源(600726)"), action_text.index("京能电力(600578)"))
         self.assertNotIn("盘前不抢跑**: 京能电力(600578)", pk_text)
@@ -619,7 +678,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
                 "step0_prediction_cn": "中性",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
@@ -634,19 +693,19 @@ class PkDecisionStageTest(unittest.TestCase):
 
         exports = result["exports"]
         rendered = "\n".join(exports["position_section_lines"] + exports["first_hour_lines"] + exports["intraday_lines"])
-        self.assertIn("0%观察", rendered)
-        self.assertIn("50%标准进攻", rendered)
+        self.assertIn("0%不参与", rendered)
+        self.assertIn("50%条件执行", rendered)
         self.assertIn("固定交易窗口条件", rendered)
         self.assertNotIn("禁止新开仓", rendered)
-        self.assertNotIn(_m("最多", "30%"), rendered)
-        self.assertNotIn(_m("30%", "条件试错"), rendered)
-        self.assertNotIn("二档（防守档）", rendered)
+        self.assertNotIn(_m("最多", "旧小仓"), rendered)
+        self.assertNotIn(_m("旧", "小仓", "条件", "试错"), rendered)
+        self.assertNotIn("禁止新开仓", rendered)
 
     def test_action_plan_context_zero_position_uses_participation_wording(self):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "DIFFICULT",
                 "step0_prediction_cn": "暂不跟随",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
@@ -667,9 +726,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
                 "has_personal_positions": False,
                 "display_observation_candidates": [
@@ -710,8 +769,8 @@ class PkDecisionStageTest(unittest.TestCase):
         )
         self.assertIn("极度看好", rendered)
         self.assertIn("09:50-10:10观察价60.50", rendered)
-        self.assertIn("固定交易窗口内条件成立后才评估50%标准进攻", rendered)
-        self.assertIn("命中后才评估50%标准进攻", rendered)
+        self.assertIn("固定交易窗口内条件成立后才评估50%条件执行", rendered)
+        self.assertIn("命中后才评估50%条件执行", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)
 
@@ -719,9 +778,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
                 "has_personal_positions": False,
                 "display_observation_candidates": [
@@ -757,9 +816,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": True},
                 "has_personal_positions": True,
                 "display_observation_candidates": [
@@ -805,9 +864,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": True},
                 "has_personal_positions": True,
                 "display_observation_candidates": [
@@ -863,7 +922,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("华电能源(600726)", rendered)
         self.assertLess(rendered.index("华电能源(600726)"), rendered.index("京能电力(600578)"))
         self.assertNotIn("确认后执行预案", rendered)
-        self.assertNotIn("50%标准进攻", rendered)
+        self.assertNotIn("50%条件执行", rendered)
         self.assertNotIn("条件50", rendered)
         self.assertNotIn("才评估50%", rendered)
 
@@ -871,9 +930,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
                 "has_personal_positions": True,
                 "watch_anchor": {
@@ -936,9 +995,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": True},
                 "has_personal_positions": True,
                 "selected_position_candidate": huadian,
@@ -988,9 +1047,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True, "should_reduce": False},
                 "has_personal_positions": True,
                 "best_stock": {"name": "晶方科技", "code": "603005"},
@@ -1024,7 +1083,7 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         exports = result["exports"]
-        self.assertEqual(exports["candidate_quality_panel_fields"]["market_emotion_label"], "0%观察")
+        self.assertEqual(exports["candidate_quality_panel_fields"]["market_emotion_label"], "0%不参与")
         self.assertEqual(exports["candidate_quality_panel_fields"]["account_attention_load"], "有持仓需先处理")
         self.assertEqual(exports["candidate_quality_panel_fields"]["daily_new_entry_limit"], 0)
         self.assertEqual(exports["candidate_quality_panel_fields"]["primary_buy_candidate"]["code"], "603005")
@@ -1035,13 +1094,130 @@ class PkDecisionStageTest(unittest.TestCase):
             ["603005", "000672"],
         )
 
+    def test_action_plan_context_does_not_promote_downgraded_sample_to_current_observation(self):
+        downgraded_sample = {
+            "name": "大有能源",
+            "code": "600403",
+            "sector": "煤炭开采",
+            "watch_anchor_type": "跨线重点观察谁",
+            "watch_priority_label": "观察优先",
+            "reason": "大阳线封板，只观察承接",
+            "candidate_role": "观察样本",
+            "anchor_reversal_decision": "降级观察",
+            "candidate_layer": "watch_sample",
+            "execution_eligibility": "observation_only",
+            "final_action": "只观察，不新增参与",
+        }
+
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "0%不参与",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": True,
+                "display_observation_candidates": [downgraded_sample],
+                "watch_anchor": {"name": "大有能源", "code": "600403"},
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {},
+                "build_observation_price_focus_text": lambda price_focus: "-",
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+                "get_execution_framework_text": lambda: "只观察指数图形、主攻线承接和观察对象是否重新成立",
+            }
+        )
+
+        rendered = "\n".join(
+            result["exports"]["observation_priority_lines"]
+            + result["exports"]["pre_market_lines"]
+            + result["exports"]["first_hour_lines"]
+            + result["exports"]["intraday_lines"]
+        )
+        panel_fields = result["exports"]["candidate_quality_panel_fields"]
+
+        self.assertIsNone(panel_fields["backup_candidate"])
+        self.assertNotIn("大有能源(600403)", rendered)
+        self.assertIn("空仓准备", rendered)
+
+    def test_action_plan_context_respects_empty_selection_workflow_final_before_rendering(self):
+        process_candidate = {
+            "name": "和远气体",
+            "code": "002971",
+            "sector": "化学制品",
+            "minute_plan": {"confirm_price_60m": 52.75},
+            "watch_anchor_type": "观察对象",
+            "identity": "过程候选",
+            "target_role": "过程候选",
+            "source_pools": ["过程候选"],
+            "front_observation_qualified": True,
+            "observation_layer": "process_observation",
+        }
+
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "0%不参与",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
+                "has_personal_positions": False,
+                "best_stock": process_candidate,
+                "watch_anchor": process_candidate,
+                "display_observation_candidates": [process_candidate],
+                "waiting_stocks": [{"name": "康强电子", "code": "002119"}],
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "和远气体", "code": "002971", "sector": "化学制品"},
+                            "identity": "过程候选",
+                            "target_role": "过程候选",
+                            "source_pools": ["过程候选"],
+                            "front_observation_qualified": True,
+                            "observation_layer": "process_observation",
+                        }
+                    ],
+                },
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {"key_zone_display": "50.11"},
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("key_zone_display", "-"),
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+                "get_execution_framework_text": lambda: "只观察指数图形、主攻线承接和过程候选回放",
+            }
+        )
+
+        exports = result["exports"]
+        rendered = "\n".join(
+            exports["observation_priority_lines"]
+            + exports["backup_observation_lines"]
+            + exports["pre_market_lines"]
+        )
+
+        self.assertEqual(exports["action_rows"][0]["action"], "❌ 明天没有可买对象")
+        self.assertEqual(exports["action_rows"][0]["name"], "-")
+        self.assertEqual(exports["observation_priority_lines"], [])
+        self.assertEqual(exports["backup_observation_lines"], [])
+        self.assertIsNone(exports["candidate_quality_panel_fields"]["primary_buy_candidate"])
+        self.assertIsNone(exports["candidate_quality_panel_fields"]["backup_candidate"])
+        self.assertNotIn("确认后执行预案", rendered)
+        self.assertNotIn("和远气体(002971)", rendered)
+        self.assertNotIn("康强电子", rendered)
+
     def test_action_plan_context_enriches_daily_candidates_for_trace_contracts(self):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
                 "mainline_name": "电力",
                 "has_personal_positions": False,
@@ -1079,7 +1255,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1102,7 +1278,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1137,7 +1313,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1177,7 +1353,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1212,7 +1388,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1244,7 +1420,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True, "should_reduce": False},
@@ -1274,9 +1450,9 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "should_reduce": False},
                 "has_personal_positions": False,
                 "best_stock": {"name": "原始主对象", "code": "000001"},
@@ -1319,21 +1495,21 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_runtime(
             {
                 "trade_gate_open": False,
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
                 "has_personal_positions": True,
                 "best_stock": None,
                 "watch_anchor": {
-                    "name": "观察锚点",
+                    "name": "观察对象",
                     "code": "000001",
                     "minute_plan": {"confirm_price_60m": 10.5},
                 },
                 "watch_anchor_type": "重点观察谁",
                 "display_observation_candidates": [
                     {
-                        "name": "观察锚点",
+                        "name": "观察对象",
                         "code": "000001",
                         "permission_label": "重点观察权",
                         "minute_plan": {"confirm_price_60m": 10.5},
@@ -1397,7 +1573,7 @@ class PkDecisionStageTest(unittest.TestCase):
         result = build_pk_decision_action_plan_context_node(
             {
                 "trade_gate_open": True,
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "step0_prediction": "GOOD",
                 "step0_prediction_cn": "进攻观察",
                 "final_gate": {"can_new_entry": True},
@@ -1427,7 +1603,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "render_pk_decision_section": lambda context: ["pk"],
                 "render_action_plan_section": render_action,
                 "candidate_quality_panel_fields": {
-                    "market_emotion_label": "0%观察",
+                    "market_emotion_label": "0%不参与",
                     "daily_new_entry_limit": 0,
                 },
                 "candidate_quality_samples": [{"name": "晶方科技", "code": "603005"}],
@@ -1467,7 +1643,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "render_action_plan_section": render_action_plan_section,
                 "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
                 "candidate_quality_panel_fields": {
-                    "market_emotion_label": "0%观察",
+                    "market_emotion_label": "0%不参与",
                     "account_attention_load": "中",
                     "holding_priority_action": "先处理旧仓，再看新增",
                     "daily_new_entry_limit": 0,
@@ -1495,6 +1671,199 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("| 主买对象 | 晶方科技(603005) |", rendered)
         self.assertIn("| 晶方科技(603005) | 实际可买 |  |  | 0 | 0 | 高 | 不舒服 | 核心观察 |", rendered)
         self.assertIn("- 成本项：远离MA/VWAP", rendered)
+
+    def test_render_sections_does_not_surface_backup_candidate_when_final_resolution_waits_empty(self):
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_result": render_action_plan_result,
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
+                "final_target_resolution": {
+                    "watch_target": {},
+                    "capital_priority_decision": {"capital_priority": "wait"},
+                },
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "🚫 暂不跟随",
+                    "account_attention_load": "有持仓需先处理",
+                    "holding_priority_action": "先处理旧仓，再看新增",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": None,
+                    "backup_candidate": {"name": "大有能源", "code": "600403"},
+                    "forbidden_actions": ["亏损后补仓", "计划外追高"],
+                    "ignored_noise_items": ["外盘大涨但A股未确认", "论坛情绪"],
+                },
+                "candidate_quality_samples": [
+                    {
+                        "name": "大有能源",
+                        "code": "600403",
+                        "selection_quality": "中",
+                        "entry_cost_state": "等确认",
+                        "final_action": "只观察，不新增参与",
+                    }
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| 补位对象 | 暂无 |", rendered)
+        self.assertNotIn("| 补位对象 | 大有能源(600403) |", rendered)
+        self.assertIn("| 大有能源(600403) |", rendered)
+
+    def test_render_sections_clears_stale_observation_lists_when_final_resolution_waits_empty(self):
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": lambda context: ["pk"],
+                "render_action_plan_result": render_action_plan_result,
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "action_table", "observation_blocks"],
+                "final_target_resolution": {
+                    "watch_target": {},
+                    "capital_priority_decision": {"capital_priority": "wait"},
+                },
+                "action_rows": [
+                    {
+                        "action": "⏳ 确认后执行预案",
+                        "name": "和远气体",
+                        "code": "002971",
+                        "trigger": "09:50-10:10站上52.75",
+                        "risk_window": "50.11",
+                    }
+                ],
+                "observation_priority_lines": [
+                    "- 👀 江丰电子(300666) - 跨线继续看谁，09:50-10:10观察价待盘中确认"
+                ],
+                "backup_observation_lines": [
+                    "- ⏳ 和远气体(002971) - 等观察位出现，09:50-10:10观察价52.75"
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |", rendered)
+        self.assertNotIn("确认后执行预案", rendered)
+        self.assertNotIn("跨线继续看谁", rendered)
+        self.assertNotIn("等观察位出现", rendered)
+        self.assertNotIn("江丰电子(300666)", rendered)
+        self.assertNotIn("和远气体(002971)", rendered)
+
+    def test_render_sections_clears_stale_pk_context_lines_when_final_resolution_waits_empty(self):
+        captured = {}
+
+        def _render_pk_section(context):
+            captured["observation_lines"] = list(context.get("observation_lines") or [])
+            captured["conclusion_lines"] = list(context.get("conclusion_lines") or [])
+            return (
+                ["pk"]
+                + captured["observation_lines"]
+                + captured["conclusion_lines"]
+            )
+
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": _render_pk_section,
+                "render_action_plan_result": render_action_plan_result,
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "action_table", "observation_blocks"],
+                "final_target_resolution": {
+                    "watch_target": {},
+                    "capital_priority_decision": {"capital_priority": "wait"},
+                },
+                "observation_lines": [
+                    "**观察优先对象**: 江丰电子(300666)",
+                    "- 👀 和远气体(002971) - 跨线继续看谁，09:50-10:10观察价待盘中确认",
+                ],
+                "conclusion_lines": [
+                    "**结论**:",
+                    "- **跨线继续看谁**: 江丰电子(300666)",
+                    "- **观察对象**: 和远气体(002971)",
+                ],
+                "action_rows": [
+                    {
+                        "action": "⏳ 确认后执行预案",
+                        "name": "和远气体",
+                        "code": "002971",
+                        "trigger": "09:50-10:10站上52.75",
+                        "risk_window": "50.11",
+                    }
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertEqual(captured["observation_lines"], [])
+        self.assertIn("明天没有可买对象", "\n".join(captured["conclusion_lines"]))
+        self.assertIn("空仓观望", "\n".join(captured["conclusion_lines"]))
+        self.assertNotIn("江丰电子", rendered)
+        self.assertNotIn("和远气体", rendered)
+        self.assertNotIn("跨线继续看谁", rendered)
+        self.assertNotIn("确认后执行预案", rendered)
+
+    def test_render_sections_reads_empty_selection_workflow_under_old_position_priority(self):
+        captured = {}
+
+        def _render_pk_section(context):
+            captured["observation_lines"] = list(context.get("observation_lines") or [])
+            captured["conclusion_lines"] = list(context.get("conclusion_lines") or [])
+            return ["pk", *captured["observation_lines"], *captured["conclusion_lines"]]
+
+        result = build_pk_decision_runtime(
+            {
+                "render_pk_decision_section": _render_pk_section,
+                "render_action_plan_result": render_action_plan_result,
+                "render_action_plan_section": render_action_plan_section,
+                "action_plan_enabled_node_keys": ["overview", "action_table", "observation_blocks"],
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "和远气体", "code": "002971"},
+                            "identity": "过程候选",
+                            "front_observation_qualified": True,
+                            "observation_layer": "process_observation",
+                        }
+                    ],
+                },
+                "final_target_resolution": {
+                    "watch_target": {"name": "和远气体", "code": "002971"},
+                    "display_target": {"name": "华电辽能", "code": "600396"},
+                    "capital_priority_decision": {"capital_priority": "old_position_t"},
+                },
+                "observation_lines": [
+                    "**观察优先对象**: 和远气体(002971)",
+                ],
+                "conclusion_lines": [
+                    "**结论**:",
+                    "- **观察对象**: 和远气体(002971)",
+                ],
+                "action_rows": [
+                    {
+                        "action": "⏳ 确认后执行预案",
+                        "name": "和远气体",
+                        "code": "002971",
+                        "trigger": "09:50-10:10站上52.75",
+                        "risk_window": "50.11",
+                    }
+                ],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["render_sections"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertEqual(captured["observation_lines"], [])
+        self.assertIn("明天没有可买对象", "\n".join(captured["conclusion_lines"]))
+        self.assertNotIn("和远气体", rendered)
+        self.assertNotIn("确认后执行预案", rendered)
 
     def test_runtime_renders_and_exports_candidate_selection_traces(self):
         result = build_pk_decision_runtime(
@@ -1544,9 +1913,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "render_action_plan_section": render_action_plan_section,
                 "action_plan_enabled_node_keys": ["overview", "candidate_quality"],
                 "trade_gate_open": False,
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "step0_prediction": "NEUTRAL",
-                "step0_prediction_cn": "0%观察",
+                "step0_prediction_cn": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
                 "best_stock": {"name": "晶方科技", "code": "603005"},
                 "watch_anchor": None,
@@ -1585,9 +1954,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "best_stock": None,
                 "watch_anchor": conviction_watch,
                 "watch_anchor_type": "极度看好先看谁",
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
-                "front_structure_layer_text": "盘前0%观察",
+                "front_structure_layer_text": "盘前0%不参与",
                 "build_trade_price_focus": lambda minute_plan, stop_plan: {
                     "compact_text": "盯60.50",
                     "key_zone_display": "60.50/57.47",
@@ -1602,7 +1971,7 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["exports"]["conclusion_lines"])
         self.assertIn("盘前不抢跑", rendered)
         self.assertIn("09:50-10:10", rendered)
-        self.assertIn("50%标准进攻", rendered)
+        self.assertIn("50%条件执行", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("当前先不买", rendered)
 
@@ -1642,7 +2011,7 @@ class PkDecisionStageTest(unittest.TestCase):
                     "minute_plan": {"confirm_price_60m": 10.05},
                 },
                 "watch_anchor_type": "主线继续看谁",
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
                 "front_structure_layer_text": "只处理旧仓",
                 "build_trade_price_focus": lambda minute_plan, stop_plan: {
@@ -1659,9 +2028,105 @@ class PkDecisionStageTest(unittest.TestCase):
         observation_text = "\n".join(result["exports"]["observation_lines"])
         conclusion_text = "\n".join(result["exports"]["conclusion_lines"])
         self.assertLess(observation_text.index("| 华电能源 |"), observation_text.index("| 京能电力 |"))
-        self.assertIn("观察优先锚点**: 华电能源(600726)", observation_text)
+        self.assertIn("观察优先对象**: 华电能源(600726)", observation_text)
         self.assertIn("主线重点观察谁**: 华电能源(600726)", conclusion_text)
         self.assertNotIn("主线继续看谁**: 京能电力(600578)", conclusion_text)
+
+    def test_pk_context_does_not_promote_downgraded_sample_to_observation_anchor(self):
+        downgraded_sample = {
+            "name": "大有能源",
+            "code": "600403",
+            "sector": "煤炭开采",
+            "watch_anchor_type": "跨线重点观察谁",
+            "watch_priority_label": "观察优先",
+            "reason": "大阳线封板，只观察承接",
+            "candidate_role": "观察样本",
+            "anchor_reversal_decision": "降级观察",
+            "candidate_layer": "watch_sample",
+            "execution_eligibility": "observation_only",
+            "final_action": "只观察，不新增参与",
+        }
+
+        result = build_pk_decision_pk_context_node(
+            {
+                "trade_gate_open": False,
+                "display_observation_candidates": [downgraded_sample],
+                "watch_anchor": {"name": "大有能源", "code": "600403"},
+                "watch_anchor_type": "跨线重点观察谁",
+                "position_level": "0%不参与",
+                "final_gate": {"can_new_entry": False},
+                "front_structure_layer_text": "保持空仓",
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {},
+                "build_observation_price_focus_text": lambda price_focus: "-",
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["observation_lines"] + result["exports"]["conclusion_lines"])
+
+        self.assertNotIn("观察优先" + "锚点**: 大有能源(600403)", rendered)
+        self.assertNotIn("跨线重点观察谁**: 大有能源(600403)", rendered)
+        self.assertIn("无执行资格候选", rendered)
+
+    def test_pk_context_clears_process_candidates_when_final_workflow_is_empty(self):
+        jiangfeng = {
+            "name": "江丰电子",
+            "code": "300666",
+            "watch_anchor_type": "跨线继续看谁",
+            "watch_priority_label": "跨线继续看谁",
+            "reason": "旧观察行残留",
+        }
+        heyuan = {
+            "name": "和远气体",
+            "code": "002971",
+            "watch_anchor_type": "观察对象",
+            "watch_priority_label": "等观察位出现",
+            "reason": "过程候选残留",
+        }
+
+        result = build_pk_decision_pk_context_node(
+            {
+                "trade_gate_open": False,
+                "display_observation_candidates": [jiangfeng, heyuan],
+                "watch_anchor": jiangfeng,
+                "watch_anchor_type": "跨线继续看谁",
+                "best_stock": heyuan,
+                "position_level": "0%不参与",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": True},
+                "front_structure_layer_text": "最终对象为空",
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                    "candidate_pool": [
+                        {
+                            "stock": {"name": "和远气体", "code": "002971"},
+                            "identity": "过程候选",
+                            "target_role": "过程候选",
+                            "source_pools": ["过程候选"],
+                            "front_observation_qualified": True,
+                            "observation_layer": "process_observation",
+                        }
+                    ],
+                },
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {},
+                "build_observation_price_focus_text": lambda price_focus: "-",
+                "compose_observation_focus_text": lambda confirm_text, focus_text: f"{confirm_text} / {focus_text}",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["observation_lines"] + result["exports"]["conclusion_lines"])
+        self.assertIn("无执行资格候选", rendered)
+        self.assertIn("明天没有可买对象", rendered)
+        self.assertIn("空仓观望", rendered)
+        self.assertNotIn("江丰电子", rendered)
+        self.assertNotIn("和远气体", rendered)
+        self.assertNotIn("跨线继续看谁", rendered)
+        self.assertNotIn("等观察位出现", rendered)
+        self.assertNotIn("确认后怎么做", rendered)
 
     def test_pk_decision_stage_renders_dynamic_heading_and_exports_best_stock(self):
         stage_lookup = build_execution_stage_lookup(
@@ -1692,7 +2157,7 @@ class PkDecisionStageTest(unittest.TestCase):
             {
                 "target_date": "2026-04-22",
                 "run_mode": "replay",
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "position_reason": "环境允许参与",
                 "step0_prediction": "CLEAR",
                 "step0_prediction_cn": "🟢 明朗",
@@ -1805,6 +2270,7 @@ class PkDecisionStageTest(unittest.TestCase):
                 "candidate_quality_panel_fields",
                 "candidate_quality_samples",
                 "candidate_quality_scorecard_diagnostics",
+                "sniper_target_derivation",
             },
         )
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
@@ -1856,7 +2322,7 @@ class PkDecisionStageTest(unittest.TestCase):
             {
                 "target_date": "2026-04-22",
                 "run_mode": "replay",
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "position_reason": "环境不支持",
                 "step0_prediction": "DIFFICULT",
                 "step0_prediction_cn": "🔴 困难",
@@ -1934,7 +2400,7 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("#### 明日操作计划", rendered)
         captured_lines = "\n".join(captured["conclusion_lines"])
-        self.assertIn("- **当前只观察**: 一档（空仓档），不新增参与", captured_lines)
+        self.assertIn("- **当前只观察**: 0%不参与，不新增参与", captured_lines)
         self.assertNotIn("不允许新买入", captured_lines)
         self.assertNotIn("为什么先不买", "\n".join(captured["conclusion_lines"]))
 

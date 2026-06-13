@@ -232,7 +232,7 @@ class UseReportTailSummaryTest(unittest.TestCase):
                     "tracking_memory_status": {
                         "today_validated_items": [{"name": "老龙头", "code": "000002", "follow_state": "今日再次入池"}]
                     },
-                    "position_level": "一档（空仓档）",
+                    "position_level": "0%不参与",
                     "exit_analysis": {"sector_name": "军工"},
                     "main_sectors_info": [{"name": "军工"}],
                     "risk_sectors": [],
@@ -246,7 +246,7 @@ class UseReportTailSummaryTest(unittest.TestCase):
         )
 
         self.assertEqual(captured["context"]["tracking_memory_status"]["today_validated_items"][0]["code"], "000002")
-        self.assertEqual(captured["context"]["position_level"], "一档（空仓档）")
+        self.assertEqual(captured["context"]["position_level"], "0%不参与")
         self.assertEqual(result["diagnostics"]["hook_name"], "report.tail_summary")
 
     def test_tail_summary_hook_passes_core_stocks_into_final_conclusion(self):
@@ -312,7 +312,7 @@ class UseReportTailSummaryTest(unittest.TestCase):
                     "final_gate": {
                         "can_new_entry": False,
                         "allow_attack_50_ready": True,
-                        "final_action": "明日目标标的保留条件50%预演：只看000586 汇源通信",
+                        "final_action": "明日目标标的保留50%条件执行：只看000586 汇源通信",
                     },
                     "mainline_name": "半导体",
                     "market_research_snapshot": {},
