@@ -105,7 +105,7 @@
 
 ## 落地 commit
 
-待本轮提交后回填 commit hash。
+- `643cd1fd` — `feat(report): render sector preflight tournament in report`
 
 ## 验证记录
 
