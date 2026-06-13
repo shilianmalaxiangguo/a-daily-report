@@ -35,7 +35,7 @@
 
 - Modify `scripts/daily_report_entry_demo.py`
   - Create a `RunProgressReporter` for the current legacy CLI flow.
-  - Wrap major legacy stages: data/replay, run-mode resolution, report rendering, stock diagnostic, snapshot persistence, snap-ui export.
+  - Wrap major legacy stages: data/replay, run-mode resolution, report rendering, stock diagnostic, snapshot persistence, and PostgreSQL fact sync.
   - Install provider event sink around the run.
   - Write the run ledger before returning.
 
@@ -1074,7 +1074,6 @@ class DailyReportCliProgressTest(unittest.TestCase):
                 patch.object(demo, "write_run_ledger", side_effect=fake_write_run_ledger), \
                 patch.object(demo, "get_daily_data", return_value={"ok": True}), \
                 patch.object(demo, "_save_data_snapshot", return_value=None), \
-                patch.object(demo, "sync_snap_ui_static_data", return_value=None), \
                 patch.object(demo, "print", side_effect=lambda *args, **kwargs: None):
                 exit_code = demo.main()
 
@@ -1091,7 +1090,7 @@ class DailyReportCliProgressTest(unittest.TestCase):
 Run:
 
 ```bash
-venv/bin/python3 -m unittest tests.test_daily_report_cli_progress
+.generated/venv-py314/bin/python3.14 -m unittest tests.test_daily_report_cli_progress
 ```
 
 Expected: FAIL because `daily_report_entry_demo` does not import `RunProgressReporter` or `write_run_ledger`.
@@ -1120,7 +1119,7 @@ def _build_cli_steps(args):
     if getattr(args, "stock", None):
         steps.append("diagnostics.single_stock")
     steps.append("persist.snapshot")
-    steps.append("export.snap_ui")
+    steps.append("storage.postgres_daily_facts")
     return steps
 
 

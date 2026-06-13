@@ -19,7 +19,7 @@
 ## Out Of Scope
 
 - 不做 snap-ui 页面或交互改动。
-- 不在第一版实现 SQLite 或 Postgres 历史 tag 池。
+- 不在第一版实现 PostgreSQL 历史 tag 池。
 - 不重写完整候选股评分、仓位、止损和买卖点策略。
 - 不重写全部 DeepSeek 调用框架。
 - 不把 tag 热度直接变成买点。
@@ -245,7 +245,7 @@ build_realtime_tag_evidence_snapshot(data) -> dict
 data["realtime_tag_evidence_snapshot"]
 ```
 
-后续 SQLite 版本再补充 `date`、`source`、`stock_code`、`tag`、`tag_layer`、`driver_role`、`evidence_text`、`evidence_score`、`contradiction_level`、`updated_at`。
+后续 PostgreSQL 版本再补充 `date`、`source`、`stock_code`、`tag`、`tag_layer`、`driver_role`、`evidence_text`、`evidence_score`、`contradiction_level`、`updated_at`。
 
 ## Test Plan
 

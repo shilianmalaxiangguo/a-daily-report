@@ -10,7 +10,7 @@ Use this when the request needs evidence. Keep checks focused; users should not 
 - Focused docs test: `venv/bin/python -m unittest tests.test_daily_report_skill_docs`
 - Acceptance smoke: `venv/bin/python -m unittest tests.test_report_acceptance_audit tests.test_entry_plan_node_runtime`
 - Focused unittest commands usually take the form: `venv/bin/python -m unittest tests.test_report_acceptance_audit`
-- Tushare gateway smoke: `PYTHONPATH=scripts venv/bin/python -c "from market_data.tushare_client import TUSHARE_HTTP_URL; print(TUSHARE_HTTP_URL)"` should print `http://a.sszhixia.cn/`; the client factory is `create_tushare_pro_api`.
+- Tushare proxy smoke: `PYTHONPATH=scripts .generated/venv-py314/bin/python3.14 -c "from market_data.tushare_client import fetch_demo_frames; a,b=fetch_demo_frames(); print(len(a), len(b))"` should return nonzero row counts; the client factory is `create_tushare_pro_api` and reads `TUSHARE_TOKEN` / `TUSHARE_HTTP_URL` from `.env`.
 - Tushare-first data-source regression: `PYTHONPATH=scripts venv/bin/python -m unittest tests.test_tushare_input_runtime tests.test_market_activity_request tests.test_new_stock_calendar_request`
 - Diff hygiene: `git diff --check`
 

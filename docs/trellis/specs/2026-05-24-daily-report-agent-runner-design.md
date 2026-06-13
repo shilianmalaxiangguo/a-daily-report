@@ -6,7 +6,7 @@ Scope: first project-level runner for `a-daily-report`
 
 ## Background
 
-The daily-report repo is no longer only a skill prompt. It already contains a report engine, pipeline runtime, run logs, replay artifacts, report acceptance checks, wiki knowledge, a decision ledger, and snap-ui review surfaces. The next useful move is to make these pieces behave like one daily work agent.
+The daily-report repo is no longer only a skill prompt. It already contains a report engine, pipeline runtime, run logs, replay artifacts, report acceptance checks, wiki knowledge, a decision ledger, and PostgreSQL-backed review surfaces. The next useful move is to make these pieces behave like one daily work agent.
 
 The article on Harness Engineering is useful here because the bottleneck is not "can the model write more text". The bottleneck is whether every run has enough context, writes auditable artifacts, exposes degraded data, and reviews yesterday's designed participation against real facts.
 
@@ -33,14 +33,14 @@ The first project-level slice should therefore be a Daily Report Agent Runner: a
    - report audit result
    - decision-ledger update under `data/decision-ledger/`
 5. Keep `SKILL.md` as a compact natural-language router, not the main system.
-6. Keep snap-ui as a consumer of published artifacts, not a second trading-logic engine.
+6. Keep replay/report review surfaces as consumers of frozen artifacts, not second trading-logic engines.
 
 ## Out of Scope
 
 1. No automatic trading.
 2. No always-on backend service.
 3. No scheduler in the first slice.
-4. No snap-ui rewrite.
+4. No frontend rewrite.
 5. No replacement of existing report renderers.
 6. No broad knowledge-platform rebuild.
 7. No new command taxonomy beyond the minimum runner entry needed for the first slice.
@@ -90,7 +90,7 @@ Inspection surfaces
   -> reports/runs/<trade-date>/
   -> data/decision-ledger/
   -> reports/replay/
-  -> snap-ui public data export
+  -> PostgreSQL fact import
 ```
 
 `DailyReportAgentRunner` owns orchestration, not domain judgment. Domain judgment stays in the existing report, inference, selection, and decision-ledger modules.
@@ -270,9 +270,9 @@ The user should be able to inspect the run folder and answer:
 These are valuable but should stay out of the first slice:
 
 1. A polished `daily-report agent run <date>` CLI wrapper.
-2. snap-ui run folder browser.
+2. local run folder browser.
 3. scheduled local heartbeat for daily generation.
 4. provider-level quality dashboard.
-5. D1 synchronization of runner audit status.
+5. PostgreSQL-backed runner audit status.
 6. richer wiki-based context selection.
 7. multi-agent review after the single-runner contract is stable.

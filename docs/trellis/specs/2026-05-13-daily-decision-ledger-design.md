@@ -4,7 +4,7 @@
 
 ## 结论
 
-第一阶段新增本地判断账本：日报生成流程先把“极度看好名单”转成可测试、可重跑、可 diff 的判断样本 artifact，再由 snap-ui 读取或导出展示。D1 暂时只作为后续同步目标，不作为新逻辑的第一写入点。
+第一阶段新增本地判断账本：日报生成流程先把“极度看好名单”转成可测试、可重跑、可 diff 的判断样本 artifact，再由报告、复盘列表和 PostgreSQL 导入链路消费。数据库不作为新逻辑的第一写入点。
 
 判断样本不是普通观察票，也不是确定性预测。它必须携带三层假设：个股形态、所属板块候选、等待验证的市场演变分支。25 个交易日结束后，每个样本必须有周期复盘验收结论，用来判断哪条规则保留、哪条规则修正。
 
@@ -25,9 +25,9 @@
 ## Out of Scope
 
 - 不把全量观察池全部转成 25 日强追踪样本。
-- 不把判断账本直接写入 Cloudflare D1。
-- 不在第一阶段实现 D1 schema migration 或线上同步 worker。
-- 不改写 snap-ui 的整体页面结构。
+- 不把判断账本直接写入数据库。
+- 不在第一阶段实现数据库 schema migration 或线上同步 worker。
+- 不改写前端页面结构。
 - 不把 Tushare、行情 raw payload 或全市场 K 线塞进判断账本。
 - 不把判断样本等同于买入指令。
 
@@ -35,7 +35,7 @@
 
 - 不追求第一版自动判断所有复杂趋势命运。
 - 不用单日涨跌给样本贴胜负标签。
-- 不把 D1 当市场数据仓库。
+- 不把判断账本当市场数据仓库。
 - 不为了未来 SaaS 提前引入用户、订阅、权限或管理后台。
 - 不用文章式理论长文进入日报主链，所有结论必须字段化。
 
@@ -63,8 +63,8 @@ daily report generation
       -> evaluate current validation state
       -> write daily snapshot
       -> refresh index
-  -> snap-ui static export reads decision-ledger artifact
-  -> later: validated rows sync to D1
+  -> report/replay lists read decision-ledger artifact
+  -> later: validated rows import to PostgreSQL
 ```
 
 ## JSON Contract
@@ -176,9 +176,9 @@ daily report generation
 - `真正失败`
 - `提前淘汰后继续走强`
 
-## snap-ui Contract
+## Report And Replay Contract
 
-第一版 snap-ui 不需要新建大型功能页，但需要能消费判断账本导出结构：
+第一版报告和复盘列表需要能消费判断账本结构：
 
 - 展示今日极度看好判断样本。
 - 展示每个样本进入名单的日报日期和理由。
@@ -198,7 +198,7 @@ daily report generation
 - Python 单测：真正失败必须同时具备板块路径失去选择和个股结构破坏或承接失败。
 - Python 单测：周期结束必须生成五类验收结论之一。
 - Python 单测：`index.json` 包含 `latest_trade_date`、`available_trade_dates`、`by_stock_code`。
-- snap-ui 单测：静态导出后能读到 judgment ledger index 和最新 snapshot。
+- Python 单测：报告和复盘列表能读到 judgment ledger index 和最新 snapshot。
 
 ## Done Definition
 
@@ -206,5 +206,5 @@ daily report generation
 - `CONTEXT.md` 和 LLM Wiki 已记录领域词，避免后续语言漂移。
 - 第一版实现能生成 `data/decision-ledger/YYYY-MM-DD.json` 和 `data/decision-ledger/index.json`。
 - 新增单测覆盖字段完整性、状态迁移、周期验收和索引。
-- snap-ui 静态导出前有 contract check，缺少判断账本关键字段时失败。
-- 不写 D1、不推 Cloudflare、不部署线上，直到本地 artifact 和测试稳定。
+- 报告和复盘列表读取前有 contract check，缺少判断账本关键字段时失败。
+- 不写线上发布链路，直到本地 artifact、PostgreSQL 导入和测试稳定。

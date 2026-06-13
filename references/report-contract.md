@@ -36,7 +36,7 @@ This reference is for report quality judgment. It is not a command manual.
 ## Monthly Trading Rhythm
 
 - Before daily stock selection, classify the month as 财报/季报高筛选月, ordinary attack month, or weak-market defense month.
-- 财报/季报密集月 raises evidence requirements but no longer automatically caps position. Calendar earnings months such as 4/8/10 require earnings-landmine checks, stricter cancellation conditions, and clear invalidation prices; if a qualified target exists and the market is not at ice point, the position still follows the 50% / 100% attack states.
+- 财报/季报密集月 raises evidence requirements but no longer automatically caps position. Calendar earnings months such as 4/8/10 require earnings-landmine checks, stricter cancellation conditions, and clear invalidation prices; if a qualified target exists and the market is not at ice point, the position still follows the 50%或100% attack states.
 - Non-earnings months default to attack: use market fit, mainline strength, and individual stock structure to decide whether a 10%-20% opportunity month is realistic.
 - Weak market structure overrides the calendar: even outside earnings months, use 0% when market fit and mainline strength are absent.
 - Treat 10%-20% as an attack-window target, not a promised report outcome. The report should state the current month mode and maximum allowed position before naming trades.
@@ -51,8 +51,8 @@ This reference is for report quality judgment. It is not a command manual.
 - 50% = standard attack. Use when market fit, trend chain, participation window, and stock structure support a valid target, even if the target has not earned full-core status.
 - 100% = full attack. Use when the candidate is the clear core target, the trend chain is active, the participation window is explicit, acceptance has acted right, and the invalidation price is clear.
 - 100% must pass six checks before it appears in the decision payload: unique core target, active trend chain, explicit participation window, acceptance acting right, clear invalidation price, and non-ice-point market.
-- Final summary execution style must use the explicit state labels: `0% / 不参与`, `50% / 标准进攻`, or `100% / 核心进攻`.
-- Final summary conclusion must also use the state-machine action label, not raw legacy `空仓等待 / 短线确认` language from upstream gates.
+- Final summary execution style must use the explicit state labels: `0%不参与`, `50%条件执行`, or `100%核心进攻`.
+- Final summary conclusion must use explicit trading-action labels, not raw legacy `空仓等待 / 短线确认` language from upstream conservative wording.
 - Legacy conservative sizing is removed: 0/50/100 only. Do not answer uncertainty by shrinking every opportunity.
 - Risk control happens through scenario cancellation, invalidation price, market ice-point detection, and the 0% state; it should not quietly downgrade every valid opportunity into a small trial.
 - Profit is not a downgrade trigger. Do not cap a correct trend just because the month reached 10%; downgrade only when the trend, mainline, or invalidation price breaks.
@@ -78,9 +78,9 @@ This reference is for report quality judgment. It is not a command manual.
 - After next-day facts exist, store the replay result as `participation_review`. This is the **参与预演复盘** field, not a free-form commentary field.
 - `participation_review` must be derived from explicit facts: `auction_matched`, `first_minutes_accepted`, `board_sealed`, `reseal_success`, `sector_supported`, `cancellation_triggered`, `primary_unavailable`, and `missed_action_worked`.
 - `participation_review` labels are controlled: `预演命中`, `预演作废`, `错过后方案命中`, `预演过早`, or waiting for more facts.
-- The decision-ledger index must expose `participation_review_status` plus a compact `participation_review` summary for snap-ui list consumption.
+- The decision-ledger index must expose `participation_review_status` plus a compact `participation_review` summary for report and replay list consumption.
 - The report tail must render both `极度看好25日跟踪表` and `极度看好历史回测表`. The backtest table must separate selection quality, buy-point quality, risk-reward, execution review, and standard action; it must not collapse "stock picked right" into "trade executed right".
-- snap-ui must consume `planned_participation` from the decision-ledger artifact. It must not implement a separate buy/sell timing algorithm for the same case.
+- Report and replay surfaces must consume `planned_participation` from the decision-ledger artifact. They must not implement a separate buy/sell timing algorithm for the same case.
 
 ## Future Change Inheritance
 

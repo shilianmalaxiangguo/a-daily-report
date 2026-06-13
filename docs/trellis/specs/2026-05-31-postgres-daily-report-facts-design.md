@@ -17,11 +17,11 @@ Move daily-report runtime facts to PostgreSQL-backed structured tables while kee
 - Installing a local PostgreSQL server or creating a database on the user machine.
 - Rewriting unrelated report wording.
 - Removing historical archive files.
-- Reworking current SQLite tests that fail because the isolated worktree does not include local ignored data.
+- Reworking unrelated storage tests that fail because the isolated worktree does not include local ignored data.
 
 ## Non-Goals
 
-- Do not make report rendering depend on whether the underlying store is SQLite or PostgreSQL.
+- Do not make report rendering depend on whether the underlying store is a fake repository or PostgreSQL.
 - Do not keep new runtime truth in cross-file scans when PostgreSQL is configured.
 - Do not use a free-form blob as the primary store for the migrated concepts.
 

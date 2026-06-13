@@ -4,7 +4,7 @@
 
 **Goal:** Build a shared realtime tag evidence snapshot so daily-report mainline, sector flow, DeepSeek context, and candidate wording consume the same industry/concept/tag interpretation.
 
-**Architecture:** Add a pure knowledge-layer snapshot builder that reuses the existing sector narrative alias rules, then thread its output into market activity analysis and mainline attack evidence. Keep this first slice in-memory only; SQLite history stays out of this implementation.
+**Architecture:** Add a pure knowledge-layer snapshot builder that reuses the existing sector narrative alias rules, then thread its output into market activity analysis and mainline attack evidence. Keep this first slice in-memory only; historical persistence stays out of this implementation.
 
 **Tech Stack:** Python 3.14, unittest, existing `scripts/knowledge`, `scripts/domains/market_activity`, `scripts/domains/market_state`, and `scripts/domains/market_activity/sector_chain_runtime` modules.
 
