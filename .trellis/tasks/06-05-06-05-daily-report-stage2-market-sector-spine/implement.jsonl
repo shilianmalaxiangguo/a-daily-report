@@ -1,0 +1,7 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `.generated/venv-py314/bin/python3.14 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Daily report decision/action/replay contract"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Backend report quality contracts and forbidden output patterns"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer packet-to-renderer data flow guidance"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing report payload/render helpers before adding new code"}
+{"file": ".trellis/tasks/06-05-daily-report-full-rewrite/prd.md", "reason": "Parent full rewrite PRD and migration map"}
+{"file": ".trellis/tasks/06-05-06-05-daily-report-stage2-market-sector-spine/research/explorer-stage2.md", "reason": "Stage 2 explorer implementation notes"}

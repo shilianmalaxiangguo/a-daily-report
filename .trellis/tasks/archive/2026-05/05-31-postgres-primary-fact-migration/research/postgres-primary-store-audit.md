@@ -106,7 +106,7 @@ Remaining JSON usage classification from `git grep` on `HEAD`:
   * `snap-ui` publishers and frontend static artifacts.
 * Legacy compatibility:
   * JSON read/write bodies in migrated stores are retained only when PostgreSQL is not configured.
-  * `scripts/storage/cloudflare_free_daily_db.py` still contains SQLite/D1-compatible `payload_json` columns. This is not PostgreSQL primary storage and should be retired separately if the SQLite compatibility layer is removed.
+  * The retired local database compatibility layer has been removed from current runtime code and tests.
 
 Residual risk:
 

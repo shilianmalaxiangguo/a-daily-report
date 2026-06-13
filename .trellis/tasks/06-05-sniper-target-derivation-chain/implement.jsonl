@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec index for report runtime work"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Existing final target and ASCII path graph contracts"}
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Daily report final target and appendix consistency contracts"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer data flow checklist for canonical target packet"}
+{"file": ".trellis/tasks/06-05-sniper-target-derivation-chain/research/current-target-flow.md", "reason": "Observed current target flow and root-cause analysis"}

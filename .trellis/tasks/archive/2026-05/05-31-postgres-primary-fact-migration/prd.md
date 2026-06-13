@@ -17,7 +17,7 @@ Move all runtime facts that affect daily report judgment, cross-day memory, cycl
 
 ## Assumptions (temporary)
 
-* SQLite can remain as a compatibility/test fallback, but production-like local runs should use PostgreSQL when configured.
+* Retired local database adapters must not remain as compatibility or test fallbacks; production-like local runs should use PostgreSQL when configured.
 * JSON snapshots under `snapshots/` and `snapshots/replay/` should remain valid replay/archive artifacts.
 
 ## Open Questions
@@ -90,7 +90,7 @@ Implementation expectations:
 * Preserve existing function-level APIs where possible so report logic does not need to know whether the backing store is PostgreSQL or legacy JSON.
 * For replay/archive paths, keep JSON behavior only when it is explicitly a frozen snapshot or diagnostic artifact.
 * When PostgreSQL is configured and write/read fails for primary decision facts, surface the failure rather than silently reading old JSON.
-* Keep SQLite compatibility only for existing tests and fallback paths; do not add new SQLite-first behavior for migrated stores.
+* Remove retired local database compatibility from existing tests and fallback paths; do not add local-database-first behavior for migrated stores.
 
 ## Technical Notes
 
