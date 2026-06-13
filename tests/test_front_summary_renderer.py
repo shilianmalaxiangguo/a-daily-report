@@ -1,3 +1,4 @@
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -6,6 +7,25 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 ACTION_TEXT = "只买军工一号，固定交易窗口条件满足后执行"
+
+
+def _cycle_sector_label_pattern(sector):
+    return (
+        r'<span class="cycle-sector-label" '
+        r'style="color:#[0-9A-Fa-f]{6};border-color:#[0-9A-Fa-f]{6}">\['
+        + re.escape(sector)
+        + r"\]</span>"
+    )
+
+
+def _cycle_sector_colors(rendered, sector):
+    pattern = (
+        r'<span class="cycle-sector-label" '
+        r'style="color:(#[0-9A-Fa-f]{6});border-color:\1">\['
+        + re.escape(sector)
+        + r"\]</span>"
+    )
+    return re.findall(pattern, rendered)
 
 from report.front_summary_renderer import render_front_digest, render_front_summary_sections, render_mvp_focus_summary
 
@@ -89,9 +109,50 @@ class FrontSummaryRendererTest(unittest.TestCase):
         self.assertIn("| 双线孕育 | 主线+背景线 | 半导体 | 电力 / 化学制品 | 半导体高标和涨停更集中，成交占比靠前 | 半导体尝试替代，电力退成背景线待确认 | 半导体启动，电力背景线 | 先看资金是否继续选择半导体；背景线只观察回流 |", rendered)
         self.assertNotIn("| 周期主线 | 当天主攻线 | 两者关系 | 明日动作 |", rendered)
         self.assertIn("> 近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。", rendered)
-        self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
-        self.assertIn("| 04-24 | 半导体 | 算力 | 2180亿 | 12834亿 | 17.0% | +1.2pct | 主线占比继续抬升，资金仍在主线内加强 |", rendered)
+        self.assertIn("| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |", rendered)
+        self.assertRegex(
+            rendered,
+            r"\| 04-24 \| "
+            + _cycle_sector_label_pattern("算力")
+            + r" \| 2180亿 \| 12834亿 \| 17\.0% \| \+1\.2pct \| 小周期试攻，未确认切换 \| 主线占比继续抬升，资金仍在主线内加强 \|",
+        )
         self.assertLess(rendered.index("04-24"), rendered.index("04-23"))
+
+    def test_render_front_digest_reuses_calendar_color_for_new_cycle_sector(self):
+        rendered = "\n".join(
+            render_front_digest(
+                {
+                    "headline": "先看新线",
+                    "state_text": "修复延续",
+                    "mainline_label": "稀有新线A",
+                    "style_action_text": "主线内做减法",
+                    "risk_parts": [],
+                    "can_open_text": "只等确认",
+                    "cycle_calendar_rows": [
+                        {
+                            "week_label": "06-01当周",
+                            "monday": {"date": "06-01", "mainline": "稀有新线A", "state": "爆发"},
+                        }
+                    ],
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "06-02",
+                            "cycle_mainline": "稀有新线A",
+                            "daily_attack_line": "稀有新线A",
+                            "mainline_turnover": "1000亿",
+                            "market_turnover": "30000亿",
+                            "share": "3.3%",
+                            "share_change": "+0.8pct",
+                            "interpretation": "新线验证",
+                        }
+                    ],
+                }
+            )
+        )
+
+        colors = _cycle_sector_colors(rendered, "稀有新线A")
+        self.assertGreaterEqual(len(colors), 1)
+        self.assertEqual(len(set(colors)), 1)
 
     def test_render_front_digest_outputs_full_contract_summary(self):
         lines = render_front_digest(
@@ -189,7 +250,7 @@ class FrontSummaryRendererTest(unittest.TestCase):
                 "special_probe_summary_text": "军工一号是主线异常探针",
                 "structure_layer_text": "只等唯一动作",
                 "observation_cycle": "先给3~5日观察合同",
-                "intervention_cycle": "固定交易窗口条件满足后只做50%标准进攻或0%",
+                "intervention_cycle": "固定交易窗口条件满足后只做50%条件执行或0%",
                 "exit_cycle": "失守关键位就作废",
                 "delete_preview": "军工弱票 / 军工后排",
                 "buy_target_text": "军工一号(000001)，只按固定交易窗口条件，不追盘中情绪顶点",
