@@ -32,7 +32,7 @@ def _snapshot(**overrides):
                 "rotation_action": "先看通信设备能否重新聚焦，支线只算轮动",
             },
             "final_gate": {
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "operation_state": "防守态",
                 "can_new_entry": False,
                 "final_action": "防守观察，只看主线核心",
@@ -94,7 +94,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
                         "rotation_action": "先看通信设备能否重新聚焦，支线只算轮动",
                     },
                     "final_gate": {
-                        "position_level": "二档（防守档）",
+                        "position_level": "0%不参与",
                         "operation_state": "防守态",
                         "can_new_entry": False,
                         "final_action": "竞价/开盘承接/回封/结构确认分层窗口",
@@ -111,7 +111,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
         self.assertEqual(payload["sourcePolicy"], "snapshot-allowlist")
         self.assertTrue(payload["failClosed"])
         self.assertEqual(payload["summary"]["mainline"], "通信设备")
-        self.assertEqual(payload["summary"]["positionGrade"], "二档（防守档）")
+        self.assertEqual(payload["summary"]["positionGrade"], "0%不参与")
         self.assertFalse(payload["summary"]["canNewEntry"])
         self.assertIn("marketState", payload["summary"])
         self.assertIn("targets", payload["lockedFields"])
@@ -176,7 +176,7 @@ class ReportOnionPublicBriefTest(unittest.TestCase):
         self.assertIn("博杰股份", markdown)
         self.assertIn("宇环数控", markdown)
         self.assertIn("##### 附录：最终结论", markdown)
-        self.assertIn("市场状态：防守态；主线：通信设备；仓位：二档（防守档）；执行细节不公开。", markdown)
+        self.assertIn("市场状态：防守态；主线：通信设备；仓位：0%不参与；执行细节不公开。", markdown)
         self.assertNotIn("002975", markdown)
         self.assertNotIn("002903", markdown)
         self.assertNotIn("09:50-10:10", markdown)
@@ -257,8 +257,8 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
     def test_publish_report_onion_writes_public_and_private_manifests(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            public_dir = root / "snap-ui" / ".generated" / "daily-reports" / "public"
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            public_dir = root / ".generated" / "daily-reports" / "public"
+            private_dir = root / ".generated" / "daily-reports" / "private"
             self._write_replay_inputs(root)
             self._write_frozen_inputs(root, "2026-05-07")
 
@@ -297,8 +297,8 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
     def test_publish_report_onion_fails_closed_without_markdown_fallback_when_snapshot_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            public_dir = root / "snap-ui" / ".generated" / "daily-reports" / "public"
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            public_dir = root / ".generated" / "daily-reports" / "public"
+            private_dir = root / ".generated" / "daily-reports" / "private"
             self._write(root, "reports/2026-05-08_A股日报_完整版.md", "# 2026-05-08 日报\n\n大唐发电(601991)")
             self._write(root, "reports/2026-05-08_A股日报_执行摘要.md", "# 2026-05-08 执行摘要\n\n09:50-10:10窗口")
             self._write_json(root, "snapshots/2026-05-08.json", {"data": {}})
@@ -316,8 +316,8 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_replay_inputs(root)
-            output_dir = root / "snap-ui" / ".generated" / "daily-reports" / "shared"
-            marker = self._write(root, "snap-ui/.generated/daily-reports/shared/marker.txt", "keep")
+            output_dir = root / ".generated" / "daily-reports" / "shared"
+            marker = self._write(root, ".generated/daily-reports/shared/marker.txt", "keep")
 
             with self.assertRaisesRegex(ValueError, "must be separate"):
                 publish_report_onion(root=root, public_output_dir=output_dir, private_output_dir=output_dir)
@@ -328,9 +328,9 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_replay_inputs(root)
-            public_dir = root / "snap-ui" / ".generated" / "daily-reports"
+            public_dir = root / ".generated" / "daily-reports"
             private_dir = public_dir / "private"
-            marker = self._write(root, "snap-ui/.generated/daily-reports/private/marker.txt", "keep")
+            marker = self._write(root, ".generated/daily-reports/private/marker.txt", "keep")
 
             with self.assertRaisesRegex(ValueError, "must be sibling"):
                 publish_report_onion(root=root, public_output_dir=public_dir, private_output_dir=private_dir)
@@ -342,7 +342,7 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
             root = Path(tmp)
             self._write_replay_inputs(root)
             marker = self._write(root, "reports/marker.txt", "keep")
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            private_dir = root / ".generated" / "daily-reports" / "private"
 
             for public_dir in [
                 root,
@@ -351,7 +351,7 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
                 root / "scripts",
                 root / "tests",
                 root / "wiki",
-                root / "snap-ui",
+                root / ".generated",
             ]:
                 with self.subTest(public_dir=public_dir):
                     with self.assertRaisesRegex(ValueError, "dangerous output directory"):
@@ -368,16 +368,16 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
                 self._write(root, "snapshots/replay/marker.txt", "keep"),
                 self._write(root, "scripts/report_onion/marker.txt", "keep"),
                 self._write(root, "tests/fixtures/marker.txt", "keep"),
-                self._write(root, "snap-ui/app/marker.txt", "keep"),
+                self._write(root, ".generated/archive/marker.txt", "keep"),
             ]
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            private_dir = root / ".generated" / "daily-reports" / "private"
 
             for public_dir in [
                 root / "reports" / "replay",
                 root / "snapshots" / "replay",
                 root / "scripts" / "report_onion",
                 root / "tests" / "fixtures",
-                root / "snap-ui" / "app",
+                root / ".generated" / "archive",
             ]:
                 with self.subTest(public_dir=public_dir):
                     with self.assertRaisesRegex(ValueError, "dangerous output directory"):
@@ -390,8 +390,8 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_replay_inputs(root)
-            public_dir = root / "snap-ui" / ".generated" / "daily-reports" / "public"
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            public_dir = root / ".generated" / "daily-reports" / "public"
+            private_dir = root / ".generated" / "daily-reports" / "private"
 
             result = publish_report_onion(root=root, public_output_dir=public_dir, private_output_dir=private_dir)
 
@@ -402,8 +402,8 @@ class ReportOnionPublisherIoTest(unittest.TestCase):
     def test_publish_report_onion_public_dir_contains_only_public_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            public_dir = root / "snap-ui" / ".generated" / "daily-reports" / "public"
-            private_dir = root / "snap-ui" / ".generated" / "daily-reports" / "private"
+            public_dir = root / ".generated" / "daily-reports" / "public"
+            private_dir = root / ".generated" / "daily-reports" / "private"
             self._write_replay_inputs(root)
 
             publish_report_onion(root=root, public_output_dir=public_dir, private_output_dir=private_dir)

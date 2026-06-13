@@ -93,7 +93,10 @@ def analyze_hybrid_structure(
         )
     )
     period = str(minute_period)
-    payload = fetch_minute_bars(index_code=index_code, period=period, target_date=target_date)
+    minute_kwargs = {"index_code": index_code, "period": period}
+    if target_date is not None:
+        minute_kwargs["target_date"] = target_date
+    payload = fetch_minute_bars(**minute_kwargs)
     minute_source_status = "invalid_minute_payload"
     bars = []
     if isinstance(payload, dict):

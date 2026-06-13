@@ -435,7 +435,7 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         ])
 
     def test_aggregate_daily_macro_platforms_merges_real_index_fragments_until_complete_departure(self):
-        payload = json.loads((ROOT / "data/snap-ui/zhongshu-visual/2026-04-29-sh000001.json").read_text())
+        payload = json.loads((ROOT / "data/market-visual/zhongshu-visual/2026-04-29-sh000001.json").read_text())
         rows = payload["index_klines"]["sh000001"]
         hist_rows = rows[:-1]
         trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")
@@ -476,7 +476,7 @@ class ChanlunZhongshuRuntimeTest(unittest.TestCase):
         )
 
     def test_aggregate_daily_macro_platforms_cuts_real_index_departure_before_warning(self):
-        payload = json.loads((ROOT / "data/snap-ui/zhongshu-visual/2026-04-29-sh000001.json").read_text())
+        payload = json.loads((ROOT / "data/market-visual/zhongshu-visual/2026-04-29-sh000001.json").read_text())
         rows = payload["index_klines"]["sh000001"]
         hist_rows = rows[:-1]
         trend_types = runtime.build_trend_types_from_bars(hist_rows, level="daily")

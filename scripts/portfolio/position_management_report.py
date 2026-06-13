@@ -54,44 +54,57 @@ def _parse_position_string_legacy_body(position_str):
     import re
 
     raw_text = str(position_str or "").strip()
-    position_str = raw_text.replace("我的仓位是", "").strip()
-    pattern = r"([^\d\s]+)\s+(\d+(?:\.\d+)?)\s*%"
-    matches = re.findall(pattern, position_str)
-
-    positions = []
-    for name, position in matches:
-        positions.append({
-            "name": name.strip(),
-            "position": float(position),
-        })
-    if positions:
-        return positions
-
+    account_fields = _extract_account_fields(raw_text)
+    t0_review_note = _extract_t0_review_note(raw_text)
     t0_match = re.search(
         r"([\u4e00-\u9fa5A-Za-z0-9*STst]+?)\s*做T\s*买\s*(\d+(?:\.\d+)?)\s*手\s*卖\s*(\d+(?:\.\d+)?)\s*手",
         raw_text,
     )
     if t0_match:
-        return [
-            {
-                "name": _clean_position_name(t0_match.group(1)),
-                "buy_lots": float(t0_match.group(2)),
-                "sell_lots": float(t0_match.group(3)),
-                "trade_action": "做T",
-            }
-        ]
+        position = {
+            "name": _clean_position_name(t0_match.group(1)),
+            "buy_lots": float(t0_match.group(2)),
+            "sell_lots": float(t0_match.group(3)),
+            "trade_action": "做T",
+        }
+        position.update(account_fields)
+        if t0_review_note:
+            position["holding_note"] = t0_review_note
+        return [{key: value for key, value in position.items() if value is not None}]
 
-    account_fields = _extract_account_fields(raw_text)
-    named_lot_positions = _extract_named_lot_holdings(raw_text)
+    parsing_text = _strip_position_context_prefixes(raw_text)
+    percent_positions = _extract_percent_positions(parsing_text)
+    named_lot_positions = _extract_named_lot_holdings(parsing_text)
     if named_lot_positions:
         named_lot_positions[0].update(account_fields)
+        _apply_percent_fields(named_lot_positions, percent_positions)
         _apply_t0_trade_fields(raw_text, named_lot_positions)
+        _apply_t0_review_note(t0_review_note, named_lot_positions)
         return [{key: value for key, value in position.items() if value is not None} for position in named_lot_positions]
 
-    lot_matches = list(re.finditer(r"(\d+(?:\.\d+)?)\s*手\s*([\u4e00-\u9fa5A-Za-z0-9*STst]+)", raw_text))
-    if not lot_matches:
-        return positions
+    if percent_positions:
+        percent_positions[0].update(account_fields)
+        _apply_t0_trade_fields(raw_text, percent_positions)
+        _apply_t0_review_note(t0_review_note, percent_positions)
+        return [{key: value for key, value in position.items() if value is not None} for position in percent_positions]
 
+    lot_matches = list(re.finditer(r"(\d+(?:\.\d+)?)\s*手\s*([\u4e00-\u9fa5A-Za-z0-9*STst]+)", parsing_text))
+    if not lot_matches:
+        bare_t0_match = re.search(
+            r"([\u4e00-\u9fa5A-Za-z0-9*STst]+?)\s*做T(?!\s*(?:买|卖)\s*\d)",
+            raw_text,
+        )
+        if bare_t0_match:
+            name = _clean_position_name(bare_t0_match.group(1))
+            if not _is_position_name_noise(name):
+                position = {"name": name, "trade_action": "做T"}
+                position.update(account_fields)
+                if t0_review_note:
+                    position["holding_note"] = t0_review_note
+                return [{key: value for key, value in position.items() if value is not None}]
+        return []
+
+    positions = []
     for index, lot_match in enumerate(lot_matches):
         lots = float(lot_match.group(1))
         name = _clean_position_name(lot_match.group(2))
@@ -105,7 +118,9 @@ def _parse_position_string_legacy_body(position_str):
         if index == 0:
             position.update(account_fields)
         positions.append({key: value for key, value in position.items() if value is not None})
+    _apply_percent_fields(positions, percent_positions)
     _apply_t0_trade_fields(raw_text, positions)
+    _apply_t0_review_note(t0_review_note, positions)
     return positions
 
 
@@ -132,13 +147,50 @@ def _extract_account_fields(raw_text):
     profit_pct_match = re.search(r"当日盈利[^\d+-]*[+-]?\d+(?:\.\d+)?\s+([+-]?\d+(?:\.\d+)?)\s*%", raw_text)
     if profit_pct_match:
         account_fields["daily_profit_pct"] = float(profit_pct_match.group(1))
+    standalone_loss_match = re.search(r"全仓吃满\s*([+-]?\d+(?:\.\d+)?)\s*%", raw_text)
+    if standalone_loss_match and "daily_profit_pct" not in account_fields:
+        account_fields["daily_profit_pct"] = float(standalone_loss_match.group(1))
+    if "全仓" in raw_text and "position" not in account_fields:
+        account_fields["position"] = 100.0
     return {key: value for key, value in account_fields.items() if value is not None}
+
+
+def _extract_t0_review_note(raw_text):
+    import re
+
+    if "做T" not in str(raw_text or ""):
+        return ""
+    has_failed_review = bool(re.search(r"T\s*失败|做T\s*失败|全仓吃满|亏损", raw_text))
+    if not has_failed_review:
+        return ""
+    parts = []
+    if re.search(r"T\s*失败|做T\s*失败", raw_text):
+        parts.append("T失败")
+    if re.search(r"0轴\s*买入", raw_text):
+        parts.append("0轴买入")
+    if re.search(r"尾盘\s*卖出", raw_text):
+        parts.append("尾盘卖出")
+    full_loss_match = re.search(r"全仓吃满\s*([+-]?\d+(?:\.\d+)?)\s*%\s*下跌?", raw_text)
+    if full_loss_match:
+        parts.append(f"全仓吃满{full_loss_match.group(1)}%下跌")
+    seen = set()
+    unique_parts = []
+    for part in parts:
+        if part and part not in seen:
+            seen.add(part)
+            unique_parts.append(part)
+    return "；".join(unique_parts)
 
 
 def _extract_named_lot_holdings(raw_text):
     import re
 
     patterns = [
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<position>\d+(?:\.\d+)?)\s*%\s*的?\s*"
+            r"(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
+            r"(?P<lots>\d+(?:\.\d+)?)\s*手(?P<note>T\+1仓|T\+0仓|底仓|旧仓|仓)?"
+        ),
         re.compile(
             r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
             r"(?P<code>\d{6})\s*(?:当前收盘)?(?:仍)?(?:持有|持仓|仓位)?\s*"
@@ -174,13 +226,78 @@ def _extract_named_lot_holdings(raw_text):
     return positions
 
 
+def _extract_percent_positions(raw_text):
+    import re
+
+    patterns = [
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
+            r"(?P<position>\d+(?:\.\d+)?)\s*%"
+        ),
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<position>\d+(?:\.\d+)?)\s*%\s*的?\s*"
+            r"(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})"
+        ),
+    ]
+    positions = []
+    seen = set()
+    for pattern in patterns:
+        for match in pattern.finditer(str(raw_text or "")):
+            if "position" in pattern.groupindex and _is_percent_after_named_position(raw_text, match):
+                continue
+            name = _clean_position_name(match.group("name"))
+            if _is_position_name_noise(name):
+                continue
+            position_pct = float(match.group("position"))
+            key = (name, position_pct)
+            if key in seen:
+                continue
+            seen.add(key)
+            positions.append({"name": name, "position": position_pct})
+    return positions
+
+
+def _is_percent_after_named_position(raw_text, match):
+    text = str(raw_text or "")
+    if match.start() <= 0:
+        return False
+    prefix = text[match.start()]
+    if not prefix.isspace():
+        return False
+    previous = text[match.start() - 1]
+    return bool(previous and (previous.isalnum() or "\u4e00" <= previous <= "\u9fff"))
+
+
+def _apply_percent_fields(positions, percent_positions):
+    if not positions or not percent_positions:
+        return
+    if len(positions) == 1 and len(percent_positions) == 1:
+        positions[0]["position"] = percent_positions[0].get("position")
+        return
+    percent_by_name = {
+        str(item.get("name") or "").strip(): item.get("position")
+        for item in percent_positions
+        if item.get("name") and item.get("position") is not None
+    }
+    for position in positions:
+        name = str(position.get("name") or "").strip()
+        if name in percent_by_name:
+            position["position"] = percent_by_name[name]
+
+
 def _extract_t0_trade_fields(raw_text):
     import re
 
     if "做T" not in raw_text:
         return {}
     fields = {"trade_action": "做T"}
-    buy_match = re.search(r"(?:买入|买)\s*(\d+(?:\.\d+)?)\s*手", raw_text)
+    buy_match = None
+    for match in re.finditer(r"(?:买入|买)\s*(\d+(?:\.\d+)?)\s*手", raw_text):
+        prefix = raw_text[max(0, match.start() - 8): match.start()]
+        if any(word in prefix for word in ("满仓", "只能", "可买", "能买", "最多")):
+            continue
+        buy_match = match
+        break
     sell_match = re.search(r"(?:卖出|卖)\s*(?:旧仓)?\s*(\d+(?:\.\d+)?)\s*手", raw_text)
     if not sell_match:
         sell_match = re.search(r"(\d+(?:\.\d+)?)\s*手[^，,。；;]{0,8}(?:卖出|卖)", raw_text)
@@ -197,6 +314,57 @@ def _apply_t0_trade_fields(raw_text, positions):
     fields = _extract_t0_trade_fields(raw_text)
     if fields:
         positions[0].update(fields)
+
+
+def _apply_t0_review_note(review_note, positions):
+    if len(positions or []) != 1 or not review_note:
+        return
+    existing = str(positions[0].get("holding_note") or "").strip()
+    positions[0]["holding_note"] = f"{existing}；{review_note}" if existing else review_note
+
+
+def _strip_position_context_prefixes(text):
+    stripped = str(text or "").strip("，,。；; ")
+    prefixes = _position_context_prefixes()
+    changed = True
+    while changed and stripped:
+        changed = False
+        for prefix in prefixes:
+            if stripped.startswith(prefix):
+                stripped = stripped[len(prefix):].strip("，,。；; ")
+                changed = True
+                break
+    return stripped
+
+
+def _position_context_prefixes():
+    prefixes = (
+        "现在为的仓位是",
+        "我的持仓为",
+        "我的持仓是",
+        "我的仓位是",
+        "我今天持仓为",
+        "我今日持仓为",
+        "另外我持仓是",
+        "我今天持仓是",
+        "今日持仓为",
+        "今天持仓为",
+        "当前持仓为",
+        "现在持仓为",
+        "我持仓是",
+        "仓位是",
+        "持仓是",
+        "持仓为",
+        "我的持仓",
+        "我今天",
+        "今天",
+        "今日",
+        "现在",
+        "目前",
+        "另外",
+        "我",
+    )
+    return tuple(sorted(prefixes, key=len, reverse=True))
 
 
 def _format_number(value):
@@ -217,10 +385,16 @@ def _clean_position_name(name):
     import re
 
     text = str(name or "").strip("，,。；; ")
-    for prefix in ("我的仓位是", "仓位是", "持仓是", "我今天", "今天", "我"):
-        if text.startswith(prefix) and len(text) > len(prefix):
-            text = text[len(prefix):].strip()
-    text = re.sub(r"^(?:现在|目前|另外|持仓是|持有)", "", text).strip()
+    prefixes = _position_context_prefixes()
+    changed = True
+    while changed and text:
+        changed = False
+        for prefix in prefixes:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                changed = True
+                break
+    text = re.sub(r"^(?:现在|目前|另外|持仓是|持仓为|持有|的仓位是|为)", "", text).strip()
     return text
 
 
@@ -231,10 +405,26 @@ def _is_position_name_noise(name):
     upper = text.upper()
     if upper in {"T", "T0", "T1", "T+0", "T+1"}:
         return True
-    noise_words = {"旧仓", "底仓", "仓", "收盘", "当前收盘", "开盘", "尾盘", "买入", "卖出"}
+    noise_words = {
+        "旧仓",
+        "底仓",
+        "仓",
+        "收盘",
+        "当前收盘",
+        "开盘",
+        "尾盘",
+        "买入",
+        "卖出",
+        "今日",
+        "为",
+        "的仓位是",
+        "我的仓位是",
+        "我的持仓为",
+        "现在为的仓位是",
+    }
     if text in noise_words:
         return True
-    return any(word in text for word in ("买入", "卖出", "涨停卖出"))
+    return any(word in text for word in ("买入", "卖出", "涨停卖出", "满仓", "只能", "可买"))
 
 
 def _position_share_text(position):
@@ -296,6 +486,9 @@ def _format_account_profile(position):
         parts.append(f"当日盈利{daily_profit}（{sign}{daily_profit_pct}%）")
     elif daily_profit:
         parts.append(f"当日盈利{daily_profit}")
+    elif daily_profit_pct:
+        sign = "+" if not daily_profit_pct.startswith("-") else ""
+        parts.append(f"当日盈利{sign}{daily_profit_pct}%")
     return "；".join(parts) or "约1w账户"
 
 

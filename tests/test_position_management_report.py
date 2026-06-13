@@ -180,6 +180,60 @@ assert report == "# report"
             ],
         )
 
+    def test_parse_position_string_extracts_bare_t0_holding_name(self):
+        module = self._load_module()
+
+        result = module.parse_position_string("我今天持仓是华电辽能做T")
+
+        self.assertEqual(result, [{"name": "华电辽能", "trade_action": "做T"}])
+
+    def test_parse_position_string_extracts_bare_t0_holding_name_with_holding_prefixes(self):
+        module = self._load_module()
+
+        cases = [
+            "今日持仓为华电辽能做T",
+            "持仓为华电辽能做T",
+        ]
+
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    module.parse_position_string(text),
+                    [{"name": "华电辽能", "trade_action": "做T"}],
+                )
+
+    def test_parse_position_string_keeps_percent_lots_and_t0_from_user_phrase(self):
+        module = self._load_module()
+
+        result = module.parse_position_string("我的持仓为50%的华电辽能 2手，满仓只能买4手，今天华电辽能做T")
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "name": "华电辽能",
+                    "position": 50.0,
+                    "lots": 2.0,
+                    "shares": 200,
+                    "trade_action": "做T",
+                }
+            ],
+        )
+
+    def test_personal_position_context_explains_bare_t0_holding(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("我今天持仓是华电辽能做T")
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600396", "name": "华电辽能"}]},
+            positions,
+        )
+
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "华电辽能(600396)，今日做T；若仍有旧仓，先按买点失败仓处理，09:50-10:10不能修复则优先处理；新开仓0手",
+        )
+
     def test_parse_position_string_reads_t1_holding_without_using_t_as_name(self):
         module = self._load_module()
 
@@ -204,6 +258,37 @@ assert report == "# report"
                 }
             ],
         )
+
+    def test_parse_position_string_keeps_failed_t0_review_details(self):
+        module = self._load_module()
+
+        result = module.parse_position_string(
+            "我的仓位是 华电辽能做T T失败了 0轴买入 尾盘卖出 全仓吃满-7%下跌"
+        )
+
+        self.assertEqual(
+            result,
+            [
+                {
+                    "name": "华电辽能",
+                    "position": 100.0,
+                    "daily_profit_pct": -7.0,
+                    "trade_action": "做T",
+                    "holding_note": "T失败；0轴买入；尾盘卖出；全仓吃满-7%下跌",
+                }
+            ],
+        )
+
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600396", "name": "华电辽能"}]},
+            result,
+        )
+        summary = context["existing_position_summary"]["summary"]
+        self.assertIn("T失败", summary)
+        self.assertIn("0轴买入", summary)
+        self.assertIn("尾盘卖出", summary)
+        self.assertIn("全仓吃满-7%下跌", summary)
+        self.assertEqual(context["account_profile"]["capital_text"], "当日盈利-7%")
 
     def test_personal_position_context_prefers_quote_with_close_price_for_old_holding(self):
         module = self._load_module()

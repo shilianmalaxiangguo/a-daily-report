@@ -32,8 +32,8 @@ class RuntimeContractsTest(unittest.TestCase):
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "主线弱转强执行预备态")
         self.assertIn("固定交易窗口", result["permission_reason"])
-        self.assertIn("50%标准进攻", result["permission_reason"])
-        self.assertNotIn(_m("30%", "条件试错"), result["permission_reason"])
+        self.assertIn("50%条件执行", result["permission_reason"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), result["permission_reason"])
 
     def test_trade_permission_maps_20cm_watch_contract_to_50_attack_preview(self):
         result = get_trade_permission_contract(
@@ -48,8 +48,8 @@ class RuntimeContractsTest(unittest.TestCase):
 
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "创业板20cm预启动观察权")
-        self.assertIn("50%标准进攻", result["permission_reason"])
-        self.assertNotIn(_m("30%", "条件试错"), result["permission_reason"])
+        self.assertIn("50%条件执行", result["permission_reason"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), result["permission_reason"])
 
     def test_trade_permission_grants_conviction_execute_on_resilient_abnormal(self):
         result = get_trade_permission_contract(
@@ -69,12 +69,12 @@ class RuntimeContractsTest(unittest.TestCase):
 
     def test_environment_display_contract_demotes_watch_only_to_defense(self):
         display = resolve_environment_display_contract(
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             final_gate={"operation_state": "进攻态", "can_new_entry": True},
             state_machine_snapshot={"execution_bias": "watch_only", "energy_state": "收缩防守"},
         )
 
-        self.assertEqual(display["position_level"], "二档（防守档）")
+        self.assertEqual(display["position_level"], "0%不参与")
         self.assertEqual(display["operation_state"], "防守态")
         self.assertIn("先看环境", display["headline"])
 
@@ -82,7 +82,7 @@ class RuntimeContractsTest(unittest.TestCase):
         reason = resolve_environment_reason_contract(
             position_reason="中枢已突破，积极做多",
             environment_display={
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "operation_state": "撤退态",
                 "headline": "环境关闭，只做等待，不做新增参与",
             },

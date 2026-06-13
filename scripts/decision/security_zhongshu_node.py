@@ -26,15 +26,15 @@ def _signal_texts(security_type: str) -> dict[str, str]:
         return {
             "breakout_status": "✅ 突破中枢",
             "breakout_signal_type": "大盘突破",
-            "breakout_position_level": "三档进攻档（50%）",
+            "breakout_position_level": "50%条件执行",
             "breakout_action": "积极做多",
             "down_status": "⚠️ 跌破中枢",
             "down_signal_type": "跌破支撑",
-            "down_position_level": "一档空仓档（0%）",
+            "down_position_level": "0%不参与",
             "down_action": "清仓观望",
             "range_status": "➖ 中枢内震荡",
             "range_signal_type": "按个股信号操作",
-            "range_position_level": "二档防守档（30%）",
+            "range_position_level": "0%不参与",
             "range_action": "精选个股",
         }
     return {

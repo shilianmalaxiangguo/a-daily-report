@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -87,7 +88,8 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
                 ),
             )
 
-            result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+            with patch("agent_runner.daily_report_agent_runner.assert_report_required_facts_complete", return_value={}):
+                result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
 
             self.assertEqual(result["status"], "error")
             self.assertEqual(result["error"]["message"], "回放数据不存在，停止生成：2026-05-24")
@@ -100,13 +102,14 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             def load_data(request):
                 self.assertEqual(request.target_date, "2026-05-24")
                 self.assertEqual(request.mode, "replay")
-                return {"sections": {"summary": "## 七、最终结论\n50% / 标准进攻"}}
+                return {"sections": {"summary": "## 七、最终结论\n50%条件执行"}}
 
             def build_outputs(data, target_date, **kwargs):
                 self.assertFalse(kwargs["emit_preflight"])
                 self.assertEqual(kwargs["run_mode"], "replay")
+                self.assertFalse(kwargs["persist_runtime_artifacts"])
                 return {
-                    "full": "# full report\n\n## 七、最终结论\n50% / 标准进攻",
+                    "full": "# full report\n\n## 七、最终结论\n50%条件执行",
                     "summary": "# summary",
                 }
 
@@ -167,7 +170,8 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
                 ),
             )
 
-            result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+            with patch("agent_runner.daily_report_agent_runner.assert_report_required_facts_complete", return_value={}):
+                result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
 
             run_dir = root / "reports" / "runs" / "2026-05-24"
             self.assertEqual(result["run_dir"], str(run_dir))
@@ -226,12 +230,51 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
                 ),
             )
 
-            runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+            with patch("agent_runner.daily_report_agent_runner.assert_report_required_facts_complete", return_value={}):
+                runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
 
             review_queue = root / "reports" / "runs" / "2026-05-24" / "review_queue.md"
             review_text = review_queue.read_text(encoding="utf-8")
             self.assertIn("critical_data_incomplete", review_text)
             self.assertIn("关键数据不完整，停止生成：中证全指", review_text)
+
+    def test_runner_stops_before_save_when_required_facts_are_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            calls = []
+
+            def build_outputs(data, target_date, **kwargs):
+                calls.append("build")
+                self.assertFalse(kwargs["persist_runtime_artifacts"])
+                return {"full": "# report"}
+
+            def save_outputs(*args, **kwargs):
+                calls.append("save")
+                raise AssertionError("report save should not run")
+
+            def write_ledger(*args, **kwargs):
+                calls.append("ledger")
+                raise AssertionError("decision ledger should not run")
+
+            runner = DailyReportAgentRunner(
+                root_dir=root,
+                dependencies=DailyReportAgentDependencies(
+                    load_data=lambda request: {"sample": True},
+                    build_report_outputs=build_outputs,
+                    save_report_outputs=save_outputs,
+                    write_decision_ledger_from_markdown=write_ledger,
+                    now=lambda: datetime(2026, 5, 24, 15, 1, 2),
+                ),
+            )
+
+            with patch(
+                "agent_runner.daily_report_agent_runner.assert_report_required_facts_complete",
+                side_effect=RuntimeError("2026-05-24 日报关键数据不完整，停止生成：主线证据"),
+            ):
+                result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(calls, ["build"])
 
     def test_runner_writes_error_artifacts_when_rendering_fails_without_live_data(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -249,7 +292,8 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
                 ),
             )
 
-            runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+            with patch("agent_runner.daily_report_agent_runner.assert_report_required_facts_complete", return_value={}):
+                runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
 
             self._assert_error_run_artifacts(root)
 

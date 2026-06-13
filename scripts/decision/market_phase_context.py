@@ -15,48 +15,48 @@ def _resolve_base_position(zs_signal_type, zs_signal_status, market_trend, zt_co
     if "形成中" in str(zs_signal_status or ""):
         if zs_signal_type in ["跌破支撑", "暴跌至下一中枢"]:
             return (
-                "一档（空仓档）",
+                "0%不参与",
                 f"当前中枢未满20根({zs_signal_status})且价格走弱，先空仓观察，不按有效日线中枢承接。",
                 is_dt_panic,
             )
         return (
-            "二档（防守档）",
-            f"当前中枢未满20根({zs_signal_status})，只作观察，不把形成中突破放大成三档进攻。",
+            "0%不参与",
+            f"当前中枢未满20根({zs_signal_status})，只作观察，不把形成中突破放大成50%条件执行。",
             is_dt_panic,
         )
 
     if zs_signal_type == "大盘突破":
         if is_dt_panic:
             return (
-                "二档（防守档）",
+                "0%不参与",
                 f"中枢已突破({zs_signal_status})，但跌停{dt_count}只≥{dt_panic_threshold}只为跌停潮(退潮期)，不猛干，持有但不新增",
                 is_dt_panic,
             )
         return (
-            "三档（进攻档）",
+            "50%条件执行",
             f"中枢已突破({zs_signal_status})，无跌停潮(dt={dt_count}<{dt_panic_threshold})，积极做多",
             is_dt_panic,
         )
 
     if zs_signal_type in ["跌破支撑", "暴跌至下一中枢"]:
         return (
-            "一档（空仓档）",
+            "0%不参与",
             f"中枢跌破({zs_signal_status})，半山腰接飞刀风险极高，必须空仓观望",
             is_dt_panic,
         )
 
     if zs_signal_type is None:
         if market_trend == "强势上涨" and zt_count > 40 and dt_count < 3 and len(main_sectors) >= 2:
-            return ("三档（进攻档）", "市场强势上涨，主线明确，赚钱效应明显（中枢数据不可用，纯情绪判断）", is_dt_panic)
+            return ("50%条件执行", "市场强势上涨，主线明确，赚钱效应明显（中枢数据不可用，纯情绪判断）", is_dt_panic)
         if market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 5 and len(main_sectors) >= 1:
-            return ("二档（防守档）", "市场震荡整理，有局部赚钱效应（中枢数据不可用，纯情绪判断）", is_dt_panic)
-        return ("一档（空仓档）", "市场调整明显，赚钱效应不足（中枢数据不可用，纯情绪判断）", is_dt_panic)
+            return ("50%条件执行", "市场震荡整理，有局部赚钱效应（中枢数据不可用，纯情绪判断）", is_dt_panic)
+        return ("0%不参与", "市场调整明显，赚钱效应不足（中枢数据不可用，纯情绪判断）", is_dt_panic)
 
     if market_trend == "强势上涨" and zt_count > 40 and not is_dt_panic:
-        return ("二档（防守档）", f"中枢内震荡({zs_signal_status})，但市场强势(涨停{zt_count}只)，可持有但不新增", is_dt_panic)
+        return ("50%条件执行", f"中枢内震荡({zs_signal_status})，但市场强势(涨停{zt_count}只)，只等固定交易窗口条件", is_dt_panic)
     if market_trend in ["小幅上涨", "震荡整理"] and zt_count > 20 and dt_count < 10:
-        return ("二档（防守档）", f"中枢内震荡({zs_signal_status})，市场温和，精选个股持有", is_dt_panic)
-    return ("一档（空仓档）", f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望", is_dt_panic)
+        return ("50%条件执行", f"中枢内震荡({zs_signal_status})，市场温和，精选个股持有", is_dt_panic)
+    return ("0%不参与", f"中枢内震荡({zs_signal_status})且市场偏弱，应清仓或极轻仓观望", is_dt_panic)
 
 
 def _chanlun_confirmation_is_unconfirmed(market_zhongshu):
@@ -176,11 +176,10 @@ def build_market_phase_context_contract(
     )
     chanlun_is_unconfirmed = _chanlun_confirmation_is_unconfirmed(market_zhongshu)
     if chanlun_is_unconfirmed:
-        if "三档" in str(base_position_level):
-            base_position_level = "二档（防守档）"
-            base_position_reason = "日K结构证据仍不完整，未确认前降为二档防守观察。"
+        if base_position_level == "50%条件执行":
+            base_position_reason = "日K结构证据仍不完整，未确认前必须等固定交易窗口确认。"
 
-    if base_position_level == "一档（空仓档）" and _is_index_recovery_inside_zhongshu(
+    if base_position_level == "0%不参与" and _is_index_recovery_inside_zhongshu(
         market_zhongshu,
         zs_signal_type,
         zt_count,
@@ -188,16 +187,16 @@ def build_market_phase_context_contract(
         dt_panic_threshold,
         exit_analysis,
     ):
-        base_position_level = "二档（防守档）"
+        base_position_level = "50%条件执行"
         base_position_reason = (
-            f"指数仍在上行中枢内({zs_signal_status})，单日跌停{dt_count}只和涨跌比偏弱只降为防守观察，"
+            f"指数仍在上行中枢内({zs_signal_status})，单日跌停{dt_count}只和涨跌比偏弱只保留条件执行观察，"
             "不直接判定空仓；明日仍需09:50-10:10窗口检查主线承接。"
         )
         _append_log(
             logs,
             "index_recovery_guard",
             "success",
-            "指数处在上行中枢内，阻止单日广度分歧直接打到空仓档",
+            "指数处在上行中枢内，阻止单日广度分歧直接打到0%不参与",
             zt_count=zt_count,
             dt_count=dt_count,
         )
@@ -228,7 +227,7 @@ def build_market_phase_context_contract(
     ):
         final_gate = {
             "gate_status": "可做",
-            "position_level": "三档（进攻档）",
+            "position_level": "50%条件执行",
             "operation_state": "进攻态",
             "can_new_entry": True,
             "can_hold": True,
@@ -263,7 +262,7 @@ def build_market_phase_context_contract(
     )
 
     price_info = None
-    if position_level not in ["一档（空仓档）", "二档（防守档）"]:
+    if position_level != "0%不参与":
         hot_rank_top30 = data.get("hot_rank_top30", [])
         if hot_rank_top30:
             price_info = calculate_price_range(hot_rank_top30[0])

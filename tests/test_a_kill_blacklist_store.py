@@ -156,7 +156,41 @@ class AKillBlacklistStoreTest(unittest.TestCase):
                         get_active_a_kill_records("2026-04-22", path=str(json_path))
             self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["records"][0]["name"], "json")
 
+    def test_postgres_only_runtime_accepts_database_service_local_default(self):
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def query_active_a_kill_cooling_records(self, target_date):
+                return [{"code": "000001", "name": "postgres", "remaining_days": 23}]
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            json_path = Path(tempdir) / "a_kill_blacklist.json"
+            json_path.write_text(
+                json.dumps({"records": [{"code": "000001", "name": "json", "a_kill_date": "2026-04-20"}]}),
+                encoding="utf-8",
+            )
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    active = get_active_a_kill_records("2026-04-22", path=str(json_path))
+            self.assertEqual(active[0]["name"], "postgres")
+            self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["records"][0]["name"], "json")
+
     def test_postgres_only_runtime_without_database_rejects_json_reader(self):
+        class StubService:
+            def is_postgres_backed(self):
+                return False
+
+        class StubDatabaseService:
+            @classmethod
+            def from_environment(cls):
+                return StubService()
+
         with tempfile.TemporaryDirectory() as tempdir:
             json_path = Path(tempdir) / "a_kill_blacklist.json"
             json_path.write_text(
@@ -173,9 +207,10 @@ class AKillBlacklistStoreTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
-                with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only A-kill cooling storage"):
-                    get_active_a_kill_records("2026-04-22", path=str(json_path))
+            with patch.object(store, "DatabaseService", StubDatabaseService, create=True):
+                with patch.dict("os.environ", {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "PostgreSQL-only A-kill cooling storage"):
+                        get_active_a_kill_records("2026-04-22", path=str(json_path))
             self.assertEqual(json.loads(json_path.read_text(encoding="utf-8"))["records"][0]["name"], "json")
 
 

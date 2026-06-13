@@ -25,7 +25,7 @@ class UseActionPlanTest(unittest.TestCase):
                     "strategy_contract": {
                         "contract_label": "conditional_entry",
                         "permission_label": "attack_50_ready",
-                        "action_plan": "沿军工进入50%标准进攻，前提是次日完成60分钟确认和参与窗口",
+                        "action_plan": "沿军工进入50%条件执行，前提是次日完成60分钟确认和参与窗口",
                     },
                 },
                 "decision": {
@@ -40,7 +40,7 @@ class UseActionPlanTest(unittest.TestCase):
 
         action_plan = result["patches"]["decision"]["action_plan"]
         self.assertEqual(action_plan["action_label"], "execute_50")
-        self.assertIn("50%标准进攻", action_plan["headline"])
+        self.assertIn("50%条件执行", action_plan["headline"])
         self.assertIn("军工", action_plan["headline"])
         self.assertIn("固定交易窗口条件", action_plan["trigger"])
         self.assertIn("竞价表态", action_plan["trigger"])
@@ -49,7 +49,7 @@ class UseActionPlanTest(unittest.TestCase):
         self.assertNotIn("参与窗口和60分钟确认", action_plan["trigger"])
         self.assertNotIn("同时成立", action_plan["trigger"])
         rendered = "\n".join(str(value) for value in action_plan.values())
-        self.assertNotIn(_m("30%", "条件试错"), rendered)
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), rendered)
         self.assertNotIn("attack_50_ready", rendered)
 
     def test_action_plan_builds_watch_only_summary_when_defensive(self):

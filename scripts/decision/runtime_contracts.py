@@ -67,7 +67,7 @@ def get_trade_permission_contract(
         }
 
     if watch_source == "gem_breathing_20cm":
-        gem_reason = "先看创业板20cm预启动能否走成右侧确认，并只在固定交易窗口内评估50%标准进攻；普通结构只看09:50-10:10窗口，不满足继续0%观察。"
+        gem_reason = "先看创业板20cm预启动能否走成右侧确认，并只在固定交易窗口内评估50%条件执行；普通结构只看09:50-10:10窗口，不满足继续0%不参与。"
         if pulse_action_reason:
             gem_reason = f"{pulse_action_reason}；{gem_reason}"
         if not is_mainline and mainline_name:
@@ -79,7 +79,7 @@ def get_trade_permission_contract(
         )
 
     if weak_to_strong_context.get("active") and execution_bias in ("watch_only", "prep_only", "divergence_only"):
-        weak_reason = "主线弱转强样本：第一波强势基础仍在，当前是假弱非真弱；先保留固定交易窗口预案，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口评估50%标准进攻。"
+        weak_reason = "主线弱转强样本：第一波强势基础仍在，当前是假弱非真弱；先保留固定交易窗口预案，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口评估50%条件执行。"
         if execution_bias == "divergence_only":
             weak_reason = f"{weak_reason}当前只做分歧承接，不直接追一致加速。"
         if pulse_action_reason:
@@ -191,27 +191,30 @@ def get_trade_permission_contract(
 def resolve_environment_display_contract(position_level="", final_gate=None, state_machine_snapshot=None):
     final_gate = final_gate or {}
     state_machine_snapshot = state_machine_snapshot or {}
-    display_position_level = str(position_level or final_gate.get("position_level", "") or "").strip() or "二档（防守档）"
+    display_position_level = str(position_level or final_gate.get("position_level", "") or "").strip() or "50%条件执行"
     display_operation_state = str(final_gate.get("operation_state", "") or state_machine_snapshot.get("operation_state", "") or "观察态").strip()
     execution_bias = str(state_machine_snapshot.get("execution_bias", "") or "").strip()
     energy_state = str(state_machine_snapshot.get("energy_state", "") or "").strip()
     headline = "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
 
-    if display_position_level == "一档（空仓档）" or execution_bias == "avoid" or display_operation_state == "撤退态":
-        display_position_level = "一档（空仓档）"
+    if display_position_level == "0%不参与" or execution_bias == "avoid" or display_operation_state == "撤退态":
+        display_position_level = "0%不参与"
         display_operation_state = "撤退态"
         headline = "环境关闭，只做等待，不做新增参与"
-    elif execution_bias in ("watch_only", "prep_only", "divergence_only", "reduce_only"):
-        if display_position_level != "一档（空仓档）":
-            display_position_level = "二档（防守档）"
+    elif execution_bias == "prep_only":
+        display_position_level = "50%条件执行"
         display_operation_state = "防守态"
         headline = "先看环境，再决定是否保留观察权/旧仓处理权"
-    elif energy_state == "收缩防守" and display_position_level != "一档（空仓档）":
-        display_position_level = "二档（防守档）"
+    elif execution_bias in ("watch_only", "divergence_only", "reduce_only"):
+        display_position_level = "0%不参与"
+        display_operation_state = "防守态"
+        headline = "先看环境，再决定是否保留观察权/旧仓处理权"
+    elif energy_state == "收缩防守" and display_position_level != "0%不参与":
+        display_position_level = "0%不参与"
         display_operation_state = "防守态"
         headline = "先看环境，再决定是否保留观察权/旧仓处理权"
     elif execution_bias == "allow_execute" and final_gate.get("can_new_entry"):
-        display_position_level = display_position_level or "三档（进攻档）"
+        display_position_level = display_position_level or "50%条件执行"
         display_operation_state = display_operation_state or "进攻态"
 
     return {
@@ -232,7 +235,7 @@ def resolve_environment_reason_contract(position_reason="", environment_display=
     energy_state = str(state_machine_snapshot.get("energy_state", "") or "").strip()
     state_reason = str(state_machine_snapshot.get("state_reason", "") or "").strip()
 
-    if display_position_level == "一档（空仓档）" or execution_bias == "avoid" or display_operation_state == "撤退态":
+    if display_position_level == "0%不参与" or execution_bias == "avoid" or display_operation_state == "撤退态":
         parts = [
             part
             for part in (
@@ -244,7 +247,7 @@ def resolve_environment_reason_contract(position_reason="", environment_display=
             if part
         ]
         return "；".join(parts)
-    if display_position_level == "二档（防守档）" and execution_bias in ("watch_only", "prep_only", "divergence_only", "reduce_only"):
+    if display_position_level == "50%条件执行" and execution_bias == "prep_only":
         parts = [
             part
             for part in (

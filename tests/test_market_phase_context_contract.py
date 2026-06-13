@@ -132,12 +132,12 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
         )
 
-        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertEqual(result["position_level"], "50%条件执行")
         self.assertTrue(result["final_gate"]["can_hold"])
-        self.assertFalse(result["final_gate"]["can_new_entry"])
+        self.assertTrue(result["final_gate"]["can_new_entry"])
         self.assertIn("09:50-10:10窗口", result["final_gate"]["final_action"])
-        self.assertIn("50%标准进攻", result["final_gate"]["final_action"])
-        self.assertNotIn(_m("30%", "条件试错"), result["final_gate"]["final_action"])
+        self.assertIn("50%条件执行", result["final_gate"]["final_action"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), result["final_gate"]["final_action"])
         self.assertIn("指数仍在上行中枢内", result["position_reason"])
         self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
 
@@ -167,7 +167,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             },
             merge_position_gate=lambda position_level, exit_analysis: {
                 "gate_status": "防守",
-                "position_level": "二档（防守档）",
+                "position_level": "0%不参与",
                 "operation_state": "防守态",
                 "can_new_entry": False,
                 "can_hold": True,
@@ -187,7 +187,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
         )
 
-        self.assertEqual(result["position_level"], "三档（进攻档）")
+        self.assertEqual(result["position_level"], "50%条件执行")
         self.assertTrue(result["final_gate"]["can_new_entry"])
         self.assertIn("普涨行情允许围绕最强趋势参与", result["final_gate"]["final_action"])
         self.assertEqual(result["environment_display"]["headline"], "环境可做")
@@ -247,7 +247,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
         )
 
-        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertEqual(result["position_level"], "0%不参与")
         self.assertFalse(result["final_gate"]["can_new_entry"])
         self.assertNotIn("中枢突破是最高优先级信号", result["final_gate"].get("gate_reason", ""))
         self.assertIn("未满20根", result["position_reason"])
@@ -293,7 +293,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda item: {},
         )
 
-        self.assertIn("防守", result["position_level"])
+        self.assertEqual(result["position_level"], "0%不参与")
         self.assertFalse(result["final_gate"]["can_new_entry"])
         self.assertIn("未确认", result["position_reason"])
 
@@ -343,7 +343,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda item: {},
         )
 
-        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertEqual(result["position_level"], "50%条件执行")
         self.assertFalse(result["final_gate"]["can_new_entry"])
         self.assertNotIn("中枢突破是最高优先级信号", result["final_gate"].get("gate_reason", ""))
         self.assertNotIn("积极做多", result["position_reason"])
@@ -400,7 +400,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             calculate_price_range=lambda item: {},
         )
 
-        self.assertEqual(result["position_level"], "二档（防守档）")
+        self.assertEqual(result["position_level"], "50%条件执行")
         self.assertTrue(any(log["step"] == "index_recovery_guard" for log in result["module_logs"]))
         self.assertIn("日K结构证据", result["position_reason"])
         self.assertIn("未确认", result["position_reason"])
@@ -431,7 +431,7 @@ class MarketPhaseContextContractTest(unittest.TestCase):
             },
             merge_position_gate=lambda position_level, exit_analysis: {
                 "gate_status": "撤退",
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "operation_state": "撤退态",
                 "can_new_entry": False,
                 "can_hold": False,
@@ -444,14 +444,14 @@ class MarketPhaseContextContractTest(unittest.TestCase):
                 "energy_state": "收缩防守",
             },
             resolve_environment_display_contract=lambda **kwargs: {
-                "position_level": "一档（空仓档）",
+                "position_level": "0%不参与",
                 "operation_state": "撤退态",
                 "headline": "环境关闭",
             },
             calculate_price_range=lambda stock: {"buy_range": "9.8 - 10.2"},
         )
 
-        self.assertEqual(result["position_level"], "一档（空仓档）")
+        self.assertEqual(result["position_level"], "0%不参与")
         self.assertIsNone(result["price_info"])
         self.assertIn("主线退潮确认", result["position_reason"])
         self.assertTrue(any(log["step"] == "final_position" for log in result["module_logs"]))

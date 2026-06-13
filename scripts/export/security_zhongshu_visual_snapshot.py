@@ -37,7 +37,7 @@ def _stock_to_bs_code(stock_code: str) -> str:
 
 
 def _load_cached_stock_kline_rows(target_date: str, security_code: str) -> list[dict[str, Any]]:
-    cache_path = SCRIPTS_ROOT.parent / "data" / "snap-ui" / "stock-klines" / f"{target_date}-{security_code}.json"
+    cache_path = SCRIPTS_ROOT.parent / "data" / "market-facts" / "stock-klines" / f"{target_date}-{security_code}.json"
     rows: list[dict[str, Any]] = []
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -154,9 +154,9 @@ def run_analysis(
         if cached_rows:
             bars = _merge_kline_rows_by_date(bars, cached_rows)
             data_source = (
-                "market_data.daily_price_runtime.fetch_daily_price_bars + data/snap-ui/stock-klines"
+                "market_data.daily_price_runtime.fetch_daily_price_bars + data/market-facts/stock-klines"
                 if has_fast_bars
-                else "data/snap-ui/stock-klines"
+                else "data/market-facts/stock-klines"
             )
     frame = pd.DataFrame(bars)
     if frame.empty:

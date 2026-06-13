@@ -91,6 +91,21 @@ class ChanlunRuntimeContractTest(unittest.TestCase):
             contracts.DATA_INSUFFICIENT,
         )
 
+    def test_hybrid_mode_passes_target_date_when_provided(self):
+        calls = []
+
+        def fetch_minute_bars(**kwargs):
+            calls.append(kwargs)
+            return {"status": "empty_source", "bars": []}
+
+        runtime.analyze_hybrid_structure(
+            daily_rows=_daily_rows(),
+            fetch_minute_bars=fetch_minute_bars,
+            target_date="2026-04-23",
+        )
+
+        self.assertEqual(calls, [{"index_code": "sh.000001", "period": "60", "target_date": "2026-04-23"}])
+
 
 if __name__ == "__main__":
     unittest.main()

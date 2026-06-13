@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from daily_report_entry_demo import replay_from_snapshot
-from daily_report_render import build_report_outputs, save_report_outputs
+from daily_report_render import assert_report_required_facts_complete, build_report_outputs, save_report_outputs
 from report.decision_ledger import write_decision_ledger_artifacts_from_markdown_report
 from report.report_run_audit import audit_daily_report_run
 
@@ -87,7 +87,9 @@ class DailyReportAgentRunner:
                 request.target_date,
                 run_mode=request.mode,
                 emit_preflight=False,
+                persist_runtime_artifacts=False,
             )
+            assert_report_required_facts_complete(data, request.target_date, run_mode=request.mode)
             output_paths = self.dependencies.save_report_outputs(
                 report_outputs,
                 request.target_date,

@@ -28,7 +28,7 @@ def _template_path() -> Path:
 
 
 def _echarts_source_path() -> Path:
-    return _repo_root() / "snap-ui" / "node_modules" / "echarts" / "dist" / "echarts.min.js"
+    return _repo_root() / ".generated" / "vendor" / "echarts" / "echarts.min.js"
 
 
 def _echarts_loader_html() -> str:

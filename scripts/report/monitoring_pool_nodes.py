@@ -52,7 +52,7 @@ def build_main_pool_details_node(context, node_meta=None, node_lookup=None):
         lines.extend([
             f'#### 主池明细 - {stock_label}',
             '',
-            f"- **观察锚点**: {item.get('anchor_price', '-')}",
+            f"- **观察价位**: {item.get('anchor_price', '-')}",
             f"- **容忍带**: {item.get('observation_band_low', '-')} ~ {item.get('observation_band_high', '-')}",
             f"- **失真线**: {item.get('failure_line', '-')}",
             f"- **当前原因**: {item.get('assessment_reason', '-')}",
@@ -100,7 +100,7 @@ def build_secondary_pool_details_node(context, node_meta=None, node_lookup=None)
         lines.extend([
             f'#### 副池明细 - {stock_label}',
             '',
-            f"- **观察锚点**: {item.get('anchor_price', '-')}",
+            f"- **观察价位**: {item.get('anchor_price', '-')}",
             f"- **容忍带**: {item.get('observation_band_low', '-')} ~ {item.get('observation_band_high', '-')}",
             f"- **失真线**: {item.get('failure_line', '-')}",
             f"- **当前原因**: {item.get('assessment_reason', '-')}",

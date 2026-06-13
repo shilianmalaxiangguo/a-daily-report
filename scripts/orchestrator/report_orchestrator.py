@@ -7,7 +7,6 @@ from hooks.input.use_hot_rank import run as run_hot_rank
 from hooks.knowledge.use_llm_wiki import run as run_llm_wiki
 from hooks.knowledge.use_trading_philosophy import run as run_trading_philosophy
 from hooks.persist.use_snapshot_persistence import run as run_snapshot_persistence
-from hooks.publish.use_snap_ui_public_data import run as run_snap_ui_public_data_publish
 from hooks.report.use_markdown_document import run as run_markdown_document
 from hooks.report.use_report_sections import run as run_report_sections
 from hooks.report.use_report_stages import run as run_report_stages
@@ -30,10 +29,5 @@ def build_report(request):
         ("report.markdown_document", run_markdown_document),
     ]
     if not request.get("postgres_only"):
-        hooks.extend(
-            [
-                ("persist.snapshot", run_snapshot_persistence),
-                ("publish.snap_ui_public_data", run_snap_ui_public_data_publish),
-            ]
-        )
+        hooks.append(("persist.snapshot", run_snapshot_persistence))
     return run_pipeline(request=request, hooks=hooks)

@@ -92,7 +92,7 @@ class MonitoringPoolNodeRuntimeTest(unittest.TestCase):
         rendered = '\n'.join(result['lines'])
         self.assertIn('主监测池', rendered)
         self.assertIn('副监测池', rendered)
-        self.assertIn('观察锚点', rendered)
+        self.assertIn('观察价位', rendered)
         self.assertIn('博杰股份(002975)', rendered)
         self.assertIn('石大胜华(603026)', rendered)
         self.assertNotIn('| 标的 | 交易日数 |', rendered)

@@ -33,13 +33,13 @@ class UseStrategyContractTest(unittest.TestCase):
         self.assertEqual(contract["permission_label"], "execute_50")
         self.assertIn("固定交易窗口条件", contract["gate_chain"])
         self.assertIn("军工", contract["action_plan"])
-        self.assertIn("50%标准进攻", contract["action_plan"])
+        self.assertIn("50%条件执行", contract["action_plan"])
         self.assertIn("固定交易窗口条件", contract["action_plan"])
         self.assertIn("强核心", contract["action_plan"])
         self.assertIn("普通结构", contract["action_plan"])
         self.assertNotIn("参与窗口和60分钟确认", contract["action_plan"])
         self.assertNotIn("同时成立", contract["action_plan"])
-        self.assertNotIn(_m("30%", "条件试错"), contract["action_plan"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), contract["action_plan"])
         self.assertEqual(
             result["patches"]["diagnostics"]["derivations"]["strategy_contract"]["hook_name"],
             "infer.strategy_contract",

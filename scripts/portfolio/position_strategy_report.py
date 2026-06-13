@@ -10,31 +10,31 @@ MARKET_SCENARIOS = [
     {
         "heading": "上证单边上升",
         "holding_action": "强于板块锚点的持仓继续持有；上升趋势：站上MA3并守MA7才允许持有或加仓；冲高后二次不过高、跌回均价线或先于指数翻绿时减仓。",
-        "new_action": "只允许对大盘、板块、锚点、个股同时确认的极度看好目标按固定交易窗口条件试错。",
+        "new_action": "只允许对大盘、板块、锚点、个股同时确认的极度看好目标按固定交易窗口条件执行。",
         "forbidden": "不因指数上涨扩大随机仓位，不把旧仓反弹当新机会买点。",
     },
     {
         "heading": "上证震荡",
         "holding_action": "旧仓不能主动走强就按弱处理；反抽优先降风险，避免在噪音里反复交易。",
-        "new_action": "明日目标标的保留50%标准进攻预演，只等右侧放量突破并守住均价线。",
+        "new_action": "明日目标标的保留50%条件执行，只等右侧放量突破并守住均价线。",
         "forbidden": "不把一分钟止跌当买点，不因候选池好看就临盘换仓。",
     },
     {
         "heading": "上证单边下跌",
         "holding_action": "只处理旧仓风险；下降趋势：MA20下方不主动开新仓；跌破计划防守线、反抽不过均价线或同步新低时执行卖出。",
-        "new_action": "只保留明日目标标的的条件仓位，至少等下一次V反或W底确认后再评估50%标准进攻预演。",
+        "new_action": "只保留明日目标标的的条件仓位，至少等下一次V反或W底确认后再评估50%条件执行。",
         "forbidden": "不因跌得多就买，不用新机会抵消旧仓亏损。",
     },
     {
         "heading": "上证M顶",
         "holding_action": "把冲高二次不过高当卖点；M顶：跌破MA7先降风险，跌破MA10认错；跌回均价线或破日内平台时降低隔夜暴露。",
-        "new_action": "只保留明日目标标的的条件仓位；只有重新放量突破日内高点并站稳才评估50%标准进攻预演。",
+        "new_action": "只保留明日目标标的的条件仓位；只有重新放量突破日内高点并站稳才评估50%条件执行。",
         "forbidden": "不把派发形态误判成进攻延续，不卖飞追回。",
     },
     {
         "heading": "上证W底",
         "holding_action": "W底：第二脚不破低点，站回MA3/MA7后才试；持仓先于指数修复时可继续观察，W失败则先降风险。",
-        "new_action": "第二脚确认、站回MA3/MA7、板块锚点止跌后，才允许小仓试错。",
+        "new_action": "第二脚确认、站回MA3/MA7、板块锚点止跌后，才允许50%条件执行。",
         "forbidden": "不在第一脚低点提前猜底，不为了摊低成本新增仓位。",
     },
     {
@@ -173,7 +173,7 @@ def _format_recommended_position(plan):
     attack_state = _clean_text(plan.get("attack_state"), "50%").replace("％", "%")
     if "100" in attack_state:
         return "100%核心进攻候选"
-    return "50%标准进攻预演"
+    return "50%条件执行"
 
 
 def _render_tomorrow_target_lines(candidates, data):
@@ -328,7 +328,7 @@ def _holding_identity_action(identity_kind):
         return "当前仍在明日极度看好；先按原参与脚本验证强弱，强于锚点才持有，走弱仍按旧仓风控处理。"
     if identity_kind == "prior_high_inertia":
         return (
-            "昨日高惯性/重点观察样本，保留延续观察资格，但不是当前新买按钮；"
+            "昨日高惯性/过程观察样本，保留延续观察资格，但不是当前新买按钮；"
             "开盘强攻路径只看急拉、几千万级大单净流入和封板/回封质量，"
             "10点路径看09:50-10:10筹码交换后不再下杀，并站回分时黄线/0轴；"
             "确认失败就降为普通旧仓风控，不为摊低成本加仓。"
@@ -350,11 +350,27 @@ def _format_lots(value):
 
 
 def _format_holding_position_text(position):
+    def _join_trade_context(base):
+        parts = [base] if base else []
+        if position.get("trade_action") == "做T":
+            buy_text = _format_lots(position.get("buy_lots"))
+            sell_text = _format_lots(position.get("sell_lots"))
+            trade_parts = []
+            if buy_text:
+                trade_parts.append(f"买入{buy_text}")
+            if sell_text:
+                trade_parts.append(f"卖出{sell_text}")
+            parts.append(f"今日做T{'、'.join(trade_parts)}" if trade_parts else "今日做T")
+        note = _clean_text(position.get("holding_note"), "")
+        if note:
+            parts.append(note)
+        return "，".join(parts) if parts else "-"
+
     pct = position.get("position", position.get("position_pct", None))
     if isinstance(pct, (int, float)):
-        return f"{pct:.1f}%"
+        return _join_trade_context(f"{pct:.1f}%")
     if pct not in (None, ""):
-        return _clean_text(pct, "-")
+        return _join_trade_context(_clean_text(pct, "-"))
     shares = position.get("shares")
     if not shares and position.get("lots") not in (None, ""):
         shares = int(float(position.get("lots")) * 100)
@@ -365,17 +381,7 @@ def _format_holding_position_text(position):
     if shares:
         parts.append(f"{shares}股")
     base = "/".join(parts)
-    if position.get("trade_action") == "做T":
-        buy_text = _format_lots(position.get("buy_lots"))
-        sell_text = _format_lots(position.get("sell_lots"))
-        trade_parts = []
-        if buy_text:
-            trade_parts.append(f"买入{buy_text}")
-        if sell_text:
-            trade_parts.append(f"卖出{sell_text}")
-        trade_text = f"今日做T{'、'.join(trade_parts)}" if trade_parts else "今日做T"
-        return f"{base}，{trade_text}" if base else trade_text
-    return base or "-"
+    return _join_trade_context(base)
 
 
 def _render_holding_rows(positions, candidates, tracking_items, scenario):

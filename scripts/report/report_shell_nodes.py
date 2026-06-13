@@ -1,6 +1,12 @@
 from knowledge.trading_philosophy import PARTICIPATION_WINDOW_LAYER_TEXT
 
 
+def _new_entry_intraday_turnover_line(has_personal_positions, prefix="不做新仓日内回转"):
+    if has_personal_positions:
+        return f"- ✅ {prefix}：新开仓不做日内回转；旧仓只按持仓策略处理"
+    return f"- ✅ {prefix}：次日不做日内回转；若有旧仓，只按旧仓处理策略处理"
+
+
 def build_report_shell_preamble_node(context, node_meta=None, node_lookup=None):
     use_report_preamble = context["use_report_preamble"]
     return {
@@ -102,7 +108,7 @@ def _build_prohibition_payload(
         "risk_line": "",
     }
 
-    if display_position_level == "一档（空仓档）":
+    if display_position_level == "0%不参与":
         headline = environment_headline or "环境关闭，只做等待，不做新增参与"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
         payload["prohibition_items"].append("- ✅ 保持空仓：当前不新增参与")
@@ -112,13 +118,13 @@ def _build_prohibition_payload(
             payload["prohibition_items"].append("- ✅ 禁止恋战：若你有旧仓，只做退出，不做摊平和自救")
         payload["prohibition_items"].append("- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开")
         payload["prohibition_items"].append("- ✅ 禁止追高：不追涨任何股票")
-        payload["prohibition_items"].append("- ✅ 禁止做T：次日不做日内回转")
+        payload["prohibition_items"].append(_new_entry_intraday_turnover_line(has_personal_positions))
         payload["prohibition_items"].append("- ✅ 禁止模式外交易：不在主线里的票不碰")
-    elif display_position_level == "二档（防守档）":
+    elif not final_gate.get("can_new_entry"):
         headline = environment_headline or "先看特殊标的是否继续抗跌，只保留观察与固定交易窗口预案"
-        payload["environment_line"] = f"**次日市场环境**: 0%观察 / {display_operation_state} - {headline}"
+        payload["environment_line"] = f"**次日市场环境**: 0%不参与 / {display_operation_state} - {headline}"
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
-            payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%观察；{PARTICIPATION_WINDOW_LAYER_TEXT}，命中预演情境才评估50%标准进攻")
+            payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%不参与；{PARTICIPATION_WINDOW_LAYER_TEXT}，命中固定交易窗口条件才评估50%条件执行")
         else:
             payload["prohibition_items"].append("- ✅ 不新增参与：当前按0%不参与，固定交易窗口内条件未成立前只观察")
         if final_gate.get("should_reduce"):
@@ -134,7 +140,7 @@ def _build_prohibition_payload(
             else:
                 payload["prohibition_items"].append(f"- ⚠️ 只盯主攻线{primary_mainline}里最强的票：主线弱化时，杂毛先淘汰")
         payload["prohibition_items"].append("- ✅ 禁止追高：不买昨天或大前天的最高点个股")
-        payload["prohibition_items"].append("- ✅ 禁止做T：次日只买一种，不做日内回转")
+        payload["prohibition_items"].append(_new_entry_intraday_turnover_line(has_personal_positions))
         payload["prohibition_items"].append("- ✅ 禁止模式外交易：不在主线板块里的票不碰")
         if final_gate.get("should_reduce"):
             if has_personal_positions:
@@ -148,17 +154,17 @@ def _build_prohibition_payload(
                 payload["allowed_items"].append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%标准进攻")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%条件执行")
             else:
                 payload["allowed_items"].append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%标准进攻")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%条件执行")
     else:
         headline = environment_headline or "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"
         payload["prohibition_items"].append("- ✅ 禁止追高：不买昨天或大前天的最高点个股")
-        payload["prohibition_items"].append("- ✅ 禁止做T：次日只买一种，不做日内回转")
+        payload["prohibition_items"].append(_new_entry_intraday_turnover_line(has_personal_positions))
         payload["prohibition_items"].append("- ✅ 禁止模式外交易：不在主线板块里的票不碰")
         payload["prohibition_items"].append("- ✅ 禁止一看到市场转强就直接下单：没有缩到一只可买股之前，一律不开仓")
         payload["allowed_items"].append("- ✅ 先看特殊标的：先判断它们是深跌还是抗跌，再决定这轮调整是继续收还是重新攻")

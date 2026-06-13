@@ -92,6 +92,25 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| 华电辽能 | 2手/200股，今日做T买入2手、卖出2手 | 否 |", report)
         self.assertNotIn("| 卖2手 |", report)
 
+    def test_render_includes_failed_t0_review_note(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={},
+            target_date="2026-06-05",
+            positions=[
+                {
+                    "name": "华电辽能",
+                    "position": 100.0,
+                    "daily_profit_pct": -7.0,
+                    "trade_action": "做T",
+                    "holding_note": "T失败；0轴买入；尾盘卖出；全仓吃满-7%下跌",
+                }
+            ],
+        )
+
+        self.assertIn("| 华电辽能 | 100.0%，今日做T，T失败；0轴买入；尾盘卖出；全仓吃满-7%下跌 | 否 |", report)
+
     def test_save_position_strategy_report_writes_replay_path(self):
         from portfolio.position_strategy_report import save_position_strategy_report
 
@@ -161,7 +180,7 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertNotIn("| 步步高 | 002251 |", report)
         self.assertNotIn("| 大众公用 | 600635 |", report)
         self.assertNotIn("| 红星发展 | 600367 |", report)
-        self.assertNotIn("50%标准进攻预演 | 09:30-09:35", report)
+        self.assertNotIn("50%条件执行 | 09:30-09:35", report)
 
     def test_render_preserves_prior_high_inertia_identity_for_old_holding(self):
         from portfolio.position_strategy_report import render_position_strategy_report
@@ -277,7 +296,7 @@ class PositionStrategyReportTest(unittest.TestCase):
         )
 
         self.assertIn("## 明日目标标的", report)
-        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 50%标准进攻预演 |", report)
+        self.assertIn("| 汇源通信 | 000586 | 通信设备 | 50%条件执行 |", report)
         self.assertIn("条件不满足回到0%", report)
         non_ice_scripts = report.split("# 上证A杀", 1)[0]
         self.assertNotIn("默认不开新仓", non_ice_scripts)

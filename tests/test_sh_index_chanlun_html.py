@@ -117,7 +117,14 @@ class ShIndexChanlunHtmlTest(unittest.TestCase):
             "source_status": "success",
         }
 
-        html = render_sh_index_chanlun_html(payload)
+        with TemporaryDirectory() as tmp:
+            echarts_path = Path(tmp) / "echarts.min.js"
+            echarts_path.write_text(
+                "/* Licensed to the Apache Software Foundation */\nwindow.echarts={init:function(){return {setOption:function(){}}}};",
+                encoding="utf-8",
+            )
+            with patch("export.sh_index_chanlun_html._echarts_source_path", return_value=echarts_path):
+                html = render_sh_index_chanlun_html(payload)
 
         self.assertIn("<h1>2026-05-19 上证指数缠论拆解</h1>", html)
         self.assertIn("sh000001", html)
@@ -146,7 +153,14 @@ class ShIndexChanlunHtmlTest(unittest.TestCase):
             "ascii_diagram": "ZG 4232 | ====ZS1====",
         }
 
-        html = render_sh_index_chanlun_html(payload)
+        with TemporaryDirectory() as tmp:
+            echarts_path = Path(tmp) / "echarts.min.js"
+            echarts_path.write_text(
+                "/* Licensed to the Apache Software Foundation */\nwindow.echarts={init:function(){return {setOption:function(){}}}};",
+                encoding="utf-8",
+            )
+            with patch("export.sh_index_chanlun_html._echarts_source_path", return_value=echarts_path):
+                html = render_sh_index_chanlun_html(payload)
 
         self.assertIn("Licensed to the Apache Software Foundation", html)
         self.assertNotIn("cdn.jsdelivr", html)

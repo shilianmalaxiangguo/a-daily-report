@@ -417,7 +417,7 @@ def _validate_output_dirs(root: Path, public_dir: Path, private_dir: Path) -> No
     if public_resolved == private_resolved:
         raise ValueError("public_output_dir and private_output_dir must be separate directories")
 
-    allowed_snap_ui_generated = root_resolved / "snap-ui" / ".generated" / "daily-reports"
+    allowed_generated = root_resolved / ".generated" / "daily-reports"
     protected_roots = [
         root_resolved,
         root_resolved / "reports",
@@ -425,10 +425,10 @@ def _validate_output_dirs(root: Path, public_dir: Path, private_dir: Path) -> No
         root_resolved / "scripts",
         root_resolved / "tests",
         root_resolved / "wiki",
-        root_resolved / "snap-ui",
+        root_resolved / ".generated",
     ]
     for label, output_dir in [("public_output_dir", public_resolved), ("private_output_dir", private_resolved)]:
-        if _is_relative_to(output_dir, allowed_snap_ui_generated):
+        if _is_relative_to(output_dir, allowed_generated):
             continue
         for protected_root in protected_roots:
             if _is_relative_to(output_dir, protected_root):
