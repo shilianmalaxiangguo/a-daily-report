@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from html import escape
 from pathlib import Path
 from string import Template
@@ -9,6 +10,8 @@ from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
 from report.html_report_view import build_daily_report_view, missing_required_fact_labels
 
 
+# Structured dashboard renderer built from normalized facts, not the Bear
+# Markdown reader. Keep its checks separate from markdown_report_html.py.
 class DailyReportHtmlDataMissingError(RuntimeError):
     pass
 
@@ -21,6 +24,18 @@ def _template_path() -> Path:
     return Path(__file__).resolve().parents[1] / "templates" / "daily_report_reader.html"
 
 
+def _echarts_source_path() -> Path:
+    return _repo_root() / ".generated" / "vendor" / "echarts" / "echarts.min.js"
+
+
+def _echarts_loader_html() -> str:
+    source_path = _echarts_source_path()
+    if source_path.exists():
+        source = source_path.read_text(encoding="utf-8").replace("</script", "<\\/script")
+        return f"<script>\n{source}\n</script>"
+    return '<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
+
+
 def _html(value: Any) -> str:
     return escape(str(value if value is not None else ""), quote=True)
 
@@ -31,6 +46,17 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 def _as_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _json_for_html_script(value: Any) -> str:
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return (
+        text.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 def _target_label(value: Any) -> dict[str, Any] | str:
@@ -131,10 +157,12 @@ def _yes_no(value: Any) -> str:
 
 def _tomorrow_action_html(view: dict[str, Any]) -> str:
     action = _as_dict(view.get("tomorrow_action"))
+    target_row_label = "观察对象" if action.get("can_participate") is False else "参与对象"
+    target = action.get("primary_target") if action.get("can_participate") is not False else action.get("observation_target")
     rows = [
         ["明日仓位", action.get("position_state") or "待确认"],
         ["是否参与", _yes_no(action.get("can_participate"))],
-        ["参与对象", _target_label(action.get("primary_target")) or "无"],
+        [target_row_label, _target_label(target) or "无"],
         ["参与窗口", action.get("participation_window") or "待确认"],
         ["动作摘要", action.get("action_summary") or "待确认"],
         ["取消条件", "；".join(str(item) for item in _as_list(action.get("cancel_conditions"))) or "待确认"],
@@ -165,7 +193,9 @@ def _market_spine_html(view: dict[str, Any]) -> str:
 def _mainline_html(view: dict[str, Any]) -> str:
     item = _as_dict(view.get("mainline_evidence"))
     rows = [
-        ["确认主线", item.get("confirmed_line") or "待确认"],
+        ["周期主线", item.get("cycle_mainline") or item.get("confirmed_line") or "待确认"],
+        ["当天主攻线", item.get("daily_attack_line") or item.get("confirmed_line") or "待确认"],
+        ["两者关系", item.get("cycle_daily_relationship") or "待确认"],
         ["辅助方向", "；".join(str(value) for value in _as_list(item.get("supporting_lines"))) or "无"],
         ["攻击证据", "；".join(str(value) for value in _as_list(item.get("attack_evidence"))) or "待确认"],
         ["成交额占比", item.get("turnover_share") or "待确认"],
@@ -265,6 +295,8 @@ def render_daily_report_html(view: dict[str, Any]) -> str:
         participation_reviews=_reviews_html(view),
         data_sources=_data_sources_html(view),
         diagnostics=_diagnostics_html(view),
+        echarts_loader=_echarts_loader_html(),
+        charts_payload=_json_for_html_script(_as_dict(view.get("charts"))),
     )
 
 

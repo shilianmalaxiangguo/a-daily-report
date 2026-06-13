@@ -350,14 +350,101 @@
       border-top: 1px solid var(--reader-line);
     }
 
-    .reader-table {
-      display: block;
-      overflow-x: auto;
-      background: var(--reader-bg);
-      -webkit-overflow-scrolling: touch;
-    }
+	    .reader-table {
+	      display: block;
+	      overflow-x: auto;
+	      background: var(--reader-bg);
+	      -webkit-overflow-scrolling: touch;
+	    }
 
-    table {
+	    .bear-chart-card {
+	      position: relative;
+	      margin: 18px 0 22px;
+	      padding: 18px 18px 16px;
+	      overflow: hidden;
+	      border: 1px solid color-mix(in srgb, var(--reader-line) 82%, #ffffff);
+	      border-radius: 14px;
+	      background:
+	        radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent-red) 8%, transparent), transparent 30%),
+	        linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, var(--reader-surface) 44%, #ffffff) 100%);
+	      box-shadow: inset 0 1px 0 rgba(255,255,255,0.82), 0 14px 34px rgba(32, 24, 18, 0.06);
+	    }
+
+	    .bear-chart-card::before {
+	      content: "";
+	      position: absolute;
+	      inset: 0;
+	      pointer-events: none;
+	      background-image: radial-gradient(rgba(68,68,68,0.055) 0.7px, transparent 0.7px);
+	      background-size: 11px 11px;
+	      opacity: 0.45;
+	      mask-image: linear-gradient(180deg, rgba(0,0,0,0.88), transparent 72%);
+	    }
+
+	    .bear-chart-copy,
+	    .bear-chart-frame,
+	    .bear-chart-footnote {
+	      position: relative;
+	      z-index: 1;
+	    }
+
+	    .bear-chart-copy {
+	      display: grid;
+	      gap: 5px;
+	      margin-bottom: 12px;
+	    }
+
+	    .bear-chart-eyebrow {
+	      width: fit-content;
+	      padding: 2px 8px;
+	      border: 1px solid color-mix(in srgb, var(--accent-red) 28%, var(--reader-line));
+	      border-radius: 999px;
+	      background: color-mix(in srgb, var(--accent-soft) 42%, #ffffff);
+	      color: var(--accent-soft-text);
+	      font-family: "AvenirNext-DemiBold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+	      font-size: 12px;
+	      font-weight: 600;
+	      line-height: 1.45;
+	    }
+
+	    .bear-chart-copy h4 {
+	      margin: 0;
+	      color: var(--reader-heading);
+	      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+	      font-size: 1.12em;
+	      font-weight: 600;
+	      line-height: 1.45;
+	    }
+
+	    .bear-chart-copy p,
+	    .bear-chart-footnote {
+	      margin: 0;
+	      color: var(--reader-muted);
+	      font-size: 0.92em;
+	      line-height: 1.55;
+	    }
+
+	    .bear-chart-frame {
+	      height: 360px;
+	      padding: 8px 0 0;
+	      border-top: 1px solid color-mix(in srgb, var(--reader-line) 72%, transparent);
+	    }
+
+	    .bear-chart-frame.is-tall {
+	      height: 660px;
+	    }
+
+	    .bear-chart {
+	      width: 100%;
+	      height: 100%;
+	      min-height: 320px;
+	    }
+
+	    .bear-chart-footnote {
+	      margin-top: 10px;
+	    }
+
+	    table {
       border-collapse: separate;
       border-spacing: 0;
       width: max-content;
@@ -416,6 +503,45 @@
       color: var(--signal-green);
     }
 
+    .cycle-sector-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45em 1em;
+      align-items: center;
+      margin: -0.2em 0 0.85em;
+      color: var(--reader-muted);
+      font-size: 0.92em;
+    }
+
+    .cycle-sector-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35em;
+      white-space: nowrap;
+      color: var(--reader-text);
+      font-family: "AvenirNext-DemiBold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-weight: 600;
+    }
+
+    .cycle-sector-legend-dot {
+      width: 0.7em;
+      height: 0.7em;
+      border-radius: 999px;
+      background: var(--cycle-sector-color);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--cycle-sector-color) 16%, transparent);
+    }
+
+    .cycle-sector-label {
+      color: var(--cycle-sector-color);
+      font-family: "AvenirNext-Bold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
+      font-weight: 700;
+    }
+
+    .cycle-sector-label {
+      display: inline;
+      white-space: nowrap;
+    }
+
     ::selection {
       background: var(--accent-soft);
       color: var(--accent);
@@ -440,13 +566,27 @@
         display: none;
       }
 
-      .reader-document {
-        max-width: none;
-        padding: 28px 16px 52px;
-      }
+	      .reader-document {
+	        max-width: none;
+	        padding: 28px 16px 52px;
+	      }
 
-      .reader-header h1,
-      .markdown-body h1 {
+	      .bear-chart-card {
+	        margin: 16px -2px 20px;
+	        padding: 16px 12px 14px;
+	        border-radius: 12px;
+	      }
+
+	      .bear-chart-frame {
+	        height: 340px;
+	      }
+
+	      .bear-chart-frame.is-tall {
+	        height: 620px;
+	      }
+
+	      .reader-header h1,
+	      .markdown-body h1 {
         font-size: 1.8em;
       }
 
@@ -478,10 +618,12 @@
           $document_body
         </div>
       </div>
-    </article>
-  </main>
-  <script>
-    (() => {
+	    </article>
+	  </main>
+	  $echarts_loader
+	  <script type="application/json" id="bear-chart-payload">$chart_payload</script>
+	  <script>
+	    (() => {
       const outlineMarker = "$" + "outline_nav";
       const mobileMarker = "$" + "mobile_nav";
       const outlineTitleMarker = "$" + "outline_title";
@@ -541,10 +683,535 @@
             <h2 id="preview-action">六、明日执行计划</h2>
             <blockquote>最终 0% 时只观察，不新增参与。</blockquote>
           `;
-        }
-      }
+	        }
+	      }
 
-      const outline = document.querySelector(".outline-sticky");
+	      const chartPayloadNode = document.getElementById("bear-chart-payload");
+	      const chartPayload = (() => {
+	        if (!chartPayloadNode) {
+	          return {};
+	        }
+	        try {
+	          return JSON.parse(chartPayloadNode.textContent || "{}");
+	        } catch (_error) {
+	          return {};
+	        }
+	      })();
+
+	      const escapeText = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+	        "&": "&amp;",
+	        "<": "&lt;",
+	        ">": "&gt;",
+	        '"': "&quot;",
+	        "'": "&#39;",
+	      })[char]);
+
+	      const cssValue = (name, fallback) => {
+	        const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+	        return value || fallback;
+	      };
+
+	      const chartTone = {
+	        text: cssValue("--reader-text", "#444444"),
+	        muted: cssValue("--reader-muted", "#888888"),
+	        line: cssValue("--reader-line", "#d9d9d9"),
+	        red: cssValue("--accent-red", "#DD4C4F"),
+	        green: cssValue("--signal-green", "#07C160"),
+	        surface: cssValue("--reader-surface", "#F3F5F7"),
+	      };
+
+	      const numberValue = (value) => Number.isFinite(Number(value)) ? Number(value) : 0;
+	      const formatAmount = (value) => `${numberValue(value).toFixed(2)}亿`;
+	      const formatSignedAmount = (value) => {
+	        const number = numberValue(value);
+	        return `${number >= 0 ? "+" : "-"}${Math.abs(number).toFixed(2)}亿`;
+	      };
+	      const formatPct = (value) => `${numberValue(value).toFixed(1)}%`;
+	      const formatSignedPct = (value) => {
+	        if (value === null || value === undefined || value === "") {
+	          return "待确认";
+	        }
+	        const number = numberValue(value);
+	        return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
+	      };
+	      const formatCount = (value) => `${numberValue(value).toFixed(0)}只`;
+	      const compactAxisLabel = (value) => {
+	        const text = String(value ?? "");
+	        return text.length > 10 ? `${text.slice(0, 9)}…` : text;
+	      };
+	      const compactDateLabel = (value) => String(value ?? "").replace(/^\d{4}-/, "");
+
+	      const baseChartOption = () => ({
+	        backgroundColor: "transparent",
+	        animationDuration: 520,
+	        animationEasing: "cubicOut",
+	        textStyle: {
+	          color: chartTone.text,
+	          fontFamily: '"Avenir Next", "PingFang SC", sans-serif',
+	        },
+	        tooltip: {
+	          trigger: "item",
+	          confine: true,
+	          appendToBody: false,
+	          backgroundColor: "rgba(255,255,255,0.96)",
+	          borderColor: chartTone.line,
+	          borderWidth: 1,
+	          padding: [8, 10],
+	          textStyle: {
+	            color: chartTone.text,
+	            fontSize: 12,
+	            lineHeight: 18,
+	          },
+	          extraCssText: "max-width:260px;white-space:normal;box-shadow:0 10px 28px rgba(32,24,18,.12);border-radius:10px;",
+	        },
+	        grid: {
+	          left: 108,
+	          right: 46,
+	          top: 18,
+	          bottom: 28,
+	          containLabel: false,
+	        },
+	      });
+
+	      const renderMarketTurnoverTop50TrendChart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          color: ["rgba(221,76,79,0.58)", chartTone.red],
+	          grid: { left: 72, right: 72, top: 46, bottom: 44, containLabel: false },
+	          legend: {
+	            top: 8,
+	            right: 8,
+	            itemWidth: 10,
+	            itemHeight: 10,
+	            textStyle: { color: chartTone.muted, fontSize: 12 },
+	            data: ["两市成交额", "Top50占比"],
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            trigger: "axis",
+	            formatter: (params) => {
+	              const first = Array.isArray(params) ? params[0] : params;
+	              const item = first?.data?.item || {};
+	              return [
+	                `<strong>${escapeText(item.date)}</strong>`,
+	                `两市成交额：${escapeText(formatAmount(item.total_turnover))}`,
+	                `Top50成交额：${escapeText(item.top50_turnover == null ? "待确认" : formatAmount(item.top50_turnover))}`,
+	                `Top50占比：${escapeText(formatPct(item.top50_share_pct))}`,
+	                item.change_pct_point == null ? "" : `较前日：${escapeText(`${numberValue(item.change_pct_point) > 0 ? "+" : ""}${numberValue(item.change_pct_point).toFixed(2)}pct`)}`,
+	                item.state ? `状态：${escapeText(item.state)}` : "",
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          xAxis: {
+	            type: "category",
+	            data: items.map((item) => item.date),
+	            axisLabel: { color: chartTone.muted, formatter: compactDateLabel, rotate: items.length > 12 ? 34 : 0 },
+	            axisTick: { show: false },
+	            axisLine: { lineStyle: { color: chartTone.line } },
+	          },
+	          yAxis: [
+	            {
+	              type: "value",
+	              name: "成交额",
+	              nameTextStyle: { color: chartTone.muted },
+	              axisLabel: { color: chartTone.muted, formatter: (value) => `${Math.round(value)}亿` },
+	              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	            },
+	            {
+	              type: "value",
+	              name: "Top50占比",
+	              min: (value) => Math.min(16, Math.floor(value.min) - 1),
+	              max: (value) => Math.max(25, Math.ceil(value.max) + 1),
+	              nameTextStyle: { color: chartTone.muted },
+	              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+	              splitLine: { show: false },
+	            },
+	          ],
+	          series: [
+	            {
+	              name: "两市成交额",
+	              type: "bar",
+	              barWidth: "54%",
+	              data: items.map((item) => ({ value: numberValue(item.total_turnover), item })),
+	              itemStyle: { borderRadius: [7, 7, 0, 0] },
+	            },
+	            {
+	              name: "Top50占比",
+	              type: "line",
+	              yAxisIndex: 1,
+	              smooth: 0.32,
+	              symbol: "circle",
+	              symbolSize: 6,
+	              lineStyle: { width: 2.5 },
+	              data: items.map((item) => ({ value: numberValue(item.top50_share_pct), item })),
+	              markLine: {
+	                silent: true,
+	                symbol: "none",
+	                label: {
+	                  color: chartTone.muted,
+	                  formatter: "{b}",
+	                  position: "middle",
+	                  padding: [2, 6],
+	                  borderRadius: 999,
+	                  backgroundColor: "rgba(255,255,255,0.78)",
+	                },
+	                lineStyle: { color: chartTone.line, type: "dashed" },
+	                data: [
+	                  { yAxis: 20, name: "20%活跃" },
+	                  { yAxis: 18, name: "18%收缩" },
+	                ],
+	              },
+	            },
+	          ],
+	        });
+	        return chart;
+	      };
+
+	      const renderSectorTurnoverShareChart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          xAxis: {
+	            type: "value",
+	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	          },
+	          yAxis: {
+	            type: "category",
+	            inverse: true,
+	            data: items.map((item) => item.sector),
+	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+	            axisTick: { show: false },
+	            axisLine: { show: false },
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            formatter: (params) => {
+	              const item = params.data.item || {};
+	              const change = item.change_pct === null || item.change_pct === undefined
+	                ? "待确认"
+	                : `${numberValue(item.change_pct) > 0 ? "+" : ""}${numberValue(item.change_pct).toFixed(1)}pct`;
+	              return [
+	                `<strong>${escapeText(item.sector)}</strong>`,
+	                `占比：${escapeText(formatPct(item.share_pct))}`,
+	                `板块成交额：${escapeText(formatAmount(item.turnover))}`,
+	                `同板块变化：${escapeText(change)}`,
+	                item.note ? `解读：${escapeText(item.note)}` : "",
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          series: [{
+	            type: "bar",
+	            barWidth: 14,
+	            data: items.map((item) => ({ value: numberValue(item.share_pct), item })),
+	            itemStyle: {
+	              borderRadius: [0, 8, 8, 0],
+	              color: (params) => params.data.item.color || chartTone.red,
+	            },
+	            label: {
+	              show: true,
+	              position: "right",
+	              color: chartTone.muted,
+	              formatter: (params) => formatPct(params.value),
+	            },
+	          }],
+	        });
+	        return chart;
+	      };
+
+	      const renderTurnoverSectorShareChart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          grid: { left: 116, right: 86, top: 18, bottom: 28, containLabel: false },
+	          xAxis: {
+	            type: "value",
+	            max: (value) => Math.max(40, Math.ceil(value.max / 10) * 10),
+	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	          },
+	          yAxis: {
+	            type: "category",
+	            inverse: true,
+	            data: items.map((item) => item.sector),
+	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+	            axisTick: { show: false },
+	            axisLine: { show: false },
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            formatter: (params) => {
+	              const item = params.data.item || {};
+	              const leaders = Array.isArray(item.leaders)
+	                ? item.leaders.map((leader) => `${leader.name}${leader.status ? ` ${leader.status}` : ""}`).filter(Boolean).join(" / ")
+	                : "";
+	              return [
+	                `<strong>${escapeText(item.sector)}</strong>`,
+	                `板块占比：${escapeText(formatPct(item.share_pct))}`,
+	                `成交额合计：${escapeText(formatAmount(item.turnover))}`,
+	                `样本数量：${escapeText(formatCount(item.count))}`,
+	                `涨跌分布：红${escapeText(item.positive_count || 0)} / 绿${escapeText(item.negative_count || 0)}`,
+	                leaders ? `核心样本：${escapeText(leaders)}` : "",
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          series: [{
+	            name: "板块占比",
+	            type: "bar",
+	            barWidth: 16,
+	            data: items.map((item) => ({ value: numberValue(item.share_pct), item })),
+	            itemStyle: {
+	              borderRadius: [0, 9, 9, 0],
+	              color: (params) => params.data.item.color || chartTone.red,
+	            },
+	            label: {
+	              show: true,
+	              position: "right",
+	              color: chartTone.muted,
+	              formatter: (params) => {
+	                const item = params.data.item || {};
+	                return `${formatPct(params.value)} · ${formatCount(item.count)}`;
+	              },
+	            },
+	          }],
+	        });
+	        return chart;
+	      };
+
+	      const renderBoardTagRankBarChart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          grid: { left: 132, right: 92, top: 14, bottom: 28, containLabel: false },
+	          xAxis: {
+	            type: "value",
+	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}次` },
+	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	          },
+	          yAxis: {
+	            type: "category",
+	            inverse: true,
+	            data: items.map((item) => `${item.rank}. ${item.tag}`),
+	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+	            axisTick: { show: false },
+	            axisLine: { show: false },
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            formatter: (params) => {
+	              const item = params.data.item || {};
+	              return [
+	                `<strong>${escapeText(item.tag)}</strong>`,
+	                `出现次数：${escapeText(formatCount(item.count))}`,
+	                `全标签占比：${escapeText(formatPct(item.share_pct))}`,
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          series: [{
+	            name: "标签出现次数",
+	            type: "bar",
+	            barWidth: 14,
+	            data: items.map((item) => ({ value: numberValue(item.count), item })),
+	            itemStyle: {
+	              borderRadius: [0, 8, 8, 0],
+	              color: chartTone.red,
+	            },
+	            label: {
+	              show: true,
+	              position: "right",
+	              color: chartTone.muted,
+	              formatter: (params) => {
+	                const item = params.data.item || {};
+	                return `${formatCount(params.value)} · ${formatPct(item.share_pct)}`;
+	              },
+	            },
+	          }],
+	        });
+	        return chart;
+	      };
+
+	      const renderLhbNetFlowChart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const maxAbs = Math.max(1, ...items.map((item) => Math.abs(numberValue(item.amount))));
+	        const bound = Math.ceil(maxAbs * 1.2);
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          grid: { left: 132, right: 82, top: 20, bottom: 34, containLabel: false },
+	          xAxis: {
+	            type: "value",
+	            min: -bound,
+	            max: bound,
+            axisLabel: { color: chartTone.muted, formatter: (value) => value === 0 ? "" : `${Math.abs(value)}亿` },
+	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	          },
+	          yAxis: {
+	            type: "category",
+	            inverse: true,
+	            data: items.map((item) => `${item.side === "buy" ? "买" : "卖"} ${item.rank}. ${item.name}`),
+	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+	            axisTick: { show: false },
+	            axisLine: { show: false },
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            formatter: (params) => {
+	              const item = params.data.item || {};
+	              return [
+	                `<strong>${escapeText(item.name)}(${escapeText(item.code)})</strong>`,
+	                `方向：${item.side === "buy" ? "净买入" : "净流出"}`,
+	                `净额：${escapeText(formatSignedAmount(item.amount))}`,
+	                `板块：${escapeText(item.sector || "待确认")}`,
+	                `涨跌幅：${escapeText(formatSignedPct(item.change_pct))}`,
+	                item.status ? `状态：${escapeText(item.status)}` : "",
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          series: [{
+	            name: "龙虎榜净额",
+	            type: "bar",
+	            barWidth: 12,
+	            data: items.map((item) => ({ value: numberValue(item.amount), item })),
+	            itemStyle: {
+	              borderRadius: [7, 7, 7, 7],
+	              color: (params) => numberValue(params.data.item.amount) >= 0 ? chartTone.red : chartTone.green,
+	            },
+	            label: {
+	              show: true,
+	              position: "right",
+	              color: chartTone.muted,
+	              formatter: (params) => formatSignedAmount(params.value),
+	            },
+	            markLine: {
+	              silent: true,
+	              symbol: "none",
+	              label: { color: chartTone.muted, formatter: "0轴" },
+	              lineStyle: { color: chartTone.line },
+	              data: [{ xAxis: 0 }],
+	            },
+	          }],
+	        });
+	        return chart;
+	      };
+
+	      const renderTurnoverTop30Chart = (node, payload) => {
+	        const items = Array.isArray(payload?.items) ? payload.items : [];
+	        if (!items.length || !window.echarts) {
+	          return null;
+	        }
+	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+	        chart.setOption({
+	          ...baseChartOption(),
+	          grid: { left: 126, right: 92, top: 14, bottom: 28, containLabel: false },
+	          xAxis: {
+	            type: "value",
+	            axisLabel: { color: chartTone.muted, formatter: (value) => `${value}亿` },
+	            splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+	          },
+	          yAxis: {
+	            type: "category",
+	            inverse: true,
+	            data: items.map((item) => `${item.rank}. ${item.name}`),
+	            axisLabel: { color: chartTone.text, formatter: compactAxisLabel },
+	            axisTick: { show: false },
+	            axisLine: { show: false },
+	          },
+	          tooltip: {
+	            ...baseChartOption().tooltip,
+	            formatter: (params) => {
+	              const item = params.data.item || {};
+	              return [
+	                `<strong>${escapeText(item.rank)}. ${escapeText(item.name)}(${escapeText(item.code)})</strong>`,
+	                `成交额：${escapeText(formatAmount(item.turnover))}`,
+	                `涨跌幅：${escapeText(formatSignedPct(item.change_pct))}`,
+	                `板块：${escapeText(item.sector || "待确认")}`,
+	                item.status ? `状态：${escapeText(item.status)}` : "",
+	              ].filter(Boolean).join("<br>");
+	            },
+	          },
+	          series: [{
+	            name: "成交额",
+	            type: "bar",
+	            barWidth: 11,
+	            data: items.map((item) => ({ value: numberValue(item.turnover), item })),
+	            itemStyle: {
+	              borderRadius: [0, 7, 7, 0],
+	              color: (params) => numberValue(params.data.item.change_pct) < 0 ? chartTone.green : chartTone.red,
+	            },
+	            label: {
+	              show: true,
+	              position: "right",
+	              color: chartTone.muted,
+	              formatter: (params) => {
+	                const item = params.data.item || {};
+	                return item.status ? `${formatAmount(params.value)} · ${item.status}` : formatAmount(params.value);
+	              },
+	            },
+	          }],
+	        });
+	        return chart;
+	      };
+
+	      const renderedCharts = Array.from(document.querySelectorAll("[data-bear-chart]"))
+	        .map((node) => {
+	          const key = node.dataset.bearChart;
+	          if (key === "market_turnover_top50_trend") {
+	            return renderMarketTurnoverTop50TrendChart(node, chartPayload.market_turnover_top50_trend);
+	          }
+	          if (key === "sector_turnover_share") {
+	            return renderSectorTurnoverShareChart(node, chartPayload.sector_turnover_share);
+	          }
+	          if (key === "turnover_sector_share") {
+	            return renderTurnoverSectorShareChart(node, chartPayload.turnover_sector_share);
+	          }
+	          if (key === "turnover_top30") {
+	            return renderTurnoverTop30Chart(node, chartPayload.turnover_top30);
+	          }
+	          if (key === "board_tag_rank_bar") {
+	            return renderBoardTagRankBarChart(node, chartPayload.board_tag_rank_bar);
+	          }
+	          if (key === "lhb_net_flow") {
+	            return renderLhbNetFlowChart(node, chartPayload.lhb_net_flow);
+	          }
+	          return null;
+	        })
+	        .filter(Boolean);
+
+	      let chartResizeTicking = false;
+	      window.addEventListener("resize", () => {
+	        if (chartResizeTicking || !renderedCharts.length) {
+	          return;
+	        }
+	        chartResizeTicking = true;
+	        window.requestAnimationFrame(() => {
+	          for (const chart of renderedCharts) {
+	            chart.resize();
+	          }
+	          chartResizeTicking = false;
+	        });
+	      });
+
+	      const outline = document.querySelector(".outline-sticky");
       const nav = document.querySelector(".outline-nav");
       const links = Array.from(document.querySelectorAll(".outline-nav a[data-outline-anchor]"));
       const headings = links
