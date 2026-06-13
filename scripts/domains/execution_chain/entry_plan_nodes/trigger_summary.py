@@ -1,6 +1,49 @@
 from report.surface_wording import sanitize_user_visible_text
 
 
+def _is_process_candidate(candidate):
+    candidate = candidate if isinstance(candidate, dict) else {}
+    text_parts = [
+        candidate.get("permission_label"),
+        candidate.get("identity"),
+        candidate.get("target_role"),
+        candidate.get("candidate_role"),
+        candidate.get("status"),
+        candidate.get("source_pool"),
+        candidate.get("watch_source"),
+        candidate.get("observation_layer"),
+    ]
+    text = " ".join(str(part or "") for part in text_parts)
+    return "过程候选" in text or "process_observation" in text
+
+
+def _append_waiting_stock_lines(
+    lines,
+    waiting_stocks,
+    *,
+    title,
+    build_trade_price_focus,
+    build_observation_price_focus_text,
+    compose_observation_focus_text,
+    append_observation_price_focus_note,
+):
+    if not waiting_stocks:
+        return
+    lines.append(title)
+    for item in waiting_stocks:
+        reason = item.get("reason", "等待信号")
+        minute_plan = item.get("minute_plan") or {}
+        stop_plan = item.get("stop_plan")
+        price_focus = build_trade_price_focus(minute_plan, stop_plan)
+        confirm_price = minute_plan.get("confirm_price_60m")
+        confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
+        price_focus_text = build_observation_price_focus_text(price_focus)
+        lines.append(f"- ⏳ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '观察权')}：{reason}")
+        lines.append(f"  {compose_observation_focus_text(confirm_text, price_focus_text)}")
+        append_observation_price_focus_note(lines, price_focus)
+    lines.append("")
+
+
 def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=None):
     final_gate = context.get("final_gate", {}) or {}
     position_level = str(context.get("position_level", "") or "").strip()
@@ -100,18 +143,25 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
         lines.append("")
 
     if waiting_stocks:
-        lines.append(f"**明日继续观察**（{len(waiting_stocks)}只，等买点出现）:")
-        for item in waiting_stocks:
-            reason = item.get("reason", "等待信号")
-            minute_plan = item.get("minute_plan") or {}
-            stop_plan = item.get("stop_plan")
-            price_focus = build_trade_price_focus(minute_plan, stop_plan)
-            confirm_price = minute_plan.get("confirm_price_60m")
-            confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
-            price_focus_text = build_observation_price_focus_text(price_focus)
-            lines.append(f"- ⏳ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '观察权')}：{reason}")
-            lines.append(f"  {compose_observation_focus_text(confirm_text, price_focus_text)}")
-            append_observation_price_focus_note(lines, price_focus)
-        lines.append("")
+        process_waiting_stocks = [item for item in waiting_stocks if _is_process_candidate(item)]
+        current_waiting_stocks = [item for item in waiting_stocks if not _is_process_candidate(item)]
+        _append_waiting_stock_lines(
+            lines,
+            current_waiting_stocks,
+            title=f"**明日继续观察**（{len(current_waiting_stocks)}只，等买点出现）:",
+            build_trade_price_focus=build_trade_price_focus,
+            build_observation_price_focus_text=build_observation_price_focus_text,
+            compose_observation_focus_text=compose_observation_focus_text,
+            append_observation_price_focus_note=append_observation_price_focus_note,
+        )
+        _append_waiting_stock_lines(
+            lines,
+            process_waiting_stocks,
+            title=f"**过程候选回看**（{len(process_waiting_stocks)}只，不作为明日对象）:",
+            build_trade_price_focus=build_trade_price_focus,
+            build_observation_price_focus_text=build_observation_price_focus_text,
+            compose_observation_focus_text=compose_observation_focus_text,
+            append_observation_price_focus_note=append_observation_price_focus_note,
+        )
 
     return {"lines": sanitize_user_visible_text(lines), "exports": {}, "module_logs": []}

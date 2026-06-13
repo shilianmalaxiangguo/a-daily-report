@@ -1,5 +1,7 @@
 from report.surface_wording import sanitize_user_visible_text
 from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import blocked_current_observation_keys
 from report.trading_time_window_contract import normalize_trading_time_text
 
 
@@ -12,13 +14,13 @@ def _format_closed_gate_buy_limit_text(position_level, final_gate):
 
 def _format_position_display(position_level):
     text = str(position_level or "").strip()
-    if "一档" in text or "空仓" in text:
+    if text == "0%不参与" or "空仓" in text:
         return "0%不参与"
-    if "二档" in text or "防守" in text:
-        return "0%观察"
-    if "进攻" in text:
-        return "50%标准进攻"
-    return text or "0%观察"
+    if "防守" in text:
+        return "0%不参与"
+    if text == "50%条件执行" or "50%" in text or "进攻" in text:
+        return "50%条件执行"
+    return text or "0%不参与"
 
 
 def _is_ten_confirm_upgrade_candidate(candidate):
@@ -115,6 +117,14 @@ def _actionable_observation_candidates(candidates, incomplete_trace_codes=None):
     ]
 
 
+def _surface_observation_candidates(candidates):
+    return [
+        candidate
+        for candidate in list(candidates or [])
+        if candidate_can_be_current_observation_target(candidate)
+    ]
+
+
 def _preferred_observation_target(context):
     for key in ("front_page_selected_position_candidate", "selected_position_candidate"):
         candidate = context.get(key)
@@ -128,6 +138,81 @@ def _preferred_observation_target(context):
         if isinstance(candidate, dict) and _candidate_key(candidate):
             return candidate
     return None
+
+
+def _final_target_empty_without_current_observation(context):
+    if _selection_workflow_final_is_empty(context):
+        return True
+    if _final_resolution_waits_without_watch_target(context):
+        return True
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    if position_pct > 0 and _candidate_key(execution_object):
+        return False
+    return not bool(_selection_workflow_front_observation_target(workflow))
+
+
+def _selection_workflow_final_is_empty(context):
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    return position_pct <= 0 or not bool(_candidate_key(execution_object))
+
+
+def _final_resolution_waits_without_watch_target(context):
+    resolution = (context or {}).get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return False
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    if str(decision.get("capital_priority") or "").strip() != "wait":
+        return False
+    return not candidate_can_be_current_observation_target(resolution.get("watch_target"))
+
+
+def _selection_workflow_from_context(context):
+    sources = [context]
+    if isinstance(context, dict):
+        sources.extend([context.get("market_research_snapshot"), context.get("execution_stage_context")])
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if isinstance(workflow, dict) and workflow.get("schema_version") == "selection_workflow.v1":
+            return workflow
+    return {}
+
+
+def _position_pct(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _selection_workflow_front_observation_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    for candidate in workflow.get("candidate_pool", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("front_observation_qualified") is not True:
+            continue
+        if not candidate_can_be_current_observation_target(candidate):
+            continue
+        stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else candidate
+        if _candidate_key(stock):
+            return stock
+    return {}
 
 
 def _prioritize_final_observation_anchor(context, candidates):
@@ -185,8 +270,35 @@ def _build_action_plan_context_diagnostics(
     }
 
 
-def _sanitize_action_plan_context_payload(payload):
+def _empty_final_action_row():
+    return {
+        "action": "暂无执行预案",
+        "name": "-",
+        "code": "-",
+        "trigger": "当前最终对象为空，只回放过程候选，不新增参与",
+        "risk_window": "-",
+    }
+
+
+def _clear_current_object_payload_for_empty_final(payload):
+    updated = dict(payload or {})
+    updated["action_rows"] = [_empty_final_action_row()]
+    updated["observation_priority_lines"] = []
+    updated["backup_observation_lines"] = []
+    diagnostics = dict(updated.get("action_plan_context_diagnostics") or {})
+    diagnostics["action_row_count"] = 1
+    diagnostics["observation_priority_count"] = 0
+    diagnostics["backup_observation_count"] = 0
+    diagnostics["degraded"] = True
+    diagnostics["final_target_empty"] = True
+    updated["action_plan_context_diagnostics"] = diagnostics
+    return updated
+
+
+def _sanitize_action_plan_context_payload(payload, context=None):
     payload = dict(payload or {})
+    if _final_target_empty_without_current_observation(context or {}):
+        payload = _clear_current_object_payload_for_empty_final(payload)
     sanitized = {}
     for key in ACTION_PLAN_CONTEXT_EXPORT_KEYS:
         if key not in payload:
@@ -205,7 +317,7 @@ def build_action_plan_context_payload(context):
     context = context or {}
     existing_payload = context.get("action_plan_context_payload")
     if existing_payload is not None:
-        return _sanitize_action_plan_context_payload(existing_payload)
+        return _sanitize_action_plan_context_payload(existing_payload, context=context)
 
     trade_gate_open = context.get("trade_gate_open", False)
     best_stock = context.get("best_stock")
@@ -216,14 +328,26 @@ def build_action_plan_context_payload(context):
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
+    final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
+    if final_empty_without_current_observation:
+        best_stock = None
+        watch_anchor = None
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
     display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
+    blocked_observation_keys = blocked_current_observation_keys(display_observation_candidates)
+    display_observation_candidates = _surface_observation_candidates(display_observation_candidates)
+    if final_empty_without_current_observation:
+        display_observation_candidates = []
+    if not candidate_can_be_current_observation_target(watch_anchor) or _candidate_key(watch_anchor) in blocked_observation_keys:
+        watch_anchor = None
     incomplete_trace_codes = _incomplete_trace_codes_from_artifact(context.get("candidate_trace_artifact") or {})
     actionable_observation_candidates = _actionable_observation_candidates(
         display_observation_candidates,
         incomplete_trace_codes,
     )
     waiting_stocks = context.get("waiting_stocks", []) or []
+    if final_empty_without_current_observation:
+        waiting_stocks = []
     today_predictions = context.get("today_predictions", []) or []
     nextday_predictions = context.get("nextday_predictions", []) or []
 
@@ -256,6 +380,11 @@ def build_action_plan_context_payload(context):
         observation_candidates=display_observation_candidates,
         watch_anchor=quality_backup_anchor,
     )
+    if (
+        not candidate_can_be_current_observation_target(quality_backup_anchor)
+        or _candidate_key(quality_backup_anchor) in blocked_observation_keys
+    ):
+        scorecard_context["watch_anchor"] = None
     scorecard_payload = build_candidate_quality_scorecard_payload(scorecard_context)
     if old_position_first:
         panel_fields = dict(scorecard_payload.get("candidate_quality_panel_fields") or {})
@@ -340,7 +469,7 @@ def build_action_plan_context_payload(context):
                 "action": "⏳ 确认后执行预案",
                 "name": candidate.get("name"),
                 "code": candidate.get("code"),
-                "trigger": f"{confirm_text}，且板块承接不塌，固定交易窗口内条件成立后才评估50%标准进攻",
+                "trigger": f"{confirm_text}，且板块承接不塌，固定交易窗口内条件成立后才评估50%条件执行",
                 "risk_window": (price_focus or {}).get("key_zone_display", "-"),
             }
         )
@@ -401,13 +530,22 @@ def build_action_plan_context_payload(context):
         f"- **明日裁决**: {step0_prediction_cn}",
         f"- **怎么执行**: {normalize_trading_time_text(get_execution_framework_text())}",
     ]
-    if position_level == "一档（空仓档）":
-        if can_ten_confirm_upgrade and display_observation_candidates:
+    position_display = _format_position_display(position_level)
+    if position_display == "0%不参与":
+        if final_empty_without_current_observation:
             position_section_lines.extend(
                 [
-                    "- **现在到底是什么状态**: 0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
-                    "- **明天仓位放多少**: 盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
-                    "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，命中后才评估50%标准进攻，未命中继续0%",
+                    "- **现在到底是什么状态**: 0%不参与，不抢跑，候选只保留过程回看",
+                    "- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化",
+                    "- **明天具体怎么做**: 不新增参与；只看市场底色、主攻线承接和过程样本反馈",
+                ]
+            )
+        elif can_ten_confirm_upgrade and display_observation_candidates:
+            position_section_lines.extend(
+                [
+                    "- **现在到底是什么状态**: 0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径",
+                    "- **明天仓位放多少**: 盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
+                    "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，命中后才评估50%条件执行，未命中继续0%",
                 ]
             )
         else:
@@ -417,26 +555,6 @@ def build_action_plan_context_payload(context):
                     "- **明天仓位放多少**: 0%（保持空仓）",
                     "- **明天具体怎么做**: 不新增参与；若有旧仓只处理旧仓，否则保持空仓",
                 ]
-            )
-    elif position_level == "二档（防守档）":
-        position_section_lines.append("- **现在到底是什么状态**: 0%观察，等待固定交易窗口内条件")
-        if final_gate.get("should_reduce"):
-            position_section_lines.append("- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）")
-            position_section_lines.append(
-                "- **明天具体怎么做**: 只处理你的旧仓，去弱留强，不新增参与"
-                if has_personal_positions
-                else "- **明天具体怎么做**: 市场级原则是若你有旧仓就去弱留强，不新增参与"
-            )
-        else:
-            position_section_lines.append(
-                "- **明天仓位放多少**: 0%新仓（只处理旧仓，不新增）"
-                if has_personal_positions
-                else "- **明天仓位放多少**: 0%观察；固定交易窗口内条件成立后才评估50%标准进攻"
-            )
-            position_section_lines.append(
-                "- **明天具体怎么做**: 旧强仓可持有，弱仓按风险线处理；新观察对象只看不买"
-                if has_personal_positions
-                else "- **明天具体怎么做**: 只观察主线核心是否在固定交易窗口内满足条件；未满足0%，满足后才评估50%标准进攻"
             )
     else:
         if not best_stock:
@@ -468,7 +586,7 @@ def build_action_plan_context_payload(context):
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    "- **明天仓位放多少**: 50%标准进攻（只在固定交易窗口内条件成立后）",
+                    "- **明天仓位放多少**: 50%条件执行（只在固定交易窗口内条件成立后）",
                     "- **明天具体怎么做**: 严格按买点触发，不追涨；固定交易窗口内条件不满足就转为0%",
                 ]
             )
@@ -523,9 +641,21 @@ def build_action_plan_context_payload(context):
     opening_lines = [
         "- 观察涨跌比、昨日涨停溢价率",
         "- 重新评估Step 0裁决是否仍然成立",
-        "- 观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步",
-        "- 若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%",
     ]
+    if final_empty_without_current_observation:
+        opening_lines.extend(
+            [
+                "- 只观察主攻线承接和过程样本反馈，不把竞价强弱转成新增参与",
+                "- 若竞价表态和开盘承接同时成立，也只记为过程证据；不新增参与",
+            ]
+        )
+    else:
+        opening_lines.extend(
+            [
+                "- 观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步",
+                "- 若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%",
+            ]
+        )
     if trade_gate_open and best_stock:
         first_hour_lines = [
             "- 竞价/开盘前几分钟未触发时，只等09:50-10:10窗口内条件成立",
@@ -548,19 +678,30 @@ def build_action_plan_context_payload(context):
         ]
     else:
         if can_ten_confirm_upgrade:
-            first_hour_lines = [
-                "- 当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
-                "- 重点观察优先锚点是否继续走强；确认后才评估50%标准进攻，未确认保持0%",
-            ]
-            intraday_lines = [
-                "- 以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻",
-                "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
-                "- 若观察标的全天未形成更强确认 → 继续等待",
-            ]
+            if final_empty_without_current_observation:
+                first_hour_lines = [
+                    "- 当前是0%不参与，本时段只观察主线核心是否继续证明承接",
+                    "- 重点观察优先对象是否继续走强；确认后也只保留观察，未确认保持0%",
+                ]
+                intraday_lines = [
+                    "- 以观察和处理持仓为主；不新增参与",
+                    "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
+                    "- 若观察标的全天未形成更强确认 → 继续等待",
+                ]
+            else:
+                first_hour_lines = [
+                    "- 当前是0%不参与，本时段只确认主线核心是否在固定交易窗口内满足条件",
+                    "- 重点观察优先对象是否继续走强；确认后才评估50%条件执行，未确认保持0%",
+                ]
+                intraday_lines = [
+                    "- 以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%条件执行",
+                    "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
+                    "- 若观察标的全天未形成更强确认 → 继续等待",
+                ]
         else:
             first_hour_lines = [
                 "- 当前条件不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
-                "- 重点观察优先锚点是否继续走强；若你有旧仓，只处理旧仓，不做新增",
+                "- 重点观察优先对象是否继续走强；若你有旧仓，只处理旧仓，不做新增",
             ]
             intraday_lines = [
                 "- 以观察和处理持仓为主，不做新开仓",

@@ -1,10 +1,26 @@
 from report.surface_wording import sanitize_user_visible_text
 from report.sniper_target_derivation import stock_key as _derivation_stock_key
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
+    anchor_reversal_payload as _anchor_payload,
+    candidate_blocks_current_observation_target as _candidate_blocks_panel_watch_target,
+    candidate_can_be_current_observation_target as _candidate_can_be_panel_watch_target,
+    candidate_matches_any_key as _candidate_matches_blocked_panel_key,
+    candidate_key as _candidate_key,
+)
 
 
-def _candidate_key(candidate):
-    candidate = candidate or {}
-    return str(candidate.get("code") or candidate.get("代码") or candidate.get("name") or candidate.get("名称") or "").strip()
+def _clear_blocked_panel_target_fields(panel_fields, candidate_samples=None):
+    updated = dict(panel_fields or {})
+    blocked_keys = {
+        _candidate_key(candidate)
+        for candidate in list(candidate_samples or [])
+        if _candidate_blocks_panel_watch_target(candidate)
+    }
+    for key in ("primary_buy_candidate", "backup_candidate"):
+        candidate = updated.get(key)
+        if _candidate_blocks_panel_watch_target(candidate) or _candidate_matches_blocked_panel_key(candidate, blocked_keys):
+            updated[key] = None
+    return updated
 
 
 def _as_list(value):
@@ -247,29 +263,33 @@ def _quality_candidate(candidate, *, quality_role="", selection_quality="", entr
 
 def _current_watch_target(context):
     context = context or {}
+    wait_without_watch_target = _final_target_empty_without_current_observation(context)
+    blocked_keys = blocked_current_observation_keys_from_context(context)
     derivation = context.get("sniper_target_derivation")
     if isinstance(derivation, dict):
         canonical = derivation.get("canonical_target")
-        if isinstance(canonical, dict) and _candidate_key(canonical):
+        if _candidate_can_be_panel_watch_target(canonical) and not _candidate_matches_blocked_panel_key(canonical, blocked_keys):
             return canonical
     final_target_resolution = context.get("final_target_resolution")
     if isinstance(final_target_resolution, dict):
         watch_target = final_target_resolution.get("watch_target")
-        if isinstance(watch_target, dict) and _candidate_key(watch_target):
+        if _candidate_can_be_panel_watch_target(watch_target) and not _candidate_matches_blocked_panel_key(watch_target, blocked_keys):
             return watch_target
+    if wait_without_watch_target:
+        return None
     snapshot = context.get("market_research_snapshot")
     if isinstance(snapshot, dict):
         nested_resolution = snapshot.get("final_target_resolution")
         if isinstance(nested_resolution, dict):
             watch_target = nested_resolution.get("watch_target")
-            if isinstance(watch_target, dict) and _candidate_key(watch_target):
+            if _candidate_can_be_panel_watch_target(watch_target) and not _candidate_matches_blocked_panel_key(watch_target, blocked_keys):
                 return watch_target
         candidate = snapshot.get("selected_position_candidate")
-        if isinstance(candidate, dict) and _candidate_key(candidate):
+        if _candidate_can_be_panel_watch_target(candidate) and not _candidate_matches_blocked_panel_key(candidate, blocked_keys):
             return candidate
     for key in ("selected_position_candidate", "current_core_candidate", "front_page_selected_position_candidate"):
         candidate = context.get(key)
-        if isinstance(candidate, dict) and _candidate_key(candidate):
+        if _candidate_can_be_panel_watch_target(candidate) and not _candidate_matches_blocked_panel_key(candidate, blocked_keys):
             return candidate
     return None
 
@@ -367,6 +387,116 @@ def _align_panel_fields_to_current_watch_target(panel_fields, target):
     return updated
 
 
+def _final_resolution_waits_without_watch_target(context):
+    resolution = (context or {}).get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return False
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    if _clean_text(decision.get("capital_priority")) != "wait":
+        return False
+    watch_target = resolution.get("watch_target")
+    return not _candidate_can_be_panel_watch_target(watch_target)
+
+
+def _final_target_empty_without_current_observation(context):
+    return (
+        _selection_workflow_final_is_empty(context)
+        or _final_resolution_waits_without_watch_target(context)
+        or _selection_workflow_final_empty_without_watch_target(context)
+    )
+
+
+def _selection_workflow_final_empty_without_watch_target(context):
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    if position_pct > 0 and _candidate_key(execution_object):
+        return False
+    return not bool(_selection_workflow_front_observation_target(workflow))
+
+
+def _selection_workflow_final_is_empty(context):
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    return position_pct <= 0 or not bool(_candidate_key(execution_object))
+
+
+def _selection_workflow_from_context(context):
+    sources = [context]
+    if isinstance(context, dict):
+        sources.extend([context.get("market_research_snapshot"), context.get("execution_stage_context")])
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if isinstance(workflow, dict) and workflow.get("schema_version") == "selection_workflow.v1":
+            return workflow
+    return {}
+
+
+def _position_pct(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _selection_workflow_front_observation_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    for candidate in workflow.get("candidate_pool", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("front_observation_qualified") is not True:
+            continue
+        if _candidate_blocks_panel_watch_target(candidate):
+            continue
+        stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else candidate
+        if _candidate_key(stock):
+            return stock
+    return {}
+
+
+def blocked_current_observation_keys_from_context(context):
+    context = context or {}
+    candidates = []
+    for key in ("candidate_quality_samples", "display_observation_candidates", "observation_candidates"):
+        candidates.extend(list(context.get(key) or []))
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict):
+        for key in ("candidate_quality_samples", "display_observation_candidates", "observation_candidates"):
+            candidates.extend(list(snapshot.get(key) or []))
+    return {
+        key
+        for candidate in candidates
+        if _candidate_blocks_panel_watch_target(candidate)
+        for key in _candidate_identity_keys(candidate)
+    }
+
+
+def _candidate_identity_keys(candidate):
+    from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_identity_keys
+
+    return candidate_identity_keys(candidate)
+
+
+def _clear_panel_target_fields(panel_fields):
+    updated = dict(panel_fields or {})
+    updated["primary_buy_candidate"] = None
+    updated["backup_candidate"] = None
+    return updated
+
+
 def _build_panel_fields(
     *,
     step0_prediction_cn,
@@ -418,13 +548,22 @@ def _build_diagnostics(samples):
 def build_candidate_quality_scorecard_payload(context):
     context = context or {}
     current_watch_target = _current_watch_target(context)
+    final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
     derivation_packet = _sniper_target_derivation(context)
     existing_panel_fields = context.get("candidate_quality_panel_fields")
     existing_samples = context.get("candidate_quality_samples")
     existing_diagnostics = context.get("candidate_quality_scorecard_diagnostics")
     if existing_panel_fields is not None and existing_samples is not None:
-        panel_fields = _align_panel_fields_to_current_watch_target(existing_panel_fields, current_watch_target)
-        candidate_samples = _replace_with_current_candidate(existing_samples, current_watch_target)
+        if final_empty_without_current_observation:
+            panel_fields = _clear_panel_target_fields(existing_panel_fields)
+        else:
+            panel_fields = _clear_blocked_panel_target_fields(existing_panel_fields, existing_samples)
+            panel_fields = _align_panel_fields_to_current_watch_target(panel_fields, current_watch_target)
+        candidate_samples = (
+            list(existing_samples or [])
+            if final_empty_without_current_observation
+            else _replace_with_current_candidate(existing_samples, current_watch_target)
+        )
         candidate_samples.extend(_derivation_process_samples(context, current_watch_target))
         samples = [
             _enrich_candidate_trace_inputs(sample, context)
@@ -440,7 +579,16 @@ def build_candidate_quality_scorecard_payload(context):
 
     trade_gate_open = context.get("trade_gate_open", False)
     best_stock = context.get("best_stock")
-    watch_anchor = current_watch_target or context.get("watch_anchor")
+    blocked_keys = blocked_current_observation_keys_from_context(context)
+    if _candidate_blocks_panel_watch_target(best_stock) or _candidate_matches_blocked_panel_key(best_stock, blocked_keys):
+        best_stock = None
+    raw_watch_anchor = context.get("watch_anchor")
+    watch_anchor = current_watch_target or (
+        raw_watch_anchor
+        if _candidate_can_be_panel_watch_target(raw_watch_anchor)
+        and not _candidate_matches_blocked_panel_key(raw_watch_anchor, blocked_keys)
+        else None
+    )
     if current_watch_target and _candidate_key(best_stock) != _candidate_key(current_watch_target):
         best_stock = None
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
@@ -496,6 +644,8 @@ def build_candidate_quality_scorecard_payload(context):
         best_stock=best_stock,
         watch_anchor=watch_anchor,
     )
+    if final_empty_without_current_observation:
+        panel_fields = _clear_panel_target_fields(panel_fields)
     return {
         "candidate_quality_panel_fields": sanitize_user_visible_text(panel_fields),
         "candidate_quality_samples": sanitize_user_visible_text(samples),

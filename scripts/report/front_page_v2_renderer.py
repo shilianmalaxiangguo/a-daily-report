@@ -5,6 +5,7 @@ import re
 from report.reasoning_decision_renderer import render_reasoning_decision_lines
 from report.reasoning_decision_support import derive_unique_action_target_from_reasoning_decision
 from report.candidate_snapshot_contract import build_candidate_snapshot
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
 from report.market_research_snapshot_nodes import (
     build_market_research_snapshot_cycle_calendar_node,
     build_market_research_snapshot_cycle_interpretation_node,
@@ -25,6 +26,7 @@ from report.mainline_turnover_summary_support import (
     resolve_overtake_window_summary,
     resolve_turnover_share_trend_rows,
 )
+from report.cycle_sector_style import cycle_sector_color_map_from_calendar_rows, cycle_sector_label
 from report.market_structure_judgement import (
     build_market_structure_judgement,
     render_market_structure_section,
@@ -346,19 +348,6 @@ def _topic_window_text(*values, missing="待补事实"):
     text = _spine_meaningful_text(*values, missing=missing)
     if text == missing:
         return text
-    phrase_replacements = (
-        ("等10点确认后再看", "题材窗口待验证"),
-        ("等待10点确认后再看", "题材窗口待验证"),
-        ("等10点确认", "题材窗口待验证"),
-        ("等待10点确认", "题材窗口待验证"),
-        ("10点确认后", "题材窗口满足条件后"),
-        ("10点确认", "题材窗口满足条件后"),
-        ("09:50确认", "题材窗口满足条件后"),
-        ("10:00左右观察", "题材窗口待验证"),
-        ("10:00左右买", "题材窗口满足条件后"),
-    )
-    for old, new in phrase_replacements:
-        text = text.replace(old, new)
     for marker in (OPENING_WINDOW, SECOND_CONFIRM_WINDOW, TAIL_WINDOW):
         text = text.replace(marker, "题材窗口")
     text = text.replace("交易时间窗口", "题材窗口")
@@ -374,9 +363,11 @@ def _topic_window_text(*values, missing="待补事实"):
         ("题材窗口开启", "题材窗口满足条件后"),
         ("题材窗口关闭", "题材窗口条件未满足"),
         ("题材窗口确认后", "题材窗口满足条件后"),
-        ("题材窗口确认", "题材窗口满足条件"),
+        ("题材窗口确认", "题材窗口满足条件后"),
         ("题材窗口条件后", "题材窗口满足条件后"),
         ("题材窗口满足条件后后", "题材窗口满足条件后"),
+        ("题材窗口左右买", "题材窗口满足条件后"),
+        ("题材窗口左右观察", "题材窗口待验证"),
         ("题材窗口待验证后再看", "题材窗口待验证"),
         ("题材窗口待验证再看", "题材窗口待验证"),
         ("等题材窗口满足条件后", "题材窗口待验证"),
@@ -718,16 +709,53 @@ def _normalize_signal_grade(value):
         return "50"
     if grade in ("0", "0%"):
         return "0"
-    if grade == "A":
-        return "100"
-    if grade in ("A-", "B"):
-        return "50"
-    if grade == "C":
-        return "0"
     return ""
 
 
+def _selection_workflow_zero_without_object(snapshot):
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if not final:
+        return False
+    try:
+        position_pct = int(float(str(final.get("position_pct") or 0).replace("%", "").strip() or 0))
+    except (TypeError, ValueError):
+        position_pct = 0
+    target = _stock_like_from_resolution(final.get("execution_object"))
+    return position_pct <= 0 and not target
+
+
+def _selection_workflow_final_target(snapshot):
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return None
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if not final:
+        return {}
+    target = _stock_like_from_resolution(final.get("execution_object"))
+    if not target:
+        return {}
+    try:
+        position_pct = int(float(str(final.get("position_pct") or 0).replace("%", "").strip() or 0))
+    except (TypeError, ValueError):
+        position_pct = 0
+    if position_pct <= 0:
+        return {}
+    if position_pct >= 100:
+        target["position_pct"] = 100
+    else:
+        target["position_pct"] = 50
+    target["action_text"] = _text_value(final.get("action_text"))
+    target["source_node"] = _text_value(final.get("source_node"), "N8")
+    return target
+
+
 def _selected_position_candidate(snapshot):
+    workflow_final_target = _selection_workflow_final_target(snapshot)
+    if workflow_final_target is not None:
+        return workflow_final_target
     selected = (snapshot or {}).get("selected_position_candidate") or {}
     return selected if isinstance(selected, dict) else {}
 
@@ -1035,7 +1063,7 @@ def _promote_selected_candidate_to_standard_attack(snapshot):
             "sizing_reason": (
                 "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按100%核心进攻；固定交易窗口不成立再回0%。"
                 if signal_grade == "100"
-                else "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按50%标准进攻预演；固定交易窗口不成立再回0%。"
+                else "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按50%条件执行；固定交易窗口不成立再回0%。"
             ),
             "front_page_promoted_from_zero": True,
         }
@@ -1101,7 +1129,7 @@ def _position_state_contract(snapshot=None, final_gate=None):
         "0": {
             "grade": "0",
             "discipline": "0%不参与",
-            "execution_style": "0% / 不参与",
+            "execution_style": "0%不参与",
             "stock_state": "0%无合格标的",
             "stock_state_without_target": "0%无合格标的",
             "default_action": "0%不参与",
@@ -1110,18 +1138,18 @@ def _position_state_contract(snapshot=None, final_gate=None):
         },
         "50": {
             "grade": "50",
-            "discipline": "50%标准进攻",
-            "execution_style": "50% / 标准进攻",
-            "stock_state": "50%标准进攻对象",
+            "discipline": "50%条件执行",
+            "execution_style": "50%条件执行",
+            "stock_state": "50%条件执行对象",
             "stock_state_without_target": "50%等待合格对象",
-            "default_action": "50%标准进攻，只做预演命中的合格对象",
-            "action_with_target": "50%：只做合格对象，满足预演情境后执行，不满足回到0%",
+            "default_action": "50%条件执行，只做合格对象",
+            "action_with_target": "50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0%",
             "action_without_target": "50%：没有合格对象前不下单，等市场缩到可做目标",
         },
         "100": {
             "grade": "100",
             "discipline": "100%核心进攻",
-            "execution_style": "100% / 核心进攻",
+            "execution_style": "100%核心进攻",
             "stock_state": "100%唯一核心对象",
             "stock_state_without_target": "100%等待唯一核心对象",
             "default_action": "100%核心进攻，只做唯一核心对象",
@@ -1277,6 +1305,7 @@ def _turnover_share_lines(snapshot):
     hot_rows = resolve_hot_sector_turnover_watch_rows(snapshot)
     hot_summary_text = resolve_hot_sector_turnover_watch_summary(snapshot)
     rows = resolve_turnover_share_trend_rows(snapshot)
+    color_by_mainline = cycle_sector_color_map_from_calendar_rows((snapshot or {}).get("cycle_calendar_rows") or [])
     summary_text = str(
         (snapshot or {}).get("turnover_share_trend_summary")
         or ((snapshot or {}).get("mainline_turnover_summary") or {}).get("turnover_share_trend_summary")
@@ -1289,7 +1318,7 @@ def _turnover_share_lines(snapshot):
         lines.append(f"> {hot_summary_text}")
         lines.append("")
     if hot_rows:
-        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows))
+        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows, color_by_mainline=color_by_mainline))
     else:
         lines.append("#### 近期热点板块成交额连续跟踪：暂无板块")
         lines.extend(
@@ -1301,19 +1330,21 @@ def _turnover_share_lines(snapshot):
         lines.append("| 今日 | 数据暂缺 | - | 待累计 | 待累计 | 待累计 | 今天开始记录，后续日报自动累计 |")
         lines.append("")
     if rows:
-        lines.append("#### 主线切换成交额记录")
+        lines.append("#### 小周期成交额与主线切换判断")
         if summary_text:
             lines.append(f"> {summary_text}")
             lines.append("")
         lines.extend(
             [
-                "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-                "|------|----------|------------|------------|------------|------|----------|------|",
+                "| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |",
+                "|------|------------|------------|------------|------|----------|----------|------|",
             ]
         )
         for row in _display_latest_first(rows):
+            rendered_row = dict(row)
+            rendered_row["small_cycle_line"] = cycle_sector_label(rendered_row.get("small_cycle_line"), color_by_mainline)
             lines.append(
-                "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(**row)
+                "| {date} | {small_cycle_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {cycle_switch_judgement} | {interpretation} |".format(**rendered_row)
             )
         lines.append("")
     return lines
@@ -1465,6 +1496,32 @@ def _text_value(*values):
     return ""
 
 
+def _candidate_reversal_blocks_surface_observation(candidate):
+    if not isinstance(candidate, dict):
+        return False
+    nested = candidate.get("anchor_reversal") if isinstance(candidate.get("anchor_reversal"), dict) else {}
+    decision = _text_value(candidate.get("anchor_reversal_decision"), nested.get("anchor_reversal_decision"))
+    if decision in {"降级观察", "不参与", "可作为补位"}:
+        return True
+    role = _text_value(
+        candidate.get("candidate_role"),
+        candidate.get("quality_role"),
+        candidate.get("sniper_role"),
+        nested.get("candidate_role"),
+    )
+    if role in {"观察样本", "跟风样本", "过程候选"}:
+        return True
+    candidate_layer = _text_value(candidate.get("candidate_layer"))
+    execution_eligibility = _text_value(candidate.get("execution_eligibility"))
+    if candidate_layer == "watch_sample":
+        return True
+    return execution_eligibility in {
+        "anchor_reversal_observation",
+        "anchor_failed_no_participation",
+        "observation_only",
+    }
+
+
 def _stock_like_from_resolution(value):
     if not isinstance(value, dict):
         return {}
@@ -1528,7 +1585,10 @@ def _new_entry_after_old_exit_active(snapshot):
 
 
 def _resolution_target(snapshot, key):
-    return _stock_like_from_resolution(_final_target_resolution(snapshot).get(key))
+    value = _final_target_resolution(snapshot).get(key)
+    if not candidate_can_be_current_observation_target(value):
+        return {}
+    return _stock_like_from_resolution(value)
 
 
 def _resolution_targets_match(left, right):
@@ -1555,14 +1615,33 @@ def _tradable_proxy_action_active(snapshot):
 
 
 def _resolution_watch_target(snapshot):
-    if not (_old_position_priority_active(snapshot) or _tradable_proxy_action_active(snapshot)):
-        return {}
+    workflow_final_target = _selection_workflow_final_target(snapshot)
+    if workflow_final_target is not None:
+        if not workflow_final_target:
+            return {}
+        return workflow_final_target
     resolution = _final_target_resolution(snapshot)
-    for key in ("watch_target", "new_entry_target", "process_target", "ascii_trace_target"):
-        target = _stock_like_from_resolution(resolution.get(key))
+    keys = ["watch_target"]
+    if _old_position_priority_active(snapshot) or _tradable_proxy_action_active(snapshot):
+        keys.extend(["new_entry_target", "process_target", "ascii_trace_target"])
+    for key in keys:
+        raw_target = resolution.get(key)
+        if not candidate_can_be_current_observation_target(raw_target):
+            continue
+        target = _stock_like_from_resolution(raw_target)
         if target:
             return target
     return {}
+
+
+def _explicit_front_observation_watch_target(snapshot):
+    resolution = _final_target_resolution(snapshot)
+    raw_target = resolution.get("watch_target")
+    if not isinstance(raw_target, dict) or raw_target.get("front_observation_qualified") is not True:
+        return {}
+    if not candidate_can_be_current_observation_target(raw_target):
+        return {}
+    return _stock_like_from_resolution(raw_target)
 
 
 def _resolution_display_target(snapshot):
@@ -1710,15 +1789,24 @@ def _resolve_sniper_candidates(snapshot, candidate_snapshot):
 
 def _effective_unique_action_target(snapshot):
     snapshot = snapshot or {}
+    if _selection_workflow_zero_without_object(snapshot):
+        return {}
     if _old_position_priority_active(snapshot):
         return {}
     if _countertrend_defense_active(snapshot):
         return {}
+    workflow_final_target = _selection_workflow_final_target(snapshot)
+    if workflow_final_target is not None:
+        if not workflow_final_target:
+            return {}
+        return _enrich_unique_action_target(snapshot, workflow_final_target)
     resolved_display = _resolution_display_target(snapshot)
     if resolved_display:
         return _enrich_unique_action_target(snapshot, resolved_display)
     if "reasoning_decision" in snapshot:
         return _enrich_unique_action_target(snapshot, derive_unique_action_target_from_reasoning_decision(snapshot))
+    if _selection_workflow_zero_without_object(snapshot):
+        return {}
     target = snapshot.get("unique_action_target") or {}
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         return _enrich_unique_action_target(snapshot, target)
@@ -1756,8 +1844,12 @@ def _conditional_observation_target(snapshot):
     resolved_watch = _resolution_watch_target(snapshot)
     if resolved_watch and not _tradable_proxy_priority_active(snapshot):
         return _enrich_unique_action_target(snapshot, resolved_watch)
+    if _selection_workflow_zero_without_object(snapshot):
+        return {}
     selected = snapshot.get("selected_position_candidate") or {}
     if not isinstance(selected, dict) or not (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return {}
+    if _candidate_reversal_blocks_surface_observation(selected):
         return {}
     if _countertrend_defense_active(snapshot):
         return {}
@@ -1883,32 +1975,7 @@ def _dedupe_top20_capacity_front_lines(lines):
 
 
 def _dedupe_repeated_front_long_cells(lines):
-    deduped = []
-    seen = set()
-    preserve_reason_labels = {"0%原因", "不参与依据", "无执行目标原因"}
-    for line in list(lines or []):
-        text = str(line or "")
-        if not text.startswith("|"):
-            deduped.append(text)
-            continue
-        raw_cells = text.strip().strip("|").split("|")
-        row_label = raw_cells[0].strip() if raw_cells else ""
-        if row_label in preserve_reason_labels:
-            deduped.append(text)
-            continue
-        changed = False
-        cells = []
-        for cell in raw_cells:
-            norm = " ".join(str(cell or "").split())
-            if len(norm) >= 40 and norm in seen:
-                cells.append(" 同类历史行说明同上，只看本行数值变化 ")
-                changed = True
-            else:
-                cells.append(cell)
-                if len(norm) >= 40:
-                    seen.add(norm)
-        deduped.append("|" + "|".join(cells) + "|" if changed else text)
-    return deduped
+    return list(lines or [])
 
 
 def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=None, observation_target, has_observation_target):
@@ -1918,10 +1985,10 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
     if _two_layer_execution_active(snapshot):
         condition, _ = _two_layer_execution_condition_text(snapshot)
         return [
-            "| 明日仓位 | 条件满足才B档执行；不满足回到0% |",
+            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |",
             f"| 执行目标 | {_two_layer_execution_target_label(snapshot)} |",
             "| 执行性质 | 条件执行对象 |",
-            f"| B档条件 | {condition} |",
+            f"| 50%执行条件 | {condition} |",
             "| 不满足条件 | 不参与 |",
             "| 责任归因 | 市场与个股条件需盘中确认 |",
         ]
@@ -2036,7 +2103,7 @@ def _two_layer_execution_object(snapshot):
         return {}
     identity = str(front.get("execution_identity") or "").strip()
     position_plan = str(front.get("position_plan") or "").strip()
-    if identity != "明日执行对象" and position_plan != "B档执行":
+    if identity != "明日执行对象" and "50%" not in position_plan:
         return {}
     return target
 
@@ -2058,7 +2125,7 @@ def _two_layer_execution_condition_text(snapshot):
     active = conditions.get("active_attack") if isinstance(conditions.get("active_attack"), dict) else {}
     window = str(active.get("window") or "09:30-09:35或09:50-10:10").strip()
     money = str(active.get("money_confirmation") or "分时大单净流入达标").strip()
-    return f"低开承接型或主动进攻型满足；主动进攻需{money}", window
+    return f"低开承接型或主动进攻型满足；主动进攻需{money}；买后用失效价和单笔-5%底线处理风险", window
 
 
 def _account_buy_zone_text(snapshot=None, target=None):
@@ -2136,8 +2203,12 @@ def _ensure_no_trade_fallback(text):
 
 
 def _t0_selected_target(snapshot):
-    selected = (snapshot or {}).get("selected_position_candidate") or {}
+    if _selection_workflow_zero_without_object(snapshot):
+        return {}
+    selected = _selected_position_candidate(snapshot)
     if not isinstance(selected, dict) or not (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+        return {}
+    if _candidate_reversal_blocks_surface_observation(selected):
         return {}
     return {
         "name": selected.get("name") or selected.get("stock_name"),
@@ -2155,6 +2226,11 @@ def _t0_selected_target(snapshot):
 def _t0_main_target(snapshot, position_state):
     snapshot = snapshot or {}
     position_state = position_state or {}
+    if _selection_workflow_zero_without_object(snapshot):
+        if position_state.get("grade") == "0":
+            target = _resolution_watch_target(snapshot) or _t0_selected_target(snapshot)
+            return (target, "条件观察") if target else ({}, "")
+        return {}, ""
     if position_state.get("grade") == "0":
         if _countertrend_defense_active(snapshot):
             return {}, ""
@@ -2165,10 +2241,12 @@ def _t0_main_target(snapshot, position_state):
         target = derive_unique_action_target_from_reasoning_decision(snapshot)
         if isinstance(target, dict) and (target.get("name") or target.get("code")):
             return target, "固定交易窗口条件"
-    target = snapshot.get("unique_action_target") or {}
+    target = _t0_selected_target(snapshot)
     if isinstance(target, dict) and (target.get("name") or target.get("code")):
         return target, "固定交易窗口条件"
-    target = _t0_selected_target(snapshot)
+    target = _effective_unique_action_target(snapshot)
+    if isinstance(target, dict) and (target.get("name") or target.get("code")):
+        return target, "固定交易窗口条件"
     return (target, "固定交易窗口条件") if target else ({}, "")
 
 
@@ -2241,7 +2319,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
                 or f"目标标的{original_label}，小资金账户可用{proxy_label}替代"
             )
         )
-        position_label = position_state.get("discipline") or "50%标准进攻"
+        position_label = position_state.get("discipline") or "50%条件执行"
         identity_text = main_identity or "市场核心"
         if holding:
             primary_row_label = "旧仓处理"
@@ -2273,7 +2351,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             if position_context_provided
             else f"{capital_text}；未输入持仓，先确认旧仓再看明日执行目标"
         )
-        position_label = position_state.get("discipline") or "50%标准进攻"
+        position_label = position_state.get("discipline") or "50%条件执行"
         tomorrow_action = (
             "只看明日执行目标，买入区间命中才新开一手"
             if position_context_provided
@@ -2315,11 +2393,11 @@ def _account_status_lines(snapshot=None, final_gate=None):
     elif not position_context_provided:
         if position_state.get("grade") == "0" and two_layer_execution_label:
             account_constraint = f"{capital_text}；未输入持仓，执行前先确认旧仓情况"
-            tomorrow_action = "条件满足才B档执行；不满足回到0%"
-            position_label = "条件满足才B档执行；不满足回到0%"
+            tomorrow_action = "条件满足才50%条件执行；不满足回到0%"
+            position_label = "条件满足才50%条件执行；不满足回到0%"
             new_entry_limit = "条件满足后1"
             primary_row_label = "明日执行目标"
-            main_label = f"{two_layer_execution_label}：条件满足才B档执行"
+            main_label = f"{two_layer_execution_label}：条件满足才50%条件执行"
         elif position_state.get("grade") == "0":
             account_constraint = f"{capital_text}；未输入持仓，先确认旧仓，再看观察对象是否重新成立"
             tomorrow_action = "0%不参与；只保留观察对象，不新开"
@@ -2397,15 +2475,17 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     has_observation_target = isinstance(observation_target, dict) and bool(
         observation_target.get("name") or observation_target.get("code")
     )
+    workflow_zero_without_object = _selection_workflow_zero_without_object(snapshot)
+    front_unique_object = "" if workflow_zero_without_object else str(front_page.get("unique_object") or "").strip()
     has_unique_object = (
         two_layer_execution
         or
         _has_unique_action_target(snapshot)
         or has_observation_target
-        or str(front_page.get("unique_object") or "").strip() not in ("", "-", "暂无", "不做")
+        or front_unique_object not in ("", "-", "暂无", "不做")
     )
     if two_layer_execution:
-        stock_state = "B档条件执行对象"
+        stock_state = "50%条件执行对象"
     elif is_zero_participation and has_observation_target:
         stock_state = "0%条件观察"
     else:
@@ -2414,7 +2494,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     if is_zero_participation and front_no_buy_reason:
         front_no_buy_reason = front_no_buy_reason.replace("没有唯一对象", "没有观察对象").replace("有唯一对象", "有观察对象")
     if two_layer_execution:
-        no_buy_reason = "条件未满足前不参与；条件满足才B档执行"
+        no_buy_reason = "条件未满足前不参与；条件满足才50%条件执行"
     elif has_unique_object and (
         not front_no_buy_reason
         or "没有唯一对象" in front_no_buy_reason
@@ -2527,7 +2607,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
                 else ("只保留观察对象和备用观察" if is_zero_participation else "只保留唯一对象和备用观察")
             ),
             principle=(
-                "低开承接型或主动进攻型满足才B档执行；不满足回到0%"
+                "低开承接型或主动进攻型满足才50%条件执行；不满足回到0%"
                 if two_layer_execution
                 else (
                     "最终0%时只观察，不做新增参与；观察对象重新成立也只作为盘中复核"
@@ -2608,7 +2688,7 @@ def _zero_participation_observation_condition(condition):
         "主买",
         "补位",
         "新增参与",
-        "50%标准进攻",
+        "50%条件执行",
         "核心进攻",
         "竞价表态 + 开盘前几分钟",
         "竞价表态 / 开盘前几分钟",
@@ -2632,8 +2712,8 @@ def _execution_plan_lines(snapshot=None, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     if _two_layer_execution_active(snapshot):
         schedule_lines = [
-            "| 09:30-09:35 | 主动进攻、分时大单净流入、VWAP上方保持 | 主动进攻型满足可B档执行 | 弱仓/错仓先降风险 | 条件满足才执行 |",
-            "| 09:50-10:10 | MA5承接、VWAP/0轴收回、市场与方向同步 | 低开承接型满足可B档执行 | 窗口内处理弱仓/错仓 | 不满足回到0% |",
+            "| 09:30-09:35 | 主动进攻、分时大单净流入、VWAP上方保持 | 主动进攻型满足可50%条件执行 | 弱仓/错仓先降风险 | 条件满足才执行 |",
+            "| 09:50-10:10 | MA5承接、VWAP/0轴收回、市场与方向同步 | 低开承接型满足可50%条件执行 | 窗口内处理弱仓/错仓 | 不满足回到0% |",
             f"| {TAIL_WINDOW} | 只判断是否仍有健康承接 | 无新增追高资格 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     elif position_state.get("grade") == "0":
@@ -2723,7 +2803,7 @@ def _next_day_action_checklist_lines(snapshot=None, final_gate=None):
         "### 明日行动清单",
         "| 项目 | 明日动作 |",
         "|------|----------|",
-        f"| 仓位 | {'条件满足才B档执行；不满足回到0%' if _two_layer_execution_active(snapshot) else position_state.get('discipline')} |",
+        f"| 仓位 | {'条件满足才50%条件执行；不满足回到0%' if _two_layer_execution_active(snapshot) else position_state.get('discipline')} |",
         f"| 最终对象 | {target_label} |",
         f"| 执行/观察条件 | {_next_day_action_condition(snapshot, target, position_state)} |",
         f"| 不参与条件 | {_next_day_action_no_participation_condition(snapshot, target, position_state)} |",
@@ -2743,10 +2823,10 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
         daily = (snapshot.get("mainline_turnover_summary") or {}).get("current_mainline") or cycle
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     if _two_layer_execution_active(snapshot):
-        action = "条件满足才B档执行；不满足回到0%"
+        action = "条件满足才50%条件执行；不满足回到0%"
         unique_target = _two_layer_execution_target_label(snapshot)
-        one_line_action = "低开承接型或主动进攻型满足才B档执行；不满足回到0%"
-        execution_style = "50% / 标准进攻"
+        one_line_action = "低开承接型或主动进攻型满足才50%条件执行；不满足回到0%"
+        execution_style = "50%条件执行"
     else:
         action = position_state["default_action"]
         observation_target = _conditional_observation_target(snapshot) if position_state.get("grade") == "0" else {}

@@ -426,10 +426,16 @@ def _merge_candidate_context(base, *sources):
 def _is_anchor_source_candidate(item, *, source_name=""):
     if not isinstance(item, dict):
         return False
-    if source_name == "dragon_stocks":
-        return True
     role = str(item.get("candidate_role") or item.get("候选身份") or "").strip()
     if role in {"板块锚", "分支龙头", "大容量中军"}:
+        return True
+    lianban = _first_number(item, "连板数", "lianban", "lianban_days")
+    turnover = _first_number(item, "turnover", "成交额", "amount", "成交金额")
+    if turnover > 10000:
+        turnover = turnover / 1e8
+    hot_rank = _hot_capacity_rank(item, "hot_rank", "rank", "popularity_rank")
+    turnover_rank = _hot_capacity_rank(item, "turnover_rank")
+    if source_name == "dragon_stocks" and (lianban >= 2 or turnover >= 50 or hot_rank <= 30 or turnover_rank <= 20):
         return True
     text = _candidate_identity_text(item)
     return any(
@@ -442,8 +448,6 @@ def _is_anchor_source_candidate(item, *, source_name=""):
             "中军",
             "反复做",
             "热门股",
-            "龙一",
-            "板块龙",
             "MA5入/MA7清/MA5T",
             "MA5B",
             "MA7清",
@@ -600,7 +604,7 @@ def _build_recent_extreme_mention_candidates(data, normalize_stock_code):
             "score": row.get("score", 50),
             "source": "recent_extreme_conviction_mention",
             "source_tier": "extreme_conviction",
-            "reason": reason or "历史重点观察样本待复核",
+            "reason": reason or "历史过程观察样本待复核",
             "pattern": str(row.get("pattern") or reason or "历史好形态").strip(),
             "conviction_reason": reason,
             "participation_window": planned_window,
@@ -744,10 +748,10 @@ def _build_historical_extreme_review(
         source_section = str(row.get("source_section") or "极度看好名单").strip()
         mention_date = str(row.get("mention_trade_date") or row.get("trade_date") or "").strip()
         if code in formal_by_code:
-            destination = "正式重点观察名单"
-            review_status = "当前合格"
-            review_basis = "进入正式重点观察名单"
-            next_action = "按最终仓位结论统一收口"
+            destination = "过程观察样本"
+            review_status = "当前观察样本"
+            review_basis = "进入过程观察样本池"
+            next_action = "按最终仓位结论统一收口；不作为明日新增参与依据"
         elif code in repair_by_code:
             repair = repair_by_code[code]
             destination = "形态待修复池"

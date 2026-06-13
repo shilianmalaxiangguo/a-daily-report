@@ -32,14 +32,15 @@ def _postgres_only_runtime():
 
 def _configured_postgres_service():
     service_cls = globals().get("DatabaseService")
-    if not _postgres_database_configured():
+    postgres_required = _postgres_only_runtime() or _postgres_database_configured()
+    if not postgres_required:
         return None
     if service_cls is None:
-        raise RuntimeError("PostgreSQL candidate trace storage is configured but DatabaseService is unavailable")
+        raise RuntimeError("PostgreSQL candidate trace storage requires DatabaseService")
     service = service_cls.from_environment()
     checker = getattr(service, "is_postgres_backed", None)
     if not callable(checker) or not checker():
-        raise RuntimeError("PostgreSQL candidate trace storage is configured but DatabaseService did not select PostgreSQL")
+        raise RuntimeError("PostgreSQL-only candidate trace storage requires PostgreSQL")
     return service
 
 

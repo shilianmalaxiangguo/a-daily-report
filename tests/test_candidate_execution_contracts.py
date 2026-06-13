@@ -62,8 +62,8 @@ class CandidateExecutionContractsTest(unittest.TestCase):
 
         self.assertIn("A级教材", front_text)
         self.assertIn("参考样本：东山精密", front_text)
-        self.assertEqual(next_step, "当前已进入50%标准进攻预演，09:50-10:10窗口内满足条件后才允许动手，不满足转为0%观察")
-        self.assertNotIn(_m("30%", "条件试错"), front_text)
+        self.assertEqual(next_step, "当前已进入50%条件执行，09:50-10:10窗口内满足条件后才允许动手，不满足转为0%不参与")
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), front_text)
         self.assertEqual(rules["holding_days_min"], 2)
         self.assertEqual(rules["holding_days_max"], 4)
         self.assertEqual(rules["profit_take_pct"], 0.04)
@@ -383,6 +383,40 @@ class CandidateExecutionContractsTest(unittest.TestCase):
         self.assertEqual(no_trade["source_tier"], "crossline_watch")
         self.assertEqual(no_trade["entry_timing"], "no_trade")
         self.assertEqual(no_trade["buy_window"], "none")
+
+    def test_participation_window_policy_keeps_no_trade_as_observation_only(self):
+        policy = build_participation_window_policy(
+            "no_trade",
+            "只观察，不新增参与",
+            candidate={"name": "观察样本"},
+        )
+
+        self.assertEqual(policy["participation_window_type"], "no_trade")
+        self.assertFalse(policy["auction_required"])
+        self.assertFalse(policy["first_minutes_required"])
+        self.assertFalse(policy["board_or_reseal_required"])
+        self.assertFalse(policy["ordinary_structure_confirm_allowed"])
+        self.assertEqual(policy["required_steps"], ["只观察，不新增参与"])
+        self.assertEqual(policy["entry_timing"], "no_trade")
+        self.assertEqual(policy["buy_window"], "none")
+        self.assertFalse(policy["ma_reversion_probe_allowed"])
+        self.assertEqual(policy["ma_reversion_window"], "none")
+        observation_fields = [
+            "auction_script",
+            "first_minutes_script",
+            "board_script",
+            "reseal_script",
+            "intraday_yellow_line_probe",
+            "intraday_average_line_cross_probe",
+            "zero_axis_reclaim_probe",
+            "daily_ma_entry_probe",
+        ]
+        for field in observation_fields:
+            with self.subTest(field=field):
+                self.assertIn("只观察", policy[field])
+                self.assertNotIn("回封/打板", policy[field])
+                self.assertNotIn("才允许旧小仓口径", policy[field])
+                self.assertNotIn("买入资格", policy[field])
 
 
 if __name__ == "__main__":

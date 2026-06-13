@@ -1,7 +1,7 @@
 DEFAULT_PK_DECISION_NODE_SPECS = [
     {"node_key": "score_candidates", "title": "候选决策栈"},
     {"node_key": "observation_pool", "title": "观察池"},
-    {"node_key": "watch_anchor", "title": "观察锚点"},
+    {"node_key": "watch_anchor", "title": "观察对象"},
     {"node_key": "probe_position", "title": "探针与仓位"},
     {"node_key": "front_texts", "title": "前摘要文本"},
     {"node_key": "pk_context", "title": "PK渲染上下文"},

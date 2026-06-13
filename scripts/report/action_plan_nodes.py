@@ -4,6 +4,12 @@ from report.sniper_target_derivation import (
     compact_section as _sniper_target_derivation_compact_section,
 )
 from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
+    candidate_blocks_current_observation_target,
+    candidate_can_be_current_observation_target,
+    candidate_identity_keys,
+    candidate_matches_any_key,
+)
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
     evaluate_candidate_quality_sample_contract,
@@ -145,6 +151,161 @@ def _candidate_quality_derivation_packet(context):
     )
 
 
+def _candidate_key(candidate):
+    candidate = candidate or {}
+    return str(candidate.get("code") or candidate.get("stock_code") or candidate.get("代码") or candidate.get("name") or candidate.get("名称") or "").strip()
+
+
+def _filtered_candidate_quality_panel_fields(panel_fields, candidate_samples=None):
+    updated = dict(panel_fields or {})
+    blocked_keys = {
+        key
+        for candidate in list(candidate_samples or [])
+        if candidate_blocks_current_observation_target(candidate)
+        for key in candidate_identity_keys(candidate)
+    }
+    for key in ("primary_buy_candidate", "backup_candidate"):
+        candidate = updated.get(key)
+        if candidate_blocks_current_observation_target(candidate) or candidate_matches_any_key(candidate, blocked_keys):
+            updated[key] = None
+    return updated
+
+
+def _final_resolution_waits_without_watch_target(context):
+    if _selection_workflow_final_is_empty(context):
+        return True
+    resolution = (context or {}).get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return _selection_workflow_final_empty_without_watch_target(context)
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    if str(decision.get("capital_priority") or "").strip() != "wait":
+        return _selection_workflow_final_empty_without_watch_target(context)
+    if _position_pct(((context or {}).get("position_decision") or {}).get("target_position_pct")) <= 0:
+        return True
+    watch_target = resolution.get("watch_target")
+    return not candidate_can_be_current_observation_target(watch_target)
+
+
+def _selection_workflow_final_is_empty(context):
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    return position_pct <= 0 or not bool(_candidate_key(execution_object))
+
+
+def _selection_workflow_final_empty_without_watch_target(context):
+    workflow = _selection_workflow_from_context(context)
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    if position_pct > 0 and _candidate_key(execution_object):
+        return False
+    return not bool(_selection_workflow_front_observation_target(workflow))
+
+
+def _selection_workflow_from_context(context):
+    sources = [context]
+    if isinstance(context, dict):
+        sources.extend([context.get("market_research_snapshot"), context.get("execution_stage_context")])
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if isinstance(workflow, dict) and workflow.get("schema_version") == "selection_workflow.v1":
+            return workflow
+    return {}
+
+
+def _position_pct(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _selection_workflow_front_observation_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    for candidate in workflow.get("candidate_pool", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("front_observation_qualified") is not True:
+            continue
+        if candidate_blocks_current_observation_target(candidate):
+            continue
+        stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else candidate
+        if _candidate_key(stock):
+            return stock
+    return {}
+
+
+def _clear_candidate_quality_panel_target_fields(panel_fields):
+    updated = dict(panel_fields or {})
+    updated["primary_buy_candidate"] = None
+    updated["backup_candidate"] = None
+    return updated
+
+
+def _candidate_label(candidate):
+    candidate = candidate or {}
+    name = str(candidate.get("name") or candidate.get("stock_name") or candidate.get("名称") or "").strip()
+    code = str(candidate.get("code") or candidate.get("stock_code") or candidate.get("代码") or "").strip()
+    if name and code:
+        return f"{name}({code})"
+    return name or code
+
+
+def _candidate_quality_panel_filter_candidates(context, contracts):
+    candidates = list((context or {}).get("candidate_quality_samples") or [])
+    for contract in list(contracts or []):
+        if not isinstance(contract, dict):
+            continue
+        data = contract.get("data") if isinstance(contract.get("data"), dict) else {}
+        candidate = data.get("candidate")
+        if isinstance(candidate, dict):
+            candidates.append(candidate)
+    return candidates
+
+
+def _filtered_candidate_quality_panel(panel, candidate_samples=None):
+    if not isinstance(panel, dict):
+        return panel
+    data = panel.get("data") if isinstance(panel.get("data"), dict) else {}
+    if data:
+        filtered = _filtered_candidate_quality_panel_fields(data, candidate_samples)
+        return build_daily_quality_decision_panel(
+            market_emotion_label=filtered.get("market_emotion_label", ""),
+            account_attention_load=filtered.get("account_attention_load", ""),
+            holding_priority_action=filtered.get("holding_priority_action", ""),
+            daily_new_entry_limit=filtered.get("daily_new_entry_limit", 0),
+            primary_buy_candidate=filtered.get("primary_buy_candidate"),
+            backup_candidate=filtered.get("backup_candidate"),
+            forbidden_actions=filtered.get("forbidden_actions"),
+            ignored_noise_items=filtered.get("ignored_noise_items"),
+        )
+
+    blocked_labels = {
+        _candidate_label(candidate)
+        for candidate in list(candidate_samples or [])
+        if candidate_blocks_current_observation_target(candidate)
+    }
+    if not blocked_labels:
+        return panel
+    visible_fields = dict(panel.get("visible_fields") or {})
+    for field in ("主买对象", "补位对象"):
+        if str(visible_fields.get(field) or "").strip() in blocked_labels:
+            visible_fields[field] = "暂无"
+    return {**panel, "visible_fields": visible_fields}
+
+
 def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
     section_title = str(context.get("section_title", "") or "明日操作计划").strip() or "明日操作计划"
     return {
@@ -168,13 +329,30 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
     contracts = context.get("candidate_quality_contracts") or []
     enabled_node_keys = set(context.get("enabled_node_keys") or [])
     heading_level = 5 if not enabled_node_keys or "overview" in enabled_node_keys else 2
-    if not panel and context.get("candidate_quality_panel_fields"):
-        panel = build_daily_quality_decision_panel(**context.get("candidate_quality_panel_fields"))
     if not contracts and context.get("candidate_quality_samples"):
         contracts = [
             evaluate_candidate_quality_sample_contract(candidate)
             for candidate in context.get("candidate_quality_samples")
         ]
+    filter_candidates = _candidate_quality_panel_filter_candidates(context, contracts)
+    if panel:
+        if _final_resolution_waits_without_watch_target(context):
+            data = panel.get("data") if isinstance(panel, dict) and isinstance(panel.get("data"), dict) else {}
+            if data:
+                panel = build_daily_quality_decision_panel(
+                    **_clear_candidate_quality_panel_target_fields(data)
+                )
+        panel = _filtered_candidate_quality_panel(panel, filter_candidates)
+    if not panel and context.get("candidate_quality_panel_fields"):
+        panel_fields = context.get("candidate_quality_panel_fields")
+        if _final_resolution_waits_without_watch_target(context):
+            panel_fields = _clear_candidate_quality_panel_target_fields(panel_fields)
+        panel = build_daily_quality_decision_panel(
+            **_filtered_candidate_quality_panel_fields(
+                panel_fields,
+                filter_candidates,
+            )
+        )
     if not panel:
         return {"lines": [], "exports": {}, "module_logs": []}
     eliminated_summary = context.get("candidate_trace_eliminated_summary")
@@ -196,6 +374,7 @@ def build_action_plan_candidate_quality_node(context, node_meta=None, node_looku
         table_fields=COMPACT_CANDIDATE_TABLE_FIELDS,
         render_trace_tables=render_trace_tables,
         eliminated_summary=eliminated_summary,
+        final_target_empty=_final_resolution_waits_without_watch_target(context),
     ).splitlines()
     derivation_packet = _candidate_quality_derivation_packet(context)
     derivation_lines = []
@@ -230,6 +409,10 @@ def build_action_plan_table_node(context, node_meta=None, node_lookup=None):
         "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
         "|----------|------|------|----------|-----------|",
     ]
+    if _final_resolution_waits_without_watch_target(context):
+        lines.append("| 暂无执行预案 | - | - | 当前最终对象为空，只回放过程候选，不新增参与 | - |")
+        lines.append("")
+        return {"lines": lines, "exports": {}, "module_logs": []}
     blocked_codes = _incomplete_trace_codes(context.get("candidate_traces") or [])
     action_rows = [
         row
@@ -249,6 +432,8 @@ def build_action_plan_table_node(context, node_meta=None, node_lookup=None):
 
 
 def build_action_plan_observation_blocks_node(context, node_meta=None, node_lookup=None):
+    if _final_resolution_waits_without_watch_target(context):
+        return {"lines": [], "exports": {}, "module_logs": []}
     lines = []
     for block_title, block_lines in (
         ("**先看顺序**（优先盯最能反映主线承接的对象）:", context.get("observation_priority_lines") or []),

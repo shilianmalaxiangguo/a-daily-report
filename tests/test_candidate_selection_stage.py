@@ -70,8 +70,8 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("> **先看结论**：从观察池继续缩到明日核心、次核心和跨线观察。", rendered)
         self.assertIn("> **只留什么**：主线最强的留核心，跨线观察只留观察。", rendered)
         self.assertIn("**主线内可执行候选**", rendered)
-        self.assertIn("**重点观察名单**", rendered)
-        self.assertIn("执行分层", rendered)
+        self.assertIn("**龙头资格反推结果**", rendered)
+        self.assertIn("板块锚与身份", rendered)
         self.assertIn("均线回归试错", rendered)
         self.assertIn("MA20作废", rendered)
         self.assertIn("跟踪周期", rendered)
@@ -351,6 +351,29 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("| 竞价表态 + 回封参与 | 50% |", rendered)
         self.assertNotIn("| 竞价表态 + 回封参与 | 100% |", rendered)
 
+    def test_conviction_list_zero_observation_rewrites_participation_rule(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "和远气体",
+                        "code": "002971",
+                        "sector": "化工原料",
+                        "pattern": "T字板",
+                        "conviction_reason": "板块锚定龙 / 3连板",
+                        "conviction_rule": "先看竞价承接，回封或结构确认命中才参与",
+                        "attack_state": "0%不参与",
+                        "candidate_layer": "watch_sample",
+                        "execution_eligibility": "observation_only",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("只观察承接，不新增参与", rendered)
+        self.assertNotIn("命中才参与", rendered)
+
     def test_conviction_list_renders_anchor_reversal_inside_reason(self):
         result = build_candidate_selection_conviction_list_node(
             {
@@ -386,6 +409,36 @@ class CandidateSelectionStageTest(unittest.TestCase):
         self.assertIn("板块锚优先", rendered)
         self.assertIn("涨停只是证据", rendered)
 
+    def test_conviction_list_renders_anchor_identity_before_limit_evidence(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "大有能源",
+                        "code": "600403",
+                        "sector": "煤炭",
+                        "pattern": "涨停",
+                        "leader_speed_tier": "观察样本",
+                        "anchor_reversal_decision": "降级观察",
+                        "sector_anchor": "兆易创新(603986)",
+                        "candidate_role": "跟风样本",
+                        "relationship_to_anchor": "非同主线锚",
+                        "why_not_anchor": "无法替代板块锚",
+                        "limit_up_evidence_role": "涨停只作观察证据",
+                        "conviction_rule": "只观察承接",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("**龙头资格反推结果**", rendered)
+        self.assertIn("大有能源(600403)", rendered)
+        self.assertLess(rendered.index("板块锚"), rendered.index("涨停只作观察证据"))
+        self.assertIn("无法替代板块锚", rendered)
+        self.assertNotIn("明日主买对象", rendered)
+
     def test_conviction_list_anchor_reversal_downgrade_overrides_stale_executable_layer(self):
         result = build_candidate_selection_conviction_list_node(
             {
@@ -408,9 +461,77 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 1 | 京能电力 | 600578 | 电力 |", rendered)
-        self.assertIn("| 修复观察 | 低位补涨；板块锚反推：降级观察", rendered)
-        self.assertNotIn("| 可执行候选 | 低位补涨；板块锚反推：降级观察", rendered)
+        self.assertIn("| 1 | 京能电力(600578) | 电力 |", rendered)
+        self.assertIn("板块锚反推：降级观察", rendered)
+        self.assertIn("身份依据：低位补涨", rendered)
+        self.assertNotIn("可执行候选", rendered)
+
+    def test_conviction_list_compacts_duplicate_no_trade_placeholder_review_rows(self):
+        placeholder = {
+            "sector": "电力",
+            "participation_window": "09:50-10:10",
+            "participation_window_type": "no_trade",
+            "attack_state": "50%",
+            "conviction_reason": "只观察，不新增参与",
+            "conviction_rule": "只观察，不新增参与",
+            "auction_script": "竞价表态强且匹配金额放大",
+            "first_minutes_script": "开盘前几分钟主动资金继续抬价",
+            "board_script": "只做首次强封",
+            "reseal_script": "开板释放抛压后快速回封",
+            "missed_action": "错过后等低位承接",
+            "invalid_condition": "保持0%不参与",
+        }
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    dict(placeholder),
+                    dict(placeholder),
+                    {
+                        **placeholder,
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "conviction_reason": "电力观察对象，保留承接证据",
+                    },
+                    {
+                        **placeholder,
+                        "name": "泛观察样本",
+                        "code": "",
+                    },
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("**重点观察复核脚本**:", rendered)
+        self.assertEqual(rendered.count("| no_trade | 0% |"), 1)
+        self.assertNotIn("| no_trade | 0% |\n| no_trade | 0% |", rendered)
+        self.assertNotIn("| 09:50-10:10 | 50% |", rendered)
+        self.assertNotIn("竞价表态强且匹配金额放大", rendered)
+        self.assertNotIn("只做首次强封", rendered)
+        self.assertNotIn("快速回封", rendered)
+
+    def test_conviction_list_no_trade_policy_forces_zero_position_when_triggered_by_action_text(self):
+        result = build_candidate_selection_conviction_list_node(
+            {
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "participation_window": "09:50-10:10",
+                        "attack_state": "50%",
+                        "missed_action": "只观察，不新增参与",
+                        "conviction_reason": "观察对象",
+                    }
+                ]
+            }
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("| no_trade | 0% |", rendered)
+        self.assertNotIn("| 09:50-10:10 | 50% |", rendered)
 
     def test_conviction_list_nested_anchor_reversal_overrides_stale_executable_layer(self):
         result = build_candidate_selection_conviction_list_node(
@@ -438,9 +559,9 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 修复观察 | 低位补涨；板块锚反推：降级观察", rendered)
-        self.assertIn("为什么不做锚：不能证明比板块锚更值得参与", rendered)
-        self.assertNotIn("| 可执行候选 | 低位补涨；板块锚反推：降级观察", rendered)
+        self.assertIn("板块锚反推：降级观察", rendered)
+        self.assertIn("不做锚原因：不能证明比板块锚更值得参与", rendered)
+        self.assertNotIn("可执行候选", rendered)
 
     def test_candidate_selection_renders_shape_repair_pool_separately(self):
         result = build_candidate_selection_runtime(
@@ -531,10 +652,10 @@ class CandidateSelectionStageTest(unittest.TestCase):
                             "code": "002281",
                             "sector": "光通信",
                             "source_section": "极度看好名单",
-                            "destination": "正式重点观察名单",
-                            "review_status": "当前合格",
-                            "review_basis": "进入正式重点观察名单",
-                            "next_action": "按最终仓位结论统一收口",
+                            "destination": "过程观察样本",
+                            "review_status": "当前观察样本",
+                            "review_basis": "进入过程观察样本池",
+                            "next_action": "按最终仓位结论统一收口；不作为明日新增参与依据",
                         },
                         {
                             "mention_trade_date": "2026-05-19",
@@ -571,10 +692,11 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("**历史重点观察样本去向**", rendered)
+        self.assertIn("**历史过程观察样本去向**", rendered)
         self.assertIn("**龙回头观察池**", rendered)
         self.assertIn("| 汇源通信 | 000586 | 通信设备 | 龙回头观察 | 龙回头样本 / A杀未修复 | 重新站回短中线承接后再评估 | 单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰 |", rendered)
-        self.assertIn("| 2026-05-20 | 光迅科技 | 002281 | 光通信 | 极度看好名单 | 正式重点观察名单 | 当前合格 | 进入正式重点观察名单 | 按最终仓位结论统一收口 |", rendered)
+        self.assertIn("| 2026-05-20 | 光迅科技 | 002281 | 光通信 | 极度看好名单 | 过程观察样本 | 当前观察样本 | 进入过程观察样本池 | 按最终仓位结论统一收口；不作为明日新增参与依据 |", rendered)
+        self.assertNotIn("正式重点观察名单 | 当前合格", rendered)
         self.assertIn("| 2026-05-19 | 汇源通信 | 000586 | 通信设备 | 极度看好名单 | 龙回头观察池 | 龙回头观察 | 龙回头样本 / A杀未修复 | 单独观察是否重新站回短中线承接；A杀未修复前不进正式名单，继续走坏再取关淘汰 |", rendered)
         self.assertEqual(result["exports"]["dragon_rebound_watch_pool"][0]["code"], "000586")
         self.assertEqual(result["exports"]["historical_extreme_review"][1]["code"], "000586")
@@ -639,8 +761,8 @@ class CandidateSelectionStageTest(unittest.TestCase):
         )
 
         rendered = "\n".join(result["lines"])
-        self.assertIn("| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |", rendered)
-        self.assertIn("| 1 | 大唐发电 | 601991 | 电力 | 趋势比价链锚点 / 高位锚 | 可执行候选 | 趋势比价链锚定龙 / 分歧转一致 | 竞价表态强且开盘承接继续才参与 |", rendered)
+        self.assertIn("| 优先级 | 标的 | 所属板块 | 板块锚与身份 | 承接结果 | 速度证据 | 明日原则 |", rendered)
+        self.assertIn("| 1 | 大唐发电(601991) | 电力 | 身份依据：趋势比价链锚定龙 / 分歧转一致 | 缩量回撤到MA3附近，站回VWAP | 极致加速龙头；T字板 | 竞价表态强且开盘承接继续才参与 |", rendered)
         self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |", rendered)
         self.assertIn("| 明日主买对象 | 大唐发电(601991) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近，站回VWAP | 通过 |", rendered)
         self.assertNotIn("极看理由", rendered)
@@ -1097,7 +1219,7 @@ class CandidateSelectionStageTest(unittest.TestCase):
                 },
                 "target_date": "2026-04-22",
                 "exit_analysis": {"sector_name": "军工"},
-                "position_level": "三档（进攻档）",
+                "position_level": "50%条件执行",
                 "candidates": [{"name": "军工一号", "code": "000001"}],
                 "watchlist": [{"name": "军工一号", "code": "000001", "sector": "军工", "score": 91}],
                 "abnormal_watch_map": {"000001": {"follow_state": "跌不下去"}},

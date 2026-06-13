@@ -286,9 +286,14 @@ def _build_etf_turnover_detail_node(context, node_meta=None, node_lookup=None):
     lines = [
         "### 附录A：ETF两市成交额完整25日表",
         "",
+    ]
+    if (snapshot or {}).get("coverage_anomaly") is True or str((snapshot or {}).get("coverage_status") or "") == "partial":
+        reason = str((snapshot or {}).get("coverage_anomaly_reason") or "样本覆盖不足，停止用于机构容量判断。").strip()
+        lines.extend([f"> {reason}", ""])
+    lines.extend([
         "| 日期 | ETF两市成交额 | 较前日 | 有成交ETF数 |",
         "|------|----------------|--------|------------|",
-    ]
+    ])
     for row in _display_latest_first(rows[-25:]):
         change_pct = row.get("change_pct", "待累计")
         lines.append(

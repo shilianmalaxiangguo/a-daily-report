@@ -561,10 +561,10 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
     if reference_text:
         prefix = f"{prefix}；{reference_text}"
 
-    if target_position_pct == 30:
-        next_step = f"当前已进入50%标准进攻预演，{trigger_text}后才允许动手，不满足转为0%观察"
+    if 0 < target_position_pct < 50:
+        next_step = f"当前已进入50%条件执行，{trigger_text}后才允许动手，不满足转为0%不参与"
     elif label == "A级教材":
-        next_step = "当前还差右侧确认和09:50-10:10窗口，确认后才评估50%标准进攻" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%标准进攻"
+        next_step = "当前还差右侧确认和09:50-10:10窗口，确认后才评估50%条件执行" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%条件执行"
     elif label == "B级教材":
         next_step = "先保留观察合同，等它走成右侧确认后再考虑升级"
     elif label == "C级观察样本":
@@ -853,7 +853,7 @@ def build_quant_anchor_plan(candidate=None):
         if "顶部" in zone:
             action = "区间顶部锚点冲不过先止盈；放量吃掉并回踩不破，才恢复候选资格"
         elif "底部" in zone:
-            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP且09:50-10:10窗口条件满足后，才允许小仓试错"
+            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP且09:50-10:10窗口条件满足后，才允许50%条件执行"
         elif "吃掉" in zone or "消化" in hidden:
             action = "锚点被放量吃掉并回踩不破，只恢复候选资格；不能自动升级主买"
         elif "高潮" in zone or "反包" in zone:
@@ -878,10 +878,47 @@ def build_quant_anchor_plan(candidate=None):
     }
 
 
+def _no_trade_observation_script_fields(reason="只观察，不新增参与"):
+    reason = str(reason or "").strip() or "只观察，不新增参与"
+    observation_text = f"{reason}；不生成新增参与动作"
+    intraday_text = f"{reason}；分时黄线、均线和0轴只作为风险观察，不作为新增参与依据"
+    return {
+        "auction": observation_text,
+        "auction_script": observation_text,
+        "first_minutes": observation_text,
+        "first_minutes_script": observation_text,
+        "board": observation_text,
+        "board_script": observation_text,
+        "reseal": observation_text,
+        "reseal_script": observation_text,
+        "missed_action": reason,
+        "cancellation": "保持0%不参与",
+        "invalid_condition": "保持0%不参与",
+        "intraday_yellow_line_probe": intraday_text,
+        "intraday_average_line_cross_probe": intraday_text,
+        "zero_axis_reclaim_probe": intraday_text,
+        "daily_ma_entry_probe": f"{reason}；MA3/MA5/MA10只作观察和风险线，不生成新增参与资格",
+    }
+
+
 def build_participation_window_policy(window="", missed_action="", source_tier="extreme_conviction", candidate=None):
     window = str(window or "").strip()
     missed_action = str(missed_action or "").strip()
-    if "打板/错过" in window:
+    no_trade_markers = ("只观察", "不开", "不参与", "禁止", "no_trade", "none")
+    if any(marker in f"{window} / {missed_action}" for marker in no_trade_markers):
+        window_type = "no_trade"
+        auction_required = False
+        first_minutes_required = False
+        board_or_reseal_required = False
+        ordinary_structure_confirm_allowed = False
+        required_steps = ["只观察，不新增参与"]
+        fallback_state = "保持0%不参与"
+        participation_basis = {
+            "observation": "计划明确只观察，不生成买入窗口",
+            "missed_entry": missed_action or "只观察，不新增参与",
+        }
+        no_trade_fields = _no_trade_observation_script_fields(missed_action)
+    elif "打板/错过" in window:
         window_type = "board_or_miss"
         auction_required = True
         first_minutes_required = True
@@ -938,6 +975,8 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
             "structure": "09:50-10:10窗口只服务普通结构，不覆盖强核心快路径",
             "missed_entry": missed_action,
         }
+    if window_type != "no_trade":
+        no_trade_fields = {}
 
     policy = {
         "participation_window_type": window_type,
@@ -951,11 +990,11 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
         "participation_basis": participation_basis,
         "decision_reason_basis": "买卖资格只来自量能、市场情绪、板块效应、资金表态、辨识度和连续承接；技术指标不能单独生成交易理由",
         "ma_execution_anchor": "MA3/MA5/MA10只优化买卖点和失效线，不能替代交易逻辑",
-        "ma_reversion_probe_allowed": source_tier == "extreme_conviction",
-        "ma_reversion_window": "09:50-10:10" if source_tier == "extreme_conviction" else "none",
-        "ma_reversion_probe": "只限已经由量能、情绪、板块、资金、辨识度和承接给出买入资格的样本；常规回踩日K MA5/MA10，极度龙头可提前看MA3；MA只是执行锚点，不能因为MA3/MA5/MA10单独买入；分时黄线不破，且9:50-10:10承接不再继续杀，才允许小仓试错",
+        "ma_reversion_probe_allowed": source_tier == "extreme_conviction" and window_type != "no_trade",
+        "ma_reversion_window": "09:50-10:10" if source_tier == "extreme_conviction" and window_type != "no_trade" else "none",
+        "ma_reversion_probe": "只限已经由量能、情绪、板块、资金、辨识度和承接给出买入资格的样本；常规回踩日K MA5/MA10，极度龙头可提前看MA3；MA只是执行锚点，不能因为MA3/MA5/MA10单独买入；分时黄线不破，且9:50-10:10承接不再继续杀，才允许50%条件执行",
         "intraday_yellow_line_probe": "分时黄线只作为日内承接确认线；09:50-10:10价格上穿分时黄色均价线并形成金叉，或水下强势修复到0轴后承接连续，才算试错条件；不是所有股票的低吸理由",
-        "intraday_average_line_cross_probe": "09:50-10:10价格上穿分时黄色均价线并形成金叉，且上穿后不再快速跌回黄线下方，才允许小仓试错",
+        "intraday_average_line_cross_probe": "09:50-10:10价格上穿分时黄色均价线并形成金叉，且上穿后不再快速跌回黄线下方，才允许50%条件执行",
         "zero_axis_reclaim_probe": "水下强势修复到0轴，0轴附近不再放量回落，才允许把修复视为资金重新表态",
         "daily_ma_entry_probe": "逻辑确认后再看MA3/MA5/MA10：MA3/MA5/MA10分别对应极度龙头/强势/趋势；MA不是买入理由，只是执行锚点和失效参考，仍要叠加分时承接",
         "daily_ma_role_map": {
@@ -976,6 +1015,7 @@ def build_participation_window_policy(window="", missed_action="", source_tier="
             participation_window=window,
         )
     )
+    policy.update(no_trade_fields)
     return policy
 
 

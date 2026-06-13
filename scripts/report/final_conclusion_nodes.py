@@ -7,7 +7,9 @@ from report.conclusion_support import (
     derive_trade_style as _derive_trade_style,
     format_stock_label as _format_stock_label,
     get_watch_anchor_note as _get_watch_anchor_note,
+    resolve_best_stock as _resolve_best_stock,
     resolve_selected_position_candidate as _resolve_selected_position_candidate,
+    resolve_watch_anchor as _resolve_watch_anchor,
     selected_target_is_attack_ready as _selected_target_is_attack_ready,
 )
 
@@ -38,8 +40,8 @@ def _build_report_stages_from_context(context):
 
 def _build_mvp_target_row(context):
     selected = _resolve_selected_position_candidate(context)
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = _resolve_best_stock(context)
+    watch_anchor = _resolve_watch_anchor(context)
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = _get_watch_anchor_note(watch_anchor)
 
@@ -86,8 +88,8 @@ def _build_full_mode_strategy_row(context):
     final_gate = context.get("final_gate") or {}
     step0_prediction = str(context.get("step0_prediction", "") or "").strip()
     selected = _resolve_selected_position_candidate(context)
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = _resolve_best_stock(context)
+    watch_anchor = _resolve_watch_anchor(context)
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = _get_watch_anchor_note(watch_anchor)
 
@@ -104,7 +106,7 @@ def _build_full_mode_strategy_row(context):
         return ("明日策略", "不开新仓，只观察：当前裁决不允许新增跟随，先看环境和主线是否继续强化")
 
     if step0_prediction == "DIFFICULT":
-        return ("明日策略", "开盘再评估：环境仍需确认，只记录竞价表态和开盘承接，不满足预演情境就回到0%")
+        return ("明日策略", "开盘再评估：环境仍需确认，只记录竞价表态和开盘承接，不满足固定交易窗口条件就回到0%")
 
     if best_stock:
         if step0_prediction == "CLEAR":
@@ -209,7 +211,7 @@ def build_final_conclusion_mvp_discipline_node(context, node_meta=None, node_loo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足预演情境就回到0%；买后用失效价和单笔-5%底线处理风险 |"
+            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足固定交易窗口条件就回到0%；买后用失效价和单笔-5%底线处理风险 |"
         ],
         "exports": {},
         "module_logs": [],
@@ -268,7 +270,7 @@ def build_final_conclusion_full_discipline_node(context, node_meta=None, node_lo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足预演情境就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
+            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足固定交易窗口条件就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
         ],
         "exports": {},
         "module_logs": [],

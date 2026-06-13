@@ -219,11 +219,49 @@ class CandidateQualityRendererTest(unittest.TestCase):
 
         self.assertIn("### 候选选股轨迹", markdown)
         self.assertIn("| 层级 | 候选 | 主线/板块 | 板块锚反推 | 为什么进入这一层 | 卡点 | 明日动作 |", markdown)
-        self.assertIn("| T0 | 华天科技(002185) | 半导体 |", markdown)
+        self.assertIn("| 观察层 | 华天科技(002185) | 半导体 |", markdown)
         self.assertNotIn("| T3 | 步步高(002251) | 消费 | 为什么进入这一层 |", markdown)
         self.assertIn("### 候选选股轨迹明细", markdown)
         self.assertIn("| 层级 | 候选 | 来源池 | 主线/板块 | 板块锚反推 | 关键输入 | 满足条件 | 未满足/缺失 | 分支结果 | 明日动作 | 失效条件 |", markdown)
-        self.assertIn("| T3 | 步步高(002251) | 异动线索 | 消费 |", markdown)
+        self.assertIn("| 观察层 | 步步高(002251) | 异动线索 | 消费 |", markdown)
+
+    def test_renderer_marks_process_samples_when_final_target_is_empty(self):
+        panel = build_daily_quality_decision_panel(
+            market_emotion_label="0%不参与",
+            daily_new_entry_limit=0,
+        )
+        contracts = [
+            evaluate_candidate_quality_sample_contract(
+                {
+                    "name": "大有能源",
+                    "code": "600403",
+                    "tier": "T1",
+                    "source_pools": ["watch_anchor"],
+                    "mainline": "半导体",
+                    "sector": "煤炭开采",
+                    "market_fit": "未满足",
+                    "mainline_fit": "未满足",
+                    "stock_structure_fit": "数据缺失",
+                    "candidate_role": "观察样本",
+                    "anchor_reversal_decision": "降级观察",
+                    "final_action": "只观察，不新增参与",
+                }
+            )
+        ]
+
+        markdown = render_candidate_quality_section(
+            panel,
+            contracts,
+            table_fields=["候选", "账户状态", "动作上限", "新开仓动作"],
+            render_trace_tables=True,
+            final_target_empty=True,
+        )
+
+        self.assertIn("当前最终对象为空；下表只回放筛选过程", markdown)
+        self.assertIn("| 候选 | 对象口径 | 账户状态 | 动作上限 | 新开仓动作 |", markdown)
+        self.assertIn("| 大有能源(600403) | 过程样本，非当前对象 |", markdown)
+        self.assertIn("| 过程样本 | 大有能源(600403) |", markdown)
+        self.assertIn("只作过程回放，不新增参与", markdown)
 
     def test_renderer_outputs_sniper_ascii_selection_graph(self):
         panel = build_daily_quality_decision_panel(market_emotion_label="主线活跃")

@@ -39,6 +39,43 @@ def _prioritized_observation_candidates(context):
     return [target] + remaining
 
 
+def _candidate_has_leader_signal(candidate):
+    if not isinstance(candidate, dict):
+        return False
+
+    leader_speed_tier = str(candidate.get("leader_speed_tier") or "").strip()
+    leader_speed_tier_code = str(candidate.get("leader_speed_tier_code") or "").strip()
+    if leader_speed_tier and leader_speed_tier not in {"观察样本", "待判定"}:
+        return True
+    if leader_speed_tier_code and leader_speed_tier_code != "not_leader":
+        return True
+
+    text_fields = (
+        "leader_certainty_path",
+        "conviction_reason",
+        "reason",
+        "watch_priority_label",
+        "watch_anchor_note",
+        "target_role",
+        "candidate_role",
+        "role",
+    )
+    joined_text = " ".join(str(candidate.get(key) or "") for key in text_fields)
+    return any(marker in joined_text for marker in ("龙头", "锚定龙", "总龙", "主线核心", "核心龙"))
+
+
+def _leader_memory_candidates(context, safe_float):
+    candidates = []
+    for candidate in context.get("leader_memory_bank", []) or []:
+        if isinstance(candidate, dict) and _candidate_key(candidate):
+            candidates.append(dict(candidate))
+    candidates.sort(
+        key=lambda item: safe_float(item.get("remember_score"), 0.0),
+        reverse=True,
+    )
+    return candidates
+
+
 def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=None):
     target_date = context.get("target_date", "")
     final_gate = with_single_focus_counts(
@@ -83,7 +120,20 @@ def build_pk_decision_probe_position_node(context, node_meta=None, node_lookup=N
         special_probe_verdict=special_probe_verdict,
         monthly_context=context.get("monthly_context", {}) or {},
     )
-    selected_position_candidate = best_stock or (watch_anchor if context.get("trade_gate_open") else None)
+    selected_position_candidate = best_stock if _candidate_has_leader_signal(best_stock) else None
+    if not selected_position_candidate:
+        for candidate in _leader_memory_candidates(context, safe_float):
+            selected_position_candidate = candidate
+            break
+    if not selected_position_candidate:
+        for candidate in _prioritized_observation_candidates(context):
+            if isinstance(candidate, dict) and (candidate.get("name") or candidate.get("code")) and _candidate_has_leader_signal(candidate):
+                selected_position_candidate = candidate
+                break
+    if not selected_position_candidate and _candidate_has_leader_signal(watch_anchor):
+        selected_position_candidate = watch_anchor
+    if not selected_position_candidate:
+        selected_position_candidate = best_stock or (watch_anchor if context.get("trade_gate_open") else None)
     if not selected_position_candidate:
         for candidate in _prioritized_observation_candidates(context):
             if isinstance(candidate, dict) and (candidate.get("name") or candidate.get("code")):

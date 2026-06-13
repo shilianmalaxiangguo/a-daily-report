@@ -9,6 +9,7 @@ from report.mainline_turnover_summary_support import (
     resolve_turnover_share_trend_summary,
     resolve_turnover_share_trend_rows,
 )
+from report.cycle_sector_style import cycle_sector_color_map_from_calendar_rows, cycle_sector_label
 from report.surface_wording import sanitize_user_visible_text
 from report.trading_time_window_contract import normalize_trading_time_text
 
@@ -42,27 +43,30 @@ def _render_turnover_share_trend_table(context):
         return []
     hot_summary = resolve_hot_sector_turnover_watch_summary(context)
     summary = resolve_turnover_share_trend_summary(context)
+    color_by_mainline = cycle_sector_color_map_from_calendar_rows((context or {}).get("cycle_calendar_rows") or [])
     lines = []
     if hot_rows:
         if hot_summary:
             lines.append(f"> {hot_summary}")
             lines.append("")
-        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows))
+        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows, color_by_mainline=color_by_mainline))
     if rows:
-        lines.append("#### 主线切换成交额记录")
+        lines.append("#### 小周期成交额与主线切换判断")
         if summary:
             lines.append(f"> {summary}")
             lines.append("")
         lines.extend(
             [
-                "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-                "|------|----------|------------|------------|------------|------|----------|------|",
+                "| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |",
+                "|------|------------|------------|------------|------|----------|----------|------|",
             ]
         )
         for row in _display_latest_first(rows):
+            rendered_row = dict(row)
+            rendered_row["small_cycle_line"] = cycle_sector_label(rendered_row.get("small_cycle_line"), color_by_mainline)
             lines.append(
-                "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
-                    **row
+                "| {date} | {small_cycle_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {cycle_switch_judgement} | {interpretation} |".format(
+                    **rendered_row
                 )
             )
         lines.append("")

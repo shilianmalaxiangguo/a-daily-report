@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from selection.candidate_bundle_runtime import (
+    _is_anchor_source_candidate,
     build_candidate_bundle_contract,
     build_step2_candidate_bundle,
 )
@@ -88,6 +89,21 @@ sys.modules.update(
 
 
 class CandidateBundleRuntimeTest(unittest.TestCase):
+    def test_first_wave_dragon_label_is_not_anchor_source_by_itself(self):
+        self.assertFalse(
+            _is_anchor_source_candidate(
+                {
+                    "name": "宇环数控",
+                    "code": "002903",
+                    "sector": "通用设备",
+                    "reason": "首波先锋，仅作承接观察 / 首波龙一",
+                    "pattern": "光头大阳柱涨停",
+                    "change_pct": 10.0,
+                },
+                source_name="candidates",
+            )
+        )
+
     def test_legacy_step2_candidate_bundle_wrapper_delegates_to_runtime(self):
         result = _run_legacy_entry_probe(
             """
@@ -628,7 +644,10 @@ assert bundle == {"core_stocks": []}
         )
 
         rows = {item["code"]: item for item in result["historical_extreme_review"]}
-        self.assertEqual(rows["002281"]["destination"], "正式重点观察名单")
+        self.assertEqual(rows["002281"]["destination"], "过程观察样本")
+        self.assertEqual(rows["002281"]["review_status"], "当前观察样本")
+        self.assertEqual(rows["002281"]["review_basis"], "进入过程观察样本池")
+        self.assertIn("不作为明日新增参与依据", rows["002281"]["next_action"])
         self.assertEqual(rows["002975"]["destination"], "形态待修复池")
         self.assertEqual(rows["000586"]["destination"], "龙回头观察池")
         self.assertEqual(rows["603005"]["destination"], "历史观察")

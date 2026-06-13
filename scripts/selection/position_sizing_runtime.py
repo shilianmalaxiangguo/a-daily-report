@@ -125,7 +125,7 @@ def _build_single_focus_constraint(final_gate=None, state_machine_snapshot=None,
     if focus_count is not None and focus_count > 1:
         return {
             "status": "multiple_candidates",
-            "reason": "多候选未缩到唯一对象，只能在50%标准进攻和0%等待之间二选一。",
+            "reason": "多候选未缩到唯一对象，只能在50%条件执行和0%等待之间二选一。",
         }
     if not best_stock:
         if candidate and _is_explicit_extreme_conviction_target(candidate, watch_anchor_type=watch_anchor_type):
@@ -582,7 +582,7 @@ def _build_position_sizing_decision_legacy_body(
         return _finalize(decision)
 
     if probe_state == "probe_deep_fall":
-        decision["sizing_reason"] = "特殊探针已经深跌失效，继续维持0%观察。"
+        decision["sizing_reason"] = "特殊探针已经深跌失效，继续维持0%不参与。"
         return _finalize(decision)
     if (
         probe_state == "probe_flow_unconfirmed"
@@ -603,7 +603,7 @@ def _build_position_sizing_decision_legacy_body(
                     {
                         "participation_mode": "execute_50",
                         "target_position_pct": 50,
-                        "sizing_reason": branch_20cm.get("reason") or "20cm 若能满足主线、确认链和风险边界，按50%标准进攻；不满足就是0%。",
+                        "sizing_reason": branch_20cm.get("reason") or "20cm 若能满足主线、确认链和风险边界，按50%条件执行；不满足就是0%。",
                     }
                 )
             else:
@@ -615,7 +615,7 @@ def _build_position_sizing_decision_legacy_body(
                     {
                         "participation_mode": "execute_50",
                         "target_position_pct": 50,
-                        "sizing_reason": "多候选未缩到唯一对象，但反馈成熟时只能在最强对象上按50%标准进攻；不满足就是0%。",
+                        "sizing_reason": "多候选未缩到唯一对象，但反馈成熟时只能在最强对象上按50%条件执行；不满足就是0%。",
                     }
                 )
             else:
@@ -628,7 +628,7 @@ def _build_position_sizing_decision_legacy_body(
             {
                 "participation_mode": "execute_50",
                 "target_position_pct": 50,
-                "sizing_reason": "环境、主线和唯一对象已经同时对齐，只做50%正常执行仓。",
+                "sizing_reason": "环境、主线和唯一对象已经同时对齐，只做50%条件执行。",
             }
         )
         return _finalize(decision)
@@ -648,16 +648,16 @@ def _build_position_sizing_decision_legacy_body(
 
     def _standard_attack_reason():
         if second_shot_ready and second_shot_breakout_price is not None:
-            return f"执行候选观察锚点仍在活观察窗口内，且已完成{second_shot_breakout_price:.2f}二次突破，按50%标准进攻预演。"
+            return f"执行候选观察对象仍在活观察窗口内，且已完成{second_shot_breakout_price:.2f}二次突破，按50%条件执行。"
         if weak_to_strong_upgrade_ready:
-            return "主线弱转强样本已具备09:50-10:10验证链：强基底假弱非真弱，按50%标准进攻；后续继续 act right 再评估是否升级为核心进攻。"
+            return "主线弱转强样本已具备09:50-10:10验证链：强基底假弱非真弱，按50%条件执行；后续继续 act right 再评估是否升级为核心进攻。"
         if probe_state == "probe_crossline_upgrade_ready":
-            return "跨线对象已先 act right，按50%标准进攻，但不直接当成核心进攻。"
+            return "跨线对象已先 act right，按50%条件执行，但不直接当成核心进攻。"
         if probe_allows_attack_50_ready:
-            return "环境条件尚未完全满足，但候选已具备可升级探针反馈，按50%标准进攻预演。"
+            return "环境条件尚未完全满足，但候选已具备可升级探针反馈，按50%条件执行。"
         if execution_bias in ("prep_only", "divergence_only"):
-            return "环境未完全共振，但最强对象已经先证明自己，按50%标准进攻预演。"
-        return "环境条件尚未完全满足，但候选已连续多日报告并保持承接，按50%标准进攻预演。"
+            return "环境未完全共振，但最强对象已经先证明自己，按50%条件执行。"
+        return "环境条件尚未完全满足，但候选已连续多日报告并保持承接，按50%条件执行。"
 
     if (
         execution_bias in ("prep_only", "divergence_only")
@@ -693,14 +693,14 @@ def _build_position_sizing_decision_legacy_body(
                 "max_position_pct": max(int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)), 50),
                 "allow_full_attack": False,
                 "trend_invalid": False,
-                "reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%标准进攻，条件不成立回0%。",
+                "reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%条件执行，条件不成立回0%。",
             }
         )
         decision.update(
             {
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
-                "sizing_reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%标准进攻，条件不成立回0%。",
+                "sizing_reason": "已有明确对象、固定交易窗口和失效价；环境要求先收缩时也保留50%条件执行，条件不成立回0%。",
             }
         )
         return _finalize(decision)
@@ -728,14 +728,14 @@ def _build_position_sizing_decision_legacy_body(
                 "max_position_pct": max(int(_safe_float(monthly_rhythm.get("max_position_pct", 0), 0)), 50),
                 "allow_full_attack": False,
                 "trend_invalid": False,
-                "reason": "市场不是极端冰点且已有明日极度看好目标，保留50%标准进攻预演；失败回到0%。",
+                "reason": "市场不是极端冰点且已有明日极度看好目标，保留50%条件执行；失败回到0%。",
             }
         )
         decision.update(
             {
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
-                "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。",
+                "sizing_reason": "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%条件执行，固定交易窗口内条件不成立就回到0%。",
             }
         )
         return _finalize(decision)
@@ -757,13 +757,13 @@ def _build_position_sizing_decision_legacy_body(
             {
                 "participation_mode": "attack_50_preview",
                 "target_position_pct": 50,
-                "sizing_reason": "已有明确候选、固定交易窗口和失效价，市场未到弱市场/冰点/趋势失效；按50%标准进攻预演，不再默认0%观察。",
+                "sizing_reason": "已有明确候选、固定交易窗口和失效价，市场未到弱市场/冰点/趋势失效；按50%条件执行，不再默认0%不参与。",
             }
         )
         return _finalize(decision)
 
     if execution_bias == "avoid":
-        decision["sizing_reason"] = "主线脉冲已退潮，维持0%观察。"
+        decision["sizing_reason"] = "主线脉冲已退潮，维持0%不参与。"
     elif execution_bias == "reduce_only":
         decision["sizing_reason"] = "当前只处理旧仓，不给新增仓位。"
     elif execution_bias == "watch_only":

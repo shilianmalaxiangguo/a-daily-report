@@ -130,6 +130,42 @@ def _render_candidate_table(contracts, heading_level=3, table_fields=None):
     return lines
 
 
+def _render_candidate_table_scope_note(final_target_empty=False):
+    if not final_target_empty:
+        return []
+    return [
+        "> 当前最终对象为空；下表只回放筛选过程，表内股票不是明日执行对象，也不是当前观察对象。",
+        "",
+    ]
+
+
+def _with_process_scope_rows(contracts, final_target_empty=False):
+    contracts = list(contracts or [])
+    if not final_target_empty:
+        return contracts
+    updated_contracts = []
+    for contract in contracts:
+        if not isinstance(contract, dict):
+            updated_contracts.append(contract)
+            continue
+        row = dict(contract.get("visible_row") or {})
+        row["对象口径"] = "过程样本，非当前对象"
+        if str(row.get("新开仓动作") or "").strip() in {"只观察，不新增参与", "仅过程证据"}:
+            row["新开仓动作"] = "只作过程回放，不新增参与"
+        updated_contracts.append({**contract, "visible_row": row})
+    return updated_contracts
+
+
+def _process_scope_table_fields(table_fields, final_target_empty=False):
+    if not final_target_empty:
+        return table_fields
+    fields = list(table_fields or CANDIDATE_TABLE_FIELDS)
+    if "对象口径" not in fields:
+        insert_at = fields.index("候选") + 1 if "候选" in fields else 0
+        fields.insert(insert_at, "对象口径")
+    return fields
+
+
 def _contract_trace(contract):
     return (contract or {}).get("trace", {}) or {}
 
@@ -267,9 +303,9 @@ def _trace_display_tier(trace):
     }.get(tier, tier or "候选")
 
 
-def _compact_trace_row(contract):
+def _compact_trace_row(contract, final_target_empty=False):
     trace = _contract_trace(contract)
-    return {
+    row = {
         "层级": _trace_display_tier(trace),
         "候选": _trace_candidate_label(contract, trace),
         "主线/板块": _trace_mainline_sector(trace),
@@ -278,11 +314,19 @@ def _compact_trace_row(contract):
         "卡点": _trace_blocking_points(trace),
         "明日动作": trace.get("final_action", ""),
     }
+    if final_target_empty:
+        row["层级"] = "过程样本"
+        row["为什么进入这一层"] = _join_values(
+            [row.get("为什么进入这一层"), "最终对象为空，本行只解释为什么曾进入筛选"],
+            separator="；",
+        )
+        row["明日动作"] = "只作过程回放，不新增参与"
+    return row
 
 
-def _full_trace_row(contract):
+def _full_trace_row(contract, final_target_empty=False):
     trace = _contract_trace(contract)
-    return {
+    row = {
         "层级": _trace_display_tier(trace),
         "候选": _trace_candidate_label(contract, trace),
         "来源池": _join_values(trace.get("source_pools", []), separator="、"),
@@ -295,6 +339,14 @@ def _full_trace_row(contract):
         "明日动作": trace.get("final_action", ""),
         "失效条件": trace.get("failure_condition", ""),
     }
+    if final_target_empty:
+        row["层级"] = "过程样本"
+        row["分支结果"] = _join_values(
+            [row.get("分支结果"), "最终对象为空，本行只作筛选回放"],
+            separator="；",
+        )
+        row["明日动作"] = "只作过程回放，不新增参与"
+    return row
 
 
 def _render_table_rows(fields, rows):
@@ -304,8 +356,12 @@ def _render_table_rows(fields, rows):
     return lines
 
 
-def _render_compact_trace_table(contracts, heading_level=3):
-    rows = [_compact_trace_row(contract) for contract in contracts if _contract_trace(contract).get("tier") in ("T0", "T1")]
+def _render_compact_trace_table(contracts, heading_level=3, final_target_empty=False):
+    rows = [
+        _compact_trace_row(contract, final_target_empty=final_target_empty)
+        for contract in contracts
+        if _contract_trace(contract).get("tier") in ("T0", "T1")
+    ]
     if not rows:
         return []
     lines = [_heading(heading_level, "候选选股轨迹"), ""]
@@ -313,8 +369,12 @@ def _render_compact_trace_table(contracts, heading_level=3):
     return lines
 
 
-def _render_full_trace_table(contracts, heading_level=3):
-    rows = [_full_trace_row(contract) for contract in contracts if _contract_trace(contract)]
+def _render_full_trace_table(contracts, heading_level=3, final_target_empty=False):
+    rows = [
+        _full_trace_row(contract, final_target_empty=final_target_empty)
+        for contract in contracts
+        if _contract_trace(contract)
+    ]
     if not rows:
         return []
     lines = [_heading(heading_level, "候选选股轨迹明细"), ""]
@@ -447,12 +507,12 @@ def _render_sniper_selection_graph(contracts, eliminated_summary=None, heading_l
     return lines
 
 
-def _render_trace_tables(contracts, eliminated_summary=None, heading_level=3):
+def _render_trace_tables(contracts, eliminated_summary=None, heading_level=3, final_target_empty=False):
     sections = []
     for section in (
         _render_sniper_selection_graph(contracts, eliminated_summary, heading_level),
-        _render_compact_trace_table(contracts, heading_level),
-        _render_full_trace_table(contracts, heading_level),
+        _render_compact_trace_table(contracts, heading_level, final_target_empty=final_target_empty),
+        _render_full_trace_table(contracts, heading_level, final_target_empty=final_target_empty),
         _render_eliminated_summary(eliminated_summary, heading_level),
     ):
         if section:
@@ -491,14 +551,27 @@ def render_candidate_quality_section(
     *,
     render_trace_tables=False,
     eliminated_summary=None,
+    final_target_empty=False,
 ):
-    contracts = list(candidate_contracts or [])
+    contracts = _with_process_scope_rows(candidate_contracts, final_target_empty=final_target_empty)
     lines = [_heading(heading_level, "候选质量与动作分层"), ""]
     lines.extend(_render_panel(panel, heading_level + 1))
     lines.append("")
-    lines.extend(_render_candidate_table(contracts, heading_level + 1, table_fields))
+    lines.extend(_render_candidate_table_scope_note(final_target_empty=final_target_empty))
+    lines.extend(
+        _render_candidate_table(
+            contracts,
+            heading_level + 1,
+            _process_scope_table_fields(table_fields, final_target_empty=final_target_empty),
+        )
+    )
     if render_trace_tables:
-        trace_lines = _render_trace_tables(contracts, eliminated_summary, heading_level + 1)
+        trace_lines = _render_trace_tables(
+            contracts,
+            eliminated_summary,
+            heading_level + 1,
+            final_target_empty=final_target_empty,
+        )
         if trace_lines:
             lines.append("")
             lines.extend(trace_lines)

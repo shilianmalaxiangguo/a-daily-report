@@ -1,6 +1,28 @@
 from report.surface_wording import sanitize_user_visible_text
 
 
+def _is_process_candidate(candidate):
+    candidate = candidate if isinstance(candidate, dict) else {}
+    text_parts = [
+        candidate.get("permission_label"),
+        candidate.get("identity"),
+        candidate.get("target_role"),
+        candidate.get("candidate_role"),
+        candidate.get("status"),
+        candidate.get("source_pool"),
+        candidate.get("watch_source"),
+        candidate.get("observation_layer"),
+    ]
+    text = " ".join(str(part or "") for part in text_parts)
+    return "过程候选" in text or "process_observation" in text
+
+
+def _waiting_action_text(waiting_item):
+    if _is_process_candidate(waiting_item):
+        return "只作过程回放，不新增参与"
+    return "⏳明日继续观察"
+
+
 def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
     target_date = context.get("target_date", "")
     mainline_name = str(context.get("mainline_name", "") or "").strip()
@@ -177,7 +199,7 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 price_focus_text = build_observation_price_focus_text(price_focus)
                 lines.append(
                     f"| {name} | {code} | {permission.get('permission_label', '-')} | 观察 | - | "
-                    f"{confirm_text} | {price_focus_text} | ⏳明日继续观察 |"
+                    f"{confirm_text} | {price_focus_text} | {_waiting_action_text(waiting_item)} |"
                 )
     else:
         lines.append("**买点判断** (量化系统不可用，使用基础判断):")
@@ -340,7 +362,8 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 )
                 lines.append(
                     f"| {name} | {code} | {permission.get('permission_label', '-')} | {change:+.2f}% | "
-                    f"{judgment} | {confirm_text} | {price_focus_text} | {action} |"
+                    f"{judgment} | {confirm_text} | {price_focus_text} | "
+                    f"{_waiting_action_text(waiting_item) if waiting_item else action} |"
                 )
             else:
                 minute_plan = waiting_item.get("minute_plan") if waiting_item else {}
@@ -351,7 +374,8 @@ def build_entry_plan_judgement_node(context, node_meta=None, node_lookup=None):
                 price_focus_text = build_observation_price_focus_text(price_focus)
                 lines.append(
                     f"| {name} | {code} | {permission.get('permission_label', '-')} | {change:+.2f}% | "
-                    f"{judgment} | {confirm_text} | {price_focus_text} | {action} |"
+                    f"{judgment} | {confirm_text} | {price_focus_text} | "
+                    f"{_waiting_action_text(waiting_item) if waiting_item else action} |"
                 )
 
     lines.append("")

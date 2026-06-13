@@ -120,7 +120,7 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         self.assertEqual(result["participation_mode"], "execute_50")
         self.assertEqual(result["target_position_pct"], 50)
         self.assertEqual(result["single_focus_constraint"]["status"], "multiple_candidates")
-        self.assertIn("按50%标准进攻", result["sizing_reason"])
+        self.assertIn("按50%条件执行", result["sizing_reason"])
 
     def test_build_position_sizing_decision_marks_missing_target_when_entry_gate_open_without_best_stock(self):
         result = build_position_sizing_decision(
@@ -631,7 +631,7 @@ class PositionSizingRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["target_position_pct"], 50)
-        self.assertIn("50%标准进攻预演", result["sizing_reason"])
+        self.assertIn("50%条件执行", result["sizing_reason"])
 
 
 if __name__ == "__main__":

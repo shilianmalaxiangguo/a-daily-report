@@ -35,7 +35,7 @@ class AnchorReversalContractsTest(unittest.TestCase):
         self.assertEqual(decision["anchor_reversal_decision"], "可作为主对象")
         self.assertIn("资金回流优先看板块锚", decision["relationship_to_anchor"])
 
-    def test_crossline_own_anchor_cannot_replace_current_mainline_anchor(self):
+    def test_crossline_candidate_uses_own_sector_anchor_not_current_mainline_anchor(self):
         decision = build_anchor_reversal_decision(
             {
                 "name": "大有能源",
@@ -60,10 +60,35 @@ class AnchorReversalContractsTest(unittest.TestCase):
             mainline_name="通信设备",
         )
 
-        self.assertEqual(decision["sector_anchor"], "意华股份(002897)")
-        self.assertEqual(decision["candidate_role"], "分支龙头")
+        self.assertEqual(decision["sector_anchor"], "大有能源(600403)")
+        self.assertEqual(decision["candidate_role"], "板块锚")
+        self.assertEqual(decision["anchor_reversal_decision"], "可作为主对象")
+        self.assertIn("候选本身就是板块锚", decision["relationship_to_anchor"])
+        self.assertNotIn("意华股份", decision["relationship_to_anchor"])
+
+    def test_crossline_candidate_without_own_anchor_does_not_borrow_current_mainline_anchor(self):
+        decision = build_anchor_reversal_decision(
+            {
+                "name": "大有能源",
+                "code": "600403",
+                "sector": "煤炭开采",
+                "reason": "5连板 / 趋势审美 / 平台呼吸",
+            },
+            sector_snapshot=[
+                {
+                    "sector": "半导体",
+                    "anchor_name": "兆易创新",
+                    "anchor_code": "603986",
+                    "anchor_reason": "存储芯片方向容量锚",
+                }
+            ],
+            mainline_name="半导体",
+        )
+
+        self.assertEqual(decision["sector_anchor"], "")
         self.assertEqual(decision["anchor_reversal_decision"], "降级观察")
-        self.assertIn("意华股份", decision["anchor_reversal_reason"])
+        self.assertIn("本板块锚未识别", decision["relationship_to_anchor"])
+        self.assertNotIn("兆易创新", " / ".join(str(value) for value in decision.values()))
 
     def test_requires_why_not_anchor_for_laggard_to_avoid_downgrade(self):
         decision = build_anchor_reversal_decision(
@@ -167,6 +192,31 @@ class AnchorReversalContractsTest(unittest.TestCase):
         self.assertEqual(decision["repair_priority"], "后排修复")
         self.assertEqual(decision["anchor_reversal_decision"], "降级观察")
         self.assertIn("不能替代板块锚", decision["anchor_reversal_reason"])
+
+    def test_first_wave_dragon_label_alone_stays_observation_sample(self):
+        decision = build_anchor_reversal_decision(
+            {
+                "name": "宇环数控",
+                "code": "002903",
+                "sector": "通用设备",
+                "reason": "首波先锋，仅作承接观察 / 首波龙一",
+            },
+            sector_snapshot=[
+                {
+                    "sector": "半导体",
+                    "anchor_name": "兆易创新",
+                    "anchor_code": "603986",
+                    "anchor_reason": "主线容量核心",
+                }
+            ],
+            mainline_name="半导体",
+        )
+
+        self.assertEqual(decision["candidate_role"], "观察样本")
+        self.assertEqual(decision["anchor_reversal_decision"], "降级观察")
+        self.assertEqual(decision["sector_anchor"], "")
+        self.assertIn("本板块锚未识别", decision["anchor_reversal_reason"])
+        self.assertNotIn("兆易创新", " / ".join(str(value) for value in decision.values()))
 
     def test_missing_sector_anchor_downgrades_until_anchor_is_identified(self):
         decision = build_anchor_reversal_decision(

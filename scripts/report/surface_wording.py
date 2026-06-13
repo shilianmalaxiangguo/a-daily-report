@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 ENGLISH_TRADING_JARGON_REPLACEMENTS = (
     ("follow through", "延续承接"),
     ("act right", "走势符合强势标准"),
@@ -7,12 +9,21 @@ ENGLISH_TRADING_JARGON_REPLACEMENTS = (
     ("probe", "优先观察对象"),
 )
 
-
 def _m(*parts):
     return "".join(parts)
 
 
+ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS = (
+    (_m("hard ", "ga", "te"), "关键条件"),
+    (_m("ga", "te"), "条件"),
+)
+
+
 USER_VISIBLE_WORDING_REPLACEMENTS = (
+    (_m("硬", "门", "禁"), "关键条件"),
+    (_m("门", "禁"), "条件"),
+    (_m("状态", "机", "词", "汇"), "交易条件用语"),
+    (_m("状态", "机"), "交易条件"),
     (_m("普通", "观察", "权"), "普通观察对象"),
     (_m("观察", "权"), "观察对象"),
     (_m("执行", "权", "关闭"), "资格未满足"),
@@ -38,12 +49,22 @@ PRICE_ACTION_WORDING_REPLACEMENTS = (
     ("均线是否继续收拢", "波动是否继续收敛"),
 )
 
-LEGACY_SURFACE_WORDING_MARKERS = tuple(source for source, _ in USER_VISIBLE_WORDING_REPLACEMENTS)
+LEGACY_SURFACE_WORDING_MARKERS = tuple(source for source, _ in USER_VISIBLE_WORDING_REPLACEMENTS) + tuple(
+    source for source, _ in ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS
+)
+
+
+def _replace_english_terms(text, replacements):
+    sanitized = text
+    for source, target in replacements:
+        sanitized = re.sub(rf"\b{re.escape(source)}\b", target, sanitized, flags=re.IGNORECASE)
+    return sanitized
 
 
 def sanitize_user_visible_text(value):
     if isinstance(value, str):
         sanitized = value
+        sanitized = _replace_english_terms(sanitized, ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS)
         for source, target in ENGLISH_TRADING_JARGON_REPLACEMENTS:
             sanitized = sanitized.replace(source, target).replace(source.title(), target).replace(source.upper(), target)
         for source, target in USER_VISIBLE_WORDING_REPLACEMENTS:
@@ -63,10 +84,16 @@ def sanitize_user_visible_text(value):
 
 def find_legacy_surface_wording(text):
     content = str(text or "")
-    return [marker for marker in LEGACY_SURFACE_WORDING_MARKERS if marker in content]
+    found = [marker for marker, _ in USER_VISIBLE_WORDING_REPLACEMENTS if marker in content]
+    lowered = content.lower()
+    for marker, _ in ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS:
+        if re.search(rf"\b{re.escape(marker)}\b", lowered):
+            found.append(marker)
+    return found
 
 
 __all__ = [
+    "ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS",
     "ENGLISH_TRADING_JARGON_REPLACEMENTS",
     "LEGACY_SURFACE_WORDING_MARKERS",
     "PRICE_ACTION_WORDING_REPLACEMENTS",

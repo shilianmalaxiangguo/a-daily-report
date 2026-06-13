@@ -478,6 +478,10 @@ def evaluate_candidate_quality_sample(candidate):
     locked = _as_number(candidate.get("locked_shares", 0))
     trend_context = str(candidate.get("trend_context") or "")
     account_trade_status, account_trade_reason = _resolve_account_trade_status(candidate)
+    process_evidence_only = (
+        selection_quality == "过程证据"
+        or str(candidate.get("action_ceiling") or "").strip() == "仅过程证据"
+    )
 
     action_ceiling = "补位"
     entry_quality_label = "等确认"
@@ -496,14 +500,19 @@ def evaluate_candidate_quality_sample(candidate):
         action_ceiling = "核心观察"
         new_entry_action = "不新增参与，等待恢复条件"
         reasons.append("今日新增上限未打开，主对象只保留核心观察")
+    elif process_evidence_only:
+        action_ceiling = "不参与"
+        entry_quality_label = str(candidate.get("entry_cost_state") or "仅过程证据").strip()
+        new_entry_action = str(candidate.get("new_entry_action") or candidate.get("final_action") or "仅过程证据").strip()
+        reasons.append(str(candidate.get("visible_summary") or "仅作为过程证据，不作为最终对象").strip())
 
-    if selection_quality == "高" and entry_cost_state == "高成本":
+    if not process_evidence_only and selection_quality == "高" and entry_cost_state == "高成本":
         action_ceiling = "核心观察"
         entry_quality_label = "不舒服"
         new_entry_action = "不追高，等回踩确认"
         reasons.append("好票高成本，保护选股资格但不追高")
 
-    if selection_quality == "低" and entry_cost_state == "低成本":
+    if not process_evidence_only and selection_quality == "低" and entry_cost_state == "低成本":
         action_ceiling = "不参与"
         entry_quality_label = "看似便宜"
         new_entry_action = "不新增参与，MA/VWAP只作已有仓处理参考"

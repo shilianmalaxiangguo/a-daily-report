@@ -135,7 +135,7 @@ def build_monthly_rhythm_decision(
         max_position_pct = 50
         allow_full_attack = False
         target_role = "attack_prepare"
-        reason = "已有进攻准备但未形成核心对象；三态模型至少按50%标准进攻预演。"
+        reason = "已有进攻准备但未形成核心对象；三态模型至少按50%条件执行。"
     else:
         max_position_pct = 0
         allow_full_attack = False

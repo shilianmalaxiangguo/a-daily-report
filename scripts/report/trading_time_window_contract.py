@@ -12,6 +12,10 @@ def normalize_trading_time_text(value):
         return tuple(normalize_trading_time_text(item) for item in value)
     if isinstance(value, dict):
         return {key: normalize_trading_time_text(item) for key, item in value.items()}
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        return value
     text = str(value or "").strip()
     if not text:
         return text

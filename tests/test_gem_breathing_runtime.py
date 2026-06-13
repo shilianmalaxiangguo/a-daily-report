@@ -112,8 +112,8 @@ class GemBreathingRuntimeTest(unittest.TestCase):
         self.assertTrue(result["allow_attack_50_ready"])
         self.assertFalse(result["direct_ban"])
         self.assertIn("教材样本", result["reason"])
-        self.assertIn("50%标准进攻", result["reason"])
-        self.assertNotIn(_m("30%", "条件试错"), result["reason"])
+        self.assertIn("50%条件执行", result["reason"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), result["reason"])
 
     def test_build_gem_breathing_contract_normalizes_prices_and_upgrade_text(self):
         contract = build_gem_breathing_contract(
@@ -140,8 +140,8 @@ class GemBreathingRuntimeTest(unittest.TestCase):
         self.assertEqual(contract["reset_breakout_price"], 12.98)
         self.assertIn("12.36", contract["upgrade_condition_text"])
         self.assertIn("11.22", contract["upgrade_condition_text"])
-        self.assertIn("50%标准进攻", contract["upgrade_condition_text"])
-        self.assertNotIn(_m("30%", "条件试错"), contract["upgrade_condition_text"])
+        self.assertIn("50%条件执行", contract["upgrade_condition_text"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), contract["upgrade_condition_text"])
 
     def test_build_gem_breathing_watch_anchor_assembles_waiting_plan_and_contract(self):
         watch_anchor = build_gem_breathing_watch_anchor(

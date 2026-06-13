@@ -7,8 +7,10 @@ from report.conclusion_support import (
     build_risk_trade_note,
     derive_trade_style,
     get_watch_anchor_note,
+    resolve_best_stock,
     resolve_selected_position_candidate,
     resolve_today_focus_items,
+    resolve_watch_anchor,
     selected_target_is_attack_ready,
 )
 
@@ -112,8 +114,8 @@ def _build_risk_row(context, stage_meta=None):
 def _build_execution_row(context, stage_meta=None):
     trade_gate_open = bool(context.get("trade_gate_open"))
     selected = resolve_selected_position_candidate(context)
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = resolve_best_stock(context)
+    watch_anchor = resolve_watch_anchor(context)
     if selected and selected_target_is_attack_ready(context):
         guidance = "只等明日目标标的在固定交易窗口内满足条件"
     elif trade_gate_open:
@@ -134,8 +136,8 @@ def _build_execution_row(context, stage_meta=None):
 
 def _build_decisive_row(context, stage_meta=None):
     selected = resolve_selected_position_candidate(context)
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = resolve_best_stock(context)
+    watch_anchor = resolve_watch_anchor(context)
     watch_anchor_type = str(context.get("watch_anchor_type", "") or "").strip()
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = get_watch_anchor_note(watch_anchor)

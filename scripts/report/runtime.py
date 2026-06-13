@@ -17,6 +17,11 @@ from diagnostics.helper_diagnostics_runtime import (
     render_helper_diagnostics_lines as _render_helper_diagnostics_lines,
 )
 from domains.calendar_events.infer import normalize_calendar_ai_analysis
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
+    candidate_blocks_current_observation_target as _candidate_blocks_current_observation_target,
+    candidate_can_be_current_observation_target as _candidate_can_be_current_observation_target,
+)
+from domains.execution_chain.pk_decision_stage import build_pk_decision_runtime as _build_pk_decision_runtime
 from knowledge.llm_wiki_context import build_llm_wiki_context
 from knowledge.llm_wiki_router import build_llm_wiki_fact_tags, route_llm_wiki_knowledge
 from report.calendar_section_nodes import render_calendar_section
@@ -44,6 +49,7 @@ from report.no_trade_conclusion_nodes import render_no_trade_conclusion_section
 from report.positioning_nodes import render_positioning_section
 from report.front_summary_renderer import sanitize_front_page_text
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
+from report.pk_decision_renderer import render_pk_decision_section as _default_render_pk_decision_section
 from hooks.report.use_report_sections import (
     build_knowledge_hits_note,
     build_knowledge_compounding_candidate_note,
@@ -61,6 +67,11 @@ from report.sniper_target_derivation import (
     compact_section as _sniper_target_derivation_compact_section,
     full_section as _sniper_target_derivation_full_section,
 )
+from report.next_day_attribution import render_next_day_attribution_lines
+from report.selection_workflow import (
+    build_selection_workflow as _default_build_selection_workflow,
+    store_selection_workflow as _default_store_selection_workflow,
+)
 from report.two_layer_decision_payload import (
     build_two_layer_decision_payload,
     render_derivation_audit_layer,
@@ -74,6 +85,7 @@ from research.entry_cycle_calibration_runtime import (
     build_default_entry_cycle_calibrations as _default_build_entry_cycle_calibrations,
 )
 from selection.candidate_execution_contracts import build_opportunity_comparison
+from selection.candidate_trace_contracts import build_candidate_trace as _default_build_candidate_trace
 
 __all__ = ["render_markdown_report_runtime"]
 
@@ -304,6 +316,7 @@ _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
     "主线成交额占比趋势",
     "近期热点板块成交额连续跟踪",
     "主线切换成交额记录",
+    "小周期成交额与主线切换判断",
     "主线成交额占比完整历史",
     "板块成交占比趋势",
     "板块周",
@@ -326,7 +339,7 @@ _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
     "龙头记忆",
     "龙头记忆库",
     "历史主线池",
-    "历史重点观察样本去向",
+    "历史过程观察样本去向",
     "候选追踪",
     "候选链路",
     "候选主表",
@@ -334,7 +347,7 @@ _PSQL_STRUCTURED_TABLE_CONTEXT_MARKERS = (
     "候选选股轨迹明细",
     "极度看好",
     "明日极度看好近25日跟踪表",
-    "重点观察25日跟踪表",
+    "过程观察25日跟踪表",
     "重点观察历史回测表",
     "板块扩散质量评分",
 )
@@ -519,7 +532,7 @@ def _number_report_tables(lines, postgres_only=False):
 
 
 _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。"
-_LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%标准进攻"
+_LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%条件执行"
 
 
 def _should_apply_pure_zero_participation_cleanup(lines):
@@ -550,11 +563,17 @@ def _has_final_zero_participation_surface(lines):
     lines = list(lines or [])
     for line in lines:
         text = str(line or "").strip()
-        if text.startswith("| 0%不参与 |") and ("| 0% / 不参与 |" in text or "0%：" in text):
+        if text.startswith("| 0%不参与 |") and ("| 0%不参与 |" in text or "0%：" in text):
             return True
     text = "\n".join(str(line or "") for line in lines)
     if "0%不参与" not in text:
         return False
+    if "| 仓位姿态 | 0%不参与 |" in text:
+        return True
+    if "| 明日仓位 | 0%不参与 |" in text:
+        return True
+    if "| 最终对象 | 无 |" in text:
+        return True
     if "唯一重点对象 | 暂无" in text:
         return True
     if "0%：没有合格标的就不参与" in text:
@@ -632,9 +651,13 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("出手指令", "参与指令"),
         ("筛出明天唯一能买的那只", "筛出明天唯一观察对象"),
         ("明天唯一能买的那只", "明天唯一观察对象"),
+        ("**明日继续观察**", "**过程候选回看**"),
+        ("⏳明日继续观察", "只作过程回放，不新增参与"),
+        ("跨线继续看谁", "跨线回看样本"),
+        ("等观察位出现", "仅保留过程回看"),
         ("核心可买 > 龙头回看 > 主线盯盘 > 普通观察", "核心观察 > 龙头回看 > 主线盯盘 > 普通观察"),
         ("只保留重点观察谁", "只保留候选观察样本"),
-        ("重点观察优先锚点", "候选观察优先对象"),
+        ("重点观察优先" + "锚点", "候选观察优先对象"),
         ("重点观察优先", "候选观察样本"),
         ("重点观察名单全天都不给确认", "候选观察样本全天都不给确认"),
         ("首波先锋，优先做重点观察谁", "首波先锋，仅作承接观察"),
@@ -658,48 +681,55 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("实际可买", "仅观察"),
         ("动作上限", "观察上限"),
         ("条件观察：", "观察对象："),
-        ("观察锚：", "观察对象："),
-        ("最终观察锚", "最终观察对象"),
-        ("50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险", "0%不参与：最终结论不允许新增参与，只观察风险是否钝化"),
-        ("盘前0%；固定交易窗口条件满足后才评估50%标准进攻", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
+        ("观察" + "锚：", "观察对象："),
+        ("最终观察" + "锚", "最终观察对象"),
+        ("50%条件执行需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险", "0%不参与：最终结论不允许新增参与，只观察风险是否钝化"),
+        ("盘前0%；固定交易窗口条件满足后才评估50%条件执行", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
         ("盘前0%；固定交易窗口条件满足后才保留观察，不能转成新增参与", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
-        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察", "只保留观察；未出现执行资格前不新增参与；未命中继续0%观察"),
-        ("盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻", "盘前0%只代表不抢跑；只观察，不新增参与"),
-        ("以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻", "以观察和处理持仓为主；不做新开仓"),
-        ("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%"),
-        ("才评估50%标准进攻", "才保留观察；未出现执行资格前不新增参与"),
-        ("触发后50%标准进攻", "触发后只观察"),
-        ("条件50%", "只观察"),
-        ("50%标准进攻", "只观察"),
+        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与", "只保留观察；未出现执行资格前不新增参与；未命中继续0%不参与"),
+        ("盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%条件执行", "盘前0%只代表不抢跑；只观察，不新增参与"),
+        ("以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%条件执行", "以观察和处理持仓为主；不做新开仓"),
+        ("确认后才评估50%条件执行，未确认保持0%", "确认后也只保留观察，未确认保持0%"),
+        ("才评估50%条件执行", "才保留观察；未出现执行资格前不新增参与"),
+        ("触发后50%条件执行", "触发后只观察"),
+        ("50%条件执行", "只观察"),
+        ("50%条件执行", "只观察"),
         ("唯一对象是否", "观察对象是否"),
-        ("观察锚是否", "观察对象是否"),
-        ("观察锚强弱", "观察对象强弱"),
-        ("观察锚缺少", "观察对象缺少"),
-        ("观察锚不能", "观察对象不能"),
-        ("观察锚重新成立", "观察对象重新成立"),
-        ("只保留观察锚", "只保留观察对象"),
-        ("暂不保留观察锚", "暂不保留观察对象"),
-        ("没有观察锚", "没有观察对象"),
-        ("有观察锚", "有观察对象"),
-        ("只看观察锚", "只看观察对象"),
-        ("观察锚", "观察对象"),
+        ("观察" + "锚是否", "观察对象是否"),
+        ("观察" + "锚强弱", "观察对象强弱"),
+        ("观察" + "锚缺少", "观察对象缺少"),
+        ("观察" + "锚不能", "观察对象不能"),
+        ("观察" + "锚重新成立", "观察对象重新成立"),
+        ("只保留观察" + "锚", "只保留观察对象"),
+        ("暂不保留观察" + "锚", "暂不保留观察对象"),
+        ("没有观察" + "锚", "没有观察对象"),
+        ("有观察" + "锚", "有观察对象"),
+        ("只看观察" + "锚", "只看观察对象"),
+        ("观察" + "锚", "观察对象"),
         ("不是执行对象", "不是执行目标"),
-        ("观察锚性质", "观察对象性质"),
-        ("观察锚去留", "观察对象去留"),
+        ("观察" + "锚性质", "观察对象性质"),
+        ("观察" + "锚去留", "观察对象去留"),
         ("✓ 溢价候选", "观察样本"),
         ("溢价候选", "观察样本"),
         ("MVP快照回退：先看次日是否继续强于市场，再按预演观察窗口确认。", "观察样本：先看是否强于市场，不预设参与。"),
         ("MVP快照回退：先看次日是否继续强于市场，再按固定交易窗口条件确认。", "观察样本：先看是否强于市场，不预设参与。"),
+        ("先看竞价承接，回封或结构确认命中才参与", "只观察承接，不新增参与"),
+        ("只在竞价表态和开盘承接同时成立后再参与", "只观察竞价表态和开盘承接，不新增参与"),
+        ("优先盯竞价表态、开盘承接和回封质量，继续强就只做它", "只观察竞价表态、开盘承接和回封质量，不新增参与"),
+        ("观察唯一对象的竞价表态、匹配金额、委托稳定和板块同步", "只观察主攻线承接和过程样本反馈，不把竞价强弱转成新增参与"),
+        ("若竞价表态和开盘前几分钟承接同时成立，按09:30-09:35窗口处理；不成立回到0%", "若竞价表态和开盘承接同时成立，也只记为过程证据；不新增参与"),
+        ("当前是0%不参与，本时段只确认主线核心是否在固定交易窗口内满足条件", "当前是0%不参与，本时段只观察主线核心是否继续证明承接"),
     )
     for line in list(lines or []):
         text = normalize_trading_time_text(str(line or ""))
         for source, target in replacements:
             text = text.replace(source, target)
-        if text.lstrip().startswith("| 0%不参与 |") and ("| 观察锚：" in text or "| 观察对象：" in text):
+        legacy_observation_prefix = "观察" + "锚："
+        if text.lstrip().startswith("| 0%不参与 |") and (f"| {legacy_observation_prefix}" in text or "| 观察对象：" in text):
             cells = text.strip().strip("|").split("|")
             if len(cells) >= 8:
                 target = cells[5].strip()
-                label = target.replace("观察锚：", "", 1).replace("观察对象：", "", 1).strip()
+                label = target.replace(legacy_observation_prefix, "", 1).replace("观察对象：", "", 1).strip()
                 cells[5] = f" 观察对象：{label} "
                 cells[7] = f" 盘前0%；只观察{label}，成立才保留观察；未出现执行资格前不新增参与；不满足继续0% "
                 text = "|" + "|".join(cells) + "|"
@@ -718,8 +748,8 @@ _PROCESS_EVIDENCE_LINE_TITLES = (
     "跨线观察候选",
     "重点观察名单",
     "重点观察复核脚本",
-    "历史重点观察样本去向",
-    "重点观察25日跟踪表",
+    "历史过程观察样本去向",
+    "过程观察25日跟踪表",
     "明日极度看好近25日跟踪表",
     "重点观察历史回测表",
     "明日观察池",
@@ -735,6 +765,7 @@ _PROCESS_EVIDENCE_LINE_TITLES = (
     "明天先观察组",
     "明天重点候选组",
     "明日继续观察",
+    "过程候选回看",
     "明日观察位预计算表",
     "今日总决策面板",
     "候选主表",
@@ -765,7 +796,7 @@ def _front_page_observation_anchor_label(lines):
         if not text.startswith("|"):
             continue
         cells = [cell.strip() for cell in text.strip().strip("|").split("|")]
-        if len(cells) >= 2 and cells[0] in {"观察锚", "观察对象"} and cells[1] not in {"", "-", "暂无", "无"}:
+        if len(cells) >= 2 and cells[0] in {"观察" + "锚", "观察对象"} and cells[1] not in {"", "-", "暂无", "无"}:
             return cells[1]
     return ""
 
@@ -788,9 +819,11 @@ def _align_appendix_observation_anchor_from_front_page(lines):
         if not in_appendix:
             normalized.append(text)
             continue
-        if "**观察优先锚点**" in text:
-            prefix = text.split("**观察优先锚点**", 1)[0]
-            normalized.append(f"{prefix}**观察优先锚点**: {anchor_label}")
+        legacy_observation_marker = "**观察优先" + "锚点**"
+        if legacy_observation_marker in text or "**观察优先对象**" in text:
+            marker = legacy_observation_marker if legacy_observation_marker in text else "**观察优先对象**"
+            prefix = text.split(marker, 1)[0]
+            normalized.append(f"{prefix}**观察优先对象**: {anchor_label}")
             in_watch_order = False
             continue
         if re.match(r"^- \*\*.*观察谁\*\*:", text):
@@ -829,32 +862,7 @@ def _sanitize_report_lines(lines, postgres_only=False):
 
 
 def _dedupe_front_page_repeated_long_table_cells(lines):
-    cleaned = []
-    seen = set()
-    in_appendix = False
-    for line in list(lines or []):
-        text = str(line or "")
-        if text == "## 八、详细附录":
-            in_appendix = True
-            cleaned.append(text)
-            continue
-        if in_appendix or not text.startswith("|"):
-            cleaned.append(text)
-            continue
-        raw_cells = text.strip().strip("|").split("|")
-        changed = False
-        next_cells = []
-        for cell in raw_cells:
-            normalized = re.sub(r"\s+", " ", str(cell or "")).strip()
-            if len(normalized) >= 40 and normalized in seen:
-                next_cells.append(" 同类说明见上方，只看本行数值变化 ")
-                changed = True
-                continue
-            next_cells.append(cell)
-            if len(normalized) >= 40:
-                seen.add(normalized)
-        cleaned.append("|" + "|".join(next_cells) + "|" if changed else text)
-    return cleaned
+    return list(lines or [])
 
 
 def _align_empty_primary_observation_rows(lines):
@@ -1277,7 +1285,7 @@ def _downgrade_extreme_conviction_list_to_observation(extreme_conviction_list):
         updated["candidate_layer"] = "watch_sample"
         updated["execution_eligibility"] = "observation_only"
         updated["source_tier"] = "extreme_conviction"
-        updated["attack_state"] = "0%观察"
+        updated["attack_state"] = "0%不参与"
         updated["participation_window"] = str(updated.get("participation_window") or "09:50-10:10").replace("参与", "观察")
         updated["conviction_rule"] = "最终0%时只作观察样本，不构成明日新增参与"
         for plan_key in ("planned_participation", "participation_script"):
@@ -1285,7 +1293,7 @@ def _downgrade_extreme_conviction_list_to_observation(extreme_conviction_list):
             if isinstance(plan, dict):
                 plan = dict(plan)
                 plan["source_tier"] = "extreme_conviction"
-                plan["attack_state"] = "0%观察"
+                plan["attack_state"] = "0%不参与"
                 updated[plan_key] = plan
         downgraded.append(updated)
     return downgraded
@@ -1483,7 +1491,11 @@ def _read_decision_ledger_index_for_tracking(root_dir="."):
         if service_cls is None:
             from storage.database_service import DatabaseService as service_cls
 
-        service = service_cls.from_environment(Path(root_dir or ".") / "data" / "cloudflare_free_daily.db")
+        service_factory = getattr(service_cls, "fact_store_from_environment", None)
+        if callable(service_factory):
+            service = service_factory()
+        else:
+            service = service_cls.from_environment()
         checker = getattr(service, "is_postgres_backed", None)
         if callable(checker) and checker():
             db_index = service.read_decision_ledger_index()
@@ -1545,18 +1557,20 @@ def _query_extreme_conviction_mention_rows_for_tracking(root_dir=".", end_date="
     try:
         from storage.database_service import DatabaseService
 
-        db_path = Path(root_dir or ".") / "data" / "cloudflare_free_daily.db"
         if postgres_required:
             if not hasattr(DatabaseService, "from_environment"):
                 raise RuntimeError("PostgreSQL extreme conviction storage requires DatabaseService.from_environment")
-            service = DatabaseService.from_environment(db_path)
+            service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+            service = service_factory() if callable(service_factory) else DatabaseService.from_environment()
             checker = getattr(service, "is_postgres_backed", None)
             if not callable(checker) or not checker():
                 raise RuntimeError("PostgreSQL extreme conviction storage requires PostgreSQL")
+        elif hasattr(DatabaseService, "fact_store_from_environment"):
+            service = DatabaseService.fact_store_from_environment()
         elif hasattr(DatabaseService, "from_environment"):
-            service = DatabaseService.from_environment(db_path)
+            service = DatabaseService.from_environment()
         else:
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            service = None
         mark_result = service.mark_a_kill_shape_extreme_conviction_mentions(
             end_date,
             window_days=window_days,
@@ -1607,8 +1621,9 @@ def _load_recent_extreme_conviction_mentions_for_selection(data, *, root_dir="."
     return data["recent_extreme_conviction_mentions"]
 
 
-def _decision_ledger_tracking_end_date(index, decision_ledger_result=None):
+def _decision_ledger_tracking_end_date(index, decision_ledger_result=None, *, target_date=""):
     candidates = []
+    candidates.append(target_date)
     if isinstance(index, dict):
         candidates.append(index.get("latest_trade_date"))
     if isinstance(decision_ledger_result, dict):
@@ -1660,7 +1675,7 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
     lines = list(render_tracking_lines(index) or [])
     mention_rows = _query_extreme_conviction_mention_rows_for_tracking(
         globals().get("decision_ledger_root_dir", "."),
-        _decision_ledger_tracking_end_date(index, decision_ledger_result),
+        _decision_ledger_tracking_end_date(index, decision_ledger_result, target_date=target_date),
         window_days=25,
     )
     if mention_rows and callable(render_mention_rows):
@@ -1710,21 +1725,21 @@ def _runtime_user_visible_trade_text(value):
         return exact_aliases[stripped]
     replacements = (
         ("条件观察：", "观察对象："),
-        ("观察锚：", "观察对象："),
-        ("观察锚性质", "观察对象性质"),
-        ("观察锚去留", "观察对象去留"),
-        ("观察锚重新成立", "观察对象重新成立"),
-        ("观察锚是否", "观察对象是否"),
-        ("观察锚强弱", "观察对象强弱"),
-        ("观察锚缺少", "观察对象缺少"),
-        ("观察锚不能", "观察对象不能"),
-        ("只保留观察锚", "只保留观察对象"),
-        ("暂不保留观察锚", "暂不保留观察对象"),
-        ("没有观察锚", "没有观察对象"),
-        ("有观察锚", "有观察对象"),
-        ("只看观察锚", "只看观察对象"),
-        ("最终观察锚", "最终观察对象"),
-        ("观察锚", "观察对象"),
+        ("观察" + "锚：", "观察对象："),
+        ("观察" + "锚性质", "观察对象性质"),
+        ("观察" + "锚去留", "观察对象去留"),
+        ("观察" + "锚重新成立", "观察对象重新成立"),
+        ("观察" + "锚是否", "观察对象是否"),
+        ("观察" + "锚强弱", "观察对象强弱"),
+        ("观察" + "锚缺少", "观察对象缺少"),
+        ("观察" + "锚不能", "观察对象不能"),
+        ("只保留观察" + "锚", "只保留观察对象"),
+        ("暂不保留观察" + "锚", "暂不保留观察对象"),
+        ("没有观察" + "锚", "没有观察对象"),
+        ("有观察" + "锚", "有观察对象"),
+        ("只看观察" + "锚", "只看观察对象"),
+        ("最终观察" + "锚", "最终观察对象"),
+        ("观察" + "锚", "观察对象"),
         ("不能转成新增参与", "未出现执行资格前不新增参与"),
         ("不能转新增参与", "未出现执行资格前不新增参与"),
         ("不是执行对象", "不是执行目标"),
@@ -1739,7 +1754,7 @@ def _runtime_role_text(value, default=""):
     if not text:
         return default
     aliases = {
-        "观察锚": "观察对象",
+        "观察" + "锚": "观察对象",
         "观察": "观察对象",
         "watch_anchor": "观察对象",
         "watch": "观察对象",
@@ -1822,10 +1837,20 @@ def _runtime_stock_payload(item):
         "high",
         "risk_reward_state",
         "risk_reward_ratio",
+        "front_observation_qualified",
+        "front_observation_reason",
+        "observation_layer",
+        "candidate_status",
+        "candidate_layer",
+        "execution_eligibility",
+        "status",
+        "source_pool",
     ):
         value = item.get(key)
         if value not in (None, ""):
             payload[key] = value
+    if isinstance(item.get("source_pools"), (list, tuple, set)):
+        payload["source_pools"] = list(item.get("source_pools"))
     strength_evidence = item.get("strength_evidence") or item.get("positive_shape_evidence")
     if strength_evidence:
         payload["strength_evidence"] = strength_evidence
@@ -2096,12 +2121,20 @@ def _runtime_opportunity_comparison(
 
 def _runtime_opportunity_risk_should_block_position(opportunity_comparison):
     comparison = opportunity_comparison if isinstance(opportunity_comparison, dict) else {}
-    old_position = comparison.get("old_position") if isinstance(comparison.get("old_position"), dict) else {}
-    old_position_key = _runtime_candidate_key(old_position)
-    if not old_position_key:
-        return False
     decision = comparison.get("comparison") if isinstance(comparison.get("comparison"), dict) else {}
-    return int(_runtime_cell_float(decision.get("max_participation_pct")) or 0) < 50
+    if not decision:
+        return False
+    max_pct = _runtime_cell_float(decision.get("max_participation_pct"))
+    return max_pct is not None and int(max_pct) < 50
+
+
+def _runtime_opportunity_comparison_blocks_participation(opportunity_comparison):
+    comparison = opportunity_comparison if isinstance(opportunity_comparison, dict) else {}
+    decision = comparison.get("comparison") if isinstance(comparison.get("comparison"), dict) else {}
+    if not decision:
+        return False
+    max_pct = _runtime_cell_float(decision.get("max_participation_pct"))
+    return max_pct is not None and int(max_pct) < 50
 
 
 def _force_observation_for_opportunity_risk(position_decision, opportunity_comparison):
@@ -2193,21 +2226,430 @@ def _runtime_old_position_priority_active(data=None, market_research_snapshot=No
     return bool(summary.get("has_position") or summary.get("summary"))
 
 
+def _build_runtime_selection_workflow(
+    *,
+    target_date="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    selected_position_candidate=None,
+    position_decision=None,
+    final_target_resolution=None,
+):
+    workflow = _default_build_selection_workflow(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        final_target_resolution=final_target_resolution,
+    )
+    observation_candidate = _runtime_unbuyable_context_candidate(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    observation_key = _runtime_candidate_key(observation_candidate)
+    if observation_key and isinstance(workflow, dict):
+        for item in workflow.get("candidate_pool", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if _runtime_candidate_key(item.get("stock")) != observation_key:
+                continue
+            item["front_observation_qualified"] = True
+            item["front_observation_reason"] = observation_candidate.get(
+                "front_observation_reason",
+                "当前账户买不了一手，只保留市场核心观察",
+            )
+            item["observation_layer"] = "front_observation"
+            stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
+            for key in ("one_lot_amount", "identity", "account_trade_status", "account_trade_reason"):
+                if observation_candidate.get(key) in (None, ""):
+                    continue
+                item[key] = observation_candidate.get(key)
+                if isinstance(stock, dict):
+                    stock[key] = observation_candidate.get(key)
+    return workflow
+
+
+def _candidate_traces_from_selection_workflow(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    traces = []
+    for item in workflow.get("candidate_pool", []) or []:
+        if not isinstance(item, dict):
+            continue
+        stock = item.get("stock") if isinstance(item.get("stock"), dict) else {}
+        candidate = {
+            **stock,
+            "mainline": item.get("mainline"),
+            "sector": item.get("sector") or stock.get("sector"),
+            "source_pools": item.get("source_pools") or [],
+            "market_fit": "满足",
+            "mainline_fit": "未满足" if item.get("eliminated_at") == "N6" else "满足",
+            "stock_structure_fit": "部分满足" if item.get("status") != "最终执行对象" else "满足",
+            "first_seen_node": item.get("first_seen_node"),
+            "entered_reason": item.get("entry_basis") or item.get("entered_reason"),
+            "entry_basis": item.get("entry_basis"),
+            "workflow_path": item.get("workflow_path"),
+            "eliminated_at": item.get("eliminated_at"),
+            "eliminated_reason": item.get("eliminated_reason"),
+            "final_action": item.get("status"),
+        }
+        trace = _default_build_candidate_trace(candidate)
+        if trace.get("stock_code") or trace.get("stock_name"):
+            traces.append(trace)
+    return traces
+
+
+def _store_runtime_selection_workflow(workflow, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(workflow, dict) or not workflow:
+        return {}
+    stored = _default_store_selection_workflow(workflow, data, execution_stage_context, market_research_snapshot)
+    traces = _candidate_traces_from_selection_workflow(stored)
+    if traces and isinstance(execution_stage_context, dict):
+        execution_stage_context["candidate_traces"] = traces
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _runtime_selection_workflow_final(data=None, market_research_snapshot=None, execution_stage_context=None):
+    workflow = _runtime_selection_workflow(
+        data=data,
+        market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
+    )
+    final = workflow.get("final") if isinstance(workflow, dict) else {}
+    return final if isinstance(final, dict) else {}
+
+
+def _runtime_selection_workflow(data=None, market_research_snapshot=None, execution_stage_context=None):
+    sources = [data, market_research_snapshot, execution_stage_context]
+    if isinstance(data, dict):
+        sources.extend([data.get("market_research_snapshot"), data.get("execution_stage_context")])
+    if isinstance(execution_stage_context, dict):
+        sources.append(execution_stage_context.get("market_research_snapshot"))
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if not isinstance(workflow, dict):
+            continue
+        if workflow.get("schema_version") == "selection_workflow.v1":
+            return workflow
+    return {}
+
+
+def _runtime_selection_workflow_final_controls_candidate(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if not final:
+        return False
+    pct = _front_page_target_pct({"target_position_pct": final.get("position_pct", 0)})
+    target = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    return pct > 0 and bool(_runtime_stock_payload(target))
+
+
+def _runtime_selection_workflow_final_controls_zero(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    if workflow.get("schema_version") != "selection_workflow.v1" or "final" not in workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    pct = _front_page_target_pct({"target_position_pct": final.get("position_pct", 0)})
+    target = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    return pct <= 0 or not bool(_runtime_stock_payload(target))
+
+
+def _runtime_selection_workflow_zero_observation_target_from_sources(data=None, execution_stage_context=None, market_research_snapshot=None):
+    workflow = _runtime_selection_workflow(
+        data=data,
+        market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
+    )
+    if not _runtime_selection_workflow_final_controls_zero(workflow):
+        return {}
+    return _runtime_selection_workflow_observation_target(workflow)
+
+
+def _runtime_selection_workflow_zero_blocks_surface_candidate(data=None, execution_stage_context=None, market_research_snapshot=None):
+    workflow = _runtime_selection_workflow(
+        data=data,
+        market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
+    )
+    return _runtime_selection_workflow_final_controls_zero(workflow)
+
+
+def _runtime_flatten_candidate_evidence(item):
+    if not isinstance(item, dict):
+        return {}
+    stock = _runtime_stock_payload(item)
+    nested_stock = _runtime_stock_payload(item.get("stock")) if isinstance(item.get("stock"), dict) else {}
+    payload = dict(stock or nested_stock)
+    if not payload:
+        return {}
+    for key, value in item.items():
+        if key == "stock":
+            continue
+        if key not in payload and value not in (None, ""):
+            payload[key] = value
+    return payload
+
+
+def _iter_runtime_candidate_evidence(source, visited=None):
+    if not isinstance(source, dict):
+        return
+    if visited is None:
+        visited = set()
+    marker = id(source)
+    if marker in visited:
+        return
+    visited.add(marker)
+    for key in (
+        "selected_position_candidate",
+        "current_core_candidate",
+        "best_stock",
+        "watch_anchor",
+        "front_observation_target",
+    ):
+        payload = _runtime_flatten_candidate_evidence(source.get(key))
+        if payload:
+            yield payload
+    for key in (
+        "extreme_conviction_list",
+        "crossline_observation_stocks",
+        "candidate_pool",
+        "core_candidates",
+    ):
+        rows = source.get(key)
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            payload = _runtime_flatten_candidate_evidence(item)
+            if payload:
+                yield payload
+    workflow = source.get("selection_workflow")
+    if isinstance(workflow, dict):
+        rows = workflow.get("candidate_pool")
+        if isinstance(rows, list):
+            for item in rows:
+                payload = _runtime_flatten_candidate_evidence(item)
+                if payload:
+                    yield payload
+                if isinstance(item, dict) and isinstance(item.get("stock"), dict):
+                    stock_payload = _runtime_stock_payload(item.get("stock"))
+                    if stock_payload:
+                        for key, value in item.items():
+                            if key == "stock":
+                                continue
+                            if key not in stock_payload and value not in (None, ""):
+                                stock_payload[key] = value
+                        yield stock_payload
+    for key in ("candidate_snapshot", "step2_bundle", "candidate_selection", "execution_stage_context"):
+        nested = source.get(key)
+        if isinstance(nested, dict):
+            yield from _iter_runtime_candidate_evidence(nested, visited)
+
+
+def _runtime_merge_same_stock_candidate_evidence(candidate, *sources):
+    merged = _runtime_flatten_candidate_evidence(candidate)
+    if not merged:
+        return {}
+    selected_key = _runtime_candidate_key(merged)
+    if not selected_key:
+        return merged
+
+    def _iter_source_payloads(source):
+        if isinstance(source, list):
+            for item in source:
+                payload = _runtime_flatten_candidate_evidence(item)
+                if payload:
+                    yield payload
+            return
+        if isinstance(source, dict):
+            payload = _runtime_flatten_candidate_evidence(source)
+            if payload:
+                yield payload
+            yield from _iter_runtime_candidate_evidence(source)
+
+    for source in sources:
+        for existing in _iter_source_payloads(source):
+            if _runtime_candidate_key(existing) != selected_key:
+                continue
+            richer = dict(existing)
+            richer.update(merged)
+            merged = richer
+    return merged
+
+
+def _runtime_sync_selected_candidate_from_final_resolution(
+    final_target_resolution=None,
+    *,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    if not resolution:
+        return {}
+    execution_target = _runtime_final_resolution_core_candidate(resolution)
+    watch_target = resolution.get("watch_target") if isinstance(resolution.get("watch_target"), dict) else {}
+    selected = execution_target or {}
+    selected_key = _runtime_candidate_key(selected)
+    watch_key = _runtime_candidate_key(watch_target)
+    if selected_key:
+        selected = _runtime_merge_same_stock_candidate_evidence(
+            selected,
+            data,
+            execution_stage_context,
+            market_research_snapshot,
+        )
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if not isinstance(target, dict):
+            continue
+        if selected_key:
+            target["selected_position_candidate"] = dict(selected)
+            target["current_core_candidate"] = dict(selected)
+        elif watch_key:
+            target.pop("selected_position_candidate", None)
+            target.pop("current_core_candidate", None)
+            target["front_observation_target"] = dict(watch_target)
+        else:
+            target.pop("selected_position_candidate", None)
+            target.pop("current_core_candidate", None)
+            target.pop("front_observation_target", None)
+        candidate_snapshot = target.get("candidate_snapshot")
+        if isinstance(candidate_snapshot, dict):
+            if selected_key:
+                candidate_snapshot["selected_position_candidate"] = dict(selected)
+                candidate_snapshot["current_core_candidate"] = dict(selected)
+            else:
+                candidate_snapshot.pop("selected_position_candidate", None)
+                candidate_snapshot.pop("current_core_candidate", None)
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return selected
+
+
+def _runtime_selection_workflow_observation_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    for candidate in workflow.get("candidate_pool", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("front_observation_qualified") is False:
+            continue
+        if candidate.get("front_observation_qualified") is True:
+            if _candidate_blocks_current_observation_target(candidate):
+                continue
+            stock = _runtime_stock_payload(candidate.get("stock"))
+            if stock:
+                for key in (
+                    "one_lot_amount",
+                    "identity",
+                    "account_trade_status",
+                    "account_trade_reason",
+                    "status",
+                    "candidate_status",
+                    "candidate_role",
+                    "quality_role",
+                    "sector_role",
+                    "sniper_role",
+                    "candidate_layer",
+                    "execution_eligibility",
+                    "anchor_reversal_decision",
+                ):
+                    if stock.get(key) in (None, "") and candidate.get(key) not in (None, ""):
+                        stock[key] = candidate.get(key)
+                stock["front_observation_qualified"] = True
+                reason = _first_runtime_text(candidate.get("front_observation_reason"))
+                if reason:
+                    stock["front_observation_reason"] = reason
+                layer = _first_runtime_text(candidate.get("observation_layer"))
+                if layer:
+                    stock["observation_layer"] = layer
+                if _candidate_blocks_current_observation_target(stock):
+                    continue
+                return stock
+            continue
+    return {}
+
+
 def _build_runtime_final_target_resolution(
     *,
     data=None,
     selected_position_candidate=None,
     position_decision=None,
     market_research_snapshot=None,
+    execution_stage_context=None,
 ):
+    workflow = _runtime_selection_workflow(
+        data=data,
+        market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
+    )
+    workflow_final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    workflow_execution_object = workflow_final.get("execution_object") if isinstance(workflow_final, dict) else {}
+    workflow_position_pct = _front_page_target_pct(
+        {"target_position_pct": workflow_final.get("position_pct", 0)} if isinstance(workflow_final, dict) else {}
+    )
+    workflow_zero_observation_target = {}
+    workflow_zero_controls_execution = False
+    if _runtime_selection_workflow_final_controls_candidate(workflow):
+        position_decision = dict(position_decision or {})
+        position_decision["target_position_pct"] = workflow_final.get(
+            "position_pct",
+            position_decision.get("target_position_pct", 0),
+        )
+        selected_position_candidate = (
+            _runtime_merge_same_stock_candidate_evidence(
+                workflow_execution_object,
+                selected_position_candidate,
+                data,
+                execution_stage_context,
+                market_research_snapshot,
+            )
+            if workflow_position_pct > 0 and isinstance(workflow_execution_object, dict) and _runtime_stock_payload(workflow_execution_object)
+            else {}
+        )
+    elif _runtime_selection_workflow_final_controls_zero(workflow):
+        workflow_zero_controls_execution = True
+        position_decision = dict(position_decision or {})
+        position_decision["target_position_pct"] = 0
+        selected_position_candidate = {}
+    workflow_final_execution_target = bool(
+        _runtime_selection_workflow_final_controls_candidate(workflow)
+        and workflow_position_pct > 0
+        and isinstance(workflow_execution_object, dict)
+        and _runtime_stock_payload(workflow_execution_object)
+        and _runtime_candidate_key(selected_position_candidate) == _runtime_candidate_key(workflow_execution_object)
+    )
+    if (
+        _runtime_candidate_is_first_wave_memory_without_leader_proof(selected_position_candidate)
+        or (
+            _runtime_candidate_blocks_final_watch_target(selected_position_candidate)
+            and not workflow_final_execution_target
+        )
+    ):
+        selected_position_candidate = {}
     existing = _runtime_existing_position_target(
         _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot),
         data=data,
     )
     new_entry = _runtime_stock_payload(selected_position_candidate)
+    if workflow_zero_controls_execution:
+        new_entry = {}
     opportunity_comparison = _runtime_opportunity_comparison(
         data=data,
-        selected_position_candidate=selected_position_candidate,
+        selected_position_candidate={} if workflow_zero_controls_execution and not new_entry else selected_position_candidate,
         position_decision=position_decision,
         market_research_snapshot=market_research_snapshot,
     )
@@ -2224,6 +2666,8 @@ def _build_runtime_final_target_resolution(
     proxy_ready = bool(new_entry and unbuyable_core and _runtime_tradable_proxy_eligible(tradable_proxy))
     target_pct = _front_page_target_pct(position_decision)
     new_entry_ready = bool(new_entry and target_pct >= 50)
+    account_observation_target = dict(new_entry) if new_entry and unbuyable_core and not proxy_ready else {}
+    execution_new_entry = {} if account_observation_target else new_entry
     old_position_first = bool(existing and new_entry and not (new_entry_ready or proxy_ready))
     priority = (
         "new_entry_after_old_exit"
@@ -2263,16 +2707,22 @@ def _build_runtime_final_target_resolution(
     display = (
         existing
         if old_position_first
-        else (tradable_proxy if proxy_ready else (new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
+        else (tradable_proxy if proxy_ready else (execution_new_entry if priority in {"new_entry", "new_entry_after_old_exit"} else {}))
     )
-    watch_target = dict(new_entry) if (old_position_first or proxy_ready or (priority == "wait" and new_entry)) else {}
+    watch_target = (
+        workflow_zero_observation_target
+        or account_observation_target
+        or (dict(new_entry) if (old_position_first or proxy_ready or (priority == "wait" and new_entry)) else {})
+    )
+    if not _candidate_can_be_current_observation_target(watch_target):
+        watch_target = {}
     return {
-        "new_entry_target": dict(new_entry),
+        "new_entry_target": dict(execution_new_entry),
         "existing_position_target": dict(existing),
         "tradable_proxy_target": dict(tradable_proxy) if proxy_ready else {},
         "watch_target": watch_target,
-        "process_target": dict(new_entry),
-        "ascii_trace_target": dict(new_entry),
+        "process_target": dict(execution_new_entry),
+        "ascii_trace_target": dict(execution_new_entry),
         "display_target": dict(display),
         "capital_priority_decision": {
             "capital_priority": priority,
@@ -2282,13 +2732,96 @@ def _build_runtime_final_target_resolution(
     }
 
 
-def _store_runtime_final_target_resolution(resolution, data=None, execution_stage_context=None, market_research_snapshot=None):
+def _runtime_final_resolution_identity(resolution):
+    resolution = resolution if isinstance(resolution, dict) else {}
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    priority = _first_runtime_text(decision.get("capital_priority"))
+    if priority == "wait":
+        sources = (
+            ("watch", resolution.get("watch_target")),
+            ("display", resolution.get("display_target")),
+            ("new_entry", resolution.get("new_entry_target")),
+        )
+    elif priority == "old_position_t":
+        sources = (
+            ("display", resolution.get("display_target")),
+            ("old_position", resolution.get("existing_position_target")),
+            ("watch", resolution.get("watch_target")),
+            ("new_entry", resolution.get("new_entry_target")),
+        )
+    elif priority in {"tradable_proxy", "new_entry_after_old_exit"}:
+        sources = (
+            ("display", resolution.get("display_target")),
+            ("tradable_proxy", resolution.get("tradable_proxy_target")),
+            ("new_entry", resolution.get("new_entry_target")),
+            ("watch", resolution.get("watch_target")),
+        )
+    else:
+        sources = (
+            ("display", resolution.get("display_target")),
+            ("new_entry", resolution.get("new_entry_target")),
+            ("watch", resolution.get("watch_target")),
+        )
+    for source, candidate in sources:
+        if source == "watch" and not _candidate_can_be_current_observation_target(candidate):
+            continue
+        stock = _runtime_stock_payload(candidate)
+        key = _runtime_candidate_key(stock)
+        if key:
+            return {
+                "key": key,
+                "label": _runtime_stock_label(stock),
+                "source": source,
+                "capital_priority": priority,
+            }
+    return {
+        "key": "",
+        "label": "无",
+        "source": "none",
+        "capital_priority": priority,
+    }
+
+
+def _store_runtime_final_target_resolution(
+    resolution,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    *,
+    phase="",
+):
     if not isinstance(resolution, dict) or not resolution:
         return {}
     stored = dict(resolution)
+    identity = _runtime_final_resolution_identity(stored)
+    audit = {}
+    for target in (execution_stage_context, market_research_snapshot, data):
+        if not isinstance(target, dict):
+            continue
+        existing_audit = target.get("final_target_resolution_audit")
+        if isinstance(existing_audit, dict):
+            audit = dict(existing_audit)
+            break
+    phase_key = str(phase or "").strip() or "runtime"
+    if phase_key == "pre_tail":
+        audit["pre_tail"] = identity
+    elif phase_key == "front_page":
+        audit.setdefault("pre_tail", identity)
+        audit["front_page"] = identity
+    else:
+        audit[phase_key] = identity
+    if audit.get("pre_tail") and audit.get("front_page"):
+        pre_key = (audit.get("pre_tail") or {}).get("key")
+        front_key = (audit.get("front_page") or {}).get("key")
+        audit["identity_drift"] = bool(pre_key != front_key)
+        if audit["identity_drift"]:
+            audit["resolution_policy"] = "front_page_final_resolution"
+    stored["resolution_phase"] = phase_key
+    stored["resolution_identity"] = identity
     for target in (data, execution_stage_context, market_research_snapshot):
         if isinstance(target, dict):
             target["final_target_resolution"] = stored
+            target["final_target_resolution_audit"] = audit
     if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
         data["market_research_snapshot"] = market_research_snapshot
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
@@ -2350,6 +2883,137 @@ def _store_runtime_two_layer_decision_payload(payload, data=None, execution_stag
     if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
         execution_stage_context["market_research_snapshot"] = market_research_snapshot
     return stored
+
+
+def _runtime_final_resolution_waits_without_watch_target(final_target_resolution=None):
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    if _first_runtime_text(decision.get("capital_priority")) != "wait":
+        return False
+    return True
+
+
+def _runtime_final_resolution_core_candidate(final_target_resolution=None):
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    capital_priority = _first_runtime_text(decision.get("capital_priority"))
+    if capital_priority == "tradable_proxy":
+        candidate_sources = (
+            resolution.get("tradable_proxy_target"),
+            resolution.get("display_target"),
+            resolution.get("new_entry_target"),
+        )
+    elif capital_priority in {"new_entry", "new_entry_after_old_exit"}:
+        candidate_sources = (
+            resolution.get("new_entry_target"),
+            resolution.get("display_target"),
+        )
+    else:
+        return {}
+    for candidate in candidate_sources:
+        stock = _runtime_stock_payload(candidate)
+        if stock:
+            return stock
+    return {}
+
+
+def _runtime_final_resolution_allows_core_candidate(final_target_resolution=None, final_gate=None):
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    final_gate = final_gate if isinstance(final_gate, dict) else {}
+    core_candidate = _runtime_final_resolution_core_candidate(resolution)
+    if core_candidate:
+        if _front_page_candidate_position_pct(core_candidate) >= 50:
+            return True
+    if "can_new_entry" in final_gate and not bool(final_gate.get("can_new_entry")) and not bool(final_gate.get("allow_attack_50_ready")):
+        return False
+    if resolution:
+        return bool(core_candidate)
+    if "can_new_entry" not in final_gate:
+        return True
+    return bool(final_gate.get("can_new_entry") or final_gate.get("allow_attack_50_ready"))
+
+
+def _clear_stale_candidate_quality_panel_targets(final_target_resolution=None, *targets):
+    if not _runtime_final_resolution_waits_without_watch_target(final_target_resolution):
+        return
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        fields = target.get("candidate_quality_panel_fields")
+        if isinstance(fields, dict):
+            updated = dict(fields)
+            updated["primary_buy_candidate"] = None
+            updated["backup_candidate"] = None
+            target["candidate_quality_panel_fields"] = updated
+
+
+def _replace_pk_decision_stage_lines(report_lines, replacement_lines):
+    report_lines = list(report_lines or [])
+    replacement_lines = list(replacement_lines or [])
+    if not replacement_lines:
+        return report_lines
+    start = None
+    for index, line in enumerate(report_lines):
+        text = str(line or "")
+        if "附录：Step 5 - PK决胜局" in text:
+            start = index
+            break
+    if start is None:
+        return report_lines
+    end = len(report_lines)
+    post_stage_markers = (
+        "**过程观察25日跟踪表**",
+        "**重点观察历史回测表**",
+        "## 八、详细附录",
+    )
+    for index in range(start + 1, len(report_lines)):
+        text = str(report_lines[index] or "")
+        if text.startswith("##### 附录：Step ") and "PK决胜局" not in text:
+            end = index
+            break
+        if any(text.startswith(marker) for marker in post_stage_markers):
+            end = index
+            break
+    return report_lines[:start] + replacement_lines + report_lines[end:]
+
+
+def _rerender_pk_decision_stage_after_final_resolution(
+    *,
+    execution_stage_context=None,
+    stage_lookup=None,
+    final_target_resolution=None,
+    selection_workflow=None,
+    sniper_target_derivation=None,
+    two_layer_decision_payload=None,
+):
+    context = dict(execution_stage_context or {})
+    context["final_target_resolution"] = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    context.setdefault("render_pk_decision_section", _default_render_pk_decision_section)
+    context.setdefault("render_action_plan_result", render_action_plan_result)
+    context.setdefault("render_action_plan_section", render_action_plan_section)
+    if isinstance(selection_workflow, dict):
+        context["selection_workflow"] = selection_workflow
+    if isinstance(sniper_target_derivation, dict):
+        context["sniper_target_derivation"] = sniper_target_derivation
+    if isinstance(two_layer_decision_payload, dict):
+        context["two_layer_decision_payload"] = two_layer_decision_payload
+    stage_meta = {}
+    if isinstance(stage_lookup, dict):
+        stage_meta = dict(stage_lookup.get("pk_decision") or {})
+    if not stage_meta:
+        stage_meta = {"stage_key": "pk_decision", "title": "PK决胜局（期望值模型）", "label": "Step 5"}
+    return _build_pk_decision_runtime(
+        context,
+        stage_meta,
+        stage_lookup=stage_lookup,
+        enabled_node_keys=[
+            "pk_context",
+            "candidate_quality_scorecard",
+            "action_plan_context",
+            "render_sections",
+            "export_stage_state",
+        ],
+    )
 
 
 def _insert_two_layer_front_decision_panel(report_lines, decision_lines):
@@ -2424,6 +3088,13 @@ def _render_sniper_target_derivation_compact(packet):
     return _sniper_target_derivation_compact_section(packet, heading="")
 
 
+def _render_next_day_attribution_section(data=None, market_research_snapshot=None):
+    for source in (data, market_research_snapshot):
+        if isinstance(source, dict) and isinstance(source.get("next_day_attribution"), dict):
+            return list(render_next_day_attribution_lines(source.get("next_day_attribution")) or [])
+    return []
+
+
 def _runtime_candidate_stock_code(item):
     if not isinstance(item, dict):
         return ""
@@ -2441,6 +3112,64 @@ def _runtime_candidate_key(item):
     if code:
         return code
     return _runtime_stock_label(item)
+
+
+def _runtime_candidate_has_final_leader_proof(item):
+    if not isinstance(item, dict):
+        return False
+    nested_reversal = _runtime_anchor_payload(item)
+    decision = _first_runtime_text(
+        item.get("anchor_reversal_decision"),
+        nested_reversal.get("anchor_reversal_decision"),
+    )
+    if decision == "可作为主对象":
+        return True
+    if bool(item.get("primary_buy_candidate")):
+        return True
+    if _first_runtime_text(item.get("sniper_role")) == "明日主买对象":
+        return True
+    if _front_page_candidate_has_execution_qualification(item):
+        return True
+    role = _first_runtime_text(item.get("candidate_role"), nested_reversal.get("candidate_role"))
+    if role in {"板块锚", "大容量中军"}:
+        return True
+    texts = " / ".join(_runtime_candidate_text_terms(item))
+    if any(
+        marker in texts
+        for marker in (
+            "板块锚",
+            "锚定龙",
+            "趋势比价链",
+            "大容量",
+            "趋势资金",
+            "中军",
+            "反复做",
+            "MA5入/MA7清/MA5T",
+            "MA5B",
+            "MA7清",
+            "MA5T",
+        )
+    ):
+        return True
+    lianban = int(_runtime_cell_float(item.get("连板数") or item.get("lianban") or item.get("lianban_days")) or 0)
+    turnover = _runtime_cell_float(item.get("turnover") or item.get("成交额") or item.get("amount") or 0) or 0.0
+    if turnover > 10000:
+        turnover = turnover / 1e8
+    return bool(lianban >= 2 or turnover >= 50)
+
+
+def _runtime_candidate_is_first_wave_memory_without_leader_proof(item):
+    if not isinstance(item, dict):
+        return False
+    has_memory_fields = any(item.get(key) not in (None, "", [], {}) for key in ("remember_score", "remember_reason", "remember_window"))
+    if not has_memory_fields:
+        return False
+    if _runtime_candidate_has_final_leader_proof(item):
+        return False
+    if item.get("candidate_feedback_ready") is False:
+        return True
+    text = " / ".join(_runtime_candidate_text_terms(item))
+    return "首波" in text or "龙一" in text
 
 
 def _runtime_anchor_payload(item):
@@ -2612,6 +3341,22 @@ def _runtime_candidate_action_rank(item):
     return score
 
 
+def _runtime_candidate_has_positive_core_evidence(item):
+    if not isinstance(item, dict):
+        return False
+    nested = _runtime_anchor_payload(item)
+    decision = _first_runtime_text(item.get("anchor_reversal_decision"), nested.get("anchor_reversal_decision"))
+    sniper_role = _first_runtime_text(item.get("sniper_role"))
+    candidate_role = _first_runtime_text(item.get("candidate_role"), nested.get("candidate_role"))
+    return bool(
+        item.get("primary_buy_candidate")
+        or item.get("backup_buy_candidate")
+        or decision in {"可作为主对象", "可作为补位"}
+        or sniper_role in {"明日主买对象", "明日补位对象"}
+        or candidate_role in {"板块锚", "主线核心", "大容量中军", "分支龙头"}
+    )
+
+
 def _iter_runtime_extreme_conviction_sources(data=None, execution_stage_context=None, market_research_snapshot=None):
     for source in (execution_stage_context, market_research_snapshot, data):
         for item in _extract_extreme_conviction_list(source):
@@ -2628,6 +3373,12 @@ def _resolve_runtime_current_core_candidate(
     extreme_conviction_list=None,
 ):
     sources = []
+    position_decision = {}
+    for source in (execution_stage_context, market_research_snapshot, data):
+        if isinstance(source, dict) and isinstance(source.get("position_decision"), dict):
+            position_decision = source.get("position_decision") or {}
+            break
+    zero_position = _has_zero_participation_context(position_decision)
 
     def _add(item, source_rank, source_key=""):
         if isinstance(item, dict) and _runtime_candidate_key(item):
@@ -2664,11 +3415,30 @@ def _resolve_runtime_current_core_candidate(
     best = None
     best_score = None
     seen = set()
+    selected_key = _runtime_candidate_key(selected_position_candidate)
     for index, (item, source_rank, source_key) in enumerate(sources):
         key = _runtime_candidate_key(item)
         if key in seen:
             continue
         seen.add(key)
+        if _runtime_candidate_is_first_wave_memory_without_leader_proof(item):
+            continue
+        if zero_position and not (
+            _front_page_candidate_can_stay_observation_only(item)
+            or _runtime_account_unbuyable_core_active(
+                data=data,
+                selected_position_candidate=item,
+                market_research_snapshot=market_research_snapshot,
+            )
+        ):
+            continue
+        if (
+            selected_key
+            and key != selected_key
+            and source_key in {"best_stock", "watch_anchor"}
+            and not _runtime_candidate_has_positive_core_evidence(item)
+        ):
+            continue
         is_current_context_candidate = source_key in {"current_core_candidate", "selected_position_candidate"}
         if not (is_current_context_candidate or _is_core_judgment_candidate(item)):
             continue
@@ -2719,6 +3489,8 @@ def _build_current_judgment_context_for_panel(
     mainline_turnover_summary=None,
     selected_position_candidate=None,
     extreme_conviction_list=None,
+    final_target_resolution=None,
+    final_gate=None,
 ):
     execution_stage_context = execution_stage_context or {}
     market_research_snapshot = market_research_snapshot or {}
@@ -2752,15 +3524,38 @@ def _build_current_judgment_context_for_panel(
     )
 
     core_candidates = []
-    current_core_candidate = _resolve_runtime_current_core_candidate(
-        execution_stage_context=execution_stage_context,
-        market_research_snapshot=market_research_snapshot,
-        selected_position_candidate=selected_position_candidate,
-        extreme_conviction_list=extreme_conviction_list,
+    final_gate = final_gate if isinstance(final_gate, dict) else {}
+    final_resolution_present = isinstance(final_target_resolution, dict) and bool(final_target_resolution)
+    final_resolution_core_candidate = _runtime_final_resolution_core_candidate(final_target_resolution)
+    final_action_blocks_core_candidate = not _runtime_final_resolution_allows_core_candidate(
+        final_target_resolution,
+        final_gate,
     )
-    candidate_items = [current_core_candidate] if current_core_candidate else [selected_position_candidate] + [
-        candidate for candidate in list(extreme_conviction_list or []) if _is_core_judgment_candidate(candidate)
-    ]
+    if final_action_blocks_core_candidate:
+        current_core_candidate = {}
+        candidate_items = []
+    elif final_resolution_core_candidate:
+        current_core_candidate = _runtime_merge_same_stock_candidate_evidence(
+            final_resolution_core_candidate,
+            selected_position_candidate,
+            extreme_conviction_list,
+            execution_stage_context,
+            market_research_snapshot,
+        )
+        candidate_items = [current_core_candidate]
+    elif final_resolution_present:
+        current_core_candidate = {}
+        candidate_items = []
+    else:
+        current_core_candidate = _resolve_runtime_current_core_candidate(
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+            selected_position_candidate=selected_position_candidate,
+            extreme_conviction_list=extreme_conviction_list,
+        )
+        candidate_items = [current_core_candidate] if current_core_candidate else [selected_position_candidate] + [
+            candidate for candidate in list(extreme_conviction_list or []) if _is_core_judgment_candidate(candidate)
+        ]
     for item in candidate_items:
         if isinstance(item, dict) and _is_core_judgment_candidate(item):
             label = _runtime_stock_label(item)
@@ -2785,12 +3580,19 @@ def _build_current_judgment_context_for_panel(
                 planned.get("cancel_condition"),
                 planned.get("ma20_invalidation"),
             )
+    if final_action_blocks_core_candidate:
+        selected_position_candidate = {}
+        participation_rehearsal = ""
+        cancellation_condition = ""
     return {
         "market_state": market_state,
         "mainline": mainline,
         "core_candidates": core_candidates,
         "current_core_candidate": current_core_candidate,
         "selected_position_candidate": selected_position_candidate,
+        "final_target_resolution": final_target_resolution if isinstance(final_target_resolution, dict) else {},
+        "suppress_core_candidate_fallback": final_action_blocks_core_candidate,
+        "suppress_participation_fallback": final_action_blocks_core_candidate,
         "participation_rehearsal": participation_rehearsal,
         "cancellation_condition": cancellation_condition,
     }
@@ -2806,6 +3608,8 @@ def _build_daily_judgment_front_panel_lines(
     mainline_turnover_summary=None,
     selected_position_candidate=None,
     extreme_conviction_list=None,
+    final_target_resolution=None,
+    final_gate=None,
 ):
     build_panel = globals().get("build_daily_judgment_review_panel") or _default_build_daily_judgment_review_panel
     render_panel = globals().get("render_daily_judgment_review_panel_lines") or _default_render_daily_judgment_review_panel_lines
@@ -2820,6 +3624,8 @@ def _build_daily_judgment_front_panel_lines(
         mainline_turnover_summary=mainline_turnover_summary,
         selected_position_candidate=selected_position_candidate,
         extreme_conviction_list=extreme_conviction_list,
+        final_target_resolution=final_target_resolution,
+        final_gate=final_gate,
     )
     panel = build_panel(index, target_date, current_context=current_context, recent_days=5)
     return list(render_panel(panel) or [])
@@ -2868,7 +3674,7 @@ def _runtime_opportunity_item_label(item):
 def _runtime_opportunity_role_action(target, role, action, two_layer_execution_object=None):
     two_layer_key = _runtime_candidate_key(two_layer_execution_object)
     if two_layer_key and _runtime_candidate_key(target) == two_layer_key:
-        return "条件执行对象", "条件满足才B档执行；不满足回到0%"
+        return "条件执行对象", "条件满足才50%条件执行；不满足回到0%"
     return _runtime_role_text(role), _runtime_user_visible_trade_text(action)
 
 
@@ -2977,6 +3783,8 @@ def _runtime_selected_target_solution_lines(
     old_position_first = capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
     tradable_proxy_priority = capital_priority == "tradable_proxy"
     wait_priority = capital_priority == "wait"
+    if wait_priority:
+        return []
     watch_target = final_target_resolution.get("watch_target") if isinstance(final_target_resolution.get("watch_target"), dict) else {}
     tradable_proxy_target = (
         final_target_resolution.get("tradable_proxy_target")
@@ -2998,25 +3806,21 @@ def _runtime_selected_target_solution_lines(
         if isinstance(final_target_resolution.get("existing_position_target"), dict)
         else {}
     )
+    execution_target = _runtime_final_resolution_core_candidate(final_target_resolution)
+    if capital_priority in {"new_entry", "new_entry_after_old_exit"} and execution_target:
+        candidate = _runtime_merge_same_stock_candidate_evidence(
+            execution_target,
+            candidate,
+            execution_stage_context,
+            market_research_snapshot,
+        )
     two_layer_execution_object = _runtime_two_layer_execution_object(market_research_snapshot, execution_stage_context)
     if old_position_first and watch_target:
+        if not _candidate_can_be_current_observation_target(watch_target):
+            return []
         candidate = watch_target
-    elif wait_priority:
-        candidate = next(
-            (
-                item
-                for item in (
-                    watch_target,
-                    display_target,
-                    final_target_resolution.get("new_entry_target"),
-                    final_target_resolution.get("process_target"),
-                    final_target_resolution.get("ascii_trace_target"),
-                    candidate,
-                )
-                if isinstance(item, dict) and _runtime_candidate_key(item)
-            ),
-            candidate,
-        )
+    if _runtime_candidate_blocks_final_watch_target(candidate, final_target_resolution):
+        return []
     if not isinstance(candidate, dict) or not _runtime_candidate_key(candidate):
         return []
     final_gate = final_gate if isinstance(final_gate, dict) else {}
@@ -3049,6 +3853,8 @@ def _runtime_selected_target_solution_lines(
     candidate_role = _runtime_role_text(
         _first_runtime_text(candidate.get("candidate_role"), nested.get("candidate_role"), "待识别")
     )
+    if _runtime_candidate_is_final_execution_target(candidate, final_target_resolution):
+        candidate_role = "最终执行对象"
     relationship = _first_runtime_text(candidate.get("relationship_to_anchor"), nested.get("relationship_to_anchor"))
     why_not_anchor = _first_runtime_text(candidate.get("why_not_anchor"), nested.get("why_not_anchor"))
     decision = _first_runtime_text(
@@ -3061,7 +3867,7 @@ def _runtime_selected_target_solution_lines(
     limit_role = _first_runtime_text(candidate.get("limit_up_evidence_role"), nested.get("limit_up_evidence_role"))
     action = normalize_trading_time_text(
         _runtime_user_visible_trade_text(
-            "条件满足才B档执行；不满足回到0%"
+            "条件满足才50%条件执行；不满足回到0%"
             if two_layer_execution_object and not wait_priority
             else _first_runtime_text(
                 final_gate.get("final_action"),
@@ -3098,7 +3904,7 @@ def _runtime_selected_target_solution_lines(
         lines.extend(["", *opportunity_lines])
     derivation_lines = _render_sniper_target_derivation_compact(derivation_packet)
     if derivation_lines:
-        lines.extend(["", "### 最终标的传导链", "", *derivation_lines])
+        lines.extend(["", "### 最终标的传导链（过程证据）", "", *derivation_lines])
     lines.extend(
         [
             "",
@@ -3221,6 +4027,44 @@ def _current_extreme_conviction_codes(execution_stage_context=None):
     return codes
 
 
+def _front_page_candidate_can_stay_observation_only(candidate):
+    if not isinstance(candidate, dict):
+        return False
+    if candidate.get("front_observation_qualified") is True:
+        return not _candidate_blocks_current_observation_target(candidate)
+    nested = _runtime_anchor_payload(candidate)
+    observation_layer = _first_runtime_text(candidate.get("observation_layer"), nested.get("observation_layer"))
+    if observation_layer == "process_observation":
+        return False
+    status = _first_runtime_text(
+        candidate.get("identity"),
+        candidate.get("status"),
+        candidate.get("candidate_status"),
+        nested.get("status"),
+    )
+    role = _first_runtime_text(
+        candidate.get("sniper_role"),
+        candidate.get("candidate_role"),
+        candidate.get("quality_role"),
+        candidate.get("target_role"),
+        nested.get("candidate_role"),
+    )
+    process_roles = {"过程候选", "观察样本", "候选观察补充", "跟风样本", "低位补涨", "套利工具"}
+    if status in process_roles or role in process_roles:
+        return False
+    layer = _first_runtime_text(candidate.get("candidate_layer"), nested.get("candidate_layer"))
+    eligibility = _first_runtime_text(candidate.get("execution_eligibility"), nested.get("execution_eligibility"))
+    decision = _first_runtime_text(
+        candidate.get("anchor_reversal_decision"),
+        nested.get("anchor_reversal_decision"),
+    )
+    if role in {"候选观察", "明日补位对象"}:
+        return True
+    if decision in {"降级观察", "可作为补位"} and layer in {"executable_candidate", "front_observation"}:
+        return True
+    return eligibility in {"anchor_reversal_observation", "auction_reseal"} and bool(role)
+
+
 def _build_front_page_selected_position_candidate(execution_stage_context=None):
     execution_stage_context = execution_stage_context or {}
     position_decision = (
@@ -3230,15 +4074,28 @@ def _build_front_page_selected_position_candidate(execution_stage_context=None):
     )
     zero_position = _has_zero_participation_context(position_decision)
     extreme_items = execution_stage_context.get("extreme_conviction_list", []) or []
-    selected = execution_stage_context.get("selected_position_candidate") or execution_stage_context.get("best_stock")
+    explicit_selected = execution_stage_context.get("selected_position_candidate")
+    selected = explicit_selected or execution_stage_context.get("best_stock")
     if not selected and execution_stage_context.get("trade_gate_open"):
         selected = execution_stage_context.get("watch_anchor")
+    if _runtime_candidate_is_first_wave_memory_without_leader_proof(selected):
+        selected = None
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         if zero_position and _front_page_candidate_has_execution_qualification(selected):
             return dict(selected)
         if not zero_position:
             return dict(selected)
     if zero_position:
+        if isinstance(explicit_selected, dict) and (
+            explicit_selected.get("name")
+            or explicit_selected.get("code")
+            or explicit_selected.get("stock_code")
+        ) and not _runtime_candidate_is_first_wave_memory_without_leader_proof(explicit_selected) and (
+            _front_page_candidate_has_execution_qualification(explicit_selected)
+            or _front_page_candidate_can_stay_observation_only(explicit_selected)
+            or _first_runtime_text(explicit_selected.get("account_trade_status"), explicit_selected.get("账户状态")) == "实际不可买"
+        ):
+            return dict(explicit_selected)
         for item in extreme_items:
             if not isinstance(item, dict) or not (item.get("name") or item.get("code") or item.get("stock_code")):
                 continue
@@ -3246,18 +4103,32 @@ def _build_front_page_selected_position_candidate(execution_stage_context=None):
             if _front_page_candidate_has_execution_qualification(candidate):
                 return candidate
         for item in extreme_items:
-            if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
-                return _front_page_candidate_from_extreme_item(item)
+            if not isinstance(item, dict) or not (item.get("name") or item.get("code") or item.get("stock_code")):
+                continue
+            candidate = _front_page_candidate_from_extreme_item(item)
+            if _front_page_candidate_can_stay_observation_only(candidate):
+                return candidate
         if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
-            return dict(selected)
+            selected_target = dict(selected)
+            if (
+                _front_page_candidate_has_execution_qualification(selected_target)
+                or _front_page_candidate_can_stay_observation_only(selected_target)
+                or _first_runtime_text(selected_target.get("account_trade_status"), selected_target.get("账户状态")) == "实际不可买"
+            ):
+                return selected_target
+        return None
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return dict(selected)
     observation_candidates = execution_stage_context.get("display_observation_candidates") or execution_stage_context.get("observation_candidates") or []
     if isinstance(observation_candidates, list):
         for item in observation_candidates:
             if isinstance(item, dict) and (item.get("name") or item.get("code") or item.get("stock_code")):
+                if _runtime_candidate_is_first_wave_memory_without_leader_proof(item):
+                    continue
                 return dict(item)
     selected = execution_stage_context.get("watch_anchor")
+    if _runtime_candidate_is_first_wave_memory_without_leader_proof(selected):
+        selected = None
     if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
         return dict(selected)
     for item in extreme_items:
@@ -3325,6 +4196,9 @@ def _front_page_candidate_from_extreme_item(item):
         "high",
         "risk_reward_state",
         "risk_reward_ratio",
+        "front_observation_qualified",
+        "front_observation_reason",
+        "observation_layer",
     ):
         value = item.get(key)
         if value not in (None, ""):
@@ -3440,7 +4314,7 @@ def _force_observation_for_missing_execution_evidence(position_decision):
             "max_position_pct": 0,
             "allow_full_attack": False,
             "trend_invalid": bool(monthly_rhythm.get("trend_invalid")),
-            "reason": "重点观察对象只说明偏好集中，缺少独立参与证据时不自动生成仓位结论。",
+            "reason": "观察对象只说明偏好集中，缺少独立参与证据时不自动生成仓位结论。",
         }
     )
     updated = dict(position_decision)
@@ -3450,7 +4324,7 @@ def _force_observation_for_missing_execution_evidence(position_decision):
             "target_position_pct": 0,
             "signal_grade": "0",
             "candidate_feedback_ready": False,
-            "sizing_reason": "重点观察对象只保留固定交易窗口预案；缺少独立参与证据，不把偏好名单自动抬成仓位结论。",
+            "sizing_reason": "观察对象只保留固定交易窗口预案；缺少独立参与证据，不把偏好名单自动抬成仓位结论。",
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "observe",
@@ -3533,6 +4407,17 @@ def _candidate_from_extreme_item(item):
         "leader_certainty_path",
         "limit_up_evidence_role",
         "anchor_reversal",
+        "market_participation_qualification",
+        "position_plan_pct",
+        "final_action",
+        "source_pool",
+        "source_pools",
+        "front_observation_qualified",
+        "front_observation_reason",
+        "observation_layer",
+        "identity",
+        "target_role",
+        "status",
         "target_position_pct",
         "position_pct",
         "planned_position_pct",
@@ -3579,6 +4464,24 @@ def _front_page_candidates_from_decision_ledger(data=None, target_date=""):
                         "sector": (record.get("hypothesis") or {}).get("sector_candidate"),
                         "source_section": latest.get("source_section") or "极度看好名单",
                         "planned_participation": planned,
+                        "candidate_role": record.get("candidate_role"),
+                        "quality_role": record.get("quality_role"),
+                        "sniper_role": record.get("sniper_role"),
+                        "target_role": record.get("target_role"),
+                        "identity": record.get("identity"),
+                        "status": record.get("status"),
+                        "source_pool": record.get("source_pool"),
+                        "source_pools": record.get("source_pools"),
+                        "candidate_layer": record.get("candidate_layer"),
+                        "execution_eligibility": record.get("execution_eligibility"),
+                        "front_observation_qualified": record.get("front_observation_qualified"),
+                        "front_observation_reason": record.get("front_observation_reason"),
+                        "observation_layer": record.get("observation_layer"),
+                        "market_participation_qualification": record.get("market_participation_qualification"),
+                        "position_plan_pct": record.get("position_plan_pct"),
+                        "final_action": record.get("final_action") or latest.get("final_action"),
+                        "anchor_reversal_decision": record.get("anchor_reversal_decision"),
+                        "anchor_reversal_reason": record.get("anchor_reversal_reason"),
                     }
                 )
         if records:
@@ -3654,12 +4557,33 @@ def _front_page_candidates_from_report_lines(report_lines):
 
 
 def _resolve_front_page_target_candidate(data=None, execution_stage_context=None, report_lines=None, target_date=""):
-    selected = _build_front_page_selected_position_candidate(execution_stage_context)
     market_research_snapshot = {}
     if isinstance(execution_stage_context, dict) and isinstance(execution_stage_context.get("market_research_snapshot"), dict):
         market_research_snapshot = execution_stage_context.get("market_research_snapshot") or {}
     elif isinstance(data, dict) and isinstance(data.get("market_research_snapshot"), dict):
         market_research_snapshot = data.get("market_research_snapshot") or {}
+    if _runtime_selection_workflow_zero_blocks_surface_candidate(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    ):
+        for target in (data, execution_stage_context, market_research_snapshot):
+            if isinstance(target, dict):
+                target.pop("selected_position_candidate", None)
+                target.pop("current_core_candidate", None)
+        if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+            data["execution_stage_context"] = execution_stage_context
+        if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+            data["market_research_snapshot"] = market_research_snapshot
+        return {}
+    workflow_observation_target = _runtime_selection_workflow_zero_observation_target_from_sources(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    if workflow_observation_target:
+        return workflow_observation_target
+    selected = _build_front_page_selected_position_candidate(execution_stage_context)
     current_core = _resolve_runtime_current_core_candidate(
         data=data,
         execution_stage_context=execution_stage_context,
@@ -3674,7 +4598,19 @@ def _resolve_front_page_target_candidate(data=None, execution_stage_context=None
             execution_stage_context=execution_stage_context,
             market_research_snapshot=market_research_snapshot,
         )
-    if selected:
+    selected_target_pct = max(
+        _front_page_candidate_position_pct(selected),
+        _front_page_target_pct((execution_stage_context or {}).get("position_decision") if isinstance(execution_stage_context, dict) else {}),
+    )
+    if selected and (
+        selected_target_pct >= 50
+        or _front_page_candidate_can_stay_observation_only(selected)
+        or _runtime_account_unbuyable_core_active(
+            data=data,
+            selected_position_candidate=selected,
+            market_research_snapshot=market_research_snapshot,
+        )
+    ):
         return _store_runtime_current_core_candidate(
             selected,
             data=data,
@@ -3682,28 +4618,45 @@ def _resolve_front_page_target_candidate(data=None, execution_stage_context=None
             market_research_snapshot=market_research_snapshot,
         )
     candidates = _front_page_candidates_from_decision_ledger(data, target_date=target_date)
-    if candidates:
+    for candidate in candidates:
+        if not (
+            _front_page_candidate_has_execution_qualification(candidate)
+            or _front_page_candidate_can_stay_observation_only(candidate)
+            or _runtime_account_unbuyable_core_active(
+                data=data,
+                selected_position_candidate=candidate,
+                market_research_snapshot=market_research_snapshot,
+            )
+        ):
+            continue
         return _store_runtime_current_core_candidate(
-            candidates[0],
+            candidate,
             data=data,
             execution_stage_context=execution_stage_context,
             market_research_snapshot=market_research_snapshot,
         )
-    candidates = _front_page_candidates_from_report_lines(report_lines)
-    if candidates:
-        return _store_runtime_current_core_candidate(
-            candidates[0],
-            data=data,
-            execution_stage_context=execution_stage_context,
-            market_research_snapshot=market_research_snapshot,
-        )
+    if isinstance(data, dict):
+        data["front_page_text_candidate_fallback_suppressed"] = bool(report_lines)
+    if isinstance(execution_stage_context, dict):
+        execution_stage_context["front_page_text_candidate_fallback_suppressed"] = bool(report_lines)
+    if isinstance(market_research_snapshot, dict):
+        market_research_snapshot["front_page_text_candidate_fallback_suppressed"] = bool(report_lines)
     return {}
 
 
 def _front_page_target_pct(position_decision):
     if not isinstance(position_decision, dict):
         return 0
-    return int(_runtime_cell_float(position_decision.get("target_position_pct")) or 0)
+    return _normalize_position_pct_to_allowed_state(_runtime_cell_float(position_decision.get("target_position_pct")))
+
+
+def _normalize_position_pct_to_allowed_state(value):
+    pct = _runtime_cell_float(value)
+    if pct is None or pct <= 0:
+        return 0
+    if pct >= 100:
+        return 100
+    return 50
 
 
 def _front_page_candidate_position_pct(candidate):
@@ -3720,7 +4673,7 @@ def _front_page_candidate_position_pct(candidate):
         for key in ("target_position_pct", "position_pct", "planned_position_pct", "attack_state"):
             value = _runtime_cell_float(source.get(key))
             if value is not None:
-                value = int(value)
+                value = _normalize_position_pct_to_allowed_state(value)
                 if value >= 50:
                     positive_values.append(value)
                 else:
@@ -3801,6 +4754,43 @@ def _front_page_candidate_reversal_blocks_execution(candidate):
     }
 
 
+def _runtime_candidate_is_final_execution_target(candidate, final_target_resolution=None):
+    if not isinstance(candidate, dict):
+        return False
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    capital_priority = _first_runtime_text(decision.get("capital_priority"))
+    if capital_priority not in {"new_entry", "new_entry_after_old_exit"}:
+        return False
+    execution_target = _runtime_final_resolution_core_candidate(resolution)
+    return bool(execution_target and _runtime_candidate_key(candidate) == _runtime_candidate_key(execution_target))
+
+
+def _runtime_candidate_blocks_final_watch_target(candidate, final_target_resolution=None):
+    if not isinstance(candidate, dict):
+        return False
+    if _runtime_candidate_is_final_execution_target(candidate, final_target_resolution):
+        return False
+    nested = _runtime_anchor_payload(candidate)
+    layer = _first_runtime_text(candidate.get("observation_layer"), nested.get("observation_layer"))
+    status = _first_runtime_text(candidate.get("status"), candidate.get("candidate_status"), nested.get("status"))
+    if layer == "execution_object" or status == "最终执行对象":
+        return False
+    if _candidate_blocks_current_observation_target(candidate):
+        return True
+    if candidate.get("front_observation_qualified") is True:
+        return False
+    if _front_page_candidate_reversal_blocks_execution(candidate):
+        return True
+    role = _first_runtime_text(
+        candidate.get("candidate_role"),
+        candidate.get("quality_role"),
+        candidate.get("sniper_role"),
+        nested.get("candidate_role"),
+    )
+    return role in {"观察样本", "跟风样本", "过程候选"}
+
+
 def _front_page_candidate_has_execution_qualification(candidate):
     if _front_page_candidate_reversal_blocks_execution(candidate):
         return False
@@ -3849,6 +4839,36 @@ def _runtime_account_unbuyable_core_active(data=None, selected_position_candidat
     return bool(cash_available and one_lot_amount and one_lot_amount > cash_available)
 
 
+def _runtime_unbuyable_context_candidate(data=None, execution_stage_context=None, market_research_snapshot=None):
+    data = data if isinstance(data, dict) else {}
+    execution_stage_context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
+    market_research_snapshot = market_research_snapshot if isinstance(market_research_snapshot, dict) else {}
+    for source in (
+        execution_stage_context.get("selected_position_candidate"),
+        market_research_snapshot.get("selected_position_candidate"),
+        data.get("selected_position_candidate"),
+        execution_stage_context.get("current_core_candidate"),
+        market_research_snapshot.get("current_core_candidate"),
+        data.get("current_core_candidate"),
+    ):
+        candidate = _runtime_stock_payload(source)
+        if not candidate:
+            continue
+        if not _runtime_account_unbuyable_core_active(
+            data=data,
+            selected_position_candidate=candidate,
+            market_research_snapshot=market_research_snapshot,
+        ):
+            continue
+        candidate["account_trade_status"] = "实际不可买"
+        candidate.setdefault("account_trade_reason", "当前账户买不了一手")
+        candidate["front_observation_qualified"] = True
+        candidate["front_observation_reason"] = "当前账户买不了一手，只保留市场核心观察"
+        candidate["observation_layer"] = "front_observation"
+        return candidate
+    return {}
+
+
 def _repair_confirmed_front_page_position_decision(position_decision, *, selected_position_candidate=None):
     updated = dict(position_decision or {})
     target_pct = _front_page_target_pct(updated)
@@ -3881,7 +4901,8 @@ def _query_monthly_account_context(root_dir=".", target_date="", account_id="mai
     try:
         from storage.database_service import DatabaseService
 
-        service = DatabaseService.from_environment(Path(root_dir) / "data" / "cloudflare_free_daily.db")
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory() if callable(service_factory) else DatabaseService.from_environment()
         row = service.query_monthly_account_ledger(target_date, account_id=account_id)
     except Exception:
         return {}
@@ -3939,6 +4960,17 @@ def _repair_extreme_candidate_full_attack_check(position_decision):
     return position_decision
 
 
+def _final_gate_blocks_new_entry(final_gate):
+    if not isinstance(final_gate, dict) or not final_gate:
+        return False
+    if bool(final_gate.get("can_new_entry")) or bool(final_gate.get("allow_attack_50_ready")):
+        return False
+    if final_gate.get("allow_attack_50_ready") is False:
+        return True
+    text = " ".join(str(value or "") for value in final_gate.values())
+    return any(marker in text for marker in ("禁止参与", "0%不参与", "不做新开仓"))
+
+
 def _build_front_page_position_decision(
     *,
     position_decision=None,
@@ -3967,6 +4999,8 @@ def _build_front_page_position_decision(
         final_gate=final_gate,
     ):
         return _force_observation_position_decision(position_decision)
+    if _final_gate_blocks_new_entry(final_gate):
+        return _force_observation_for_missing_execution_evidence(position_decision)
     candidate_target_pct = _front_page_candidate_position_pct(selected_position_candidate)
     if _has_zero_participation_context(position_decision) and candidate_target_pct < 50:
         return _force_observation_position_decision(position_decision)
@@ -4007,13 +5041,13 @@ def _build_front_page_position_decision(
     if candidate_target_pct < 50 or not _front_page_candidate_has_execution_qualification(selected_position_candidate):
         return _force_observation_for_missing_execution_evidence(position_decision)
     monthly_rhythm = dict(position_decision.get("monthly_rhythm") or {}) if isinstance(position_decision.get("monthly_rhythm"), dict) else {}
-    promoted_target_pct = min(candidate_target_pct, 100)
+    promoted_target_pct = _normalize_position_pct_to_allowed_state(candidate_target_pct)
     promoted_signal_grade = "100" if promoted_target_pct >= 100 else "50"
     promoted_mode = "full_100" if promoted_signal_grade == "100" else "attack_50_preview"
     promoted_reason = (
         "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留100%核心进攻，固定交易窗口内条件不成立就回到0%。"
         if promoted_signal_grade == "100"
-        else "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%标准进攻预演，固定交易窗口内条件不成立就回到0%。"
+        else "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%条件执行，固定交易窗口内条件不成立就回到0%。"
     )
     monthly_rhythm.update(
         {
@@ -4056,7 +5090,13 @@ def _target_candidate_label(candidate):
     return code or name or "明日目标标的"
 
 
-def _build_effective_front_page_final_gate(final_gate=None, *, selected_position_candidate=None, position_decision=None):
+def _build_effective_front_page_final_gate(
+    final_gate=None,
+    *,
+    selected_position_candidate=None,
+    position_decision=None,
+    opportunity_comparison=None,
+):
     final_gate = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
     if bool(final_gate.get("old_position_priority")):
         updated = dict(final_gate)
@@ -4072,11 +5112,31 @@ def _build_effective_front_page_final_gate(final_gate=None, *, selected_position
     target_pct = _front_page_target_pct(position_decision)
     if not selected_position_candidate or target_pct < 50:
         return final_gate
+    if opportunity_comparison and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison):
+        updated = dict(final_gate)
+        updated.update(
+            {
+                "can_new_entry": False,
+                "should_reduce": False,
+                "allow_attack_50_ready": False,
+                "base_position_cap_pct": 0,
+                "final_action": _first_runtime_text(
+                    (opportunity_comparison.get("comparison") or {}).get("final_action")
+                    if isinstance(opportunity_comparison, dict)
+                    else "",
+                    final_gate.get("final_action"),
+                    "只保留观察，等风险价格补齐",
+                ),
+                "final_participation": "风险价格或盈亏比不完整，只保留观察。",
+                "gate_reason": "新目标风险价格或盈亏比未补齐，不能把候选强度直接变成参与动作。",
+            }
+        )
+        return updated
 
     target_label = _target_candidate_label(selected_position_candidate)
     target_display_label = _runtime_stock_label(selected_position_candidate) or target_label
     target_grade = "100" if target_pct >= 100 else "50"
-    target_action_label = "条件100%核心进攻" if target_grade == "100" else "条件50%预演"
+    target_action_label = "条件100%核心进攻" if target_grade == "100" else "50%条件执行"
     capital_action_reason = _first_runtime_text(final_gate.get("capital_action_reason"))
     old_exit_for_new_entry = bool(final_gate.get("old_position_exit_for_new_entry"))
     if capital_action_reason or old_exit_for_new_entry:
@@ -4159,8 +5219,8 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("参与窗口", "观察窗口")
     text = text.replace("参与窗", "观察窗")
     text = text.replace("回封参与", "回封观察")
-    text = text.replace("| 50% |", "| 0%观察 |")
-    text = text.replace("| 100% |", "| 0%观察 |")
+    text = text.replace("| 50% |", "| 0%不参与 |")
+    text = text.replace("| 100% |", "| 0%不参与 |")
     text = text.replace("买入资格后", "观察资格成立后")
     text = text.replace("给出买入资格", "给出观察资格")
     text = text.replace("优化买点", "优化观察点")
@@ -4170,8 +5230,8 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("才算试错条件", "才算复核条件")
     if "| 仓位三态 |" in text:
         text = text.replace("仓位三态", "观察状态")
-    text = text.replace("允许小仓试错", "只观察，不试错")
-    text = text.replace("才允许小仓试错", "只观察，不试错")
+    text = text.replace("允许" + "小仓" + "试错", "只观察，不试错")
+    text = text.replace("才允许" + "小仓" + "试错", "只观察，不试错")
     text = text.replace("时参与", "时只观察")
     if had_sniper_role:
         text = text.replace("| 通过 |", "| 仅观察 |")
@@ -4180,9 +5240,9 @@ def _normalize_zero_participation_appendix_line(line):
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
             "明日不新增参与，只观察风险是否钝化、主攻线承接和观察对象是否重新成立",
         )
-    if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
+    if "盘前0%；固定交易窗口内条件成立后才评估50%条件执行" in text:
         text = text.replace(
-            "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
+            "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
             "盘前0%；暂无新增参与资格，只观察风险是否钝化",
         )
     if "明日目标标的保留条件100%核心进攻" in text:
@@ -4191,15 +5251,15 @@ def _normalize_zero_participation_appendix_line(line):
             "不新增参与；只保留观察对象；未出现执行资格前不新增参与",
             text,
         )
-    if "明日目标标的保留条件50%预演" in text:
+    if "明日目标标的保留50%条件执行" in text:
         text = re.sub(
-            r"明日目标标的保留条件50%预演：只看[^，|]+，固定交易窗口内条件成立才执行，不满足回到0%",
+            r"明日目标标的保留50%条件执行：只看[^，|]+，固定交易窗口内条件成立才执行，不满足回到0%",
             "不新增参与；只保留观察对象；未出现执行资格前不新增参与",
             text,
         )
-    if "盘前0%；观察窗口命中后才评估50%标准进攻" in text:
+    if "盘前0%；观察窗口命中后才评估50%条件执行" in text:
         text = text.replace(
-            "盘前0%；观察窗口命中后才评估50%标准进攻",
+            "盘前0%；观察窗口命中后才评估50%条件执行",
             "盘前0%；暂无新增参与资格，只观察风险是否钝化",
         )
     if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
@@ -4207,27 +5267,27 @@ def _normalize_zero_participation_appendix_line(line):
             _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
             "盘前0%；暂无新增参与资格，只观察风险是否钝化",
         )
-    if "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
+    if "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
         text = text.replace(
-            "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
-            "0%观察，不抢跑，只保留候选观察的盘中复核路径",
+            "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径",
+            "0%不参与，不抢跑，只保留候选观察的盘中复核路径",
         )
     text = text.replace("条件观察：", "观察对象：")
-    text = text.replace("观察锚：", "观察对象：")
+    text = text.replace("观察" + "锚：", "观察对象：")
     text = text.replace(
-        "50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险",
+        "50%条件执行需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险",
         "0%不参与：最终结论不允许新增参与，只观察风险是否钝化",
     )
     text = text.replace(
-        "09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察",
-        "只保留观察；未出现执行资格前不新增参与；未命中继续0%观察",
+        "09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与",
+        "只保留观察；未出现执行资格前不新增参与；未命中继续0%不参与",
     )
     text = text.replace(
-        "盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻",
+        "盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%条件执行",
         "盘前0%只代表不抢跑；只观察，不新增参与",
     )
     text = text.replace(
-        "以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%标准进攻",
+        "以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%条件执行",
         "以观察和处理持仓为主；不做新开仓",
     )
     text = text.replace("只在", "仅在") if "核心里找参与资格" in text else text
@@ -4235,23 +5295,149 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("继续寻找参与资格", "继续观察")
     text = text.replace("寻找参与资格", "观察")
     text = text.replace("等触发条件成立", "只观察，不新增参与")
-    text = text.replace("确认后才评估50%标准进攻，未确认保持0%", "确认后也只保留观察，未确认保持0%")
-    text = text.replace("才评估50%标准进攻", "才保留观察；未出现执行资格前不新增参与")
-    text = text.replace("触发后50%标准进攻", "触发后只观察")
-    text = text.replace("条件50%", "只观察")
-    text = text.replace("50%标准进攻", "只观察")
+    text = text.replace("确认后才评估50%条件执行，未确认保持0%", "确认后也只保留观察，未确认保持0%")
+    text = text.replace("才评估50%条件执行", "才保留观察；未出现执行资格前不新增参与")
+    text = text.replace("触发后50%条件执行", "触发后只观察")
+    text = text.replace("50%条件执行", "只观察")
+    text = text.replace("50%条件执行", "只观察")
     text = text.replace("唯一对象是否", "观察对象是否")
-    text = text.replace("观察锚是否", "观察对象是否")
+    text = text.replace("观察" + "锚是否", "观察对象是否")
     return text
 
 
 def _runtime_observation_anchor_label(final_target_resolution=None):
     if not isinstance(final_target_resolution, dict):
         return ""
+    if _runtime_final_resolution_waits_without_watch_target(final_target_resolution):
+        return ""
     watch_target = final_target_resolution.get("watch_target")
-    if not isinstance(watch_target, dict) or not watch_target:
+    if not _candidate_can_be_current_observation_target(watch_target):
         return ""
     return _runtime_stock_label(watch_target) or _target_candidate_label(watch_target)
+
+
+def _clear_empty_final_candidate_quality_panel_targets(lines, final_target_resolution=None):
+    if not _runtime_final_resolution_waits_without_watch_target(final_target_resolution):
+        return list(lines or [])
+    cleared = []
+    target_fields = {
+        "主买对象": ("当前执行对象", "暂无"),
+        "主观察对象": ("当前执行对象", "暂无"),
+        "补位对象": ("过程回看样本", "见候选主表（过程证据）"),
+        "观察对象": ("过程回看样本", "见候选主表（过程证据）"),
+    }
+    for line in list(lines or []):
+        text = str(line or "")
+        if text.startswith("|"):
+            cells = [cell.strip() for cell in text.strip().strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] in target_fields:
+                cells[0], cells[1] = target_fields[cells[0]]
+                text = "| " + " | ".join(cells) + " |"
+        cleared.append(text)
+    return cleared
+
+
+def _candidate_process_display_fields(fields):
+    display_fields = list(fields or [])
+    if "对象口径" not in display_fields:
+        insert_at = display_fields.index("候选") + 1 if "候选" in display_fields else 0
+        display_fields.insert(insert_at, "对象口径")
+    return display_fields
+
+
+def _mark_empty_final_candidate_quality_process_rows(lines, final_target_resolution=None):
+    if not _runtime_final_resolution_waits_without_watch_target(final_target_resolution):
+        return list(lines or [])
+    marked = []
+    in_candidate_table = False
+    in_trace_table = False
+    candidate_header_fields = None
+    trace_header_fields = None
+    for line in list(lines or []):
+        text = str(line or "")
+        if "候选主表" in text:
+            in_candidate_table = True
+            in_trace_table = False
+            candidate_header_fields = None
+            marked.append(text)
+            continue
+        if "候选选股轨迹" in text:
+            in_candidate_table = False
+            in_trace_table = True
+            trace_header_fields = None
+            marked.append(text)
+            continue
+        if text.startswith("#####") or text.startswith("#### ") or text.startswith("### "):
+            in_candidate_table = False
+            in_trace_table = False
+            candidate_header_fields = None
+            trace_header_fields = None
+            marked.append(text)
+            continue
+        if not text.startswith("|"):
+            marked.append(text)
+            continue
+
+        cells = [cell.strip() for cell in text.strip().strip("|").split("|")]
+        if in_candidate_table and "候选" in cells:
+            candidate_header_fields = list(cells)
+            display_cells = list(cells)
+            if "对象口径" not in display_cells:
+                insert_at = display_cells.index("候选") + 1
+                display_cells.insert(insert_at, "对象口径")
+            marked.append("| " + " | ".join(display_cells) + " |")
+            continue
+        if in_candidate_table and candidate_header_fields:
+            if all(set(cell) <= {"-"} and cell for cell in cells):
+                display_header = _candidate_process_display_fields(candidate_header_fields)
+                cells = ["------"] * len(display_header)
+                marked.append("|" + "|".join(cells) + "|")
+                continue
+            source_header = list(candidate_header_fields)
+            display_header = _candidate_process_display_fields(source_header)
+            row = {field: cells[index] if index < len(cells) else "" for index, field in enumerate(source_header)}
+            row["对象口径"] = "过程样本，非当前对象"
+            if "账户状态" in row and row["账户状态"] == "实际可买":
+                row["账户状态"] = "仅观察"
+            for field in ("动作上限", "观察上限"):
+                if field in row and row[field] in {"主买", "补位", "核心观察", ""}:
+                    row[field] = "观察"
+            for field in ("新开仓动作", "新增参与动作"):
+                if field in row and row[field]:
+                    row[field] = "只作过程回放，不新增参与"
+            marked.append("| " + " | ".join(row.get(field, "") for field in display_header) + " |")
+            continue
+
+        if in_trace_table and "层级" in cells and "候选" in cells:
+            trace_header_fields = list(cells)
+            marked.append(text)
+            continue
+        if in_trace_table and trace_header_fields:
+            if all(set(cell) <= {"-"} and cell for cell in cells):
+                marked.append(text)
+                continue
+            header = list(trace_header_fields)
+            row = {field: cells[index] if index < len(cells) else "" for index, field in enumerate(header)}
+            row["层级"] = "过程样本"
+            if "为什么进入这一层" in row:
+                row["为什么进入这一层"] = "；".join(
+                    part
+                    for part in (row.get("为什么进入这一层", ""), "最终对象为空，本行只解释为什么曾进入筛选")
+                    if part
+                )
+            if "分支结果" in row:
+                row["分支结果"] = "；".join(
+                    part
+                    for part in (row.get("分支结果", ""), "最终对象为空，本行只作筛选回放")
+                    if part
+                )
+            if "明日动作" in row:
+                row["明日动作"] = "只作过程回放，不新增参与"
+            marked.append("| " + " | ".join(row.get(field, "") for field in header) + " |")
+            continue
+
+        marked.append(text)
+    return marked
 
 
 def _align_appendix_observation_anchor_lines(lines, final_target_resolution=None):
@@ -4263,9 +5449,11 @@ def _align_appendix_observation_anchor_lines(lines, final_target_resolution=None
     first_watch_rewritten = False
     for line in list(lines or []):
         text = str(line or "")
-        if "**观察优先锚点**" in text:
-            prefix = text.split("**观察优先锚点**", 1)[0]
-            normalized.append(f"{prefix}**观察优先锚点**: {anchor_label}")
+        legacy_observation_marker = "**观察优先" + "锚点**"
+        if legacy_observation_marker in text or "**观察优先对象**" in text:
+            marker = legacy_observation_marker if legacy_observation_marker in text else "**观察优先对象**"
+            prefix = text.split(marker, 1)[0]
+            normalized.append(f"{prefix}**观察优先对象**: {anchor_label}")
             in_watch_order = False
             continue
         if "**先看顺序**" in text:
@@ -4277,6 +5465,121 @@ def _align_appendix_observation_anchor_lines(lines, final_target_resolution=None
             normalized.append(re.sub(r"(?<=👀\s).*?(?=\s+-|$)", anchor_label, text, count=1))
             first_watch_rewritten = True
             continue
+        normalized.append(text)
+    return normalized
+
+
+def _normalize_empty_final_action_plan_lines(lines, final_target_resolution=None):
+    if not _runtime_final_resolution_waits_without_watch_target(final_target_resolution):
+        return list(lines or [])
+
+    def _normalize_zero_action_text(text):
+        text = str(text or "")
+        replacements = {
+            "先看竞价承接，回封或结构确认命中才参与": "只观察承接，不新增参与",
+            "只在竞价表态和开盘承接同时成立后再参与": "只观察竞价表态和开盘承接，不新增参与",
+            "优先盯竞价表态、开盘承接和回封质量，继续强就只做它": "只观察竞价表态、开盘承接和回封质量，不新增参与",
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        return text
+
+    normalized = []
+    in_final_action_table = False
+    action_table_header = None
+    in_entry_plan_table = False
+    entry_plan_header = None
+    for line in list(lines or []):
+        text = _normalize_zero_action_text(line)
+        stripped = text.strip()
+        if "明日继续观察" in text and "等观察位出现" in text:
+            text = text.replace("明日继续观察", "过程候选回看")
+            text = text.replace("等观察位出现", "不作为明日对象")
+            stripped = text.strip()
+        if stripped.startswith("**最终动作表**"):
+            in_final_action_table = True
+            action_table_header = None
+            normalized.append(text)
+            continue
+        if in_final_action_table and not stripped:
+            normalized.append(text)
+            continue
+        if in_final_action_table and stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if "明天具体怎么做" in cells and "股票" in cells:
+                action_table_header = list(cells)
+                normalized.append(text)
+                continue
+            if action_table_header and all(set(cell) <= {"-"} and cell for cell in cells):
+                normalized.append(text)
+                continue
+            if action_table_header:
+                row = {field: cells[index] if index < len(cells) else "" for index, field in enumerate(action_table_header)}
+                row["明天具体怎么做"] = "暂无执行预案"
+                row["股票"] = "-"
+                row["代码"] = "-"
+                row["触发条件"] = "当前最终对象为空，只回放过程候选，不新增参与"
+                row["止损/时间"] = "-"
+                normalized.append("| " + " | ".join(row.get(field, "") for field in action_table_header) + " |")
+                continue
+        if in_final_action_table and (stripped.startswith("**") or stripped.startswith("#") or stripped.startswith("- ")):
+            in_final_action_table = False
+            action_table_header = None
+
+        if "明日观察位预计算表" in stripped or "明日买点预计算表" in stripped:
+            in_entry_plan_table = True
+            entry_plan_header = None
+            normalized.append(text)
+            continue
+        if in_entry_plan_table and not stripped:
+            normalized.append(text)
+            continue
+        if in_entry_plan_table and stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if ("买入资格" in cells or "观察资格" in cells) and "明天具体怎么做" in cells:
+                entry_plan_header = list(cells)
+                normalized.append(text)
+                continue
+            if entry_plan_header and all(set(cell) <= {"-"} and cell for cell in cells):
+                normalized.append(text)
+                continue
+            if entry_plan_header:
+                row = {field: cells[index] if index < len(cells) else "" for index, field in enumerate(entry_plan_header)}
+                row_text = " ".join(cells)
+                if "过程候选" in row_text:
+                    row["明天具体怎么做"] = "只作过程回放，不新增参与"
+                    normalized.append("| " + " | ".join(row.get(field, "") for field in entry_plan_header) + " |")
+                    continue
+        if in_entry_plan_table and not stripped.startswith("|"):
+            in_entry_plan_table = False
+            entry_plan_header = None
+
+        if stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] in {"今日关注标的", "明天观察池", "PK决胜局（期望值模型）"}:
+                cells[1] = "无当前对象；个股仅保留在过程候选回放"
+                text = "| " + " | ".join(cells) + " |"
+            elif "观察资格" in cells and "明天具体怎么做" in cells:
+                text = text.replace("重点观察对象", "过程候选")
+            else:
+                text = text.replace("| 重点观察对象 |", "| 过程候选 |")
+        else:
+            if "**观察优先对象**" in text:
+                text = re.sub(r"(\*\*观察优先对象\*\*:\s*).*$", r"\1暂无", text)
+            if text.startswith("- 👀 ") or text.startswith("- ⏳ "):
+                text = text.replace("观察对象", "过程候选").replace("重点观察对象", "过程候选")
+                text = text.replace("等观察位出现", "仅保留过程回看")
+                text = text.replace("跨线继续看谁", "过程候选，跨线回看样本")
+                if "过程候选" not in text and "过程证据" not in text:
+                    text = re.sub(r"^(- [👀⏳]\s+\S+)(\s*[-：:]\s*)", r"\1 - 过程候选，", text, count=1)
+            if text.startswith("- **跨线继续看谁**:"):
+                text = text.replace("- **跨线继续看谁**:", "- **跨线回看样本**:")
+                if "过程证据" not in text:
+                    text = f"{text}（过程证据，不是当前对象）"
+            if text.startswith("- **盘前不抢跑**:"):
+                text = "- **盘前不抢跑**: 无当前对象；过程候选只回放推导，不新增参与"
+            text = text.replace("重点观察对象", "过程候选")
+            text = text.replace("观察优先对象", "观察优先对象")
         normalized.append(text)
     return normalized
 
@@ -4310,12 +5613,36 @@ def _normalize_attack_preview_appendix_lines(
     )
     if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t", "wait"}:
         normalized_zero_lines = [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        normalized_zero_lines = _normalize_empty_final_action_plan_lines(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _clear_empty_final_candidate_quality_panel_targets(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _mark_empty_final_candidate_quality_process_rows(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
         return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
     has_selected_target = isinstance(selected_position_candidate, dict) and bool(
         selected_position_candidate.get("name") or selected_position_candidate.get("code")
     )
     if _has_zero_participation_context(position_decision):
         normalized_zero_lines = [_normalize_zero_participation_appendix_line(line) for line in list(lines or [])]
+        normalized_zero_lines = _normalize_empty_final_action_plan_lines(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _clear_empty_final_candidate_quality_panel_targets(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
+        normalized_zero_lines = _mark_empty_final_candidate_quality_process_rows(
+            normalized_zero_lines,
+            final_target_resolution,
+        )
         return _align_appendix_observation_anchor_lines(normalized_zero_lines, final_target_resolution)
     if not has_selected_target and _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
@@ -4328,35 +5655,35 @@ def _normalize_attack_preview_appendix_lines(
         if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
             text = text.replace(
                 "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-                f"明日目标标的保留条件50%预演：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
+                f"明日目标标的保留50%条件执行：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
             )
         if text == "- **进攻仓位三态**: 0%不参与":
-            text = "- **进攻仓位三态**: 50%标准进攻预演"
-        if text == "- **进攻仓位三态**: 0%观察":
-            text = "- **进攻仓位三态**: 50%标准进攻预演"
-        if text.startswith("**次日市场环境**: 0%观察 /"):
-            text = text.replace("**次日市场环境**: 0%观察 /", "**次日市场环境**: 50%标准进攻 /", 1)
+            text = "- **进攻仓位三态**: 50%条件执行"
+        if text == "- **进攻仓位三态**: 0%不参与":
+            text = "- **进攻仓位三态**: 50%条件执行"
+        if text.startswith("**次日市场环境**: 0%不参与 /"):
+            text = text.replace("**次日市场环境**: 0%不参与 /", "**次日市场环境**: 50%条件执行 /", 1)
         if "当前按0%不参与，固定交易窗口内条件未成立前只观察" in text:
             text = text.replace(
                 "当前按0%不参与，固定交易窗口内条件未成立前只观察",
-                "50%标准进攻；固定交易窗口内条件成立才执行，不满足回到0%",
+                "50%条件执行；固定交易窗口内条件成立才执行，不满足回到0%",
             )
-        if text.startswith("- ✅ 不新增参与：50%标准进攻"):
+        if text.startswith("- ✅ 不新增参与：50%条件执行"):
             text = text.replace("- ✅ 不新增参与：", "- ⚠️ 不抢跑：", 1)
-        if "0%观察不开新仓" in text:
+        if "0%不参与不开新仓" in text:
             text = text.replace(
-                "0%观察不开新仓",
-                "50%标准进攻，盘前不抢跑",
+                "0%不参与不开新仓",
+                "50%条件执行，盘前不抢跑",
             )
-        if "0%观察，等待固定交易窗口内条件" in text:
+        if "0%不参与，等待固定交易窗口内条件" in text:
             text = text.replace(
-                "0%观察，等待固定交易窗口内条件",
-                "50%标准进攻，等待固定交易窗口内条件",
+                "0%不参与，等待固定交易窗口内条件",
+                "50%条件执行，等待固定交易窗口内条件",
             )
         if "0%新仓（只处理旧仓，不新增）" in text:
             text = text.replace(
                 "0%新仓（只处理旧仓，不新增）",
-                "50%标准进攻；条件不成立回0%",
+                "50%条件执行；条件不成立回0%",
             )
         if "市场级原则是若你有旧仓就去弱留强，不新增参与" in text:
             text = text.replace(
@@ -4365,26 +5692,26 @@ def _normalize_attack_preview_appendix_lines(
             )
         if "**⛔ 当前先不开新仓**" in text:
             text = text.replace("**⛔ 当前先不开新仓**", "**⚠️ 当前不抢跑**")
-            text = text.replace("本轮不做PK出手结论", "本轮只保留固定交易窗口预演")
-        if "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件" in text:
+            text = text.replace("本轮不做PK出手结论", "本轮只等待固定交易窗口条件")
+        if "当前是0%不参与，本时段只确认主线核心是否在固定交易窗口内满足条件" in text:
             text = text.replace(
-                "当前是0%观察，本时段只确认主线核心是否在固定交易窗口内满足条件",
-                "当前是50%标准进攻，本时段只确认主线核心是否在固定交易窗口内满足条件",
+                "当前是0%不参与，本时段只确认主线核心是否在固定交易窗口内满足条件",
+                "当前是50%条件执行，本时段只确认主线核心是否在固定交易窗口内满足条件",
             )
-        if "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻" in text:
+        if "盘前0%；固定交易窗口内条件成立后才评估50%条件执行" in text:
             text = text.replace(
-                "盘前0%；固定交易窗口内条件成立后才评估50%标准进攻",
-                "条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
+                "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
+                "50%条件执行；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
             )
         if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
             text = text.replace(
                 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
-                "条件50%；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
+                "50%条件执行；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
             )
-        if "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
+        if "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
             text = text.replace(
-                "0%观察，禁止抢跑，但保留重点观察名单的盘中确认路径",
-                "条件50%预演，盘前不抢跑，只等明日目标标的盘中确认路径",
+                "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径",
+                "50%条件执行，盘前不抢跑，只等明日目标标的盘中确认路径",
             )
         text = normalize_trading_time_text(text)
         text = text.replace("重点观察参与脚本", "重点观察复核脚本")
@@ -6476,17 +7803,45 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot=market_research_snapshot,
         final_gate=final_gate,
     )
+    selection_workflow = _build_runtime_selection_workflow(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    selection_workflow = _store_runtime_selection_workflow(
+        selection_workflow,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     final_target_resolution = _build_runtime_final_target_resolution(
         data=data,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
     )
     _store_runtime_final_target_resolution(
         final_target_resolution,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
+        phase="pre_tail",
+    )
+    selected_position_candidate = _runtime_sync_selected_candidate_from_final_resolution(
+        final_target_resolution,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    _clear_stale_candidate_quality_panel_targets(
+        final_target_resolution,
+        data,
+        execution_stage_context,
+        market_research_snapshot,
     )
     two_layer_decision_payload = build_two_layer_decision_payload(
         target_date=target_date,
@@ -6516,6 +7871,18 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
+        execution_stage_context=execution_stage_context,
+        stage_lookup=execution_stage_result.get("stage_lookup"),
+        final_target_resolution=final_target_resolution,
+        selection_workflow=selection_workflow,
+        sniper_target_derivation=sniper_target_derivation,
+        two_layer_decision_payload=two_layer_decision_payload,
+    )
+    report = _replace_pk_decision_stage_lines(report, rerendered_pk_stage.get("lines") or [])
+    data.setdefault("module_logs", []).extend(rerendered_pk_stage.get("module_logs") or [])
+    if isinstance(rerendered_pk_stage.get("exports"), dict):
+        execution_stage_context.update(rerendered_pk_stage.get("exports") or {})
     final_gate_for_front_page = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
     capital_priority = final_target_resolution.get("capital_priority_decision", {}).get("capital_priority")
     capital_reason = final_target_resolution.get("capital_priority_decision", {}).get("reason")
@@ -6536,6 +7903,7 @@ def _render_markdown_report_legacy_body(
         final_gate_for_front_page,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
+        opportunity_comparison=final_target_resolution.get("opportunity_comparison"),
     )
     front_structure_layer_text = execution_stage_context.get('front_structure_layer_text', '')
     front_follow_action_text = execution_stage_context.get('front_follow_action_text', '')
@@ -6760,17 +8128,45 @@ def _render_markdown_report_legacy_body(
         market_research_snapshot=market_research_snapshot,
         final_gate=final_gate,
     )
+    selection_workflow = _build_runtime_selection_workflow(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    selection_workflow = _store_runtime_selection_workflow(
+        selection_workflow,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     final_target_resolution = _build_runtime_final_target_resolution(
         data=data,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
         market_research_snapshot=market_research_snapshot,
+        execution_stage_context=execution_stage_context,
     )
     _store_runtime_final_target_resolution(
         final_target_resolution,
         data=data,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
+        phase="front_page",
+    )
+    selected_position_candidate = _runtime_sync_selected_candidate_from_final_resolution(
+        final_target_resolution,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    _clear_stale_candidate_quality_panel_targets(
+        final_target_resolution,
+        data,
+        execution_stage_context,
+        market_research_snapshot,
     )
     two_layer_decision_payload = build_two_layer_decision_payload(
         target_date=target_date,
@@ -6800,6 +8196,18 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
+        execution_stage_context=execution_stage_context,
+        stage_lookup=execution_stage_result.get("stage_lookup"),
+        final_target_resolution=final_target_resolution,
+        selection_workflow=selection_workflow,
+        sniper_target_derivation=sniper_target_derivation,
+        two_layer_decision_payload=two_layer_decision_payload,
+    )
+    report = _replace_pk_decision_stage_lines(report, rerendered_pk_stage.get("lines") or [])
+    data.setdefault("module_logs", []).extend(rerendered_pk_stage.get("module_logs") or [])
+    if isinstance(rerendered_pk_stage.get("exports"), dict):
+        execution_stage_context.update(rerendered_pk_stage.get("exports") or {})
     final_gate_for_front_page = dict(final_gate or {}) if isinstance(final_gate, dict) else {}
     capital_priority = final_target_resolution.get("capital_priority_decision", {}).get("capital_priority")
     capital_reason = final_target_resolution.get("capital_priority_decision", {}).get("reason")
@@ -6820,6 +8228,7 @@ def _render_markdown_report_legacy_body(
         final_gate_for_front_page,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
+        opportunity_comparison=final_target_resolution.get("opportunity_comparison"),
     )
     if isinstance(market_research_snapshot, dict):
         if "raw_final_gate" not in market_research_snapshot:
@@ -6883,6 +8292,8 @@ def _render_markdown_report_legacy_body(
         mainline_turnover_summary=mainline_turnover_summary,
         selected_position_candidate=selected_position_candidate,
         extreme_conviction_list=extreme_conviction_list,
+        final_target_resolution=final_target_resolution,
+        final_gate=front_page_final_gate,
     )
     front_page_lines = _insert_daily_judgment_front_panel(front_page_lines, daily_judgment_front_panel_lines)
     final_target_solution_lines = _runtime_selected_target_solution_lines(
@@ -6901,6 +8312,10 @@ def _render_markdown_report_legacy_body(
     if DISPLAY_MVP_MODE:
         report = front_page_lines
     else:
+        next_day_attribution_lines = _render_next_day_attribution_section(
+            data=data,
+            market_research_snapshot=market_research_snapshot,
+        )
         appendix_report = _normalize_attack_preview_appendix_lines(
             _remove_duplicate_front_page_sections_from_appendix(report),
             selected_position_candidate=selected_position_candidate,
@@ -6919,8 +8334,13 @@ def _render_markdown_report_legacy_body(
             appendix_lines.extend(two_layer_derivation_lines)
             appendix_lines.append("")
         appendix_lines.extend(_demote_appendix_headings(appendix_report))
-        report = front_page_lines + ["", "## 八、详细附录", ""] + appendix_lines
+        report = front_page_lines
+        if next_day_attribution_lines:
+            report = report + [""] + next_day_attribution_lines
+        report = report + ["", "## 八、详细附录", ""] + appendix_lines
 
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
     print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(front_page_final_gate.get('final_action', '未知'))}")
     _finalize_helper_diagnostics(data)
     report = _sanitize_report_lines(

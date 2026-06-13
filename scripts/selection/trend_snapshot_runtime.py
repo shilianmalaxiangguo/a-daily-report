@@ -649,22 +649,37 @@ def _pullback_repair_count(closes, lookback=20):
     return count
 
 
+def _rounded_or_none(value, digits=3):
+    return round(value, digits) if value is not None else None
+
+
 def _build_trend_aesthetic_review_from_bars(stock):
     rows = _candidate_recent_bars(stock)[-120:]
     if len(rows) < 8:
         return None
 
+    opens = [_bar_value(row, "open", "开盘", "开盘价") for row in rows]
     closes = [_bar_value(row, "close", "收盘", "收盘价") for row in rows]
     highs = [_bar_value(row, "high", "最高", "最高价") for row in rows]
     lows = [_bar_value(row, "low", "最低", "最低价") for row in rows]
+    volumes = [_bar_value(row, "volume", "vol", "成交量", default=0.0) for row in rows]
     pct_changes = [_bar_value(row, "pct_chg", "change_pct", "涨跌幅") for row in rows]
+    open_price = opens[-1]
     close = closes[-1]
+    high = highs[-1]
+    low = lows[-1]
+    volume = volumes[-1]
     ma3 = _ma(closes, 3)
     ma5 = _ma(closes, 5)
+    ma7 = _ma(closes, 7)
     ma10 = _ma(closes, 10)
     ma20 = _ma(closes, 20)
     previous_ma20 = _ma(closes[:-10], 20) if len(closes) >= 30 else None
     ma20_slope = _pct_change(ma20, previous_ma20)
+    previous_volume5 = _ma(volumes[:-1], 5)
+    volume_ratio5 = volume / previous_volume5 if previous_volume5 else None
+    body_pct = _pct_change(close, open_price)
+    close_position = (close - low) / (high - low) if high and high != low else 1.0
     recent20_high = max(highs[-20:])
     recent20_low = min(lows[-20:])
     previous20_high = max(highs[-40:-20]) if len(highs) >= 40 else None
@@ -694,7 +709,12 @@ def _build_trend_aesthetic_review_from_bars(stock):
     metrics = {
         "bars": len(rows),
         "close": round(close, 3),
+        "ma5": _rounded_or_none(ma5),
+        "ma7": _rounded_or_none(ma7),
+        "ma10": _rounded_or_none(ma10),
+        "ma20": _rounded_or_none(ma20),
         "ma5_gap_pct": round(_pct_change(close, ma5) or 0.0, 2),
+        "ma7_gap_pct": round(_pct_change(close, ma7) or 0.0, 2) if ma7 is not None else None,
         "ma20_gap_pct": round(_pct_change(close, ma20) or 0.0, 2) if ma20 is not None else None,
         "ma20_slope_pct": round(ma20_slope, 2) if ma20_slope is not None else None,
         "max_drawdown_pct": round(max_drawdown, 2),
@@ -706,7 +726,20 @@ def _build_trend_aesthetic_review_from_bars(stock):
         "below_ma3_days": below_ma3_days,
         "range_contraction_ratio": round(range_contraction_ratio, 2) if range_contraction_ratio is not None else None,
         "pullback_repair_count": pullback_repairs,
+        "volume_ratio5": round(volume_ratio5, 2) if volume_ratio5 is not None else None,
+        "candle_body_pct": round(body_pct or 0.0, 2),
+        "close_position_pct": round(close_position * 100, 2),
     }
+    ma5_below_ma7 = bool(ma5 is not None and ma7 is not None and ma5 < ma7)
+    ma5_below_ma7_reversal_confirmed = bool(
+        ma5_below_ma7
+        and close >= ma7
+        and (pct_changes[-1] or 0.0) >= 5
+        and (volume_ratio5 or 0.0) >= 1.3
+        and close_position >= 0.6
+    )
+    metrics["ma5_below_ma7"] = ma5_below_ma7
+    metrics["ma5_below_ma7_reversal_confirmed"] = ma5_below_ma7_reversal_confirmed
 
     weak_alignment = bool(ma5 is not None and ma10 is not None and ma20 is not None and ma5 < ma10 < ma20 and close < ma20)
     broken_structure = bool(
@@ -778,6 +811,21 @@ def _build_trend_aesthetic_review_from_bars(stock):
             "reasons": ["弱反抽未收回短中线", "MA20下方", "20日区间低位"],
             "metrics": metrics,
             "action": "弱反抽只观察，重新站回MA5/MA20并有承接修复后再评估",
+        }
+    if ma5_below_ma7 and not ma5_below_ma7_reversal_confirmed:
+        reasons = ["MA5低于MA7"]
+        if close < (ma7 or close):
+            reasons.append("未站回MA7")
+        if close < (ma5 or close):
+            reasons.append("跌破MA5")
+        if (volume_ratio5 or 0.0) < 1.3 or close_position < 0.75:
+            reasons.append("缺少放量大阳确认")
+        return {
+            "status": "不通过",
+            "source": "recent_bars",
+            "reasons": reasons,
+            "metrics": metrics,
+            "action": "历史趋势样本待修复，重新站回MA7并放量大阳确认后再评估",
         }
 
     good_reasons = []
@@ -1225,6 +1273,16 @@ def _conviction_participation_window(stock, *, is_anchor=False, is_mainline=Fals
     )
 
 
+def _observation_leader_speed_profile(reason="未形成明确龙头身份，只能等结构确认"):
+    return {
+        "leader_speed_tier_code": "not_leader",
+        "leader_speed_tier": "观察样本",
+        "buy_ma_line": "MA10",
+        "sell_ma_line": "MA20",
+        "ma_role_reason": reason,
+    }
+
+
 def _infer_leader_speed_profile(stock, *, is_anchor=False, is_mainline=False, lianban=0, pattern="", change_pct=None):
     stock = stock or {}
     combined = _candidate_combined_text(stock, pattern)
@@ -1234,11 +1292,24 @@ def _infer_leader_speed_profile(stock, *, is_anchor=False, is_mainline=False, li
     )
     close_ma = str(stock.get("close_ma_alignment") or stock.get("ma_alignment") or "").upper()
     is_limit_style = int(lianban or 0) >= 1 or _text_contains_any(combined, ("涨停", "T字", "一字", "连板", "光头"))
+    role_text = " / ".join(
+        str(stock.get(key) or "")
+        for key in ("candidate_role", "候选身份", "sector_anchor", "anchor_reason", "core_identity_label", "role")
+    )
+    has_leader_role = bool(
+        (is_anchor and is_mainline)
+        or _text_contains_any(
+            f"{combined} / {role_text}",
+            ("板块锚", "锚定龙", "总龙", "主线核心", "核心龙", "分支龙头", "大容量中军"),
+        )
+    )
     is_large_capacity = _text_contains_any(f"{combined} / {capacity_text}", ("大容量", "large", "容量龙", "趋势资金")) or (
         close_ma in ("MA5", "MA10") and _text_contains_any(combined, ("趋势比价链", "趋势核心"))
     )
 
-    if is_limit_style or (change_pct is not None and change_pct >= 9.5):
+    if (is_limit_style or (change_pct is not None and change_pct >= 9.5)) and not has_leader_role:
+        return _observation_leader_speed_profile("涨停/T字板只是资金表态证据，未通过板块锚反推前只能作为观察样本")
+    if has_leader_role and (is_limit_style or (change_pct is not None and change_pct >= 9.5)):
         return {
             "leader_speed_tier_code": "extreme_acceleration",
             "leader_speed_tier": "极致加速龙头",
@@ -1262,13 +1333,7 @@ def _infer_leader_speed_profile(stock, *, is_anchor=False, is_mainline=False, li
             "sell_ma_line": "MA10",
             "ma_role_reason": "强趋势票以MA5承接为买点线，MA10收不回则降级",
         }
-    return {
-        "leader_speed_tier_code": "not_leader",
-        "leader_speed_tier": "观察样本",
-        "buy_ma_line": "MA10",
-        "sell_ma_line": "MA20",
-        "ma_role_reason": "未形成明确龙头身份，只能等结构确认",
-    }
+    return _observation_leader_speed_profile()
 
 
 def _build_acceptance_repair_required(profile):
@@ -1287,39 +1352,37 @@ def _assign_sniper_roles(conviction_list):
         str((item or {}).get("anchor_reversal_decision") or (item or {}).get("sector_anchor") or "").strip()
         for item in conviction_list or []
     )
-    if has_anchor_contract:
-        primary_assigned = False
-        backup_assigned = False
+    if not has_anchor_contract:
         for item in conviction_list or []:
-            anchor_decision = str((item or {}).get("anchor_reversal_decision") or "").strip()
-            role = "候选观察"
-            if anchor_decision == "可作为主对象" and not primary_assigned:
-                role = "明日主买对象"
-                primary_assigned = True
-            elif anchor_decision in {"可作为主对象", "可作为补位"} and not backup_assigned:
-                role = "明日补位对象"
-                backup_assigned = True
-            item["sniper_role"] = role
-            item["primary_buy_candidate"] = role == "明日主买对象"
-            item["backup_buy_candidate"] = role == "明日补位对象"
+            item["sniper_role"] = "候选观察"
+            item["primary_buy_candidate"] = False
+            item["backup_buy_candidate"] = False
+            item["candidate_layer"] = "watch_sample"
+            item["execution_eligibility"] = "anchor_reversal_required"
+            item["attack_state"] = "0%"
+            item["participation_window"] = "no_trade"
+            item["conviction_rule"] = "未完成板块锚反推，只观察承接，不新增参与"
         return conviction_list
 
-    action_idx = 0
+    primary_assigned = False
+    backup_assigned = False
     for item in conviction_list or []:
         anchor_decision = str((item or {}).get("anchor_reversal_decision") or "").strip()
-        if anchor_decision in {"降级观察", "不参与"}:
-            role = "候选观察"
-        elif action_idx == 0:
+        role = "候选观察"
+        if anchor_decision == "可作为主对象" and not primary_assigned:
             role = "明日主买对象"
-            action_idx += 1
-        elif action_idx == 1:
+            primary_assigned = True
+        elif anchor_decision in {"可作为主对象", "可作为补位"} and not backup_assigned:
             role = "明日补位对象"
-            action_idx += 1
-        else:
-            role = "候选观察"
+            backup_assigned = True
         item["sniper_role"] = role
         item["primary_buy_candidate"] = role == "明日主买对象"
         item["backup_buy_candidate"] = role == "明日补位对象"
+        if role == "候选观察" and not anchor_decision:
+            item["candidate_layer"] = "watch_sample"
+            item["execution_eligibility"] = "anchor_reversal_required"
+            item["attack_state"] = "0%"
+            item["participation_window"] = "no_trade"
     return conviction_list
 
 
@@ -1535,6 +1598,100 @@ def build_leader_memory_bank(sector_snapshot, watchlist, dragon_stocks, hot_rank
         _restore_runtime_bindings(previous)
 
 
+def _rank_value(item, *keys):
+    for key in keys:
+        try:
+            value = int(float(str((item or {}).get(key) or "").strip()))
+        except ValueError:
+            continue
+        if value > 0:
+            return value
+    return 9999
+
+
+def _stock_anchor_identity_proven(stock, dragon=None):
+    stock = stock or {}
+    dragon = dragon or {}
+    lianban = int(stock.get("连板数", stock.get("lianban", dragon.get("lianban", 0))) or 0)
+    turnover = _first_number(stock, "turnover", "成交额", "amount", "成交金额") or 0.0
+    if turnover > 10000:
+        turnover = turnover / 1e8
+    hot_rank = _rank_value(stock, "hot_rank", "popularity_rank")
+    turnover_rank = _rank_value(stock, "turnover_rank")
+    pattern = str(stock.get("pattern", "") or "")
+    role_text = str(stock.get("candidate_role") or stock.get("候选身份") or "").strip()
+    source_tier = str(stock.get("source_tier") or "").strip()
+    source_text = " / ".join(str(stock.get(key) or "") for key in ("source", "_source", "data_source") if stock.get(key))
+    reason = " / ".join(
+        str((source or {}).get(key, "") or "")
+        for source in (stock, dragon)
+        for key in ("reason", "anchor_reason")
+    )
+    combined = _candidate_combined_text(stock, pattern)
+    status_text = " / ".join(str(stock.get(key) or "") for key in ("anchor_status", "status") if stock.get(key))
+    proof_text = f"{combined} / {reason}"
+    if _text_contains_any(status_text, ("失效", "走弱", "破位", "A杀", "退潮", "杀跌")):
+        return True
+    if role_text in {"板块锚", "大容量中军"}:
+        return True
+    if _text_contains_any(
+        proof_text,
+        (
+            "板块锚",
+            "锚定龙",
+            "趋势比价链",
+            "大容量",
+            "趋势资金",
+            "中军",
+            "反复做",
+            "MA5入/MA7清/MA5T",
+            "MA5B",
+            "MA7清",
+            "MA5T",
+        ),
+    ):
+        return True
+    if source_tier == "anchor_reversal_source" and _text_contains_any(source_text, ("hot_capacity", "成交额", "热榜")):
+        return True
+    if (turnover >= 50 or hot_rank <= 30 or turnover_rank <= 20) and _text_contains_any(
+        proof_text,
+        (
+            "承接",
+            "趋势",
+            "容量",
+            "中军",
+            "主线",
+            "核心",
+            "辨识度",
+            "反复做",
+            "MA5",
+            "MA7",
+            "MA10",
+        ),
+    ):
+        return True
+    if lianban >= 2 and _text_contains_any(
+        proof_text,
+        (
+            "板块锚",
+            "锚定龙",
+            "主线内核",
+            "主线核心",
+            "龙一",
+            "高标",
+            "先锋",
+            "总龙",
+            "分支龙头",
+            "容量",
+            "中军",
+            "趋势比价链",
+            "承接",
+        ),
+    ):
+        return True
+    return False
+
+
 def _pick_sector_anchor_stock(sector_name, sector_stocks, dragon_stocks):
     if not sector_stocks:
         return None
@@ -1577,9 +1734,9 @@ def _pick_sector_anchor_stock(sector_name, sector_stocks, dragon_stocks):
         anchor_identity = 0
         if role_text == "板块锚":
             anchor_identity += 45
-        if code in dragon_by_code:
+        if code in dragon_by_code and _stock_anchor_identity_proven(stock, dragon_by_code.get(code, {})):
             anchor_identity += 40
-        if _text_contains_any(reason, ("板块锚", "锚定龙", "龙一", "前排")):
+        if _text_contains_any(reason, ("板块锚", "锚定龙")):
             anchor_identity += 30
         if role_text in {"大容量中军", "分支龙头"}:
             anchor_identity += 24
@@ -1622,7 +1779,11 @@ def _pick_sector_anchor_stock(sector_name, sector_stocks, dragon_stocks):
             pattern_rank = 1
         return (anchor_identity, tomorrow_strength, raw_score, turnover, lianban, pattern_rank, change)
 
-    return max(sector_stocks, key=_priority)
+    anchor_stock = max(sector_stocks, key=_priority)
+    code = normalize_stock_code((anchor_stock or {}).get("code", ""))
+    if not _stock_anchor_identity_proven(anchor_stock, dragon_by_code.get(code, {})):
+        return None
+    return anchor_stock
 
 
 def _build_sector_trend_snapshot_legacy_body(candidates, watchlist, evaluated_stocks, dragon_stocks, zt_pool_by_sector=None, top_n=5):
@@ -1696,13 +1857,22 @@ def _build_sector_trend_snapshot_legacy_body(candidates, watchlist, evaluated_st
             + [stock for stock in (dragon_stocks or []) if stock_matches_sector(stock, sector)]
         )
         anchor_stock = _pick_sector_anchor_stock(sector, anchor_source, dragon_stocks or [])
-        anchor_name = anchor_stock.get("name", "-") if anchor_stock else "-"
+        anchor_name = anchor_stock.get("name", "") if anchor_stock else ""
         anchor_code = normalize_stock_code(anchor_stock.get("code", "")) if anchor_stock else ""
         anchor_lianban = int(anchor_stock.get("连板数", anchor_stock.get("lianban", 0)) or 0) if anchor_stock else 0
         anchor_pattern = str(anchor_stock.get("pattern", "")) if anchor_stock else ""
         raw_anchor_reason = str((anchor_stock or {}).get("anchor_reason") or (anchor_stock or {}).get("reason") or "").strip()
         anchor_status = str((anchor_stock or {}).get("anchor_status") or (anchor_stock or {}).get("status") or "").strip()
-        anchor_reason = "板块辨识度最高"
+        anchor_source_text = " / ".join(
+            _candidate_combined_text(stock, str(stock.get("pattern", "")))
+            for stock in anchor_source[:5]
+            if isinstance(stock, dict)
+        )
+        anchor_reason = "板块锚未识别"
+        if not anchor_stock and _text_contains_any(anchor_source_text, ("首波", "龙一", "首板", "涨停", "T字板", "一字板")):
+            anchor_reason = "首波样本，只作承接观察"
+        elif anchor_stock:
+            anchor_reason = "板块辨识度最高"
         anchor_identity_text = _candidate_combined_text(anchor_stock, anchor_pattern) if anchor_stock else ""
         anchor_failure_text = " / ".join(text for text in (anchor_status, raw_anchor_reason) if text)
         if _text_contains_any(anchor_failure_text, ("失效", "走弱", "破位", "A杀", "退潮", "杀跌")):
@@ -1713,7 +1883,7 @@ def _build_sector_trend_snapshot_legacy_body(candidates, watchlist, evaluated_st
             anchor_reason = "板块高标，资金已记住"
         elif anchor_lianban == 2:
             anchor_reason = "连板先锋，后续优先回看"
-        elif "龙一" in str(anchor_stock.get("reason", "")):
+        elif anchor_stock and "龙一" in str(anchor_stock.get("reason", "")):
             anchor_reason = "首波先锋，优先做重点观察谁"
         elif anchor_pattern in ["一字板", "T字板"]:
             anchor_reason = "强异动已出现，等分歧后再看转强"
@@ -1788,7 +1958,7 @@ def _apply_st_resume_observation_policy(candidate, risk_context):
     updated["systemic_risk_review"] = {
         "status": "降主动性",
         "reason": reason,
-        "action": "保留主买/补位比较，但只在固定交易窗口内条件成立后评估50%标准进攻；风险扩散未钝化就回到0%。",
+        "action": "保留主买/补位比较，但只在固定交易窗口内条件成立后评估50%条件执行；风险扩散未钝化就回到0%。",
         "position_cap_pct": 50,
     }
     final_review = dict(updated.get("final_risk_review") or {})
@@ -1813,7 +1983,11 @@ def _is_shape_repair_candidate(stock, trend_review):
     stock = stock or {}
     if (trend_review or {}).get("status") == "通过":
         return False
-    if (trend_review or {}).get("action") != "历史趋势样本待修复，重新站回短中线承接后再评估":
+    action = (trend_review or {}).get("action")
+    if action not in {
+        "历史趋势样本待修复，重新站回短中线承接后再评估",
+        "历史趋势样本待修复，重新站回MA7并放量大阳确认后再评估",
+    }:
         return False
     if _candidate_is_limit_down(stock, change_pct=_first_number(stock, "change_pct", "change", "pct_chg", "涨跌幅"), pattern=str(stock.get("pattern", "") or "")):
         return False
@@ -2055,7 +2229,13 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             }
             participation_fields["attack_state"] = "0%"
             participation_fields["participation_window"] = "no_trade"
-        elif anchor_decision == "降级观察" and layer_fields.get("candidate_layer") != "watch_sample":
+            participation_fields["missed_action"] = "只观察，不新增参与"
+            participation_fields["board_script"] = "只观察，不新增参与"
+            participation_fields.update(
+                build_participation_window_policy("no_trade", "只观察，不新增参与", candidate=stock)
+            )
+            leader_speed_profile = _observation_leader_speed_profile("板块锚已失效，后排涨停不能保留龙头速度档")
+        elif anchor_decision == "降级观察":
             action_rule = "板块锚反推未通过，只观察承接，不新增参与"
             layer_fields = {
                 "candidate_layer": "watch_sample",
@@ -2063,6 +2243,12 @@ def _build_extreme_conviction_list_legacy_body(evaluated_stocks, mainline_name, 
             }
             participation_fields["attack_state"] = "0%"
             participation_fields["participation_window"] = "no_trade"
+            participation_fields["missed_action"] = "只观察，不新增参与"
+            participation_fields["board_script"] = "只观察，不新增参与"
+            participation_fields.update(
+                build_participation_window_policy("no_trade", "只观察，不新增参与", candidate=stock)
+            )
+            leader_speed_profile = _observation_leader_speed_profile("板块锚反推未通过，涨停/T字板只能作为观察样本")
         candidate = {
                 **stock,
                 "conviction_score": round(conviction_score, 1),
@@ -2142,6 +2328,15 @@ def _build_leader_memory_bank_legacy_body(sector_snapshot, watchlist, dragon_sto
             watch_stock.get("连板数", watch_stock.get("lianban", dragon_stock.get("lianban", item.get("anchor_lianban", 0))))
             or 0
         )
+        anchor_probe = {
+            **dict(item or {}),
+            "code": code,
+            "sector": sector,
+            "reason": item.get("anchor_reason", ""),
+            "连板数": lianban,
+        }
+        if not _stock_anchor_identity_proven(anchor_probe, dragon_stock):
+            continue
         hot_rank = hot_rank_map.get(code)
 
         remember_reason_parts = [item.get("anchor_reason", "板块辨识度最高")]

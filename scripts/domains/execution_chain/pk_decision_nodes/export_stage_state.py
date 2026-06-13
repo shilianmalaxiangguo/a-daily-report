@@ -25,6 +25,10 @@ def build_pk_decision_export_stage_state_node(context, node_meta=None, node_look
         "candidate_quality_scorecard_diagnostics",
         "candidate_traces",
         "candidate_trace_eliminated_summary",
+        "final_target_resolution",
+        "selection_workflow",
+        "sniper_target_derivation",
+        "two_layer_decision_payload",
     ]
     stage_exports = {key: context.get(key) for key in export_keys if key in context}
     return {"lines": [], "exports": {"stage_exports": stage_exports}, "module_logs": []}

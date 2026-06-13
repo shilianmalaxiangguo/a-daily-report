@@ -86,6 +86,24 @@ def _sector_matches(a, b):
     return bool(a and b and (a in b or b in a))
 
 
+def _is_confirmed_mainline_name(mainline_name):
+    text = _clean_text(mainline_name)
+    if not text:
+        return False
+    unconfirmed_markers = (
+        "无确认",
+        "未确认",
+        "暂无确认",
+        "暂无明确",
+        "无明确",
+        "没有确认",
+        "无主攻线",
+        "无主线",
+        "多方向",
+    )
+    return not any(marker in text for marker in unconfirmed_markers)
+
+
 def _anchor_from_snapshot_row(row):
     row = row or {}
     anchor_code = _stock_code({"code": row.get("anchor_code")})
@@ -142,22 +160,6 @@ def _anchor_certainty_path(candidate, anchor=None):
 
 def _find_sector_anchor(candidate, sector_snapshot, mainline_name=""):
     candidate_sector = _sector(candidate)
-    mainline_name = _clean_text(mainline_name)
-    raw_sector = _raw_sector(candidate)
-    has_trade_narrative_migration = bool(
-        candidate_sector
-        and mainline_name
-        and raw_sector
-        and _sector_matches(raw_sector, mainline_name)
-        and not _sector_matches(candidate_sector, mainline_name)
-    )
-    if mainline_name and not has_trade_narrative_migration:
-        for row in sector_snapshot or []:
-            row_sector = _clean_text((row or {}).get("sector"))
-            if row_sector and _sector_matches(row_sector, mainline_name):
-                anchor = _anchor_from_snapshot_row(row)
-                if anchor:
-                    return anchor
     for row in sector_snapshot or []:
         row_sector = _clean_text((row or {}).get("sector"))
         if candidate_sector and row_sector and not _sector_matches(candidate_sector, row_sector):
@@ -165,6 +167,13 @@ def _find_sector_anchor(candidate, sector_snapshot, mainline_name=""):
         anchor = _anchor_from_snapshot_row(row)
         if anchor:
             return anchor
+    if not candidate_sector and _is_confirmed_mainline_name(mainline_name):
+        for row in sector_snapshot or []:
+            row_sector = _clean_text((row or {}).get("sector"))
+            if row_sector and _sector_matches(row_sector, mainline_name):
+                anchor = _anchor_from_snapshot_row(row)
+                if anchor:
+                    return anchor
     if not sector_snapshot:
         return {}
     return {}
@@ -187,7 +196,7 @@ def _candidate_role(candidate, *, is_anchor=False):
         return "分支龙头"
     if _text_has_any(text, ("大容量", "容量龙", "中军", "趋势资金", "large", "large_capacity")):
         return "大容量中军"
-    if _text_has_any(text, ("龙头", "龙一", "板块锚", "锚定龙", "趋势比价链锚点")):
+    if _text_has_any(text, ("板块锚", "锚定龙", "趋势比价链锚点")):
         return "分支龙头"
     if _text_has_any(text, ("修复观察", "龙回头")):
         return "修复观察"
@@ -231,11 +240,11 @@ def build_anchor_reversal_decision(candidate, *, sector_snapshot=None, mainline_
         return {
             "sector_anchor": "",
             "candidate_role": role,
-            "relationship_to_anchor": "板块锚未识别，先保留原有排序证据",
+            "relationship_to_anchor": "本板块锚未识别，先保留原有排序证据",
             "why_not_anchor": why_not_anchor,
             "repair_priority": "待识别",
             "anchor_reversal_decision": "降级观察",
-            "anchor_reversal_reason": "板块锚未识别，不能说明为什么不做板块锚",
+            "anchor_reversal_reason": "本板块锚未识别，不能说明为什么不做本板块锚",
             "ma_binding_strategy": ma_strategy,
             "leader_certainty_path": certainty_path,
             "limit_up_evidence_role": limit_up_role,

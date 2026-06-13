@@ -1,0 +1,558 @@
+import sys
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from report.selection_workflow import build_selection_workflow, render_selection_workflow_mermaid
+
+
+class SelectionWorkflowTest(unittest.TestCase):
+    def test_builds_required_nodes_and_final_source(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-04",
+            data={"target_date": "2026-06-04"},
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "发酵"},
+                "mainline_name": "电力",
+                "mainline_turnover_summary": {"current_mainline": "电力"},
+                "sector_trend_snapshot": [
+                    {
+                        "sector": "电力",
+                        "anchor_name": "豫能控股",
+                        "anchor_code": "001896",
+                        "anchor_reason": "板块锚，资金更容易反复回看",
+                    }
+                ],
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "source_pools": ["主线核心"],
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_anchor": "豫能控股(001896)",
+                        "volume_summary": "放量",
+                        "pattern": "突破后强收盘",
+                        "conviction_rule": "固定窗口条件成立才参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["schema_version"], "selection_workflow.v1")
+        self.assertEqual(workflow["derivation_contract"], "sector_first_strict.v1")
+        self.assertEqual(
+            [node["node_id"] for node in workflow["nodes"]],
+            [f"N{i}" for i in range(10)],
+        )
+        self.assertLess(
+            [node["node_id"] for node in workflow["nodes"]].index("N6"),
+            [node["node_id"] for node in workflow["nodes"]].index("N7"),
+        )
+        for node in workflow["nodes"]:
+            self.assertIn("input_summary", node)
+            self.assertIsInstance(node["input_summary"], list)
+            self.assertIn("conflicts", node)
+            self.assertIsInstance(node["conflicts"], list)
+        self.assertEqual(workflow["final"]["source_node"], "N8")
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "001896")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(workflow["candidate_pool"][0]["first_seen_node"], "N5")
+        self.assertEqual(workflow["candidate_pool"][0]["source_pools"], ["主线核心"])
+        self.assertEqual(workflow["candidate_pool"][0]["entered_reason"], "固定窗口条件成立才参与")
+        self.assertEqual(workflow["candidate_pool"][0]["workflow_path"], ["N5", "N6", "N7", "N8"])
+        self.assertTrue(workflow["candidate_pool"][0]["new_entry_qualified"])
+        self.assertEqual(workflow["candidate_pool"][0]["candidate_origin"], "sector_first")
+        self.assertEqual(workflow["candidate_pool"][0]["leader_debate"]["question"], "为什么做它，为什么不做板块锚")
+        self.assertEqual(workflow["candidate_pool"][0]["brooks_price_action_judge"]["verdict"], "资金表态被价格接受")
+        self.assertEqual(workflow["candidate_pool"][0]["brooks_price_action_judge"]["volume_signal"], "放量")
+        self.assertEqual(workflow["candidate_pool"][0]["common_selection_consistency"]["status"], "待复核")
+        self.assertEqual(workflow["candidate_pool"][0]["status"], "最终执行对象")
+        n6 = next(node for node in workflow["nodes"] if node["node_id"] == "N6")
+        n7 = next(node for node in workflow["nodes"] if node["node_id"] == "N7")
+        self.assertEqual(workflow["market_layer"]["market_atmosphere"], "发酵")
+        self.assertEqual(workflow["sector_layer"]["selected_direction"], "电力")
+        self.assertEqual(workflow["leader_layer"]["leader_source"], "板块发酵推导")
+        self.assertEqual(workflow["data_completeness"]["status"], "success")
+        self.assertIn("market_layer", n6["passes_forward"])
+        self.assertEqual(n6["passes_forward"]["leader_debate"], "先问为什么做它，再问为什么不做板块锚")
+        self.assertIn("布鲁克斯价格行为裁判：价格确认1只", n7["judgement"])
+        self.assertIn("成交量不能单独生成买入资格", n7["cannot_conclude"])
+        self.assertEqual(n7["passes_forward"]["brooks_price_action"]["volume_role"], "资金表态证据")
+
+    def test_limit_up_without_reversal_cannot_be_final_object(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-05",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "extreme_conviction_list": [
+                    {
+                        "name": "大有能源",
+                        "code": "600403",
+                        "sector": "煤炭",
+                        "pattern": "涨停",
+                        "score": 140,
+                        "anchor_reversal_decision": "降级观察",
+                        "limit_up_evidence_role": "涨停只作观察证据",
+                        "why_not_anchor": "无法替代板块锚",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["candidate_pool"][0]["status"], "降级观察")
+        self.assertEqual(workflow["candidate_pool"][0]["eliminated_at"], "N6")
+        self.assertEqual(workflow["candidate_pool"][0]["brooks_price_action_judge"]["verdict"], "价格行为证据不足")
+        self.assertFalse(workflow["candidate_pool"][0]["new_entry_qualified"])
+        self.assertEqual(workflow["candidate_pool"][0]["candidate_origin"], "legacy_signal_only")
+        self.assertFalse(workflow["candidate_pool"][0]["front_observation_qualified"])
+        self.assertEqual(workflow["candidate_pool"][0]["observation_layer"], "process_observation")
+
+    def test_t_board_or_one_line_limit_cannot_create_new_entry_without_sector_derivation(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "局部活跃"},
+                "mainline_name": "机器人",
+                "extreme_conviction_list": [
+                    {
+                        "name": "样本丁",
+                        "code": "000004",
+                        "sector": "机器人",
+                        "source_pools": ["T字板", "涨停池"],
+                        "pattern": "T字板，放量强收盘",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "明日主买对象",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(row["candidate_origin"], "legacy_signal_only")
+        self.assertFalse(row["new_entry_qualified"])
+        self.assertIn("不能作为新仓入口", row["entry_basis"])
+        self.assertEqual(row["status"], "过程候选")
+
+    def test_runtime_observation_anchor_does_not_become_front_observation_without_explicit_mark(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "国产芯片替代",
+                "sector_trend_snapshot": [
+                    {
+                        "sector": "化工原料",
+                        "anchor_name": "和远气体",
+                        "anchor_code": "002971",
+                    }
+                ],
+            },
+            selected_position_candidate={
+                "name": "和远气体",
+                "code": "002971",
+                "sector": "化工原料",
+                "anchor_reversal_decision": "可作为主对象",
+                "candidate_role": "板块锚",
+                "anchor_reversal_reason": "候选就是板块锚，分歧后资金优先回看",
+                "pattern": "T字板分歧转一致",
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(row["status"], "过程候选")
+        self.assertFalse(row["front_observation_qualified"])
+        self.assertEqual(row["observation_layer"], "process_observation")
+
+    def test_conflicting_explicit_front_observation_mark_stays_process_observation(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "国产芯片替代",
+                "extreme_conviction_list": [
+                    {
+                        "name": "和远气体",
+                        "code": "002971",
+                        "sector": "化工原料",
+                        "front_observation_qualified": True,
+                        "front_observation_reason": "上游误标首页观察",
+                        "observation_layer": "process_observation",
+                        "candidate_role": "过程候选",
+                        "anchor_reversal_decision": "降级观察",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertFalse(row["front_observation_qualified"])
+        self.assertEqual(row["observation_layer"], "process_observation")
+        self.assertIn("过程观察", row["front_observation_reason"])
+
+    def test_sector_derived_candidate_can_be_final_when_price_and_execution_qualify(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "板块发酵"},
+                "mainline_name": "AI算力",
+                "sector_trend_snapshot": [
+                    {
+                        "sector": "AI算力",
+                        "anchor_name": "工业富联",
+                        "anchor_code": "601138",
+                        "anchor_reason": "板块成交扩散后反复承接的容量核心",
+                    }
+                ],
+                "sector_derived_candidates": [
+                    {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "AI算力",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "板块成交扩散，后排承接，容量核心横住",
+                        "volume_summary": "放量",
+                        "pattern": "突破后强收盘",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "601138")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(row["candidate_origin"], "sector_first")
+        self.assertTrue(row["new_entry_qualified"])
+        self.assertIn("板块成交扩散", row["entry_basis"])
+
+    def test_missing_critical_data_stops_workflow_final_output(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            data={"selection_workflow_missing_fields": ["板块发酵数据", "市场情绪线承接"]},
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "局部活跃"},
+                "mainline_name": "机器人",
+                "sector_derived_candidates": [
+                    {
+                        "name": "样本戊",
+                        "code": "000005",
+                        "sector": "机器人",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        n8 = next(node for node in workflow["nodes"] if node["node_id"] == "N8")
+
+        self.assertEqual(workflow["data_completeness"]["status"], "failed")
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("板块发酵数据", workflow["final"]["failure_conditions"])
+        self.assertIn("关键数据不完整，停止生成", n8["judgement"])
+
+    def test_volume_alone_enters_brooks_evidence_without_creating_participation(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "震荡"},
+                "mainline_name": "AI硬件",
+                "extreme_conviction_list": [
+                    {
+                        "name": "样本甲",
+                        "code": "000001",
+                        "sector": "AI硬件",
+                        "volume_summary": "突然放量，资金开始表态",
+                        "anchor_reversal_decision": "",
+                        "candidate_role": "观察样本",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(row["brooks_price_action_judge"]["volume_signal"], "放量")
+        self.assertEqual(row["brooks_price_action_judge"]["verdict"], "价格行为证据不足")
+        self.assertIn("不新增资格", row["brooks_price_action_judge"]["participation_effect"])
+        n7 = next(node for node in workflow["nodes"] if node["node_id"] == "N7")
+        self.assertIn("价格确认0只", n7["judgement"])
+
+    def test_brooks_records_volume_rejection_as_process_evidence(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-11",
+            execution_stage_context={
+                "mainline_name": "半导体",
+                "extreme_conviction_list": [
+                    {
+                        "name": "样本乙",
+                        "code": "000002",
+                        "sector": "半导体",
+                        "volume_summary": "放量",
+                        "pattern": "冲高回落，长上影",
+                        "anchor_reversal_decision": "降级观察",
+                        "candidate_role": "大容量中军",
+                        "why_not_anchor": "不能替代板块锚",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(row["brooks_price_action_judge"]["verdict"], "资金表态未被价格接受")
+        self.assertIn("等待后续行情重新确认", row["brooks_price_action_judge"]["participation_effect"])
+        n7 = next(node for node in workflow["nodes"] if node["node_id"] == "N7")
+        self.assertEqual(n7["passes_forward"]["brooks_price_action"]["risk_or_rejection_count"], 1)
+
+    def test_front_observation_qualification_separates_yake_from_shuangxing_process_sample(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-10",
+            execution_stage_context={
+                "mainline_name": "半导体",
+                "extreme_conviction_list": [
+                    {
+                        "name": "雅克科技",
+                        "code": "002409",
+                        "sector": "半导体",
+                        "entered_reason": "主线内核 / 首板 / 趋势审美 / 蛇形走位 / 高低点上移",
+                        "anchor_reversal_decision": "降级观察",
+                        "candidate_role": "大容量中军",
+                        "why_not_anchor": "不能替代板块锚；无法说明为什么不做海光信息(688041)",
+                        "candidate_layer": "front_observation",
+                        "front_observation_qualified": True,
+                        "front_observation_reason": "上游明确只保留首页观察，用于盯半导体容量承接，并继续对照海光信息",
+                    },
+                    {
+                        "name": "双星新材",
+                        "code": "002585",
+                        "sector": "塑料",
+                        "entered_reason": "2连板 / 趋势审美 / 蛇形走位 / 高低点上移",
+                        "anchor_reversal_decision": "降级观察",
+                        "candidate_role": "观察样本",
+                        "why_not_anchor": "本板块锚未识别，不能说明为什么不做本板块锚",
+                    },
+                ],
+            },
+            position_decision={"target_position_pct": 0},
+        )
+
+        by_code = {row["stock"]["code"]: row for row in workflow["candidate_pool"]}
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertTrue(by_code["002409"]["front_observation_qualified"])
+        self.assertEqual(by_code["002409"]["observation_layer"], "front_observation")
+        self.assertIn("海光信息", by_code["002409"]["front_observation_reason"])
+        self.assertFalse(by_code["002585"]["front_observation_qualified"])
+        self.assertEqual(by_code["002585"]["observation_layer"], "process_observation")
+        self.assertIn("本板块锚未识别", by_code["002585"]["front_observation_reason"])
+
+    def test_selected_candidate_not_in_pool_cannot_fallback_to_other_candidate(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-05",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "extreme_conviction_list": [
+                    {
+                        "name": "候选乙",
+                        "code": "000002",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                    }
+                ],
+            },
+            selected_position_candidate={"name": "显式对象甲", "code": "000001"},
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        n6 = next(node for node in workflow["nodes"] if node["node_id"] == "N6")
+        n9 = next(node for node in workflow["nodes"] if node["node_id"] == "N9")
+        self.assertIsInstance(n6["conflicts"], list)
+        self.assertIsInstance(n9["conflicts"], list)
+        self.assertTrue(any("显式对象不在候选池" in item for item in n6["conflicts"]))
+        self.assertTrue(any("000001" in item for item in n9["conflicts"]))
+
+    def test_selected_candidate_needs_execution_evidence_even_when_reversal_passes(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-05",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                    }
+                ],
+            },
+            selected_position_candidate={"name": "豫能控股", "code": "001896", "sector": "电力"},
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["candidate_pool"][0]["status"], "过程候选")
+
+    def test_selected_candidate_needs_reversal_proof_even_with_execution_window(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-05",
+            execution_stage_context={
+                "mainline_name": "电力",
+            },
+            selected_position_candidate={
+                "name": "显式对象甲",
+                "code": "000001",
+                "sector": "电力",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["candidate_pool"][0]["source_pools"], ["运行时观察对象"])
+        self.assertNotIn("执行对象", workflow["candidate_pool"][0]["source_pools"][0])
+
+    def test_selected_candidate_outside_pool_cannot_be_final_even_with_reversal_and_execution_window(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-05",
+            execution_stage_context={
+                "mainline_name": "电力",
+            },
+            selected_position_candidate={
+                "name": "显式对象甲",
+                "code": "000001",
+                "sector": "电力",
+                "anchor_reversal_decision": "可作为主对象",
+                "participation_window": "09:50-10:10",
+                "fallback_state": "不满足回到0%",
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        n6 = next(node for node in workflow["nodes"] if node["node_id"] == "N6")
+        self.assertTrue(any("显式对象不在候选池" in item for item in n6["conflicts"]))
+
+    def test_position_is_normalized_to_allowed_values(self):
+        workflow = build_selection_workflow(
+            target_date="2026-06-04",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 70},
+        )
+
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertNotIn("70", workflow["final"]["action_text"])
+
+        full_workflow = build_selection_workflow(
+            target_date="2026-06-04",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 120},
+        )
+        empty_workflow = build_selection_workflow(
+            target_date="2026-06-04",
+            execution_stage_context={
+                "mainline_name": "电力",
+                "extreme_conviction_list": [
+                    {
+                        "name": "豫能控股",
+                        "code": "001896",
+                        "sector": "电力",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 49},
+        )
+
+        self.assertEqual(full_workflow["final"]["position_pct"], 100)
+        self.assertEqual(full_workflow["final"]["action_text"], "100%核心进攻")
+        self.assertEqual(empty_workflow["final"]["position_pct"], 0)
+        self.assertEqual(empty_workflow["final"]["action_text"], "0%不参与")
+        self.assertEqual(empty_workflow["final"]["execution_object"], {})
+        self.assertEqual(empty_workflow["candidate_pool"][0]["status"], "过程候选")
+
+    def test_render_mermaid_from_workflow_nodes(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "nodes": [
+                {"node_id": "N1", "node_name": "市场周期判断", "judgement": "允许继续诊断"},
+                {"node_id": "N3", "node_name": "板块关系拆解", "judgement": "电力成为窗口方向"},
+                {"node_id": "N7", "node_name": "候选对照淘汰", "judgement": "布鲁克斯裁判：价格确认1只"},
+                {"node_id": "N8", "node_name": "仓位与执行条件", "judgement": "50%条件执行"},
+            ],
+            "final": {"execution_object": {"name": "豫能控股", "code": "001896"}, "position_pct": 50},
+        }
+
+        mermaid = render_selection_workflow_mermaid(workflow)
+
+        self.assertIn("flowchart TD", mermaid)
+        self.assertIn("N1[\"N1 市场周期判断", mermaid)
+        self.assertIn("N7[\"N7 候选对照淘汰", mermaid)
+        self.assertIn("布鲁克斯", mermaid)
+        self.assertIn("N8[\"N8 仓位与执行条件", mermaid)
+        self.assertIn("豫能控股(001896)", mermaid)
+
+
+if __name__ == "__main__":
+    unittest.main()

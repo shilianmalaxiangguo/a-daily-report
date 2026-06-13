@@ -56,7 +56,7 @@ def build_entry_plan_stop_anchor_node(context, node_meta=None, node_lookup=None)
     else:
         lines.append("**明日止损锚定**:")
         if final_gate.get("allow_attack_50_ready"):
-            lines.append("- 50%标准进攻需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险")
+            lines.append("- 50%条件执行需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险")
         else:
             lines.append("- 0%不参与：无合格标的或取消条件已经出现，无需设置新增参与止损")
     lines.append("")

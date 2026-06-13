@@ -290,6 +290,30 @@ class CandidateTraceContractsTest(unittest.TestCase):
         self.assertIn("承接路径明确", anchor["leader_certainty_path"])
         self.assertIn("涨停只是证据", anchor["limit_up_evidence_role"])
 
+    def test_candidate_trace_preserves_selection_workflow_lifecycle(self):
+        trace = build_candidate_trace(
+            {
+                "name": "上海石化",
+                "code": "600688",
+                "mainline": "电力",
+                "sector": "石化",
+                "market_fit": "满足",
+                "mainline_fit": "未满足",
+                "stock_structure_fit": "部分满足",
+                "first_seen_node": "N5",
+                "entered_reason": "涨停池样本",
+                "workflow_path": ["N5", "N6", "N7"],
+                "eliminated_at": "N6",
+                "eliminated_reason": "不是当前主线核心",
+            }
+        )
+
+        self.assertEqual(trace["first_seen_node"], "N5")
+        self.assertEqual(trace["entered_reason"], "涨停池样本")
+        self.assertEqual(trace["workflow_path"], ["N5", "N6", "N7"])
+        self.assertEqual(trace["eliminated_at"], "N6")
+        self.assertEqual(trace["eliminated_reason"], "不是当前主线核心")
+
     def test_candidate_trace_accepts_why_not_sector_anchor_alias(self):
         trace = build_candidate_trace(
             {

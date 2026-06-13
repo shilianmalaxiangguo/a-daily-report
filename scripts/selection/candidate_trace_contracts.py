@@ -251,6 +251,13 @@ def build_candidate_trace(candidate):
         "missing_data": missing_data,
         "visible_summary": _visible_summary(name, tier, checks, final_action),
     }
+    for key in ("first_seen_node", "entered_reason", "eliminated_at", "eliminated_reason"):
+        value = _clean_text(candidate.get(key))
+        if value:
+            trace[key] = value
+    workflow_path = _as_list(candidate.get("workflow_path"))
+    if workflow_path:
+        trace["workflow_path"] = workflow_path
     if anchor_reversal:
         trace["anchor_reversal"] = anchor_reversal
     return trace

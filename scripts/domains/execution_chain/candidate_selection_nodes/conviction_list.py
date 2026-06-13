@@ -158,6 +158,79 @@ def _format_anchor_reversal_reason(stock):
     return _clean_cell("；".join(parts))
 
 
+def _anchor_identity_summary(stock):
+    decision = _anchor_reversal_value(stock, "anchor_reversal_decision", "板块锚反推结论")
+    sector_anchor = _anchor_reversal_value(stock, "sector_anchor", "板块锚")
+    candidate_role = _anchor_reversal_value(stock, "candidate_role", "候选身份")
+    relationship = _anchor_reversal_value(stock, "relationship_to_anchor", "与板块锚关系")
+    why_not_anchor = _anchor_reversal_value(stock, "why_not_anchor", "为什么不做板块锚", "为什么不做锚", "为什么不做龙头")
+    repair_priority = _anchor_reversal_value(stock, "repair_priority", "修复优先级")
+    reason = _anchor_reversal_value(stock, "anchor_reversal_reason", "板块锚反推原因")
+    ma_strategy = _anchor_reversal_value(stock, "ma_binding_strategy", "均线绑定策略")
+    certainty_path = _anchor_reversal_value(stock, "leader_certainty_path", "龙头确定性路径")
+    identity_basis = _clean_cell(stock.get("conviction_reason") or stock.get("reason") or stock.get("core_level"), "")
+    parts = []
+    if decision:
+        parts.append(f"板块锚反推：{decision}")
+    if sector_anchor:
+        parts.append(f"板块锚：{sector_anchor}")
+    if candidate_role:
+        parts.append(f"身份：{candidate_role}")
+    if relationship:
+        parts.append(f"关系：{relationship}")
+    if why_not_anchor:
+        parts.append(f"不做锚原因：{why_not_anchor}")
+    if repair_priority:
+        parts.append(f"修复优先级：{repair_priority}")
+    if ma_strategy:
+        parts.append(f"均线绑定：{ma_strategy}")
+    if certainty_path:
+        parts.append(f"龙头路径：{certainty_path}")
+    if reason:
+        parts.append(reason)
+    if identity_basis:
+        parts.append(f"身份依据：{identity_basis}")
+    return _clean_cell("；".join(parts), "未完成板块锚反推")
+
+
+def _speed_evidence_summary(stock):
+    limit_up_role = _anchor_reversal_value(stock, "limit_up_evidence_role", "涨停证据角色")
+    speed_tier = _clean_cell(stock.get("leader_speed_tier"), "")
+    pattern = _clean_cell(stock.get("pattern"), "")
+    parts = [part for part in (limit_up_role, speed_tier, pattern) if part and part != "-"]
+    return _clean_cell("；".join(parts), "无速度加分")
+
+
+def _is_zero_observation_candidate(stock):
+    stock = stock or {}
+    attack_state = _normalize_attack_state(
+        _first_text(stock, "attack_state", "position_state", "target_position_pct"),
+        stock=stock,
+    )
+    window = str(_first_text(stock, "participation_window", "conviction_window") or "").strip()
+    window_type = str(stock.get("participation_window_type") or "").strip()
+    eligibility = str(stock.get("execution_eligibility") or "").strip()
+    layer = str(stock.get("candidate_layer") or "").strip()
+    rule = str(stock.get("conviction_rule") or "").strip()
+    return (
+        attack_state == "0%"
+        or window_type == "no_trade"
+        or window == "no_trade"
+        or eligibility in {"observation_only", "anchor_reversal_required", "anchor_reversal_observation"}
+        or layer == "watch_sample"
+        or ("最终0%" in rule and "不新增参与" in rule)
+    )
+
+
+def _format_conviction_rule(stock):
+    rule = _clean_cell(stock.get("conviction_rule"), "只观察承接，不新增参与")
+    if _is_zero_observation_candidate(stock) and "不新增参与" not in rule:
+        return "只观察承接，不新增参与"
+    if _is_zero_observation_candidate(stock) and ("才参与" in rule or "后再参与" in rule or "再参与" in rule):
+        return "只观察承接，不新增参与"
+    return rule
+
+
 def _format_conviction_reason(stock):
     reason = _clean_cell(stock.get("conviction_reason"))
     anchor_reason = _format_anchor_reversal_reason(stock)
@@ -193,7 +266,7 @@ def _format_ma_reversion_probe(script):
     if not script.get("ma_reversion_probe_allowed"):
         return "不启用"
     window = script.get("ma_reversion_window") or "09:50-10:10"
-    probe = script.get("ma_reversion_probe") or "只限昨日重点观察且未被风险拦截的样本；回踩日K MA5/MA10或分时黄线不破才允许小仓试错"
+    probe = script.get("ma_reversion_probe") or "只限昨日重点观察且未被风险拦截的样本；回踩日K MA5/MA10或分时黄线不破才允许50%条件执行"
     yellow = script.get("intraday_yellow_line_probe") or "分时黄线只作为日内承接确认线"
     return _clean_cell(f"{window}均线回归试错；{probe}；{yellow}")
 
@@ -316,9 +389,14 @@ def _build_participation_script(stock):
             return _clean_cell(nested)
         return ""
 
+    explicit_window_type = _clean_cell(stock.get("participation_window_type"), "")
+    no_trade_by_type = explicit_window_type == "no_trade"
+    participation_window = "no_trade" if no_trade_by_type else _clean_cell(_derive_participation_window(stock))
     script = {
-        "participation_window": _clean_cell(_derive_participation_window(stock)),
-        "attack_state": _clean_cell(_normalize_attack_state(_first_text(stock, "attack_state", "position_state", "target_position_pct"), stock=stock)),
+        "participation_window": participation_window,
+        "attack_state": _clean_cell(
+            _normalize_attack_state(_first_text(stock, "attack_state", "position_state", "target_position_pct"), stock=stock)
+        ),
         "anchor_zone_role": _optional_script_value("anchor_zone_role"),
         "anchor_line_confluence": _optional_script_value("anchor_line_confluence"),
         "hidden_liquidity_read": _optional_script_value("hidden_liquidity_read"),
@@ -361,7 +439,65 @@ def _build_participation_script(stock):
         ),
     }
     script.update(build_participation_window_policy(script["participation_window"], script["missed_action"], candidate=stock))
+    if str(script.get("participation_window_type") or "").strip() == "no_trade":
+        script["participation_window"] = "no_trade"
+        script["attack_state"] = "0%"
     return script
+
+
+def _has_real_stock_identity(stock):
+    stock = stock or {}
+    code = _clean_cell(stock.get("code") or stock.get("stock_code"), "")
+    name = _clean_cell(stock.get("name") or stock.get("stock_name"), "")
+    return bool(code and name)
+
+
+def _script_is_no_trade(script):
+    if not isinstance(script, dict):
+        return False
+    text = " / ".join(
+        str(script.get(key) or "")
+        for key in ("participation_window_type", "participation_window", "entry_timing", "buy_window")
+    )
+    return any(marker in text for marker in ("no_trade", "none", "只观察", "不参与", "禁止"))
+
+
+def _no_trade_script_signature(script):
+    return tuple(
+        _clean_cell(script.get(key), "")
+        for key in (
+            "participation_window",
+            "attack_state",
+            "auction_script",
+            "first_minutes_script",
+            "board_script",
+            "reseal_script",
+            "missed_action",
+            "ma20_invalidation",
+            "tracking_window_trade_days",
+            "invalid_condition",
+            "entry_timing",
+            "buy_window",
+        )
+    )
+
+
+def _review_script_rows(stocks):
+    rows = []
+    seen_no_trade_scripts = set()
+    for stock in list(stocks or []):
+        if not isinstance(stock, dict):
+            continue
+        script = _build_participation_script(stock)
+        if _script_is_no_trade(script):
+            if not _has_real_stock_identity(stock):
+                continue
+            signature = _no_trade_script_signature(script)
+            if signature in seen_no_trade_scripts:
+                continue
+            seen_no_trade_scripts.add(signature)
+        rows.append((stock, script))
+    return rows
 
 
 def build_candidate_selection_conviction_list_node(context, node_meta=None, node_lookup=None):
@@ -370,7 +506,7 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
     dragon_rebound_watch_pool = context.get("dragon_rebound_watch_pool", []) or []
     historical_extreme_review = context.get("historical_extreme_review", []) or []
 
-    lines = ["**重点观察名单**（只保留最心动的少数，每只都绑定固定交易窗口条件）:"]
+    lines = ["**龙头资格反推结果**（先看板块锚和身份，再看速度证据）:"]
     if extreme_conviction_list:
         sniper_items = [
             stock for stock in extreme_conviction_list
@@ -388,20 +524,20 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
                     f"{_format_risk_review(stock)} |"
                 )
             lines.append("")
-        lines.append("| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 执行分层 | 观察理由 | 明日原则 |")
-        lines.append("|--------|------|------|----------|----------|----------|----------|----------|")
-        for idx, stock in enumerate(extreme_conviction_list, 1):
+        lines.append("| 优先级 | 标的 | 所属板块 | 板块锚与身份 | 承接结果 | 速度证据 | 明日原则 |")
+        lines.append("|--------|------|----------|--------------|----------|----------|----------|")
+        for idx, stock in enumerate(extreme_conviction_list[:3], 1):
             lines.append(
-                f"| {idx} | {_clean_cell(stock.get('name'))} | {_clean_cell(stock.get('code'))} | "
-                f"{_clean_cell(stock.get('sector'))} | {_format_core_identity(stock)} | {_format_candidate_layer(stock)} | {_format_conviction_reason(stock)} | "
-                f"{_clean_cell(stock.get('conviction_rule'))} |"
+                f"| {idx} | {_format_stock_label(stock)} | {_clean_cell(stock.get('sector'))} | "
+                f"{_anchor_identity_summary(stock)} | {_clean_cell(stock.get('acceptance_repair_required'), '等待承接确认')} | "
+                f"{_speed_evidence_summary(stock)} | "
+                f"{_format_conviction_rule(stock)} |"
             )
         lines.append("")
         lines.append("**重点观察复核脚本**:")
         lines.append("| 固定交易窗口 | 仓位三态 | 量化锚点动作 | 涨停惯性 | 盈亏比 | 检查步骤 | 加工依据 | 集合竞价 | 开盘前几分钟 | 均线回归观察 | 封板策略 | 回封观察 | 错过后动作 | MA20作废 | 跟踪周期 | 作废条件 |")
         lines.append("|----------|----------|--------------|----------|--------|----------|----------|----------|--------------|--------------|----------|----------|------------|----------|----------|----------|")
-        for stock in extreme_conviction_list:
-            script = _build_participation_script(stock)
+        for stock, script in _review_script_rows(extreme_conviction_list):
             lines.append(
                 f"| {script['participation_window']} | {script['attack_state']} | "
                 f"{_format_quant_anchor_action(script)} | "
@@ -441,7 +577,7 @@ def build_candidate_selection_conviction_list_node(context, node_meta=None, node
             )
     if historical_extreme_review:
         lines.append("")
-        lines.append("**历史重点观察样本去向**（逐个复核，不把走坏样本混进正式名单）:")
+        lines.append("**历史过程观察样本去向**（逐个复核，不把走坏样本混进明日执行观察样本）:")
         lines.append("| 入选日 | 股票 | 代码 | 板块 | 来源 | 去向 | 当前判断 | 依据 | 下一步 |")
         lines.append("|--------|------|------|------|------|------|----------|------|--------|")
         for stock in historical_extreme_review:

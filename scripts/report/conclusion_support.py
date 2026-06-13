@@ -1,3 +1,12 @@
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
+    blocked_current_observation_keys,
+    candidate_blocks_current_observation_target,
+    candidate_can_be_current_observation_target,
+    candidate_identity_keys,
+    candidate_matches_any_key,
+)
+
+
 def get_watch_anchor_note(watch_anchor):
     return str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
 
@@ -35,9 +44,65 @@ def _capital_priority(context):
 def _resolution_target(resolution, *keys):
     for key in keys:
         target = resolution.get(key)
-        if isinstance(target, dict) and (target.get("name") or target.get("code") or target.get("stock_code")):
+        if candidate_can_be_current_observation_target(target):
             return target
     return {}
+
+
+def _wait_without_watch_target(context):
+    resolution = _final_target_resolution(context)
+    if not resolution or _capital_priority(context) != "wait":
+        return False
+    return not _resolution_target(resolution, "watch_target")
+
+
+def _blocked_surface_keys(context):
+    context = context or {}
+    candidates = []
+    for key in (
+        "selected_position_candidate",
+        "front_page_selected_position_candidate",
+        "current_core_candidate",
+        "best_stock",
+        "watch_anchor",
+    ):
+        candidate = context.get(key)
+        if isinstance(candidate, dict):
+            candidates.append(candidate)
+    for key in ("display_observation_candidates", "observation_candidates", "candidate_quality_samples"):
+        value = context.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+    snapshot = context.get("market_research_snapshot")
+    if isinstance(snapshot, dict):
+        for key in ("selected_position_candidate", "best_stock", "watch_anchor"):
+            candidate = snapshot.get(key)
+            if isinstance(candidate, dict):
+                candidates.append(candidate)
+        for key in ("display_observation_candidates", "observation_candidates", "candidate_quality_samples"):
+            value = snapshot.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+    return blocked_current_observation_keys(candidates)
+
+
+def _surface_candidate(context, candidate):
+    if not isinstance(candidate, dict) or not candidate_identity_keys(candidate):
+        return {}
+    if _wait_without_watch_target(context):
+        return {}
+    blocked_keys = _blocked_surface_keys(context)
+    if candidate_blocks_current_observation_target(candidate) or candidate_matches_any_key(candidate, blocked_keys):
+        return {}
+    return candidate
+
+
+def resolve_best_stock(context):
+    return _surface_candidate(context, (context or {}).get("best_stock") or {})
+
+
+def resolve_watch_anchor(context):
+    return _surface_candidate(context, (context or {}).get("watch_anchor") or {})
 
 
 def _old_position_priority_active(context):
@@ -75,8 +140,11 @@ def resolve_selected_position_candidate(context):
         resolved = _resolution_target(resolution, "display_target", "new_entry_target", "watch_target", "process_target")
         if resolved:
             return resolved
+        if _wait_without_watch_target(context):
+            return {}
     selected = context.get("selected_position_candidate") or {}
-    if isinstance(selected, dict) and (selected.get("name") or selected.get("code") or selected.get("stock_code")):
+    selected = _surface_candidate(context, selected)
+    if selected:
         return selected
     return {}
 
@@ -135,12 +203,12 @@ def build_focus_recap_text(context):
     selected = resolve_selected_position_candidate(context)
     if selected:
         if _old_position_priority_active(context):
-            return f"{format_stock_label(selected)}：观察锚，旧仓先处理"
+            return f"{format_stock_label(selected)}：观察对象，旧仓先处理"
         if selected_target_is_attack_ready(context):
             return f"{format_stock_label(selected)}：明日目标标的，固定交易窗口内条件成立才执行"
-        return f"{format_stock_label(selected)}：明日目标标的，先观察强弱与承接"
+        return f"{format_stock_label(selected)}：观察对象，先观察强弱与承接"
 
-    best_stock = context.get("best_stock") or {}
+    best_stock = resolve_best_stock(context)
     if best_stock:
         return f"{format_stock_label(best_stock)}：已缩成明天唯一执行候选"
 
@@ -148,10 +216,10 @@ def build_focus_recap_text(context):
     if core_stocks:
         return f"{format_stock_label(core_stocks[0])}：主线核心候选，优先观察"
 
-    watch_anchor = context.get("watch_anchor") or {}
+    watch_anchor = resolve_watch_anchor(context)
     if watch_anchor:
         note_text = get_watch_anchor_note(watch_anchor)
-        recap_text = f"{format_stock_label(watch_anchor)}：继续作为重点观察对象"
+        recap_text = f"{format_stock_label(watch_anchor)}：继续作为观察对象"
         if note_text:
             recap_text = f"{recap_text}；{note_text}"
         return recap_text
@@ -182,22 +250,22 @@ def build_candidate_trade_directive(context):
     crossline_count = int(context.get("crossline_count", 0) or 0)
 
     selected = resolve_selected_position_candidate(context)
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = resolve_best_stock(context)
+    watch_anchor = resolve_watch_anchor(context)
     if selected:
         if _old_position_priority_active(context):
-            return f"板块锚反推已收敛到观察锚{format_stock_label(selected)}，但账户先处理旧仓，不新增参与"
+            return f"板块锚反推已收敛到观察对象{format_stock_label(selected)}，但账户先处理旧仓，不新增参与"
         if selected_target_is_attack_ready(context):
             return f"板块锚反推已收敛到明日目标标的{format_stock_label(selected)}，只看固定交易窗口内条件是否成立"
         else:
-            return f"板块锚反推已收敛到明日目标标的{format_stock_label(selected)}，先观察强弱与承接"
+            return f"板块锚反推已收敛到观察对象{format_stock_label(selected)}，先观察强弱与承接"
     summary = f"{core_count}只主线核心 / {secondary_count}只备选 / {crossline_count}只跨线观察"
     if best_stock:
         directive = f"先只在主线核心里做减法，目标缩到{format_stock_label(best_stock)}"
     elif core_count > 0:
         directive = "先只在主线核心里做减法，不把跨线对象直接当观察位"
     elif watch_anchor:
-        directive = f"主线核心还不够，只把{format_stock_label(watch_anchor)}当观察锚点"
+        directive = f"主线核心还不够，只把{format_stock_label(watch_anchor)}当观察对象"
     else:
         directive = "当前还没缩出具备参与资格的对象，先继续观察"
     return f"{summary}；{directive}"
@@ -214,8 +282,8 @@ def derive_trade_style(context):
         return "条件进攻"
     if "空仓" in position_level:
         return "空仓"
-    best_stock = context.get("best_stock") or {}
-    watch_anchor = context.get("watch_anchor") or {}
+    best_stock = resolve_best_stock(context)
+    watch_anchor = resolve_watch_anchor(context)
     style_switch = context.get("style_switch", {}) or {}
     style_label = str(
         context.get("market_style_label")
@@ -238,7 +306,7 @@ def build_risk_trade_note(context):
     selected = resolve_selected_position_candidate(context)
     if selected and selected_target_is_attack_ready(context):
         return "固定交易窗口内条件不成立就回到0%，只接受小亏试错，不接受大亏硬扛"
-    best_stock = context.get("best_stock") or {}
+    best_stock = resolve_best_stock(context)
     rr = best_stock.get("r_reward_ratio")
     if rr not in (None, ""):
         return f"只接受预估赚赔比 1:{float(rr):.1f} 的试错，不接受大亏硬扛"

@@ -1,4 +1,8 @@
 from report.surface_wording import sanitize_user_visible_text
+from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
+    blocked_current_observation_keys,
+    candidate_can_be_current_observation_target,
+)
 
 
 def _candidate_key(candidate):
@@ -38,6 +42,102 @@ def _prioritize_final_observation_anchor(context, candidates):
     return [target] + remaining
 
 
+def _surface_observation_candidates(candidates):
+    return [
+        candidate
+        for candidate in list(candidates or [])
+        if candidate_can_be_current_observation_target(candidate)
+    ]
+
+
+def _position_pct(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _candidate_with_workflow_identity(candidate):
+    candidate = candidate if isinstance(candidate, dict) else {}
+    stock = candidate.get("stock") if isinstance(candidate.get("stock"), dict) else candidate
+    payload = dict(stock or {})
+    for key, value in candidate.items():
+        if key == "stock":
+            continue
+        if payload.get(key) in (None, "") and value not in (None, ""):
+            payload[key] = value
+    return payload
+
+
+def _selection_workflow_from_context(context):
+    sources = [context]
+    if isinstance(context, dict):
+        sources.extend([context.get("market_research_snapshot"), context.get("execution_stage_context")])
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        workflow = source.get("selection_workflow")
+        if isinstance(workflow, dict) and workflow.get("schema_version") == "selection_workflow.v1":
+            return workflow
+    return {}
+
+
+def _selection_workflow_front_observation_target(workflow):
+    workflow = workflow if isinstance(workflow, dict) else {}
+    for candidate in workflow.get("candidate_pool", []) or []:
+        if not isinstance(candidate, dict):
+            continue
+        if candidate.get("front_observation_qualified") is not True:
+            continue
+        payload = _candidate_with_workflow_identity(candidate)
+        if candidate_can_be_current_observation_target(payload):
+            return payload
+    return {}
+
+
+def _final_resolution_watch_target(context):
+    resolution = (context or {}).get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return {}
+    watch_target = resolution.get("watch_target")
+    return watch_target if candidate_can_be_current_observation_target(watch_target) else {}
+
+
+def _final_resolution_waits_without_watch_target(context):
+    resolution = (context or {}).get("final_target_resolution")
+    if not isinstance(resolution, dict):
+        return False
+    decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    if str(decision.get("capital_priority") or "").strip() != "wait":
+        return False
+    return not bool(_final_resolution_watch_target(context))
+
+
+def _final_target_empty_without_current_observation(context):
+    workflow = _selection_workflow_from_context(context)
+    if workflow:
+        final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+        if "final" in workflow:
+            execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+            position_pct = _position_pct(final.get("position_pct"))
+            if position_pct <= 0 or not _candidate_key(execution_object):
+                return True
+    if _final_resolution_waits_without_watch_target(context):
+        return True
+    if _final_resolution_watch_target(context):
+        return False
+    if not workflow:
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if "final" not in workflow:
+        return False
+    execution_object = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    position_pct = _position_pct(final.get("position_pct"))
+    if position_pct > 0 and _candidate_key(execution_object):
+        return False
+    return not bool(_selection_workflow_front_observation_target(workflow))
+
+
 def _is_ten_confirm_upgrade_candidate(candidate):
     candidate = candidate or {}
     text = " ".join(
@@ -70,8 +170,17 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
     display_pending_candidates = context.get("display_pending_candidates", context.get("pending_candidates", [])) or []
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
     display_observation_candidates = _prioritize_final_observation_anchor(context, display_observation_candidates)
+    blocked_observation_keys = blocked_current_observation_keys(display_observation_candidates)
+    display_observation_candidates = _surface_observation_candidates(display_observation_candidates)
     best_stock = context.get("best_stock")
     watch_anchor = context.get("watch_anchor")
+    if not candidate_can_be_current_observation_target(watch_anchor) or _candidate_key(watch_anchor) in blocked_observation_keys:
+        watch_anchor = None
+    if _final_target_empty_without_current_observation(context):
+        display_pending_candidates = []
+        display_observation_candidates = []
+        best_stock = None
+        watch_anchor = None
     watch_anchor_type = context.get("watch_anchor_type", "")
     position_level = str(context.get("position_level", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
@@ -165,7 +274,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 observation_lines.append("")
             top_watch = display_observation_candidates[0]
             top_signal = top_watch.get("signal")
-            observation_lines.append(f"**观察优先锚点**: {top_watch.get('name')}({top_watch.get('code')})")
+            observation_lines.append(f"**观察优先对象**: {top_watch.get('name')}({top_watch.get('code')})")
             observation_lines.append(
                 f"- **原因**: {top_watch.get('watch_priority_label', '观察优先')}；"
                 f"{top_watch.get('reason', top_watch.get('tomorrow_risk', '当前优先盯它的承接变化'))}"
@@ -229,7 +338,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             conclusion_lines.append(
                 f"- **盘前不抢跑**: {ten_confirm_upgrade_candidate.get('name')}({ten_confirm_upgrade_candidate.get('code')})只保留盘中确认路径，不按盘前0%直接否定"
             )
-            conclusion_lines.append("- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，才评估50%标准进攻；未命中继续0%观察")
+            conclusion_lines.append("- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与")
         elif trade_gate_open and watch_anchor:
             conclusion_lines.append(f"- **明天先盯哪只**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
             conclusion_lines.append("- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明")
@@ -255,9 +364,9 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             if trade_gate_open:
                 conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
             elif ten_confirm_upgrade_candidate:
-                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%标准进攻")
+                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%条件执行")
             elif final_gate.get("allow_attack_50_ready"):
-                conclusion_lines.append("- **当前先不抢**: 0%观察，只做固定交易窗口条件确认；强核心看竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口")
+                conclusion_lines.append("- **当前先不抢**: 0%不参与，只做固定交易窗口条件确认；强核心看竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口")
             else:
                 conclusion_lines.append(f"- **当前只观察**: {position_level}，不新增参与")
         else:
