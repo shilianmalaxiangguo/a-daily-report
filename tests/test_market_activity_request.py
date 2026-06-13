@@ -59,6 +59,19 @@ class _MarketActivityFrameStub:
         return len(self._rows)
 
 
+class _FakeDatabaseService:
+    market_breadth = {}
+
+    @classmethod
+    def fact_store_from_environment(cls, db_path=None):
+        del db_path
+        return cls()
+
+    def query_market_breadth_counts(self, target_date):
+        del target_date
+        return dict(self.market_breadth)
+
+
 class _TencentStub:
     def __init__(self, hot_stocks=None):
         self._hot_stocks = hot_stocks or []
@@ -196,6 +209,91 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["market_stats"]["zt_count"], 1)
         self.assertEqual(result["results"]["market_stats"]["dt_count"], 1)
         self.assertTrue(any(log["step"] == "request.market_stats" and log["status"] == "degraded" for log in result["module_logs"]))
+
+    def test_collect_market_activity_pool_request_bundle_uses_postgres_breadth_when_stats_fail(self):
+        timer = _TimerStub()
+        emitted = []
+        _FakeDatabaseService.market_breadth = {
+            "up_count": 899,
+            "down_count": 4591,
+            "flat_count": 25,
+            "zt_count": 82,
+            "dt_count": 86,
+            "stock_count": 5515,
+            "source": "storage.stock_daily_quotes_recent",
+        }
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-06-08",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "半导体", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "白酒Ⅱ"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: (_ for _ in ()).throw(RuntimeError("akshare timeout")),
+            request_registry={"database_service_cls": _FakeDatabaseService},
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 899)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 4591)
+        self.assertTrue(
+            any(
+                log["step"] == "request.market_stats"
+                and log["status"] == "success"
+                and log["details"].get("provider") == "storage.stock_daily_quotes_recent"
+                for log in result["module_logs"]
+            )
+        )
+
+    def test_historical_pool_request_reads_postgres_breadth_before_current_market_activity(self):
+        timer = _TimerStub()
+        emitted = []
+        current_market_activity_calls = []
+        _FakeDatabaseService.market_breadth = {
+            "up_count": 899,
+            "down_count": 4591,
+            "flat_count": 25,
+            "zt_count": 82,
+            "dt_count": 86,
+            "stock_count": 5515,
+            "source": "storage.stock_daily_quotes_recent",
+        }
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-06-08",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "半导体", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "白酒Ⅱ"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: current_market_activity_calls.append("current")
+            or _MarketActivityFrameStub(
+                [
+                    {"item": "上涨", "value": 3200},
+                    {"item": "下跌", "value": 1800},
+                ]
+            ),
+            request_registry={"database_service_cls": _FakeDatabaseService},
+            current_date="2026-06-09",
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(current_market_activity_calls, [])
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 899)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 4591)
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.market_stats"], "storage.stock_daily_quotes_recent")
 
     def test_collect_market_activity_pool_request_bundle_uses_tushare_registry_before_legacy_sources(self):
         timer = _TimerStub()
@@ -379,7 +477,8 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["hot_rank_top30"][0]["sector"], "军工")
         self.assertEqual(result["results"]["code_to_sector"]["000001"], "军工")
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "000001")
-        self.assertEqual(result["results"]["tag_distribution"]["军工"], 50)
+        self.assertEqual(result["results"]["tag_distribution"]["军工"], 1)
+        self.assertEqual(result["results"]["integrated_hot_list_sample_target"], 100)
         self.assertTrue(result["data_status"]["热度前50个股"])
         self.assertTrue(result["data_status"]["整合热榜"])
         self.assertTrue(result["step_status"]["热度前50个股获取"])
@@ -478,6 +577,61 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertTrue(result["data_status"]["热度前50个股"])
         self.assertTrue(result["step_status"]["热度前50个股获取"])
 
+    def test_integrated_hot_rank_requests_top100_even_when_primary_hot_rank_is_top50(self):
+        timer = _TimerStub()
+        emitted = []
+        integrated_calls = []
+
+        result = collect_market_activity_hot_rank_request_bundle(
+            "2026-06-09",
+            existing_results={},
+            fetch_ths_hot_stock=lambda num=30: _hot_rank_rows(num, sector="军工", name_prefix="基础热榜"),
+            get_integrated_hot_list=lambda limit=100: integrated_calls.append(limit)
+            or (
+                _hot_rank_rows(limit, sector="算力", name_prefix="整合热榜"),
+                {"算力": limit},
+                {"热榜": limit},
+                [],
+            ),
+            tencent=_TencentStub(),
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(integrated_calls, [100])
+        self.assertEqual(len(result["results"]["hot_rank_top50"]), 50)
+        self.assertEqual(len(result["results"]["integrated_hot_list"]), 100)
+        self.assertEqual(result["results"]["integrated_hot_list_sample_size"], 100)
+        self.assertEqual(result["results"]["integrated_hot_list_sample_target"], 100)
+        self.assertEqual(result["results"]["tag_distribution"], {"算力": 100})
+        integrated_log = next(log for log in result["module_logs"] if log["step"] == "request.integrated_hot_rank")
+        self.assertEqual(integrated_log["details"]["provider"], "hot_list_integrated.get_integrated_hot_list")
+        self.assertFalse(integrated_log["details"]["fallback_used"])
+
+    def test_integrated_hot_rank_falls_back_to_primary_when_top100_returns_empty(self):
+        timer = _TimerStub()
+        emitted = []
+        integrated_calls = []
+
+        result = collect_market_activity_hot_rank_request_bundle(
+            "2026-06-09",
+            existing_results={},
+            fetch_ths_hot_stock=lambda num=30: _hot_rank_rows(num, sector="军工", name_prefix="基础热榜"),
+            get_integrated_hot_list=lambda limit=100: integrated_calls.append(limit) or ([], {}, {}, []),
+            tencent=_TencentStub(),
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(integrated_calls, [100])
+        self.assertEqual(len(result["results"]["integrated_hot_list"]), 50)
+        self.assertEqual(result["results"]["integrated_hot_list_sample_size"], 50)
+        self.assertEqual(result["results"]["integrated_hot_list_sample_target"], 50)
+        self.assertEqual(result["results"]["tag_distribution"], {"军工": 50})
+        integrated_log = next(log for log in result["module_logs"] if log["step"] == "request.integrated_hot_rank")
+        self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank.fallback")
+        self.assertTrue(integrated_log["details"]["fallback_used"])
+
     def test_integrated_hot_rank_reuses_tushare_hot_rank_before_legacy_integrator(self):
         timer = _TimerStub()
         emitted = []
@@ -505,7 +659,7 @@ class MarketActivityRequestTest(unittest.TestCase):
             emit=emitted.append,
         )
 
-        self.assertEqual(legacy_calls, [("ths", 50)])
+        self.assertEqual(legacy_calls, [("ths", 50), ("integrated", 100)])
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "601991")
         self.assertEqual(result["results"]["tag_distribution"], {"绿色电力": 1, "风电": 1})
         self.assertTrue(result["data_status"]["整合热榜"])
@@ -513,7 +667,7 @@ class MarketActivityRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.integrated_hot_rank"], "tushare.ths_hot.primary_hot_rank")
         fallback_by_step = {log["step"]: log["details"].get("fallback_used") for log in result["module_logs"]}
-        self.assertFalse(fallback_by_step["request.integrated_hot_rank"])
+        self.assertTrue(fallback_by_step["request.integrated_hot_rank"])
 
     def test_integrated_hot_rank_reuses_primary_hot_rank_even_when_source_label_is_chinese(self):
         timer = _TimerStub()
@@ -539,13 +693,13 @@ class MarketActivityRequestTest(unittest.TestCase):
             emit=emitted.append,
         )
 
-        self.assertEqual(legacy_calls, [])
+        self.assertEqual(legacy_calls, [("integrated", 100)])
         self.assertEqual(result["results"]["integrated_hot_list"][0]["code"], "601991")
         self.assertEqual(result["results"]["tag_distribution"], {"绿色电力": 1, "风电": 1})
         self.assertFalse(result["data_status"]["热度前50个股"])
         integrated_log = next(log for log in result["module_logs"] if log["step"] == "request.integrated_hot_rank")
-        self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank")
-        self.assertFalse(integrated_log["details"]["fallback_used"])
+        self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank.fallback")
+        self.assertTrue(integrated_log["details"]["fallback_used"])
 
     def test_collect_market_activity_sector_snapshot_request_bundle_builds_sector_and_turnover_views(self):
         timer = _TimerStub()
@@ -732,8 +886,8 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["tag_distribution"], {"电力": 1})
         integrated_log = next(log for log in result["module_logs"] if log["step"] == "request.integrated_hot_rank")
         self.assertEqual(integrated_log["status"], "success")
-        self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank")
-        self.assertFalse(integrated_log["details"]["fallback_used"])
+        self.assertEqual(integrated_log["details"]["provider"], "primary_hot_rank.fallback")
+        self.assertTrue(integrated_log["details"]["fallback_used"])
 
     def test_collect_market_activity_hot_rank_request_bundle_collects_xueqiu_factors(self):
         timer = _TimerStub()
@@ -1260,6 +1414,52 @@ class MarketActivityRequestTest(unittest.TestCase):
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.lhb_snapshot"], "tushare.top_list")
 
+    def test_collect_market_activity_capital_snapshot_request_bundle_keeps_lhb_inst_detail(self):
+        timer = _TimerStub()
+
+        result = collect_market_activity_capital_snapshot_request_bundle(
+            "2026-05-13",
+            limit_up_df=_FrameStub([]),
+            existing_results={},
+            fetch_lhb_rows=lambda target_date: [],
+            request_registry={
+                "lhb_snapshot": lambda *, target_date: {
+                    "lhb_net_buy_top10": [
+                        {
+                            "rank": 1,
+                            "code": "000001",
+                            "name": "平安银行",
+                            "net_buy_amount_yi": 3.2,
+                            "sector": "银行",
+                        }
+                    ],
+                    "lhb_net_sell_top10": [],
+                    "lhb_analysis": [{"代码": "000001", "data_source": "tushare.top_list"}],
+                    "lhb_inst_detail": [
+                        {
+                            "trade_date": "2026-05-13",
+                            "code": "000001",
+                            "exalter": "机构专用",
+                            "seat_type": "机构",
+                            "net_buy_yi": 0.7,
+                            "data_source": "tushare.top_inst",
+                        }
+                    ],
+                    "lhb_inst_detail_status": "available",
+                    "provider": "tushare.top_list+top_inst",
+                    "fallback_used": False,
+                },
+            },
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(result["results"]["lhb_inst_detail"][0]["exalter"], "机构专用")
+        self.assertEqual(result["results"]["lhb_inst_detail_status"], "available")
+        log = next(item for item in result["module_logs"] if item["step"] == "request.lhb_snapshot")
+        self.assertIn("lhb_inst_detail", log["details"]["target_keys"])
+        self.assertEqual(log["details"]["inst_detail_count"], 1)
+
     def test_collect_market_activity_capital_snapshot_request_bundle_marks_empty_lhb_as_degraded(self):
         timer = _TimerStub()
         emitted = []
@@ -1361,10 +1561,185 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(timer.records[0], ("批量获取股票信息", 15))
         self.assertTrue(any("股票" in line for line in emitted))
 
+    def test_stock_quote_request_includes_and_backfills_all_report_stock_sources(self):
+        timer = _TimerStub()
+        captured_codes = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "hot_rank_top30": [],
+                "hot_rank_top50": [
+                    {"rank": 46, "code": "sh600255", "name": "鑫科材料", "rate": 12155000},
+                ],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "lianban_data": [],
+                "display_observation_candidates": [{"code": "001896", "name": "豫能控股"}],
+            },
+            fetch_stock_batch_info=lambda codes: (
+                captured_codes.extend(sorted(codes))
+                or {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": -1.41,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                        "zt_status": "正常",
+                    },
+                    "600255": {
+                        "name": "鑫科材料",
+                        "change_pct": 2.67,
+                        "high": 4.83,
+                        "low": 4.30,
+                        "open": 4.35,
+                        "close": 4.61,
+                        "zt_status": "正常",
+                    }
+                }
+            ),
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(captured_codes, ["001896", "600255"])
+        self.assertEqual(result["results"]["stock_full_info"]["001896"]["close"], 19.60)
+        self.assertEqual(result["results"]["stock_full_info"]["600255"]["close"], 4.61)
+        self.assertEqual(result["results"]["hot_rank_top50"][0]["change_pct"], 2.67)
+        self.assertEqual(result["results"]["hot_rank_top50"][0]["high"], 4.83)
+        self.assertEqual(result["results"]["hot_rank_top50"][0]["close"], 4.61)
+        self.assertEqual(result["results"]["display_observation_candidates"][0]["change_pct"], -1.41)
+        self.assertEqual(result["results"]["display_observation_candidates"][0]["close"], 19.60)
+
+    def test_stock_quote_request_fetches_single_non_hot_report_stock(self):
+        timer = _TimerStub()
+        captured_codes = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+            },
+            fetch_stock_batch_info=lambda codes: (
+                captured_codes.extend(sorted(codes))
+                or {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": -1.41,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                    }
+                }
+            ),
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(captured_codes, ["001896"])
+        self.assertEqual(result["results"]["selected_position_candidate"]["change_pct"], -1.41)
+        self.assertEqual(result["results"]["selected_position_candidate"]["close"], 19.60)
+
+    def test_stock_quote_request_backfills_deep_execution_candidate_sources(self):
+        timer = _TimerStub()
+        captured_codes = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "execution_stage_context": {
+                    "watch_anchor": {"code": "001896", "name": "豫能控股"},
+                    "candidate_quality_panel_fields": {
+                        "backup_candidate": {"code": "600255", "name": "鑫科材料"},
+                    },
+                },
+            },
+            fetch_stock_batch_info=lambda codes: (
+                captured_codes.extend(sorted(codes))
+                or {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": -1.41,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                    },
+                    "600255": {
+                        "name": "鑫科材料",
+                        "change_pct": 2.67,
+                        "high": 4.83,
+                        "low": 4.30,
+                        "open": 4.35,
+                        "close": 4.61,
+                    },
+                }
+            ),
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(captured_codes, ["001896", "600255"])
+        stage = result["results"]["execution_stage_context"]
+        self.assertEqual(stage["watch_anchor"]["change_pct"], -1.41)
+        self.assertEqual(stage["watch_anchor"]["close"], 19.60)
+        self.assertEqual(stage["candidate_quality_panel_fields"]["backup_candidate"]["change_pct"], 2.67)
+        self.assertEqual(stage["candidate_quality_panel_fields"]["backup_candidate"]["close"], 4.61)
+
+    def test_stock_quote_request_preserves_existing_quotes_and_fetches_only_incomplete_codes(self):
+        timer = _TimerStub()
+        captured_codes = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "stock_full_info": {
+                    "001896": {
+                        "name": "豫能控股",
+                        "change_pct": 0.0,
+                        "high": 21.50,
+                        "low": 19.00,
+                        "open": 19.87,
+                        "close": 19.60,
+                    },
+                    "600255": {
+                        "name": "鑫科材料",
+                        "change_pct": 0.0,
+                        "high": 0,
+                        "low": 4.30,
+                        "open": 4.35,
+                        "close": 4.61,
+                    },
+                },
+                "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+                "watch_anchor": {"code": "600255", "name": "鑫科材料"},
+            },
+            fetch_stock_batch_info=lambda codes: (
+                captured_codes.extend(sorted(codes))
+                or {
+                    "600255": {
+                        "name": "鑫科材料",
+                        "change_pct": 2.67,
+                        "high": 4.83,
+                        "low": 4.30,
+                        "open": 4.35,
+                        "close": 4.61,
+                    },
+                }
+            ),
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(captured_codes, ["600255"])
+        self.assertEqual(result["results"]["stock_full_info"]["001896"]["change_pct"], 0.0)
+        self.assertEqual(result["results"]["selected_position_candidate"]["close"], 19.60)
+        self.assertEqual(result["results"]["stock_full_info"]["600255"]["high"], 4.83)
+        self.assertEqual(result["results"]["watch_anchor"]["change_pct"], 2.67)
+
     def test_collect_market_activity_stock_quote_request_bundle_uses_tushare_before_tencent(self):
         timer = _TimerStub()
         emitted = []
-        tushare_codes = []
+        tushare_calls = []
         tencent_calls = []
 
         result = collect_market_activity_stock_quote_request_bundle(
@@ -1373,8 +1748,8 @@ class MarketActivityRequestTest(unittest.TestCase):
                 "lhb_net_buy_top10": [{"code": "000001", "name": ""}],
             },
             fetch_stock_batch_info=lambda codes: tencent_calls.append(codes) or {},
-            fetch_tushare_stock_batch_info=lambda codes: (
-                tushare_codes.extend(sorted(codes))
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: (
+                tushare_calls.append((sorted(codes), target_date))
                 or {
                     "000001": {
                         "name": "平安银行",
@@ -1385,14 +1760,16 @@ class MarketActivityRequestTest(unittest.TestCase):
                         "close": 10.5,
                         "zt_status": "正常",
                         "data_source": "tushare.daily",
+                        "trade_date": target_date,
                     }
                 }
             ),
+            target_date="2026-06-09",
             timer=timer,
             emit=emitted.append,
         )
 
-        self.assertEqual(tushare_codes, ["000001"])
+        self.assertEqual(tushare_calls, [(["000001"], "2026-06-09")])
         self.assertEqual(tencent_calls, [])
         self.assertEqual(result["results"]["stock_full_info"]["000001"]["name"], "平安银行")
         self.assertEqual(result["results"]["lhb_net_buy_top10"][0]["name"], "平安银行")
@@ -1421,7 +1798,7 @@ class MarketActivityRequestTest(unittest.TestCase):
                     "data_source": "tencent.qt",
                 }
             },
-            fetch_tushare_stock_batch_info=lambda codes: {
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: {
                 "000001": {
                     "name": "平安银行",
                     "change_pct": 5.0,
@@ -1430,8 +1807,11 @@ class MarketActivityRequestTest(unittest.TestCase):
                     "open": 10.0,
                     "close": 10.5,
                     "data_source": "tushare.daily",
+                    "trade_date": target_date,
                 }
             },
+            target_date="2026-06-09",
+            current_date="2026-06-09",
             timer=timer,
             emit=lambda message: None,
         )
@@ -1443,6 +1823,72 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(result["results"]["lhb_net_buy_top10"][1]["high"], 176.8)
         provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
         self.assertEqual(provider_by_step["request.stock_quotes"], "tushare.daily+tencent.get_stock_batch_info")
+
+    def test_stock_quote_request_does_not_use_realtime_tencent_for_historical_target_date(self):
+        timer = _TimerStub()
+        tencent_calls = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+            },
+            fetch_stock_batch_info=lambda codes: tencent_calls.append(sorted(codes)) or {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": 8.88,
+                    "high": 22.00,
+                    "low": 20.00,
+                    "open": 20.50,
+                    "close": 21.80,
+                    "data_source": "tencent.qt",
+                }
+            },
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: {},
+            target_date="2026-06-08",
+            current_date="2026-06-09",
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(tencent_calls, [])
+        self.assertEqual(result["results"]["stock_full_info"], {})
+        self.assertNotIn("selected_position_candidate", result["results"])
+        by_step = {log["step"]: log for log in result["module_logs"]}
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertFalse(by_step["request.stock_quotes"]["details"]["realtime_quote_allowed"])
+
+    def test_stock_quote_request_treats_undated_tushare_rows_as_incomplete_for_historical_target(self):
+        timer = _TimerStub()
+        tencent_calls = []
+
+        result = collect_market_activity_stock_quote_request_bundle(
+            existing_results={
+                "selected_position_candidate": {"code": "001896", "name": "豫能控股"},
+            },
+            fetch_stock_batch_info=lambda codes: tencent_calls.append(sorted(codes)) or {},
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: {
+                "001896": {
+                    "name": "豫能控股",
+                    "change_pct": -1.41,
+                    "high": 21.50,
+                    "low": 19.00,
+                    "open": 19.87,
+                    "close": 19.60,
+                    "data_source": "tushare.daily",
+                }
+            },
+            target_date="2026-06-08",
+            current_date="2026-06-09",
+            timer=timer,
+            emit=lambda message: None,
+        )
+
+        self.assertEqual(tencent_calls, [])
+        self.assertEqual(result["results"]["stock_full_info"], {})
+        self.assertNotIn("selected_position_candidate", result["results"])
+        by_step = {log["step"]: log for log in result["module_logs"]}
+        self.assertEqual(by_step["request.stock_quotes"]["status"], "degraded")
+        self.assertEqual(by_step["request.stock_quotes"]["details"]["missing_count"], 1)
 
     def test_stock_quote_request_backfills_lhb_sector_from_tushare_industry(self):
         timer = _TimerStub()
@@ -1456,10 +1902,29 @@ class MarketActivityRequestTest(unittest.TestCase):
                 "lhb_net_sell_top10": [],
             },
             fetch_stock_batch_info=lambda codes: {},
-            fetch_tushare_stock_batch_info=lambda codes: {
-                "000988": {"name": "华工科技", "industry": "通信设备", "change_pct": 10.0},
-                "688409": {"name": "富创精密", "所属行业": "半导体", "change_pct": 4.67},
+            fetch_tushare_stock_batch_info=lambda codes, target_date=None: {
+                "000988": {
+                    "name": "华工科技",
+                    "industry": "通信设备",
+                    "change_pct": 10.0,
+                    "high": 12.0,
+                    "low": 10.0,
+                    "open": 10.5,
+                    "close": 11.8,
+                    "trade_date": target_date,
+                },
+                "688409": {
+                    "name": "富创精密",
+                    "所属行业": "半导体",
+                    "change_pct": 4.67,
+                    "high": 176.8,
+                    "low": 155.74,
+                    "open": 158.09,
+                    "close": 169.85,
+                    "trade_date": target_date,
+                },
             },
+            target_date="2026-06-09",
             timer=timer,
             emit=lambda message: None,
         )

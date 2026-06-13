@@ -99,6 +99,83 @@ class TushareTurnoverServiceTest(unittest.TestCase):
 
         self.assertEqual(fetch_stock_daily_turnover_records("2026-05-12", pro=BadPro()), [])
 
+    def test_fetch_stock_daily_turnover_records_range_paginates_full_daily_rows(self):
+        from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records_range
+
+        class RangePro:
+            def __init__(self):
+                self.calls = []
+
+            def daily(self, **kwargs):
+                self.calls.append(kwargs)
+                offset = kwargs.get("offset", 0)
+                if offset == 0:
+                    return _FakeFrame(
+                        [
+                            {
+                                "ts_code": "000001.SZ",
+                                "trade_date": "20260511",
+                                "open": 10,
+                                "high": 11,
+                                "low": 9.8,
+                                "close": 10.5,
+                                "pre_close": 10,
+                                "change": 0.5,
+                                "pct_chg": 5,
+                                "vol": 12345,
+                                "amount": 250000,
+                            },
+                            {
+                                "ts_code": "600000.SH",
+                                "trade_date": "20260512",
+                                "open": 8,
+                                "high": 8.5,
+                                "low": 7.9,
+                                "close": 8.1,
+                                "pre_close": 8.2,
+                                "change": -0.1,
+                                "pct_chg": -1.22,
+                                "vol": 8000,
+                                "amount": 100000,
+                            },
+                        ]
+                    )
+                return _FakeFrame([])
+
+        pro = RangePro()
+        rows = fetch_stock_daily_turnover_records_range("2026-05-01", "2026-05-12", pro=pro, page_limit=2)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["trade_date"], "2026-05-11")
+        self.assertEqual(rows[0]["stock_code"], "000001")
+        self.assertEqual(rows[0]["high"], 11.0)
+        self.assertEqual(rows[1]["market"], "SH")
+        self.assertEqual(
+            pro.calls,
+            [
+                {
+                    "start_date": "20260501",
+                    "end_date": "20260512",
+                    "fields": (
+                        "ts_code,trade_date,open,high,low,close,pre_close,"
+                        "change,pct_chg,vol,amount"
+                    ),
+                    "limit": 2,
+                    "offset": 0,
+                },
+                {
+                    "start_date": "20260501",
+                    "end_date": "20260512",
+                    "fields": (
+                        "ts_code,trade_date,open,high,low,close,pre_close,"
+                        "change,pct_chg,vol,amount"
+                    ),
+                    "limit": 2,
+                    "offset": 2,
+                },
+            ],
+        )
+
     def test_fetch_stock_turnover_history_fetches_daily_amounts_for_one_stock(self):
         from market_data.tushare_turnover_service import fetch_stock_turnover_history
 
@@ -163,6 +240,7 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         self.assertEqual(rows["000001"]["所属行业"], "银行")
         self.assertEqual(rows["000001"]["change_pct"], 5.0)
         self.assertEqual(rows["000001"]["zt_status"], "正常")
+        self.assertEqual(rows["000001"]["trade_date"], "2026-05-12")
         self.assertEqual(rows["600000"]["name"], "浦发银行")
         self.assertEqual(rows["600000"]["data_source"], "tushare.daily")
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -320,6 +321,16 @@ class LLMService:
                 elapsed = time.time() - start_time
                 self._update_stats(elapsed, success=False, empty=False)
                 if attempt < max_retries:
+                    if (
+                        self.provider_name == "deepseek"
+                        and "reasoning-only length response" in str(error)
+                    ):
+                        match = re.search(r"reasoning_len=(\d+)", str(error))
+                        reasoning_len = int(match.group(1)) if match else 0
+                        resolved_max_tokens = max(
+                            resolved_max_tokens * 2,
+                            reasoning_len + 1024,
+                        )
                     print(f"[LLMService] API调用失败 ({elapsed:.2f}s)，重试 {attempt + 1}/{max_retries}: {error}")
                     time.sleep(2)
                     continue
@@ -436,6 +447,91 @@ class LLMService:
         except Exception as error:
             print(f"[LLMService] JSON解析失败: {error}")
             return {"groups": [], "insights": "解析失败降级"}
+
+    def adjudicate_calendar_event_news_evidence(
+        self,
+        event: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        report_date: str = "",
+    ) -> Dict[str, Any]:
+        if not candidates:
+            return {}
+
+        limited_candidates = list(candidates)[:8]
+        event_title = str((event or {}).get("title") or "")
+        event_date = str((event or {}).get("date") or "")
+        event_summary = str((event or {}).get("summary") or "")
+        candidate_lines = []
+        for idx, candidate in enumerate(limited_candidates):
+            title = str(candidate.get("title") or "")[:120]
+            source_date = str(candidate.get("source_date") or "")
+            evidence_text = str(candidate.get("evidence_text") or "")[:500]
+            candidate_lines.append(
+                f"[{idx}] title={title}\nsource_date={source_date}\nevidence={evidence_text}"
+            )
+
+        system_prompt = """你是A股日报的事件证据审校员。
+只判断候选新闻能否作为指定日历事件的同日证据；不要做宽泛联想。
+必须严格返回纯JSON，键名必须是英文：
+{
+    "matched": true,
+    "evidence_index": 0,
+    "confidence": "高/中/低",
+    "match_reason": "30字以内",
+    "classification_hint": "可选产业链方向或空字符串",
+    "related_sectors": ["细分方向"],
+    "policy_evidence": true
+}"""
+        prompt = f"""报告日期：{report_date}
+日历事件：
+- 日期：{event_date}
+- 标题：{event_title}
+- 摘要：{event_summary}
+
+候选新闻：
+{chr(10).join(candidate_lines)}
+
+判定要求：
+1. matched=true 只在新闻主体、活动名称、公司/机构、时间语境足以确认同一事件时使用。
+2. 如果只是共享“大会/论坛/行业/交流/发布”等泛词，必须 matched=false。
+3. 如果新闻补足了标题省略的主体且语义能确认同一事件，可以 matched=true。
+4. policy_evidence=true 只在候选新闻含官方部门、规则、文件、方案、通知、实施等明确政策文件证据时使用。
+5. 不确定时返回 matched=false，confidence=低。
+
+只返回JSON，不要markdown标记。"""
+        result = self.chat(prompt, system_prompt=system_prompt, temperature=0.1, max_tokens=900)
+        if not result:
+            return {}
+        try:
+            parsed = self._parse_json_response(result)
+        except Exception as error:
+            print(f"[LLMService] 日历新闻证据判定解析失败: {error}")
+            return {}
+
+        raw_index = parsed.get("evidence_index", parsed.get("candidate_index", parsed.get("index", -1)))
+        if isinstance(raw_index, bool):
+            evidence_index = -1
+        else:
+            try:
+                evidence_index = int(raw_index)
+            except (TypeError, ValueError):
+                evidence_index = -1
+        related_sectors = parsed.get("related_sectors")
+        if isinstance(related_sectors, str):
+            related_sectors = [item.strip() for item in re.split(r"[、,，/]", related_sectors) if item.strip()]
+        elif not isinstance(related_sectors, list):
+            related_sectors = []
+        raw_confidence = parsed.get("confidence")
+        confidence = "" if isinstance(raw_confidence, bool) else str(raw_confidence or "").strip()
+        return {
+            "matched": parsed.get("matched", False),
+            "evidence_index": evidence_index,
+            "confidence": confidence,
+            "match_reason": str(parsed.get("match_reason") or "").strip()[:120],
+            "classification_hint": str(parsed.get("classification_hint") or "").strip()[:40],
+            "related_sectors": [str(item).strip() for item in related_sectors if str(item or "").strip()][:5],
+            "policy_evidence": parsed.get("policy_evidence", False),
+        }
 
     def analyze_events_batch(
         self,

@@ -241,12 +241,15 @@ def get_abnormal_rank_adjustment(abnormal_item):
 
 
 def merge_position_gate(position_level, exit_analysis):
-    """把 Step 1 档位和 Step 4 转折分析合并成最终执行动作。"""
+    """把市场环境和主线退潮信号合并成最终执行动作。"""
     light = exit_analysis.get("overall_level", "红灯")
-    if position_level == "一档（空仓档）":
+    pct_level = str(position_level or "").strip()
+    is_zero_level = pct_level == "0%不参与" or "空仓" in pct_level
+    is_attack_level = pct_level == "50%条件执行" or "进攻" in pct_level
+    if is_zero_level:
         return {
             "gate_status": "撤退",
-            "position_level": "一档（空仓档）",
+            "position_level": "0%不参与",
             "operation_state": "撤退态",
             "can_new_entry": False,
             "can_hold": False,
@@ -260,7 +263,7 @@ def merge_position_gate(position_level, exit_analysis):
     if light == "红灯":
         return {
             "gate_status": "撤退",
-            "position_level": "一档（空仓档）",
+            "position_level": "0%不参与",
             "operation_state": "撤退态",
             "can_new_entry": False,
             "can_hold": False,
@@ -274,55 +277,55 @@ def merge_position_gate(position_level, exit_analysis):
     if light == "橙灯":
         return {
             "gate_status": "防守",
-            "position_level": "二档（防守档）" if position_level != "一档（空仓档）" else "一档（空仓档）",
-            "operation_state": "防守态" if position_level != "一档（空仓档）" else "撤退态",
+            "position_level": "0%不参与",
+            "operation_state": "防守态" if not is_zero_level else "撤退态",
             "can_new_entry": False,
-            "can_hold": position_level != "一档（空仓档）",
+            "can_hold": not is_zero_level,
             "should_reduce": True,
-            "allow_attack_50_ready": position_level != "一档（空仓档）",
+            "allow_attack_50_ready": False,
             "base_position_cap_pct": 0,
             "final_action": "禁止新增；若你有旧仓，去弱留强，不强就卖",
             "final_participation": "市场可能还没坏透，但这时只配留最强，不配乱出手",
             "gate_reason": "主线出现退潮预警，先收缩战线，等待真正强者自己走出来",
         }
-    if position_level == "二档（防守档）":
+    if not is_attack_level:
         return {
             "gate_status": "防守",
-            "position_level": "二档（防守档）",
+            "position_level": "0%不参与",
             "operation_state": "防守态",
             "can_new_entry": False,
             "can_hold": True,
             "should_reduce": False,
             "allow_attack_50_ready": True,
             "base_position_cap_pct": 0,
-            "final_action": "0%观察，只看主线核心；09:50-10:10窗口内条件成立后才评估50%标准进攻，否则不参与",
-            "final_participation": "这不是随手上车的位置，只能观察、持有强者，或等固定交易窗口内条件成立后的标准进攻",
+            "final_action": "0%不参与，只看主线核心；09:50-10:10窗口内条件成立后才评估50%条件执行，否则不参与",
+            "final_participation": "这不是随手上车的位置，只能观察、持有强者，或等固定交易窗口内条件成立后的条件执行",
             "gate_reason": "市场环境还没完全满足进攻条件，先让子弹飞一会儿",
         }
     if light == "黄灯":
         return {
             "gate_status": "可做",
-            "position_level": position_level,
-            "operation_state": "进攻态" if position_level == "三档（进攻档）" else "防守态",
-            "can_new_entry": position_level == "三档（进攻档）",
+            "position_level": "50%条件执行",
+            "operation_state": "进攻态",
+            "can_new_entry": True,
             "can_hold": True,
             "should_reduce": False,
             "allow_attack_50_ready": True,
-            "base_position_cap_pct": 50 if position_level == "三档（进攻档）" else 0,
-            "final_action": "优先围绕主线核心出手，去弱留强，继续贴着最强趋势",
+            "base_position_cap_pct": 50,
+            "final_action": "50%条件执行只围绕主线核心；09:30-09:35或09:50-10:10窗口条件成立才参与，不满足回到0%",
             "final_participation": "黄灯不是卖点，而是提醒你别去杂毛，要更聚焦核心",
             "gate_reason": "主线进入强化阶段，买也只买最强，不做分散试错",
         }
     return {
         "gate_status": "可做",
-        "position_level": position_level,
-        "operation_state": "进攻态" if position_level == "三档（进攻档）" else "防守态",
-        "can_new_entry": position_level == "三档（进攻档）",
+        "position_level": "50%条件执行",
+        "operation_state": "进攻态",
+        "can_new_entry": True,
         "can_hold": True,
         "should_reduce": False,
         "allow_attack_50_ready": True,
-        "base_position_cap_pct": 50 if position_level == "三档（进攻档）" else 0,
-        "final_action": "环境和主线同向，围绕最强主线正常参与，像口香糖一样粘住强趋势",
+        "base_position_cap_pct": 50,
+        "final_action": "环境和主线同向，50%条件执行只围绕最强主线；09:30-09:35或09:50-10:10窗口条件成立才参与，不满足回到0%",
         "final_participation": "做对趋势的前提下，不轻易下车",
         "gate_reason": "大盘环境和主线强度同向，允许执行狙击计划",
     }

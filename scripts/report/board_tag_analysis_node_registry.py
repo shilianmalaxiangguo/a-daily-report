@@ -1,6 +1,7 @@
 DEFAULT_BOARD_TAG_ANALYSIS_NODE_SPECS = [
     {"node_key": "header", "title": "章节标题"},
     {"node_key": "source_note", "title": "数据提示"},
+    {"node_key": "tag_rank_chart", "title": "标签热度排行榜"},
     {"node_key": "analysis", "title": "板块分布AI分析"},
     {"node_key": "footer", "title": "章节收尾"},
 ]

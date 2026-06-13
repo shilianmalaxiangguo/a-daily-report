@@ -74,10 +74,12 @@ def get_market_total_turnover_from_fact_db(target_date, *, market_scope="all_a",
     if DatabaseService is None:
         return 0.0
     try:
-        if hasattr(DatabaseService, "from_environment"):
+        if hasattr(DatabaseService, "fact_store_from_environment"):
+            service = DatabaseService.fact_store_from_environment(db_path)
+        elif hasattr(DatabaseService, "from_environment"):
             service = DatabaseService.from_environment(db_path)
         else:
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            return 0.0
         row = service.query_market_daily_total(target_date, market_scope=market_scope)
     except Exception:
         return 0.0
@@ -354,15 +356,22 @@ def _load_recent_sector_turnover_history_from_fact_db(target_date, sector_name, 
     if service_cls is None:
         return []
     try:
-        if _postgres_only_runtime() and hasattr(service_cls, "from_environment"):
+        if _postgres_only_runtime() and hasattr(service_cls, "fact_store_from_environment"):
+            service = service_cls.fact_store_from_environment(db_path)
+            checker = getattr(service, "is_postgres_backed", None)
+            if not callable(checker) or not checker():
+                return []
+        elif _postgres_only_runtime() and hasattr(service_cls, "from_environment"):
             service = service_cls.from_environment(db_path)
             checker = getattr(service, "is_postgres_backed", None)
             if not callable(checker) or not checker():
                 return []
+        elif hasattr(service_cls, "fact_store_from_environment"):
+            service = service_cls.fact_store_from_environment(db_path)
         elif hasattr(service_cls, "from_environment"):
             service = service_cls.from_environment(db_path)
         else:
-            service = service_cls.sqlite_d1_compatible(db_path)
+            return []
         rows = service.query_mainline_turnover_series(
             _normalize_kline_date_str(target_date) or target_date,
             sector_name,

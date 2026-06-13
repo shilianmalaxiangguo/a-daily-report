@@ -12,6 +12,16 @@ def _format_count(value):
     return str(value)
 
 
+def _format_pct(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    if number.is_integer():
+        return f"{int(number)}%"
+    return f"{number:.1f}%"
+
+
 def _safe_int(value):
     try:
         if value in (None, ""):
@@ -56,6 +66,55 @@ def _render_distribution_items(items, limit):
     for name, _, raw_count in items[:limit]:
         rendered.append(f"{name}{_format_count(raw_count)}次")
     return "、".join(rendered)
+
+
+def _build_board_tag_rank_rows(tag_distribution, *, limit=12):
+    items = [item for item in _sorted_distribution_items(tag_distribution) if item[1] > 0]
+    visible_items = list(items[:limit])
+    total = sum(count for _, count, _ in items)
+    max_count = max((count for _, count, _ in visible_items), default=0)
+    if total <= 0 or max_count <= 0:
+        return []
+
+    rows = []
+    for name, count, raw_count in visible_items:
+        share_pct = count / total * 100
+        bar_width = max(1, round(count / max_count * 20))
+        rows.append(
+            {
+                "tag": name,
+                "count": raw_count,
+                "share_pct": share_pct,
+                "bar": "#" * bar_width,
+            }
+        )
+    return rows
+
+
+def _render_board_tag_rank_chart(tag_distribution):
+    rows = _build_board_tag_rank_rows(tag_distribution)
+    if not rows:
+        return []
+
+    lines = [
+        "### 标签热度排行榜",
+        "> **读法**: 按热榜标签出现次数排序，条形长度按本表最高次数归一化；占比为该标签在全部标签出现次数中的比例。",
+        "",
+        "| 排名 | 标签 | 出现次数 | 全标签占比 | 热度条 |",
+        "|------|------|----------|----------|--------|",
+    ]
+    for index, row in enumerate(rows, 1):
+        lines.append(
+            "| {rank} | {tag} | {count} | {share_pct} | `{bar}` |".format(
+                rank=index,
+                tag=row["tag"],
+                count=_format_count(row["count"]),
+                share_pct=_format_pct(row["share_pct"]),
+                bar=row["bar"],
+            )
+        )
+    lines.append("")
+    return lines
 
 
 def _render_board_tag_fallback_summary(tag_distribution, status_distribution, high_lianban_stocks, market_stats):
@@ -106,6 +165,11 @@ def build_board_tag_source_note_node(context, node_meta=None, node_lookup=None):
     }
 
 
+def build_board_tag_rank_chart_node(context, node_meta=None, node_lookup=None):
+    lines = _render_board_tag_rank_chart(_data(context).get("tag_distribution", {}))
+    return {"lines": lines, "exports": {}, "module_logs": []}
+
+
 def build_board_tag_analysis_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     analyze_sector_distribution = context.get("analyze_sector_distribution")
@@ -147,6 +211,7 @@ def build_board_tag_footer_node(context, node_meta=None, node_lookup=None):
 BOARD_TAG_ANALYSIS_NODE_BUILDERS = {
     "header": build_board_tag_header_node,
     "source_note": build_board_tag_source_note_node,
+    "tag_rank_chart": build_board_tag_rank_chart_node,
     "analysis": build_board_tag_analysis_node,
     "footer": build_board_tag_footer_node,
 }

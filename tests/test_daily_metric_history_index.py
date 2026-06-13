@@ -9,6 +9,115 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 
+class _MemoryFactStore:
+    def __init__(self):
+        self.market_totals = {}
+        self.sector_flows = {}
+        self.mainlines = {}
+        self.mainline_turnovers = {}
+        self.new_high_feedback = {}
+
+    @staticmethod
+    def _row_date(row):
+        return str((row or {}).get("trade_date") or (row or {}).get("date") or "").strip()
+
+    @staticmethod
+    def _recent_rows(rows, end_date, window_days):
+        end_text = str(end_date or "").strip()
+        filtered = [dict(row) for row in rows if _MemoryFactStore._row_date(row) <= end_text]
+        filtered.sort(key=_MemoryFactStore._row_date)
+        return filtered[-int(window_days or 25) :]
+
+    def is_postgres_backed(self):
+        return True
+
+    def upsert_market_daily_total(self, row):
+        trade_date = self._row_date(row)
+        if trade_date:
+            self.market_totals[trade_date] = dict(row or {})
+        return 1 if trade_date else 0
+
+    def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+        return dict(self.market_totals.get(str(trade_date or "").strip()) or {})
+
+    def upsert_sector_fund_flow_daily(self, row):
+        trade_date = self._row_date(row)
+        sector_name = str((row or {}).get("sector_name") or "").strip()
+        if not trade_date or not sector_name:
+            return 0
+        stored = dict(row or {})
+        stored.setdefault("inflow", stored.get("net_inflow_yi"))
+        self.sector_flows[(trade_date, sector_name)] = stored
+        return 1
+
+    def query_sector_fund_flow_series(self, end_date, sector_name, *, window_days=8):
+        sector_text = str(sector_name or "").strip()
+        return self._recent_rows(
+            [row for (trade_date, name), row in self.sector_flows.items() if name == sector_text],
+            end_date,
+            window_days,
+        )
+
+    def upsert_mainline_daily(self, row):
+        trade_date = self._row_date(row)
+        if trade_date:
+            stored = dict(row or {})
+            stored.setdefault("date", trade_date)
+            self.mainlines[trade_date] = stored
+        return 1 if trade_date else 0
+
+    def query_mainline_daily_series(self, end_date, *, window_days=25):
+        return self._recent_rows(self.mainlines.values(), end_date, window_days)
+
+    def upsert_mainline_turnover_daily(self, row):
+        trade_date = self._row_date(row)
+        sector_name = str(
+            (row or {}).get("sector_name")
+            or (row or {}).get("primary_mainline")
+            or (row or {}).get("cycle_mainline")
+            or ""
+        ).strip()
+        if not trade_date or not sector_name:
+            return 0
+        stored = dict(row or {})
+        stored.setdefault("date", trade_date)
+        stored.setdefault("sector_name", sector_name)
+        self.mainline_turnovers[(trade_date, sector_name)] = stored
+        return 1
+
+    def query_mainline_turnover_series(self, end_date, sector_name, *, window_days=25):
+        sector_text = str(sector_name or "").strip()
+        return self._recent_rows(
+            [row for (trade_date, name), row in self.mainline_turnovers.items() if name == sector_text],
+            end_date,
+            window_days,
+        )
+
+    def upsert_new_high_feedback_daily(self, row):
+        trade_date = self._row_date(row)
+        if trade_date:
+            stored = dict(row or {})
+            stored.setdefault("trade_date", trade_date)
+            self.new_high_feedback[trade_date] = stored
+        return 1 if trade_date else 0
+
+    def query_new_high_feedback_series(self, end_date, *, window_days=25):
+        return self._recent_rows(self.new_high_feedback.values(), end_date, window_days)
+
+
+def _memory_fact_store_factory(service=None):
+    class MemoryFactStoreFactory:
+        fact_store = service or _MemoryFactStore()
+        calls = []
+
+        @classmethod
+        def fact_store_from_environment(cls, db_path=None):
+            cls.calls.append(db_path)
+            return cls.fact_store
+
+    return MemoryFactStoreFactory
+
+
 class DailyMetricHistoryIndexTest(unittest.TestCase):
     def test_replay_snapshot_loader_blocks_postgres_only_json_read(self):
         from domains.market_state import daily_metric_history_index as index
@@ -19,7 +128,6 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
 
     def test_ensure_daily_metric_history_index_rebuilds_t25_metrics_from_snapshots(self):
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         snapshots = {
             "2026-05-20": (
@@ -105,15 +213,17 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
+            db_path = Path(tmp) / "fact-store"
+            factory = _memory_fact_store_factory()
             result = ensure_daily_metric_history_index(
                 end_date="2026-05-20",
                 window_days=2,
                 max_scan_days=2,
                 db_path=db_path,
+                database_service_cls=factory,
                 load_snapshot_fn=lambda target_date: snapshots.get(target_date, (None, None)),
             )
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            service = factory.fact_store
 
             mainline_rows = service.query_mainline_daily_series("2026-05-20", window_days=3)
             turnover_rows = service.query_mainline_turnover_series("2026-05-20", "半导体", window_days=2)
@@ -129,7 +239,6 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
 
     def test_ensure_daily_metric_history_index_backfills_new_high_from_report_markdown(self):
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         markdowns = {
             "2026-05-19": """
@@ -143,16 +252,18 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
+            db_path = Path(tmp) / "fact-store"
+            factory = _memory_fact_store_factory()
             result = ensure_daily_metric_history_index(
                 end_date="2026-05-19",
                 window_days=1,
                 max_scan_days=1,
                 db_path=db_path,
+                database_service_cls=factory,
                 load_snapshot_fn=lambda target_date: ({"new_high_feedback": {"available": False}}, ""),
                 load_report_markdown_fn=lambda target_date: markdowns.get(target_date, ""),
             )
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            service = factory.fact_store
             new_high_rows = service.query_new_high_feedback_series("2026-05-19", window_days=1)
 
         self.assertEqual(result["indexed_count"], 1)
@@ -163,11 +274,11 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
 
     def test_ensure_daily_metric_history_index_keeps_existing_new_high_fact_row(self):
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            db_path = Path(tmp) / "fact-store"
+            service = _MemoryFactStore()
+            factory = _memory_fact_store_factory(service)
             service.upsert_new_high_feedback_daily(
                 {
                     "trade_date": "2026-05-20",
@@ -183,6 +294,7 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
                 window_days=1,
                 max_scan_days=1,
                 db_path=db_path,
+                database_service_cls=factory,
                 load_snapshot_fn=lambda target_date: (
                     {
                         "new_high_feedback": {
@@ -204,7 +316,6 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
 
     def test_ensure_daily_metric_history_index_writes_market_total_and_sector_fund_flow(self):
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         snapshot = {
             "total_turnover": 29246.59,
@@ -216,17 +327,19 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
+            db_path = Path(tmp) / "fact-store"
+            factory = _memory_fact_store_factory()
             result = ensure_daily_metric_history_index(
                 end_date="2026-05-22",
                 window_days=1,
                 max_scan_days=1,
                 db_path=db_path,
+                database_service_cls=factory,
                 load_snapshot_fn=lambda target_date: (snapshot, ""),
                 load_replay_snapshot_fn=lambda target_date: None,
                 load_report_markdown_fn=lambda target_date: "",
             )
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            service = factory.fact_store
             market_total = service.query_market_daily_total("2026-05-22")
             semiconductor_rows = service.query_sector_fund_flow_series("2026-05-22", "半导体", window_days=1)
             component_rows = service.query_sector_fund_flow_series("2026-05-22", "元器件", window_days=1)
@@ -240,7 +353,6 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
     def test_ensure_daily_metric_history_index_default_loader_uses_compact_snapshot(self):
         from domains.market_state import daily_metric_history_index as index
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         compact_snapshot = {
             "total_turnover": 29246.59,
@@ -264,7 +376,8 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
+            db_path = Path(tmp) / "fact-store"
+            factory = _memory_fact_store_factory()
             with patch.object(
                 index,
                 "load_data_snapshot",
@@ -287,8 +400,9 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
                     window_days=1,
                     max_scan_days=1,
                     db_path=db_path,
+                    database_service_cls=factory,
                 )
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            service = factory.fact_store
             market_total = service.query_market_daily_total("2026-05-22")
             turnover_rows = service.query_mainline_turnover_series("2026-05-22", "半导体", window_days=1)
 
@@ -300,7 +414,6 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
     def test_ensure_daily_metric_history_index_reuses_default_rebuild_window(self):
         from domains.market_state import daily_metric_history_index as index
         from domains.market_state.daily_metric_history_index import ensure_daily_metric_history_index
-        from storage.database_service import DatabaseService
 
         snapshot = {
             "current_sector_turnover_snapshot": {
@@ -313,7 +426,8 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
+            db_path = Path(tmp) / "fact-store"
+            factory = _memory_fact_store_factory()
             with patch.object(index, "_DEFAULT_REBUILD_WINDOW_CACHE", {}), patch.object(
                 index,
                 "_load_compact_metric_history_snapshot",
@@ -328,14 +442,14 @@ class DailyMetricHistoryIndexTest(unittest.TestCase):
                     window_days=1,
                     max_scan_days=1,
                     db_path=db_path,
-                    database_service_cls=DatabaseService,
+                    database_service_cls=factory,
                 )
                 second = ensure_daily_metric_history_index(
                     end_date="2026-05-22",
                     window_days=1,
                     max_scan_days=1,
                     db_path=db_path,
-                    database_service_cls=DatabaseService,
+                    database_service_cls=factory,
                 )
 
         self.assertEqual(first, second)

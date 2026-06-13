@@ -860,7 +860,8 @@ def _build_markdown_sections(
 
     # 章节3: 量化环境识别
     if quant_environment:
-        env = quant_environment.get("environment") or {}
+        nested_environment = quant_environment.get("environment")
+        env = nested_environment if isinstance(nested_environment, dict) and nested_environment else quant_environment
         sections.append("### 量化环境识别")
         sections.append("")
         sections.append(f"**当前环境**: {env.get('summary', '待识别')}")

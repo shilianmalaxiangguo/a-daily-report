@@ -101,17 +101,17 @@ with patch.object(daily_report_entry_demo, "run_score_environment_snapshot", ret
      patch.object(daily_report_entry_demo, "run_score_mainline_snapshot", return_value=91) as mainline_mock, \
      patch.object(daily_report_entry_demo, "run_normalize_flow_to_yi", return_value=12.3) as flow_mock, \
      patch.object(daily_report_entry_demo, "run_build_market_state_machine_snapshot", return_value={"state_code": "expand"}) as state_mock:
-    env_score = daily_report_entry_demo._score_environment_snapshot({"can_new_entry": True}, "三档（进攻档）")
+    env_score = daily_report_entry_demo._score_environment_snapshot({"can_new_entry": True}, "50%条件执行")
     mainline_score = daily_report_entry_demo._score_mainline_snapshot("军工", 40, [{"sector": "军工"}])
     flow_yi = daily_report_entry_demo._normalize_flow_to_yi(123000)
-    snapshot = daily_report_entry_demo._build_market_state_machine_snapshot({}, {"can_new_entry": True}, "三档（进攻档）", {"sector_name": "军工"})
+    snapshot = daily_report_entry_demo._build_market_state_machine_snapshot({}, {"can_new_entry": True}, "50%条件执行", {"sector_name": "军工"})
 
-assert env_mock.call_args[0] == ({"can_new_entry": True}, "三档（进攻档）")
+assert env_mock.call_args[0] == ({"can_new_entry": True}, "50%条件执行")
 assert mainline_mock.call_args[0][:3] == ("军工", 40, [{"sector": "军工"}])
 assert "helpers" in mainline_mock.call_args.kwargs
 assert flow_mock.call_args[0][0] == 123000
 assert "helpers" in flow_mock.call_args.kwargs
-assert state_mock.call_args[0][:4] == ({}, {"can_new_entry": True}, "三档（进攻档）", {"sector_name": "军工"})
+assert state_mock.call_args[0][:4] == ({}, {"can_new_entry": True}, "50%条件执行", {"sector_name": "军工"})
 assert "helpers" in state_mock.call_args.kwargs
 assert env_score == 85
 assert mainline_score == 91
@@ -162,7 +162,7 @@ assert leader["name"] == "军工龙头"
     def test_market_state_support_core_scores_and_flow_normalization(self):
         support = self._load_module()
 
-        env_score = support.score_environment_snapshot({"can_new_entry": True}, "三档（进攻档）")
+        env_score = support.score_environment_snapshot({"can_new_entry": True}, "50%条件执行")
         mainline_score = support.score_mainline_snapshot(
             "军工",
             40,
@@ -223,8 +223,8 @@ assert leader["name"] == "军工龙头"
 
         self.assertEqual(pulse["execution_bias"], "conditional_defense")
         self.assertIn("固定交易窗口", pulse["pulse_action_reason"])
-        self.assertIn("50%标准进攻", pulse["pulse_action_reason"])
-        self.assertNotIn(_m("30%", "条件试错"), pulse["pulse_action_reason"])
+        self.assertIn("50%条件执行", pulse["pulse_action_reason"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), pulse["pulse_action_reason"])
         self.assertNotIn("只允许处理旧仓", pulse["pulse_action_reason"])
 
     def test_build_market_state_machine_snapshot_support_builds_transition_contract(self):
@@ -239,7 +239,7 @@ assert leader["name"] == "军工龙头"
                 "sector_quadrant": {"high_strong_analysis": {"total": 16}},
             },
             {"can_new_entry": True, "final_action": "只做核心", "operation_state": "进攻态"},
-            "三档（进攻档）",
+            "50%条件执行",
             {"sector_name": "军工"},
             main_sectors_info=[{"name": "军工"}],
             secondary_sectors_info=[{"name": "机器人"}],
@@ -297,7 +297,7 @@ assert leader["name"] == "军工龙头"
                 },
             },
             {"can_new_entry": False, "operation_state": "撤退态", "should_reduce": True},
-            "一档（空仓档）",
+            "0%不参与",
             {"sector_name": "半导体"},
             main_sectors_info=[{"name": "半导体"}],
             sector_trend_snapshot=[{"sector": "半导体", "trend_count": 3}],
@@ -324,7 +324,7 @@ assert leader["name"] == "军工龙头"
                 "market_stats": {"up_count": 2300, "down_count": 3000},
             },
             {"can_new_entry": False, "operation_state": "撤退态"},
-            "一档（空仓档）",
+            "0%不参与",
             {"sector_name": "电力"},
             main_sectors_info=[{"name": "电力"}],
             sector_trend_snapshot=[
@@ -626,7 +626,7 @@ assert leader["name"] == "军工龙头"
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return cls()
 
             def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
@@ -697,7 +697,7 @@ assert leader["name"] == "军工龙头"
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 return cls()
 
             def query_sector_fund_flow_series(self, end_date, sector_name, *, window_days=8):
@@ -905,7 +905,7 @@ assert leader["name"] == "军工龙头"
                 "sector_quadrant": {"high_strong_analysis": {"total": 16}},
             },
             {"can_new_entry": True, "final_action": "只做核心", "operation_state": "进攻态"},
-            "三档（进攻档）",
+            "50%条件执行",
             {"sector_name": "军工"},
             main_sectors_info=[{"name": "军工"}],
             secondary_sectors_info=[{"name": "机器人"}],

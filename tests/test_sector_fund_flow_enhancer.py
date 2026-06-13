@@ -303,6 +303,63 @@ class SectorFundFlowEnhancerTest(unittest.TestCase):
         self.assertEqual(report["diffusion_quality"]["sectors"], [])
         self.assertEqual(report["markdown_sections"][-1], "")
 
+    def test_turnover_summary_merges_mixed_history_without_duplicate_sectors(self):
+        report = enhancer.build_enhanced_sector_fund_flow_report(
+            {"inflow": [{"name": "电力"}, {"name": "煤炭"}]},
+            sector_turnover_history=[
+                {
+                    "sector_name": "电力",
+                    "history": [{"date": "2026-05-27", "turnover_share_pct": 2.0}],
+                },
+                {"date": "2026-05-28", "sector_name": "电力", "turnover_share_pct": 2.8},
+                {"date": "2026-05-29", "sector_name": "电力", "turnover_share_pct": 3.5},
+                {"date": "2026-05-29", "sector_name": "煤炭"},
+            ],
+        )
+
+        turnover_summary = report["turnover_trend"]
+        sectors = turnover_summary["sectors"]
+        self.assertEqual([sector["sector_name"] for sector in sectors], ["电力", "煤炭"])
+        self.assertEqual(sectors[0]["latest_share"], 3.5)
+        self.assertEqual(sectors[0]["formatted_series"], "2.0% → 2.8% → 3.5% (扩张)")
+        self.assertEqual(sectors[1]["latest_share"], 0.0)
+        self.assertEqual(sectors[1]["formatted_series"], "待累计")
+
+    def test_turnover_summary_sorts_all_normalized_sectors_before_top5_cut(self):
+        report = enhancer.build_enhanced_sector_fund_flow_report(
+            {"inflow": [{"name": f"板块{i}"} for i in range(1, 7)]},
+            sector_turnover_history=[
+                {"date": "2026-05-29", "sector_name": "板块1", "turnover_share_pct": 1.0},
+                {"date": "2026-05-29", "sector_name": "板块2", "turnover_share_pct": 2.0},
+                {"date": "2026-05-29", "sector_name": "板块3", "turnover_share_pct": 3.0},
+                {"date": "2026-05-29", "sector_name": "板块4", "turnover_share_pct": 4.0},
+                {"date": "2026-05-29", "sector_name": "板块5", "turnover_share_pct": 5.0},
+                {"date": "2026-05-29", "sector_name": "板块6", "turnover_share_pct": 9.0},
+            ],
+        )
+
+        sectors = report["turnover_trend"]["sectors"]
+        self.assertEqual([sector["sector_name"] for sector in sectors], ["板块6", "板块5", "板块4", "板块3", "板块2"])
+        self.assertNotIn("板块1", [sector["sector_name"] for sector in sectors])
+
+    def test_markdown_quant_environment_uses_top_level_when_nested_environment_is_empty(self):
+        sections = enhancer._build_markdown_sections(
+            sector_fund_flow={"inflow": [], "outflow": []},
+            diffusion_summary={},
+            turnover_summary={},
+            quant_environment={
+                "environment": {},
+                "summary": "未检测到明显的量化横行特征",
+                "modes": [],
+                "action": "按传统模式处理",
+            },
+        )
+
+        rendered = "\n".join(sections)
+        self.assertIn("**当前环境**: 未检测到明显的量化横行特征", rendered)
+        self.assertIn("**动作建议**: 按传统模式处理", rendered)
+        self.assertNotIn("**当前环境**: 待识别", rendered)
+
     def test_normalizes_raw_yuan_turnover_to_yi_without_dividing_yi_fields(self):
         result = enhancer.build_sector_internal_analysis_data(
             {"inflow": [{"name": "机器人"}]},

@@ -237,7 +237,9 @@ def _create_database_service(*, postgres_only=False):
     if service_cls is None:
         return None
     if postgres_only:
-        factory = getattr(service_cls, "from_environment", None)
+        factory = getattr(service_cls, "fact_store_from_environment", None)
+        if not callable(factory):
+            factory = getattr(service_cls, "from_environment", None)
         if not callable(factory):
             return None
         try:
@@ -248,9 +250,9 @@ def _create_database_service(*, postgres_only=False):
         if not callable(checker) or not checker():
             return None
         return service
-    factory = getattr(service_cls, "from_environment", None)
+    factory = getattr(service_cls, "fact_store_from_environment", None)
     if not callable(factory):
-        factory = getattr(service_cls, "sqlite_d1_compatible", None)
+        factory = getattr(service_cls, "from_environment", None)
     if not callable(factory):
         return None
     try:
@@ -663,9 +665,7 @@ def build_market_state_machine_snapshot(
 def _score_environment_snapshot_legacy_body(final_gate, position_level):
     if final_gate and final_gate.get("can_new_entry"):
         score = 85
-    elif "二档" in str(position_level or ""):
-        score = 45
-    elif "一档" in str(position_level or ""):
+    elif str(position_level or "").strip() == "0%不参与" or "空仓" in str(position_level or ""):
         score = 15
     else:
         score = 55
@@ -1720,7 +1720,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
         elif allow_attack_50_ready and not should_reduce:
             execution_bias = "conditional_defense"
             pulse_action_bias = "只保留固定交易窗口预案"
-            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做固定交易窗口预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口，条件成立后才评估50%标准进攻。"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做固定交易窗口预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口，条件成立后才评估50%条件执行。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"
@@ -1825,7 +1825,7 @@ def _build_market_state_machine_snapshot_legacy_body(
     elif (
         dt_count >= 15
         or (breadth_available and rise_fall_ratio is not None and rise_fall_ratio < 0.8)
-        or position_level == "一档（空仓档）"
+        or position_level == "0%不参与"
         or final_gate.get("operation_state") == "撤退态"
     ):
         energy_state = "收缩防守"

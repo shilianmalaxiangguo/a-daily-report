@@ -270,6 +270,8 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             helpers={
                 "DatabaseService": None,
                 "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
+                "_load_replay_snapshot_data": lambda target_date: None,
+                "_load_mainline_series_replay_data": lambda target_date: None,
                 "get_previous_date_str": lambda value: {
                     "2026-05-14": "2026-05-13",
                     "2026-05-13": "2026-05-12",
@@ -284,13 +286,121 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
         self.assertEqual([item["date"] for item in result], ["2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13"])
         self.assertEqual([item["primary_mainline"] for item in result], ["机器人", "电力", "电力", "半导体"])
 
+    def test_load_recent_mainline_history_uses_series_replay_rows_when_frozen_snapshot_is_missing(self):
+        runtime = self._load_module()
+
+        snapshots = {
+            "2026-05-13": (
+                {
+                    "current_mainline_history_record": {
+                        "date": "2026-05-13",
+                        "primary_mainline": "半导体",
+                        "secondary_mainline": "电力",
+                        "competition_mainline": "光伏设备",
+                        "rotation_label": "爆发",
+                        "leading_line": "半导体",
+                        "state_code": "expand",
+                        "rotation_summary": "半导体重新聚焦",
+                        "source": "market_research_snapshot",
+                    }
+                },
+                "",
+            ),
+        }
+        replay_snapshots = {
+            "2026-05-12": {
+                "current_mainline_history_record": {
+                    "date": "2026-05-12",
+                    "primary_mainline": "电力",
+                    "secondary_mainline": "通信设备",
+                    "competition_mainline": "光伏设备",
+                    "rotation_label": "分化整理",
+                    "leading_line": "电力",
+                    "state_code": "migrate",
+                    "rotation_summary": "电力分化整理",
+                    "source": "replay.snapshot",
+                }
+            },
+            "2026-05-11": {
+                "current_mainline_history_record": {
+                    "date": "2026-05-11",
+                    "primary_mainline": "半导体",
+                    "secondary_mainline": "电力",
+                    "competition_mainline": "光伏设备",
+                    "rotation_label": "爆发",
+                    "leading_line": "半导体",
+                    "state_code": "expand",
+                    "rotation_summary": "半导体重新聚焦",
+                    "source": "replay.snapshot",
+                }
+            },
+        }
+        series_snapshots = {
+            "2026-05-11": {
+                "rows": [
+                    {
+                        "date": "2026-05-07",
+                        "currentMainline": "电力",
+                        "secondaryMainline": "待确认",
+                        "competitionMainline": "待确认",
+                        "stateCode": "观察",
+                        "sectorName": "电力",
+                        "sourceMessage": "已读取主线成交额趋势",
+                    },
+                    {
+                        "date": "2026-05-08",
+                        "currentMainline": "通信设备",
+                        "secondaryMainline": "待确认",
+                        "competitionMainline": "待确认",
+                        "stateCode": "观察",
+                        "sectorName": "通信设备",
+                        "sourceMessage": "已读取主线成交额趋势",
+                    },
+                    {
+                        "date": "2026-05-11",
+                        "currentMainline": "半导体",
+                        "secondaryMainline": "待确认",
+                        "competitionMainline": "待确认",
+                        "stateCode": "观察",
+                        "sectorName": "半导体",
+                        "sourceMessage": "已读取主线成交额趋势",
+                    },
+                ]
+            }
+        }
+
+        result = runtime.load_recent_mainline_history(
+            "2026-05-14",
+            lookback_days=4,
+            max_scan_days=4,
+            helpers={
+                "DatabaseService": None,
+                "load_data_snapshot": lambda target_date: snapshots.get(target_date, (None, None)),
+                "_load_replay_snapshot_data": lambda target_date: replay_snapshots.get(target_date),
+                "_load_mainline_series_replay_data": lambda target_date: series_snapshots.get(target_date),
+                "get_previous_date_str": lambda value: {
+                    "2026-05-14": "2026-05-13",
+                    "2026-05-13": "2026-05-12",
+                    "2026-05-12": "2026-05-11",
+                    "2026-05-11": "2026-05-08",
+                    "2026-05-08": "2026-05-07",
+                }.get(value),
+                "_normalize_kline_date_str": lambda value: value,
+            },
+        )
+
+        self.assertEqual([item["date"] for item in result], ["2026-05-08", "2026-05-11", "2026-05-12", "2026-05-13"])
+        self.assertEqual([item["primary_mainline"] for item in result], ["通信设备", "半导体", "电力", "半导体"])
+        self.assertEqual(result[0]["source"], "snap_ui.mainline_series_replay")
+        self.assertEqual(result[1]["source"], "replay.snapshot")
+
     def test_load_recent_mainline_history_prefers_fact_db_before_snapshot_scan(self):
         runtime = self._load_module()
         calls = []
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return cls()
 
@@ -317,6 +427,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             helpers={
                 "DatabaseService": FakeDatabaseService,
                 "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+                "_load_mainline_series_replay_data": lambda target_date: None,
             },
         )
 
@@ -363,6 +474,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
                 "DatabaseService": FakeDatabaseService,
                 "ensure_daily_metric_history_index": fail_index_rebuild,
                 "load_data_snapshot": fail_snapshot_scan,
+                "_load_mainline_series_replay_data": lambda target_date: None,
                 "postgres_only_runtime": True,
             },
         )
@@ -383,6 +495,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
             helpers={
                 "DatabaseService": None,
                 "load_data_snapshot": fail_snapshot_scan,
+                "_load_mainline_series_replay_data": lambda target_date: None,
                 "postgres_only_runtime": True,
             },
         )
@@ -426,7 +539,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -443,6 +556,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
                 "DatabaseService": FakeDatabaseService,
                 "ensure_daily_metric_history_index": ensure_index,
                 "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+                "_load_mainline_series_replay_data": lambda target_date: None,
             },
         )
 
@@ -495,7 +609,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -512,6 +626,7 @@ class MainlineHistoryRuntimeTest(unittest.TestCase):
                 "DatabaseService": FakeDatabaseService,
                 "ensure_daily_metric_history_index": ensure_index,
                 "load_data_snapshot": lambda target_date: calls.append(("snapshot", target_date)) or (None, None),
+                "_load_mainline_series_replay_data": lambda target_date: None,
             },
         )
 

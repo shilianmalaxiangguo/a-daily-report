@@ -47,7 +47,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-04-22",
             exit_analysis={"sector_name": "军工", "risk_sectors": ["地产"]},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             get_active_a_kill_records=lambda target_date: [{"code": "000002"}],
             normalize_stock_code=lambda code: str(code).zfill(6) if code else "",
             safe_float=lambda value: float(value or 0),
@@ -140,7 +140,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-05-18",
             exit_analysis={"sector_name": "电力", "risk_sectors": []},
             final_gate={"can_new_entry": False},
-            position_level="一档",
+            position_level="0%不参与",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").split(".")[0].replace("SZ", "").replace("SS", "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -255,7 +255,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-05-18",
             exit_analysis={"sector_name": "", "risk_sectors": []},
             final_gate={"can_new_entry": False},
-            position_level="一档",
+            position_level="0%不参与",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").split(".")[0].replace("SZ", "").replace("SS", "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -321,7 +321,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-04-22",
             exit_analysis={"sector_name": "军工", "risk_sectors": []},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -386,7 +386,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-04-24",
             exit_analysis={"sector_name": "半导体", "risk_sectors": []},
             final_gate={"can_new_entry": False},
-            position_level="一档",
+            position_level="0%不参与",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -441,7 +441,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-05-18",
             exit_analysis={"sector_name": "国产芯片", "risk_sectors": []},
             final_gate={"can_new_entry": False},
-            position_level="一档",
+            position_level="0%不参与",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -487,7 +487,7 @@ class MarketResearchContextBundleTest(unittest.TestCase):
             target_date="2026-05-18",
             exit_analysis={"sector_name": "军工", "risk_sectors": []},
             final_gate={"can_new_entry": False},
-            position_level="一档",
+            position_level="0%不参与",
             get_active_a_kill_records=lambda target_date: [],
             normalize_stock_code=lambda code: str(code or "").zfill(6),
             safe_float=lambda value: float(value or 0),
@@ -517,6 +517,56 @@ class MarketResearchContextBundleTest(unittest.TestCase):
         self.assertEqual(hot_stock["tomorrow_expectation"], "热度观察")
         self.assertNotIn("明日可能反包", hot_stock["reason"])
         self.assertNotIn("反包预期", hot_stock["tomorrow_expectation"])
+
+    def test_build_market_research_context_bundle_reads_hot_rank_change_aliases(self):
+        result = build_market_research_context_bundle_contract(
+            data={
+                "zt_pool_by_sector": {},
+                "dt_pool_by_sector": {},
+                "zt_pool": [],
+                "hot_rank_top30": [
+                    {"code": "601991", "name": "大唐发电", "sector": "电力", "change_pct": 7.21},
+                    {"code": "600396", "name": "华电辽能", "sector": "电力", "pct_chg": 6.34},
+                    {"code": "000003", "name": "缺涨幅样本", "sector": "电力"},
+                ],
+                "integrated_hot_list": [],
+                "stocks_with_history": [],
+                "turnover_rank": [],
+                "volume_anomalies": [],
+            },
+            target_date="2026-06-08",
+            exit_analysis={"sector_name": "电力", "risk_sectors": []},
+            final_gate={"can_new_entry": False},
+            position_level="0%不参与",
+            get_active_a_kill_records=lambda target_date: [],
+            normalize_stock_code=lambda code: str(code or "").zfill(6),
+            safe_float=lambda value: float(value or 0),
+            is_stock_in_a_kill_cooldown=lambda candidate, records: (False, {}),
+            sector_name_matches=lambda sector, mainline_name: sector == mainline_name,
+            build_abnormal_watch_pool=lambda *args, **kwargs: [],
+            decision_strict_mode=False,
+            allow_display_degraded_abnormal_snapshot=True,
+            is_degraded_abnormal_snapshot=lambda item: False,
+            build_sector_trend_snapshot=lambda *args, **kwargs: [],
+            build_leader_memory_bank=lambda *args, **kwargs: [],
+            refresh_tracking_memory=lambda *args, **kwargs: {"today_validated_items": []},
+            discover_all_gem_breathing_candidates=lambda stock_meta_map, target_date="": [],
+            candidate_matches_mainline=lambda item, mainline_name: True,
+            build_gem_observation_pool=lambda candidates, target_date="": [],
+            build_mainline_competition_snapshot=lambda **kwargs: [],
+            build_market_observation_snapshot=lambda data, **kwargs: {},
+            build_market_research_snapshot=lambda data, final_gate, position_level, exit_analysis, observation_snapshot=None, target_date="": {
+                "state_machine": {},
+                "abnormal_projection": {},
+            },
+            derive_step0_follow_plan=lambda market_research_snapshot, final_gate, position_level: {},
+        )
+
+        reasons_by_code = {item["code"]: item["reason"] for item in result["watchlist"]}
+        self.assertEqual(reasons_by_code["601991"], "热榜第1+涨幅7.2%，仅作热度观察")
+        self.assertEqual(reasons_by_code["600396"], "热榜第2+涨幅6.3%，仅作热度观察")
+        self.assertEqual(reasons_by_code["000003"], "热榜第3，涨幅待补，仅作热度观察")
+        self.assertNotIn("涨幅0.0%", "\n".join(reasons_by_code.values()))
 
 
 if __name__ == "__main__":

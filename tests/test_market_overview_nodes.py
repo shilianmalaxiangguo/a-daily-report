@@ -128,6 +128,63 @@ class MarketOverviewNodesTest(unittest.TestCase):
             rendered,
         )
 
+    def test_market_base_marks_etf_turnover_coverage_anomaly_as_review_needed(self):
+        rows = [
+            {"trade_date": "2026-06-05", "etf_turnover_yi": 2300.93, "change_pct": "待累计", "covered_etf_count": 1142},
+            {"trade_date": "2026-06-08", "etf_turnover_yi": 2091.97, "change_pct": -9.08, "covered_etf_count": 1144},
+            {"trade_date": "2026-06-09", "etf_turnover_yi": 1833.32, "change_pct": -12.36, "covered_etf_count": 1150},
+            {"trade_date": "2026-06-10", "etf_turnover_yi": 1863.6, "change_pct": 1.65, "covered_etf_count": 1153},
+            {
+                "trade_date": "2026-06-11",
+                "etf_turnover_yi": 665.8,
+                "change_pct": -64.28,
+                "covered_etf_count": 520,
+                "coverage_anomaly": True,
+                "coverage_anomaly_reason": "目标日有成交ETF数520只，低于近10个前序样本中位数1150只的70%，样本覆盖不足",
+            },
+        ]
+
+        lines = render_market_overview_section(
+            {
+                "target_date": "2026-06-11",
+                "enabled_node_keys": ["header", "indices", "volume"],
+                "data": {
+                    "total_turnover": 30000.0,
+                    "indices": {"上证指数": {"点位": 3900.0, "涨跌幅": 0.18}},
+                    "market_stats": {"up_count": 2600, "down_count": 2100},
+                    "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                    "new_high_feedback": {"available": True, "all_a_share_pct": 3.2},
+                    "margin_pressure": {
+                        "available": True,
+                        "latest_pressure_label": "中性",
+                        "latest_margin_turnover_ratio_pct": 93.5,
+                        "latest_data_date": "2026-06-11",
+                        "rows": [
+                            {
+                                "trade_date": "2026-06-11",
+                                "margin_turnover_ratio_pct": 93.5,
+                                "pressure_label": "中性",
+                                "market_turnover_yi": 30000.0,
+                            }
+                        ],
+                    },
+                    "etf_turnover_series": {
+                        "available": True,
+                        "source": "sina.etf.daily_amount",
+                        "coverage_anomaly": True,
+                        "coverage_status": "partial",
+                        "coverage_anomaly_reason": "目标日有成交ETF数520只，低于近10个前序样本中位数1150只的70%，样本覆盖不足",
+                        "rows": rows,
+                    },
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| ETF两市成交额 | 665.80亿 | 样本覆盖不足 |", rendered)
+        self.assertNotIn("机构容量中性偏收缩 | 近5日", rendered)
+        self.assertIn("| ETF容量协同 | 待复核 | ETF容量数据样本不足，暂不判断与其他市场指标的配合。 |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,12 +3,30 @@ import unittest
 from datetime import date, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.market_overview_builder import build_market_trend_sections_contract
-from storage.database_service import DatabaseService
+
+
+class _MarginPressureFactStore:
+    def __init__(self):
+        self.rows = []
+
+    def upsert_margin_pressure_daily(self, row):
+        self.rows.append(dict(row or {}))
+        return 1
+
+    def query_margin_pressure_series(self, end_date, *, window_days=250):
+        rows = [
+            dict(row)
+            for row in self.rows
+            if str(row.get("trade_date") or "") <= str(end_date or "")
+        ]
+        rows.sort(key=lambda row: str(row.get("trade_date") or ""))
+        return {"rows": rows[-int(window_days or 250) :]}
 
 
 class MarketOverviewBuilderTest(unittest.TestCase):
@@ -387,6 +405,63 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("| 局部热度处理 | 创新高高潮，但指数大跌、跌多涨少、跌停扩散，只写局部过热，不把整体市场升级为高潮。 |", rendered)
         self.assertIn("| 明日总体含义 | 趋势扩散偏热，但指数和涨跌家数破坏，先防降温，等待止跌和核心承接。 |", rendered)
 
+    def test_build_market_trend_sections_contract_separates_0609_local_style_from_overall_temperature(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "indices": {
+                    "上证指数": {"点位": 4010.03, "涨跌幅": 1.28},
+                    "深证成指": {"点位": 15268.71, "涨跌幅": 3.02},
+                    "创业板指": {"点位": 3961.75, "涨跌幅": 3.93},
+                },
+                "wind_a_alternative": {"点位": 6254.74, "涨跌幅": 2.21},
+                "csi1000_index": {"点位": 8318.70, "涨跌幅": 2.94},
+                "total_turnover": 26667.33,
+                "turnover_rank": [{"turnover": 116.58} for _ in range(50)],
+                "zt_pool": [{"code": "000001"}] * 130,
+                "dt_pool": [{"code": "000002"}] * 9,
+                "market_stats": {"up_count": 3322, "down_count": 2049},
+                "new_high_feedback": {
+                    "available": True,
+                    "new_high_count": 82,
+                    "all_a_share_pct": 1.64,
+                    "summary": "本地事实库记录显示阶段新高 82 只，占全A约 1.64%，主要集中在 元器件、化工原料、专用机械。",
+                    "trend_rows": [
+                        {
+                            "trade_date": "2026-06-09",
+                            "new_high_count": 82,
+                            "all_a_share_pct": 1.64,
+                            "change_text": "-78",
+                            "leading_sectors": "元器件、化工原料、专用机械",
+                        }
+                    ],
+                    "sector_distribution": [],
+                    "top_stocks": [],
+                },
+                "price_band_style_series": {
+                    "available": True,
+                    "rows": [
+                        {
+                            "trade_date": "2026-06-09",
+                            "high_price_pct": 1.96,
+                            "low_price_pct": -0.72,
+                            "spread_pct": 2.68,
+                            "style_label": "高潮",
+                            "absolute_label": "高价占优",
+                        }
+                    ],
+                },
+            },
+            target_date="2026-06-09",
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 市场情绪总状态 | 震荡 |", rendered)
+        self.assertIn("| 2026-06-09 | +1.96% | -0.72% | +2.68pct | 高价相对占优 | 高价占优 |", rendered)
+        self.assertIn("> 当前解读：全A占比1.64%，趋势扩散偏冷，说明趋势赚钱效应扩散不足；这不是整体市场冰点。", rendered)
+        self.assertIn("| 2026-06-09 | 82 | 1.64% | 趋势扩散偏冷 | -78 | 元器件、化工原料、专用机械 |", rendered)
+        self.assertNotIn("最新差值 +2.68pct，当前为高潮", rendered)
+        self.assertNotIn("全A占比1.64%，处于冰点", rendered)
+
     def test_build_market_trend_sections_contract_renders_price_band_style_series(self):
         result = build_market_trend_sections_contract(
             data={
@@ -429,15 +504,15 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("### 3. 价格带风格", rendered)
         self.assertIn(
-            "> 近3个交易日价格带风格：最新差值 -1.38pct，当前为震荡；百元股累计 -3.26%，低价股累计 -1.98%。价格带只作风格背景，不单独说明明日走势，明日仍看成交额与核心承接。",
+            "> 近3个交易日价格带风格：最新差值 -1.38pct，相对风格价格带均衡；绝对状态同步回落；百元股累计 -3.26%，低价股累计 -1.98%。价格带只作局部风格背景，不单独说明整体市场温度，明日仍看成交额与核心承接。",
             rendered,
         )
         self.assertIn(
-            "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
+            "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。价格带只说明高价与低价的相对偏好，不单独代表整体市场冰点或高潮。",
             rendered,
         )
         self.assertIn("| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 相对风格 | 绝对状态 |", rendered)
-        self.assertIn("| 2026-05-21 | -4.26% | -2.88% | -1.38pct | 震荡 | 同步回落 |", rendered)
+        self.assertIn("| 2026-05-21 | -4.26% | -2.88% | -1.38pct | 价格带均衡 | 同步回落 |", rendered)
 
     def test_build_market_trend_sections_contract_renders_new_high_feedback(self):
         result = build_market_trend_sections_contract(
@@ -498,15 +573,15 @@ class MarketOverviewBuilderTest(unittest.TestCase):
             rendered,
         )
         self.assertIn(
-            "> 读法：全A占比低于2%看冰点，2%到5%看震荡，5%以上看高潮。这个指标只作趋势扩散背景，明日仍要结合成交额、指数位置、涨跌家数和核心承接。",
+            "> 读法：全A占比低于2%看趋势扩散偏冷，2%到5%看趋势扩散震荡，5%以上看趋势扩散偏热。这个指标只作趋势扩散背景，整体市场温度仍要结合成交额、指数位置、涨跌家数和核心承接。",
             rendered,
         )
         self.assertIn(
-            "> 当前解读：全A占比2.52%，处于震荡，说明趋势扩散存在但还不是极端热度。",
+            "> 当前解读：全A占比2.52%，趋势扩散震荡，说明趋势扩散存在但还不是极端热度。",
             rendered,
         )
-        self.assertIn("| 日期 | 新高数 | 全A占比 | 状态 | 较前日 | 主导板块 |", rendered)
-        self.assertIn("| 2026-05-18 | 126 | 2.52% | 震荡 | +26 | 半导体、机器人 |", rendered)
+        self.assertIn("| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |", rendered)
+        self.assertIn("| 2026-05-18 | 126 | 2.52% | 趋势扩散震荡 | +26 | 半导体、机器人 |", rendered)
         self.assertIn("| 半导体 | 35 | 27.78% | 趋势一号、趋势二号 |", rendered)
         self.assertIn("| 排名 | 股票 | 代码 | 所属板块 | 涨跌幅 | 成交额 | 新高跨度 |", rendered)
         self.assertNotIn("新高周期", rendered)
@@ -559,8 +634,8 @@ class MarketOverviewBuilderTest(unittest.TestCase):
 
     def test_build_market_trend_sections_contract_loads_recent_margin_pressure_from_fact_db(self):
         with TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            db_path = Path(tmp) / "fact-store"
+            service = _MarginPressureFactStore()
             for index in range(12):
                 day = date(2026, 5, 10) + timedelta(days=index)
                 market_turnover = 30000.0 + index * 100.0
@@ -587,11 +662,12 @@ class MarketOverviewBuilderTest(unittest.TestCase):
                 },
             }
 
-            result = build_market_trend_sections_contract(
-                data=data,
-                target_date="2026-05-22",
-                daily_fact_db_path=db_path,
-            )
+            with patch("report.market_overview_nodes.DatabaseService.fact_store_from_environment", return_value=service):
+                result = build_market_trend_sections_contract(
+                    data=data,
+                    target_date="2026-05-22",
+                    daily_fact_db_path=db_path,
+                )
 
         rendered = "\n".join(result["lines"])
         self.assertTrue(data["margin_pressure"]["available"])

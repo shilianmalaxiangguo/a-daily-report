@@ -19,7 +19,7 @@ class TradingPhilosophyModuleTest(unittest.TestCase):
         self.assertIn("观察资格/买入资格", snapshot["main_derivation_chain"])
         self.assertIn("环境条件满足", snapshot["decision_gate_chain"])
         self.assertIn("固定交易窗口条件", snapshot["decision_gate_chain"])
-        self.assertIn("30分钟止损", snapshot["decision_gate_chain"])
+        self.assertIn("失效价和单笔-5%底线", snapshot["decision_gate_chain"])
         self.assertIn("普通结构只看09:50-10:10窗口", rendered)
         self.assertIn("不为新故事切掉旧事实", rendered)
         self.assertIn("10cm", rendered)

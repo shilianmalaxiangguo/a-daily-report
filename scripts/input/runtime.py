@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as _dt
+
 from domains.calendar_events.request import collect_calendar_events_request_bundle
 from domains.market_activity.infer import (
     build_market_activity_quant_signal_bundle,
@@ -25,6 +27,7 @@ from input.request_diagnostics_runtime import (
     render_request_diagnostics_lines,
 )
 from input.request_registry import build_input_request_registry, resolve_request_target_date
+from storage.database_service import DatabaseService
 from market_data.xueqiu_hot_stock_service import (
     try_fetch_xueqiu_a_share_hot_24h,
     try_fetch_xueqiu_hot_stock_arguments,
@@ -55,6 +58,19 @@ def _restore_runtime_bindings(previous):
             module_globals.pop(key, None)
         else:
             module_globals[key] = value
+
+
+def _refresh_final_report_stock_quotes(results, *, target_date, timer, emit, tencent):
+    quote_result = collect_market_activity_stock_quote_request_bundle(
+        existing_results=results,
+        fetch_stock_batch_info=lambda codes: tencent.get_stock_batch_info(codes),
+        fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
+        target_date=target_date,
+        timer=timer,
+        emit=emit,
+    )
+    results.update(quote_result.get("results", {}))
+    return quote_result.get("module_logs", [])
 
 
 def run_input_runtime(target_date=None, *, helpers=None, config=None):
@@ -197,6 +213,7 @@ def _run_input_runtime_legacy_body(target_date=None):
     
     # 确定目标日期并初始化首批请求注册表
     request_registry = build_input_request_registry(globals())
+    request_registry["database_service_cls"] = globals().get("DatabaseService", DatabaseService)
     target_date = resolve_request_target_date(target_date)
     
     print("📅 目标日期: {}".format(target_date), flush=True)
@@ -233,6 +250,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             get_limit_down_pool=get_limit_down_pool,
             fetch_market_activity_df=_fetch_market_activity_df,
             request_registry=request_registry,
+            current_date=_dt.datetime.now().strftime("%Y-%m-%d"),
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -261,8 +279,6 @@ def _run_input_runtime_legacy_body(target_date=None):
         step_status.update(market_activity_hot_rank_result.get("step_status", {}))
         module_logs.extend(market_activity_hot_rank_result.get("module_logs", []))
         
-        import datetime as _dt
-
         current_dates = (
             _dt.datetime.now().strftime("%Y-%m-%d"),
             (_dt.datetime.now() - _dt.timedelta(days=1)).strftime("%Y-%m-%d"),
@@ -438,20 +454,32 @@ def _run_input_runtime_legacy_body(target_date=None):
                 etf_turnover_series = {}
             results["etf_turnover_series"] = etf_turnover_series or {}
             etf_rows = (etf_turnover_series or {}).get("rows") or []
-            data_status["ETF两市成交额趋势"] = bool(etf_rows)
-            step_status["ETF两市成交额趋势获取"] = bool(etf_rows)
+            etf_coverage_anomaly = bool((etf_turnover_series or {}).get("coverage_anomaly"))
+            etf_usable = bool(etf_rows) and not etf_coverage_anomaly
+            data_status["ETF两市成交额趋势"] = etf_usable
+            step_status["ETF两市成交额趋势获取"] = etf_usable
+            etf_message = "已获取ETF两市成交额趋势"
+            if etf_rows and etf_coverage_anomaly:
+                etf_message = "ETF两市成交额趋势样本覆盖不足"
             module_logs.append(
                 {
                     "module": "input.runtime",
                     "step": "request.etf_turnover_series",
-                    "status": "success" if etf_rows else "degraded",
-                    "message": "已获取ETF两市成交额趋势",
+                    "status": "success" if etf_usable else "degraded",
+                    "message": etf_message,
                     "details": {
                         "provider": (etf_turnover_series or {}).get("source") or "sina.etf.daily_amount",
                         "target_keys": ["etf_turnover_series"],
                         "row_count": len(etf_rows),
                         "usable_etf_count": (etf_turnover_series or {}).get("usable_etf_count", 0),
                         "empty_etf_count": (etf_turnover_series or {}).get("empty_etf_count", 0),
+                        "coverage_status": (etf_turnover_series or {}).get("coverage_status", ""),
+                        "coverage_ratio": (etf_turnover_series or {}).get("coverage_ratio", ""),
+                        "overall_coverage_ratio": (etf_turnover_series or {}).get("overall_coverage_ratio", ""),
+                        "coverage_reference_count": (etf_turnover_series or {}).get("coverage_reference_count", 0),
+                        "latest_covered_etf_count": (etf_turnover_series or {}).get("latest_covered_etf_count", 0),
+                        "total_etf_universe_count": (etf_turnover_series or {}).get("total_etf_universe_count", 0),
+                        "coverage_anomaly_reason": (etf_turnover_series or {}).get("coverage_anomaly_reason", ""),
                     },
                 }
             )
@@ -791,6 +819,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             existing_results=results,
             fetch_stock_batch_info=lambda codes: TencentFinanceData().get_stock_batch_info(codes),
             fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
+            target_date=target_date,
             timer=timer,
             emit=lambda message: print(message, flush=True),
         )
@@ -995,6 +1024,15 @@ def _run_input_runtime_legacy_body(target_date=None):
                     },
                 }
             )
+
+        final_quote_logs = _refresh_final_report_stock_quotes(
+            results,
+            target_date=target_date,
+            timer=timer,
+            tencent=tencent,
+            emit=lambda message: print(message, flush=True),
+        )
+        module_logs.extend(final_quote_logs)
         
         # ========== 添加状态跟踪字典到结果 ==========
         results['data_status'] = data_status

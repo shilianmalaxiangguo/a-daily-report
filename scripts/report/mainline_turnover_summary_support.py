@@ -2,6 +2,7 @@ from knowledge.sector_narrative_alias import (
     merge_sector_evidence_rows_by_narrative,
     normalize_sector_list_by_narrative,
 )
+from report.cycle_sector_style import cycle_sector_label
 
 
 def resolve_mainline_turnover_summary(context=None):
@@ -617,10 +618,25 @@ def resolve_turnover_share_trend_rows(context=None):
         if not isinstance(row, dict):
             continue
         row = row or {}
+        cycle_mainline = str(row.get("cycle_mainline") or "-").strip() or "-"
+        daily_attack_line = str(row.get("daily_attack_line") or "-").strip() or "-"
+        small_cycle_line = str(row.get("small_cycle_line") or daily_attack_line or cycle_mainline or "-").strip() or "-"
+        switch_judgement = str(
+            row.get("cycle_switch_judgement") or row.get("switch_judgement") or ""
+        ).strip()
+        if not switch_judgement:
+            if cycle_mainline != "-" and small_cycle_line != "-" and cycle_mainline != small_cycle_line:
+                switch_judgement = "小周期试攻，未确认切换"
+            elif small_cycle_line != "-":
+                switch_judgement = "大周期延续"
+            else:
+                switch_judgement = "小周期待确认"
         normalized_row = {
             "date": str(row.get("date") or "-").strip() or "-",
-            "cycle_mainline": str(row.get("cycle_mainline") or "-").strip() or "-",
-            "daily_attack_line": str(row.get("daily_attack_line") or "-").strip() or "-",
+            "cycle_mainline": cycle_mainline,
+            "daily_attack_line": daily_attack_line,
+            "small_cycle_line": small_cycle_line,
+            "cycle_switch_judgement": switch_judgement,
             "mainline_turnover": str(row.get("mainline_turnover") or "-").strip() or "-",
             "market_turnover": str(row.get("market_turnover") or "-").strip() or "-",
             "share": str(row.get("share") or "-").strip() or "-",
@@ -712,11 +728,14 @@ def group_hot_sector_turnover_watch_rows(rows=None):
     )
 
 
-def render_hot_sector_turnover_watch_grouped_lines(rows=None, *, heading_prefix="####"):
+def render_hot_sector_turnover_watch_grouped_lines(rows=None, *, heading_prefix="####", color_by_mainline=None):
     groups = group_hot_sector_turnover_watch_rows(rows)
     lines = []
     for group in groups:
-        lines.append(f"{heading_prefix} 近期热点板块成交额连续跟踪：{group['sector_name']}")
+        lines.append(
+            f"{heading_prefix} 近期热点板块成交额连续跟踪："
+            f"{cycle_sector_label(group['sector_name'], color_by_mainline)}"
+        )
         lines.extend(
             [
                 "| 日期 | 板块成交额 | 两市成交额 | 占比 | 同板块变化 | 样本状态 | 解读 |",

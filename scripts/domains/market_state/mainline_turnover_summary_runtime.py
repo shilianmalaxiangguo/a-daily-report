@@ -526,6 +526,21 @@ def _apply_tag_snapshot_to_evidence_rows(rows, snapshot):
     return patched_rows
 
 
+def _tag_snapshot_daily_attack_line(snapshot, *, max_labels=2):
+    labels = []
+    for group in (snapshot or {}).get("groups") or []:
+        if str((group or {}).get("关系判断") or "") == "证据不足":
+            continue
+        label = str((group or {}).get("当日主攻分支") or (group or {}).get("采用名称") or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    for label in (snapshot or {}).get("adopted_labels") or []:
+        label = str(label or "").strip()
+        if label and label not in labels:
+            labels.append(label)
+    return " / ".join(labels[: max(int(max_labels or 0), 1)])
+
+
 def build_mainline_attack_evidence_summary(*, sector_evidence_rows=None, market_regime="", realtime_tag_evidence_snapshot=None):
     sector_evidence_rows = _apply_tag_snapshot_to_evidence_rows(sector_evidence_rows or [], realtime_tag_evidence_snapshot)
     rows = [
@@ -863,8 +878,22 @@ def _limit_turnover_share_source_rows(source_rows, current_mainline, limit=25):
     return source_rows[-limit:]
 
 
-def _build_turnover_share_trend_rows(recent_sector_turnover_history, current_snapshot, current_mainline):
-    source_rows = list(recent_sector_turnover_history or []) + ([current_snapshot] if current_snapshot else [])
+def _build_turnover_share_trend_rows(
+    recent_sector_turnover_history,
+    current_snapshot,
+    current_mainline,
+    *,
+    current_cycle_mainline="",
+    current_daily_attack_line="",
+):
+    source_rows = list(recent_sector_turnover_history or [])
+    if current_snapshot:
+        current_item = dict(current_snapshot)
+        if current_cycle_mainline and not current_item.get("cycle_mainline"):
+            current_item["cycle_mainline"] = current_cycle_mainline
+        if current_daily_attack_line and not current_item.get("daily_attack_line"):
+            current_item["daily_attack_line"] = current_daily_attack_line
+        source_rows.append(current_item)
     rows = []
     previous_share_by_mainline = {}
     for item in _limit_turnover_share_source_rows(source_rows, current_mainline):
@@ -927,10 +956,10 @@ def _build_turnover_share_trend_summary(recent_sector_turnover_history, current_
     window_label = f"近{len(limited_rows)}个交易日" if len(limited_rows) == 25 else f"近{len(points)}个有效交易日"
     if len(unique_sectors) > 1:
         return (
-            f"{window_label}主线切换成交额记录："
+            f"{window_label}小周期成交额记录："
             f"当前{current_sector}{current_share:.1f}%，"
             f"样本包含{len(unique_sectors)}个不同方向；"
-            "这是每日被选中方向的记录，不作为同一板块涨跌判断。"
+            "这是小周期方向的成交额记录，不作为大周期主线切换确认。"
         )
     recent_change_text = ""
     if len(shares) >= 5:
@@ -1309,6 +1338,7 @@ def build_mainline_turnover_summary(
     )
     evidence_primary_line = str((attack_evidence_summary or {}).get("primary_line") or "").strip()
     evidence_relationship = str((attack_evidence_summary or {}).get("relationship_hint") or "").strip()
+    tag_daily_attack_line = _tag_snapshot_daily_attack_line(realtime_tag_evidence_snapshot)
     if attack_evidence_summary:
         if attack_evidence_summary.get("attack_state") == "confirmed_attack" and evidence_primary_line:
             current_mainline = evidence_primary_line
@@ -1383,6 +1413,8 @@ def build_mainline_turnover_summary(
         sector_attack_evidence_rows=sector_attack_evidence_rows,
         recent_hot_sector_turnover_history=recent_hot_sector_turnover_history,
     )
+    cycle_mainline = previous_mainline if is_countertrend_attack and previous_mainline else (current_mainline or "-")
+    daily_attack_line = tag_daily_attack_line or current_mainline or "-"
     return {
         "date": str(target_date or current_record.get("date") or current_snapshot.get("date") or "").strip(),
         "label": "主线更替与成交额占比",
@@ -1393,11 +1425,15 @@ def build_mainline_turnover_summary(
         "data_text": data_text,
         "action_text": action_text,
         "double_mainline_summary": {
-            "cycle_mainline": previous_mainline if is_countertrend_attack and previous_mainline else (current_mainline or "-"),
-            "daily_attack_line": current_mainline or "-",
+            "cycle_mainline": cycle_mainline,
+            "daily_attack_line": daily_attack_line,
             "relationship": (
                 f"{current_mainline}只是放量杀跌中的观察主攻线，不按周期主线处理"
                 if is_countertrend_attack and current_mainline
+                else f"{tag_daily_attack_line}只是当日观察分支，不按周期主线处理"
+                if tag_daily_attack_line and not current_mainline
+                else f"{tag_daily_attack_line}是当天主攻线，{current_mainline}仍按周期主线观察"
+                if tag_daily_attack_line and current_mainline and tag_daily_attack_line != current_mainline
                 else "周期主线与当天主攻线一致" if current_mainline else "主线待确认"
             ),
             "tomorrow_action": action_text,
@@ -1415,6 +1451,8 @@ def build_mainline_turnover_summary(
             recent_sector_turnover_history,
             current_snapshot,
             current_mainline,
+            current_cycle_mainline=previous_mainline if is_countertrend_attack and previous_mainline else current_mainline,
+            current_daily_attack_line=tag_daily_attack_line or current_mainline,
         ),
         "hot_sector_turnover_watch_summary": _build_hot_sector_turnover_watch_summary(hot_sector_watch_rows),
         "hot_sector_turnover_watch_rows": hot_sector_watch_rows,

@@ -19,7 +19,7 @@ def _target_date(context):
 def _daily_fact_db_path(context):
     if (context or {}).get("daily_fact_db_path"):
         return Path((context or {}).get("daily_fact_db_path"))
-    return Path(__file__).resolve().parents[2] / "data" / "cloudflare_free_daily.db"
+    return None
 
 
 def _safe_float(value, default=0.0):
@@ -369,11 +369,24 @@ def _etf_turnover_rows(data):
     return rows[-25:]
 
 
+def _etf_turnover_coverage_anomaly(data, rows):
+    snapshot = (data or {}).get("etf_turnover_series") or {}
+    if isinstance(snapshot, dict) and (
+        snapshot.get("coverage_anomaly") is True or str(snapshot.get("coverage_status") or "") == "partial"
+    ):
+        return True, str(snapshot.get("coverage_anomaly_reason") or "").strip()
+    for row in rows or []:
+        if isinstance(row, dict) and row.get("coverage_anomaly") is True:
+            return True, str(row.get("coverage_anomaly_reason") or "").strip()
+    return False, ""
+
+
 def _etf_capacity_signal(data):
     rows = _etf_turnover_rows(data)
     if not rows:
         return {
             "available": False,
+            "usable_for_capacity_judgment": False,
             "current_amount_yi": 0.0,
             "label": "待累计",
             "basis": "ETF两市成交额待累计。",
@@ -382,6 +395,20 @@ def _etf_capacity_signal(data):
 
     current = rows[-1]
     current_amount = _safe_float(current.get("etf_turnover_yi"))
+    coverage_anomaly, coverage_reason = _etf_turnover_coverage_anomaly(data, rows)
+    if coverage_anomaly:
+        basis = coverage_reason or "ETF两市成交额样本覆盖不足，停止用于机构容量判断。"
+        if not basis.endswith("。"):
+            basis = f"{basis}。"
+        basis = _append_sentence(basis, "停止用于机构容量判断")
+        return {
+            "available": True,
+            "usable_for_capacity_judgment": False,
+            "current_amount_yi": current_amount,
+            "label": "样本覆盖不足",
+            "basis": basis,
+            "rows": rows,
+        }
     recent_rows = rows[-5:] if len(rows) >= 5 else rows
     recent_amounts = [_safe_float(row.get("etf_turnover_yi")) for row in recent_rows]
     recent_change = _pct_change_between(current_amount, recent_amounts[0]) if recent_amounts else None
@@ -410,6 +437,7 @@ def _etf_capacity_signal(data):
 
     return {
         "available": True,
+        "usable_for_capacity_judgment": True,
         "current_amount_yi": current_amount,
         "label": label,
         "basis": basis,
@@ -422,6 +450,11 @@ def _etf_capacity_combo_judgment(etf_capacity, top50_share, new_high_regime, mar
         return {
             "state": "待累计",
             "basis": "ETF容量数据待累计，暂不判断与其他市场指标的配合。",
+        }
+    if (etf_capacity or {}).get("usable_for_capacity_judgment") is False:
+        return {
+            "state": "待复核",
+            "basis": "ETF容量数据样本不足，暂不判断与其他市场指标的配合。",
         }
 
     etf_label = str((etf_capacity or {}).get("label") or "")
@@ -562,7 +595,7 @@ def _load_margin_pressure_snapshot_from_fact_db(target_date="", *, db_path=None)
     if not target_date:
         return {}
     try:
-        service = DatabaseService.sqlite_d1_compatible(db_path)
+        service = DatabaseService.fact_store_from_environment(db_path)
         payload = service.query_margin_pressure_series(target_date, window_days=250)
         rows = list((payload or {}).get("rows") or [])
         if not rows:
@@ -676,14 +709,56 @@ def _new_high_regime(all_a_share_pct):
     return "震荡"
 
 
-def _new_high_interpretation(all_a_share_pct):
+def _new_high_regime_signal(all_a_share_pct):
     regime = _new_high_regime(all_a_share_pct)
-    pct_text = _format_pct(all_a_share_pct)
     if regime == "冰点":
-        return f"全A占比{pct_text}，处于冰点，说明趋势赚钱效应扩散不足。"
+        return "趋势扩散偏冷"
     if regime == "高潮":
-        return f"全A占比{pct_text}，处于高潮，说明趋势扩散偏热，若同时放量，次日更要警惕降温。"
-    return f"全A占比{pct_text}，处于震荡，说明趋势扩散存在但还不是极端热度。"
+        return "趋势扩散偏热"
+    return "趋势扩散震荡"
+
+
+def _new_high_interpretation(all_a_share_pct):
+    signal = _new_high_regime_signal(all_a_share_pct)
+    pct_text = _format_pct(all_a_share_pct)
+    if signal == "趋势扩散偏冷":
+        return f"全A占比{pct_text}，趋势扩散偏冷，说明趋势赚钱效应扩散不足；这不是整体市场冰点。"
+    if signal == "趋势扩散偏热":
+        return f"全A占比{pct_text}，趋势扩散偏热；只有成交额、指数位置和涨跌家数同步支持时，整体才按高潮看待。"
+    return f"全A占比{pct_text}，趋势扩散震荡，说明趋势扩散存在但还不是极端热度。"
+
+
+def _price_band_style_signal(label):
+    text = str(label or "").strip()
+    if text == "高潮":
+        return "高价相对占优"
+    if text == "冰点":
+        return "低价相对抗跌"
+    if text == "震荡":
+        return "价格带均衡"
+    return text or "价格带待判断"
+
+
+def _price_band_style_summary(snapshot, rows):
+    rows = list(rows or [])
+    if not rows:
+        return snapshot.get("summary") or "价格带风格趋势已生成。"
+    latest_row = rows[-1]
+    latest_spread = _safe_float(latest_row.get("spread_pct"))
+    latest_signal = _price_band_style_signal(latest_row.get("style_label"))
+    latest_absolute_label = latest_row.get("absolute_label") or _price_band_absolute_label(
+        latest_row.get("high_price_pct"),
+        latest_row.get("low_price_pct"),
+    )
+    high_total = sum(_safe_float((row or {}).get("high_price_pct")) for row in rows)
+    low_total = sum(_safe_float((row or {}).get("low_price_pct")) for row in rows)
+    return (
+        f"近{len(rows)}个交易日价格带风格："
+        f"最新差值 {latest_spread:+.2f}pct，相对风格{latest_signal}；"
+        f"绝对状态{latest_absolute_label}；"
+        f"百元股累计 {high_total:+.2f}%，低价股累计 {low_total:+.2f}%。"
+        f"价格带只作局部风格背景，不单独说明整体市场温度，明日仍看成交额与核心承接。"
+    )
 
 
 def _index_risk_is_weak(data):
@@ -980,8 +1055,8 @@ def build_market_overview_price_band_style_node(context, node_meta=None, node_lo
         return {"lines": [], "exports": {"price_band_style_series": snapshot}, "module_logs": []}
     lines = [
         "### 3. 价格带风格",
-        f"> {snapshot.get('summary') or '价格带风格趋势已生成。'}",
-        "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。-2pct 以下看冰点，-2pct 到 +2pct 看震荡，+2pct 以上看高潮。",
+        f"> {_price_band_style_summary(snapshot, rows)}",
+        "> 读法：这里先看 `百元股涨跌幅 - 低价股涨跌幅` 的相对风格，再看两组自身涨跌的绝对状态。差值越高，说明资金越偏高价核心；差值越低，说明高价核心降温、低价股相对抗跌。价格带只说明高价与低价的相对偏好，不单独代表整体市场冰点或高潮。",
         "",
         "| 日期 | 百元股涨跌幅 | 低价股涨跌幅 | 当日差值 | 相对风格 | 绝对状态 |",
         "|------|--------------|--------------|--------------|----------|----------|",
@@ -990,7 +1065,8 @@ def build_market_overview_price_band_style_node(context, node_meta=None, node_lo
         lines.append(
             f"| {row.get('trade_date', '')} | {_format_signed_pct(row.get('high_price_pct'))} | "
             f"{_format_signed_pct(row.get('low_price_pct'))} | {_safe_float(row.get('spread_pct')):+.2f}pct | "
-            f"{row.get('style_label', '震荡')} | {row.get('absolute_label') or _price_band_absolute_label(row.get('high_price_pct'), row.get('low_price_pct'))} |"
+            f"{_price_band_style_signal(row.get('style_label'))} | "
+            f"{row.get('absolute_label') or _price_band_absolute_label(row.get('high_price_pct'), row.get('low_price_pct'))} |"
         )
     lines.append("")
     return {"lines": lines, "exports": {"price_band_style_series": snapshot}, "module_logs": []}
@@ -1009,17 +1085,17 @@ def build_market_overview_new_high_node(context, node_meta=None, node_lookup=Non
         [
             f"> {snapshot.get('summary') or '创新高趋势反馈已生成。'}",
             "> 用途：创新高看的是趋势赚钱效应有没有扩散。全A占比越高，说明越多股票突破过去约250个交易日高点；但超过5%后若同时放量，往往偏热，次日更容易降温。",
-            "> 读法：全A占比低于2%看冰点，2%到5%看震荡，5%以上看高潮。这个指标只作趋势扩散背景，明日仍要结合成交额、指数位置、涨跌家数和核心承接。",
+            "> 读法：全A占比低于2%看趋势扩散偏冷，2%到5%看趋势扩散震荡，5%以上看趋势扩散偏热。这个指标只作趋势扩散背景，整体市场温度仍要结合成交额、指数位置、涨跌家数和核心承接。",
             f"> 当前解读：{_new_high_interpretation(snapshot.get('all_a_share_pct'))}",
             "",
-            "| 日期 | 新高数 | 全A占比 | 状态 | 较前日 | 主导板块 |",
+            "| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |",
             "|------|--------|---------|------|--------|----------|",
         ]
     )
     for row in _display_latest_first(snapshot.get("trend_rows", []) or []):
         lines.append(
             f"| {row.get('trade_date', '')} | {int(_safe_float(row.get('new_high_count')))} | "
-            f"{_format_pct(row.get('all_a_share_pct'))} | {_new_high_regime(row.get('all_a_share_pct'))} | "
+            f"{_format_pct(row.get('all_a_share_pct'))} | {_new_high_regime_signal(row.get('all_a_share_pct'))} | "
             f"{row.get('change_text', '待累计')} | "
             f"{row.get('leading_sectors', '待补充板块')} |"
         )

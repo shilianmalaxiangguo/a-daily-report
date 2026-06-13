@@ -136,6 +136,37 @@ def _build_conclusion(sector_name: str, trend: str, ma5: float, latest: float) -
         return f"{sector_name}成交占比震荡,边走边确认,等窗口"
 
 
+def _normalize_sector_turnover_history_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    grouped = {}
+    sector_order = []
+
+    for item in rows or []:
+        if not isinstance(item, dict):
+            continue
+
+        sector_name = str(item.get("sector_name") or item.get("name") or "").strip()
+        if not sector_name:
+            continue
+
+        if sector_name not in grouped:
+            grouped[sector_name] = []
+            sector_order.append(sector_name)
+
+        if isinstance(item.get("history"), list):
+            grouped[sector_name].extend(row for row in item.get("history") or [] if isinstance(row, dict))
+            continue
+
+        grouped[sector_name].append(dict(item))
+
+    normalized = []
+    for sector_name in sector_order:
+        history = grouped[sector_name]
+        history.sort(key=lambda row: str(row.get("date") or row.get("trade_date") or ""))
+        normalized.append({"sector_name": sector_name, "history": history})
+
+    return normalized
+
+
 def build_sector_turnover_trend(
     sector_name: str,
     turnover_history: List[Dict[str, Any]],
@@ -256,8 +287,9 @@ def build_top5_sector_turnover_summary(
         }
     """
     results = []
+    normalized_history = _normalize_sector_turnover_history_rows(sectors_turnover_history)
 
-    for item in sectors_turnover_history[:top_n]:
+    for item in normalized_history:
         sector_name = item.get("sector_name") or item.get("name")
         history = item.get("history") or []
 
@@ -269,6 +301,7 @@ def build_top5_sector_turnover_summary(
 
     # 按最新成交占比排序
     results.sort(key=lambda x: x["latest_share"], reverse=True)
+    results = results[:top_n]
 
     # 找出扩张和收缩的板块
     expanding_sectors = [r["sector_name"] for r in results if r["trend_3d"] == "强化"]

@@ -58,6 +58,34 @@ class TwoMarketTurnoverNodeRuntimeTest(unittest.TestCase):
         self.assertEqual(result["diagnostics"]["compare"]["history_count"], 0)
         self.assertEqual(result["diagnostics"]["compare"]["source"], "missing")
 
+    def test_compare_node_uses_top50_series_market_amount_when_turnover_history_missing(self):
+        node_specs = build_two_market_turnover_node_specs(enabled_node_keys=["compare"])
+        result = run_two_market_turnover_nodes(
+            node_specs,
+            {
+                "target_date": "2026-06-04",
+                "data": {
+                    "total_turnover": 27791.64,
+                    "top50_turnover_share_series": {
+                        "rows": [
+                            {"trade_date": "2026-06-03", "market_amount_yi": 31531.25, "share_pct": 20.0},
+                            {"trade_date": "2026-06-04", "market_amount_yi": 27791.64, "share_pct": 19.0},
+                        ]
+                    },
+                    "market_stats": {"up_count": 1800, "down_count": 3600},
+                    "dt_pool": [{"code": "000001"}] * 5,
+                },
+            },
+        )
+
+        summary = result["context"]["two_market_turnover_comparison"]
+        self.assertEqual(summary["state"], "pullback")
+        self.assertEqual(summary["label"], "成交额冲高后回落")
+        self.assertEqual(summary["previous_turnover_yi"], 31531.25)
+        self.assertAlmostEqual(summary["previous_change_pct"], -11.86, places=2)
+        self.assertEqual(result["diagnostics"]["compare"]["history_count"], 1)
+        self.assertEqual(result["diagnostics"]["compare"]["source"], "context.top50_turnover_share_series.market_amount_yi")
+
 
 if __name__ == "__main__":
     unittest.main()

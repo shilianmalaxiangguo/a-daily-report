@@ -24,6 +24,7 @@ def build_market_and_sector_analysis_contract(
     *,
     ai_group_concepts_into_chains,
     enabled_node_keys=None,
+    target_date="",
 ):
     data = data or {}
     market_analysis = market_analysis or {}
@@ -31,6 +32,7 @@ def build_market_and_sector_analysis_contract(
     exit_analysis = exit_analysis or {}
     main_sectors_info = main_sectors_info or []
     secondary_sectors_info = secondary_sectors_info or []
+    target_date = target_date or data.get("target_date", "")
     node_result = build_market_analysis_section_result(
         {
             "data": data,
@@ -42,6 +44,7 @@ def build_market_and_sector_analysis_contract(
             "secondary_sectors_info": secondary_sectors_info,
             "ai_group_concepts_into_chains": ai_group_concepts_into_chains,
             "enabled_node_keys": enabled_node_keys,
+            "target_date": target_date,
         }
     )
     lines = list(node_result.get("lines") or [])

@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -123,6 +124,123 @@ class LlmServiceEnvTest(unittest.TestCase):
 
         self.assertEqual(result, "OK")
         self.assertEqual(provider.calls, [64])
+
+    def test_llm_service_retries_reasoning_only_length_response_with_higher_tokens(self):
+        module = self._load_llm_service_module("llm_service_reasoning_retry_test")
+
+        class ReasoningRetryProvider(module.BaseLLMProvider):
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, model, temperature, max_tokens, timeout):
+                self.calls.append(max_tokens)
+                if len(self.calls) == 1:
+                    raise RuntimeError(
+                        "deepseek reasoning-only length response; increase max_tokens "
+                        "(reasoning_len=1750)"
+                    )
+                return "OK"
+
+        module.reset_llm_service()
+        service = module.LLMService(timeout=3)
+        provider = ReasoningRetryProvider()
+        service.provider = provider
+
+        result = service.chat("只返回 OK", max_tokens=500, max_retries=1)
+
+        self.assertEqual(result, "OK")
+        self.assertEqual(provider.calls[0], 500)
+        self.assertGreaterEqual(provider.calls[1], 2774)
+
+    def test_adjudicate_calendar_event_news_evidence_parses_structured_result(self):
+        module = self._load_llm_service_module("llm_service_calendar_news_adjudication_test")
+
+        class CapturingProvider(module.BaseLLMProvider):
+            def __init__(self):
+                self.calls = []
+
+            def chat(self, messages, model, temperature, max_tokens, timeout):
+                self.calls.append(
+                    {
+                        "messages": messages,
+                        "model": model,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "timeout": timeout,
+                    }
+                )
+                return json.dumps(
+                    {
+                        "matched": True,
+                        "evidence_index": 0,
+                        "confidence": "高",
+                        "match_reason": "同一场活动新闻，且含官方文件动作",
+                        "classification_hint": "政策催化",
+                        "related_sectors": ["政策催化"],
+                        "policy_evidence": True,
+                    },
+                    ensure_ascii=False,
+                )
+
+        module.reset_llm_service()
+        service = module.LLMService(timeout=3)
+        provider = CapturingProvider()
+        service.provider = provider
+
+        result = service.adjudicate_calendar_event_news_evidence(
+            {"title": "量子安全技术大会将于6月5日举办", "date": "2026-06-05"},
+            [
+                {
+                    "title": "量子安全技术大会召开，工信部发布行业高质量发展实施方案",
+                    "evidence_text": "工信部在大会期间发布行业高质量发展实施方案。",
+                    "source_date": "2026-06-05",
+                }
+            ],
+            report_date="2026-06-05",
+        )
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["evidence_index"], 0)
+        self.assertEqual(result["confidence"], "高")
+        self.assertTrue(result["policy_evidence"])
+        prompt_text = provider.calls[0]["messages"][-1]["content"]
+        self.assertIn("量子安全技术大会", prompt_text)
+        self.assertIn("工信部", prompt_text)
+        self.assertGreaterEqual(provider.calls[0]["max_tokens"], 64)
+
+    def test_adjudicate_calendar_event_news_evidence_rejects_boolean_index_and_confidence_shape(self):
+        module = self._load_llm_service_module("llm_service_calendar_news_boolean_shape_test")
+
+        class BooleanShapeProvider(module.BaseLLMProvider):
+            def chat(self, messages, model, temperature, max_tokens, timeout):
+                return json.dumps(
+                    {
+                        "matched": True,
+                        "evidence_index": True,
+                        "confidence": True,
+                        "match_reason": "布尔字段不是合格结构",
+                        "classification_hint": "政策催化",
+                        "policy_evidence": True,
+                    },
+                    ensure_ascii=False,
+                )
+
+        module.reset_llm_service()
+        service = module.LLMService(timeout=3)
+        service.provider = BooleanShapeProvider()
+
+        result = service.adjudicate_calendar_event_news_evidence(
+            {"title": "量子安全技术大会将于6月5日举办", "date": "2026-06-05"},
+            [
+                {"title": "候选1", "evidence_text": "同日候选1。", "source_date": "2026-06-05"},
+                {"title": "候选2", "evidence_text": "同日候选2。", "source_date": "2026-06-05"},
+            ],
+            report_date="2026-06-05",
+        )
+
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["evidence_index"], -1)
+        self.assertEqual(result["confidence"], "")
 
     def test_event_analysis_cache_uses_postgres_runtime_cache_when_configured(self):
         module = self._load_llm_service_module("llm_service_event_cache_test")

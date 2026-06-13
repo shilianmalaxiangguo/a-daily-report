@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import datetime
+import json
+import os
+from pathlib import Path
 
 from daily_report_snapshot_io import load_data_snapshot
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
@@ -71,6 +74,10 @@ def _normalize_date(value):
 
 def _normalize_kline_date_str(value):
     return _default_normalize_kline_date_str(value)
+
+
+def _repo_root():
+    return Path(__file__).resolve().parents[3]
 
 
 def ensure_daily_metric_history_index(**kwargs):
@@ -248,20 +255,100 @@ def _iter_recent_mainline_history(payload, depth=0, max_depth=4):
     return records
 
 
+def _normalize_series_mainline_history_record(row):
+    if not isinstance(row, dict):
+        return None
+    primary_mainline = _first_non_empty(row.get("currentMainline"), row.get("sectorName"))
+    trade_date = _normalize_date(row.get("date") or row.get("trade_date"))
+    if not primary_mainline or not trade_date:
+        return None
+    state_code = _normalize_date(row.get("stateCode"))
+    return {
+        "date": trade_date,
+        "primary_mainline": primary_mainline,
+        "secondary_mainline": _normalize_date(row.get("secondaryMainline")),
+        "competition_mainline": _normalize_date(row.get("competitionMainline")),
+        "rotation_label": state_code,
+        "leading_line": primary_mainline,
+        "state_code": state_code,
+        "rotation_summary": _normalize_date(row.get("sourceMessage")),
+        "source": "snap_ui.mainline_series_replay",
+    }
+
+
+def _iter_mainline_series_history_records(payload, depth=0, max_depth=4):
+    if payload is None or depth > max_depth:
+        return []
+    records = []
+    if isinstance(payload, dict):
+        direct_rows = payload.get("rows")
+        if isinstance(direct_rows, list):
+            for row in direct_rows:
+                normalized = _normalize_series_mainline_history_record(row)
+                if normalized:
+                    records.append(normalized)
+        for key, value in payload.items():
+            if key == "rows":
+                continue
+            if isinstance(value, (dict, list)):
+                records.extend(_iter_mainline_series_history_records(value, depth=depth + 1, max_depth=max_depth))
+        return records
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, (dict, list)):
+                records.extend(_iter_mainline_series_history_records(item, depth=depth + 1, max_depth=max_depth))
+    return records
+
+
+def _load_replay_snapshot_data(target_date):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        return None
+    path = _repo_root() / "snapshots" / "replay" / f"{target_date}_replay.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(payload, dict) and "data" in payload:
+        return payload.get("data")
+    return payload if isinstance(payload, dict) else None
+
+
+def _load_mainline_series_replay_data(target_date):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        return None
+    path = _repo_root() / "snap-ui" / "dist" / "data" / "snap-ui" / "mainline-series" / f"{target_date}-replay.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _load_recent_mainline_history_from_fact_db(target_date, lookback_days=25, *, db_path=None):
     service_cls = globals().get("DatabaseService")
     if service_cls is None:
         return []
     try:
-        if _postgres_only_runtime() and hasattr(service_cls, "from_environment"):
+        if _postgres_only_runtime() and hasattr(service_cls, "fact_store_from_environment"):
+            service = service_cls.fact_store_from_environment(db_path)
+            checker = getattr(service, "is_postgres_backed", None)
+            if not callable(checker) or not checker():
+                return []
+        elif _postgres_only_runtime() and hasattr(service_cls, "from_environment"):
             service = service_cls.from_environment(db_path)
             checker = getattr(service, "is_postgres_backed", None)
             if not callable(checker) or not checker():
                 return []
+        elif hasattr(service_cls, "fact_store_from_environment"):
+            service = service_cls.fact_store_from_environment(db_path)
         elif hasattr(service_cls, "from_environment"):
             service = service_cls.from_environment(db_path)
         else:
-            service = service_cls.sqlite_d1_compatible(db_path)
+            return []
         rows = service.query_mainline_daily_series(
             _normalize_kline_date_str(target_date) or target_date,
             window_days=lookback_days,
@@ -273,7 +360,41 @@ def _load_recent_mainline_history_from_fact_db(target_date, lookback_days=25, *,
         record = _normalize_history_record(row, fallback_date=row.get("trade_date") if isinstance(row, dict) else "")
         if record and str(record.get("date") or "") < str(target_date):
             normalized.append(record)
+    if len(normalized) < lookback_days:
+        series_history = _load_recent_mainline_history_from_series_replay(
+            target_date,
+            lookback_days=lookback_days,
+            max_scan_days=max(lookback_days * 3, 60),
+        )
+        if series_history:
+            merged = {str((item or {}).get("date") or "").strip(): item for item in normalized if str((item or {}).get("date") or "").strip()}
+            for item in series_history:
+                record_date = str((item or {}).get("date") or "").strip()
+                if record_date and record_date not in merged:
+                    merged[record_date] = item
+            normalized = [merged[key] for key in sorted(merged)]
     return normalized[-lookback_days:]
+
+
+def _load_recent_mainline_history_from_series_replay(target_date, lookback_days=25, *, max_scan_days=60):
+    history_by_date = {}
+    cursor = _normalize_kline_date_str(target_date)
+    scanned_days = 0
+    while cursor and len(history_by_date) < lookback_days and scanned_days < max_scan_days:
+        cursor = get_previous_date_str(cursor)
+        if not cursor:
+            break
+        scanned_days += 1
+        series_snapshot_data = _load_mainline_series_replay_data(cursor)
+        if not series_snapshot_data:
+            continue
+        for series_record in _iter_mainline_series_history_records(series_snapshot_data):
+            normalized_series = _normalize_history_record(series_record)
+            record_date = normalized_series.get("date") if normalized_series else ""
+            if not record_date or record_date >= str(target_date):
+                continue
+            history_by_date.setdefault(record_date, normalized_series)
+    return [history_by_date[key] for key in sorted(history_by_date)][-lookback_days:]
 
 
 def _history_latest_date(history):
@@ -342,24 +463,38 @@ def load_recent_mainline_history(target_date, lookback_days=5, max_scan_days=20,
             scanned_days += 1
 
             snapshot_data, _ = load_data_snapshot(cursor)
-            if not snapshot_data:
-                continue
+            payloads = []
+            if snapshot_data:
+                payloads.append(snapshot_data)
 
-            for recent_record in _iter_recent_mainline_history(snapshot_data):
-                normalized_recent = _normalize_history_record(recent_record)
-                record_date = normalized_recent.get("date") if normalized_recent else ""
-                if not record_date or record_date >= str(target_date):
-                    continue
-                history_by_date.setdefault(record_date, normalized_recent)
+            replay_snapshot_data = _load_replay_snapshot_data(cursor)
+            if replay_snapshot_data:
+                payloads.append(replay_snapshot_data)
 
-            record = extract_mainline_history_record(snapshot_data)
-            if not record:
-                continue
+            series_snapshot_data = _load_mainline_series_replay_data(cursor)
+            if series_snapshot_data:
+                payloads.append(series_snapshot_data)
 
-            normalized_record = _normalize_history_record(record, fallback_date=cursor)
-            record_date = normalized_record.get("date") if normalized_record else ""
-            if record_date and record_date < str(target_date):
-                history_by_date[record_date] = normalized_record
+            for payload in payloads:
+                record = extract_mainline_history_record(payload)
+                if record:
+                    normalized_record = _normalize_history_record(record, fallback_date=cursor)
+                    record_date = normalized_record.get("date") if normalized_record else ""
+                    if record_date and record_date < str(target_date):
+                        history_by_date.setdefault(record_date, normalized_record)
+
+                for recent_record in _iter_recent_mainline_history(payload):
+                    normalized_recent = _normalize_history_record(recent_record)
+                    record_date = normalized_recent.get("date") if normalized_recent else ""
+                    if not record_date or record_date >= str(target_date):
+                        continue
+                    history_by_date.setdefault(record_date, normalized_recent)
+
+                for series_record in _iter_mainline_series_history_records(payload):
+                    record_date = str((series_record or {}).get("date") or "").strip()
+                    if not record_date or record_date >= str(target_date):
+                        continue
+                    history_by_date.setdefault(record_date, series_record)
 
         return [history_by_date[key] for key in sorted(history_by_date)][-lookback_days:]
     finally:

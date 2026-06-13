@@ -133,6 +133,122 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("| 50 | 热股50 | 000050 |", rendered)
 
+    def test_hot_rank_table_enriches_limit_down_quote_and_status_from_context_pool(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [{"name": "利通电子", "code": "603629", "rate": 20904000, "concepts": ["消费电子"], "popularity_tag": ""}],
+                "zt_pool": [],
+                "dt_pool": [
+                    {
+                        "代码": "603629",
+                        "名称": "利通电子",
+                        "所属行业": "消费电子",
+                        "涨跌幅": -10.0,
+                        "最高价": 166.98,
+                        "最低价": 162.34,
+                        "开盘价": 162.34,
+                        "最新价": 162.34,
+                    }
+                ],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-06-08",
+            stock_full_info={"603629": {"change_pct": 0.0, "high": 0.0, "low": 0.0, "open": 0.0, "close": 0.0, "name": "利通电子"}},
+            get_stock_status=lambda *args, **kwargs: "-10.00% 跌停",
+            get_stock_sector=lambda *args, **kwargs: "消费电子",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("下跌趋势", 0, "弱"),
+            enabled_node_keys=["hot_rank_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 利通电子 | 603629 | 2090.4w | 消费电子 | -10.00% | 166.98 | 162.34 | 162.34 | 162.34 | 跌停 | 下跌趋势(0分) |",
+            rendered,
+        )
+
+    def test_lhb_table_enriches_limit_down_quote_and_status_from_normalized_sources(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [
+                    {
+                        "代码": "603629",
+                        "名称": "利通电子",
+                        "所属行业": "消费电子",
+                        "涨跌幅": -10.0,
+                        "最高价": 166.98,
+                        "最低价": 162.34,
+                        "开盘价": 162.34,
+                        "最新价": 162.34,
+                    }
+                ],
+                "turnover_rank": [],
+                "lianban_data": [],
+                "lhb_net_sell_top10": [
+                    {
+                        "rank": 1,
+                        "code": "603629",
+                        "net_buy_amount_yi": -4.09,
+                        "name": "利通电子",
+                        "zt_status": "正常",
+                        "sector": "消费电子",
+                    }
+                ],
+            },
+            target_date="2026-06-08",
+            stock_full_info={
+                "sh603629": {
+                    "change_pct": 0.0,
+                    "high": 0.0,
+                    "low": 0.0,
+                    "open": 0.0,
+                    "close": 0.0,
+                    "name": "利通电子",
+                }
+            },
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "消费电子",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("下跌趋势", 0, "弱"),
+            enabled_node_keys=["lhb_header", "lhb_sell"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 利通电子 | 603629 | 4.09亿 | 消费电子 | -10.00% | 166.98 | 162.34 | 162.34 | 162.34 | 跌停 | 下跌趋势(0分) |",
+            rendered,
+        )
+        self.assertNotIn("| 1 | 利通电子 | 603629 | 4.09亿 | 消费电子 | +0.00% |", rendered)
+        self.assertNotIn("| 1 | 利通电子 | 603629 | 4.09亿 | 消费电子 | -10.00% | 166.98 | 162.34 | 162.34 | 162.34 | 正常 |", rendered)
+
+    def test_hot_rank_table_marks_missing_quote_fields_without_fake_zero_prices(self):
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("missing quote fields should not run candlestick analysis")
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [{"name": "未补报价", "code": "000001", "rate": 123000, "concepts": ["热榜概念"], "popularity_tag": ""}],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lianban_data": [],
+            },
+            target_date="2026-06-08",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "-",
+            get_stock_sector=lambda *args, **kwargs: "热榜概念",
+            analyze_candlestick_pattern=fail_if_called,
+            enabled_node_keys=["hot_rank_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn(
+            "| 1 | 未补报价 | 000001 | 12.3w | 热榜概念 | 待补 | - | - | - | - | - | 报价待补(0分) |",
+            rendered,
+        )
+        self.assertNotIn("| +0.00% | 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
+
     def test_build_market_activity_report_sections_can_render_turnover_header_without_table(self):
         result = build_market_activity_report_sections(
             data={
@@ -261,6 +377,53 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("quant_environment", exported)
         self.assertIn("### 板块成交占比趋势 (近5日)", "\n".join(result["lines"]))
 
+    def test_sector_turnover_trend_groups_flat_recent_history_rows(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [
+                        {"name": "电网设备", "zljlr": 12.3, "zdf": 1.23},
+                        {"name": "电力", "zljlr": 10.1, "zdf": 0.82},
+                        {"name": "半导体", "zljlr": 8.9, "zdf": -0.35},
+                    ],
+                    "outflow": [],
+                },
+                "lianban_data": [],
+                "market_stats": {"up_count": 1800, "total_count": 5000},
+                "top50_turnover_share_pct": 22.5,
+                "recent_sector_turnover_history": [
+                    {"date": "2026-05-29", "sector_name": "电网设备", "turnover_share_pct": 4.6},
+                    {"date": "2026-05-27", "sector_name": "电网设备", "turnover_share_pct": 3.2},
+                    {"date": "2026-05-28", "sector_name": "电网设备", "turnover_share_pct": 4.0},
+                    {"date": "2026-05-29", "sector_name": "电力", "turnover_share_pct": 3.5},
+                    {"date": "2026-05-28", "sector_name": "电力", "turnover_share_pct": 2.8},
+                    {"date": "2026-05-29", "name": "半导体", "turnover_share_pct": 5.0},
+                    {"date": "2026-05-28", "sector_name": "半导体", "turnover_share_pct": 5.8},
+                ],
+            },
+            target_date="2026-05-29",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "电网设备",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("### 板块成交占比趋势 (近5日)", rendered)
+        turnover_section = rendered.split("### 板块成交占比趋势 (近5日)", 1)[1].split("### 量化环境识别", 1)[0]
+        self.assertEqual(turnover_section.count("| 电网设备 |"), 1)
+        self.assertEqual(turnover_section.count("| 电力 |"), 1)
+        self.assertEqual(turnover_section.count("| 半导体 |"), 1)
+        self.assertIn("| 电网设备 | 4.6% | 强化 | 0.0% | 3.2% → 4.0% → 4.6% (扩张) |", turnover_section)
+        self.assertLess(turnover_section.index("| 半导体 | 5.0% |"), turnover_section.index("| 电网设备 | 4.6% |"))
+        self.assertLess(turnover_section.index("| 电网设备 | 4.6% |"), turnover_section.index("| 电力 | 3.5% |"))
+        self.assertNotIn("| 电力 | 0.0% | 待累计 |", turnover_section)
+
     def test_sector_fund_flow_quant_environment_uses_weaker_csi1000_rhythm(self):
         result = build_market_activity_report_sections(
             data={
@@ -290,6 +453,37 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
 
         self.assertFalse(exported["is_quant_dominant"])
         self.assertNotIn("窄池子进攻", [item["mode"] for item in exported["modes"]])
+
+    def test_sector_fund_flow_quant_environment_renders_top_level_detector_summary(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"name": "电力", "zljlr": 12.3, "zdf": 1.23}],
+                    "outflow": [],
+                },
+                "lianban_data": [],
+                "market_stats": {"up_count": 2500, "total_count": 5000},
+                "top50_turnover_share_pct": 18.0,
+                "wind_a_alternative": {"change_pct": 0.2},
+                "csi1000_index": {"change_pct": 0.1},
+            },
+            target_date="2026-05-29",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "电力",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("### 量化环境识别", rendered)
+        self.assertIn("**当前环境**: 未检测到明显的量化横行特征", rendered)
+        self.assertIn("**动作建议**: 按传统模式处理,个股强度和板块节奏并重", rendered)
+        self.assertNotIn("**当前环境**: 待识别", rendered)
 
     def test_build_market_activity_report_sections_can_render_lhb_buy_without_sell(self):
         result = build_market_activity_report_sections(
@@ -430,6 +624,139 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 1 | 富创精密 | 688409 | 7.28亿 | 半导体 | +4.67% | 176.80 | 155.74 | 158.09 | 169.85 |", rendered)
         self.assertNotIn("| 0.00 | 0.00 | 0.00 | 0.00 |", rendered)
 
+    def test_lhb_seat_strength_renders_institution_broker_stock_connect_and_repeat_lists(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "lhb_net_buy_top10": [
+                    {
+                        "rank": 1,
+                        "code": "000001",
+                        "name": "军工一号",
+                        "net_buy_amount_yi": 3.2,
+                        "sector": "军工",
+                    },
+                    {
+                        "rank": 2,
+                        "code": "000002",
+                        "name": "科技二号",
+                        "net_buy_amount_yi": 1.5,
+                        "sector": "科技",
+                    },
+                ],
+                "lhb_net_sell_top10": [
+                    {
+                        "rank": 1,
+                        "code": "000003",
+                        "name": "消费三号",
+                        "net_buy_amount_yi": -2.0,
+                        "sector": "消费",
+                    },
+                ],
+                "lhb_analysis": [
+                    {
+                        "代码": "000001",
+                        "name": "军工一号",
+                        "net_buy_amount": 320000000,
+                        "reasons": ["日涨幅偏离值达到7%", "日振幅值达到15%"],
+                    },
+                    {
+                        "代码": "000002",
+                        "name": "科技二号",
+                        "net_buy_amount": 150000000,
+                        "reasons": ["日涨幅偏离值达到7%"],
+                    },
+                    {
+                        "代码": "000003",
+                        "name": "消费三号",
+                        "net_buy_amount": -200000000,
+                        "reasons": ["日跌幅偏离值达到7%", "连续三个交易日内跌幅偏离值累计达到20%"],
+                    },
+                ],
+                "lhb_inst_detail": [
+                    {
+                        "trade_date": "20260611",
+                        "code": "000001",
+                        "exalter": "机构专用",
+                        "seat_type": "机构",
+                        "net_buy_yi": 0.7,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000001",
+                        "exalter": "深股通专用",
+                        "seat_type": "非机构",
+                        "net_buy_yi": 0.5,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000001",
+                        "exalter": "东方财富证券股份有限公司拉萨东环路第二证券营业部",
+                        "seat_type": "非机构",
+                        "net_buy_yi": -0.2,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000002",
+                        "exalter": "国泰海通证券股份有限公司总部",
+                        "seat_type": "非机构",
+                        "net_buy_yi": 1.1,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000002",
+                        "exalter": "沪股通专用",
+                        "seat_type": "非机构",
+                        "net_buy_yi": -0.4,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000003",
+                        "exalter": "机构专用",
+                        "seat_type": "机构",
+                        "net_buy_yi": -0.5,
+                    },
+                    {
+                        "trade_date": "20260611",
+                        "code": "000003",
+                        "exalter": "中信证券股份有限公司上海分公司",
+                        "seat_type": "非机构",
+                        "net_buy_yi": 0.8,
+                    },
+                    {
+                        "trade_date": "20260610",
+                        "code": "000001",
+                        "exalter": "日期不一致席位",
+                        "seat_type": "机构",
+                        "net_buy_yi": 9.0,
+                    },
+                ],
+                "lianban_data": [],
+            },
+            target_date="2026-06-11",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "军工",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("普通形态", 0, "中"),
+            enabled_node_keys=["lhb_seat_strength"],
+        )
+
+        rendered = "\n".join(result["lines"])
+
+        self.assertIn("### 席位强度解读", rendered)
+        self.assertIn("#### 机构净买强榜", rendered)
+        self.assertIn("| 军工一号 | 000001 | +0.70 | 1 | 机构专用 | 日涨幅偏离值达到7%；日振幅值达到15% |", rendered)
+        self.assertIn("#### 非机构强榜", rendered)
+        self.assertIn("| 科技二号 | 000002 | +0.70 | 2 | 国泰海通证券股份有限公司总部 | 日涨幅偏离值达到7% |", rendered)
+        self.assertIn("#### 股通席位", rendered)
+        self.assertIn("| 军工一号 | 000001 | +0.50 | 净买 | 深股通专用 | 日涨幅偏离值达到7%；日振幅值达到15% |", rendered)
+        self.assertIn("#### 重复上榜分歧榜", rendered)
+        self.assertIn("| 消费三号 | 000003 | 2 | -2.00 | -0.50 | +0.80 | 机构卖、非机构买 |", rendered)
+        self.assertNotIn("日期不一致席位", rendered)
+
     def test_turnover_rows_preserve_valid_row_sector_and_replace_unknown(self):
         result = build_market_activity_report_sections(
             data={
@@ -462,6 +789,46 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertIn("| 1 | 中际旭创 | 300308 | 255.46亿 | 通信设备 | -0.46% |", rendered)
         self.assertIn("| 2 | 佰维存储 | 688525 | 167.86亿 | 存储芯片 | +8.10% |", rendered)
         self.assertNotIn("| 未知 |", rendered)
+
+    def test_turnover_table_outputs_top30_rows(self):
+        turnover_rows = [
+            {"name": f"成交{i:02d}", "code": f"300{i:03d}", "turnover": 300 - i, "sector": "通信设备"}
+            for i in range(1, 32)
+        ]
+        stock_full_info = {
+            row["code"]: {
+                "change_pct": 1.0,
+                "high": 10.0,
+                "low": 9.0,
+                "open": 9.5,
+                "close": 9.8,
+                "name": row["name"],
+            }
+            for row in turnover_rows
+        }
+
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_over_100b": turnover_rows,
+                "turnover_rank": [],
+                "lhb_net_buy_top10": [],
+                "lhb_net_sell_top10": [],
+                "lianban_data": [],
+            },
+            target_date="2026-06-09",
+            stock_full_info=stock_full_info,
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "通信设备",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("普通形态", 0, "普通"),
+            enabled_node_keys=["turnover_header", "turnover_table"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 30 | 成交30 | 300030 | 270.00亿 | 通信设备 | +1.00% |", rendered)
+        self.assertNotIn("| 31 | 成交31 | 300031 |", rendered)
 
     def test_build_market_activity_report_sections_renders_hot_rank_and_lhb(self):
         result = build_market_activity_report_sections(

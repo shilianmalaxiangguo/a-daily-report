@@ -14,7 +14,10 @@ def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
             return float(default)
-        return float(value)
+        numeric = float(value)
+        if numeric != numeric:
+            return float(default)
+        return numeric
     except (TypeError, ValueError):
         return float(default)
 

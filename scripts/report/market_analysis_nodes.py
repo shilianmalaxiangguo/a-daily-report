@@ -1,6 +1,7 @@
 from report.market_analysis_node_registry import build_market_analysis_node_specs
 from report.market_analysis_node_runtime import run_market_analysis_nodes
 from report.market_condition_wording import describe_market_turnover_condition
+from domains.market_state.two_market_turnover.nodes import build_turnover_comparison
 from report.mainline_turnover_summary_support import (
     resolve_display_mainline_name,
     resolve_mainline_attack_evidence_summary,
@@ -47,13 +48,17 @@ def build_market_analysis_market_state_node(context, node_meta=None, node_lookup
     indices = _indices(context)
     sh_change = context.get("sh_change", 0)
     total_turnover = data.get("total_turnover", 0)
+    condition = describe_market_turnover_condition(data)
+    comparison = build_turnover_comparison(data, context.get("target_date", ""))
+    label = str(comparison.get("label") or "").strip()
+    volume_text = f"{label}；{condition}" if label and label != "量能历史不足" else condition
 
     return {
         "lines": [
             "### 1. 市场整体状态",
             f"- **现在是什么情况**: {market_analysis.get('market_status', '震荡整理')}",
             f"- **主要指数**: 上证{sh_change:+.2f}%，深证{indices.get('深证成指', {}).get('涨跌幅', 0):+.2f}%，创业{indices.get('创业板指', {}).get('涨跌幅', 0):+.2f}%",
-            f"- **量能水平**: {total_turnover:.2f}亿元，{describe_market_turnover_condition(data)}",
+            f"- **量能水平**: {total_turnover:.2f}亿元，{volume_text}",
             "",
         ],
         "exports": {},

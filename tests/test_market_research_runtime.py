@@ -17,7 +17,7 @@ class MarketResearchRuntimeTest(unittest.TestCase):
     def _minimal_snapshot_kwargs(self, leading_line="半导体"):
         return {
             "final_gate": {"can_new_entry": True},
-            "position_level": "三档（进攻档）",
+            "position_level": "50%条件执行",
             "exit_analysis": {"overall_level": "黄灯"},
             "observation_snapshot": {
                 "abnormal_watch_pool": [{"code": "000001"}],
@@ -326,7 +326,7 @@ class MarketResearchRuntimeTest(unittest.TestCase):
                 },
             },
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             exit_analysis={"overall_level": "黄灯"},
             observation_snapshot={
                 "abnormal_watch_pool": [{"code": "000001"}],
@@ -392,7 +392,7 @@ class MarketResearchRuntimeTest(unittest.TestCase):
                 "special_probe_verdict": {"summary_text": "先看异常承接", "action": "看异常龙头"},
             },
             {"can_new_entry": True},
-            "二档（防守档）",
+            "0%不参与",
         )
 
         self.assertEqual(result["step0_prediction"], "DIFFICULT")
@@ -416,7 +416,7 @@ class MarketResearchRuntimeTest(unittest.TestCase):
                 ],
             },
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             exit_analysis={"overall_level": "黄灯"},
             observation_snapshot={
                 "abnormal_watch_pool": [{"code": "000001"}],

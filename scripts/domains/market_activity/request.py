@@ -1,3 +1,6 @@
+import datetime as _dt
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -33,6 +36,67 @@ _NON_SECTOR_LABELS = {
 HOT_RANK_SAMPLE_TARGET = 50
 HOT_RANK_STATUS_LABEL = f"热度前{HOT_RANK_SAMPLE_TARGET}个股"
 HOT_RANK_STEP_LABEL = f"{HOT_RANK_STATUS_LABEL}获取"
+_REPORT_STOCK_LIST_KEYS = {
+    "hot_rank_top30",
+    "hot_rank_top50",
+    "integrated_hot_list",
+    "turnover_rank",
+    "turnover_over_100b",
+    "lhb_net_buy_top10",
+    "lhb_net_sell_top10",
+    "lianban_data",
+    "zt_pool",
+    "dt_pool",
+    "volume_anomalies",
+    "trade_signals",
+    "watchlist",
+    "candidates",
+    "dragon_stocks",
+    "extreme_conviction_list",
+    "display_observation_candidates",
+    "observation_candidates",
+    "abnormal_watch_pool",
+    "high_lianban_stocks",
+    "waiting_stocks",
+    "scored_executable_stocks",
+    "recent_extreme_conviction_mentions",
+    "recent_extreme_conviction_mentions_for_review",
+    "gem_breathing_candidates",
+    "filtered_out_gem_breathing_candidates",
+    "knowledge_compounding_candidates",
+    "core_candidates",
+    "backup_candidates",
+}
+_REPORT_STOCK_OBJECT_KEYS = {
+    "selected_position_candidate",
+    "current_core_candidate",
+    "best_stock",
+    "runner_up",
+    "watch_target",
+    "watch_anchor",
+    "new_entry_target",
+    "display_target",
+    "canonical_target",
+    "old_position",
+    "new_target",
+    "front_page_selected_position_candidate",
+    "primary_buy_candidate",
+    "backup_candidate",
+    "target",
+    "candidate",
+}
+_REPORT_STOCK_CONTAINER_KEYS = {
+    "execution_stage_context",
+    "market_research_snapshot",
+    "candidate_snapshot",
+    "candidate_quality_panel_fields",
+    "candidate_quality_samples",
+    "step2_bundle",
+    "final_target_resolution",
+    "sniper_target_derivation",
+    "opportunity_comparison",
+    "additional_target_comparisons",
+}
 
 
 def _is_valid_sector_label(value):
@@ -182,6 +246,19 @@ def _market_breadth_counts_complete(market_stats):
         _normalize_market_stats_value(market_stats.get("up_count")) > 0
         and _normalize_market_stats_value(market_stats.get("down_count")) > 0
     )
+
+
+def _load_market_breadth_from_fact_db(target_date, request_registry=None):
+    service_cls = (request_registry or {}).get("database_service_cls")
+    if service_cls is None:
+        return {}
+    try:
+        factory = getattr(service_cls, "fact_store_from_environment", None)
+        service = factory() if callable(factory) else service_cls.from_environment()
+        row = service.query_market_breadth_counts(target_date)
+    except Exception:
+        return {}
+    return dict(row or {}) if isinstance(row, dict) else {}
 
 
 def _market_activity_row_value(row, key, position, default=None):
@@ -418,6 +495,8 @@ def collect_market_activity_pool_request_bundle(
     get_limit_down_pool,
     fetch_market_activity_df,
     request_registry=None,
+    current_date=None,
+    allow_realtime_market_activity=None,
     timer,
     emit,
 ):
@@ -507,64 +586,143 @@ def collect_market_activity_pool_request_bundle(
             data_status["跌停池"] = False
             emit("   ❌ 跌停池为空")
 
-        try:
-            market_activity_df = fetch_market_activity_df()
-            emit(f"   📊 大盘涨跌统计原始数据: {len(market_activity_df)} 行")
-            if not market_activity_df.empty:
-                market_stats = {}
-                for _, row in market_activity_df.iterrows():
-                    item = _market_activity_row_value(row, "item", 0, "")
-                    value = _market_activity_row_value(row, "value", 1, 0)
-                    numeric_value = _normalize_market_stats_value(value)
-                    if item == "上涨":
-                        market_stats["up_count"] = numeric_value
-                    elif item == "下跌":
-                        market_stats["down_count"] = numeric_value
-                    elif item == "涨停":
-                        market_stats["zt_count"] = numeric_value
-                    elif item == "跌停":
-                        market_stats["dt_count"] = numeric_value
-                results["market_stats"] = market_stats
-                data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
-                if data_status["大盘涨跌统计"]:
-                    emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
-                else:
-                    emit("   ⚠️ 大盘涨跌统计缺少上涨/下跌家数")
-            else:
-                results["market_stats"] = {}
-                data_status["大盘涨跌统计"] = False
-                emit("   ⚠️ 大盘涨跌统计数据为空")
-        except Exception as stats_error:
-            fallback_stats = {
-                "up_count": 0,
-                "down_count": 0,
-                "zt_count": len(results.get("zt_pool", []) or []),
-                "dt_count": len(results.get("dt_pool", []) or []),
-            }
-            if _market_breadth_counts_complete(snapshot_market_stats):
-                market_stats = dict(snapshot_market_stats)
-                market_stats.setdefault("zt_count", fallback_stats["zt_count"])
-                market_stats.setdefault("dt_count", fallback_stats["dt_count"])
-                results["market_stats"] = market_stats
-                data_status["大盘涨跌统计"] = True
-                emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
-            else:
-                results["market_stats"] = fallback_stats
-                data_status["大盘涨跌统计"] = False
-                emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
+        fallback_stats = {
+            "up_count": 0,
+            "down_count": 0,
+            "zt_count": len(results.get("zt_pool", []) or []),
+            "dt_count": len(results.get("dt_pool", []) or []),
+        }
+        realtime_market_activity_allowed = True
+        if current_date is not None or allow_realtime_market_activity is not None:
+            realtime_market_activity_allowed = _realtime_quote_fallback_allowed(
+                target_date,
+                current_date=current_date,
+                allow_realtime_quote_fallback=allow_realtime_market_activity,
+            )
+        fact_db_market_stats = _load_market_breadth_from_fact_db(target_date, request_registry=request_registry)
+        if not realtime_market_activity_allowed and _market_breadth_counts_complete(fact_db_market_stats):
+            market_stats = dict(fact_db_market_stats)
+            market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+            market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+            results["market_stats"] = market_stats
+            data_status["大盘涨跌统计"] = True
+            emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
             _append_log(
                 module_logs,
                 "request.market_stats",
-                "success" if data_status.get("大盘涨跌统计") else "degraded",
-                "大盘涨跌统计接口异常，使用涨跌停池数量补足",
-                provider=snapshot.get("provider", "akshare.stock_market_activity_legu") if data_status.get("大盘涨跌统计") else "akshare.stock_market_activity_legu",
+                "success",
+                "历史日期使用PostgreSQL行情快照回补大盘涨跌统计",
+                provider=market_stats.get("source") or market_stats.get("data_source") or "storage.stock_daily_quotes_recent",
                 target_keys=["market_stats"],
-                up_count=(results.get("market_stats") or {}).get("up_count", 0),
-                down_count=(results.get("market_stats") or {}).get("down_count", 0),
-                zt_count=(results.get("market_stats") or {}).get("zt_count", fallback_stats["zt_count"]),
-                dt_count=(results.get("market_stats") or {}).get("dt_count", fallback_stats["dt_count"]),
-                error=str(stats_error),
+                up_count=market_stats.get("up_count", 0),
+                down_count=market_stats.get("down_count", 0),
+                zt_count=market_stats.get("zt_count", fallback_stats["zt_count"]),
+                dt_count=market_stats.get("dt_count", fallback_stats["dt_count"]),
+                realtime_market_activity_allowed=False,
             )
+        elif not realtime_market_activity_allowed and _market_breadth_counts_complete(snapshot_market_stats):
+            market_stats = dict(snapshot_market_stats)
+            market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+            market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+            results["market_stats"] = market_stats
+            data_status["大盘涨跌统计"] = True
+            emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+            _append_log(
+                module_logs,
+                "request.market_stats",
+                "success",
+                "历史日期使用涨跌停池快照回补大盘涨跌统计",
+                provider=snapshot.get("provider", "tushare.limit_list_ths"),
+                target_keys=["market_stats"],
+                up_count=market_stats.get("up_count", 0),
+                down_count=market_stats.get("down_count", 0),
+                zt_count=market_stats.get("zt_count", fallback_stats["zt_count"]),
+                dt_count=market_stats.get("dt_count", fallback_stats["dt_count"]),
+                realtime_market_activity_allowed=False,
+            )
+        elif not realtime_market_activity_allowed:
+            results["market_stats"] = fallback_stats
+            data_status["大盘涨跌统计"] = False
+            emit("   ⚠️ 历史日期不使用实时大盘涨跌统计，保留涨跌家数缺口")
+            _append_log(
+                module_logs,
+                "request.market_stats",
+                "degraded",
+                "历史日期缺少可验证的大盘涨跌统计",
+                provider="storage.stock_daily_quotes_recent",
+                target_keys=["market_stats"],
+                up_count=0,
+                down_count=0,
+                zt_count=fallback_stats["zt_count"],
+                dt_count=fallback_stats["dt_count"],
+                realtime_market_activity_allowed=False,
+            )
+        else:
+            try:
+                market_activity_df = fetch_market_activity_df()
+                emit(f"   📊 大盘涨跌统计原始数据: {len(market_activity_df)} 行")
+                if not market_activity_df.empty:
+                    market_stats = {}
+                    for _, row in market_activity_df.iterrows():
+                        item = _market_activity_row_value(row, "item", 0, "")
+                        value = _market_activity_row_value(row, "value", 1, 0)
+                        numeric_value = _normalize_market_stats_value(value)
+                        if item == "上涨":
+                            market_stats["up_count"] = numeric_value
+                        elif item == "下跌":
+                            market_stats["down_count"] = numeric_value
+                        elif item == "涨停":
+                            market_stats["zt_count"] = numeric_value
+                        elif item == "跌停":
+                            market_stats["dt_count"] = numeric_value
+                    results["market_stats"] = market_stats
+                    data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
+                    if data_status["大盘涨跌统计"]:
+                        emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                    else:
+                        emit("   ⚠️ 大盘涨跌统计缺少上涨/下跌家数")
+                else:
+                    results["market_stats"] = {}
+                    data_status["大盘涨跌统计"] = False
+                    emit("   ⚠️ 大盘涨跌统计数据为空")
+            except Exception as stats_error:
+                stats_provider = "akshare.stock_market_activity_legu"
+                stats_message = "大盘涨跌统计接口异常，使用涨跌停池数量补足"
+                if _market_breadth_counts_complete(fact_db_market_stats):
+                    market_stats = dict(fact_db_market_stats)
+                    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+                    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+                    results["market_stats"] = market_stats
+                    data_status["大盘涨跌统计"] = True
+                    stats_provider = market_stats.get("source") or market_stats.get("data_source") or "storage.stock_daily_quotes_recent"
+                    stats_message = "大盘涨跌统计接口异常，使用PostgreSQL行情快照回补"
+                    emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                elif _market_breadth_counts_complete(snapshot_market_stats):
+                    market_stats = dict(snapshot_market_stats)
+                    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+                    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+                    results["market_stats"] = market_stats
+                    data_status["大盘涨跌统计"] = True
+                    stats_provider = snapshot.get("provider", "akshare.stock_market_activity_legu")
+                    stats_message = "大盘涨跌统计接口异常，使用涨跌停池快照回补"
+                    emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                else:
+                    results["market_stats"] = fallback_stats
+                    data_status["大盘涨跌统计"] = False
+                    emit(f"   ⚠️ 大盘涨跌统计使用涨跌停池数量补足: 涨停{fallback_stats['zt_count']}只 vs 跌停{fallback_stats['dt_count']}只")
+                _append_log(
+                    module_logs,
+                    "request.market_stats",
+                    "success" if data_status.get("大盘涨跌统计") else "degraded",
+                    stats_message,
+                    provider=stats_provider,
+                    target_keys=["market_stats"],
+                    up_count=(results.get("market_stats") or {}).get("up_count", 0),
+                    down_count=(results.get("market_stats") or {}).get("down_count", 0),
+                    zt_count=(results.get("market_stats") or {}).get("zt_count", fallback_stats["zt_count"]),
+                    dt_count=(results.get("market_stats") or {}).get("dt_count", fallback_stats["dt_count"]),
+                    error=str(stats_error),
+                )
 
         step_status["涨停跌停数据获取"] = True
         elapsed, _ = timer.record("涨停跌停数据获取", 4)
@@ -574,7 +732,14 @@ def collect_market_activity_pool_request_bundle(
             "request.pool_snapshot",
             "success",
             "已获取涨停跌停池与市场活跃度快照",
-            provider="akshare.limit_up_down+akshare.stock_market_activity_legu",
+            provider=(
+                "akshare.limit_up_down+"
+                + (
+                    ((results.get("market_stats") or {}).get("source") or (results.get("market_stats") or {}).get("data_source") or "storage.stock_daily_quotes_recent")
+                    if not realtime_market_activity_allowed
+                    else "akshare.stock_market_activity_legu"
+                )
+            ),
             target_keys=["zt_pool", "dt_pool", "zt_pool_by_sector", "dt_pool_by_sector", "market_stats"],
             zt_count=len(results.get("zt_pool", [])),
             dt_count=len(results.get("dt_pool", [])),
@@ -819,27 +984,25 @@ def collect_market_activity_hot_rank_request_bundle(
     emit("  5️⃣.5️⃣ 构建整合热榜数据（Tushare 热榜优先）...")
     try:
         hot_rank_provider = _provider_from_rows(results.get("hot_rank_top30", []), "")
-        if results.get("hot_rank_top30"):
+        integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = _normalize_integrated_hot_list_payload(
+            get_integrated_hot_list(limit=100)
+        )
+        integrated_provider = "hot_list_integrated.get_integrated_hot_list"
+        fallback_used = False
+        sample_target = 100
+        if not integrated_hot_list and results.get("hot_rank_top30"):
             integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = (
                 _build_integrated_hot_list_from_primary_hot_rank(results.get("hot_rank_top30", []))
             )
             integrated_provider = (
-                "tushare.ths_hot.primary_hot_rank" if hot_rank_provider.startswith("tushare.") else "primary_hot_rank"
+                "tushare.ths_hot.primary_hot_rank" if hot_rank_provider.startswith("tushare.") else "primary_hot_rank.fallback"
             )
-            fallback_used = False
-        else:
-            integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = _normalize_integrated_hot_list_payload(
-                get_integrated_hot_list(limit=100)
-            )
-            integrated_provider = "hot_list_integrated.get_integrated_hot_list"
             fallback_used = True
-            if not integrated_hot_list and results.get("hot_rank_top30"):
-                integrated_hot_list, tag_distribution, status_distribution, high_lianban_stocks = (
-                    _build_integrated_hot_list_from_primary_hot_rank(results.get("hot_rank_top30", []))
-                )
-                integrated_provider = "primary_hot_rank.fallback"
+            sample_target = int(results.get("hot_rank_sample_target") or HOT_RANK_SAMPLE_TARGET)
         if integrated_hot_list:
             results["integrated_hot_list"] = integrated_hot_list
+            results["integrated_hot_list_sample_size"] = len(integrated_hot_list)
+            results["integrated_hot_list_sample_target"] = sample_target
             results["tag_distribution"] = tag_distribution
             results["status_distribution"] = status_distribution
             results["high_lianban_stocks"] = high_lianban_stocks
@@ -861,6 +1024,7 @@ def collect_market_activity_hot_rank_request_bundle(
             "success" if data_status.get("整合热榜") else "degraded",
             "已处理整合热榜请求",
             integrated_count=len(results.get("integrated_hot_list", [])),
+            required_count=results.get("integrated_hot_list_sample_target"),
             provider=integrated_provider,
             target_keys=["integrated_hot_list", "tag_distribution", "status_distribution", "high_lianban_stocks"],
             fallback_used=fallback_used,
@@ -1522,6 +1686,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
             net_buy_top10 = list(snapshot.get("lhb_net_buy_top10") or [])
             net_sell_top10 = list(snapshot.get("lhb_net_sell_top10") or [])
             grouped_rows = list(snapshot.get("lhb_analysis") or [])
+            inst_detail = list(snapshot.get("lhb_inst_detail") or [])
             for item in net_buy_top10 + net_sell_top10:
                 code = item.get("code", "")
                 if code and not _is_valid_sector_label(item.get("sector")):
@@ -1580,10 +1745,16 @@ def collect_market_activity_capital_snapshot_request_bundle(
                         "sector": _resolve_lhb_sector(code, existing_results),
                     }
                 )
+            inst_detail = []
 
         results["lhb_net_buy_top10"] = net_buy_top10
         results["lhb_net_sell_top10"] = net_sell_top10
         results["lhb_analysis"] = grouped_rows
+        results["lhb_inst_detail"] = inst_detail
+        if "snapshot" in locals() and isinstance(snapshot, dict):
+            results["lhb_inst_detail_status"] = snapshot.get("lhb_inst_detail_status") or ("available" if inst_detail else "empty")
+        else:
+            results["lhb_inst_detail_status"] = "empty"
         has_lhb_rows = bool(net_buy_top10 or net_sell_top10 or grouped_rows)
         lhb_provider = (snapshot or {}).get("provider", "tushare.top_list") if "snapshot" in locals() else "finshare.get_lhb"
         results["lhb_provider"] = lhb_provider
@@ -1600,15 +1771,18 @@ def collect_market_activity_capital_snapshot_request_bundle(
             "success" if has_lhb_rows else "degraded",
             "已处理龙虎榜请求" if has_lhb_rows else "龙虎榜返回空",
             provider=lhb_provider,
-            target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+            target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis", "lhb_inst_detail"],
             lhb_count=len(grouped_rows),
             buy_count=len(net_buy_top10),
             sell_count=len(net_sell_top10),
+            inst_detail_count=len(inst_detail),
         )
     except Exception as error:
         results["lhb_net_buy_top10"] = []
         results["lhb_net_sell_top10"] = []
         results["lhb_analysis"] = []
+        results["lhb_inst_detail"] = []
+        results["lhb_inst_detail_status"] = "error"
         results["lhb_provider"] = "finshare.get_lhb"
         results["lhb_data_status"] = "error"
         emit(f"   ⚠️ 龙虎榜获取失败: {error}")
@@ -1618,7 +1792,7 @@ def collect_market_activity_capital_snapshot_request_bundle(
             "error",
             "龙虎榜请求失败",
             provider="finshare.get_lhb",
-            target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis"],
+            target_keys=["lhb_net_buy_top10", "lhb_net_sell_top10", "lhb_analysis", "lhb_inst_detail"],
             error=str(error),
         )
 
@@ -1631,10 +1805,77 @@ def collect_market_activity_capital_snapshot_request_bundle(
 
 
 def _normalize_quote_code(raw_code):
-    code = str(raw_code or "")
-    for prefix in (".SZ", ".SS", ".SH", "sz", "sh", "bj"):
-        code = code.replace(prefix, "")
-    return code
+    text = str(raw_code or "").strip()
+    for suffix in (".SZ", ".SS", ".SH", ".BJ"):
+        if text.upper().endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    lower_text = text.lower()
+    for prefix in ("sz", "sh", "bj"):
+        if lower_text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def _normalize_quote_trade_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text[:10]
+
+
+def _realtime_quote_fallback_allowed(target_date=None, *, current_date=None, allow_realtime_quote_fallback=None):
+    if allow_realtime_quote_fallback is not None:
+        return bool(allow_realtime_quote_fallback)
+    normalized_target = _normalize_quote_trade_date(target_date)
+    if not normalized_target:
+        return True
+    normalized_current = _normalize_quote_trade_date(current_date or _dt.datetime.now().strftime("%Y-%m-%d"))
+    return normalized_target == normalized_current
+
+
+def _report_stock_code(row):
+    if not isinstance(row, dict):
+        return ""
+    for key in ("code", "代码", "stock_code", "symbol", "prod_code", "ts_code", "full_code", "股票代码", "证券代码"):
+        code = _normalize_quote_code(row.get(key))
+        if code:
+            return code
+    return ""
+
+
+def _iter_report_stock_rows(payload, *, depth=0):
+    if depth > 5:
+        return
+    if isinstance(payload, list):
+        for item in payload:
+            yield from _iter_report_stock_rows(item, depth=depth + 1)
+        return
+    if not isinstance(payload, dict):
+        return
+    if _report_stock_code(payload):
+        yield payload
+    for key, value in payload.items():
+        if key in _REPORT_STOCK_LIST_KEYS or key in _REPORT_STOCK_OBJECT_KEYS or key in _REPORT_STOCK_CONTAINER_KEYS:
+            yield from _iter_report_stock_rows(value, depth=depth + 1)
+
+
+def _collect_report_stock_quote_codes(payload):
+    return {
+        code
+        for row in _iter_report_stock_rows(payload)
+        for code in (_report_stock_code(row),)
+        if code
+    }
+
+
+def _has_report_stock_rows(payload):
+    return any(True for _row in _iter_report_stock_rows(payload))
 
 
 def _normalize_stock_info_map(stock_full_info):
@@ -1645,6 +1886,32 @@ def _normalize_stock_info_map(stock_full_info):
             continue
         normalized[code] = info
     return normalized
+
+
+def _quote_info_complete(info, *, target_date=None):
+    if not isinstance(info, dict):
+        return False
+    normalized_target = _normalize_quote_trade_date(target_date)
+    if normalized_target:
+        source_date = ""
+        for key in ("trade_date", "source_date", "query_date", "date"):
+            source_date = _normalize_quote_trade_date(info.get(key))
+            if source_date:
+                break
+        if not source_date:
+            return False
+        if source_date and source_date != normalized_target:
+            return False
+    if info.get("change_pct") in (None, ""):
+        return False
+    price_values = [info.get(key) for key in ("open", "high", "low", "close")]
+    if any(value in (None, "") for value in price_values):
+        return False
+    try:
+        numeric_prices = [float(value) for value in price_values]
+    except (TypeError, ValueError):
+        return False
+    return all(value > 0 for value in numeric_prices)
 
 
 def _patch_quote_fields(row, info):
@@ -1672,11 +1939,32 @@ def _patch_quote_fields(row, info):
     return patched
 
 
+def _patch_report_stock_quote_sources(payload, stock_full_info, *, depth=0):
+    if depth > 5:
+        return payload
+    if isinstance(payload, list):
+        return [_patch_report_stock_quote_sources(item, stock_full_info, depth=depth + 1) for item in payload]
+    if not isinstance(payload, dict):
+        return payload
+
+    patched = dict(payload)
+    code = _report_stock_code(patched)
+    if code:
+        patched = _patch_quote_fields(patched, stock_full_info.get(code, {}))
+    for key, value in list(patched.items()):
+        if key in _REPORT_STOCK_LIST_KEYS or key in _REPORT_STOCK_OBJECT_KEYS or key in _REPORT_STOCK_CONTAINER_KEYS:
+            patched[key] = _patch_report_stock_quote_sources(value, stock_full_info, depth=depth + 1)
+    return patched
+
+
 def collect_market_activity_stock_quote_request_bundle(
     *,
     existing_results,
     fetch_stock_batch_info,
     fetch_tushare_stock_batch_info=None,
+    target_date=None,
+    current_date=None,
+    allow_realtime_quote_fallback=None,
     timer,
     emit,
 ):
@@ -1685,38 +1973,48 @@ def collect_market_activity_stock_quote_request_bundle(
     module_logs = []
 
     emit("\n📊 批量获取股票完整信息（涨跌幅、最高价、最低价、开盘价、收盘价）...")
-    all_stock_codes = set()
-
-    for stock in existing_results.get("hot_rank_top30", []) or []:
-        code = _normalize_quote_code(stock.get("code", ""))
-        if code:
-            all_stock_codes.add(code)
-
-    for stock in existing_results.get("turnover_rank", []) or []:
-        code = _normalize_quote_code(stock.get("code", ""))
-        if code:
-            all_stock_codes.add(code)
-
-    for key in ("lhb_net_buy_top10", "lhb_net_sell_top10", "lianban_data"):
-        for stock in existing_results.get(key, []) or []:
-            code = _normalize_quote_code(stock.get("code", ""))
-            if code:
-                all_stock_codes.add(code)
+    all_stock_codes = _collect_report_stock_quote_codes(existing_results)
+    existing_stock_full_info = _normalize_stock_info_map(existing_results.get("stock_full_info") or {})
+    realtime_quote_allowed = _realtime_quote_fallback_allowed(
+        target_date,
+        current_date=current_date,
+        allow_realtime_quote_fallback=allow_realtime_quote_fallback,
+    )
 
     if all_stock_codes:
         try:
-            stock_full_info = {}
+            stock_full_info = dict(existing_stock_full_info)
             provider = "tencent.get_stock_batch_info"
-            if callable(fetch_tushare_stock_batch_info):
+            refresh_codes = sorted(
+                code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+            )
+            if callable(fetch_tushare_stock_batch_info) and refresh_codes:
                 try:
-                    stock_full_info = _normalize_stock_info_map(fetch_tushare_stock_batch_info(list(all_stock_codes)))
-                    if stock_full_info:
+                    try:
+                        raw_tushare_info = fetch_tushare_stock_batch_info(refresh_codes, target_date=target_date)
+                    except TypeError as error:
+                        if "target_date" not in str(error):
+                            raise
+                        raw_tushare_info = fetch_tushare_stock_batch_info(refresh_codes)
+                    tushare_info = _normalize_stock_info_map(raw_tushare_info)
+                    valid_tushare_info = {
+                        code: info
+                        for code, info in tushare_info.items()
+                        if code in refresh_codes and _quote_info_complete(info, target_date=target_date)
+                    }
+                    if valid_tushare_info:
+                        stock_full_info.update(valid_tushare_info)
                         provider = "tushare.daily"
                 except Exception as error:
-                    emit(f"   ⚠️ Tushare批量股票补数失败: {error}，切换腾讯兜底")
+                    if realtime_quote_allowed:
+                        emit(f"   ⚠️ Tushare批量股票补数失败: {error}，切换腾讯兜底")
+                    else:
+                        emit(f"   ⚠️ Tushare批量股票补数失败: {error}，历史日期不使用实时行情源")
 
-            missing_codes = sorted(all_stock_codes - set(stock_full_info.keys()))
-            if missing_codes:
+            missing_codes = sorted(
+                code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+            )
+            if missing_codes and realtime_quote_allowed:
                 tencent_info = _normalize_stock_info_map(fetch_stock_batch_info(missing_codes))
                 if tencent_info:
                     stock_full_info.update({code: info for code, info in tencent_info.items() if code in missing_codes})
@@ -1724,20 +2022,32 @@ def collect_market_activity_stock_quote_request_bundle(
                         provider = "tushare.daily+tencent.get_stock_batch_info"
                     else:
                         provider = "tencent.get_stock_batch_info"
+                missing_codes = sorted(
+                    code for code in all_stock_codes if not _quote_info_complete(stock_full_info.get(code), target_date=target_date)
+                )
+            elif missing_codes:
+                provider = "tushare.daily"
+                emit("   ⚠️ 历史日期不使用实时行情源补数，保留未补齐股票")
             results["stock_full_info"] = stock_full_info
             elapsed, _ = timer.record("批量获取股票信息", 15)
             emit(f"   ✅ 成功获取 {len(stock_full_info)} 只股票的完整信息 [⏱ {elapsed:.2f}s]")
+            log_status = "success" if not missing_codes else "degraded"
             _append_log(
                 module_logs,
                 "request.stock_quotes",
-                "success",
-                "已处理批量股票补数请求",
+                log_status,
+                "已处理批量股票补数请求" if not missing_codes else "历史日期股票行情仍有缺口",
                 provider=provider,
-                target_keys=["stock_full_info", "lhb_net_buy_top10", "lhb_net_sell_top10"],
+                target_keys=["stock_full_info"],
                 stock_count=len(stock_full_info),
+                requested_count=len(all_stock_codes),
+                refreshed_count=len(refresh_codes),
+                missing_count=len(missing_codes),
+                target_date=target_date or "",
+                realtime_quote_allowed=realtime_quote_allowed,
             )
         except Exception as error:
-            results["stock_full_info"] = {}
+            results["stock_full_info"] = existing_stock_full_info
             timer.record("批量获取股票信息(失败)", 15)
             emit(f"   ⚠️ 批量查询失败: {error}")
             _append_log(
@@ -1746,11 +2056,11 @@ def collect_market_activity_stock_quote_request_bundle(
                 "error",
                 "批量股票补数请求失败",
                 provider="tencent.get_stock_batch_info",
-                target_keys=["stock_full_info", "lhb_net_buy_top10", "lhb_net_sell_top10"],
+                target_keys=["stock_full_info"],
                 error=str(error),
             )
     else:
-        results["stock_full_info"] = {}
+        results["stock_full_info"] = existing_stock_full_info
         timer.record("批量获取股票信息(跳过)", 15)
         _append_log(
             module_logs,
@@ -1763,13 +2073,14 @@ def collect_market_activity_stock_quote_request_bundle(
 
     stock_full_info_for_fill = results.get("stock_full_info", {}) or {}
     if stock_full_info_for_fill:
-        for lhb_list_key in ("lhb_net_buy_top10", "lhb_net_sell_top10"):
-            patched_rows = []
-            for item in existing_results.get(lhb_list_key, []) or []:
-                code = _normalize_quote_code((item or {}).get("code", ""))
-                patched = _patch_quote_fields(item, stock_full_info_for_fill.get(code, {}))
-                patched_rows.append(patched)
-            results[lhb_list_key] = patched_rows
+        patched_sources = _patch_report_stock_quote_sources(existing_results, stock_full_info_for_fill)
+        for key, value in patched_sources.items():
+            if (
+                key in _REPORT_STOCK_LIST_KEYS
+                or key in _REPORT_STOCK_OBJECT_KEYS
+                or key in _REPORT_STOCK_CONTAINER_KEYS
+            ) and _has_report_stock_rows(existing_results.get(key)):
+                results[key] = value
 
     return {
         "results": results,

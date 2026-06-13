@@ -159,6 +159,23 @@ def _load_report_markdown(target_date):
     return ""
 
 
+def _load_mainline_series_replay_data(target_date):
+    if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+        stack = "".join(traceback.format_stack(limit=12))
+        raise RuntimeError(
+            "PostgreSQL-only runtime attempted to read replay mainline series JSON "
+            f"for {target_date}.\n{stack}"
+        )
+    path = _repo_root() / "snap-ui" / "dist" / "data" / "snap-ui" / "mainline-series" / f"{target_date}-replay.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 _COMPACT_METRIC_HISTORY_KEYS = (
     "total_turnover",
     "market_overview",
@@ -351,6 +368,37 @@ def _recent_mainline_records_from_snapshot(snapshot_data):
         row["trade_date"] = trade_date
         row.setdefault("source_policy", row.get("source") or "snapshot_index.recent_mainline_history")
         rows.append(row)
+    return rows
+
+
+def _recent_mainline_records_from_series_snapshot(snapshot_data, fallback_date):
+    if not isinstance(snapshot_data, dict):
+        return []
+    rows = []
+    trade_date = str(fallback_date or "").strip()
+    for row in snapshot_data.get("rows") or []:
+        if not isinstance(row, dict):
+            continue
+        record_date = _text(row.get("date") or row.get("trade_date"))
+        primary = _text(row.get("currentMainline") or row.get("sectorName"))
+        if not record_date or not primary or record_date > trade_date:
+            continue
+        rows.append(
+            {
+                "trade_date": record_date,
+                "primary_mainline": primary,
+                "daily_attack_line": primary,
+                "secondary_mainline": _text(row.get("secondaryMainline")),
+                "competition_mainline": _text(row.get("competitionMainline")),
+                "rotation_label": _text(row.get("stateCode")),
+                "leading_line": primary,
+                "state_code": _text(row.get("stateCode")),
+                "market_state": _text(row.get("stateCode")),
+                "confidence": 0.0,
+                "rotation_summary": _text(row.get("sourceMessage")),
+                "source_policy": "snap_ui.mainline_series_replay",
+            }
+        )
     return rows
 
 
@@ -576,10 +624,12 @@ def ensure_daily_metric_history_index(
     database_service_cls = database_service_cls or DatabaseService
     if database_service_cls is None:
         return {"indexed_count": 0, "dates": []}
-    if hasattr(database_service_cls, "from_environment"):
+    if hasattr(database_service_cls, "fact_store_from_environment"):
+        service = database_service_cls.fact_store_from_environment(db_path)
+    elif hasattr(database_service_cls, "from_environment"):
         service = database_service_cls.from_environment(db_path)
     else:
-        service = database_service_cls.sqlite_d1_compatible(db_path)
+        return {"indexed_count": 0, "dates": []}
     load_snapshot_fn = load_snapshot_fn or _load_compact_metric_history_snapshot
     load_replay_snapshot_fn = load_replay_snapshot_fn or _load_compact_replay_metric_snapshot
     load_report_markdown_fn = load_report_markdown_fn or _load_report_markdown
@@ -593,6 +643,11 @@ def ensure_daily_metric_history_index(
         new_high_row = _existing_new_high_record(service, cursor)
         if new_high_row:
             new_high_dates.append(cursor)
+        series_snapshot_data = _load_mainline_series_replay_data(cursor)
+        if series_snapshot_data:
+            for mainline_row in _recent_mainline_records_from_series_snapshot(series_snapshot_data, cursor):
+                service.upsert_mainline_daily(mainline_row)
+                indexed_any = True
         if snapshot_data:
             market_total_row = _market_total_record_from_snapshot(snapshot_data, cursor)
             if market_total_row:

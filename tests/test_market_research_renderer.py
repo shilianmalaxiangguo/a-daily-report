@@ -1,3 +1,4 @@
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -9,12 +10,33 @@ sys.path.insert(0, str(ROOT / "scripts"))
 def _m(*parts):
     return "".join(parts)
 
+
+def _cycle_sector_label_pattern(sector):
+    return (
+        r'<span class="cycle-sector-label" '
+        r'style="color:#[0-9A-Fa-f]{6};border-color:#[0-9A-Fa-f]{6}">\['
+        + re.escape(sector)
+        + r"\]</span>"
+    )
+
+
+def _cycle_sector_colors(rendered, sector):
+    pattern = (
+        r'<span class="cycle-sector-label" '
+        r'style="color:(#[0-9A-Fa-f]{6});border-color:\1">\['
+        + re.escape(sector)
+        + r"\]</span>"
+    )
+    return re.findall(pattern, rendered)
+
+
 from report.market_research_renderer import (
     render_gem_breathing_pool_section,
     render_gem_breathing_step2_section,
     render_market_research_snapshot_section,
     render_step0_follow_section,
 )
+from report.front_page_v2_renderer import render_front_page_v2
 
 
 class MarketResearchRendererTest(unittest.TestCase):
@@ -50,11 +72,79 @@ class MarketResearchRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 1. 周期日历主视图", rendered)
         self.assertIn("| 周次 | 一 | 二 | 三 | 四 | 五 |", rendered)
-        self.assertIn("| 04-14当周 | [电力] 主导 | [电力] 主导 | [电力] 强化 | [电力] 分化 | [电力] 退潮 |", rendered)
-        self.assertIn("[电力] 反抽 / [半导体] 偏弱", rendered)
+        power_colors = _cycle_sector_colors(rendered, "电力")
+        semiconductor_colors = _cycle_sector_colors(rendered, "半导体")
+        self.assertGreaterEqual(len(power_colors), 2)
+        self.assertGreaterEqual(len(semiconductor_colors), 2)
+        self.assertEqual(len(set(power_colors)), 1)
+        self.assertEqual(len(set(semiconductor_colors)), 1)
+        self.assertNotEqual(power_colors[0], semiconductor_colors[0])
+        self.assertIn("[电力]</span> 反抽 /", rendered)
+        self.assertIn("[半导体]</span> 偏弱", rendered)
         self.assertNotIn("04-14 [电力] 主导", rendered)
         self.assertNotIn("04-23 [电力] 反抽", rendered)
         self.assertNotIn("电力主导", rendered)
+
+    def test_cycle_calendar_assigns_unique_colors_beyond_base_palette(self):
+        sector_names = [f"板块{i}" for i in range(1, 11)]
+        rows = []
+        for week_index in range(2):
+            row = {"week_label": f"06-{1 + week_index * 7:02d}当周"}
+            for field_index, field in enumerate(("monday", "tuesday", "wednesday", "thursday", "friday")):
+                sector = sector_names[week_index * 5 + field_index]
+                row[field] = {"mainline": sector, "state": "观察"}
+            rows.append(row)
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["cycle_calendar"],
+                "cycle_calendar_rows": rows,
+            }
+        )
+
+        rendered = "\n".join(lines)
+        colors = {sector: _cycle_sector_colors(rendered, sector)[0] for sector in sector_names}
+        self.assertEqual(len(set(colors.values())), len(sector_names))
+
+    def test_cycle_calendar_marks_burst_and_ice_point_with_icons(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["cycle_calendar"],
+                "cycle_calendar_rows": [
+                    {
+                        "week_label": "06-01当周",
+                        "monday": {"date": "06-01", "mainline": "半导体", "state": "爆发"},
+                        "tuesday": {"date": "06-02", "mainline": "电力", "state": "冰点"},
+                        "wednesday": {"date": "06-03", "mainline": "机器人", "state": "🧊 冰点"},
+                    },
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("🔥 爆发", rendered)
+        self.assertIn("❄️ 冰点", rendered)
+        self.assertIn("🧊 冰点", rendered)
+        self.assertNotIn("❄️ 🧊", rendered)
+
+    def test_cycle_calendar_escapes_state_text_before_markdown_html(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["cycle_calendar"],
+                "cycle_calendar_rows": [
+                    {
+                        "week_label": "06-01当周",
+                        "monday": {"date": "06-01", "mainline": "半导体", "state": '<script>alert(2)</script>爆发'},
+                    },
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("&lt;script&gt;alert(2)&lt;/script&gt;爆发", rendered)
+        self.assertNotIn("<script>alert(2)</script>", rendered)
 
     def test_state_summary_renders_market_performance_evidence_without_action_shortcut(self):
         lines = render_market_research_snapshot_section(
@@ -141,8 +231,138 @@ class MarketResearchRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("### 2. 周期解读", rendered)
         self.assertIn("| 周期 | 时间段 | 交易日数 | 攻击线 | 周期阶段 | 传递性 | 市场状态 | 明日验证点 | 周期解读 |", rendered)
-        self.assertIn("| 上个周期 | 04-14 ~ 04-18 | 5日 | 电力 | 已结束周期 | 背景观察 | 强化后分化 |", rendered)
+        self.assertIn("[电力]</span> | 已结束周期 | 背景观察 | 强化后分化 |", rendered)
         self.assertIn("半导体正在尝试接替电力", rendered)
+
+    def test_cycle_interpretation_and_turnover_share_reuse_cycle_sector_colors(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-02",
+                market_research_snapshot={
+                "enabled_node_keys": ["cycle_calendar", "cycle_interpretation", "mainline_turnover"],
+                "cycle_calendar_rows": [
+                    {
+                        "week_label": "06-01当周",
+                        "monday": {"date": "06-01", "mainline": "电力", "state": "爆发"},
+                        "tuesday": {"date": "06-02", "mainline": "半导体", "state": "修复"},
+                    }
+                ],
+                "cycle_interpretation_rows": [
+                    {
+                        "cycle_label": "上个周期",
+                        "date_range": "06-01",
+                        "trading_days": "1日",
+                        "mainline": "电力",
+                        "attack_line": "电力",
+                        "market_state": "爆发",
+                    },
+                    {
+                        "cycle_label": "当前周期",
+                        "date_range": "06-02",
+                        "trading_days": "1日",
+                        "mainline": "半导体",
+                        "attack_line": "半导体",
+                        "market_state": "修复",
+                    },
+                ],
+                "mainline_turnover_summary": {
+                    "hot_sector_turnover_watch_rows": [
+                        {
+                            "date": "2026-06-02",
+                            "sector_name": "电力",
+                            "sector_turnover": "1000.00亿",
+                            "market_turnover": "30000.00亿",
+                            "share": "3.3%",
+                            "share_change": "+0.8pct",
+                            "sample_status": "同板块连续",
+                            "interpretation": "电力成交占比抬升",
+                        }
+                    ],
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-06-02",
+                            "cycle_mainline": "电力",
+                            "daily_attack_line": "半导体",
+                            "mainline_turnover": "4050.00亿",
+                            "market_turnover": "30000.00亿",
+                            "share": "13.5%",
+                            "share_change": "+1.5pct",
+                            "interpretation": "半导体接替电力",
+                        }
+                    ],
+                },
+                },
+            )
+        )
+
+        power_colors = _cycle_sector_colors(rendered, "电力")
+        semiconductor_colors = _cycle_sector_colors(rendered, "半导体")
+        self.assertGreaterEqual(len(power_colors), 3)
+        self.assertGreaterEqual(len(semiconductor_colors), 2)
+        self.assertEqual(len(set(power_colors)), 1)
+        self.assertEqual(len(set(semiconductor_colors)), 1)
+        self.assertIn("#### 近期热点板块成交额连续跟踪：", rendered)
+        self.assertIn("[电力]</span>", rendered)
+        self.assertIn("| 2026-06-02 |", rendered)
+        self.assertIn("| 4050.00亿 | 30000.00亿 | 13.5% | +1.5pct |", rendered)
+
+    def test_new_cycle_sector_reuses_calendar_color_across_related_sections(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-02",
+                market_research_snapshot={
+                    "enabled_node_keys": ["cycle_calendar", "cycle_interpretation", "mainline_turnover"],
+                    "cycle_calendar_rows": [
+                        {
+                            "week_label": "06-01当周",
+                            "monday": {"date": "06-01", "mainline": "稀有新线A", "state": "爆发"},
+                        }
+                    ],
+                    "cycle_interpretation_rows": [
+                        {
+                            "cycle_label": "当前周期",
+                            "date_range": "06-01",
+                            "trading_days": "1日",
+                            "mainline": "稀有新线A",
+                            "attack_line": "稀有新线A",
+                            "market_state": "爆发",
+                        }
+                    ],
+                    "mainline_turnover_summary": {
+                        "hot_sector_turnover_watch_rows": [
+                            {
+                                "date": "2026-06-02",
+                                "sector_name": "稀有新线A",
+                                "sector_turnover": "1000.00亿",
+                                "market_turnover": "30000.00亿",
+                                "share": "3.3%",
+                                "share_change": "+0.8pct",
+                                "sample_status": "同板块连续",
+                                "interpretation": "稀有新线A成交占比抬升",
+                            }
+                        ],
+                        "turnover_share_trend_rows": [
+                            {
+                                "date": "2026-06-02",
+                                "cycle_mainline": "稀有新线A",
+                                "daily_attack_line": "稀有新线A",
+                                "mainline_turnover": "1000.00亿",
+                                "market_turnover": "30000.00亿",
+                                "share": "3.3%",
+                                "share_change": "+0.8pct",
+                                "interpretation": "新线验证",
+                            }
+                        ],
+                    },
+                },
+            )
+        )
+
+        colors = _cycle_sector_colors(rendered, "稀有新线A")
+        self.assertGreaterEqual(len(colors), 4)
+        self.assertEqual(len(set(colors)), 1)
 
     def test_render_market_research_snapshot_section_renders_cycle_attack_transfer_fields(self):
         lines = render_market_research_snapshot_section(
@@ -167,7 +387,7 @@ class MarketResearchRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 当前周期 | 05-14 | 1日 | 半导体 | 切换试攻 | 首次攻击 | 观察 | 看是否二次攻击，不能由单日攻击自动升级周期主线 | 半导体今日攻击成立，但传递性不足，不自动升级周期主线。 |", rendered)
+        self.assertIn("[半导体]</span> | 切换试攻 | 首次攻击 | 观察 | 看是否二次攻击，不能由单日攻击自动升级周期主线 | 半导体今日攻击成立，但传递性不足，不自动升级周期主线。 |", rendered)
         self.assertNotIn("| 周期 | 时间段 | 交易日数 | 主导主线 | 市场状态 | 周期解读 |", rendered)
         self.assertNotIn("正在承担当前周期的主线观察任务", rendered)
 
@@ -190,10 +410,48 @@ class MarketResearchRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 近5周期-1 | 05-18 ~ 05-19 | 2日 | 电力 | 已结束周期 |", rendered)
-        self.assertIn("| 近5周期-4 | 05-22 | 1日 | 电力 | 已结束周期 |", rendered)
-        self.assertIn("| 当前周期 | 05-25 | 1日 | 光通信/CPO |", rendered)
+        self.assertRegex(
+            rendered,
+            r"\| 近5周期-1 \| 05-18 ~ 05-19 \| 2日 \| "
+            + _cycle_sector_label_pattern("电力")
+            + r" \| 已结束周期 \|",
+        )
+        self.assertRegex(
+            rendered,
+            r"\| 近5周期-4 \| 05-22 \| 1日 \| "
+            + _cycle_sector_label_pattern("电力")
+            + r" \| 已结束周期 \|",
+        )
+        self.assertRegex(
+            rendered,
+            r"\| 当前周期 \| 05-25 \| 1日 \| "
+            + _cycle_sector_label_pattern("光通信/CPO")
+            + r" \|",
+        )
         self.assertNotIn("| 上个周期 |", rendered)
+
+    def test_market_research_cycle_calendar_marks_missing_elapsed_days_as_unverified(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["cycle_calendar"],
+                "recent_mainline_history": [
+                    {"date": "2026-05-29", "primary_mainline": "电力", "market_state": "爆发"},
+                ],
+                "current_mainline_history_record": {
+                    "date": "2026-06-04",
+                    "primary_mainline": "国产芯片替代",
+                    "market_state": "支线轮动",
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn(
+            "| 06-01当周 | [主线记录待核验] 待确认 | [主线记录待核验] 待确认 | [主线记录待核验] 待确认 |",
+            rendered,
+        )
+        self.assertIn("[国产芯片替代]</span> 支线轮动 | - |", rendered)
 
     def test_render_market_research_snapshot_section_renders_pivot_mainline_interpretation_table(self):
         lines = render_market_research_snapshot_section(
@@ -304,12 +562,53 @@ class MarketResearchRendererTest(unittest.TestCase):
         self.assertIn("| 主线更替与成交额占比 | 主线未切换，通信仍是中心 |", rendered)
         self.assertIn("最近3日主线 通信 -> 通信 -> 通信；成交额占比 12.4% -> 15.8% -> 18.1%，节奏偏强化", rendered)
         self.assertIn("继续围绕通信做减法，不追支线分流", rendered)
-        self.assertIn("#### 主线切换成交额记录", rendered)
+        self.assertIn("#### 小周期成交额与主线切换判断", rendered)
         self.assertIn("> 近25个交易日主线成交额占比趋势：当前17.0%，区间12.4%-17.0%，主线成交占比抬升，资金聚焦度走强。", rendered)
-        self.assertIn("| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |", rendered)
-        self.assertIn("| 2026-04-24 | 通信 | 通信 | 2180.00亿 | 12834.00亿 | 17.0% | +1.2pct | 主线占比继续抬升 |", rendered)
+        self.assertIn("| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |", rendered)
+        self.assertNotIn("| 日期 | 周期主线 | 当天主攻线 |", rendered)
+        self.assertRegex(
+            rendered,
+            r"\| 2026-04-24 \| "
+            + _cycle_sector_label_pattern("通信")
+            + r" \| 2180\.00亿 \| 12834\.00亿 \| 17\.0% \| \+1\.2pct \| 大周期延续 \| 主线占比继续抬升 \|",
+        )
         self.assertLess(rendered.index("2026-04-24"), rendered.index("2026-04-23"))
         self.assertNotIn("| 盘面风险偏好 |", rendered)
+
+    def test_mainline_turnover_marks_small_cycle_attack_when_attack_line_differs(self):
+        lines = render_market_research_snapshot_section(
+            {
+                "compact": False,
+                "enabled_node_keys": ["mainline_turnover"],
+                "mainline_turnover_summary": {
+                    "conclusion": "通信试攻，电力仍是周期参照",
+                    "data_text": "周期主线与当天主攻线出现分化",
+                    "action_text": "先看通信承接，不急着把电力移出参照",
+                    "turnover_share_trend_rows": [
+                        {
+                            "date": "2026-04-24",
+                            "cycle_mainline": "电力",
+                            "daily_attack_line": "通信",
+                            "mainline_turnover": "2180.00亿",
+                            "market_turnover": "12834.00亿",
+                            "share": "17.0%",
+                            "share_change": "+1.2pct",
+                            "interpretation": "通信试图接替电力",
+                        }
+                    ],
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |", rendered)
+        self.assertNotIn("| 日期 | 周期主线 | 当天主攻线 |", rendered)
+        self.assertRegex(
+            rendered,
+            r"\| 2026-04-24 \| "
+            + _cycle_sector_label_pattern("通信")
+            + r" \| 2180\.00亿 \| 12834\.00亿 \| 17\.0% \| \+1\.2pct \| 小周期试攻，未确认切换 \| 通信试图接替电力 \|",
+        )
 
     def test_mainline_turnover_skips_malformed_trend_rows(self):
         lines = render_market_research_snapshot_section(
@@ -1041,7 +1340,14 @@ class MarketResearchRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 2026-05-14 | 半导体 | 半导体 | 4206.70亿 | 33880.86亿 | 12.4% | 待累计 | 主线成交额占比可用，继续观察占比抬升或回落 |", rendered)
+        self.assertIn("| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |", rendered)
+        self.assertNotIn("| 日期 | 周期主线 | 当天主攻线 |", rendered)
+        self.assertRegex(
+            rendered,
+            r"\| 2026-05-14 \| "
+            + _cycle_sector_label_pattern("半导体")
+            + r" \| 4206\.70亿 \| 33880\.86亿 \| 12\.4% \| 待累计 \| 大周期延续 \| 主线成交额占比可用，继续观察占比抬升或回落 \|",
+        )
         self.assertNotIn("| 2026-05-14 | 暂无确认主线 | 暂无确认主攻线 | 4206.70亿", rendered)
 
     def test_render_market_research_snapshot_rotation_downgrades_when_attack_evidence_is_chaotic(self):

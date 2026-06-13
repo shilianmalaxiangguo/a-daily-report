@@ -199,7 +199,7 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "新型电力")
         self.assertEqual(result["turnover_share_trend_rows"][-1]["share"], "0.9%")
         self.assertEqual(result["turnover_share_trend_rows"][-1]["share_change"], "待累计")
-        self.assertIn("不作为同一板块涨跌判断", result["turnover_share_trend_summary"])
+        self.assertIn("不作为大周期主线切换确认", result["turnover_share_trend_summary"])
         watch_rows = result["hot_sector_turnover_watch_rows"]
         communication = [row for row in watch_rows if row["sector_name"] == "通信设备"][0]
         cpo = [row for row in watch_rows if row["sector_name"] == "光通信/CPO"][0]
@@ -340,8 +340,8 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         rows = result["turnover_share_trend_rows"]
         self.assertEqual(len(rows), 25)
         self.assertEqual(rows[4]["mainline_turnover"], "数据暂缺")
-        self.assertIn("近25个交易日主线切换成交额记录", result["turnover_share_trend_summary"])
-        self.assertIn("不作为同一板块涨跌判断", result["turnover_share_trend_summary"])
+        self.assertIn("近25个交易日小周期成交额记录", result["turnover_share_trend_summary"])
+        self.assertIn("不作为大周期主线切换确认", result["turnover_share_trend_summary"])
 
     def test_build_mainline_turnover_summary_keeps_daily_cycle_mainline_labels_in_trend_rows(self):
         runtime = self._load_module()
@@ -599,6 +599,120 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(summary["sector_evidence_rows"][0]["sector_name"], "国产芯片替代")
         self.assertIn("元器件", summary["sector_evidence_rows"][0]["surface_sector_names"])
 
+    def test_build_mainline_turnover_summary_keeps_tag_branches_as_daily_attack_when_rotation_is_chaotic(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-06-05",
+            current_mainline_history_record={
+                "date": "2026-06-05",
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+                "rotation_label": "爆发",
+            },
+            recent_mainline_history=[{"date": "2026-05-29", "primary_mainline": "电力", "daily_attack_line": "电力"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-06-05",
+                "sector_name": "半导体",
+                "sector_turnover": 4154.85,
+                "total_turnover": 31006.90,
+                "turnover_share_pct": 13.4,
+            },
+            recent_sector_turnover_history=[
+                {
+                    "date": "2026-05-29",
+                    "sector_name": "电力",
+                    "sector_turnover": 296.49,
+                    "total_turnover": 33408.58,
+                    "turnover_share_pct": 0.9,
+                }
+            ],
+            realtime_tag_evidence_snapshot={
+                "adopted_labels": ["国产芯片替代", "AI算力基础设施"],
+                "groups": [
+                    {
+                        "采用名称": "国产芯片替代",
+                        "大方向": "泛半导体/硬科技电子",
+                        "当日主攻分支": "国产芯片替代",
+                        "表层行业名": ["半导体", "元器件", "芯片概念"],
+                        "关系判断": "父子",
+                    },
+                    {
+                        "采用名称": "AI算力基础设施",
+                        "大方向": "AI算力基础设施",
+                        "当日主攻分支": "AI算力基础设施",
+                        "表层行业名": ["算力租赁", "液冷服务器"],
+                        "关系判断": "分支",
+                    },
+                ],
+            },
+            sector_attack_evidence_rows=[
+                {"sector_name": "专用设备", "limit_up_count": 3},
+                {"sector_name": "通用设备", "limit_up_count": 3},
+                {"sector_name": "IT服务Ⅱ", "net_inflow_amount": 8.0, "net_inflow_rank": 3},
+            ],
+        )
+
+        self.assertEqual(result["mainline_attack_evidence_summary"]["attack_state"], "chaotic_rotation")
+        self.assertEqual(result["current_mainline"], "")
+        self.assertEqual(result["double_mainline_summary"]["cycle_mainline"], "-")
+        self.assertEqual(result["double_mainline_summary"]["daily_attack_line"], "国产芯片替代 / AI算力基础设施")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "半导体")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["daily_attack_line"], "国产芯片替代 / AI算力基础设施")
+
+    def test_build_mainline_turnover_summary_keeps_tag_branch_as_daily_attack_when_cycle_line_is_confirmed(self):
+        runtime = self._load_module()
+
+        result = runtime.build_mainline_turnover_summary(
+            target_date="2026-06-05",
+            current_mainline_history_record={
+                "date": "2026-06-05",
+                "primary_mainline": "半导体",
+                "leading_line": "半导体",
+                "rotation_label": "爆发",
+            },
+            recent_mainline_history=[{"date": "2026-06-04", "primary_mainline": "半导体"}],
+            current_sector_turnover_snapshot={
+                "date": "2026-06-05",
+                "sector_name": "半导体",
+                "sector_turnover": 4154.85,
+                "total_turnover": 31006.90,
+                "turnover_share_pct": 13.4,
+            },
+            recent_sector_turnover_history=[
+                {
+                    "date": "2026-06-04",
+                    "sector_name": "半导体",
+                    "sector_turnover": 4050.0,
+                    "total_turnover": 30000.0,
+                    "turnover_share_pct": 13.5,
+                }
+            ],
+            realtime_tag_evidence_snapshot={
+                "adopted_labels": ["国产芯片替代", "AI算力基础设施"],
+                "groups": [
+                    {
+                        "采用名称": "国产芯片替代",
+                        "当日主攻分支": "国产芯片替代",
+                        "表层行业名": ["半导体", "元器件", "芯片概念"],
+                        "关系判断": "父子",
+                    },
+                    {
+                        "采用名称": "AI算力基础设施",
+                        "当日主攻分支": "AI算力基础设施",
+                        "表层行业名": ["算力租赁", "液冷服务器"],
+                        "关系判断": "分支",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(result["current_mainline"], "半导体")
+        self.assertEqual(result["double_mainline_summary"]["cycle_mainline"], "半导体")
+        self.assertEqual(result["double_mainline_summary"]["daily_attack_line"], "国产芯片替代 / AI算力基础设施")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "半导体")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["daily_attack_line"], "国产芯片替代 / AI算力基础设施")
+
     def test_build_mainline_turnover_summary_uses_confirmed_attack_line_as_current_mainline(self):
         runtime = self._load_module()
 
@@ -676,7 +790,7 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         self.assertEqual(result["double_mainline_summary"]["daily_attack_line"], "人形机器人")
         self.assertIn("不按周期主线处理", result["double_mainline_summary"]["relationship"])
         self.assertEqual(result["mainline_capacity_regime_summary"]["mainline_process"], "逆势试攻")
-        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "人形机器人")
+        self.assertEqual(result["turnover_share_trend_rows"][-1]["cycle_mainline"], "半导体")
         self.assertEqual(result["turnover_share_trend_rows"][-1]["daily_attack_line"], "人形机器人")
 
     def test_turnover_share_summary_uses_recent_drop_over_window_low_base(self):
@@ -718,8 +832,8 @@ class MainlineTurnoverSummaryRuntimeTest(unittest.TestCase):
         )
 
         summary = result["turnover_share_trend_summary"]
-        self.assertIn("主线切换成交额记录", summary)
-        self.assertIn("不作为同一板块涨跌判断", summary)
+        self.assertIn("小周期成交额记录", summary)
+        self.assertIn("不作为大周期主线切换确认", summary)
         self.assertNotIn("资金聚焦度走强", summary)
 
     def test_build_mainline_turnover_summary_aligns_turnover_row_to_confirmed_attack_line(self):

@@ -26,6 +26,7 @@ __all__ = [
     "fetch_tushare_ths_hot",
     "fetch_tushare_ths_index_map",
     "fetch_tushare_ths_member",
+    "fetch_tushare_top_inst",
     "fetch_tushare_top_list",
 ]
 
@@ -340,6 +341,15 @@ def fetch_tushare_top_list(trade_date, *, pro=None, ts_module=None):
         "l_sell,l_buy,l_amount,net_amount,net_rate,amount_rate,float_values,reason"
     )
     return _frame_to_records(pro.top_list(trade_date=compact, fields=fields))
+
+
+def fetch_tushare_top_inst(trade_date, *, pro=None, ts_module=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "trade_date,ts_code,exalter,side,buy,buy_rate,sell,sell_rate,net_buy,reason"
+    return _frame_to_records(pro.top_inst(trade_date=compact, fields=fields))
 
 
 def fetch_tushare_st_rows(trade_date, *, pro=None, ts_module=None):

@@ -12,6 +12,7 @@ __all__ = [
     "fetch_stock_factor_pro_rows",
     "fetch_stock_batch_quote_info",
     "fetch_stock_daily_turnover_records",
+    "fetch_stock_daily_turnover_records_range",
     "fetch_market_daily_amount_rows",
     "fetch_market_index_amount_rows",
     "fetch_market_margin_balance_rows",
@@ -143,6 +144,35 @@ def fetch_stock_daily_turnover_records(trade_date, *, pro=None, ts_module=None):
         if normalized:
             records.append(normalized)
     return records
+
+
+def fetch_stock_daily_turnover_records_range(start_date, end_date, *, pro=None, ts_module=None, page_limit=6000):
+    start = _compact_date(start_date)
+    end = _compact_date(end_date)
+    if not start or not end:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    fields = "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+    rows = []
+    offset = 0
+    limit = int(page_limit or 6000)
+    while True:
+        frame = pro.daily(
+            start_date=start,
+            end_date=end,
+            fields=fields,
+            limit=limit,
+            offset=offset,
+        )
+        page_rows = _frame_to_records(frame)
+        for row in page_rows:
+            normalized = _normalize_daily_row(row)
+            if normalized:
+                rows.append(normalized)
+        if len(page_rows) < limit:
+            break
+        offset += limit
+    return rows
 
 
 def _is_hs_a_share_ts_code(ts_code):
@@ -461,6 +491,7 @@ def fetch_stock_batch_quote_info(
             "turnover": _safe_float((row or {}).get("amount_yi")),
             "zt_status": _quote_status_from_pct(change_pct),
             "data_source": (row or {}).get("data_source") or "tushare.daily",
+            "trade_date": str(trade_date or "").strip(),
         }
     return result
 

@@ -36,6 +36,38 @@ def _normalized_history_rows(data):
     return rows
 
 
+def _top50_series_source_rows(data):
+    data = data or {}
+    for key in ("top50_turnover_share_series", "top50_turnover_share_trend", "top50_turnover_share_trend_rows"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            rows = value.get("rows") or value.get("trend_rows") or []
+            if rows:
+                return list(rows)
+        elif isinstance(value, (list, tuple)) and value:
+            return list(value)
+    return []
+
+
+def _normalized_top50_market_amount_rows(data, target_date=""):
+    rows = []
+    target_date = str(target_date or "").strip()
+    if not target_date:
+        return rows
+    for item in _top50_series_source_rows(data):
+        row = dict(item or {})
+        trade_date = str(row.get("trade_date") or row.get("date") or "").strip()
+        turnover = _safe_float(row.get("market_amount_yi", row.get("total_amount_yi")))
+        if not trade_date or turnover <= 0:
+            continue
+        if trade_date == target_date:
+            continue
+        rows.append({"date": trade_date, "turnover": round(turnover, 2)})
+    rows.sort(key=lambda row: row["date"])
+    rows = [row for row in rows if row["date"] < target_date]
+    return rows
+
+
 def _comparison_state(current_turnover, history_rows):
     previous = _safe_float((history_rows[-1] if history_rows else {}).get("turnover"))
     previous2 = _safe_float((history_rows[-2] if len(history_rows) >= 2 else {}).get("turnover"))
@@ -56,12 +88,16 @@ def build_turnover_comparison(data, target_date=""):
     data = data or {}
     current_turnover = _safe_float(data.get("total_turnover", data.get("turnover")))
     history_rows = _normalized_history_rows(data)
+    source = "context.market_turnover_history" if history_rows else "missing"
+    if not history_rows:
+        history_rows = _normalized_top50_market_amount_rows(data, target_date)
+        if history_rows:
+            source = "context.top50_turnover_share_series.market_amount_yi"
     state, label = _comparison_state(current_turnover, history_rows)
     previous_turnover = _safe_float((history_rows[-1] if history_rows else {}).get("turnover"))
     previous_change_pct = None
     if current_turnover > 0 and previous_turnover > 0:
         previous_change_pct = round((current_turnover / previous_turnover - 1) * 100, 2)
-    source = "context.market_turnover_history" if history_rows else "missing"
     series = [*history_rows]
     if current_turnover > 0:
         series.append({"date": str(target_date or "").strip(), "turnover": round(current_turnover, 2)})

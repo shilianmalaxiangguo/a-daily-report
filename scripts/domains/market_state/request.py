@@ -1,3 +1,7 @@
+import re
+from pathlib import Path
+
+
 def _append_log(logs, step, status, message, **details):
     logs.append(
         {
@@ -30,6 +34,125 @@ def _provider_from_payload(payload, default_provider):
 def _provider_from_value(value, default_provider):
     source = getattr(value, "data_source", "")
     return source or default_provider
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _normalize_date_text(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    return text[:10]
+
+
+def _coerce_csi1000_payload(payload, target_date, *, data_source=""):
+    if not isinstance(payload, dict):
+        return {}
+    source_date = _normalize_date_text(payload.get("trade_date") or payload.get("date") or target_date)
+    target = _normalize_date_text(target_date)
+    price = _safe_float(payload.get("price", payload.get("点位", payload.get("close"))))
+    if price <= 0 or (target and source_date and source_date != target):
+        return {}
+    result = {
+        "name": "中证1000",
+        "code": str(payload.get("code") or "000852"),
+        "price": price,
+        "change_pct": _safe_float(payload.get("change_pct", payload.get("涨跌幅"))),
+        "trade_date": source_date or target,
+        "data_source": data_source or str(payload.get("data_source") or payload.get("source") or ""),
+    }
+    if payload.get("source"):
+        result["source"] = payload.get("source")
+    return result
+
+
+def _load_csi1000_from_fact_registry(request_registry, target_date):
+    fetcher = (request_registry or {}).get("csi1000_fact")
+    if not callable(fetcher):
+        return {}
+    try:
+        return _coerce_csi1000_payload(fetcher(target_date=target_date), target_date)
+    except Exception:
+        return {}
+
+
+def _load_csi1000_from_database(target_date):
+    try:
+        from storage.database_service import DatabaseService
+
+        service = DatabaseService.from_environment()
+        if not service.is_postgres_backed():
+            return {}
+        rows = service.query_index_daily_bars("sh000852", target_date, window_days=5) or []
+    except Exception:
+        return {}
+    for row in reversed(rows):
+        payload = _coerce_csi1000_payload(row, target_date, data_source="postgresql.index_daily_bars")
+        if payload:
+            return payload
+    return {}
+
+
+_CSI1000_SUCCESS_LOG_RE = re.compile(
+    r"✅\s*中证1000:\s*(?P<price>[0-9]+(?:\.[0-9]+)?)点\s*\((?P<change>[+-]?[0-9]+(?:\.[0-9]+)?)%\)"
+)
+
+
+def _load_csi1000_from_same_day_run_log(target_date):
+    target = _normalize_date_text(target_date)
+    if not target:
+        return {}
+    logs_dir = Path(__file__).resolve().parents[3] / "logs" / "runs"
+    if not logs_dir.exists():
+        return {}
+    try:
+        paths = sorted(logs_dir.glob(f"*__{target}.log"), reverse=True)
+    except OSError:
+        return {}
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if f"日报关键数据检查: 成功 / {target}" not in text:
+            continue
+        match = _CSI1000_SUCCESS_LOG_RE.search(text)
+        if not match:
+            continue
+        payload = _coerce_csi1000_payload(
+            {
+                "price": match.group("price"),
+                "change_pct": match.group("change"),
+                "trade_date": target,
+                "data_source": "run_log.csi1000_same_day_success",
+                "source": str(path),
+            },
+            target,
+        )
+        if payload:
+            return payload
+    return {}
+
+
+def _resolve_csi1000_fallback(request_registry, target_date):
+    for loader in (
+        lambda: _load_csi1000_from_fact_registry(request_registry, target_date),
+        lambda: _load_csi1000_from_database(target_date),
+        lambda: _load_csi1000_from_same_day_run_log(target_date),
+    ):
+        payload = loader()
+        if payload:
+            return payload
+    return {}
 
 
 def collect_market_state_request_bundle(
@@ -195,6 +318,14 @@ def collect_market_state_request_bundle(
         results["csi1000_index"] = csi1000
         csi1000_price = csi1000.get("price", csi1000.get("点位", 0))
         csi1000_change = csi1000.get("change_pct", csi1000.get("涨跌幅", 0))
+        if csi1000_price <= 0:
+            fallback_csi1000 = _resolve_csi1000_fallback(request_registry, target_date)
+            if fallback_csi1000:
+                csi1000 = fallback_csi1000
+                results["csi1000_index"] = csi1000
+                csi1000_price = csi1000.get("price", csi1000.get("点位", 0))
+                csi1000_change = csi1000.get("change_pct", csi1000.get("涨跌幅", 0))
+
         if csi1000_price > 0:
             data_status["中证1000"] = True
             step_status["中证1000获取"] = True

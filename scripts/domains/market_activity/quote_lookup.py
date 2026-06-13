@@ -38,6 +38,44 @@ def _extract_change_pct(row):
     return None
 
 
+def _positive_float(value):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _first_positive(row, keys):
+    for key in keys:
+        value = _positive_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _quote_complete(row):
+    if not isinstance(row, dict):
+        return False
+    if _extract_change_pct(row) is None:
+        return False
+    return all(
+        _first_positive(row, keys) is not None
+        for keys in (
+            ("open", "开盘价", "开盘", "open_price"),
+            ("high", "最高价", "最高", "high_price"),
+            ("low", "最低价", "最低", "low_price"),
+            ("close", "最新价", "收盘价", "收盘", "price", "当前价", "close_price"),
+        )
+    )
+
+
+def _register_lookup_key(lookup, key, payload):
+    existing = lookup.get(key)
+    if existing is None or (_quote_complete(payload) and not _quote_complete(existing)):
+        lookup[key] = payload
+
+
 def _register_quote(lookup, row, *, stock_code="", stock_name=""):
     if not isinstance(row, dict):
         return
@@ -51,10 +89,10 @@ def _register_quote(lookup, row, *, stock_code="", stock_name=""):
     payload = dict(row)
     payload["change_pct"] = change_pct
 
-    if normalized_code and ("code", normalized_code) not in lookup:
-        lookup[("code", normalized_code)] = payload
-    if normalized_name and ("name", normalized_name) not in lookup:
-        lookup[("name", normalized_name)] = payload
+    if normalized_code:
+        _register_lookup_key(lookup, ("code", normalized_code), payload)
+    if normalized_name:
+        _register_lookup_key(lookup, ("name", normalized_name), payload)
 
 
 def build_market_quote_lookup(

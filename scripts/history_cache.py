@@ -22,9 +22,8 @@ def _postgres_only_runtime():
 
 def _runtime_cache_service():
     database_url = _postgres_database_url()
-    if not database_url.startswith(("postgres://", "postgresql://")):
-        if _postgres_only_runtime():
-            raise RuntimeError("PostgreSQL-only history cache requires A_DAILY_REPORT_DATABASE_URL or DATABASE_URL")
+    postgres_required = _postgres_only_runtime() or database_url.startswith(("postgres://", "postgresql://"))
+    if not postgres_required:
         return None
     service = DatabaseService.from_environment()
     if not service.is_postgres_backed():

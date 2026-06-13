@@ -186,6 +186,15 @@ def _enrich_price_shape(stock, code, stock_info_map, volume_anomaly_map):
     return enriched
 
 
+def _stock_change_pct(stock, safe_float):
+    if not isinstance(stock, dict):
+        return None
+    for key in ("change", "change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf"):
+        if stock.get(key) not in (None, ""):
+            return safe_float(stock.get(key))
+    return None
+
+
 def build_market_research_context_bundle_contract(
     data,
     target_date,
@@ -325,18 +334,25 @@ def build_market_research_context_bundle_contract(
     for idx, stock in enumerate(hot_stocks[:15], 1):
         code = normalize_stock_code(stock.get("code", ""))
         if code and code not in hot_codes:
-            change = stock.get("change", 0)
+            change = _stock_change_pct(stock, safe_float)
+            score_change = change if change is not None else 0
+            if change is None:
+                reason = f"热榜第{idx}，涨幅待补，仅作热度观察"
+            elif change < 9.9:
+                reason = f"热榜第{idx}+涨幅{change:.1f}%，仅作热度观察"
+            else:
+                reason = f"热榜第{idx}"
             candidates.append(
                 {
                     "name": stock.get("name", ""),
                     "code": code,
                     "sector": _resolve_stock_sector(stock, code, xuangubao_plate_map),
                     "change": change,
-                    "score": max(0, 30 - idx * 2) + (10 if change >= 7 else 0),
+                    "score": max(0, 30 - idx * 2) + (10 if score_change >= 7 else 0),
                     "source": f"热榜第{idx}",
                     "pattern": "放量冲高",
-                    "reason": f"热榜第{idx}+涨幅{change:.1f}%，仅作热度观察" if change < 9.9 else f"热榜第{idx}",
-                    "tomorrow_expectation": "热度观察" if change < 9.9 else "连板预期",
+                    "reason": reason,
+                    "tomorrow_expectation": "热度观察" if change is None or change < 9.9 else "连板预期",
                 }
             )
 

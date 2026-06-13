@@ -332,7 +332,7 @@ class SectorTurnoverHistoryRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return cls()
 
@@ -489,7 +489,7 @@ class SectorTurnoverHistoryRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 
@@ -565,7 +565,7 @@ class SectorTurnoverHistoryRuntimeTest(unittest.TestCase):
 
         class FakeDatabaseService:
             @classmethod
-            def sqlite_d1_compatible(cls, db_path=None):
+            def fact_store_from_environment(cls, db_path=None):
                 calls.append(("db", db_path))
                 return service
 

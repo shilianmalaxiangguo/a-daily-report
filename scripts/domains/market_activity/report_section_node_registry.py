@@ -9,13 +9,14 @@ DEFAULT_MARKET_ACTIVITY_BASIC_NODE_SPECS = [
     {"node_key": "lhb_header", "title": "龙虎榜结果标题"},
     {"node_key": "lhb_buy", "title": "龙虎榜净买入结果"},
     {"node_key": "lhb_sell", "title": "龙虎榜净流出结果"},
+    {"node_key": "lhb_seat_strength", "title": "龙虎榜席位强度解读"},
 ]
 
 MARKET_ACTIVITY_BASIC_NODE_ALIASES = {
     "hot_rank": ["hot_rank_header", "hot_rank_table"],
     "turnover": ["turnover_header", "turnover_table"],
     "sector_fund_flow": ["sector_fund_header", "sector_fund_inflow", "sector_fund_outflow"],
-    "lhb": ["lhb_header", "lhb_buy", "lhb_sell"],
+    "lhb": ["lhb_header", "lhb_buy", "lhb_sell", "lhb_seat_strength"],
 }
 
 DEFAULT_MARKET_ACTIVITY_ADVANCED_NODE_SPECS = [

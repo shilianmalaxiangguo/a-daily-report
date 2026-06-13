@@ -14,12 +14,28 @@ class CalendarEventsInferTest(unittest.TestCase):
         self.assertEqual(result["main_direction"], "人形机器人")
         self.assertIn("减速器", result["related_sectors"])
 
-    def test_minimal_fallback_analysis_uses_concrete_bucket_instead_of_other(self):
+    def test_minimal_fallback_analysis_keeps_confirmed_policy_evidence(self):
         result = minimal_fallback_analysis("未知行业政策发布")
 
         self.assertEqual(result["main_direction"], "政策催化")
-        self.assertNotIn("其他", result["related_sectors"])
         self.assertIn("政策催化", result["related_sectors"])
+
+    def test_minimal_fallback_analysis_maps_low_evidence_events_by_title_subject(self):
+        samples = {
+            "华为云创想者大会将于6月5日至6日举办": "云计算",
+            "2026第十届中关村数字金融与金融安全大会将于6月5日举办": "金融流动性",
+            "2026全球数字合作交流会暨全球数据周将于6月5日至7日举办": "数字经济",
+            "东风汽车：OpenVAN无人物流车品牌将于6月6日全球首发": "汽车产业链",
+            "第二十七届国际气体产业链展览交易会（IG  China 2026） 将于6月9日至11日举办": "化工材料",
+            "第21届开源中国·开源世界高峰论坛": "软件服务",
+        }
+
+        for title, expected_direction in samples.items():
+            with self.subTest(title=title):
+                result = minimal_fallback_analysis(title)
+                self.assertEqual(result["main_direction"], expected_direction)
+                self.assertNotEqual(result["main_direction"], "政策催化")
+                self.assertNotIn("政策催化", result["related_sectors"])
 
     def test_minimal_fallback_analysis_splits_calendar_events_by_theme_not_generic_policy(self):
         samples = {
@@ -172,7 +188,7 @@ class CalendarEventsInferTest(unittest.TestCase):
         self.assertEqual(result["main_direction"], "AI应用")
         self.assertNotIn("政策催化", result["related_sectors"])
 
-    def test_ai_analyze_event_sectors_normalizes_llm_other_to_concrete_bucket(self):
+    def test_ai_analyze_event_sectors_keeps_confirmed_policy_evidence_when_llm_returns_other(self):
         class OtherClient:
             def analyze_event_sectors(self, event_title, event_summary=""):
                 return {
@@ -190,7 +206,30 @@ class CalendarEventsInferTest(unittest.TestCase):
         )
 
         self.assertEqual(result["main_direction"], "政策催化")
-        self.assertNotIn("其他", result["related_sectors"])
+        self.assertIn("政策催化", result["related_sectors"])
+
+    def test_ai_analyze_event_sectors_does_not_turn_unknown_llm_result_into_policy(self):
+        class OtherClient:
+            def analyze_event_sectors(self, event_title, event_summary=""):
+                return {
+                    "main_direction": "其他",
+                    "related_sectors": ["其他"],
+                    "trading_logic": "AI无法识别明确产业链",
+                    "expectation": "中性",
+                    "confidence": "低",
+                }
+
+        result = ai_analyze_event_sectors(
+            "第21届开源中国·开源世界高峰论坛",
+            helpers={
+                "_default_get_llm_service": lambda: OtherClient(),
+                "ENABLE_REMOTE_CALENDAR_LLM": True,
+            },
+            print_fn=lambda *args, **kwargs: None,
+        )
+
+        self.assertNotEqual(result["main_direction"], "政策催化")
+        self.assertNotIn("政策催化", result["related_sectors"])
 
     def test_ai_analyze_event_sectors_handles_missing_llm_service_without_other(self):
         result = ai_analyze_event_sectors(
@@ -199,7 +238,7 @@ class CalendarEventsInferTest(unittest.TestCase):
             print_fn=lambda *args, **kwargs: None,
         )
 
-        self.assertNotEqual(result["main_direction"], "其他")
+        self.assertEqual(result["main_direction"], "政策催化")
         self.assertTrue(result["related_sectors"])
 
     def test_ai_analyze_event_sectors_handles_malformed_llm_result_without_other(self):
@@ -265,7 +304,7 @@ class CalendarEventsInferTest(unittest.TestCase):
     def test_analyze_event_sector_never_returns_other_for_unknown_event(self):
         sector = analyze_event_sector("完全未知事件")
 
-        self.assertEqual(sector, "政策催化")
+        self.assertEqual(sector, "待确认")
 
 
 if __name__ == "__main__":

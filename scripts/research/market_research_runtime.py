@@ -180,6 +180,12 @@ def _mainline_turnover_summary_conflicts_with_current_record(summary, current_re
         str(summary.get(key) or "")
         for key in ("share_trend_label", "conclusion", "data_text", "action_text")
     )
+    if ("逆势攻击" in record_text or "放量杀跌" in record_text) and (
+        "逆势试攻" in conclusion_text
+        or "观察主攻线" in conclusion_text
+        or "不按周期主线切换处理" in conclusion_text
+    ):
+        return False
     if ("逆势攻击" in record_text or "放量杀跌" in record_text) and "主线切换" in conclusion_text:
         return True
     return False

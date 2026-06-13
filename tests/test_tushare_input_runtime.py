@@ -1,4 +1,5 @@
 import sys
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -230,6 +231,254 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertTrue(result["available"])
         self.assertEqual(result["rows"][0]["etf_turnover_yi"], 100.0)
 
+    def test_etf_turnover_series_uses_completed_rows_when_one_fetch_is_slow(self):
+        etf_universe_rows = [
+            {"代码": "510300", "名称": "沪深300ETF"},
+            {"代码": "159915", "名称": "创业板ETF"},
+        ]
+
+        def fetch_hist(symbol):
+            if symbol == "sz159915":
+                time.sleep(0.2)
+                return [{"date": "2026-05-20", "amount": 7_000_000_000}]
+            return [{"date": "2026-05-20", "amount": 10_000_000_000}]
+
+        started_at = time.monotonic()
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-05-20",
+            window_days=1,
+            max_workers=2,
+            overall_timeout_seconds=0.05,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=fetch_hist,
+        )
+        elapsed = time.monotonic() - started_at
+
+        self.assertLess(elapsed, 0.15)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["usable_etf_count"], 1)
+        self.assertEqual(result["empty_etf_count"], 1)
+        self.assertEqual(result["rows"][0]["etf_turnover_yi"], 100.0)
+
+    def test_etf_turnover_series_flags_latest_coverage_collapse(self):
+        symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        base_rows = [
+            {"date": "2026-06-08", "amount": 10_000_000_000},
+            {"date": "2026-06-09", "amount": 10_000_000_000},
+            {"date": "2026-06-10", "amount": 10_000_000_000},
+        ]
+        hist_rows_by_symbol = {}
+        for symbol in symbols:
+            rows = list(base_rows)
+            if symbol == "sh510300":
+                rows.append({"date": "2026-06-11", "amount": 10_000_000_000})
+            hist_rows_by_symbol[symbol] = rows
+
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=lambda symbol: hist_rows_by_symbol[symbol],
+        )
+
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["coverage_status"], "partial")
+        self.assertEqual(result["coverage_reference_count"], 4)
+        self.assertEqual(result["latest_covered_etf_count"], 1)
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-11")
+        self.assertTrue(result["rows"][-1]["coverage_anomaly"])
+        self.assertIn("样本覆盖不足", result["coverage_anomaly_reason"])
+
+    def test_etf_turnover_series_flags_low_overall_universe_coverage(self):
+        symbols = [f"sh58{index:04d}" for index in range(20)]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        complete_rows = [
+            {"date": "2026-06-08", "amount": 10_000_000_000},
+            {"date": "2026-06-09", "amount": 10_000_000_000},
+            {"date": "2026-06-10", "amount": 10_000_000_000},
+            {"date": "2026-06-11", "amount": 10_000_000_000},
+        ]
+
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=lambda symbol: list(complete_rows) if symbol in symbols[:17] else [],
+        )
+
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["coverage_status"], "partial")
+        self.assertEqual(result["coverage_reference_count"], 17)
+        self.assertEqual(result["latest_covered_etf_count"], 17)
+        self.assertEqual(result["total_etf_universe_count"], 20)
+        self.assertEqual(result["overall_coverage_ratio"], 0.85)
+        self.assertIn("ETF样本池20只的95%以下", result["coverage_anomaly_reason"])
+
+    def test_etf_turnover_series_falls_back_to_tushare_fund_daily_when_sina_coverage_anomaly(self):
+        symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        sina_rows_by_symbol = {
+            symbol: [
+                {"date": "2026-06-08", "amount": 10_000_000_000},
+                {"date": "2026-06-09", "amount": 10_000_000_000},
+                {"date": "2026-06-10", "amount": 10_000_000_000},
+            ]
+            for symbol in symbols
+        }
+        sina_rows_by_symbol["sh510300"].append({"date": "2026-06-11", "amount": 10_000_000_000})
+        tushare_codes = ["510300.SH", "159915.SZ", "588000.SH", "159995.SZ"]
+
+        def fund_daily_rows(trade_date):
+            return [
+                {"trade_date": trade_date, "ts_code": code, "amount_yi": 100.0}
+                for code in tushare_codes
+            ]
+
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=lambda symbol: sina_rows_by_symbol[symbol],
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-06-08",
+                "2026-06-09",
+                "2026-06-10",
+                "2026-06-11",
+            ],
+            fetch_tushare_fund_daily_rows_fn=fund_daily_rows,
+        )
+
+        self.assertEqual(result["source"], "tushare.fund_daily.etf_amount")
+        self.assertFalse(result["coverage_anomaly"])
+        self.assertEqual(result["fallback_from"], "sina.etf.daily_amount")
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-11")
+        self.assertEqual(result["rows"][-1]["covered_etf_count"], 4)
+        self.assertAlmostEqual(result["rows"][-1]["etf_turnover_yi"], 400.0)
+
+    def test_etf_turnover_series_fallback_reads_tushare_pro_frame_rows(self):
+        symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        sina_rows_by_symbol = {
+            symbol: [
+                {"date": "2026-06-08", "amount": 10_000_000_000},
+                {"date": "2026-06-09", "amount": 10_000_000_000},
+                {"date": "2026-06-10", "amount": 10_000_000_000},
+            ]
+            for symbol in symbols
+        }
+        sina_rows_by_symbol["sh510300"].append({"date": "2026-06-11", "amount": 10_000_000_000})
+        tushare_codes = ["510300.SH", "159915.SZ", "588000.SH", "159995.SZ"]
+
+        class FakePro:
+            def __init__(self):
+                self.calls = []
+
+            def fund_daily(self, **kwargs):
+                self.calls.append(dict(kwargs))
+                rows = []
+                for trade_date in ["20260608", "20260609", "20260610", "20260611"]:
+                    rows.extend(
+                        {"trade_date": trade_date, "ts_code": code, "amount": 10_000_000}
+                        for code in tushare_codes
+                    )
+                return _FakeFrame(rows)
+
+        pro = FakePro()
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=lambda symbol: sina_rows_by_symbol[symbol],
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-06-08",
+                "2026-06-09",
+                "2026-06-10",
+                "2026-06-11",
+            ],
+            pro=pro,
+        )
+
+        self.assertEqual(result["source"], "tushare.fund_daily.etf_amount")
+        self.assertFalse(result["coverage_anomaly"])
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-11")
+        self.assertEqual(result["rows"][-1]["covered_etf_count"], 4)
+        self.assertAlmostEqual(result["rows"][-1]["etf_turnover_yi"], 400.0)
+        self.assertEqual(pro.calls[0]["start_date"], "20260608")
+        self.assertEqual(pro.calls[0]["end_date"], "20260611")
+
+    def test_etf_turnover_series_does_not_try_tushare_fallback_after_time_budget_is_spent(self):
+        symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        sina_rows_by_symbol = {
+            symbol: [
+                {"date": "2026-06-08", "amount": 10_000_000_000},
+                {"date": "2026-06-09", "amount": 10_000_000_000},
+                {"date": "2026-06-10", "amount": 10_000_000_000},
+            ]
+            for symbol in symbols
+        }
+        sina_rows_by_symbol["sh510300"].append({"date": "2026-06-11", "amount": 10_000_000_000})
+        fallback_date_calls = []
+
+        def slow_sina_rows(symbol):
+            time.sleep(0.01)
+            return sina_rows_by_symbol[symbol]
+
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            overall_timeout_seconds=0.001,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=slow_sina_rows,
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: fallback_date_calls.append(
+                (start_date, end_date)
+            )
+            or ["2026-06-08", "2026-06-09", "2026-06-10", "2026-06-11"],
+            fetch_tushare_fund_daily_rows_fn=lambda trade_date: [],
+        )
+
+        self.assertEqual(result["source"], "sina.etf.daily_amount")
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["fallback_error"], "ETF成交额备用来源超过时间预算")
+        self.assertEqual(fallback_date_calls, [])
+
+    def test_etf_turnover_series_preserves_sina_payload_when_tushare_fallback_errors(self):
+        symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
+        etf_universe_rows = [{"symbol": symbol} for symbol in symbols]
+        sina_rows_by_symbol = {
+            symbol: [
+                {"date": "2026-06-08", "amount": 10_000_000_000},
+                {"date": "2026-06-09", "amount": 10_000_000_000},
+                {"date": "2026-06-10", "amount": 10_000_000_000},
+            ]
+            for symbol in symbols
+        }
+        sina_rows_by_symbol["sh510300"].append({"date": "2026-06-11", "amount": 10_000_000_000})
+
+        class FailingPro:
+            def fund_daily(self, **kwargs):
+                raise TimeoutError("fund_daily timeout")
+
+        result = get_etf_turnover_series_from_sina_first(
+            "2026-06-11",
+            window_days=4,
+            fetch_etf_universe_fn=lambda: etf_universe_rows,
+            fetch_etf_hist_fn=lambda symbol: sina_rows_by_symbol[symbol],
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-06-08",
+                "2026-06-09",
+                "2026-06-10",
+                "2026-06-11",
+            ],
+            pro=FailingPro(),
+        )
+
+        self.assertEqual(result["source"], "sina.etf.daily_amount")
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["fallback_error"], "fund_daily timeout")
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-11")
+
     def test_margin_pressure_uses_index_amount_proxy_for_250_day_calibration(self):
         class FakePro:
             def __init__(self):
@@ -398,6 +647,52 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual([row["trade_date"] for row in result["rows"]], ["2026-05-20", "2026-05-21"])
         self.assertEqual(result["source"], "eastmoney.rzrq.total.RZYE+tushare.index_daily.market_amount")
 
+    def test_margin_pressure_falls_back_to_market_margin_balance_when_margin_fetch_times_out(self):
+        class FakePro:
+            def index_daily(self, ts_code="", start_date="", end_date=""):
+                amount_by_date = {
+                    "20260520": {"000001.SH": 10_000_000.0, "399001.SZ": 20_000_000.0},
+                    "20260521": {"000001.SH": 10_000_000.0, "399001.SZ": 20_000_000.0},
+                }
+                return _FakeFrame(
+                    [
+                        {"ts_code": ts_code, "trade_date": trade_date_value, "amount": by_code[ts_code]}
+                        for trade_date_value, by_code in amount_by_date.items()
+                        if ts_code in by_code
+                    ]
+                )
+
+        result = get_margin_pressure_from_tushare_first(
+            "2026-05-21",
+            window_days=2,
+            calibration_days=2,
+            pro=FakePro(),
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: ["2026-05-20", "2026-05-21"],
+            fetch_margin_balance_rows_fn=lambda start_date, end_date, pro=None: (_ for _ in ()).throw(
+                TimeoutError("margin timeout")
+            ),
+            fetch_market_margin_balance_rows_fn=lambda start_date, end_date: [
+                {
+                    "trade_date": "2026-05-20",
+                    "margin_balance_yi": 28836.18,
+                    "exchange_count": 1,
+                    "source_policy": "eastmoney.rzrq.total.RZYE",
+                },
+                {
+                    "trade_date": "2026-05-21",
+                    "margin_balance_yi": 28752.80,
+                    "exchange_count": 1,
+                    "source_policy": "eastmoney.rzrq.total.RZYE",
+                },
+            ],
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["latest_data_date"], "2026-05-21")
+        self.assertEqual(result["source"], "eastmoney.rzrq.total.RZYE+tushare.index_daily.market_amount")
+        self.assertEqual(result["refresh_error"], "margin timeout")
+        self.assertEqual([row["trade_date"] for row in result["rows"]], ["2026-05-20", "2026-05-21"])
+
     def test_margin_pressure_ignores_cached_incomplete_target_row_after_market_balance_fallback(self):
         class FakeDatabaseService:
             @classmethod
@@ -557,9 +852,9 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["rows"][-1]["style_label"], "震荡")
         self.assertEqual(result["rows"][-1]["trade_date"], "2026-05-14")
         self.assertIn("近25个交易日价格带风格", result["summary"])
-        self.assertIn("最新差值 -0.70pct，当前为震荡", result["summary"])
+        self.assertIn("最新差值 -0.70pct，相对风格价格带均衡", result["summary"])
         self.assertNotIn("对数相对强弱", result["summary"])
-        self.assertIn("不单独说明明日走势", result["summary"])
+        self.assertIn("不单独说明整体市场温度", result["summary"])
         self.assertIn("明日仍看成交额与核心承接", result["summary"])
         self.assertEqual(calls[0][0], "dates")
         self.assertEqual(len([call for call in calls if call[0] == "daily"]), 25)
@@ -598,7 +893,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["latest_absolute_label"], "同步回落")
         self.assertIn("绝对状态同步回落", result["summary"])
         self.assertAlmostEqual(result["latest_spread_pct"], -1.3778, places=4)
-        self.assertIn("最新差值 -1.38pct，当前为震荡", result["summary"])
+        self.assertIn("最新差值 -1.38pct，相对风格价格带均衡", result["summary"])
         self.assertNotIn("相对收益", result["summary"])
 
     def test_price_band_style_series_reads_from_fact_db_and_refreshes_missing_target(self):
@@ -1100,6 +1395,94 @@ class TushareInputRuntimeTest(unittest.TestCase):
             ],
         )
 
+    def test_top50_turnover_share_series_refreshes_when_window_is_incomplete_even_if_target_date_exists(self):
+        calls = []
+
+        class FakeDatabaseService:
+            refreshed = False
+
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("fact_store_from_environment", db_path))
+                return cls()
+
+            def query_top_turnover_share_series(self, end_date, *, window_days=30, limit=50, rank_scope="all_a"):
+                calls.append(("query", end_date, window_days, limit, rank_scope, self.refreshed))
+                if not self.refreshed:
+                    return {
+                        "rows": [
+                            {
+                                "trade_date": "2026-06-08",
+                                "top_amount_yi": 6000.0,
+                                "market_amount_yi": 30000.0,
+                                "share_pct": 20.0,
+                            }
+                        ]
+                    }
+                return {
+                    "rows": [
+                        {
+                            "trade_date": f"2026-05-{day:02d}",
+                            "top_amount_yi": 5000.0 + day,
+                            "market_amount_yi": 30000.0,
+                            "share_pct": 18.0 + day / 100.0,
+                        }
+                        for day in range(14, 31)
+                    ]
+                    + [
+                        {
+                            "trade_date": f"2026-06-{day:02d}",
+                            "top_amount_yi": 6000.0 + day,
+                            "market_amount_yi": 30000.0,
+                            "share_pct": 19.0 + day / 100.0,
+                        }
+                        for day in range(1, 9)
+                    ]
+                }
+
+            def save_provider_source_run(self, payload):
+                calls.append(("save_run", payload["trade_date"], payload["row_count"]))
+                return 9
+
+            def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
+                calls.append(("upsert", len(rows), source_run_id))
+                return len(rows)
+
+            def rebuild_market_daily_total(self, trade_date, *, source_run_id=0):
+                calls.append(("rebuild_total", trade_date, source_run_id))
+                return {}
+
+            def rebuild_turnover_rank_daily(self, trade_date, *, rank_limit=100, source_run_id=0, rank_scope="all_a"):
+                calls.append(("rebuild_rank", trade_date, rank_limit, source_run_id, rank_scope))
+                self.refreshed = True
+                return []
+
+        result = get_top50_turnover_share_series_from_tushare_first(
+            "2026-06-08",
+            window_days=25,
+            limit=50,
+            db_path="daily.db",
+            database_service_cls=FakeDatabaseService,
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [
+                {"trade_date": trade_date, "ts_code": "000001.SZ", "stock_code": "000001", "amount_yi": 1.0}
+            ],
+        )
+
+        self.assertGreaterEqual(len(result["rows"]), 25)
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-08")
+        self.assertEqual(
+            calls,
+            [
+                ("fact_store_from_environment", "daily.db"),
+                ("query", "2026-06-08", 25, 50, "all_a", False),
+                ("save_run", "2026-06-08", 1),
+                ("upsert", 1, 9),
+                ("rebuild_total", "2026-06-08", 9),
+                ("rebuild_rank", "2026-06-08", 100, 9, "all_a"),
+                ("query", "2026-06-08", 25, 50, "all_a", True),
+            ],
+        )
+
     def test_new_high_feedback_uses_tushare_stk_factor_pro_topdays(self):
         class FactorPro:
             def __init__(self):
@@ -1186,6 +1569,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 "000001": {"name": "趋势一号", "industry": "半导体", "list_date": "20200102"},
             },
             stock_risk_map={},
+            fetch_akshare_one_year_high_rows_fn=lambda: [],
             database_service_cls=FakeNoDatabaseService,
         )
 
@@ -1197,6 +1581,111 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertNotIn("2026-05-19", result["message"])
         self.assertEqual(result["new_high_count"], 0)
         self.assertEqual(calls, [("factor", "2026-05-20")])
+
+    def test_new_high_feedback_uses_akshare_one_year_high_when_tushare_empty_and_quote_history_unavailable(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return []
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                calls.append(("quote_builder", trade_date))
+                return {
+                    "available": False,
+                    "status": "insufficient_history",
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                }
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("source_policy") or row.get("source")))
+                return row
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return FakeService()
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-05-21",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: calls.append(("factor", trade_date)) or [],
+            fetch_stock_basic_map_fn=lambda: {
+                "000001": {"name": "趋势一号", "industry": "半导体", "list_date": "20200102"},
+                "000002": {"name": "趋势二号", "industry": "机器人", "list_date": "20200102"},
+                "000003": {"name": "未选", "industry": "电力", "list_date": "20200102"},
+            },
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [],
+            fetch_stock_risk_map_fn=lambda target_date: {},
+            fetch_akshare_one_year_high_rows_fn=lambda: calls.append(("akshare_one_year_high",)) or [
+                {
+                    "股票代码": "000001",
+                    "股票简称": "趋势一号",
+                    "涨跌幅": 5.2,
+                    "换手率": 10.5,
+                    "最新价": 12.3,
+                    "前期高点": 12.0,
+                },
+                {
+                    "股票代码": "000002",
+                    "股票简称": "趋势二号",
+                    "涨跌幅": 1.1,
+                    "换手率": 2.0,
+                    "最新价": 8.8,
+                    "前期高点": 8.7,
+                },
+                {
+                    "股票代码": "000003",
+                    "股票简称": float("nan"),
+                    "涨跌幅": float("nan"),
+                    "换手率": float("nan"),
+                    "最新价": float("nan"),
+                    "前期高点": float("nan"),
+                },
+            ],
+            database_service_cls=FakeDatabaseService,
+            db_path="daily.db",
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "akshare.stock_rank_cxg_ths.one_year_high")
+        self.assertEqual(result["source_policy"], "akshare.stock_rank_cxg_ths.one_year_high")
+        self.assertEqual(result["new_high_count"], 3)
+        self.assertEqual(result["leading_sectors"], "半导体、机器人、电力")
+        self.assertEqual(result["top_stocks"][-1]["name"], "未选")
+        self.assertEqual(result["top_stocks"][-1]["close"], 0.0)
+        self.assertEqual(result["requested_trade_date"], "2026-05-21")
+        self.assertEqual(result["factor_trade_date"], "2026-05-21")
+        self.assertIn(("akshare_one_year_high",), calls)
+        self.assertIn(("upsert_new_high", "2026-05-21", "akshare.stock_rank_cxg_ths.one_year_high"), calls)
+
+    def test_new_high_feedback_still_uses_akshare_when_stock_basic_times_out(self):
+        calls = []
+
+        class FakeNoDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return None
+
+        def basic_timeout():
+            raise TimeoutError("stock_basic timeout")
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-05-21",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: [],
+            fetch_stock_basic_map_fn=basic_timeout,
+            fetch_stock_risk_map_fn=lambda target_date: {},
+            fetch_akshare_one_year_high_rows_fn=lambda: calls.append(("akshare_one_year_high",)) or [
+                {"股票代码": "000001", "股票简称": "趋势一号", "最新价": 12.3, "涨跌幅": 5.2}
+            ],
+            database_service_cls=FakeNoDatabaseService,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "akshare.stock_rank_cxg_ths.one_year_high")
+        self.assertEqual(result["top_stocks"][0]["name"], "趋势一号")
+        self.assertIn(("akshare_one_year_high",), calls)
 
     def test_new_high_feedback_uses_recent_quotes_when_factor_rows_empty(self):
         calls = []
@@ -1250,6 +1739,186 @@ class TushareInputRuntimeTest(unittest.TestCase):
             calls,
         )
         self.assertIn(("upsert", "2026-05-21", "storage.stock_daily_quotes_recent.high_break"), calls)
+
+    def test_new_high_feedback_refills_quote_history_when_factor_rows_empty_and_local_history_is_short(self):
+        calls = []
+        history_loaded = False
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return []
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                calls.append(("quote_builder", trade_date, bool(history_loaded)))
+                if not history_loaded:
+                    return {
+                        "available": False,
+                        "status": "insufficient_history",
+                        "source": "storage.stock_daily_quotes_recent.high_break",
+                        "message": "本地日线历史不足，只有 0 个历史交易日，不能重建 250 日新高反馈。",
+                    }
+                return {
+                    "available": True,
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                    "new_high_count": 1,
+                    "all_a_share_pct": 50.0,
+                    "leading_sectors": "半导体",
+                    "sector_distribution": [{"sector": "半导体", "new_high_count": 1}],
+                    "top_stocks": [],
+                    "trend_rows": [
+                        {"trade_date": "2026-05-20", "new_high_count": 1, "all_a_share_pct": 50.0},
+                        {"trade_date": "2026-05-21", "new_high_count": 1, "all_a_share_pct": 50.0},
+                    ],
+                }
+
+            def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
+                nonlocal history_loaded
+                history_loaded = True
+                calls.append(("upsert_quotes", len(rows), source_run_id))
+                return len(rows)
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("source_policy") or row.get("source")))
+                return row
+
+            def save_provider_source_run(self, run):
+                calls.append(("source_run", run.get("endpoint"), run.get("row_count")))
+                return 42
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return FakeService()
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-05-21",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: calls.append(("factor", trade_date)) or [],
+            fetch_stock_basic_map_fn=lambda: {},
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-05-19",
+                "2026-05-20",
+                "2026-05-21",
+            ],
+            fetch_akshare_one_year_high_rows_fn=lambda: [],
+            fetch_stock_daily_turnover_records_range_fn=lambda start_date, end_date: calls.append(
+                ("fetch_range", start_date, end_date)
+            ) or [
+                {
+                    "trade_date": "2026-05-19",
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "high": 10.0,
+                    "amount_yi": 1.0,
+                },
+                {
+                    "trade_date": "2026-05-20",
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "high": 10.5,
+                    "amount_yi": 1.0,
+                },
+                {
+                    "trade_date": "2026-05-21",
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "high": 11.0,
+                    "amount_yi": 1.0,
+                },
+            ],
+            stock_risk_map={},
+            database_service_cls=FakeDatabaseService,
+            db_path="daily.db",
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "storage.stock_daily_quotes_recent.high_break")
+        self.assertEqual(result["requested_trade_date"], "2026-05-21")
+        self.assertEqual(result["source_policy"], "storage.stock_daily_quotes_recent.high_break")
+        self.assertIn(("fetch_range", "2026-05-19", "2026-05-21"), calls)
+        self.assertIn(("upsert_quotes", 3, 42), calls)
+        self.assertIn(("quote_builder", "2026-05-21", False), calls)
+        self.assertIn(("quote_builder", "2026-05-21", True), calls)
+        self.assertIn(("upsert_new_high", "2026-05-21", "storage.stock_daily_quotes_recent.high_break"), calls)
+
+    def test_new_high_feedback_refills_quote_history_one_day_at_a_time_when_range_fetch_times_out(self):
+        calls = []
+        history_loaded = False
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                return []
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                calls.append(("quote_builder", trade_date, bool(history_loaded)))
+                if not history_loaded:
+                    return {
+                        "available": False,
+                        "status": "insufficient_history",
+                        "source": "storage.stock_daily_quotes_recent.high_break",
+                    }
+                return {
+                    "available": True,
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                    "new_high_count": 1,
+                    "all_a_share_pct": 50.0,
+                    "leading_sectors": "半导体",
+                    "trend_rows": [{"trade_date": trade_date, "new_high_count": 1, "all_a_share_pct": 50.0}],
+                }
+
+            def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
+                nonlocal history_loaded
+                history_loaded = True
+                calls.append(("upsert_quotes", len(rows)))
+                return len(rows)
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("source_policy") or row.get("source")))
+                return row
+
+            def save_provider_source_run(self, run):
+                return 7
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return FakeService()
+
+        def range_timeout(start_date, end_date):
+            calls.append(("range_timeout", start_date, end_date))
+            raise TimeoutError("daily range timeout")
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-05-21",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: [],
+            fetch_stock_basic_map_fn=lambda: {},
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-05-19",
+                "2026-05-20",
+                "2026-05-21",
+            ],
+            fetch_akshare_one_year_high_rows_fn=lambda: [],
+            fetch_stock_daily_turnover_records_range_fn=range_timeout,
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: calls.append(("daily_fetch", trade_date)) or [
+                {
+                    "trade_date": trade_date,
+                    "ts_code": "000001.SZ",
+                    "stock_code": "000001",
+                    "high": 10.0,
+                    "amount_yi": 1.0,
+                }
+            ],
+            stock_risk_map={},
+            database_service_cls=FakeDatabaseService,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertIn(("range_timeout", "2026-05-19", "2026-05-21"), calls)
+        self.assertIn(("daily_fetch", "2026-05-19"), calls)
+        self.assertIn(("daily_fetch", "2026-05-20"), calls)
+        self.assertIn(("daily_fetch", "2026-05-21"), calls)
+        self.assertIn(("upsert_quotes", 3), calls)
 
     def test_new_high_feedback_uses_recent_quotes_when_factor_fetch_times_out(self):
         calls = []
@@ -2273,6 +2942,24 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result[0]["concepts"], ["钠离子电池", "同花顺漂亮100"])
         self.assertEqual(result[0]["popularity_tag"], "")
 
+    def test_stock_hot_rank_keeps_missing_change_pct_empty(self):
+        result = get_stock_hot_rank_from_tushare_first(
+            "2026-06-08",
+            limit=1,
+            fetch_tushare_ths_hot_fn=lambda trade_date=None, market="热股": [
+                {
+                    "ts_code": "601991.SH",
+                    "trade_date": "20260608",
+                    "ts_name": "大唐发电",
+                    "rank": 3,
+                    "current_price": 4.32,
+                    "concept": "电力",
+                }
+            ],
+        )
+
+        self.assertIsNone(result[0]["change_pct"])
+
     def test_limit_pool_snapshot_uses_tushare_limit_list_before_legacy_fallback(self):
         fallback_calls = []
 
@@ -2794,6 +3481,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 {"ts_code": "000002.SZ", "name": "万科A", "net_amount": -150000000, "close": 8.0, "pct_change": -5.0},
                 {"ts_code": "000001.SZ", "name": "平安银行", "net_amount": 180000000, "close": 11.0, "pct_change": 10.0},
             ],
+            fetch_tushare_top_inst_fn=lambda trade_date: [],
             fetch_stock_industry_map_fn=lambda: {"000001": "银行", "000002": "房地产"},
             legacy_get_lhb_snapshot_fn=lambda target_date=None: fallback_calls.append(target_date) or {},
         )
@@ -2806,6 +3494,86 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["lhb_net_sell_top10"][0]["sector"], "房地产")
         self.assertEqual(result["lhb_analysis"][0]["data_source"], "tushare.top_list")
         self.assertEqual(fallback_calls, [])
+
+    def test_lhb_snapshot_includes_tushare_top_inst_detail_when_available(self):
+        calls = []
+
+        result = get_lhb_snapshot_from_tushare_first(
+            "2026-05-13",
+            fetch_tushare_top_list_fn=lambda trade_date: calls.append(("top_list", trade_date))
+            or [
+                {"ts_code": "000001.SZ", "name": "平安银行", "net_amount": 320000000, "close": 11.0, "pct_change": 10.0},
+            ],
+            fetch_tushare_top_inst_fn=lambda trade_date: calls.append(("top_inst", trade_date))
+            or [
+                {
+                    "trade_date": "20260513",
+                    "ts_code": "000001.SZ",
+                    "exalter": "机构专用",
+                    "side": "0",
+                    "buy": 80000000,
+                    "sell": 10000000,
+                    "net_buy": 70000000,
+                    "reason": "日涨幅偏离值达到7%",
+                },
+                {
+                    "trade_date": "20260513",
+                    "ts_code": "000001.SZ",
+                    "exalter": "机构专用",
+                    "side": "1",
+                    "buy": 80000000,
+                    "sell": 10000000,
+                    "net_buy": 70000000,
+                    "reason": "日涨幅偏离值达到7%",
+                },
+                {
+                    "trade_date": "20260513",
+                    "ts_code": "000001.SZ",
+                    "exalter": "东方财富证券股份有限公司拉萨东环路第二证券营业部",
+                    "side": "1",
+                    "buy": 10000000,
+                    "sell": 20000000,
+                    "net_buy": -10000000,
+                    "reason": "日涨幅偏离值达到7%",
+                },
+                {
+                    "trade_date": "20260514",
+                    "ts_code": "000001.SZ",
+                    "exalter": "机构专用",
+                    "side": "0",
+                    "buy": 990000000,
+                    "sell": 0,
+                    "net_buy": 990000000,
+                    "reason": "日涨幅偏离值达到7%",
+                },
+            ],
+            fetch_stock_industry_map_fn=lambda: {"000001": "银行"},
+        )
+
+        self.assertEqual(calls, [("top_list", "2026-05-13"), ("top_inst", "2026-05-13")])
+        self.assertEqual(result["provider"], "tushare.top_list+top_inst")
+        self.assertEqual(result["lhb_inst_detail_status"], "available")
+        self.assertEqual(len(result["lhb_inst_detail"]), 2)
+        self.assertEqual(result["lhb_inst_detail"][0]["trade_date"], "2026-05-13")
+        self.assertEqual(result["lhb_inst_detail"][0]["seat_type"], "机构")
+        self.assertEqual(result["lhb_inst_detail"][0]["net_buy_yi"], 0.7)
+        self.assertEqual(result["lhb_inst_detail"][1]["seat_type"], "非机构")
+        self.assertEqual(result["lhb_inst_detail"][1]["net_buy_yi"], -0.1)
+
+    def test_lhb_snapshot_keeps_top_list_when_tushare_top_inst_errors(self):
+        result = get_lhb_snapshot_from_tushare_first(
+            "2026-05-13",
+            fetch_tushare_top_list_fn=lambda trade_date: [
+                {"ts_code": "000001.SZ", "name": "平安银行", "net_amount": 320000000, "close": 11.0, "pct_change": 10.0},
+            ],
+            fetch_tushare_top_inst_fn=lambda trade_date: (_ for _ in ()).throw(RuntimeError("top_inst unavailable")),
+            fetch_stock_industry_map_fn=lambda: {"000001": "银行"},
+        )
+
+        self.assertEqual(result["provider"], "tushare.top_list")
+        self.assertEqual(result["lhb_inst_detail_status"], "error")
+        self.assertEqual(result["lhb_inst_detail"], [])
+        self.assertEqual(result["lhb_net_buy_top10"][0]["code"], "000001")
 
     def test_lhb_snapshot_falls_back_to_legacy_when_tushare_same_day_empty(self):
         fallback_calls = []

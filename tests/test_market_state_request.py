@@ -1,11 +1,13 @@
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from domains.market_state.request import collect_market_state_request_bundle
+from domains.market_state.request import collect_market_state_request_bundle, _load_csi1000_from_same_day_run_log
 
 
 class _TimerStub:
@@ -70,6 +72,70 @@ class MarketStateRequestTest(unittest.TestCase):
         self.assertEqual(provider_by_step["request.major_indices"], "tushare.index_daily")
         self.assertEqual(provider_by_step["request.wind_a"], "tushare.index_daily")
         self.assertEqual(provider_by_step["request.csi1000"], "tushare.index_daily")
+
+    def test_collect_market_state_request_bundle_backfills_csi1000_from_same_day_fact(self):
+        timer = _TimerStub()
+        emitted = []
+        request_registry = {
+            "total_turnover": lambda *, target_date: 12345.6,
+            "major_indices": lambda *, target_date: [
+                {"code": "000001", "change_pct": 1.2, "data_source": "tushare.index_daily"}
+            ],
+            "wind_a": lambda *, target_date: {
+                "price": 5432.1,
+                "change_pct": 0.8,
+                "data_source": "tushare.index_daily",
+            },
+            "csi1000": lambda *, target_date: {"price": 0, "change_pct": 0},
+            "csi1000_fact": lambda *, target_date: {
+                "price": 8318.7,
+                "change_pct": 2.94,
+                "trade_date": target_date,
+                "data_source": "postgresql.index_daily_bars",
+            },
+        }
+
+        result = collect_market_state_request_bundle(
+            "2026-06-09",
+            request_registry=request_registry,
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(result["results"]["csi1000_index"]["price"], 8318.7)
+        self.assertEqual(result["results"]["csi1000_index"]["data_source"], "postgresql.index_daily_bars")
+        self.assertTrue(result["data_status"]["中证1000"])
+        self.assertTrue(result["step_status"]["中证1000获取"])
+        provider_by_step = {log["step"]: log["details"].get("provider") for log in result["module_logs"]}
+        self.assertEqual(provider_by_step["request.csi1000"], "postgresql.index_daily_bars")
+        self.assertTrue(any("中证1000" in line and "8318.70" in line for line in emitted))
+
+    def test_load_csi1000_from_same_day_run_log_requires_successful_target_date_log(self):
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            runs_dir = root / "logs" / "runs"
+            runs_dir.mkdir(parents=True)
+            (runs_dir / "20260609-010000__2026-06-08.log").write_text(
+                "日报关键数据检查: 成功 / 2026-06-08\n   ✅ 中证1000: 8081.26点 (-3.11%) [⏱ 0.68s]\n",
+                encoding="utf-8",
+            )
+            (runs_dir / "20260609-020000__2026-06-09.log").write_text(
+                "日报关键数据检查: 失败 / 2026-06-09\n   ✅ 中证1000: 1.00点 (+0.01%) [⏱ 0.68s]\n",
+                encoding="utf-8",
+            )
+            (runs_dir / "20260609-030000__2026-06-09.log").write_text(
+                "日报关键数据检查: 成功 / 2026-06-09\n   ✅ 中证1000: 8318.70点 (+2.94%) [⏱ 0.62s]\n",
+                encoding="utf-8",
+            )
+
+            fake_file = root / "scripts" / "domains" / "market_state" / "request.py"
+            with patch("domains.market_state.request.__file__", str(fake_file)):
+                payload = _load_csi1000_from_same_day_run_log("2026-06-09")
+
+        self.assertEqual(payload["price"], 8318.7)
+        self.assertEqual(payload["change_pct"], 2.94)
+        self.assertEqual(payload["trade_date"], "2026-06-09")
+        self.assertEqual(payload["data_source"], "run_log.csi1000_same_day_success")
 
 
 if __name__ == "__main__":

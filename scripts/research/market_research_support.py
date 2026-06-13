@@ -134,7 +134,8 @@ def get_market_total_turnover_from_fact_db_runtime(target_date, *, market_scope=
 
 def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="all_a", db_path=None):
     try:
-        service = DatabaseService.from_environment(db_path)
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory(db_path) if callable(service_factory) else DatabaseService.from_environment(db_path)
         row = service.query_market_daily_total(target_date, market_scope=market_scope)
     except Exception:
         return {}
@@ -143,7 +144,8 @@ def get_market_daily_total_from_fact_db_runtime(target_date, *, market_scope="al
 
 def get_market_breadth_from_fact_db_runtime(target_date, *, db_path=None):
     try:
-        service = DatabaseService.from_environment(db_path)
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory(db_path) if callable(service_factory) else DatabaseService.from_environment(db_path)
         row = service.query_market_breadth_counts(target_date)
     except Exception:
         return {}
@@ -152,7 +154,8 @@ def get_market_breadth_from_fact_db_runtime(target_date, *, db_path=None):
 
 def get_turnover_rank_from_fact_db_runtime(target_date, *, limit=50, rank_scope="all_a", db_path=None):
     try:
-        service = DatabaseService.from_environment(db_path)
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory(db_path) if callable(service_factory) else DatabaseService.from_environment(db_path)
         rows = service.query_turnover_rank_rows(target_date, limit=limit, rank_scope=rank_scope)
     except Exception:
         return []
@@ -183,7 +186,8 @@ def get_turnover_rank_from_fact_db_runtime(target_date, *, limit=50, rank_scope=
 
 def save_market_cycle_context_runtime(target_date, snapshot, *, db_path=None):
     try:
-        service = DatabaseService.from_environment(db_path)
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory(db_path) if callable(service_factory) else DatabaseService.from_environment(db_path)
         return service.replace_market_cycle_context(target_date, snapshot)
     except Exception:
         return {}
@@ -191,7 +195,8 @@ def save_market_cycle_context_runtime(target_date, snapshot, *, db_path=None):
 
 def save_observation_pools_runtime(target_date, pools, *, db_path=None):
     try:
-        service = DatabaseService.from_environment(db_path)
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory(db_path) if callable(service_factory) else DatabaseService.from_environment(db_path)
         return service.replace_observation_pool_items_for_trade_date(target_date, pools)
     except Exception:
         return 0
@@ -1114,15 +1119,8 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "reason": pulse_action_reason or state_machine_snapshot.get("transition_reason") or f"当前处于{energy_state}，但主攻线优势已经开始拉开。",
                 "action": "先不开新仓，只为最强对象保留条件执行预备态；若次日09:50-10:10窗口满足条件，再升级唯一执行候选",
             }
-        if position_level == "一档（空仓档）" or final_gate.get("operation_state") == "撤退态":
-            return {
-                "code": "avoid",
-                "label": "🚫 暂不跟随",
-                "reason": f"当前处于{energy_state}，新增买入资格未满足，先研究市场，不做新增参与。",
-                "action": "保持空仓，只观察，不新增参与",
-            }
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
-            action_text = "只看主线核心是否在固定交易窗口内满足条件：强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口；条件成立后才评估50%标准进攻，否则按0%不参与"
+            action_text = "只看主线核心是否在固定交易窗口内满足条件：强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口；条件成立后才评估50%条件执行，否则按0%不参与"
             if special_probe_action:
                 action_text = f"{special_probe_action}；{action_text}"
             return {
@@ -1140,6 +1138,13 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "label": "🟠 只处理旧仓",
                 "reason": pulse_action_reason or f"当前处于{energy_state}，系统只保留旧仓处理资格，不给新增买入资格。",
                 "action": action_text,
+            }
+        if position_level == "0%不参与" or final_gate.get("operation_state") == "撤退态":
+            return {
+                "code": "avoid",
+                "label": "🚫 暂不跟随",
+                "reason": f"当前处于{energy_state}，新增买入资格未满足，先研究市场，不做新增参与。",
+                "action": "保持空仓，只观察，不新增参与",
             }
         action_text = "先看环境；若你有持仓，只处理持仓，不新增参与"
         if special_probe_action:

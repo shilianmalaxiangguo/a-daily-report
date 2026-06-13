@@ -1,4 +1,4 @@
-from domains.market_activity.quote_lookup import build_market_quote_lookup, normalize_stock_code, resolve_change_pct
+from domains.market_activity.quote_lookup import build_market_quote_lookup, normalize_stock_code, resolve_change_pct, resolve_market_quote
 from domains.market_activity.report_section_node_registry import (
     build_market_activity_advanced_node_specs,
     build_market_activity_basic_node_specs,
@@ -88,6 +88,103 @@ def _first_positive_float(*values):
         if parsed > 0:
             return parsed
     return 0.0
+
+
+def _optional_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+_QUOTE_PRICE_KEY_GROUPS = (
+    ("open", "开盘价", "开盘", "open_price"),
+    ("high", "最高价", "最高", "high_price"),
+    ("low", "最低价", "最低", "low_price"),
+    ("close", "最新价", "收盘价", "收盘", "price", "当前价", "close_price"),
+)
+_QUOTE_CHANGE_KEYS = {"change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf", "change_rate", "change"}
+
+
+def _row_has_complete_positive_prices(row):
+    if not isinstance(row, dict):
+        return False
+    for keys in _QUOTE_PRICE_KEY_GROUPS:
+        values = [_optional_float(row.get(key)) for key in keys if key in row]
+        if not any(value is not None and value > 0 for value in values):
+            return False
+    return True
+
+
+def _first_row_float(rows, keys, *, positive_only=False):
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for key in keys:
+            parsed = _optional_float(row.get(key))
+            if parsed is None:
+                continue
+            if positive_only and parsed <= 0:
+                continue
+            if not positive_only and key in _QUOTE_CHANGE_KEYS and parsed == 0 and not _row_has_complete_positive_prices(row):
+                continue
+            return parsed
+    return None
+
+
+def _format_optional_pct(value):
+    return "待补" if value is None else f"{value:+.2f}%"
+
+
+def _format_optional_price(value):
+    return "-" if value is None else f"{value:.2f}"
+
+
+def _valid_quote_rows(rows):
+    return [row for row in (rows or []) if isinstance(row, dict)]
+
+
+def _resolve_stock_info(stock_full_info, stock_name, stock_code):
+    normalized_code = normalize_stock_code(stock_code)
+    if normalized_code:
+        for code, info in (stock_full_info or {}).items():
+            if normalize_stock_code(code) == normalized_code:
+                return info or {}
+
+    expected_name = str(stock_name or "").strip()
+    if expected_name:
+        for info in (stock_full_info or {}).values():
+            if isinstance(info, dict) and str(info.get("name", "")).strip() == expected_name:
+                return info or {}
+    return {}
+
+
+def _matching_rows(rows, stock_name, stock_code):
+    return [row for row in (rows or []) if _stock_matches(row, stock_name, stock_code)]
+
+
+def _limit_status_tag(status_text):
+    text = str(status_text or "")
+    if "跌停" in text:
+        return "跌停"
+    if "涨停" in text:
+        return "涨停"
+    return ""
+
+
+def _limit_tag_from_rows(rows):
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("涨停统计"):
+            return str(row.get("涨停统计")).strip()
+        if row.get("limit_status") or row.get("zt_status"):
+            tag = _limit_status_tag(row.get("limit_status") or row.get("zt_status"))
+            if tag:
+                return tag
+    return ""
 
 
 def _broad_index_change_pct(data):
@@ -197,6 +294,7 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
     analyze_candlestick_pattern = context.get("analyze_candlestick_pattern")
     zt_pool = _zt_pool(context)
     dt_pool = _dt_pool(context)
+    quote_lookup = _build_quote_lookup(context)
 
     lines = [
         "| 排名 | 股票 | 代码 | 热度分(w) | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 | 连板标签 | 蜡烛图形态 |",
@@ -209,15 +307,28 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
             code = stock.get("code", "?")
             rate_val = int(stock.get("rate", 0)) if isinstance(stock.get("rate"), str) else stock.get("rate", 0)
             rate_w = rate_val / 10000
-            tag = stock.get("popularity_tag", "-")
-            info = stock_full_info.get(code, {})
-            change_pct = info.get("change_pct", 0)
-            high = info.get("high", 0)
-            low = info.get("low", 0)
-            open_price = info.get("open", 0)
-            close = info.get("close", 0)
+            info = _resolve_stock_info(stock_full_info, name, code)
+            quote_info = resolve_market_quote(quote_lookup, stock_code=code, stock_name=name)
+            matched_turnover = _matching_rows(data.get("turnover_rank", []), name, code)
+            matched_lianban = _matching_rows(_lianban_data(context), name, code)
+            matched_zt = _matching_rows(zt_pool, name, code)
+            matched_dt = _matching_rows(dt_pool, name, code)
+            quote_rows = matched_dt + matched_zt + matched_lianban + matched_turnover + [quote_info, stock, info]
+            change_pct = _first_row_float(quote_rows, ("change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf", "change_rate", "change"))
+            high = _first_row_float(quote_rows, ("high", "最高价", "最高"), positive_only=True)
+            low = _first_row_float(quote_rows, ("low", "最低价", "最低"), positive_only=True)
+            open_price = _first_row_float(quote_rows, ("open", "开盘价", "开盘"), positive_only=True)
+            close = _first_row_float(quote_rows, ("close", "最新价", "收盘价", "收盘", "price", "当前价"), positive_only=True)
+            status_text = ""
             if callable(get_stock_status):
-                get_stock_status(name, code, zt_pool, dt_pool, change_pct)
+                status_text = get_stock_status(name, code, zt_pool, dt_pool, change_pct)
+            status_tag = _limit_status_tag(status_text)
+            if not status_tag:
+                if matched_dt:
+                    status_tag = "跌停"
+                elif matched_zt:
+                    status_tag = "涨停"
+            tag = stock.get("popularity_tag") or _limit_tag_from_rows(matched_lianban + matched_zt + matched_dt) or status_tag or "-"
             sector = get_stock_sector(
                 name,
                 code,
@@ -230,9 +341,12 @@ def build_hot_rank_table_node(context, node_meta=None, node_lookup=None):
                 xuangubao_data=data.get("xuangubao_data", {}),
                 sector_fund_flow=data.get("sector_fund_flow", {}),
             )
-            pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
+            if None in (open_price, close, high, low, change_pct):
+                pattern_name, pattern_score = "报价待补", 0
+            else:
+                pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
             lines.append(
-                f"| {idx} | {name} | {code} | {rate_w:.1f}w | {sector} | {change_pct:+.2f}% | {high:.2f} | {low:.2f} | {open_price:.2f} | {close:.2f} | {tag} | {pattern_name}({pattern_score}分) |"
+                f"| {idx} | {name} | {code} | {rate_w:.1f}w | {sector} | {_format_optional_pct(change_pct)} | {_format_optional_price(high)} | {_format_optional_price(low)} | {_format_optional_price(open_price)} | {_format_optional_price(close)} | {tag} | {pattern_name}({pattern_score}分) |"
             )
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
@@ -265,7 +379,7 @@ def build_turnover_table_node(context, node_meta=None, node_lookup=None):
     ]
     over_100b = _resolved_turnover_over_100b(context)
     if over_100b:
-        for idx, stock in enumerate(over_100b[:15], 1):
+        for idx, stock in enumerate(over_100b[:30], 1):
             name = stock.get("name", "?")
             code = stock.get("code", "?").replace("sz", "").replace("sh", "")
             stock_turnover = stock.get("turnover", 0)
@@ -397,6 +511,7 @@ def _build_lhb_trade_rows(context, items, amount_title, amount_formatter):
     analyze_candlestick_pattern = context.get("analyze_candlestick_pattern")
     zt_pool = _zt_pool(context)
     dt_pool = _dt_pool(context)
+    quote_lookup = _build_quote_lookup(context)
 
     lines = [
         f"| 排名 | 股票 | 代码 | {amount_title} | 所属板块 | 涨跌幅 | 最高价 | 最低价 | 开盘价 | 收盘价 | 涨停状态 | 蜡烛图形态 |",
@@ -404,13 +519,17 @@ def _build_lhb_trade_rows(context, items, amount_title, amount_formatter):
     ]
     for item in items[:10]:
         code = item.get("code", "?")
-        info = stock_full_info.get(code, {})
+        info = _resolve_stock_info(stock_full_info, item.get("name"), code)
         name = item.get("name") or info.get("name", "?")
-        change_pct = _safe_float(info.get("change_pct", item.get("change_pct", 0)))
-        high = _first_positive_float(info.get("high"), item.get("high"), item.get("high_price"), item.get("最高价"))
-        low = _first_positive_float(info.get("low"), item.get("low"), item.get("low_price"), item.get("最低价"))
-        open_price = _first_positive_float(info.get("open"), item.get("open"), item.get("open_price"), item.get("开盘价"))
-        close = _first_positive_float(info.get("close"), item.get("close"), item.get("close_price"), item.get("收盘价"))
+        quote_info = resolve_market_quote(quote_lookup, stock_code=code, stock_name=name)
+        matched_zt = _matching_rows(zt_pool, name, code)
+        matched_dt = _matching_rows(dt_pool, name, code)
+        quote_rows = _valid_quote_rows(matched_dt + matched_zt + [quote_info, item, info])
+        change_pct = _first_row_float(quote_rows, ("change_pct", "pct_chg", "pct_change", "涨跌幅", "zdf", "change_rate", "change"))
+        high = _first_row_float(quote_rows, ("high", "最高价", "最高", "high_price"), positive_only=True)
+        low = _first_row_float(quote_rows, ("low", "最低价", "最低", "low_price"), positive_only=True)
+        open_price = _first_row_float(quote_rows, ("open", "开盘价", "开盘", "open_price"), positive_only=True)
+        close = _first_row_float(quote_rows, ("close", "最新价", "收盘价", "收盘", "price", "当前价", "close_price"), positive_only=True)
         sector = item.get("sector", "")
         if not _is_valid_sector_label(sector):
             sector = _resolve_context_sector(context, name, code)
@@ -429,15 +548,376 @@ def _build_lhb_trade_rows(context, items, amount_title, amount_formatter):
             )
         if not _is_valid_sector_label(sector):
             sector = "待补充板块"
-        if callable(analyze_candlestick_pattern):
+        if matched_dt:
+            status = "跌停"
+        elif matched_zt:
+            status = "涨停"
+        else:
+            status = item.get("zt_status", "正常")
+        if None in (open_price, close, high, low, change_pct):
+            pattern_name, pattern_score = "报价待补", 0
+        elif callable(analyze_candlestick_pattern):
             pattern_name, pattern_score, _ = analyze_candlestick_pattern(open_price, close, high, low, change_pct)
         else:
             pattern_name, pattern_score = "未知", 0
         lines.append(
-            f"| {item.get('rank', 0)} | {name} | {code} | {amount_formatter(item.get('net_buy_amount_yi', 0))}亿 | {sector} | {change_pct:+.2f}% | {high:.2f} | {low:.2f} | {open_price:.2f} | {close:.2f} | {item.get('zt_status', '正常')} | {pattern_name}({pattern_score}分) |"
+            f"| {item.get('rank', 0)} | {name} | {code} | {amount_formatter(item.get('net_buy_amount_yi', 0))}亿 | {sector} | {_format_optional_pct(change_pct)} | {_format_optional_price(high)} | {_format_optional_price(low)} | {_format_optional_price(open_price)} | {_format_optional_price(close)} | {status} | {pattern_name}({pattern_score}分) |"
         )
     lines.append("")
     return lines
+
+
+def _compact_lhb_date(value):
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _lhb_row_code(row):
+    if not isinstance(row, dict):
+        return ""
+    return normalize_stock_code(
+        row.get("code")
+        or row.get("代码")
+        or row.get("stock_code")
+        or row.get("ts_code")
+        or row.get("fs_code")
+    )
+
+
+def _lhb_row_name(row):
+    if not isinstance(row, dict):
+        return ""
+    return _display_text(row.get("name") or row.get("名称") or row.get("stock_name") or row.get("stock_chi_name"))
+
+
+def _lhb_amount_yi(row, yi_key, raw_key):
+    value = _optional_float(row.get(yi_key))
+    if value is not None:
+        return value
+    raw = _optional_float(row.get(raw_key))
+    if raw is None:
+        return 0.0
+    return raw / 1e8 if abs(raw) > 10000 else raw
+
+
+def _collect_lhb_reasons(row):
+    reasons = row.get("reasons") if isinstance(row, dict) else None
+    if isinstance(reasons, list):
+        return [_display_text(item) for item in reasons if _display_text(item)]
+    reason = _display_text((row or {}).get("reason") or (row or {}).get("上榜原因"))
+    return [reason] if reason else []
+
+
+def _build_lhb_stock_context(data, stock_full_info):
+    context_by_code = {}
+
+    def ensure(code):
+        return context_by_code.setdefault(
+            code,
+            {
+                "name": "",
+                "reasons": [],
+                "reason_count": 0,
+                "list_net_yi": 0.0,
+            },
+        )
+
+    for code, info in (stock_full_info or {}).items():
+        normalized_code = normalize_stock_code(code)
+        if not normalized_code:
+            continue
+        bucket = ensure(normalized_code)
+        bucket["name"] = bucket["name"] or _lhb_row_name(info)
+
+    for row in (data.get("lhb_net_buy_top10", []) or []) + (data.get("lhb_net_sell_top10", []) or []):
+        code = _lhb_row_code(row)
+        if not code:
+            continue
+        bucket = ensure(code)
+        bucket["name"] = bucket["name"] or _lhb_row_name(row)
+        if "net_buy_amount_yi" in row:
+            bucket["list_net_yi"] += _safe_float(row.get("net_buy_amount_yi"))
+
+    occurrences = {}
+    for row in data.get("lhb_analysis", []) or []:
+        code = _lhb_row_code(row)
+        if not code:
+            continue
+        bucket = ensure(code)
+        bucket["name"] = bucket["name"] or _lhb_row_name(row)
+        occurrences[code] = occurrences.get(code, 0) + 1
+        for reason in _collect_lhb_reasons(row):
+            if reason not in bucket["reasons"]:
+                bucket["reasons"].append(reason)
+        if "net_buy_amount_yi" in row:
+            bucket["list_net_yi"] = _safe_float(row.get("net_buy_amount_yi"))
+        elif "net_buy_amount" in row:
+            bucket["list_net_yi"] = _safe_float(row.get("net_buy_amount")) / 1e8
+        elif "net_amount" in row:
+            bucket["list_net_yi"] = _safe_float(row.get("net_amount")) / 1e8
+        elif "net_buy" in row:
+            bucket["list_net_yi"] = _safe_float(row.get("net_buy"))
+
+    for code, bucket in context_by_code.items():
+        bucket["reason_count"] = max(len(bucket.get("reasons") or []), occurrences.get(code, 0))
+        if not bucket["name"]:
+            bucket["name"] = code
+    return context_by_code
+
+
+def _normalize_lhb_seat_rows(rows, target_date):
+    target_compact = _compact_lhb_date(target_date)
+    normalized = []
+    seen = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        trade_date = _compact_lhb_date(
+            row.get("trade_date") or row.get("date") or row.get("source_date") or row.get("query_date")
+        )
+        if target_compact and trade_date and trade_date != target_compact:
+            continue
+        code = _lhb_row_code(row)
+        exalter = _display_text(row.get("exalter") or row.get("seat") or row.get("seat_name"))
+        if not code or not exalter:
+            continue
+        net_buy_yi = round(_lhb_amount_yi(row, "net_buy_yi", "net_buy"), 6)
+        buy_yi = round(_lhb_amount_yi(row, "buy_yi", "buy"), 6)
+        sell_yi = round(_lhb_amount_yi(row, "sell_yi", "sell"), 6)
+        reason = _display_text(row.get("reason") or row.get("上榜原因"))
+        dedupe_key = (code, exalter, buy_yi, sell_yi, net_buy_yi, reason)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        normalized.append(
+            {
+                "code": code,
+                "exalter": exalter,
+                "seat_type": "机构" if _display_text(row.get("seat_type")) == "机构" or "机构" in exalter else "非机构",
+                "buy_yi": buy_yi,
+                "sell_yi": sell_yi,
+                "net_buy_yi": net_buy_yi,
+                "reason": reason,
+            }
+        )
+    return normalized
+
+
+def _build_lhb_seat_summary(seat_rows):
+    summary_by_code = {}
+    for row in seat_rows:
+        code = row["code"]
+        bucket = summary_by_code.setdefault(
+            code,
+            {
+                "institution_net_yi": 0.0,
+                "institution_count": 0,
+                "non_institution_net_yi": 0.0,
+                "non_institution_count": 0,
+                "stock_connect_net_yi": 0.0,
+                "stock_connect_count": 0,
+                "total_net_yi": 0.0,
+                "institution_seats": [],
+                "non_institution_seats": [],
+                "stock_connect_seats": [],
+            },
+        )
+        net_buy_yi = _safe_float(row.get("net_buy_yi"))
+        bucket["total_net_yi"] += net_buy_yi
+        if row.get("seat_type") == "机构":
+            bucket["institution_net_yi"] += net_buy_yi
+            bucket["institution_count"] += 1
+            bucket["institution_seats"].append(row)
+        else:
+            bucket["non_institution_net_yi"] += net_buy_yi
+            bucket["non_institution_count"] += 1
+            bucket["non_institution_seats"].append(row)
+        if "沪股通" in row.get("exalter", "") or "深股通" in row.get("exalter", ""):
+            bucket["stock_connect_net_yi"] += net_buy_yi
+            bucket["stock_connect_count"] += 1
+            bucket["stock_connect_seats"].append(row)
+    for bucket in summary_by_code.values():
+        for key in ("institution_net_yi", "non_institution_net_yi", "stock_connect_net_yi", "total_net_yi"):
+            bucket[key] = round(bucket[key], 6)
+    return summary_by_code
+
+
+def _top_lhb_seat_name(seats, *, by_abs=False):
+    if not seats:
+        return "-"
+    key = (lambda item: abs(_safe_float(item.get("net_buy_yi")))) if by_abs else (lambda item: _safe_float(item.get("net_buy_yi")))
+    return sorted(seats, key=key, reverse=True)[0].get("exalter") or "-"
+
+
+def _format_lhb_signed_yi(value):
+    return f"{_safe_float(value):+.2f}"
+
+
+def _format_lhb_reason(reasons):
+    reasons = [reason for reason in reasons or [] if reason]
+    if not reasons:
+        return "-"
+    if len(reasons) <= 2:
+        return "；".join(reasons)
+    return "；".join(reasons[:2]) + f"等{len(reasons)}项"
+
+
+def _lhb_divergence_read(institution_net_yi, non_institution_net_yi):
+    institution_net_yi = _safe_float(institution_net_yi)
+    non_institution_net_yi = _safe_float(non_institution_net_yi)
+    if institution_net_yi > 0 and non_institution_net_yi < 0:
+        return "机构买、非机构卖"
+    if institution_net_yi < 0 and non_institution_net_yi > 0:
+        return "机构卖、非机构买"
+    if institution_net_yi > 0 and non_institution_net_yi > 0:
+        return "机构与非机构同向净买"
+    if institution_net_yi < 0 and non_institution_net_yi < 0:
+        return "机构与非机构同向净卖"
+    if institution_net_yi:
+        return "主要由机构表态"
+    if non_institution_net_yi:
+        return "主要由非机构表态"
+    return "席位表态不明显"
+
+
+def _lhb_display_name(code, stock_context):
+    return (stock_context.get(code) or {}).get("name") or code
+
+
+def _render_lhb_empty_row(columns, text):
+    return "| " + " | ".join(["-"] * (columns - 1) + [text]) + " |"
+
+
+def build_lhb_seat_strength_node(context, node_meta=None, node_lookup=None):
+    data = _data(context)
+    stock_context = _build_lhb_stock_context(data, _stock_full_info(context))
+    seat_rows = _normalize_lhb_seat_rows(data.get("lhb_inst_detail", []) or [], context.get("target_date"))
+    lines = [
+        "### 席位强度解读",
+        "> 席位只反映资金表态，不直接生成明日参与动作。",
+        "",
+    ]
+    if not seat_rows:
+        lines.extend(["| 结果 | 说明 |", "|------|------|", "| 席位明细缺失 | 只保留龙虎榜净买卖排行 |", ""])
+        return {"lines": lines, "exports": {}, "module_logs": []}
+
+    summary_by_code = _build_lhb_seat_summary(seat_rows)
+
+    institution_rows = [
+        (code, summary)
+        for code, summary in summary_by_code.items()
+        if _safe_float(summary.get("institution_net_yi")) > 0
+    ]
+    institution_rows = sorted(institution_rows, key=lambda item: item[1].get("institution_net_yi", 0), reverse=True)[:5]
+    lines.extend(
+        [
+            "#### 机构净买强榜",
+            "| 股票 | 代码 | 机构净买(亿) | 机构席位数 | 买方代表 | 上榜原因 |",
+            "|------|------|--------------|------------|----------|----------|",
+        ]
+    )
+    if institution_rows:
+        for code, summary in institution_rows:
+            stock_meta = stock_context.get(code, {})
+            lines.append(
+                f"| {_lhb_display_name(code, stock_context)} | {code} | {_format_lhb_signed_yi(summary.get('institution_net_yi'))} | "
+                f"{summary.get('institution_count', 0)} | {_top_lhb_seat_name(summary.get('institution_seats', []))} | "
+                f"{_format_lhb_reason(stock_meta.get('reasons'))} |"
+            )
+    else:
+        lines.append(_render_lhb_empty_row(6, "当前无机构净买强样本"))
+    lines.append("")
+
+    non_institution_rows = [
+        (code, summary)
+        for code, summary in summary_by_code.items()
+        if _safe_float(summary.get("non_institution_net_yi")) > 0
+    ]
+    non_institution_rows = sorted(
+        non_institution_rows,
+        key=lambda item: item[1].get("non_institution_net_yi", 0),
+        reverse=True,
+    )[:5]
+    lines.extend(
+        [
+            "#### 非机构强榜",
+            "| 股票 | 代码 | 非机构净买(亿) | 非机构席位数 | 买方代表 | 上榜原因 |",
+            "|------|------|----------------|--------------|----------|----------|",
+        ]
+    )
+    if non_institution_rows:
+        for code, summary in non_institution_rows:
+            stock_meta = stock_context.get(code, {})
+            lines.append(
+                f"| {_lhb_display_name(code, stock_context)} | {code} | {_format_lhb_signed_yi(summary.get('non_institution_net_yi'))} | "
+                f"{summary.get('non_institution_count', 0)} | {_top_lhb_seat_name(summary.get('non_institution_seats', []))} | "
+                f"{_format_lhb_reason(stock_meta.get('reasons'))} |"
+            )
+    else:
+        lines.append(_render_lhb_empty_row(6, "当前无非机构净买强样本"))
+    lines.append("")
+
+    stock_connect_rows = [
+        (code, summary)
+        for code, summary in summary_by_code.items()
+        if summary.get("stock_connect_count", 0) > 0
+    ]
+    stock_connect_rows = sorted(
+        stock_connect_rows,
+        key=lambda item: abs(_safe_float(item[1].get("stock_connect_net_yi"))),
+        reverse=True,
+    )[:5]
+    lines.extend(
+        [
+            "#### 股通席位",
+            "| 股票 | 代码 | 股通净额(亿) | 方向 | 代表席位 | 上榜原因 |",
+            "|------|------|--------------|------|----------|----------|",
+        ]
+    )
+    if stock_connect_rows:
+        for code, summary in stock_connect_rows:
+            stock_meta = stock_context.get(code, {})
+            stock_connect_net = _safe_float(summary.get("stock_connect_net_yi"))
+            direction = "净买" if stock_connect_net >= 0 else "净卖"
+            lines.append(
+                f"| {_lhb_display_name(code, stock_context)} | {code} | {_format_lhb_signed_yi(stock_connect_net)} | {direction} | "
+                f"{_top_lhb_seat_name(summary.get('stock_connect_seats', []), by_abs=True)} | {_format_lhb_reason(stock_meta.get('reasons'))} |"
+            )
+    else:
+        lines.append(_render_lhb_empty_row(6, "当前无股通席位样本"))
+    lines.append("")
+
+    repeated_rows = []
+    for code, stock_meta in stock_context.items():
+        reason_count = stock_meta.get("reason_count", 0)
+        if reason_count < 2:
+            continue
+        summary = summary_by_code.get(code, {})
+        repeated_rows.append((code, stock_meta, summary))
+    repeated_rows = sorted(
+        repeated_rows,
+        key=lambda item: abs(_safe_float(item[2].get("total_net_yi", item[1].get("list_net_yi", 0)))),
+        reverse=True,
+    )[:5]
+    lines.extend(
+        [
+            "#### 重复上榜分歧榜",
+            "| 股票 | 代码 | 上榜原因数 | 榜单净额(亿) | 机构净额(亿) | 非机构净额(亿) | 分歧读法 |",
+            "|------|------|------------|--------------|--------------|----------------|----------|",
+        ]
+    )
+    if repeated_rows:
+        for code, stock_meta, summary in repeated_rows:
+            institution_net = _safe_float(summary.get("institution_net_yi"))
+            non_institution_net = _safe_float(summary.get("non_institution_net_yi"))
+            lines.append(
+                f"| {_lhb_display_name(code, stock_context)} | {code} | {stock_meta.get('reason_count', 0)} | "
+                f"{_format_lhb_signed_yi(stock_meta.get('list_net_yi'))} | {_format_lhb_signed_yi(institution_net)} | "
+                f"{_format_lhb_signed_yi(non_institution_net)} | {_lhb_divergence_read(institution_net, non_institution_net)} |"
+            )
+    else:
+        lines.append(_render_lhb_empty_row(7, "当前无重复上榜分歧样本"))
+    lines.append("")
+    return {"lines": lines, "exports": {}, "module_logs": []}
 
 
 def build_lhb_buy_node(context, node_meta=None, node_lookup=None):
@@ -465,6 +945,7 @@ MARKET_ACTIVITY_BASIC_NODE_BUILDERS = {
     "lhb_header": build_lhb_header_node,
     "lhb_buy": build_lhb_buy_node,
     "lhb_sell": build_lhb_sell_node,
+    "lhb_seat_strength": build_lhb_seat_strength_node,
 }
 
 

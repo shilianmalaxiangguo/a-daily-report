@@ -418,6 +418,68 @@ assert snapshot["lhb_analysis"][0]["data_source"] == "finshare.get_lhb"
             )
         )
 
+    def test_run_input_runtime_refreshes_quotes_after_watch_candidates_are_built(self):
+        input_runtime = importlib.import_module("input.runtime")
+        quote_calls = []
+        final_candidate = {"code": "001896", "name": "豫能控股"}
+
+        def collect_stock_quotes(*, existing_results=None, fetch_stock_batch_info=None, fetch_tushare_stock_batch_info=None, target_date=None, timer=None, emit=None):
+            del fetch_stock_batch_info, fetch_tushare_stock_batch_info, timer, emit
+            quote_calls.append((target_date, sorted((existing_results or {}).keys())))
+            if (existing_results or {}).get("selected_position_candidate"):
+                return {
+                    "results": {
+                        "stock_full_info": {
+                            "001896": {
+                                "name": "豫能控股",
+                                "change_pct": -1.41,
+                                "high": 21.50,
+                                "low": 19.00,
+                                "open": 19.87,
+                                "close": 19.60,
+                            }
+                        },
+                        "selected_position_candidate": {
+                            "code": "001896",
+                            "name": "豫能控股",
+                            "change_pct": -1.41,
+                            "high": 21.50,
+                            "low": 19.00,
+                            "open": 19.87,
+                            "close": 19.60,
+                        },
+                    },
+                    "module_logs": [
+                        {
+                            "module": "domains.market_activity.request",
+                            "step": "request.stock_quotes",
+                            "status": "success",
+                            "message": "stub",
+                            "details": {"target_keys": ["stock_full_info"], "stock_count": 1},
+                        }
+                    ],
+                }
+            return {"results": {"stock_full_info": {}}, "module_logs": []}
+
+        helpers = self._new_stock_runtime_helpers(
+            watch_candidate_builder=lambda all_data, **kwargs: {
+                "results": {
+                    "selected_position_candidate": dict(final_candidate),
+                },
+                "module_logs": [],
+            }
+        )
+        helpers["collect_market_activity_stock_quote_request_bundle"] = collect_stock_quotes
+
+        result = input_runtime.run_input_runtime("2026-06-08", helpers=helpers)
+
+        self.assertGreaterEqual(len(quote_calls), 2)
+        self.assertTrue(all(item[0] == "2026-06-08" for item in quote_calls))
+        self.assertEqual(result["selected_position_candidate"]["change_pct"], -1.41)
+        self.assertEqual(result["selected_position_candidate"]["close"], 19.60)
+        self.assertEqual(result["stock_full_info"]["001896"]["high"], 21.50)
+        self.assertTrue(any(log.get("step") == "request.stock_quotes" for log in result.get("module_logs", [])))
+
     def test_run_input_runtime_logs_quicktiny_sector_quadrant_provider(self):
         input_runtime = importlib.import_module("input.runtime")
         helpers = self._new_stock_runtime_helpers()
@@ -511,6 +573,32 @@ assert snapshot["lhb_analysis"][0]["data_source"] == "finshare.get_lhb"
         self.assertTrue(result["step_status"]["ETF两市成交额趋势获取"])
         provider_by_step = {log.get("step"): (log.get("details") or {}).get("provider") for log in result.get("module_logs", [])}
         self.assertEqual(provider_by_step["request.etf_turnover_series"], "sina.etf.daily_amount")
+
+    def test_run_input_runtime_rejects_etf_turnover_coverage_anomaly(self):
+        input_runtime = importlib.import_module("input.runtime")
+        helpers = self._new_stock_runtime_helpers()
+        helpers["build_input_request_registry"] = lambda runtime_helpers: {
+            "etf_turnover_series": lambda *, target_date, window_days=25: {
+                "available": True,
+                "source": "sina.etf.daily_amount",
+                "coverage_anomaly": True,
+                "coverage_status": "partial",
+                "coverage_ratio": 0.44,
+                "coverage_reference_count": 1190,
+                "latest_covered_etf_count": 520,
+                "coverage_anomaly_reason": "目标日有成交ETF数520只，样本覆盖不足",
+                "rows": [{"trade_date": "2026-06-11", "etf_turnover_yi": 665.8}],
+            },
+        }
+
+        result = input_runtime.run_input_runtime("2026-06-11", helpers=helpers)
+
+        self.assertFalse(result["data_status"]["ETF两市成交额趋势"])
+        self.assertFalse(result["step_status"]["ETF两市成交额趋势获取"])
+        log = next(row for row in result["module_logs"] if row.get("step") == "request.etf_turnover_series")
+        self.assertEqual(log["status"], "degraded")
+        self.assertEqual(log["message"], "ETF两市成交额趋势样本覆盖不足")
+        self.assertEqual(log["details"]["coverage_status"], "partial")
 
     def test_run_input_runtime_fetches_margin_pressure(self):
         input_runtime = importlib.import_module("input.runtime")

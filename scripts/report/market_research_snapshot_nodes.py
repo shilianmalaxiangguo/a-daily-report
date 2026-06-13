@@ -1,5 +1,11 @@
 from datetime import datetime, timedelta
+from html import escape
 
+from report.cycle_sector_style import (
+    cycle_sector_color_map_from_calendar_rows as _cycle_sector_color_map_from_calendar_rows,
+    is_cycle_calendar_placeholder_mainline as _shared_is_cycle_calendar_placeholder_mainline,
+    cycle_sector_label as _cycle_sector_label,
+)
 from report.mainline_turnover_summary_support import (
     normalize_display_text_by_tag_pool,
     render_hot_sector_turnover_watch_grouped_lines,
@@ -23,8 +29,6 @@ _STATE_CODE_LABELS = {
     "contract": "收缩分歧",
     "observe": "观察",
 }
-
-
 def _display_latest_first(rows):
     return list(reversed(list(rows or [])))
 
@@ -125,6 +129,44 @@ def _append_calendar_cell(row, field, cell):
         row[field] = [existing, cell]
 
 
+def _calendar_as_of_date(data, current_record):
+    data = data or {}
+    current_record = current_record or {}
+    for value in (
+        current_record.get("date"),
+        current_record.get("trade_date"),
+        data.get("target_date"),
+        data.get("date"),
+    ):
+        parsed = _parse_iso_date(value)
+        if parsed:
+            return parsed
+    return None
+
+
+def _mark_elapsed_weekdays_without_mainline(calendar_row_by_week, as_of_date, *, has_loaded_history=False):
+    if not calendar_row_by_week or not as_of_date:
+        return
+    if not has_loaded_history:
+        return
+    week_start = as_of_date - timedelta(days=as_of_date.weekday())
+    week_key = week_start.isoformat()
+    row = calendar_row_by_week.setdefault(week_key, {"week_label": f"{_short_date(week_key)}当周"})
+    for weekday_index, field in enumerate(_TRADING_DAY_FIELDS):
+        day = week_start + timedelta(days=weekday_index)
+        if day > as_of_date:
+            continue
+        existing = row.get(field)
+        if existing and existing != {"mainline": "-", "state": "-"}:
+            continue
+        row[field] = {
+            "date": _short_date(day.isoformat()),
+            "mainline": "主线记录待核验",
+            "state": "待确认",
+            "source": "calendar_missing_mainline_record",
+        }
+
+
 def _record_mainline(record):
     return str(
         (record or {}).get("primary_mainline")
@@ -153,16 +195,38 @@ def _record_state(record):
     return _STATE_CODE_LABELS.get(state_code, "观察")
 
 
-def _format_cycle_calendar_cell(cell):
+def _cycle_state_with_icon(state):
+    raw_text = str(state or "-").strip() or "-"
+    text = escape(raw_text, quote=True)
+    if any(icon in raw_text for icon in ("🔥", "❄️", "🧊")):
+        return text
+    if "爆发" in raw_text:
+        return f"🔥 {text}"
+    if "冰点" in raw_text:
+        return f"❄️ {text}"
+    return text
+
+
+def _is_cycle_calendar_placeholder_mainline(mainline):
+    return _shared_is_cycle_calendar_placeholder_mainline(mainline)
+
+
+def _cycle_calendar_color_map(rows):
+    return _cycle_sector_color_map_from_calendar_rows(rows)
+
+
+def _format_cycle_calendar_cell(cell, color_by_mainline=None):
     if isinstance(cell, (list, tuple)):
-        formatted = [_format_cycle_calendar_cell(item) for item in cell]
+        formatted = [_format_cycle_calendar_cell(item, color_by_mainline) for item in cell]
         return " / ".join([item for item in formatted if item and item != "-"]) or "-"
     if isinstance(cell, dict):
         mainline = str(cell.get("mainline") or cell.get("primary_mainline") or cell.get("sector") or "-").strip()
         state = str(cell.get("state") or cell.get("market_state") or cell.get("status") or "-").strip()
         if not mainline or mainline == "-":
             return "-"
-        return f"[{mainline}] {state or '-'}"
+        if _is_cycle_calendar_placeholder_mainline(mainline):
+            return f"[{mainline}] {_cycle_state_with_icon(state)}"
+        return f"{_cycle_sector_label(mainline, color_by_mainline)} {_cycle_state_with_icon(state)}"
     text = str(cell or "-").strip()
     if len(text) >= 6 and text[2] == "-" and text[5] == " ":
         return text[6:].strip() or "-"
@@ -404,6 +468,11 @@ def derive_market_research_cycle_layer(data, state_machine=None):
             field,
             {"date": _short_date(record.get("date")), "mainline": _record_mainline(record), "state": _record_state(record)},
         )
+    _mark_elapsed_weekdays_without_mainline(
+        calendar_row_by_week,
+        _calendar_as_of_date(data, current_record),
+        has_loaded_history=bool(data.get("recent_mainline_history")),
+    )
     for week_key in sorted(calendar_row_by_week):
         row = calendar_row_by_week[week_key]
         for field in _TRADING_DAY_FIELDS:
@@ -535,29 +604,33 @@ def _build_turnover_share_trend_table_lines(context):
     if not hot_rows and not rows:
         return []
     summary = resolve_turnover_share_trend_summary(context)
+    color_by_mainline = _cycle_calendar_color_map(context.get("cycle_calendar_rows") or [])
     lines = []
     if hot_rows:
         lines.append("#### 近期热点板块成交额连续跟踪")
         if hot_summary:
             lines.append(f"> {hot_summary}")
             lines.append("")
-        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows))
+        lines.extend(render_hot_sector_turnover_watch_grouped_lines(hot_rows, color_by_mainline=color_by_mainline))
     if not rows:
         return lines
-    lines.append("#### 主线切换成交额记录")
+    lines.append("#### 小周期成交额与主线切换判断")
     if summary:
         lines.append(f"> {summary}")
         lines.append("")
+    display_rows = list(_display_latest_first(rows))
     lines.extend(
         [
-            "| 日期 | 周期主线 | 当天主攻线 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 解读 |",
-            "|------|----------|------------|------------|------------|------|----------|------|",
+            "| 日期 | 小周期方向 | 主线成交额 | 两市成交额 | 占比 | 占比变化 | 切换判断 | 解读 |",
+            "|------|------------|------------|------------|------|----------|----------|------|",
         ]
     )
-    for row in _display_latest_first(rows):
+    for row in display_rows:
+        rendered_row = dict(row)
+        rendered_row["small_cycle_line"] = _cycle_sector_label(rendered_row.get("small_cycle_line"), color_by_mainline)
         lines.append(
-            "| {date} | {cycle_mainline} | {daily_attack_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {interpretation} |".format(
-                **row
+            "| {date} | {small_cycle_line} | {mainline_turnover} | {market_turnover} | {share} | {share_change} | {cycle_switch_judgement} | {interpretation} |".format(
+                **rendered_row
             )
         )
     lines.append("")
@@ -744,6 +817,7 @@ def build_market_research_snapshot_cycle_calendar_node(context, node_meta=None, 
     rows = context.get("cycle_calendar_rows") or []
     if not rows:
         return {"lines": [], "exports": {}, "module_logs": []}
+    color_by_mainline = _cycle_calendar_color_map(rows)
 
     lines = [
         "### 1. 周期日历主视图",
@@ -754,11 +828,11 @@ def build_market_research_snapshot_cycle_calendar_node(context, node_meta=None, 
         lines.append(
             "| {week_label} | {monday} | {tuesday} | {wednesday} | {thursday} | {friday} |".format(
                 week_label=row.get("week_label", "-"),
-                monday=_format_cycle_calendar_cell(row.get("monday", "-")),
-                tuesday=_format_cycle_calendar_cell(row.get("tuesday", "-")),
-                wednesday=_format_cycle_calendar_cell(row.get("wednesday", "-")),
-                thursday=_format_cycle_calendar_cell(row.get("thursday", "-")),
-                friday=_format_cycle_calendar_cell(row.get("friday", "-")),
+                monday=_format_cycle_calendar_cell(row.get("monday", "-"), color_by_mainline),
+                tuesday=_format_cycle_calendar_cell(row.get("tuesday", "-"), color_by_mainline),
+                wednesday=_format_cycle_calendar_cell(row.get("wednesday", "-"), color_by_mainline),
+                thursday=_format_cycle_calendar_cell(row.get("thursday", "-"), color_by_mainline),
+                friday=_format_cycle_calendar_cell(row.get("friday", "-"), color_by_mainline),
             )
         )
     return {"lines": lines, "exports": {}, "module_logs": []}
@@ -768,6 +842,7 @@ def build_market_research_snapshot_cycle_interpretation_node(context, node_meta=
     rows = context.get("cycle_interpretation_rows") or []
     if not rows:
         return {"lines": [], "exports": {}, "module_logs": []}
+    color_by_mainline = _cycle_calendar_color_map(context.get("cycle_calendar_rows") or [])
 
     lines = [
         "### 2. 周期解读",
@@ -780,7 +855,7 @@ def build_market_research_snapshot_cycle_interpretation_node(context, node_meta=
                 cycle_label=row.get("cycle_label", "-"),
                 date_range=row.get("date_range", "-"),
                 trading_days=row.get("trading_days", "-"),
-                attack_line=row.get("attack_line") or row.get("mainline", "-"),
+                attack_line=_cycle_sector_label(row.get("attack_line") or row.get("mainline", "-"), color_by_mainline),
                 cycle_stage=row.get("cycle_stage") or ("已结束周期" if row.get("cycle_label") != "当前周期" else "待验证"),
                 transfer_state=row.get("transfer_state") or ("背景观察" if row.get("cycle_label") != "当前周期" else "待二次验证"),
                 market_state=row.get("market_state", "-"),

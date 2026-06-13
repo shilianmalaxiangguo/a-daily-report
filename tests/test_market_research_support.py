@@ -13,6 +13,62 @@ def _m(*parts):
     return "".join(parts)
 
 
+class _MarketFactStore:
+    def __init__(self):
+        self.source_runs = []
+        self.rows_by_date = {}
+        self.market_totals = {}
+        self.ranks = {}
+
+    def save_provider_source_run(self, row):
+        run_id = len(self.source_runs) + 1
+        self.source_runs.append({"id": run_id, **dict(row or {})})
+        return run_id
+
+    def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
+        for row in rows or []:
+            trade_date = str((row or {}).get("trade_date") or "").strip()
+            stored = dict(row or {})
+            stored["source_run_id"] = source_run_id
+            self.rows_by_date.setdefault(trade_date, [])
+            self.rows_by_date[trade_date] = [
+                item for item in self.rows_by_date[trade_date] if item.get("stock_code") != stored.get("stock_code")
+            ] + [stored]
+        return len(rows or [])
+
+    def rebuild_market_daily_total(self, trade_date, *, market_scope="all_a", source_run_id=0):
+        rows = self.rows_by_date.get(str(trade_date or "").strip()) or []
+        row = {
+            "trade_date": trade_date,
+            "market_scope": market_scope,
+            "total_amount_yi": round(sum(float(item.get("amount_yi") or 0) for item in rows), 6),
+            "stock_count": len(rows),
+            "source_run_id": source_run_id,
+        }
+        self.market_totals[(str(trade_date or "").strip(), market_scope)] = row
+        return dict(row)
+
+    def query_market_daily_total(self, trade_date, *, market_scope="all_a"):
+        return dict(self.market_totals.get((str(trade_date or "").strip(), market_scope)) or {})
+
+    def rebuild_turnover_rank_daily(self, trade_date, *, rank_scope="all_a", rank_limit=100, source_run_id=0):
+        rows = sorted(
+            self.rows_by_date.get(str(trade_date or "").strip()) or [],
+            key=lambda row: float(row.get("amount_yi") or 0),
+            reverse=True,
+        )[: int(rank_limit or 100)]
+        ranked = []
+        for rank_no, row in enumerate(rows, start=1):
+            stored = dict(row)
+            stored.update({"rank_no": rank_no, "rank_scope": rank_scope, "source_run_id": source_run_id})
+            ranked.append(stored)
+        self.ranks[(str(trade_date or "").strip(), rank_scope)] = ranked
+        return list(ranked)
+
+    def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+        return list(self.ranks.get((str(trade_date or "").strip(), rank_scope)) or [])[: int(limit or 50)]
+
+
 def _run_legacy_entry_probe(script_body):
     stub_setup = """
 import sys
@@ -108,20 +164,20 @@ with patch.object(daily_report_entry_demo, "run_build_market_research_snapshot",
      patch.object(daily_report_entry_demo, "run_render_market_research_snapshot_section", return_value="snapshot-section") as render_snapshot_mock, \
      patch.object(daily_report_entry_demo, "run_render_step0_follow_section", return_value="step0-section") as render_step0_mock, \
      patch.object(daily_report_entry_demo, "run_build_market_research_context_bundle", return_value={"market_state_snapshot": {"leading_line": "军工"}}) as bundle_mock:
-    snapshot = daily_report_entry_demo._build_market_research_snapshot({}, {}, "三档（进攻档）", {}, target_date="2026-04-22")
-    step0 = daily_report_entry_demo._derive_step0_follow_plan({"state_machine": {}}, {"can_new_entry": True}, "三档（进攻档）")
+    snapshot = daily_report_entry_demo._build_market_research_snapshot({}, {}, "50%条件执行", {}, target_date="2026-04-22")
+    step0 = daily_report_entry_demo._derive_step0_follow_plan({"state_machine": {}}, {"can_new_entry": True}, "50%条件执行")
     dialectical = daily_report_entry_demo._build_dialectical_decision_snapshot({"zt_count": 20}, {"style_label": "主线抱团"}, {"state_code": "expand"}, {"code": "follow"}, {"can_new_entry": True})
     competition = daily_report_entry_demo._build_mainline_competition_snapshot([{"name": "军工"}], [{"name": "机器人"}], [{"sector": "军工"}], ["地产"])
     projection = daily_report_entry_demo._build_abnormal_projection_summary([{"follow_state": "跌不下去"}])
     observation = daily_report_entry_demo._build_market_observation_snapshot({"zt_pool": [{"code": "000001"}]})
-    follow = daily_report_entry_demo._build_follow_verdict({"can_new_entry": True}, "三档（进攻档）", {"state_code": "expand"})
+    follow = daily_report_entry_demo._build_follow_verdict({"can_new_entry": True}, "50%条件执行", {"state_code": "expand"})
     snapshot_section = daily_report_entry_demo._render_market_research_snapshot_section({"observation": {}}, compact=True)
     step0_section = daily_report_entry_demo._render_step0_follow_section({"step0_prediction_cn": "观察"}, {"observation": {}}, compact=True)
-    bundle = daily_report_entry_demo.build_market_research_context_bundle({}, "2026-04-22", {}, {}, "三档（进攻档）")
+    bundle = daily_report_entry_demo.build_market_research_context_bundle({}, "2026-04-22", {}, {}, "50%条件执行")
 
-assert snapshot_mock.call_args[0][:4] == ({}, {}, "三档（进攻档）", {})
+assert snapshot_mock.call_args[0][:4] == ({}, {}, "50%条件执行", {})
 assert "helpers" in snapshot_mock.call_args.kwargs
-assert step0_mock.call_args[0][2] == "三档（进攻档）"
+assert step0_mock.call_args[0][2] == "50%条件执行"
 assert dialectical_mock.call_args.kwargs["observation"] == {"zt_count": 20}
 assert "helpers" in dialectical_mock.call_args.kwargs
 assert competition_mock.call_args.kwargs["main_sectors_info"] == [{"name": "军工"}]
@@ -130,13 +186,13 @@ assert projection_mock.call_args[0][0] == [{"follow_state": "跌不下去"}]
 assert "helpers" in projection_mock.call_args.kwargs
 assert observation_mock.call_args[0][0] == {"zt_pool": [{"code": "000001"}]}
 assert "helpers" in observation_mock.call_args.kwargs
-assert follow_mock.call_args[0][:3] == ({"can_new_entry": True}, "三档（进攻档）", {"state_code": "expand"})
+assert follow_mock.call_args[0][:3] == ({"can_new_entry": True}, "50%条件执行", {"state_code": "expand"})
 assert "helpers" in follow_mock.call_args.kwargs
 assert render_snapshot_mock.call_args[0][0] == {"observation": {}}
 assert "helpers" in render_snapshot_mock.call_args.kwargs
 assert render_step0_mock.call_args[0][0] == {"step0_prediction_cn": "观察"}
 assert "helpers" in render_step0_mock.call_args.kwargs
-assert bundle_mock.call_args[0][:5] == ({}, "2026-04-22", {}, {}, "三档（进攻档）")
+assert bundle_mock.call_args[0][:5] == ({}, "2026-04-22", {}, {}, "50%条件执行")
 assert "helpers" in bundle_mock.call_args.kwargs
 assert snapshot == {"state_machine": {}}
 assert step0 == {"step0_prediction_cn": "观察"}
@@ -171,7 +227,7 @@ assert follow == {"code": "follow"}
             result = support.build_market_research_snapshot(
                 {"sector_ai_analysis": {}},
                 {"can_new_entry": True},
-                "三档（进攻档）",
+                "50%条件执行",
                 {"overall_level": "黄灯"},
                 target_date="2026-04-22",
                 helpers={
@@ -210,7 +266,7 @@ assert follow == {"code": "follow"}
                     "pivot_mainline_history": [{"date_range": "04-21 ~ 04-24", "mainline": "半导体"}],
                 },
                 {"can_new_entry": True},
-                "三档（进攻档）",
+                "50%条件执行",
                 {"overall_level": "黄灯"},
                 target_date="2026-04-24",
                 helpers={
@@ -453,7 +509,7 @@ assert follow == {"code": "follow"}
 
         result = support.build_follow_verdict(
             {"can_new_entry": False, "should_reduce": True},
-            "二档（防守档）",
+            "0%不参与",
             {"energy_state": "收缩防守", "execution_bias": "reduce_only"},
             {"action": "先处理异常对象"},
         )
@@ -467,7 +523,7 @@ assert follow == {"code": "follow"}
 
         result = support.build_follow_verdict(
             {"can_new_entry": False, "should_reduce": False, "allow_attack_50_ready": True},
-            "二档（防守档）",
+            "0%不参与",
             {
                 "energy_state": "收缩防守",
                 "execution_bias": "reduce_only",
@@ -479,8 +535,8 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["label"], "🟡 条件防守观察")
         self.assertIn("指数结构未坏", result["reason"])
         self.assertIn("固定交易窗口", result["action"])
-        self.assertIn("50%标准进攻", result["action"])
-        self.assertNotIn(_m("30%", "条件试错"), result["action"])
+        self.assertIn("50%条件执行", result["action"])
+        self.assertNotIn(_m("3", "0%", "条件", "试错"), result["action"])
 
     def test_build_mainline_competition_snapshot_support_builds_ranked_rows(self):
         support = self._load_module()
@@ -728,7 +784,7 @@ assert follow == {"code": "follow"}
         result = support.build_market_research_snapshot(
             data={"total_turnover": 10000.0},
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             exit_analysis={"overall_level": "黄灯"},
             observation_snapshot={
                 "abnormal_watch_pool": [{"code": "000001"}],
@@ -781,7 +837,7 @@ assert follow == {"code": "follow"}
                 "sector_fund_flow": [{"name": "电力", "code": "pt01801161", "cje": 995.13 * 1e4}],
             },
             final_gate={"can_new_entry": True},
-            position_level="三档（进攻档）",
+            position_level="50%条件执行",
             exit_analysis={"overall_level": "黄灯"},
             observation_snapshot={},
             target_date="2026-05-13",
@@ -813,7 +869,6 @@ assert follow == {"code": "follow"}
 
     def test_fact_db_runtime_helpers_return_tushare_total_and_rank_rows(self):
         support = self._load_module()
-        from storage.database_service import DatabaseService
 
         rows = [
             {
@@ -839,8 +894,8 @@ assert follow == {"code": "follow"}
         ]
 
         with TemporaryDirectory() as tmp:
-            db_path = Path(tmp) / "daily.db"
-            service = DatabaseService.sqlite_d1_compatible(db_path)
+            db_path = Path(tmp) / "fact-store"
+            service = _MarketFactStore()
             run_id = service.save_provider_source_run(
                 {
                     "trade_date": "2026-05-13",
@@ -854,8 +909,9 @@ assert follow == {"code": "follow"}
             service.rebuild_market_daily_total("2026-05-13", source_run_id=run_id)
             service.rebuild_turnover_rank_daily("2026-05-13", rank_limit=50, source_run_id=run_id)
 
-            total = support.get_market_daily_total_from_fact_db_runtime("2026-05-13", db_path=db_path)
-            rank_rows = support.get_turnover_rank_from_fact_db_runtime("2026-05-13", limit=50, db_path=db_path)
+            with patch.object(support.DatabaseService, "fact_store_from_environment", return_value=service):
+                total = support.get_market_daily_total_from_fact_db_runtime("2026-05-13", db_path=db_path)
+                rank_rows = support.get_turnover_rank_from_fact_db_runtime("2026-05-13", limit=50, db_path=db_path)
 
         self.assertEqual(total["total_amount_yi"], 309.2)
         self.assertEqual(total["stock_count"], 2)
@@ -904,7 +960,7 @@ assert follow == {"code": "follow"}
                 "2026-04-22",
                 {"sector_name": "军工"},
                 {"can_new_entry": True},
-                "三档（进攻档）",
+                "50%条件执行",
                 helpers=helpers,
             )
 
@@ -953,7 +1009,7 @@ assert follow == {"code": "follow"}
                 "2026-04-22",
                 {"sector_name": "军工"},
                 {"can_new_entry": True},
-                "三档（进攻档）",
+                "50%条件执行",
                 decision_strict_mode=False,
                 allow_display_degraded_abnormal_snapshot=True,
                 helpers=helpers,

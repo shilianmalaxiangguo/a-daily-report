@@ -44,9 +44,7 @@ def build_calendar_section_event_table_node(context, node_meta=None, node_lookup
         star = item.get("star", "")
         ai = item.get("ai_analysis", {}) or {}
         expectation_icon = {"利好": "📈", "利空": "📉", "中性": "➖"}.get(ai.get("expectation"), "➖")
-        if any(keyword in title for keyword in ["会议", "发布", "启动", "开幕"]):
-            direction = "抢跑/兑现"
-        elif any(keyword in title for keyword in ["风险", "警告", "谨慎", "监管"]):
+        if any(keyword in title for keyword in ["风险", "警告", "谨慎", "监管"]):
             direction = "回避"
         elif ai.get("expectation") == "利好":
             direction = "事件观察"

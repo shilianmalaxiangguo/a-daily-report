@@ -252,6 +252,62 @@ class MarketAnalysisBuilderTest(unittest.TestCase):
         rendered = "\n".join(result["lines"])
         self.assertIn("- **量能水平**: 29170.74亿元，量能充沛，但赚钱效应不足", rendered)
 
+    def test_build_market_and_sector_analysis_contract_uses_turnover_history_shrinkage_label(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "total_turnover": 27791.64,
+                "market_turnover_history": [
+                    {"date": "2026-06-02", "turnover": 35072.80},
+                    {"date": "2026-06-03", "turnover": 32643.59},
+                ],
+                "market_stats": {"up_count": 1800, "down_count": 3600},
+                "zt_pool": [],
+                "dt_pool": [{"code": "000001"}] * 5,
+            },
+            market_analysis={"market_status": "震荡整理"},
+            sh_change=-0.09,
+            indices={"深证成指": {"涨跌幅": -0.20}, "创业板指": {"涨跌幅": -0.36}},
+            exit_analysis={},
+            main_sectors_info=[],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+            enabled_node_keys=["market_state"],
+            target_date="2026-06-04",
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("- **量能水平**: 27791.64亿元，成交额连续回落；量能充沛，但赚钱效应不足", rendered)
+        self.assertNotIn("- **量能水平**: 27791.64亿元，量能充沛，但赚钱效应不足", rendered)
+
+    def test_build_market_and_sector_analysis_contract_uses_top50_series_market_amount_shrinkage(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "target_date": "2026-06-04",
+                "total_turnover": 27791.64,
+                "top50_turnover_share_series": {
+                    "rows": [
+                        {"trade_date": "2026-06-03", "market_amount_yi": 31531.25, "share_pct": 20.0},
+                        {"trade_date": "2026-06-04", "market_amount_yi": 27791.64, "share_pct": 19.0},
+                    ]
+                },
+                "market_stats": {"up_count": 1800, "down_count": 3600},
+                "zt_pool": [],
+                "dt_pool": [{"code": "000001"}] * 5,
+            },
+            market_analysis={"market_status": "震荡整理"},
+            sh_change=-0.09,
+            indices={"深证成指": {"涨跌幅": -0.20}, "创业板指": {"涨跌幅": -0.36}},
+            exit_analysis={},
+            main_sectors_info=[],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+            enabled_node_keys=["market_state"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("- **量能水平**: 27791.64亿元，成交额冲高后回落；量能充沛，但赚钱效应不足", rendered)
+        self.assertNotIn("- **量能水平**: 27791.64亿元，量能充沛，但赚钱效应不足", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

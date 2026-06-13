@@ -7,8 +7,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 
 class TushareClientTest(unittest.TestCase):
-    def test_create_tushare_pro_api_sets_gateway_and_default_timeout(self):
-        from market_data.tushare_client import TUSHARE_HTTP_URL, TUSHARE_TIMEOUT_SECONDS, create_tushare_pro_api
+    def test_create_tushare_pro_api_sets_proxy_and_default_timeout(self):
+        from market_data.tushare_client import TUSHARE_TIMEOUT_SECONDS, create_tushare_pro_api
 
         calls = []
 
@@ -17,10 +17,10 @@ class TushareClientTest(unittest.TestCase):
                 calls.append({"token": token, "timeout": timeout})
                 return type("FakePro", (), {})()
 
-        pro = create_tushare_pro_api(ts_module=FakeTs(), token="token-x")
+        pro = create_tushare_pro_api(ts_module=FakeTs(), token="token-x", http_url="http://proxy.invalid/")
 
         self.assertEqual(calls, [{"token": "token-x", "timeout": TUSHARE_TIMEOUT_SECONDS}])
-        self.assertEqual(pro._DataApi__http_url, TUSHARE_HTTP_URL)
+        self.assertEqual(pro._DataApi__http_url, "http://proxy.invalid/")
 
     def test_create_tushare_pro_api_allows_timeout_override(self):
         from market_data.tushare_client import create_tushare_pro_api
@@ -32,9 +32,35 @@ class TushareClientTest(unittest.TestCase):
                 calls.append({"token": token, "timeout": timeout})
                 return type("FakePro", (), {})()
 
-        create_tushare_pro_api(ts_module=FakeTs(), token="token-x", timeout_seconds=2)
+        create_tushare_pro_api(ts_module=FakeTs(), token="token-x", http_url="http://proxy.invalid/", timeout_seconds=2)
 
         self.assertEqual(calls, [{"token": "token-x", "timeout": 2}])
+
+    def test_create_tushare_pro_api_reads_token_and_proxy_from_dotenv(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import market_data.tushare_client as client
+
+        calls = []
+
+        class FakeTs:
+            def pro_api(self, token="", timeout=30):
+                calls.append({"token": token, "timeout": timeout})
+                return type("FakePro", (), {})()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text(
+                "TUSHARE_TOKEN=dotenv-token\nTUSHARE_HTTP_URL=http://dotenv-proxy.invalid/\n",
+                encoding="utf-8",
+            )
+            with patch.dict("os.environ", {}, clear=True), patch.object(Path, "cwd", return_value=Path(tmpdir)):
+                pro = client.create_tushare_pro_api(ts_module=FakeTs())
+
+        self.assertEqual(calls, [{"token": "dotenv-token", "timeout": client.TUSHARE_TIMEOUT_SECONDS}])
+        self.assertEqual(pro._DataApi__http_url, "http://dotenv-proxy.invalid/")
 
     def test_tushare_risk_fetchers_call_expected_pro_endpoints(self):
         from market_data.tushare_market_activity_service import (

@@ -20,6 +20,8 @@ __all__ = [
 
 GENERIC_CALENDAR_DIRECTION = "政策催化"
 GENERIC_CALENDAR_SECTORS = ["政策催化"]
+PENDING_CALENDAR_DIRECTION = "待确认"
+PENDING_CALENDAR_SECTORS = ["待确认"]
 _INVALID_CALENDAR_SECTOR_LABELS = {"", "其他", "需盘面确认", "相关产业链标的"}
 _SEMANTIC_PRIORITY_DIRECTIONS = {
     "云计算",
@@ -154,15 +156,50 @@ def has_clear_signal(text, *, helpers=None):
         _restore_runtime_bindings(previous)
 
 
+def _has_policy_catalyst_evidence(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    direct_terms = [
+        "政策",
+        "新规",
+        "监管",
+        "条例",
+        "办法",
+        "意见",
+        "通知",
+        "细则",
+        "征求意见",
+        "国常会",
+        "国务院",
+        "发改委",
+        "工信部",
+        "证监会",
+        "央行",
+        "国新办",
+        "统计局",
+    ]
+    if any(term in normalized for term in direct_terms):
+        return True
+    document_terms = ["规划", "方案", "规则", "标准"]
+    action_terms = ["发布", "出台", "实施", "落地", "印发", "生效"]
+    return any(term in normalized for term in document_terms) and any(term in normalized for term in action_terms)
+
+
 def _generic_calendar_analysis(event_title: str = "", event_summary: str = "", *, reason: str = "") -> dict:
     text = f"{event_title} {event_summary}".strip()
-    trading_logic = reason or "事件产业链方向不明确，归入政策/事件催化观察"
-    if text and any(term in text for term in ["政策", "规划", "发布", "出台", "实施", "推进", "会议", "大会", "论坛"]):
-        trading_logic = reason or "涉及政策/事件催化，先按政策催化板块归类观察"
+    if _has_policy_catalyst_evidence(text):
+        return {
+            "main_direction": GENERIC_CALENDAR_DIRECTION,
+            "related_sectors": list(GENERIC_CALENDAR_SECTORS),
+            "trading_logic": reason or "标题包含明确政策、规则或官方文件证据，按政策催化观察",
+            "expectation": infer_expectation(text) if text else "中性",
+            "confidence": "低",
+        }
     return {
-        "main_direction": GENERIC_CALENDAR_DIRECTION,
-        "related_sectors": list(GENERIC_CALENDAR_SECTORS),
-        "trading_logic": trading_logic,
+        "main_direction": PENDING_CALENDAR_DIRECTION,
+        "related_sectors": list(PENDING_CALENDAR_SECTORS),
+        "trading_logic": reason or "标题缺少明确产业链或政策文件证据，保留待确认",
         "expectation": infer_expectation(text) if text else "中性",
         "confidence": "低",
     }
@@ -229,6 +266,7 @@ def normalize_calendar_ai_analysis(result, event_title: str = "", event_summary:
             result = fallback_result
             direction = fallback_direction
             needs_concrete_direction = False
+            needs_semantic_override = False
 
     if allow_rule_fallback and not needs_concrete_direction and not needs_semantic_override:
         fallback_result = fallback_result or _minimal_fallback_analysis_legacy_body(event_title, event_summary)
@@ -236,21 +274,36 @@ def normalize_calendar_ai_analysis(result, event_title: str = "", event_summary:
             result = fallback_result
             direction = str(result.get("main_direction") or "").strip()
 
+    if needs_semantic_override and not _has_policy_catalyst_evidence(f"{event_title} {event_summary}"):
+        result = _generic_calendar_analysis(
+            event_title,
+            event_summary,
+            reason=str(result.get("trading_logic") or "").strip(),
+        )
+        direction = str(result.get("main_direction") or "").strip()
+        needs_concrete_direction = False
+        needs_semantic_override = False
+
     if needs_concrete_direction:
         generic_result = _generic_calendar_analysis(
             event_title,
             event_summary,
             reason=str(result.get("trading_logic") or "").strip(),
         )
-        result = {**generic_result, **{key: value for key, value in result.items() if value not in (None, "", [])}}
-        direction = GENERIC_CALENDAR_DIRECTION
+        preserved = {
+            key: value
+            for key, value in result.items()
+            if key not in ("main_direction", "related_sectors") and value not in (None, "", [])
+        }
+        result = {**generic_result, **preserved}
+        direction = str(generic_result.get("main_direction") or "").strip()
 
     related_sectors = _dedupe_valid_calendar_sectors(result.get("related_sectors"))
     if not related_sectors:
         related_sectors = [direction] if not _is_invalid_calendar_label(direction) else list(GENERIC_CALENDAR_SECTORS)
 
     normalized = dict(result)
-    normalized["main_direction"] = direction if not _is_invalid_calendar_label(direction) else GENERIC_CALENDAR_DIRECTION
+    normalized["main_direction"] = direction if not _is_invalid_calendar_label(direction) else PENDING_CALENDAR_DIRECTION
     normalized["related_sectors"] = related_sectors
     normalized["trading_logic"] = str(normalized.get("trading_logic") or "事件催化，需结合盘面资金确认").strip()
     normalized["expectation"] = str(normalized.get("expectation") or infer_expectation(f"{event_title} {event_summary}")).strip()
@@ -288,6 +341,14 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "related_sectors": ["银行", "券商", "国债期货", "货币政策"],
             "trading_logic": "涉及公开市场或资金面事件，主要影响流动性预期和金融板块风险偏好",
             "expectation": "中性",
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["数字金融", "金融安全", "金融科技", "数字货币", "稳定币", "跨境支付"]):
+        return {
+            "main_direction": "金融流动性",
+            "related_sectors": ["金融科技", "数字货币", "跨境支付", "银行", "券商"],
+            "trading_logic": "涉及数字金融或金融安全议题，映射到金融科技与金融流动性链",
+            "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
     if any(term in full_text for term in ["amd", "英伟达", "gpu", "ai开发者日", "智算", "算力", "数据中心", "液冷", "服务器"]):
@@ -434,11 +495,43 @@ def _minimal_fallback_analysis_legacy_body(event_title: str, event_summary: str 
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
-    if any(term in full_text for term in ["短信服务", "阿里云", "云服务", "云计算", "云通信"]):
+    if any(term in full_text for term in ["华为云", "短信服务", "阿里云", "云服务", "云计算", "云通信"]):
         return {
             "main_direction": "云计算",
             "related_sectors": ["云服务", "云通信", "数字经济", "软件服务"],
             "trading_logic": "涉及云服务价格或平台变化，映射到云计算和软件服务链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["数据周", "数据要素", "数据合作", "全球数字合作", "数字合作", "数据交易"]):
+        return {
+            "main_direction": "数字经济",
+            "related_sectors": ["数据要素", "数字经济", "云计算", "软件服务", "网络安全"],
+            "trading_logic": "涉及数据合作或数据要素议题，映射到数字经济链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["开源中国", "开源世界", "开源软件", "开源生态", "开源鸿蒙"]):
+        return {
+            "main_direction": "软件服务",
+            "related_sectors": ["软件服务", "信创", "开发工具", "操作系统", "数字经济"],
+            "trading_logic": "涉及开源软件生态会议，映射到软件服务和信创链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["openvan", "无人物流车", "无人配送车", "智能物流车"]):
+        return {
+            "main_direction": "汽车产业链",
+            "related_sectors": ["商用车", "智能驾驶", "物流车", "汽车零部件"],
+            "trading_logic": "涉及车企无人化物流产品发布，映射到商用车和智能驾驶链",
+            "expectation": infer_expectation(full_text),
+            "confidence": "中",
+        }
+    if any(term in full_text for term in ["工业气体", "气体产业链", "气体展", "ig china"]):
+        return {
+            "main_direction": "化工材料",
+            "related_sectors": ["工业气体", "电子特气", "化工材料", "半导体材料"],
+            "trading_logic": "涉及工业气体产业链展会，映射到化工材料和电子特气链",
             "expectation": infer_expectation(full_text),
             "confidence": "中",
         }
@@ -762,4 +855,4 @@ def _analyze_event_sector_legacy_body(event_title, event_summary="", xuangubao_d
     for keywords, label in mapping:
         if any(keyword in title_lower for keyword in keywords):
             return label
-    return GENERIC_CALENDAR_DIRECTION
+    return PENDING_CALENDAR_DIRECTION
