@@ -151,4 +151,4 @@
 
 ## 与代码的关系
 
-wiki 只维护判断口径。具体 tag 抽取、归并、打分和数据库留痕应落在 service 层或数据库层；日报只消费字段化结果。后续如果接入 SQLite 或 Postgres，实时 tag 池至少要保留 `date`、`source`、`stock_code`、`tag`、`tag_layer`、`driver_role`、`evidence_text`、`evidence_score`、`contradiction_level`、`capital_vehicle_role`、`mismatch_note`、`new_theme_window`、`late_entry_risk`、`updated_at`。
+wiki 只维护判断口径。具体 tag 抽取、归并、打分和数据库留痕应落在 service 层或 PostgreSQL 事实库；日报只消费字段化结果。实时 tag 池至少要保留 `date`、`source`、`stock_code`、`tag`、`tag_layer`、`driver_role`、`evidence_text`、`evidence_score`、`contradiction_level`、`capital_vehicle_role`、`mismatch_note`、`new_theme_window`、`late_entry_risk`、`updated_at`。
