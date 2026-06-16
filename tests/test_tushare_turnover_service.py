@@ -304,6 +304,31 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         self.assertEqual(pro.calls[0]["limit"], 6000)
         self.assertEqual(pro.calls[0].get("offset", 0), 0)
 
+    def test_fetch_daily_price_bars_by_trade_date_normalizes_full_market_daily_rows(self):
+        from market_data.tushare_service import fetch_daily_price_bars_by_trade_date
+
+        fake_pro = _FakePro()
+        rows = fetch_daily_price_bars_by_trade_date("2026-05-12", pro=fake_pro)
+
+        self.assertEqual(
+            fake_pro.daily_calls[-1],
+            {
+                "trade_date": "20260512",
+                "fields": (
+                    "ts_code,trade_date,open,high,low,close,pre_close,"
+                    "change,pct_chg,vol,amount"
+                ),
+            },
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["date"], "2026-05-12")
+        self.assertEqual(rows[0]["stock_code"], "000001")
+        self.assertEqual(rows[0]["open"], 10.0)
+        self.assertEqual(rows[0]["high"], 11.0)
+        self.assertEqual(rows[0]["low"], 9.8)
+        self.assertEqual(rows[0]["close"], 10.5)
+        self.assertEqual(rows[0]["data_source"], "tushare.daily")
+
 
 if __name__ == "__main__":
     unittest.main()

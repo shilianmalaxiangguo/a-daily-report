@@ -54,7 +54,7 @@ def _normalize_date_text(value):
     return text[:10]
 
 
-def _coerce_csi1000_payload(payload, target_date, *, data_source=""):
+def _coerce_named_index_payload(payload, target_date, *, name, code, data_source=""):
     if not isinstance(payload, dict):
         return {}
     source_date = _normalize_date_text(payload.get("trade_date") or payload.get("date") or target_date)
@@ -63,8 +63,8 @@ def _coerce_csi1000_payload(payload, target_date, *, data_source=""):
     if price <= 0 or (target and source_date and source_date != target):
         return {}
     result = {
-        "name": "中证1000",
-        "code": str(payload.get("code") or "000852"),
+        "name": name,
+        "code": str(payload.get("code") or code),
         "price": price,
         "change_pct": _safe_float(payload.get("change_pct", payload.get("涨跌幅"))),
         "trade_date": source_date or target,
@@ -73,6 +73,16 @@ def _coerce_csi1000_payload(payload, target_date, *, data_source=""):
     if payload.get("source"):
         result["source"] = payload.get("source")
     return result
+
+
+def _coerce_csi1000_payload(payload, target_date, *, data_source=""):
+    return _coerce_named_index_payload(
+        payload,
+        target_date,
+        name="中证1000",
+        code="000852",
+        data_source=data_source,
+    )
 
 
 def _load_csi1000_from_fact_registry(request_registry, target_date):
@@ -153,6 +163,80 @@ def _resolve_csi1000_fallback(request_registry, target_date):
         if payload:
             return payload
     return {}
+
+
+def _collect_optional_index_request(
+    *,
+    request_registry,
+    request_key,
+    result_key,
+    label,
+    step_key,
+    target_date,
+    timer,
+    emit,
+    module_logs,
+    data_status,
+    step_status,
+    timer_order,
+    fallback_loader=None,
+):
+    step_status[f"{label}获取"] = False
+    emit(f"  {timer_order}️⃣ 获取{label}（Tushare 优先）...")
+    try:
+        payload = request_registry[request_key](target_date=target_date)
+        results_payload = payload if isinstance(payload, dict) else {}
+        price = _safe_float(results_payload.get("price", results_payload.get("点位", 0)))
+        change = _safe_float(results_payload.get("change_pct", results_payload.get("涨跌幅", 0)))
+        if price <= 0 and callable(fallback_loader):
+            fallback_payload = fallback_loader(request_registry, target_date)
+            if fallback_payload:
+                results_payload = fallback_payload
+                price = _safe_float(results_payload.get("price", results_payload.get("点位", 0)))
+                change = _safe_float(results_payload.get("change_pct", results_payload.get("涨跌幅", 0)))
+
+        if price > 0:
+            data_status[label] = True
+            step_status[f"{label}获取"] = True
+            elapsed, _ = timer.record(f"{label}获取", str(timer_order))
+            emit(f"   ✅ {label}: {price:.2f}点 ({change:+.2f}%) [⏱ {elapsed:.2f}s]")
+            _append_log(
+                module_logs,
+                step_key,
+                "success",
+                f"已获取{label}",
+                provider=_provider_from_payload(results_payload, "tushare-first"),
+                target_keys=[result_key],
+                price=price,
+                change_pct=change,
+            )
+        else:
+            data_status[label] = False
+            elapsed, _ = timer.record(f"{label}获取(失败)", str(timer_order))
+            emit(f"   ❌ {label}获取失败 [⏱ {elapsed:.2f}s]")
+            _append_log(
+                module_logs,
+                step_key,
+                "degraded",
+                f"{label}为空或无效",
+                provider="tushare-first",
+                target_keys=[result_key],
+            )
+        return results_payload
+    except Exception as error:
+        data_status[label] = False
+        elapsed, _ = timer.record(f"{label}获取(失败)", str(timer_order))
+        emit(f"   ❌ {label}获取异常: {error} [⏱ {elapsed:.2f}s]")
+        _append_log(
+            module_logs,
+            step_key,
+            "error",
+            f"{label}请求失败",
+            provider="tushare-first",
+            target_keys=[result_key],
+            error=str(error),
+        )
+        return {"price": 0, "change_pct": 0}
 
 
 def collect_market_state_request_bundle(
@@ -311,61 +395,37 @@ def collect_market_state_request_bundle(
             error=str(error),
         )
 
-    step_status["中证1000获取"] = False
-    emit("  3.5️⃣ 获取中证1000（Tushare 优先）...")
-    try:
-        csi1000 = request_registry["csi1000"](target_date=target_date)
-        results["csi1000_index"] = csi1000
-        csi1000_price = csi1000.get("price", csi1000.get("点位", 0))
-        csi1000_change = csi1000.get("change_pct", csi1000.get("涨跌幅", 0))
-        if csi1000_price <= 0:
-            fallback_csi1000 = _resolve_csi1000_fallback(request_registry, target_date)
-            if fallback_csi1000:
-                csi1000 = fallback_csi1000
-                results["csi1000_index"] = csi1000
-                csi1000_price = csi1000.get("price", csi1000.get("点位", 0))
-                csi1000_change = csi1000.get("change_pct", csi1000.get("涨跌幅", 0))
-
-        if csi1000_price > 0:
-            data_status["中证1000"] = True
-            step_status["中证1000获取"] = True
-            elapsed, _ = timer.record("中证1000获取", "3.5")
-            emit(f"   ✅ 中证1000: {csi1000_price:.2f}点 ({csi1000_change:+.2f}%) [⏱ {elapsed:.2f}s]")
-            _append_log(
-                module_logs,
-                "request.csi1000",
-                "success",
-                "已获取中证1000",
-                provider=_provider_from_payload(csi1000, "tushare-first"),
-                target_keys=["csi1000_index"],
-                price=csi1000_price,
-                change_pct=csi1000_change,
-            )
-        else:
-            data_status["中证1000"] = False
-            elapsed, _ = timer.record("中证1000获取(失败)", "3.5")
-            emit(f"   ❌ 中证1000获取失败 [⏱ {elapsed:.2f}s]")
-            _append_log(
-                module_logs,
-                "request.csi1000",
-                "degraded",
-                "中证1000为空或无效",
-                provider="tushare-first",
-                target_keys=["csi1000_index"],
-            )
-    except Exception as error:
-        data_status["中证1000"] = False
-        elapsed, _ = timer.record("中证1000获取(失败)", "3.5")
-        emit(f"   ❌ 中证1000获取异常: {error} [⏱ {elapsed:.2f}s]")
-        _append_log(
-            module_logs,
-            "request.csi1000",
-            "error",
-            "中证1000请求失败",
-            provider="tushare-first",
-            target_keys=["csi1000_index"],
-            error=str(error),
+    if "csi500" in request_registry:
+        results["csi500_index"] = _collect_optional_index_request(
+            request_registry=request_registry,
+            request_key="csi500",
+            result_key="csi500_index",
+            label="中证500",
+            step_key="request.csi500",
+            target_date=target_date,
+            timer=timer,
+            emit=emit,
+            module_logs=module_logs,
+            data_status=data_status,
+            step_status=step_status,
+            timer_order="3.5",
         )
+
+    results["csi1000_index"] = _collect_optional_index_request(
+        request_registry=request_registry,
+        request_key="csi1000",
+        result_key="csi1000_index",
+        label="中证1000",
+        step_key="request.csi1000",
+        target_date=target_date,
+        timer=timer,
+        emit=emit,
+        module_logs=module_logs,
+        data_status=data_status,
+        step_status=step_status,
+        timer_order="3.6",
+        fallback_loader=_resolve_csi1000_fallback,
+    )
 
     return {
         "results": results,

@@ -40,6 +40,15 @@ __all__ = ["run_input_runtime"]
 _MISSING = object()
 
 
+def _safe_float(value, default=0.0):
+    try:
+        if value in (None, ""):
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _install_runtime_bindings(bindings):
     previous = {}
     module_globals = globals()
@@ -919,7 +928,10 @@ def _run_input_runtime_legacy_body(target_date=None):
         if results.get('wind_a_alternative'):
             wa = results['wind_a_alternative']
             print(f"🌐 中证全指(Wind全A平替): {wa.get('点位', wa.get('price', 0)):.2f}点 ({wa.get('涨跌幅', wa.get('change_pct', 0)):+.2f}%)")
-        if results.get('csi1000_index'):
+        if results.get('csi500_index') and _safe_float(results['csi500_index'].get('点位', results['csi500_index'].get('price', 0))) > 0:
+            csi500 = results['csi500_index']
+            print(f"🌐 中证500: {csi500.get('点位', csi500.get('price', 0)):.2f}点 ({csi500.get('涨跌幅', csi500.get('change_pct', 0)):+.2f}%)")
+        if results.get('csi1000_index') and _safe_float(results['csi1000_index'].get('点位', results['csi1000_index'].get('price', 0))) > 0:
             csi1000 = results['csi1000_index']
             print(f"🌐 中证1000: {csi1000.get('点位', csi1000.get('price', 0)):.2f}点 ({csi1000.get('涨跌幅', csi1000.get('change_pct', 0)):+.2f}%)")
         

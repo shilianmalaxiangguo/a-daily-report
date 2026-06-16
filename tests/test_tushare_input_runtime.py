@@ -29,6 +29,7 @@ from input.tushare_runtime import (
     get_top50_turnover_share_series_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
+    get_csi500_from_tushare_first,
     get_csi1000_from_tushare_first,
 )
 from market_data.tushare_service import fetch_daily_price_bars
@@ -52,6 +53,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_tushare_first": lambda *, target_date: calls.append("tushare_total") or 100.0,
             "get_major_indices_from_tushare_first": lambda *, target_date: calls.append("tushare_indices") or {},
             "get_wind_a_from_tushare_first": lambda *, target_date: calls.append("tushare_wind_a") or {},
+            "get_csi500_from_tushare_first": lambda *, target_date: calls.append("tushare_csi500") or {},
             "get_csi1000_from_tushare_first": lambda *, target_date: calls.append("tushare_csi1000") or {},
             "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_turnover_rank") or [],
             "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=50: calls.append("tushare_hot_rank") or [],
@@ -71,6 +73,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_iwencai": lambda *, target_date: calls.append("legacy_total") or 0.0,
             "get_major_indices_from_iwencai": lambda *, target_date: calls.append("legacy_indices") or {},
             "get_wind_a_from_iwencai": lambda *, target_date: calls.append("legacy_wind_a") or {},
+            "get_csi500_from_iwencai": lambda *, target_date: calls.append("legacy_csi500") or {},
             "get_csi1000_from_iwencai": lambda *, target_date: calls.append("legacy_csi1000") or {},
             "get_turnover_rank_from_iwencai": lambda *, target_date, limit=50: calls.append("legacy_turnover_rank") or [],
             "fetch_ths_hot_stock": lambda num=50: calls.append("legacy_ths_hot") or [],
@@ -86,6 +89,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(registry["total_turnover"](target_date="2026-05-13"), 100.0)
         registry["major_indices"](target_date="2026-05-13")
         registry["wind_a"](target_date="2026-05-13")
+        registry["csi500"](target_date="2026-05-13")
         registry["csi1000"](target_date="2026-05-13")
         registry["turnover_rank"](target_date="2026-05-13", limit=50)
         registry["stock_hot_rank"](target_date="2026-05-13", limit=50)
@@ -109,6 +113,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
                 "tushare_total",
                 "tushare_indices",
                 "tushare_wind_a",
+                "tushare_csi500",
                 "tushare_csi1000",
                 "tushare_turnover_rank",
                 "tushare_hot_rank",
@@ -139,6 +144,7 @@ class TushareInputRuntimeTest(unittest.TestCase):
             "get_total_turnover_from_tushare_first": lambda *, target_date: 100.0,
             "get_major_indices_from_tushare_first": lambda *, target_date: {},
             "get_wind_a_from_tushare_first": lambda *, target_date: {},
+            "get_csi500_from_tushare_first": lambda *, target_date: {},
             "get_csi1000_from_tushare_first": lambda *, target_date: {},
             "get_turnover_rank_from_tushare_first": lambda *, target_date, limit=50: [],
             "get_stock_hot_rank_from_tushare_first": lambda *, target_date, limit=30: [],
@@ -2785,6 +2791,27 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertTrue(calls[0][3])
         self.assertEqual(result["name"], "中证1000")
         self.assertEqual(result["code"], "000852")
+        self.assertEqual(result["data_source"], "tushare.index_daily")
+        self.assertAlmostEqual(result["change_pct"], 1.0)
+
+    def test_csi500_uses_tushare_index_daily_primary(self):
+        calls = []
+
+        result = get_csi500_from_tushare_first(
+            "2026-05-13",
+            fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: calls.append(
+                (code, start_date, end_date, is_index)
+            )
+            or [
+                {"date": "2026-05-12", "close": 6200.0},
+                {"date": "2026-05-13", "close": 6262.0},
+            ],
+        )
+
+        self.assertEqual(calls[0][0], "000905")
+        self.assertTrue(calls[0][3])
+        self.assertEqual(result["name"], "中证500")
+        self.assertEqual(result["code"], "000905")
         self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["change_pct"], 1.0)
 

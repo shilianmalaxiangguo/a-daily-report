@@ -16,6 +16,7 @@ __all__ = [
     "get_total_turnover_from_iwencai",
     "get_turnover_rank_from_iwencai",
     "get_wind_a_from_iwencai",
+    "get_csi500_from_iwencai",
     "get_csi1000_from_iwencai",
 ]
 
@@ -293,6 +294,10 @@ def _get_csi1000_akshare_fallback(target_date=None, *, print_fn=print):
     return _get_named_index_akshare_fallback("中证1000", "sh000852", "000852", target_date, print_fn=print_fn)
 
 
+def _get_csi500_akshare_fallback(target_date=None, *, print_fn=print):
+    return _get_named_index_akshare_fallback("中证500", "sh000905", "000905", target_date, print_fn=print_fn)
+
+
 def _get_named_index_tushare_primary(index_name, code, target_date=None, *, fetch_daily_price_bars_fn=None, print_fn=print):
     del print_fn
     try:
@@ -349,6 +354,16 @@ def _get_csi1000_tushare_primary(target_date=None, *, fetch_daily_price_bars_fn=
     return _get_named_index_tushare_primary(
         "中证1000",
         "000852",
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        print_fn=print_fn,
+    )
+
+
+def _get_csi500_tushare_primary(target_date=None, *, fetch_daily_price_bars_fn=None, print_fn=print):
+    return _get_named_index_tushare_primary(
+        "中证500",
+        "000905",
         target_date,
         fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
         print_fn=print_fn,
@@ -912,6 +927,55 @@ def get_wind_a_from_iwencai(
 
         traceback.print_exc()
         return _get_wind_a_akshare_fallback(target_date, print_fn=print_fn)
+
+
+def get_csi500_from_iwencai(
+    target_date=None,
+    *,
+    api_key=None,
+    urlopen_fn=None,
+    fetch_daily_price_bars_fn=None,
+    print_fn=print,
+):
+    """获取中证500 - 优先使用 Tushare index_daily，必要时回退到问财/AkShare。"""
+    tushare_csi500 = _get_csi500_tushare_primary(
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        print_fn=print_fn,
+    )
+    if _safe_float(tushare_csi500.get("price")) > 0:
+        return tushare_csi500
+
+    try:
+        query_date = _resolve_query_date(target_date)
+        date_str = query_date.strftime("%Y-%m-%d")
+        date_compact = query_date.strftime("%Y%m%d")
+        query = f"{date_str}中证500的点位、涨跌幅"
+
+        result = _post_iwencai_query(query, limit="10", api_key=api_key, urlopen_fn=urlopen_fn)
+        if result is None:
+            print_fn("⚠️ 未设置IWENCAI_API_KEY，返回空数据")
+            return {"price": 0, "change_pct": 0}
+
+        if result.get("datas"):
+            item = result["datas"][0]
+            return {
+                "name": "中证500",
+                "code": "000905",
+                "price": _safe_float(item.get(f"收盘价[{date_compact}]")),
+                "change_pct": _safe_float(item.get(f"涨跌幅[{date_compact}]")),
+                "data_source": "iwencai.query2data",
+            }
+        return {"price": 0, "change_pct": 0}
+    except IwencaiSkillVersionError as error:
+        print_fn(f"⚠️ {error}，切换到 AkShare 中证500回补")
+        return _get_csi500_akshare_fallback(target_date, print_fn=print_fn)
+    except Exception as error:
+        print_fn(f"⚠️ iwencai中证500获取失败: {error}")
+        import traceback
+
+        traceback.print_exc()
+        return _get_csi500_akshare_fallback(target_date, print_fn=print_fn)
 
 
 def get_csi1000_from_iwencai(

@@ -20,7 +20,7 @@ class TushareClientTest(unittest.TestCase):
         pro = create_tushare_pro_api(ts_module=FakeTs(), token="token-x", http_url="http://proxy.invalid/")
 
         self.assertEqual(calls, [{"token": "token-x", "timeout": TUSHARE_TIMEOUT_SECONDS}])
-        self.assertEqual(pro._DataApi__http_url, "http://proxy.invalid/")
+        self.assertEqual(pro._DataApi__http_url, "http://proxy.invalid")
 
     def test_create_tushare_pro_api_allows_timeout_override(self):
         from market_data.tushare_client import create_tushare_pro_api
@@ -60,7 +60,7 @@ class TushareClientTest(unittest.TestCase):
                 pro = client.create_tushare_pro_api(ts_module=FakeTs())
 
         self.assertEqual(calls, [{"token": "dotenv-token", "timeout": client.TUSHARE_TIMEOUT_SECONDS}])
-        self.assertEqual(pro._DataApi__http_url, "http://dotenv-proxy.invalid/")
+        self.assertEqual(pro._DataApi__http_url, "http://dotenv-proxy.invalid")
 
     def test_tushare_risk_fetchers_call_expected_pro_endpoints(self):
         from market_data.tushare_market_activity_service import (

@@ -56,6 +56,10 @@ def _resolve_runtime_value(value, env_name):
     return str(os.environ.get(env_name) or "").strip()
 
 
+def _normalize_http_url(value):
+    return str(value or "").strip().rstrip("/")
+
+
 def create_tushare_pro_api(
     *,
     ts_module=None,
@@ -66,7 +70,7 @@ def create_tushare_pro_api(
     """Create a Tushare Pro client using the local proxy configured in .env."""
     ts = _load_tushare_module(ts_module)
     resolved_token = _resolve_runtime_value(token, TUSHARE_TOKEN_ENV)
-    resolved_http_url = _resolve_runtime_value(http_url, TUSHARE_HTTP_URL_ENV)
+    resolved_http_url = _normalize_http_url(_resolve_runtime_value(http_url, TUSHARE_HTTP_URL_ENV))
     pro = ts.pro_api(resolved_token, timeout=timeout_seconds)
     if resolved_http_url:
         pro._DataApi__http_url = resolved_http_url

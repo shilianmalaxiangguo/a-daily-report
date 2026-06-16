@@ -48,6 +48,7 @@ __all__ = [
     "get_total_turnover_from_tushare_first",
     "get_major_indices_from_tushare_first",
     "get_wind_a_from_tushare_first",
+    "get_csi500_from_tushare_first",
     "get_csi1000_from_tushare_first",
     "get_turnover_rank_from_tushare_first",
     "get_stock_hot_rank_from_tushare_first",
@@ -4047,6 +4048,21 @@ def get_wind_a_from_tushare_first(
         target_date,
         fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
         legacy_get_index_fn=legacy_get_wind_a_fn,
+    )
+
+
+def get_csi500_from_tushare_first(
+    target_date=None,
+    *,
+    fetch_daily_price_bars_fn=None,
+    legacy_get_csi500_fn=None,
+):
+    return _get_single_index_from_tushare_first(
+        "中证500",
+        "000905",
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        legacy_get_index_fn=legacy_get_csi500_fn,
     )
 
 

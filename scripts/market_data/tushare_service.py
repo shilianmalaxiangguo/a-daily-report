@@ -5,6 +5,7 @@ from market_data.tushare_client import create_tushare_pro_api
 
 __all__ = [
     "fetch_daily_price_bars",
+    "fetch_daily_price_bars_by_trade_date",
     "normalize_ts_code",
 ]
 
@@ -77,18 +78,28 @@ def _frame_to_records(frame):
     return []
 
 
-def _normalize_bar_row(row):
+def _stock_code_from_ts_code(value):
+    text = str(value or "").strip().upper()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits.zfill(6) if digits else ""
+
+
+def _normalize_bar_row(row, *, data_source="tushare.pro_bar"):
     date_text = normalize_kline_date_str(row.get("trade_date") or row.get("date"))
     if not date_text:
         return None
     return {
         "date": date_text,
+        "ts_code": str(row.get("ts_code") or "").strip().upper(),
+        "stock_code": _stock_code_from_ts_code(row.get("ts_code")),
         "open": _safe_float(row.get("open")),
         "high": _safe_float(row.get("high")),
         "low": _safe_float(row.get("low")),
         "close": _safe_float(row.get("close")),
         "volume": _safe_float(row.get("vol") if row.get("vol") is not None else row.get("volume")),
-        "data_source": "tushare.pro_bar",
+        "data_source": data_source,
     }
 
 
@@ -127,3 +138,20 @@ def fetch_daily_price_bars(security_code, start_date, end_date, *, is_index=Fals
         if bar and normalize_kline_date_str(start_date) <= bar["date"] <= normalize_kline_date_str(end_date):
             bars.append(bar)
     return sorted(bars, key=lambda item: item.get("date", ""))
+
+
+def fetch_daily_price_bars_by_trade_date(trade_date, *, ts_module=None, pro=None):
+    compact = _compact_date(trade_date)
+    if not compact:
+        return []
+    pro = pro or create_tushare_pro_api(ts_module=ts_module)
+    frame = pro.daily(
+        trade_date=compact,
+        fields="ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount",
+    )
+    bars = []
+    for row in _frame_to_records(frame):
+        bar = _normalize_bar_row(row or {}, data_source="tushare.daily")
+        if bar and bar.get("stock_code"):
+            bars.append(bar)
+    return sorted(bars, key=lambda item: item.get("stock_code", ""))
