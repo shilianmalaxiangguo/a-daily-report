@@ -1382,6 +1382,7 @@ _DAILY_REPORT_FACT_TOP_LEVEL_KEYS = (
     "turnover_data",
     "indices",
     "wind_a_alternative",
+    "csi500_index",
     "csi1000_index",
     "turnover_rank",
     "market_stats",
@@ -2433,6 +2434,7 @@ _INDEX_DAILY_BAR_SOURCE_KEYS = (
     ("indices", "深证成指", "sz399001"),
     ("indices", "创业板指", "sz399006"),
     ("wind_a_alternative", None, "sh000985"),
+    ("csi500_index", None, "sh000905"),
     ("csi1000_index", None, "sh000852"),
 )
 
@@ -6810,6 +6812,13 @@ class PostgresDailyFactDb:
                 "name": "中证全指",
             }
         structured_counts["wind_a_alternative_index_daily_bar"] = 1 if wind_a_bar else 0
+        csi500_bar = self._load_structured_target_index_daily_bar(cursor, trade_date, "sh000905")
+        if csi500_bar and not data.get("csi500_index"):
+            data["csi500_index"] = {
+                **csi500_bar,
+                "name": "中证500",
+            }
+        structured_counts["csi500_index_daily_bar"] = 1 if csi500_bar else 0
         csi1000_bar = self._load_structured_target_index_daily_bar(cursor, trade_date, "sh000852")
         if csi1000_bar and not data.get("csi1000_index"):
             data["csi1000_index"] = {

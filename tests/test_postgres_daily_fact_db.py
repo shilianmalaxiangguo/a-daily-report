@@ -2577,6 +2577,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             [],
             [],
             [],
+            [],
             [
                 (
                     "2026-05-29",
@@ -2709,6 +2710,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
                 ("2026-06-04", "all_a", 2, "001896.SZ", "001896", "豫能控股", 80.0, 10500.0, 0.76, 0),
             ],
             [("sh000985", "2026-06-04", 5000.0, 5100.0, 4980.0, 5088.8, 100.0, 200.0, "postgresql.index_daily_bars", 0)],
+            [("sh000905", "2026-06-04", 5600.0, 5680.0, 5580.0, 5666.6, 100.0, 200.0, "postgresql.index_daily_bars", 0)],
             [("sh000852", "2026-06-04", 6000.0, 6120.0, 5980.0, 6108.6, 100.0, 200.0, "postgresql.index_daily_bars", 0)],
             [
                 (
@@ -2747,6 +2749,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(loaded["structured_counts"]["market_stats_from_quotes"], 1)
         self.assertEqual(loaded["structured_counts"]["turnover_rank_daily"], 2)
         self.assertEqual(loaded["structured_counts"]["wind_a_alternative_index_daily_bar"], 1)
+        self.assertEqual(loaded["structured_counts"]["csi500_index_daily_bar"], 1)
         self.assertEqual(loaded["structured_counts"]["csi1000_index_daily_bar"], 1)
         self.assertGreaterEqual(loaded["structured_fact_count"], 7)
         self.assertEqual(data["current_mainline_history_record"]["primary_mainline"], "电力")
@@ -2757,6 +2760,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(data["market_stats"]["up_count"], 2600)
         self.assertEqual(data["turnover_rank"][0]["code"], "600578")
         self.assertEqual(data["wind_a_alternative"]["price"], 5088.8)
+        self.assertEqual(data["csi500_index"]["price"], 5666.6)
         self.assertEqual(data["csi1000_index"]["price"], 6108.6)
         self.assertEqual(data["sector_attack_evidence_rows"][0]["sector_name"], "电力")
         self.assertEqual(data["recent_hot_sector_turnover_history"][-1]["turnover_share_pct"], 3.14)
@@ -2902,6 +2906,7 @@ class PostgresDailyFactDbTest(unittest.TestCase):
             ensure_schema=False,
         )
         conn.cursor_obj.row_batches = [
+            [],
             [],
             [],
             [],
