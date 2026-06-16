@@ -3,11 +3,17 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from dataclasses import dataclass
 from html import escape, unescape
 from pathlib import Path
 from string import Template
 from typing import Iterable
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from report.surface_wording import sanitize_user_visible_text
 
 
 # Bear/readable HTML renderer: consumes the final Markdown report and preserves
@@ -105,6 +111,11 @@ def _strip_inline_markdown(text: str) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"__([^_]+)__", r"\1", text)
     return text.strip()
+
+
+def _sanitize_reader_markdown_text(markdown_text: str) -> str:
+    """Normalize legacy replay wording before converting Markdown to reader HTML."""
+    return sanitize_user_visible_text(str(markdown_text or ""))
 
 
 def _cycle_sector_display_color(color: str) -> str:
@@ -471,7 +482,7 @@ def _is_judgment_review_internal_heading(parent_title: str, heading_title: str, 
     if heading_level != 3 or parent_title != "判断纠偏与今日五项结论":
         return False
     return (
-        re.match(r"^近\d+个已结算交易日正确率", heading_title) is not None
+        re.match(r"^近\d+个已结算交易日(正确率|复盘表现)", heading_title) is not None
         or heading_title.startswith("结算上一交易日")
         or heading_title == "上一交易日未完成结算"
         or heading_title.startswith("今日判断")
@@ -1350,6 +1361,7 @@ def render_markdown_report_html(
     trade_date: str = "",
     source_label: str = "Markdown日报",
 ) -> str:
+    markdown_text = _sanitize_reader_markdown_text(markdown_text)
     lines = markdown_text.splitlines()
     stock_refs = _collect_stock_refs(markdown_text)
     limit_pools = _collect_limit_pools(markdown_text)

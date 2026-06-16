@@ -1008,10 +1008,10 @@ def render_daily_judgment_review_panel_lines(panel):
     recent_end = _clean_text(panel.get("recent_end_date"))
     recent_days = int(panel.get("recent_days") or 0)
     if recent_start and recent_end:
-        lines.append(f"**近{recent_days}个已结算交易日正确率（{recent_start}至{recent_end}）**")
+        lines.append(f"**近{recent_days}个已结算交易日复盘表现（{recent_start}至{recent_end}）**")
     else:
-        lines.append("**近5个已结算交易日正确率**")
-    lines.append("| 判断项 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |")
+        lines.append("**近5个已结算交易日复盘表现**")
+    lines.append("| 判断项 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |")
     lines.append("|--------|--------|----------|------|------|------|")
     for row in list(panel.get("recent_rows") or []):
         lines.append(
@@ -1093,7 +1093,7 @@ def render_five_judgment_statistics_lines(stats):
         lines.append("- 统计范围：待补事实。")
     lines.append("> 历史复盘只统计过去判断，不作为明日新增参与依据。")
     lines.append("")
-    lines.append("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |")
+    lines.append("| 判断项 | 统计口径 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |")
     lines.append("|--------|----------|--------|----------|------|------|------|")
     if not rows:
         rows = [{**item, **_summarize_rows([])} for item in JUDGMENT_TYPES]

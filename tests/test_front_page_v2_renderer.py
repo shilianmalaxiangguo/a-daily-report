@@ -2928,6 +2928,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "### 1. 指数与市场底色",
                     "| 指标 | 数值 | 涨跌幅 | 解读 |",
                     "| 上证指数 | 4079.90 | -0.33% | 震荡修复 |",
+                    "| 中证500 | 5830.25 | +0.82% | 中盘修复 |",
                     "### 2. 市场状态结论",
                     "| 项目 | 结论 | 依据 |",
                     "|------|------|------|",
@@ -3001,6 +3002,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
+        self.assertIn("| 中证500 | 5830.25 | +0.82% | 中盘修复 |", rendered)
         self.assertIn("| 市场贴合度 | 主线有效，池子偏窄 | 强势样本3只，主线命中2只，观察池命中0只 |", rendered)
         market_base = rendered[rendered.index("### 2. 市场状态结论") : rendered.index("## 三、周期与主线")]
         self.assertLess(market_base.index("| 项目 | 结论 | 依据 |"), market_base.index("| 市场贴合度 |"))

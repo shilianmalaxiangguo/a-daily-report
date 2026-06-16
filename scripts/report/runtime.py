@@ -49,8 +49,12 @@ from report.decision_statistics import (
 )
 from report.elimination_tournament import (
     build_elimination_tournament_payload,
+    build_sector_capital_preflight_daily_context,
     build_sector_capital_preflight_payload,
     store_elimination_tournament_payload as _default_store_elimination_tournament_payload,
+)
+from report.sector_capital_carrier_strategy import (
+    build_sector_capital_carrier_strategy as _build_sector_capital_carrier_strategy,
 )
 from report.candidate_trace_artifacts import write_candidate_trace_artifact as _default_write_candidate_trace_artifact
 from report.execution_chain_overview_nodes import render_execution_chain_overview_section
@@ -544,8 +548,19 @@ _ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行
 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%条件执行"
 
 
+def _has_positive_sector_capital_preflight_surface(lines):
+    text = "\n".join(str(line or "") for line in list(lines or []))
+    if "## 板块资金扩散淘汰赛" not in text:
+        return False
+    return (
+        "**最终动作**：50%条件执行" in text
+        or "**最终动作**：100%核心进攻" in text
+        or "| 与最终动作关系 | 已进入最终动作；按唯一明日动作执行 |" in text
+    )
+
+
 def _should_apply_pure_zero_participation_cleanup(lines):
-    return _has_final_zero_participation_surface(lines)
+    return _has_final_zero_participation_surface(lines) and not _has_positive_sector_capital_preflight_surface(lines)
 
 
 def _has_existing_position_zero_new_entry_surface(lines):
@@ -1418,44 +1433,142 @@ def _maybe_persist_decision_ledger(
     target_date,
     execution_stage_context,
     market_research_snapshot=None,
+    final_action=None,
+    write_decision_revision=True,
 ):
     if not globals().get("persist_decision_ledger", False):
         return None
     execution_stage_context = execution_stage_context or {}
+    market_research_snapshot = market_research_snapshot if isinstance(market_research_snapshot, dict) else {}
+    if final_action is None:
+        final_action = _decision_ledger_final_action_from_runtime_sources(
+            data,
+            execution_stage_context,
+            market_research_snapshot,
+        )
     extreme_conviction_list = execution_stage_context.get("extreme_conviction_list", []) or []
     build_snapshot = globals().get("build_decision_ledger_snapshot") or _default_build_decision_ledger_snapshot
     write_artifacts = globals().get("write_decision_ledger_artifacts") or _default_write_decision_ledger_artifacts
-    snapshot = build_snapshot(
-        trade_date=target_date,
-        extreme_conviction_list=extreme_conviction_list,
-        market_branch=_resolve_decision_ledger_market_branch(market_research_snapshot, execution_stage_context),
-        sector_relationship_state=_resolve_decision_ledger_sector_relationship(execution_stage_context),
-        source_report=(data or {}).get("source_report") or {},
-    )
+    snapshot_kwargs = {
+        "trade_date": target_date,
+        "extreme_conviction_list": extreme_conviction_list,
+        "market_branch": _resolve_decision_ledger_market_branch(market_research_snapshot, execution_stage_context),
+        "sector_relationship_state": _resolve_decision_ledger_sector_relationship(execution_stage_context),
+        "source_report": (data or {}).get("source_report") or {},
+        "final_action": final_action,
+    }
+    try:
+        snapshot = build_snapshot(**snapshot_kwargs)
+    except TypeError as exc:
+        if "final_action" not in str(exc):
+            raise
+        snapshot_kwargs.pop("final_action", None)
+        snapshot = build_snapshot(**snapshot_kwargs)
     postgres_only = bool(globals().get("decision_ledger_postgres_only", False))
     write_kwargs = {
         "root_dir": globals().get("decision_ledger_root_dir", "."),
         "write_json_archive": not postgres_only,
+        "write_decision_revision": write_decision_revision,
     }
     if postgres_only:
         write_kwargs["review_market_facts_by_stock_code"] = {}
-    try:
-        result = write_artifacts(snapshot, **write_kwargs)
-    except TypeError as exc:
-        if postgres_only:
+    while True:
+        try:
+            result = write_artifacts(snapshot, **write_kwargs)
+            break
+        except TypeError as exc:
+            if postgres_only:
+                raise
+            message = str(exc)
+            if "write_decision_revision" in message and "write_decision_revision" in write_kwargs:
+                write_kwargs.pop("write_decision_revision", None)
+                continue
+            if "write_json_archive" in message and "write_json_archive" in write_kwargs:
+                write_kwargs.pop("write_json_archive", None)
+                continue
             raise
-        if "write_json_archive" not in str(exc):
-            raise
-        result = write_artifacts(
-            snapshot,
-            root_dir=globals().get("decision_ledger_root_dir", "."),
-        )
     tracking_lines = _build_decision_ledger_tracking_lines(result, target_date=target_date)
     if isinstance(result, dict):
         result["tracking_lines"] = tracking_lines
     if isinstance(data, dict):
         data["decision_ledger_artifacts"] = result
     return result
+
+
+def _decision_ledger_final_action_from_runtime(
+    *,
+    final_target_resolution=None,
+    position_decision=None,
+    sector_capital_preflight=None,
+):
+    preflight = sector_capital_preflight if isinstance(sector_capital_preflight, dict) else {}
+    preflight_action = preflight.get("final_action") if isinstance(preflight.get("final_action"), dict) else {}
+    preflight_target = preflight_action.get("target") if isinstance(preflight_action.get("target"), dict) else {}
+    preflight_pct = int(_runtime_cell_float(preflight_action.get("position_pct")) or 0)
+    if preflight_target and preflight_pct >= 50:
+        return {
+            "label": _first_runtime_text(preflight_action.get("label")) or "50%条件执行",
+            "position_pct": _normalize_position_pct_to_allowed_state(preflight_pct),
+            "target": dict(preflight_target),
+            "source": _first_runtime_text(preflight_action.get("source")) or "sector_capital_preflight",
+            "reason": _first_runtime_text(preflight_action.get("reason")),
+        }
+
+    resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    position_pct = _front_page_target_pct(position_decision)
+    target = _runtime_final_resolution_core_candidate(resolution) if position_pct >= 50 else {}
+    if target:
+        return {
+            "label": "100%核心进攻" if position_pct >= 100 else "50%条件执行",
+            "position_pct": position_pct,
+            "target": target,
+            "source": "final_target_resolution",
+            "reason": _first_runtime_text(
+                (resolution.get("capital_priority_decision") or {}).get("reason")
+                if isinstance(resolution.get("capital_priority_decision"), dict)
+                else ""
+            ),
+        }
+
+    return {
+        "label": "0%不参与",
+        "position_pct": 0,
+        "target": {},
+        "source": "final_target_resolution",
+        "reason": _first_runtime_text(
+            (resolution.get("capital_priority_decision") or {}).get("reason")
+            if isinstance(resolution.get("capital_priority_decision"), dict)
+            else "",
+            "无明日执行对象，保持观察",
+        ),
+    }
+
+
+def _decision_ledger_final_action_from_runtime_sources(*sources):
+    normalized_sources = [source for source in sources if isinstance(source, dict)]
+    for source in normalized_sources:
+        for key in ("sector_capital_preflight", "sector_capital_preflight_payload"):
+            preflight = source.get(key)
+            if isinstance(preflight, dict) and preflight:
+                return _decision_ledger_final_action_from_runtime(
+                    final_target_resolution=source.get("final_target_resolution"),
+                    position_decision=source.get("position_decision"),
+                    sector_capital_preflight=preflight,
+                )
+
+    final_target_resolution = {}
+    position_decision = {}
+    for source in normalized_sources:
+        if not final_target_resolution and isinstance(source.get("final_target_resolution"), dict):
+            final_target_resolution = source.get("final_target_resolution") or {}
+        if not position_decision and isinstance(source.get("position_decision"), dict):
+            position_decision = source.get("position_decision") or {}
+    if final_target_resolution or position_decision:
+        return _decision_ledger_final_action_from_runtime(
+            final_target_resolution=final_target_resolution,
+            position_decision=position_decision,
+        )
+    return None
 
 
 def _build_default_candidate_trace_source_report(target_date, run_mode=None):
@@ -1666,6 +1779,55 @@ def _decision_ledger_tracking_end_date(index, decision_ledger_result=None, *, ta
     return ""
 
 
+def _build_decision_revision_ledger_lines(decision_ledger_result=None):
+    if not isinstance(decision_ledger_result, dict):
+        return []
+    revision_ledger = decision_ledger_result.get("revision_ledger")
+    if not isinstance(revision_ledger, dict):
+        return []
+    status = str(revision_ledger.get("status") or "").strip()
+    if status in ("", "not_run"):
+        return []
+    status_label = {
+        "written": "已记录",
+        "unchanged": "本次无变化",
+        "skipped": "未记录",
+    }.get(status, status)
+    path = str(revision_ledger.get("path") or "").strip() or "-"
+    latest_revision_id = str(revision_ledger.get("latest_revision_id") or "").strip() or "-"
+    lines = [
+        "",
+        "### 决策差异记录",
+        f"- 修订结果：{status_label}；路径：{path}",
+        f"- 最新修订：{latest_revision_id}",
+    ]
+    reason = str(revision_ledger.get("reason") or "").strip()
+    if reason:
+        lines.append(f"- 说明：{reason}")
+    entries = [
+        entry
+        for entry in list(revision_ledger.get("entries") or [])
+        if isinstance(entry, dict)
+    ]
+    if not entries and status == "unchanged":
+        lines.append("- 本次结构化决策与上一修订一致。")
+    for entry in entries:
+        revision_id = str(entry.get("revision_id") or "").strip() or "-"
+        revision_type = "首次记录" if entry.get("revision_type") == "initial" else "差异修订"
+        diff_summary = str(entry.get("diff_summary") or "").strip() or "结构化决策无变化"
+        lines.append(f"- {revision_id}：{revision_type}；{diff_summary}")
+        action_change = entry.get("action_change") if isinstance(entry.get("action_change"), dict) else {}
+        if action_change.get("changed"):
+            before = action_change.get("before") if isinstance(action_change.get("before"), dict) else {}
+            after = action_change.get("after") if isinstance(action_change.get("after"), dict) else {}
+            lines.append(
+                "- 动作变化："
+                f"{str(before.get('label') or '空').strip()} -> {str(after.get('label') or '空').strip()}"
+            )
+    lines.append("")
+    return lines
+
+
 def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target_date=""):
     render_tracking_lines = (
         globals().get("render_extreme_conviction_tracking_lines")
@@ -1695,14 +1857,16 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
         globals().get("render_five_judgment_statistics_lines")
         or _default_render_five_judgment_statistics_lines
     )
+    revision_lines = _build_decision_revision_ledger_lines(decision_ledger_result)
     if not callable(render_tracking_lines):
-        return []
+        return revision_lines
     index = (decision_ledger_result or {}).get("index") or _read_decision_ledger_index_for_tracking(
         globals().get("decision_ledger_root_dir", ".")
     )
     if not index:
-        return []
+        return revision_lines
     lines = list(render_tracking_lines(index) or [])
+    lines.extend(revision_lines)
     mention_rows = _query_extreme_conviction_mention_rows_for_tracking(
         globals().get("decision_ledger_root_dir", "."),
         _decision_ledger_tracking_end_date(index, decision_ledger_result, target_date=target_date),
@@ -1730,6 +1894,39 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
         statistics = build_five_judgment_statistics(index, target_date=cutoff_date)
         lines.extend(list(render_five_judgment_statistics_lines(statistics) or []))
     return lines
+
+
+def _append_decision_revision_lines_once(report_lines, decision_ledger_result=None):
+    report_lines = list(report_lines or [])
+    revision_lines = _build_decision_revision_ledger_lines(decision_ledger_result)
+    if not revision_lines:
+        return report_lines
+    rendered = "\n".join(str(line or "") for line in report_lines)
+    if "### 决策差异记录" in rendered:
+        start = next(
+            (
+                idx
+                for idx, line in enumerate(report_lines)
+                if str(line or "").strip() == "### 决策差异记录"
+            ),
+            -1,
+        )
+        if start >= 0:
+            end = start + 1
+            while end < len(report_lines):
+                stripped = str(report_lines[end] or "").strip()
+                if not stripped and end > start + 1:
+                    end += 1
+                    break
+                if stripped.startswith("### ") and end > start + 1:
+                    break
+                if stripped.startswith("## ") and end > start + 1:
+                    break
+                end += 1
+            prefix_end = start - 1 if start > 0 and not str(report_lines[start - 1] or "").strip() else start
+            return report_lines[:prefix_end] + revision_lines + report_lines[end:]
+        return report_lines
+    return report_lines + revision_lines
 
 
 def _first_runtime_text(*values):
@@ -2113,6 +2310,8 @@ def _runtime_opportunity_comparison(
     position_decision=None,
     market_research_snapshot=None,
 ):
+    if _candidate_from_sector_capital_carrier(selected_position_candidate):
+        return {}
     new_target = _runtime_candidate_for_opportunity(selected_position_candidate)
     if not new_target:
         return {}
@@ -2915,6 +3114,134 @@ def _store_runtime_two_layer_decision_payload(payload, data=None, execution_stag
     return stored
 
 
+def _runtime_fact_date(value):
+    if not isinstance(value, dict):
+        return ""
+    for key in ("trade_date", "report_date", "target_date", "date", "latest_trade_date"):
+        text = str(value.get(key) or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _same_date_rows(rows, target_date=""):
+    rows = [row for row in (rows or []) if isinstance(row, dict)]
+    target_date = str(target_date or "").strip()
+    if not target_date:
+        return rows
+    result = []
+    for row in rows:
+        row_date = _runtime_fact_date(row)
+        if row_date and row_date != target_date:
+            continue
+        result.append(row)
+    return result
+
+
+def _candidate_trace_artifact_rows(artifact, target_date=""):
+    if not isinstance(artifact, dict):
+        return []
+    payload = artifact.get("payload") if isinstance(artifact.get("payload"), dict) else {}
+    artifact_date = _runtime_fact_date(artifact) or _runtime_fact_date(payload)
+    target_date = str(target_date or "").strip()
+    if target_date and artifact_date != target_date:
+        return []
+    for rows in (artifact.get("traces"), payload.get("traces")):
+        if isinstance(rows, list) and rows:
+            return _same_date_rows(rows, target_date=target_date)
+    return []
+
+
+def _runtime_candidate_traces(data=None, execution_stage_context=None, selection_workflow=None, target_date=""):
+    data = data if isinstance(data, dict) else {}
+    context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
+    context_artifact = context.get("candidate_trace_artifact") if isinstance(context.get("candidate_trace_artifact"), dict) else {}
+    data_artifact = data.get("candidate_trace_artifact") if isinstance(data.get("candidate_trace_artifact"), dict) else {}
+    for source in (
+        context.get("candidate_traces"),
+        data.get("candidate_traces"),
+        _candidate_trace_artifact_rows(context_artifact, target_date=target_date),
+        _candidate_trace_artifact_rows(data_artifact, target_date=target_date),
+    ):
+        if isinstance(source, list):
+            rows = _same_date_rows(source, target_date=target_date)
+            if rows:
+                return rows
+        if isinstance(source, dict) and source.get("traces"):
+            rows = _same_date_rows(source.get("traces"), target_date=target_date)
+            if rows:
+                return {"traces": rows}
+    workflow = selection_workflow if isinstance(selection_workflow, dict) else _runtime_selection_workflow(
+        data=data,
+        execution_stage_context=execution_stage_context,
+    )
+    return _candidate_traces_from_selection_workflow(workflow)
+
+
+def _same_day_ledger_rows_from_index(index, target_date=""):
+    if not isinstance(index, dict):
+        return []
+    target_date = str(target_date or "").strip()
+    rows = []
+    for records in (index.get("by_stock_code") or {}).values():
+        for record in records or []:
+            if not isinstance(record, dict):
+                continue
+            record_date = str(
+                record.get("latest_trade_date")
+                or record.get("trade_date")
+                or record.get("report_date")
+                or ""
+            ).strip()
+            if target_date and record_date and record_date != target_date:
+                continue
+            rows.append(record)
+    return rows
+
+
+def _same_day_ledger_from_source(source, target_date=""):
+    target_date = str(target_date or "").strip()
+    if isinstance(source, list):
+        rows = _same_date_rows(source, target_date=target_date)
+        return {"rows": rows} if rows else {}
+    if not isinstance(source, dict) or not source:
+        return {}
+    source_date = _runtime_fact_date(source)
+    if target_date and source_date and source_date != target_date:
+        return {}
+    for key in ("cases", "rows", "records"):
+        rows = source.get(key)
+        if isinstance(rows, list):
+            filtered = _same_date_rows(rows, target_date=target_date)
+            if filtered:
+                return {key: filtered}
+            return {}
+    if source.get("stock_code") or source.get("code"):
+        rows = _same_date_rows([source], target_date=target_date)
+        return {"rows": rows} if rows else {}
+    return source if source_date and (not target_date or source_date == target_date) else {}
+
+
+def _runtime_decision_ledger(data=None, target_date=""):
+    data = data if isinstance(data, dict) else {}
+    for source in (
+        data.get("decision_ledger_snapshot"),
+        data.get("decision_ledger"),
+        (data.get("decision_ledger_artifacts") or {}).get("snapshot")
+        if isinstance(data.get("decision_ledger_artifacts"), dict)
+        else None,
+    ):
+        ledger = _same_day_ledger_from_source(source, target_date=target_date)
+        if ledger:
+            return ledger
+    artifacts = data.get("decision_ledger_artifacts")
+    if isinstance(artifacts, dict):
+        same_day_rows = _same_day_ledger_rows_from_index(artifacts.get("index"), target_date=target_date)
+        if same_day_rows:
+            return {"rows": same_day_rows}
+    return {}
+
+
 def _build_runtime_elimination_tournament_payload(
     *,
     target_date="",
@@ -2928,18 +3255,25 @@ def _build_runtime_elimination_tournament_payload(
 ):
     context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
     data = data if isinstance(data, dict) else {}
+    workflow = selection_workflow or _runtime_selection_workflow(
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    trade_date = target_date or data.get("target_date")
     return build_elimination_tournament_payload(
-        trade_date=target_date or data.get("target_date"),
+        trade_date=trade_date,
         variant=run_mode or data.get("run_mode") or data.get("ledger_mode") or "",
-        selection_workflow=selection_workflow or _runtime_selection_workflow(
-            data=data,
-            execution_stage_context=execution_stage_context,
-            market_research_snapshot=market_research_snapshot,
-        ),
+        selection_workflow=workflow,
         final_target_resolution=final_target_resolution,
         position_decision=position_decision,
-        candidate_traces=context.get("candidate_traces") or data.get("candidate_traces"),
-        decision_ledger=data.get("decision_ledger_snapshot") or data.get("decision_ledger"),
+        candidate_traces=_runtime_candidate_traces(
+            data=data,
+            execution_stage_context=context,
+            selection_workflow=workflow,
+            target_date=trade_date,
+        ),
+        decision_ledger=_runtime_decision_ledger(data=data, target_date=trade_date),
         risk_groups={
             "focus_group": context.get("focus_group", []) or [],
             "keep_group": context.get("keep_group", []) or [],
@@ -2960,6 +3294,7 @@ def _build_runtime_sector_capital_preflight_payload(
     two_layer_decision_payload=None,
     sniper_target_derivation=None,
     elimination_tournament_payload=None,
+    sector_capital_carrier_strategy=None,
 ):
     data = data if isinstance(data, dict) else {}
     execution_stage_context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
@@ -3001,6 +3336,12 @@ def _build_runtime_sector_capital_preflight_payload(
         execution_stage_context.get("elimination_tournament_payload"),
         market_research_snapshot.get("elimination_tournament_payload"),
     )
+    sector_capital_carrier_strategy = _first_payload(
+        sector_capital_carrier_strategy,
+        data.get("sector_capital_carrier_strategy"),
+        execution_stage_context.get("sector_capital_carrier_strategy"),
+        market_research_snapshot.get("sector_capital_carrier_strategy"),
+    )
     payload = build_sector_capital_preflight_payload(
         trade_date=target_date or data.get("target_date"),
         variant=run_mode or data.get("run_mode") or data.get("ledger_mode") or "",
@@ -3010,6 +3351,13 @@ def _build_runtime_sector_capital_preflight_payload(
             "two_layer_decision_payload": two_layer_decision_payload,
             "sniper_target_derivation": sniper_target_derivation,
             "elimination_tournament_payload": elimination_tournament_payload,
+            "sector_capital_carrier_strategy": sector_capital_carrier_strategy,
+            "daily_context": build_sector_capital_preflight_daily_context(
+                data,
+                execution_stage_context,
+                market_research_snapshot,
+                trade_date=target_date or data.get("target_date"),
+            ),
         },
         elimination_tournament_payload=elimination_tournament_payload,
     )
@@ -3017,6 +3365,175 @@ def _build_runtime_sector_capital_preflight_payload(
         return {}
     stored = dict(payload)
     return stored
+
+
+def _build_runtime_sector_capital_carrier_strategy(*, target_date="", data=None):
+    payload = _build_sector_capital_carrier_strategy(target_date or (data or {}).get("target_date"), data or {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _store_runtime_sector_capital_carrier_strategy(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(payload, dict) or not payload:
+        return {}
+    stored = dict(payload)
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["sector_capital_carrier_strategy"] = stored
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _sector_capital_carrier_candidate_for_selection(strategy):
+    strategy = strategy if isinstance(strategy, dict) else {}
+    if strategy.get("action") != "paper_participate":
+        return {}
+    primary = strategy.get("primary_candidate") if isinstance(strategy.get("primary_candidate"), dict) else {}
+    stock = primary.get("stock") if isinstance(primary.get("stock"), dict) else {}
+    candidate = _runtime_stock_payload(stock)
+    if not candidate:
+        return {}
+    source_pools = list(primary.get("source_pools") or [])
+    for marker in ("sector_capital_carrier_strategy", "sector_derived_candidates"):
+        if marker not in source_pools:
+            source_pools.insert(0, marker)
+    reason = _first_runtime_text(
+        primary.get("reason"),
+        strategy.get("action_reason"),
+        "板块被资金选择，且主样本具备资金载体证据",
+    )
+    candidate.update(
+        {
+            "candidate_origin": "sector_capital_carrier_v1",
+            "candidate_role": "板块锚",
+            "sector_role": "板块锚",
+            "target_role": "attack_prepare",
+            "anchor_reversal_decision": "可作为主对象",
+            "primary_buy_candidate": True,
+            "target_position_pct": 50,
+            "source_pools": source_pools,
+            "strength_evidence": list(primary.get("evidence_families") or primary.get("source_labels") or []),
+            "entered_reason": reason,
+            "sector_derivation_evidence": reason,
+            "execution_eligibility": "conditional_execution",
+            "conditional_execution_source": "sector_capital_carrier_strategy",
+            "participation_window": "09:50-10:10优先等回踩MA5/VWAP/0轴后重新站回",
+            "buy_window": "09:50-10:10优先等回踩MA5/VWAP/0轴后重新站回",
+            "fallback_state": "T+1板块早盘失去扩散或核心掉队，回到0%不参与",
+            "front_observation_qualified": False,
+            "front_observation_reason": "已进入明日执行对象",
+            "observation_layer": "execution_object",
+            "status": "最终执行对象",
+            "planned_participation": {
+                "source_tier": "sector_capital_carrier_strategy",
+                "buy_window": "09:50-10:10优先等回踩MA5/VWAP/0轴后重新站回",
+                "participation_window": "09:50-10:10优先等回踩MA5/VWAP/0轴后重新站回",
+                "condition": "板块延续扩散，主样本回踩后重新站回关键均线或VWAP",
+                "fallback_state": "T+1板块早盘失去扩散或核心掉队，回到0%不参与",
+                "target_position_pct": 50,
+            },
+        }
+    )
+    if primary.get("stock_label"):
+        candidate["stock_label"] = primary.get("stock_label")
+    return candidate
+
+
+def _candidate_from_sector_capital_carrier(candidate):
+    candidate = candidate if isinstance(candidate, dict) else {}
+    if candidate.get("conditional_execution_source") == "sector_capital_carrier_strategy":
+        return True
+    if candidate.get("candidate_origin") == "sector_capital_carrier_v1":
+        return True
+    return "sector_capital_carrier_strategy" in list(candidate.get("source_pools") or [])
+
+
+def _add_runtime_sector_candidate_to_context(candidate, execution_stage_context):
+    if not isinstance(candidate, dict) or not isinstance(execution_stage_context, dict):
+        return
+    key = _runtime_candidate_key(candidate)
+    rows = execution_stage_context.setdefault("sector_derived_candidates", [])
+    if not isinstance(rows, list):
+        rows = []
+        execution_stage_context["sector_derived_candidates"] = rows
+    if key and any(_runtime_candidate_key(item) == key for item in rows if isinstance(item, dict)):
+        return
+    rows.insert(0, dict(candidate))
+
+
+def _apply_sector_capital_carrier_strategy_to_runtime(
+    *,
+    sector_capital_carrier_strategy=None,
+    selected_position_candidate=None,
+    position_decision=None,
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+):
+    candidate = _sector_capital_carrier_candidate_for_selection(sector_capital_carrier_strategy)
+    position_decision = dict(position_decision or {}) if isinstance(position_decision, dict) else {}
+    if not candidate:
+        return selected_position_candidate or {}, position_decision
+
+    _add_runtime_sector_candidate_to_context(candidate, execution_stage_context)
+    current_key = _runtime_candidate_key(selected_position_candidate)
+    carrier_key = _runtime_candidate_key(candidate)
+    current_pct = _front_page_target_pct(position_decision)
+    if current_key and current_key != carrier_key and current_pct >= 50:
+        return selected_position_candidate or {}, position_decision
+
+    selected = _runtime_merge_same_stock_candidate_evidence(
+        candidate,
+        selected_position_candidate,
+        data,
+        execution_stage_context,
+        market_research_snapshot,
+    )
+    updated = dict(position_decision)
+    updated.update(
+        {
+            "participation_mode": "attack_50_preview",
+            "target_position_pct": max(current_pct, 50),
+            "signal_grade": "50",
+            "candidate_feedback_ready": True,
+            "final_action": "条件满足才50%条件执行；不满足回到0%",
+            "sizing_reason": "板块资金扩散链路选出唯一资金载体；T+1固定窗口条件成立才参与，不成立回到0%。",
+            "single_focus_constraint": {
+                "status": "clear",
+                "reason": "唯一对象来自板块资金扩散链路，先看板块延续和价格回踩确认。",
+            },
+        }
+    )
+    monthly_rhythm = (
+        dict(updated.get("monthly_rhythm") or {})
+        if isinstance(updated.get("monthly_rhythm"), dict)
+        else {}
+    )
+    monthly_rhythm.update(
+        {
+            "month_mode": "attack_prepare",
+            "target_role": "attack_prepare",
+            "max_position_pct": max(int(_runtime_cell_float(monthly_rhythm.get("max_position_pct")) or 0), 50),
+            "trend_invalid": False,
+            "reason": "板块资金扩散链路给出50%条件执行资格，等待T+1固定窗口确认。",
+        }
+    )
+    updated["monthly_rhythm"] = monthly_rhythm
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["selected_position_candidate"] = selected
+            target["position_decision"] = updated
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return selected, _repair_extreme_candidate_full_attack_check(updated)
 
 
 def _store_runtime_elimination_tournament_payload(payload, data=None, execution_stage_context=None, market_research_snapshot=None):
@@ -3230,6 +3747,112 @@ def _preflight_elimination_reason(layer):
     return note or "无"
 
 
+def _preflight_join_list(value):
+    if not isinstance(value, list):
+        return _clean_runtime_cell(value or "-")
+    items = [_clean_runtime_cell(item) for item in value if _clean_runtime_cell(item)]
+    return "；".join(items) if items else "-"
+
+
+def _render_sector_capital_carrier_strategy_front_summary(strategy, final_action=None):
+    strategy = strategy if isinstance(strategy, dict) else {}
+    if not strategy:
+        return []
+    final_action = final_action if isinstance(final_action, dict) else {}
+    primary = strategy.get("primary_candidate") if isinstance(strategy.get("primary_candidate"), dict) else {}
+    final_position = int(final_action.get("position_pct") or 0)
+    action_label = _clean_runtime_cell(strategy.get("action_label") or "-")
+    primary_label = _clean_runtime_cell(primary.get("stock_label") or "无")
+    reason = _clean_runtime_cell(strategy.get("action_reason") or primary.get("reason") or "-")
+    if final_position > 0:
+        relation = "已进入最终动作；按唯一明日动作执行"
+    elif strategy.get("action") in {"paper_participate", "paper_watch"}:
+        relation = "与当前最终动作不一致：先作为策略差异复核，不新增第二个明日对象"
+    else:
+        relation = "与当前最终动作一致：没有恢复出可参与资金载体"
+    if final_position > 0:
+        boundary = "本预案已并入唯一明日动作；T+1固定窗口条件不成立则回到0%不参与。"
+    else:
+        boundary = "本预案只用 T0 板块、资金和个股载体事实做差异复核；最终仓位仍以唯一明日动作表为准。"
+    lines = [
+        "## 板块资金载体预案",
+        "| 项目 | 结论 |",
+        "|---|---|",
+        f"| T0同源策略动作 | {action_label} |",
+        f"| 主样本 | {primary_label} |",
+        f"| 依据 | {reason} |",
+        f"| 与最终动作关系 | {relation} |",
+        "",
+        f"> **边界**：{boundary}",
+        "",
+    ]
+    stages = [stage for stage in strategy.get("stages") or [] if isinstance(stage, dict)]
+    if stages:
+        lines.extend(
+            [
+                "| 环节 | 输入 | 淘汰 | 剩余 | 代表剩余/淘汰理由 |",
+                "|---|---:|---:|---:|---|",
+            ]
+        )
+        for stage in stages:
+            survivors = stage.get("survivors") if isinstance(stage.get("survivors"), list) else []
+            eliminated = stage.get("eliminated") if isinstance(stage.get("eliminated"), list) else []
+            sample = survivors[0] if survivors else eliminated[0] if eliminated else {}
+            sample_text = ""
+            if isinstance(sample, dict):
+                sample_text = "：".join(
+                    part for part in (
+                        _clean_runtime_cell(sample.get("label")),
+                        _clean_runtime_cell(sample.get("reason")),
+                    )
+                    if part
+                )
+            lines.append(
+                f"| {_clean_runtime_cell(stage.get('title') or '复核层')} "
+                f"| {int(stage.get('input_count') or 0)} "
+                f"| {int(stage.get('eliminated_count') or 0)} "
+                f"| {int(stage.get('survivor_count') or 0)} "
+                f"| {sample_text or '-'} |"
+            )
+        lines.append("")
+    return lines
+
+
+def _render_tplus_rehearsal_front_summary(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    rehearsal = payload.get("tplus_rehearsal") if isinstance(payload.get("tplus_rehearsal"), dict) else {}
+    if not rehearsal:
+        return []
+    tplus1 = rehearsal.get("tplus1") if isinstance(rehearsal.get("tplus1"), dict) else {}
+    tplus2 = rehearsal.get("tplus2") if isinstance(rehearsal.get("tplus2"), dict) else {}
+    lines = [
+        "## T0推演T+1/T+2交易环境",
+        "| 阶段 | 市场情绪 | 市场周期 | 板块情绪 | 板块周期 | 处理 |",
+        "|---|---|---|---|---|---|",
+        (
+            f"| T+1参与日 | {_clean_runtime_cell(tplus1.get('market_emotion') or '-')} "
+            f"| {_clean_runtime_cell(tplus1.get('market_cycle') or '-')} "
+            f"| {_clean_runtime_cell(tplus1.get('sector_emotion') or '-')} "
+            f"| {_clean_runtime_cell(tplus1.get('sector_cycle') or '-')} "
+            f"| {_clean_runtime_cell(tplus1.get('participation_qualification') or '-')}；{_clean_runtime_cell(tplus1.get('action') or '-')} |"
+        ),
+        (
+            f"| T+2处理日 | {_clean_runtime_cell(tplus2.get('market_emotion') or '-')} "
+            f"| {_clean_runtime_cell(tplus2.get('market_cycle') or '-')} "
+            f"| {_clean_runtime_cell(tplus2.get('sector_emotion') or '-')} "
+            f"| {_clean_runtime_cell(tplus2.get('sector_cycle') or '-')} "
+            f"| {_clean_runtime_cell(tplus2.get('action') or '-')} |"
+        ),
+        "",
+        f"> **T0边界**：{_clean_runtime_cell(rehearsal.get('t0_boundary') or '日报生成日是T0；只使用T0已知事实推演T+1和T+2')}",
+        f"> **复盘边界**：{_clean_runtime_cell(rehearsal.get('review_boundary') or 'T+1/T+2后验事实只用于复盘批改，不回写T0候选生成或最终动作')}",
+        f"> **T+1窗口**：{_preflight_join_list(tplus1.get('buy_windows'))}",
+        f"> **T+2窗口**：{_preflight_join_list(tplus2.get('sell_windows'))}",
+        "",
+    ]
+    return lines
+
+
 def _render_sector_capital_preflight_front_summary(payload):
     payload = payload if isinstance(payload, dict) else {}
     layers = [layer for layer in list(payload.get("layers") or []) if isinstance(layer, dict)]
@@ -3270,7 +3893,78 @@ def _render_sector_capital_preflight_front_summary(payload):
             "",
         ]
     )
+    lines.extend(
+        _render_sector_capital_carrier_strategy_front_summary(
+            payload.get("sector_capital_carrier_strategy"),
+            final_action=final_action,
+        )
+    )
+    lines.extend(_render_tplus_rehearsal_front_summary(payload))
     return lines
+
+
+def _effective_preflight_front_action(payload):
+    payload = payload if isinstance(payload, dict) else {}
+    final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+    target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
+    position_pct = int(final_action.get("position_pct") or 0)
+    if position_pct <= 0 or not (target.get("name") or target.get("code")):
+        return {}
+    return final_action
+
+
+def _sync_front_page_tables_with_preflight_action(report_lines, payload):
+    action = _effective_preflight_front_action(payload)
+    if not action:
+        return list(report_lines or [])
+    target = action.get("target") if isinstance(action.get("target"), dict) else {}
+    target_label = _runtime_stock_label(target) or _target_candidate_label(target)
+    action_label = _clean_runtime_cell(action.get("label") or "50%条件执行")
+    reason = _clean_runtime_cell(action.get("reason") or "板块资金扩散链路恢复出唯一主样本")
+    synced = []
+    for line in list(report_lines or []):
+        text = str(line or "")
+        if text.startswith("| 仓位姿态 |"):
+            text = f"| 仓位姿态 | {action_label}；固定交易窗口条件不成立回到0% |"
+        elif text.startswith("| 最终对象 |"):
+            text = f"| 最终对象 | 明日执行对象：{target_label} |"
+        elif text.startswith("| 对象性质 |"):
+            text = f"| 对象性质 | {action_label} |"
+        elif text.startswith("| 推导摘要 |"):
+            text = f"| 推导摘要 | {target_label}来自板块资金扩散链路；{reason} |"
+        elif text.startswith("| 明日仓位 |"):
+            text = f"| 明日仓位 | 条件满足才{action_label}；不满足回到0% |"
+        elif text.startswith("| 明日执行对象 |"):
+            text = f"| 明日执行对象 | {target_label} |"
+        elif text.startswith("| 执行性质 |"):
+            text = f"| 执行性质 | {action_label} |"
+        elif text.startswith("| 不满足条件 |"):
+            text = "| 不满足条件 | 不参与 |"
+        synced.append(text)
+    return synced
+
+
+def _remove_existing_sector_capital_preflight_front_summary(report_lines):
+    rows = list(report_lines or [])
+    try:
+        start = next(
+            index
+            for index, line in enumerate(rows)
+            if str(line or "").strip() == "## 板块资金扩散淘汰赛"
+        )
+    except StopIteration:
+        return rows
+    end = None
+    for index in range(start + 1, len(rows)):
+        marker = str(rows[index] or "").strip()
+        if marker in {"## 明日执行结论", "## 判断纠偏与今日五项结论"}:
+            end = index
+            break
+    if end is None:
+        return rows
+    while start > 0 and str(rows[start - 1] or "").strip() == "":
+        start -= 1
+    return rows[:start] + rows[end:]
 
 
 def _insert_sector_capital_preflight_front_summary(report_lines, payload):
@@ -3278,9 +3972,8 @@ def _insert_sector_capital_preflight_front_summary(report_lines, payload):
     summary_lines = _render_sector_capital_preflight_front_summary(payload)
     if not summary_lines:
         return report_lines
-    for line in report_lines:
-        if str(line or "").strip() == "## 板块资金扩散淘汰赛":
-            return report_lines
+    report_lines = _sync_front_page_tables_with_preflight_action(report_lines, payload)
+    report_lines = _remove_existing_sector_capital_preflight_front_summary(report_lines)
     insert_at = 0
     for marker in ("## 明日执行结论", "## 判断纠偏与今日五项结论"):
         for index, line in enumerate(report_lines):
@@ -4042,6 +4735,29 @@ def _runtime_two_layer_execution_object(*sources):
     return {}
 
 
+def _runtime_sector_capital_execution_object(*sources):
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("sector_capital_preflight", "sector_capital_preflight_payload"):
+            payload = source.get(key)
+            if not isinstance(payload, dict):
+                continue
+            final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+            target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
+            if int(_runtime_cell_float(final_action.get("position_pct")) or 0) >= 50 and _runtime_candidate_key(target):
+                return target
+        strategy = source.get("sector_capital_carrier_strategy")
+        if not isinstance(strategy, dict) or strategy.get("action") != "paper_participate":
+            continue
+        primary = strategy.get("primary_candidate") if isinstance(strategy.get("primary_candidate"), dict) else {}
+        stock = primary.get("stock") if isinstance(primary.get("stock"), dict) else {}
+        target = _runtime_stock_payload(stock)
+        if target:
+            return target
+    return {}
+
+
 def _runtime_selected_target_solution_lines(
     candidate=None,
     *,
@@ -4094,6 +4810,12 @@ def _runtime_selected_target_solution_lines(
             market_research_snapshot,
         )
     two_layer_execution_object = _runtime_two_layer_execution_object(market_research_snapshot, execution_stage_context)
+    sector_capital_execution_object = _runtime_sector_capital_execution_object(
+        market_research_snapshot,
+        execution_stage_context,
+        final_target_resolution,
+    )
+    final_execution_object = two_layer_execution_object or sector_capital_execution_object
     if old_position_first and watch_target:
         if not _candidate_can_be_current_observation_target(watch_target):
             return []
@@ -4147,7 +4869,7 @@ def _runtime_selected_target_solution_lines(
     action = normalize_trading_time_text(
         _runtime_user_visible_trade_text(
             "条件满足才50%条件执行；不满足回到0%"
-            if two_layer_execution_object and not wait_priority
+            if final_execution_object and not wait_priority
             else _first_runtime_text(
                 final_gate.get("final_action"),
                 candidate.get("final_action"),
@@ -4177,7 +4899,7 @@ def _runtime_selected_target_solution_lines(
         lines.append(f"| 替代效应 | {_clean_runtime_cell(proxy_effect_type)} |")
     opportunity_lines = _runtime_opportunity_comparison_lines(
         final_target_resolution.get("opportunity_comparison"),
-        two_layer_execution_object=two_layer_execution_object,
+        two_layer_execution_object=final_execution_object,
     )
     if opportunity_lines:
         lines.extend(["", *opportunity_lines])
@@ -5250,6 +5972,15 @@ def _final_gate_blocks_new_entry(final_gate):
     return any(marker in text for marker in ("禁止参与", "0%不参与", "不做新开仓"))
 
 
+def _final_gate_blocks_sector_capital_candidate(final_gate):
+    if not isinstance(final_gate, dict) or not final_gate:
+        return False
+    if bool(final_gate.get("old_position_priority")):
+        return True
+    text = " ".join(str(value or "") for value in final_gate.values())
+    return "先处理旧仓" in text and "不新增参与" in text
+
+
 def _build_front_page_position_decision(
     *,
     position_decision=None,
@@ -5278,7 +6009,13 @@ def _build_front_page_position_decision(
         final_gate=final_gate,
     ):
         return _force_observation_position_decision(position_decision)
-    if _final_gate_blocks_new_entry(final_gate):
+    if (
+        _final_gate_blocks_new_entry(final_gate)
+        and (
+            not _candidate_from_sector_capital_carrier(selected_position_candidate)
+            or _final_gate_blocks_sector_capital_candidate(final_gate)
+        )
+    ):
         return _force_observation_for_missing_execution_evidence(position_decision)
     candidate_target_pct = _front_page_candidate_position_pct(selected_position_candidate)
     if _has_zero_participation_context(position_decision) and candidate_target_pct < 50:
@@ -5309,6 +6046,7 @@ def _build_front_page_position_decision(
         requested_target_pct >= 50
         and opportunity_comparison
         and not proxy_ready
+        and not _candidate_from_sector_capital_carrier(selected_position_candidate)
         and _runtime_opportunity_risk_should_block_position(opportunity_comparison)
     ):
         return _force_observation_for_opportunity_risk(position_decision, opportunity_comparison)
@@ -5391,7 +6129,11 @@ def _build_effective_front_page_final_gate(
     target_pct = _front_page_target_pct(position_decision)
     if not selected_position_candidate or target_pct < 50:
         return final_gate
-    if opportunity_comparison and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison):
+    if (
+        opportunity_comparison
+        and not _candidate_from_sector_capital_carrier(selected_position_candidate)
+        and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison)
+    ):
         updated = dict(final_gate)
         updated.update(
             {
@@ -6004,7 +6746,200 @@ def _normalize_attack_preview_appendix_lines(
         text = text.replace("参与窗口", "固定交易窗口")
         text = text.replace("回封参与", "回封观察")
         normalized.append(text)
+    if has_selected_target and target_pct >= 50:
+        normalized = _normalize_positive_final_action_appendix_lines(
+            normalized,
+            selected_position_candidate=selected_position_candidate,
+            position_decision=position_decision,
+        )
     return _align_appendix_observation_anchor_lines(normalized, final_target_resolution)
+
+
+def _normalize_positive_final_action_appendix_lines(
+    lines,
+    *,
+    selected_position_candidate=None,
+    position_decision=None,
+):
+    if _front_page_target_pct(position_decision) < 50:
+        return list(lines or [])
+    target = selected_position_candidate if isinstance(selected_position_candidate, dict) else {}
+    target_label = _runtime_stock_label(target) or _target_candidate_label(target)
+    action_label = f"唯一明日动作：{target_label}"
+    target_name = _clean_runtime_cell(target.get("name") or target.get("stock_name"), default=target_label)
+    target_code = _normalize_runtime_stock_code(target.get("code") or target.get("stock_code"))
+    if not target_label or target_label == "明日目标标的":
+        return list(lines or [])
+    normalized = []
+    in_final_action_table = False
+    action_table_header = None
+
+    def _positive_action_row(fields):
+        row = {field: "" for field in fields}
+        row.update(
+            {
+                "明天具体怎么做": "只看明日执行对象",
+                "股票": target_name,
+                "代码": target_code or "-",
+                "触发条件": "固定交易窗口条件成立才50%条件执行；不满足回到0%不参与",
+                "止损/时间": "买后用失效价和单笔-5%底线处理风险",
+            }
+        )
+        return "| " + " | ".join(row.get(field, "") for field in fields) + " |"
+
+    for line in list(lines or []):
+        text = str(line or "")
+        stripped = text.strip()
+        if stripped.startswith("**最终动作表**"):
+            in_final_action_table = True
+            action_table_header = None
+            normalized.append(text)
+            continue
+        if in_final_action_table and not stripped:
+            normalized.append(text)
+            continue
+        if in_final_action_table and stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if "明天具体怎么做" in cells and "股票" in cells:
+                action_table_header = list(cells)
+                normalized.append(text)
+                continue
+            if action_table_header and all(set(cell) <= {"-"} and cell for cell in cells):
+                normalized.append(text)
+                continue
+            if action_table_header:
+                normalized.append(_positive_action_row(action_table_header))
+                continue
+        if in_final_action_table and (stripped.startswith("**") or stripped.startswith("#") or stripped.startswith("- ")):
+            in_final_action_table = False
+            action_table_header = None
+
+        replacements = {
+            "**明天先盯哪只**": "**过程候选回看样本**",
+            "跨线明天先盯哪只": "跨线过程候选回看样本",
+            "明天先盯哪只": "过程候选回看样本",
+            "- **明天先盯哪只**:": "- **过程候选回看样本**:",
+            "- **跨线明天先盯哪只**:": "- **跨线过程候选回看样本**:",
+            "- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明": (
+                f"- **现在是什么情况**: 已收口到唯一明日动作：{target_label}；其它候选只作过程证据"
+            ),
+            "先确认重点盯盘股，再看能否缩到一只可买股": (
+                f"先确认{action_label}是否满足固定交易窗口条件"
+            ),
+            "- **明天能不能开仓**: 市场已允许出手，但现在还只有重点盯盘股，还没有缩到一只可买股；": (
+                "- **明天能不能参与**: 条件满足才50%条件执行；"
+            ),
+            "- **现在到底是什么状态**: 还没有缩到一只可买股": (
+                f"- **现在到底是什么状态**: 已收口到唯一明日动作：{target_label}"
+            ),
+            "- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）": (
+                "- **明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%"
+            ),
+            "- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买": (
+                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；不满足固定交易窗口条件就回到0%不参与"
+            ),
+            "只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑": (
+                f"它只作过程回看；明日只看唯一明日动作{target_label}的固定交易窗口条件，盘中强也不替换唯一动作"
+            ),
+            "市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否在固定交易窗口内满足条件": (
+                f"过程候选只作回看；本时段只看{action_label}是否满足固定交易窗口条件"
+            ),
+            "只有它继续抗跌并走成明天唯一能买的那只，才允许进入参与流程": (
+                f"过程候选即使继续抗跌，也不覆盖{action_label}"
+            ),
+            "它如果始终走不成明天唯一能买的那只": (
+                f"过程候选若不能证明强于{action_label}"
+            ),
+            "没有缩到一只可买股之前，一律不开仓": (
+                f"{action_label}未满足固定交易窗口条件前，一律不新增参与"
+            ),
+            "只有缩到一只可买股时，才允许按计划买入": (
+                f"只有{action_label}满足固定交易窗口条件时，才允许按计划参与"
+            ),
+            "不代表已经有可买标的；真正能不能买，要看后文有没有缩到一只可买股": (
+                f"最终只看{action_label}是否满足固定交易窗口条件"
+            ),
+            "继续进入执行层筛到可买股": "仅保留为过程证据",
+            "继续筛到可买股": "继续回看过程候选",
+            "筛到可买股": "回看过程候选",
+            "为候选组预计算买点并筛出明天唯一能买的那只": "为候选组预计算观察位并回看过程候选",
+            "筛出明天唯一能买的那只": "回看过程候选",
+            "明天唯一能买的那只": action_label,
+            "只有走成": "仅作过程证据，不覆盖",
+            "再走成": "再回看是否仍弱于",
+            "走成": "成为",
+            "才参与": "才保留观察",
+            "等买点出现": "等观察位出现",
+            "买点出现": "观察位出现",
+            "预计算买点": "预计算观察位",
+            "明日买点预计算": "明日观察位预计算",
+            "可买对象": "合格参与对象",
+            "可买标的": "合格参与对象",
+            "可买股": "合格参与对象",
+            "按计划买入": "按计划参与",
+            "后再买": "后再按计划参与",
+            "市场已允许出手，但还没有缩到一只可买股": (
+                f"已收口到唯一明日动作{target_label}"
+            ),
+            "市场已允许出手，但还没有缩到一只合格参与对象": (
+                f"已收口到{action_label}"
+            ),
+            "市场允许出手，但还没有缩到一只可买股": (
+                f"已收口到唯一明日动作{target_label}"
+            ),
+            "市场允许出手，但还没有缩到一只合格参与对象": (
+                f"已收口到{action_label}"
+            ),
+            "还没有缩到一只可买股": f"已收口到唯一明日动作{target_label}",
+            "还没有缩到一只合格参与对象": f"已收口到{action_label}",
+            "当前还在等待层，先等买点自己长出来，不提前写成执行对象": (
+                f"当前已收口到{action_label}；过程候选只作回看，不提前替换执行对象"
+            ),
+            "明天仓位放多少**: 0%": "明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%",
+            "继续只盯明天先盯哪只": "继续回看过程候选",
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        text = text.replace(f"唯一明日动作{target_label}", action_label)
+        if text.startswith("- **明天具体怎么做**:") and "过程候选回看样本" in text:
+            text = (
+                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；"
+                "不满足固定交易窗口条件就回到0%不参与"
+            )
+        if text.startswith("| 过程候选最终复核 |") and target_label in text:
+            text = (
+                f"| 过程候选最终复核 | 过程候选只作回看，不覆盖{action_label}；"
+                "明日只按固定交易窗口条件复核最终动作。 |"
+            )
+        if "过程候选回看样本" in text and "过程证据" not in text and target_label not in text:
+            text = f"{text}（过程证据，不覆盖唯一明日动作：{target_label}）"
+        if any(marker in text for marker in ("过程候选", "过程样本", "过程回看")):
+            if target_label not in text and "不覆盖唯一明日动作" not in text:
+                text = f"{text}（过程证据，不覆盖唯一明日动作：{target_label}）"
+        if text.startswith("| 主买对象 | 暂无 |"):
+            text = f"| 主买对象 | {target_label} |"
+        elif text.startswith("| 补位对象 |") and target_label not in text:
+            text = "| 补位对象 | 过程候选回看样本，不覆盖唯一明日动作 |"
+        if text.startswith("| 今日关注标的 |"):
+            text = f"| 今日关注标的 | {action_label} |"
+        elif text.startswith("| 操作风格 | 空仓 |"):
+            text = "| 操作风格 | 50%条件执行；盘前不抢跑 |"
+        elif text.startswith("| 明日核心标的 |") and target_label not in text:
+            text = f"| 明日核心标的 | {action_label} |"
+        elif text.startswith("| 明日风险预判 |") and any(
+            marker in text for marker in ("还没有缩到", "只用于观察", "提前硬上")
+        ):
+            text = (
+                f"| 明日风险预判 | 已收口到{action_label}；固定交易窗口条件不成立回到0%不参与；"
+                "其它候选只作过程证据 |"
+            )
+        elif text.startswith("| 明日策略 |") and any(marker in text for marker in ("不开新仓", "只观察", "不允许新增")):
+            text = (
+                f"| 明日策略 | 只看明日执行对象{target_label}；"
+                "固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 |"
+            )
+        normalized.append(text)
+    return normalized
 
 
 def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_result=None, *, target_date="", execution_stage_context=None):
@@ -7393,6 +8328,10 @@ def render_markdown_report_runtime(
             run_mode=run_mode,
             persist_strategy_tracking=persist_strategy_tracking,
         )
+        if isinstance(data, dict):
+            report_lines = str(report or "").splitlines()
+            report_lines = _append_decision_revision_lines_once(report_lines, data.get("decision_ledger_artifacts"))
+            report = "\n".join(report_lines)
     finally:
         _restore_runtime_bindings(previous)
     _attach_topic_lifecycle_snapshot(data)
@@ -7625,9 +8564,14 @@ def _render_markdown_report_legacy_body(
     csci_change = 0
     if data.get('wind_a_alternative'):
         csci_change = data['wind_a_alternative'].get('涨跌幅', data['wind_a_alternative'].get('change_pct', 0))
+    csi500_change = None
+    csi500_payload = data.get('csi500_index') or {}
+    if isinstance(csi500_payload, dict) and _safe_float(csi500_payload.get('price', csi500_payload.get('点位', 0))) > 0:
+        csi500_change = csi500_payload.get('涨跌幅', csi500_payload.get('change_pct', 0))
     csi1000_change = None
-    if data.get('csi1000_index'):
-        csi1000_change = data['csi1000_index'].get('涨跌幅', data['csi1000_index'].get('change_pct', 0))
+    csi1000_payload = data.get('csi1000_index') or {}
+    if isinstance(csi1000_payload, dict) and _safe_float(csi1000_payload.get('price', csi1000_payload.get('点位', 0))) > 0:
+        csi1000_change = csi1000_payload.get('涨跌幅', csi1000_payload.get('change_pct', 0))
     
     # 主线退出分析和最终执行条件已在前面构建，最终前台口径会在执行候选确定后统一。
     print(f"   ✅ 龙头股票: {len(dragon_stocks)} 只")
@@ -7641,6 +8585,7 @@ def _render_markdown_report_legacy_body(
         render_execution_chain_overview_section(
             {
                 "csci_change": csci_change,
+                "csi500_change": csi500_change,
                 "csi1000_change": csi1000_change,
                 "market_trend": market_trend,
                 "primary_mainline": primary_mainline,
@@ -7966,6 +8911,7 @@ def _render_markdown_report_legacy_body(
         target_date=target_date,
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
+        write_decision_revision=False,
     )
     decision_ledger_result = _prune_decision_ledger_result_for_current_extreme_list(
         decision_ledger_result,
@@ -8130,6 +9076,24 @@ def _render_markdown_report_legacy_body(
     abnormal_probe_group = execution_stage_context.get('abnormal_probe_group', {}) or {}
     special_probe_verdict = execution_stage_context.get('special_probe_verdict', {}) or {}
     position_decision = execution_stage_context.get('position_decision', {}) or {}
+    sector_capital_carrier_strategy = _build_runtime_sector_capital_carrier_strategy(
+        target_date=target_date,
+        data=data,
+    )
+    _store_runtime_sector_capital_carrier_strategy(
+        sector_capital_carrier_strategy,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    selected_position_candidate, position_decision = _apply_sector_capital_carrier_strategy_to_runtime(
+        sector_capital_carrier_strategy=sector_capital_carrier_strategy,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     position_decision = _build_front_page_position_decision(
         position_decision=position_decision,
         selected_position_candidate=selected_position_candidate,
@@ -8228,6 +9192,7 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
         elimination_tournament_payload=elimination_tournament_payload,
+        sector_capital_carrier_strategy=sector_capital_carrier_strategy,
     )
     _store_runtime_sector_capital_preflight_payload(
         sector_capital_preflight_payload,
@@ -8235,6 +9200,24 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    final_decision_ledger_result = _maybe_persist_decision_ledger(
+        data=data,
+        target_date=target_date,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_action=_decision_ledger_final_action_from_runtime(
+            final_target_resolution=final_target_resolution,
+            position_decision=position_decision,
+            sector_capital_preflight=sector_capital_preflight_payload,
+        ),
+    )
+    if isinstance(final_decision_ledger_result, dict):
+        decision_ledger_result = _prune_decision_ledger_result_for_current_extreme_list(
+            final_decision_ledger_result,
+            target_date=target_date,
+            execution_stage_context=execution_stage_context,
+        )
+        data["decision_ledger_artifacts"] = decision_ledger_result
     rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
         execution_stage_context=execution_stage_context,
         stage_lookup=execution_stage_result.get("stage_lookup"),
@@ -8485,6 +9468,24 @@ def _render_markdown_report_legacy_body(
             market_research_snapshot["selected_position_candidate"] = selected_position_candidate
             data["market_research_snapshot"] = market_research_snapshot
         _refresh_llm_wiki_knowledge_hits(data, (data.get("knowledge") or {}).get("llm_wiki") or {})
+    sector_capital_carrier_strategy = _build_runtime_sector_capital_carrier_strategy(
+        target_date=target_date,
+        data=data,
+    )
+    _store_runtime_sector_capital_carrier_strategy(
+        sector_capital_carrier_strategy,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
+    selected_position_candidate, position_decision = _apply_sector_capital_carrier_strategy_to_runtime(
+        sector_capital_carrier_strategy=sector_capital_carrier_strategy,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     position_decision = _build_front_page_position_decision(
         position_decision=position_decision,
         selected_position_candidate=selected_position_candidate,
@@ -8583,6 +9584,7 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
         elimination_tournament_payload=elimination_tournament_payload,
+        sector_capital_carrier_strategy=sector_capital_carrier_strategy,
     )
     _store_runtime_sector_capital_preflight_payload(
         sector_capital_preflight_payload,
@@ -8737,6 +9739,7 @@ def _render_markdown_report_legacy_body(
             report = report + [""] + next_day_attribution_lines
         report = report + ["", "## 八、详细附录", ""] + appendix_lines
 
+    report = _append_decision_revision_lines_once(report, decision_ledger_result)
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
         data["execution_stage_context"] = execution_stage_context
     print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(front_page_final_gate.get('final_action', '未知'))}")

@@ -56,7 +56,7 @@ class PkDecisionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### Step 5 - PK决胜局（期望值模型）", rendered)
         self.assertIn("> **先看结论**：真允许出手时，只保留唯一动作；不允许时，只保留观察。", rendered)
-        self.assertIn("> **只看什么**：环境、主线、触发、可交易性和历史胜率收益。", rendered)
+        self.assertIn("> **只看什么**：环境、主线、触发、可交易性和历史复盘表现。", rendered)
         self.assertIn("**决策栈排序**（环境 -> 主线 -> EV）:", rendered)
         self.assertIn("| 军工一号 | 9 | 8 | 7 | 8 | 7 | 8 | 参与资格 |", rendered)
         self.assertIn("**✅ 明天唯一能买的那只**: 军工一号(000001)", rendered)

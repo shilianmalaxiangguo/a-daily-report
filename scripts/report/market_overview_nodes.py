@@ -764,14 +764,37 @@ def _price_band_style_summary(snapshot, rows):
 def _index_risk_is_weak(data):
     data = data or {}
     values = []
+
+    def append_change_if_valid(item):
+        if not isinstance(item, dict):
+            return
+        price = _safe_float(
+            item.get("price")
+            or item.get("点位")
+            or item.get("close")
+            or item.get("收盘")
+            or item.get("最新价"),
+            None,
+        )
+        has_price_key = any(key in item for key in ("price", "点位", "close", "收盘", "最新价"))
+        if has_price_key and (price is None or price <= 0):
+            return
+        change = _safe_float(item.get("涨跌幅", item.get("change_pct")), None)
+        if change is None:
+            return
+        values.append(change)
+
     for item in (data.get("indices") or {}).values():
-        values.append(_safe_float((item or {}).get("涨跌幅", (item or {}).get("change_pct"))))
+        append_change_if_valid(item)
     wind_a = data.get("wind_a_alternative") or {}
     if wind_a:
-        values.append(_safe_float(wind_a.get("涨跌幅", wind_a.get("change_pct"))))
+        append_change_if_valid(wind_a)
+    csi500 = data.get("csi500_index") or {}
+    if csi500:
+        append_change_if_valid(csi500)
     csi1000 = data.get("csi1000_index") or {}
     if csi1000:
-        values.append(_safe_float(csi1000.get("涨跌幅", csi1000.get("change_pct"))))
+        append_change_if_valid(csi1000)
     return any(value <= -1.5 for value in values)
 
 
@@ -908,30 +931,50 @@ def build_market_overview_indices_node(context, node_meta=None, node_lookup=None
 
     if data.get("indices"):
         for name, index_data in data["indices"].items():
-            point = (
-                index_data.get("点位")
-                or index_data.get("close")
-                or index_data.get("price")
-                or index_data.get("收盘")
-                or index_data.get("最新价")
-                or 0
+            point = _safe_float(
+                (index_data or {}).get("点位")
+                or (index_data or {}).get("close")
+                or (index_data or {}).get("price")
+                or (index_data or {}).get("收盘")
+                or (index_data or {}).get("最新价"),
+                None,
             )
-            change = index_data.get("涨跌幅", index_data.get("change_pct", 0))
+            change = _safe_float((index_data or {}).get("涨跌幅", (index_data or {}).get("change_pct")), None)
+            if point is None or point <= 0 or change is None:
+                lines.append(f"| {name} | 待补 | 待补 | 待补 |")
+                continue
             trend = _index_trend_label(index_data, change)
             lines.append(f"| {name} | {point:.2f} | {change:+.2f}% | {trend} |")
 
     if data.get("wind_a_alternative"):
         wa = data["wind_a_alternative"]
-        point = wa.get("点位", wa.get("price", 0))
-        change = wa.get("涨跌幅", wa.get("change_pct", 0))
-        trend = _index_trend_label(wa, change)
-        lines.append(f"| 中证全指 | {point:.2f} | {change:+.2f}% | {trend} |")
+        point = _safe_float(wa.get("点位", wa.get("price")), None)
+        change = _safe_float(wa.get("涨跌幅", wa.get("change_pct")), None)
+        if point is None or point <= 0 or change is None:
+            lines.append("| 中证全指 | 待补 | 待补 | 待补 |")
+        else:
+            trend = _index_trend_label(wa, change)
+            lines.append(f"| 中证全指 | {point:.2f} | {change:+.2f}% | {trend} |")
+    csi500 = data.get("csi500_index")
+    if isinstance(csi500, dict):
+        point = _safe_float(csi500.get("点位", csi500.get("price")), None)
+        change = _safe_float(csi500.get("涨跌幅", csi500.get("change_pct")), None)
+        if point is None or point <= 0 or change is None:
+            lines.append("| 中证500 | 待补 | 待补 | 待补 |")
+        else:
+            trend = _index_trend_label(csi500, change)
+            lines.append(f"| 中证500 | {point:.2f} | {change:+.2f}% | {trend} |")
+    elif "csi500_index" in data:
+        lines.append("| 中证500 | 待补 | 待补 | 待补 |")
     if data.get("csi1000_index"):
         csi1000 = data["csi1000_index"]
-        point = csi1000.get("点位", csi1000.get("price", 0))
-        change = csi1000.get("涨跌幅", csi1000.get("change_pct", 0))
-        trend = _index_trend_label(csi1000, change)
-        lines.append(f"| 中证1000 | {point:.2f} | {change:+.2f}% | {trend} |")
+        point = _safe_float(csi1000.get("点位", csi1000.get("price")), None)
+        change = _safe_float(csi1000.get("涨跌幅", csi1000.get("change_pct")), None)
+        if point is None or point <= 0 or change is None:
+            lines.append("| 中证1000 | 待补 | 待补 | 待补 |")
+        else:
+            trend = _index_trend_label(csi1000, change)
+            lines.append(f"| 中证1000 | {point:.2f} | {change:+.2f}% | {trend} |")
     turnover = float(data.get("total_turnover", 0) or 0)
     zt_count = len(data.get("zt_pool", []))
     dt_count = len(data.get("dt_pool", []))

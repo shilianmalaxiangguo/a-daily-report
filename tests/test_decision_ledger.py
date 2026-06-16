@@ -15,6 +15,7 @@ from report.decision_ledger import (
     build_decision_ledger_index,
     build_decision_ledger_snapshot,
     build_decision_ledger_snapshot_from_markdown_report,
+    build_decision_revision_entry,
     build_extreme_conviction_backtest_rows,
     build_extreme_conviction_mention_rows,
     classify_cycle_acceptance,
@@ -2146,6 +2147,379 @@ class DecisionLedgerTest(unittest.TestCase):
             result["index"]["by_stock_code"]["002703"][0]["planned_participation"]["source_tier"],
             "ordinary_watch",
         )
+
+    def test_decision_revision_entry_keeps_structured_decision_without_hidden_reasoning(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-11",
+            extreme_conviction_list=[
+                {
+                    "code": "688146",
+                    "name": "中船特气",
+                    "sector": "电子特气",
+                    "conviction_reason": "板块锚定龙 / 趋势容量核心",
+                    "attack_state": "50%",
+                }
+            ],
+            market_branch="主线修复",
+            sector_relationship_state="电子特气扩散",
+            generated_at="2026-06-11T20:00:00+08:00",
+        )
+
+        entry = build_decision_revision_entry(snapshot, sequence=1, created_at="2026-06-11T12:00:00Z")
+
+        self.assertEqual(entry["schema_version"], "decision_revision_ledger.v1")
+        self.assertEqual(entry["revision_type"], "initial")
+        self.assertEqual(entry["diff_summary"], "首次结构化决策记录")
+        self.assertEqual(entry["decision_summary"]["market_branch"], "主线修复")
+        self.assertEqual(entry["decision_summary"]["sector_relationship_state"], "电子特气扩散")
+        self.assertEqual(entry["decision_summary"]["final_action_label"], "50%条件执行")
+        serialized = json.dumps(entry, ensure_ascii=False)
+        self.assertNotIn("chain_of_thought", serialized)
+        self.assertNotIn("hidden_reasoning", serialized)
+
+    def test_decision_revision_entry_prefers_explicit_final_action_over_case_guess(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {
+                    "code": "300136",
+                    "name": "信维通信",
+                    "sector": "通信设备",
+                    "conviction_reason": "板块观察样本",
+                    "attack_state": "0%",
+                }
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="通信设备扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"stock_code": "600584", "stock_name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+
+        entry = build_decision_revision_entry(snapshot, sequence=1, created_at="2026-06-12T12:00:00Z")
+
+        self.assertEqual(entry["decision_summary"]["final_action_label"], "50%条件执行")
+        self.assertEqual(entry["decision_summary"]["final_target"]["stock_code"], "600584")
+        self.assertEqual(entry["decision_summary"]["final_target"]["stock_name"], "长电科技")
+
+    def test_writer_can_skip_revision_for_intermediate_snapshot_then_record_final_action(self):
+        early = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块轮动",
+            sector_relationship_state="化工观察",
+        )
+        final = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块轮动",
+            sector_relationship_state="化工观察",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(early, root_dir=root, write_decision_revision=False)
+            result = write_decision_ledger_artifacts(final, root_dir=root)
+            revision_path = Path(result["revision_ledger"]["path"])
+            entries = [json.loads(line) for line in revision_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["decision_summary"]["final_action_label"], "50%条件执行")
+        self.assertEqual(entries[0]["decision_summary"]["final_target"]["stock_code"], "600584")
+
+    def test_writer_records_initial_and_diff_revision_for_same_day_refresh(self):
+        first = build_decision_ledger_snapshot(
+            trade_date="2026-06-11",
+            extreme_conviction_list=[
+                {
+                    "code": "688146",
+                    "name": "中船特气",
+                    "sector": "电子特气",
+                    "conviction_reason": "板块锚定龙 / 趋势容量核心",
+                    "attack_state": "50%",
+                }
+            ],
+            market_branch="主线修复",
+            sector_relationship_state="电子特气扩散",
+            generated_at="2026-06-11T20:00:00+08:00",
+        )
+        second = build_decision_ledger_snapshot(
+            trade_date="2026-06-11",
+            extreme_conviction_list=[],
+            market_branch="退潮防守",
+            sector_relationship_state="板块扩散不足",
+            generated_at="2026-06-11T21:00:00+08:00",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            first_result = write_decision_ledger_artifacts(first, root_dir=root)
+            second_result = write_decision_ledger_artifacts(second, root_dir=root)
+            revision_path = root / "data" / "decision-ledger" / "revisions" / "2026-06-11.jsonl"
+            revisions = [json.loads(line) for line in revision_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(first_result["revision_ledger"]["status"], "written")
+        self.assertEqual(second_result["revision_ledger"]["status"], "written")
+        self.assertEqual(len(revisions), 2)
+        self.assertEqual(revisions[0]["revision_type"], "initial")
+        self.assertEqual(revisions[1]["revision_type"], "diff")
+        self.assertEqual(revisions[1]["base_revision_id"], revisions[0]["revision_id"])
+        self.assertTrue(revisions[1]["action_change"]["changed"])
+        self.assertEqual(revisions[1]["action_change"]["before"]["label"], "50%条件执行")
+        self.assertEqual(revisions[1]["action_change"]["after"]["label"], "0%不参与")
+        self.assertEqual(revisions[1]["removed_evidence"][0]["stock"], "中船特气(688146)")
+        self.assertIn("移除样本1个", revisions[1]["diff_summary"])
+
+    def test_writer_marks_postgres_only_json_archive_skip_with_reason(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-11",
+            extreme_conviction_list=[
+                {
+                    "code": "688146",
+                    "name": "中船特气",
+                    "sector": "电子特气",
+                    "conviction_reason": "板块锚定龙 / 趋势容量核心",
+                    "attack_state": "50%",
+                }
+            ],
+            market_branch="主线修复",
+            sector_relationship_state="电子特气扩散",
+            generated_at="2026-06-11T20:00:00+08:00",
+        )
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                return {"cases": len(payload.get("cases") or []), "mentions": 1}
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            result = write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=root,
+                database_service=StubService(),
+                write_json_archive=False,
+            )
+
+            snapshot_path = root / "data" / "decision-ledger" / "2026-06-11.json"
+            index_path = root / "data" / "decision-ledger" / "index.json"
+            revision_path = root / "data" / "decision-ledger" / "revisions" / "2026-06-11.jsonl"
+            self.assertFalse(snapshot_path.exists())
+            self.assertFalse(index_path.exists())
+            self.assertTrue(revision_path.exists())
+            revision_lines = revision_path.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(result["revision_ledger"]["status"], "written")
+        self.assertEqual(len(result["revision_ledger"]["entries"]), 1)
+        self.assertEqual(len(revision_lines), 1)
+        self.assertIn("首次结构化决策记录", revision_lines[0])
+        self.assertEqual(result["stale_json_removed"], [])
+
+    def test_postgres_only_success_removes_stale_local_json_archive(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                return {"cases": len(payload.get("cases") or []), "mentions": 1}
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            ledger_dir = root / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            snapshot_path = ledger_dir / "2026-06-12.json"
+            index_path = ledger_dir / "index.json"
+            snapshot_path.write_text('{"trade_date":"2026-06-12"}\n', encoding="utf-8")
+            index_path.write_text('{"latest_trade_date":"2026-06-12"}\n', encoding="utf-8")
+
+            result = write_decision_ledger_artifacts(
+                snapshot,
+                root_dir=root,
+                database_service=StubService(),
+                write_json_archive=False,
+            )
+
+            self.assertFalse(snapshot_path.exists())
+            self.assertFalse(index_path.exists())
+
+        self.assertEqual(result["fact_db_sync"]["status"], "success")
+        self.assertEqual(set(result["stale_json_removed"]), {str(snapshot_path), str(index_path)})
+
+    def test_postgres_only_intermediate_snapshot_recovers_final_action_from_revision_history(self):
+        final_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+        markdown_sync_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+        )
+
+        class StubService:
+            def __init__(self):
+                self.saved_snapshots = []
+
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                self.saved_snapshots.append(payload)
+                return {"cases": len(payload.get("cases") or []), "mentions": 1}
+
+        service = StubService()
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(
+                final_snapshot,
+                root_dir=root,
+                database_service=service,
+                write_json_archive=False,
+            )
+            result = write_decision_ledger_artifacts(
+                markdown_sync_snapshot,
+                root_dir=root,
+                database_service=service,
+                write_json_archive=False,
+                write_decision_revision=False,
+            )
+
+        self.assertEqual(result["fact_db_sync"]["status"], "success")
+        self.assertEqual(service.saved_snapshots[-1]["final_action"]["label"], "50%条件执行")
+        self.assertEqual(service.saved_snapshots[-1]["final_action"]["target"]["stock_code"], "600584")
+
+    def test_postgres_only_runtime_env_uses_database_service_without_url(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+
+        class StubService:
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                self.saved_snapshot = payload
+                return {"cases": len(payload.get("cases") or []), "mentions": 0}
+
+        service = StubService()
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            ledger_dir = root / "data" / "decision-ledger"
+            ledger_dir.mkdir(parents=True)
+            (ledger_dir / "2026-06-12.json").write_text('{"trade_date":"2026-06-12"}\n', encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {
+                    "A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1",
+                    "A_DAILY_REPORT_DATABASE_URL": "",
+                    "DATABASE_URL": "",
+                },
+                clear=False,
+            ):
+                with patch("storage.database_service.DatabaseService.fact_store_from_environment", return_value=service):
+                    result = write_decision_ledger_artifacts(
+                        snapshot,
+                        root_dir=root,
+                        write_json_archive=False,
+                    )
+
+            self.assertFalse((ledger_dir / "2026-06-12.json").exists())
+
+        self.assertEqual(service.saved_snapshot["final_action"]["label"], "50%条件执行")
+        self.assertEqual(result["fact_db_sync"]["status"], "success")
+        self.assertEqual(len(result["stale_json_removed"]), 1)
+
+    def test_writer_does_not_duplicate_revision_when_same_snapshot_is_rewritten(self):
+        snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-11",
+            extreme_conviction_list=[
+                {
+                    "code": "688146",
+                    "name": "中船特气",
+                    "sector": "电子特气",
+                    "conviction_reason": "板块锚定龙 / 趋势容量核心",
+                    "attack_state": "50%",
+                }
+            ],
+            market_branch="主线修复",
+            sector_relationship_state="电子特气扩散",
+            generated_at="2026-06-11T20:00:00+08:00",
+        )
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            first_result = write_decision_ledger_artifacts(snapshot, root_dir=root)
+            second_result = write_decision_ledger_artifacts(snapshot, root_dir=root)
+            revision_path = root / "data" / "decision-ledger" / "revisions" / "2026-06-11.jsonl"
+            revisions = [json.loads(line) for line in revision_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(first_result["revision_ledger"]["status"], "written")
+        self.assertEqual(second_result["revision_ledger"]["status"], "unchanged")
+        self.assertEqual(len(revisions), 1)
 
     def test_pruning_same_day_extreme_mentions_refreshes_cached_backtest_rows(self):
         index = {

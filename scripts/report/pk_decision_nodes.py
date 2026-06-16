@@ -9,7 +9,7 @@ def build_pk_overview_node(context, node_meta=None, node_lookup=None):
         "lines": [
             heading,
             "> **先看结论**：真允许出手时，只保留唯一动作；不允许时，只保留观察。",
-            "> **只看什么**：环境、主线、触发、可交易性和历史胜率收益。",
+            "> **只看什么**：环境、主线、触发、可交易性和历史复盘表现。",
             "",
         ],
         "exports": {},

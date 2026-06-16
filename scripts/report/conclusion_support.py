@@ -113,6 +113,30 @@ def _tradable_proxy_priority_active(context):
     return _capital_priority(context) == "tradable_proxy"
 
 
+def _candidate_is_crossline_observation(candidate):
+    if not isinstance(candidate, dict):
+        return False
+    texts = []
+    for key in (
+        "source_pool",
+        "source_pools",
+        "watch_anchor_note",
+        "summary_text",
+        "reason",
+        "why_watch",
+        "current_interpretation",
+        "candidate_origin",
+        "observation_layer",
+    ):
+        value = candidate.get(key)
+        if isinstance(value, (list, tuple, set)):
+            texts.extend(str(item or "") for item in value)
+        else:
+            texts.append(str(value or ""))
+    joined = "；".join(text for text in texts if text)
+    return any(marker in joined for marker in ("跨线对象", "跨线观察", "crossline"))
+
+
 def _resolved_target_position_pct(target, fallback=0):
     target = target or {}
     for key in ("target_position_pct", "position_pct", "planned_position_pct"):
@@ -214,6 +238,11 @@ def build_focus_recap_text(context):
 
     core_stocks = context.get("core_stocks") or []
     if core_stocks:
+        if _candidate_is_crossline_observation(core_stocks[0]):
+            return f"{format_stock_label(core_stocks[0])}：跨线观察，只观察承接"
+        final_gate = context.get("final_gate") if isinstance(context.get("final_gate"), dict) else {}
+        if not (final_gate.get("can_new_entry") or context.get("trade_gate_open")):
+            return f"{format_stock_label(core_stocks[0])}：过程候选，优先观察"
         return f"{format_stock_label(core_stocks[0])}：主线核心候选，优先观察"
 
     watch_anchor = resolve_watch_anchor(context)

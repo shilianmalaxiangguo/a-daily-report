@@ -49,6 +49,23 @@ PRICE_ACTION_WORDING_REPLACEMENTS = (
     ("均线是否继续收拢", "波动是否继续收敛"),
 )
 
+PSEUDO_PRECISE_WORDING_REPLACEMENTS = (
+    ("周期概率窗口", "周期窗口"),
+    ("概率窗口只作条件链合并判断，不输出精确胜率。", "周期窗口只作条件链合并判断，不输出精确预测。"),
+    ("概率窗口只作条件链合并判断", "周期窗口只作条件链合并判断"),
+    ("精确胜率", "精确预测"),
+    ("近5个已结算交易日正确率", "近5个已结算交易日复盘表现"),
+    ("PK决胜局（期望值模型）", "过程候选最终复核"),
+    ("历史胜率收益", "历史复盘样本"),
+    ("次日冲高或再涨停概率高于普通上涨样本", "次日是否继续被资金承接需要窗口确认"),
+    ("高于普通上涨样本", "资金选择后的承接观察样本"),
+    ("正确率", "复盘表现"),
+    ("成功率", "复盘表现"),
+    ("胜率", "复盘表现"),
+    ("return_1d_pct、return_3d_pct、return_5d_pct、max_drawdown_5d_pct", "T+1/T+3/T+5表现与回撤字段"),
+    ("等待计划窗口事实回写；不作为明日新增参与依据", "等待计划窗口事实回写；不作为新增参与依据"),
+)
+
 LEGACY_SURFACE_WORDING_MARKERS = tuple(source for source, _ in USER_VISIBLE_WORDING_REPLACEMENTS) + tuple(
     source for source, _ in ENGLISH_USER_VISIBLE_WORDING_REPLACEMENTS
 )
@@ -70,6 +87,8 @@ def sanitize_user_visible_text(value):
         for source, target in USER_VISIBLE_WORDING_REPLACEMENTS:
             sanitized = sanitized.replace(source, target)
         for source, target in PRICE_ACTION_WORDING_REPLACEMENTS:
+            sanitized = sanitized.replace(source, target)
+        for source, target in PSEUDO_PRECISE_WORDING_REPLACEMENTS:
             sanitized = sanitized.replace(source, target)
         sanitized = sanitized.replace("连续 走势符合强势标准", "连续走势符合强势标准")
         return sanitized
@@ -97,6 +116,7 @@ __all__ = [
     "ENGLISH_TRADING_JARGON_REPLACEMENTS",
     "LEGACY_SURFACE_WORDING_MARKERS",
     "PRICE_ACTION_WORDING_REPLACEMENTS",
+    "PSEUDO_PRECISE_WORDING_REPLACEMENTS",
     "USER_VISIBLE_WORDING_REPLACEMENTS",
     "find_legacy_surface_wording",
     "sanitize_user_visible_text",

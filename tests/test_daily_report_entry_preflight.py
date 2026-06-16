@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 def _with_html_required_facts(data):
     data = dict(data)
     data.setdefault("top50_turnover_share_pct", 19.0)
+    data.setdefault("csi500_index", {"price": 6262.0, "data_source": "tushare.index_daily"})
     data.setdefault("csi1000_index", {"price": 8408.73, "data_source": "tushare.index_daily"})
     data.setdefault("hot_rank_top50", [{"code": f"{index:06d}"} for index in range(50)])
     data.setdefault("hot_rank_sample_size", 50)
@@ -878,7 +879,7 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertEqual(result["rows"][0]["name"], "电力")
         self.assertEqual(result["provider"], "postgresql.daily_report_facts")
 
-    def test_postgres_only_load_marks_csi1000_status_when_fact_exists(self):
+    def test_postgres_only_load_marks_optional_broad_index_status_when_fact_exists(self):
         import daily_report_entry_demo
 
         class FakeService:
@@ -887,8 +888,13 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
                     "source": f"postgresql://daily-report-facts/{target_date}",
                     "field_count": 6,
                     "data": {
-                        "data_status": {"中证1000": False},
-                        "step_status": {"中证1000获取": False},
+                        "data_status": {"中证500": False, "中证1000": False},
+                        "step_status": {"中证500获取": False, "中证1000获取": False},
+                        "csi500_index": {
+                            "price": 6262.0,
+                            "change_pct": 0.9,
+                            "data_source": "tushare.index_daily",
+                        },
                         "csi1000_index": {
                             "price": 8408.7357,
                             "change_pct": -2.6512,
@@ -902,6 +908,8 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
 
         self.assertTrue(data["data_status"]["中证1000"])
         self.assertTrue(data["step_status"]["中证1000获取"])
+        self.assertTrue(data["data_status"]["中证500"])
+        self.assertTrue(data["step_status"]["中证500获取"])
         self.assertTrue(data["postgres_only"])
 
     def test_postgres_only_load_restores_sector_first_runtime_packets_from_same_date_facts(self):
@@ -1131,9 +1139,8 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "2026-05-28"):
                 daily_report_snapshot_io.load_data_snapshot("2026-05-28")
 
-    def test_main_aborts_when_existing_official_report_fails_audit(self):
+    def test_main_switches_to_replay_when_existing_official_report_fails_audit(self):
         import daily_report_entry_demo
-        from daily_report_render import ReportCriticalDataMissingError
 
         data = _with_html_required_facts({
             "data_status": {
@@ -1153,6 +1160,14 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         })
         stale_report = Path("/tmp/2026-05-28_A股日报_完整版.md")
         stale_report.write_text("| 涨跌比 | 0 / 0 | - | 多头仍占优 |", encoding="utf-8")
+        report_outputs = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "# full\n| 明日执行风格 | 0%不参与 |",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
+        }
+        saved_paths = {
+            daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md",
+            daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "/tmp/summary.md",
+        }
 
         def fake_exists(path):
             return str(path) == str(stale_report)
@@ -1162,20 +1177,30 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
              patch.object(daily_report_entry_demo, "_get_report_output_path", return_value=str(stale_report)), \
              patch.object(daily_report_entry_demo.os.path, "exists", side_effect=fake_exists), \
-             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={
-                 "passed": False,
-                 "findings": [{"code": "market_breadth_incomplete", "message": "关键数据不完整，停止生成", "line": 1}],
-             }) as audit_mock, \
-             patch.object(daily_report_entry_demo, "build_report_outputs") as build_mock, \
-             patch.object(daily_report_entry_demo, "save_report_outputs") as save_mock, \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", side_effect=[
+                 {
+                     "passed": False,
+                     "findings": [{"code": "market_breadth_incomplete", "message": "关键数据不完整，停止生成", "line": 1}],
+                 },
+                 {"passed": True, "findings": []},
+             ]) as audit_mock, \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=report_outputs) as build_mock, \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-05-28", "field_count": 8}), \
+             patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value=saved_paths) as save_mock, \
+             patch.object(daily_report_entry_demo, "_try_save_elimination_tournament_html", return_value=None), \
+             patch.object(daily_report_entry_demo, "_try_save_sector_capital_preflight_html", return_value=None), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")), \
              patch.object(daily_report_entry_demo, "_save_data_snapshot"):
-            with self.assertRaises(ReportCriticalDataMissingError) as error:
-                daily_report_entry_demo.main()
+            daily_report_entry_demo.main()
 
-        self.assertIn("已有正式日报一致性检查未通过", str(error.exception))
-        audit_mock.assert_called_once_with(stale_report.read_text(encoding="utf-8"))
-        build_mock.assert_not_called()
-        save_mock.assert_not_called()
+        self.assertEqual(audit_mock.call_args_list[0].args[0], stale_report.read_text(encoding="utf-8"))
+        self.assertEqual(audit_mock.call_count, 2)
+        self.assertEqual(build_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
+        self.assertEqual(save_mock.call_args.kwargs["mode"], daily_report_entry_demo.LEDGER_MODE_REPLAY)
+        self.assertFalse(save_mock.call_args.kwargs["overwrite_existing"])
 
     def test_main_overwrite_official_keeps_frozen_mode_when_report_exists(self):
         import daily_report_entry_demo

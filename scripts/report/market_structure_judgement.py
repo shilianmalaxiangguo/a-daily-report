@@ -26,24 +26,31 @@ def _market_structure_inputs(data, market_research_snapshot):
     return {**data_inputs, **snapshot_inputs}
 
 
+def _append_index_change_if_valid(candidates, item):
+    if not isinstance(item, dict):
+        return
+    price = _safe_float(item.get("price"), item.get("点位"), item.get("close"), item.get("收盘"), default=0.0)
+    if price <= 0 and any(key in item for key in ("price", "点位", "close", "收盘")):
+        return
+    if item.get("涨跌幅") in (None, "") and item.get("change_pct") in (None, ""):
+        return
+    candidates.append(_safe_float(item.get("涨跌幅"), item.get("change_pct")))
+
+
 def _first_index_change(data, market_research_snapshot):
     explicit = _market_structure_inputs(data, market_research_snapshot)
     if explicit.get("index_change_pct") not in (None, ""):
         return _safe_float(explicit.get("index_change_pct"))
     candidates = []
     indices = (data or {}).get("indices") or {}
-    for name in ("创业板指", "创业板", "中证全指", "中证1000", "上证指数"):
-        item = indices.get(name) or {}
-        if isinstance(item, dict) and (
-            item.get("涨跌幅") not in (None, "") or item.get("change_pct") not in (None, "")
-        ):
-            candidates.append(_safe_float(item.get("涨跌幅"), item.get("change_pct")))
+    for name in ("创业板指", "创业板", "中证全指", "中证500", "中证1000", "上证指数"):
+        _append_index_change_if_valid(candidates, indices.get(name) or {})
     wind_all = (data or {}).get("wind_a_alternative") or {}
-    if isinstance(wind_all, dict) and wind_all:
-        candidates.append(_safe_float(wind_all.get("涨跌幅"), wind_all.get("change_pct")))
+    _append_index_change_if_valid(candidates, wind_all)
+    csi500 = (data or {}).get("csi500_index") or {}
+    _append_index_change_if_valid(candidates, csi500)
     csi1000 = (data or {}).get("csi1000_index") or {}
-    if isinstance(csi1000, dict) and csi1000:
-        candidates.append(_safe_float(csi1000.get("涨跌幅"), csi1000.get("change_pct")))
+    _append_index_change_if_valid(candidates, csi1000)
     return min(candidates) if candidates else 0.0
 
 

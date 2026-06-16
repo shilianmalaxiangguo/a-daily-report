@@ -587,7 +587,7 @@ REQUIRED_SECTOR_CAPITAL_PREFLIGHT_LAYERS = (
     "carrier_role",
     "quant_trace",
     "price_action",
-    "cycle_probability_window",
+    "cycle_window",
     "counter_evidence_account",
     "final_action",
 )
@@ -599,7 +599,7 @@ REQUIRED_SECTOR_CAPITAL_PREFLIGHT_DECISIONS = (
     "谁是资金载体",
     "是否有量化参与痕迹",
     "价格行为是否接受",
-    "周期概率窗口是否打开",
+    "周期窗口是否打开",
     "账户是否适配",
 )
 
@@ -608,6 +608,13 @@ def _audit_sector_capital_preflight_payload_contract(payload):
     if payload is None or not payload:
         return []
     findings = []
+    final_action = payload.get("final_action") if isinstance(payload.get("final_action"), dict) else {}
+    final_target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
+    final_identity = _target_identity(final_target.get("code") or final_target.get("name") or "")
+    final_pct = _parse_percent_int(str(final_action.get("position_pct", "")))
+    if final_pct is None:
+        final_pct = _parse_percent_int(final_action.get("label", ""))
+    zero_final_action_without_target = bool(final_action) and final_pct == 0 and not final_identity
     if payload.get("derivation_contract") != "sector_capital_diffusion_first.v1":
         findings.append(
             _finding(
@@ -616,7 +623,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
             )
         )
     mermaid = str(payload.get("mermaid") or "")
-    for text in ("周期概率窗口", "唯一明日动作或不参与", "白痴指数复核", "压缩/合并/降级低价值高成本层"):
+    for text in ("周期窗口", "唯一明日动作或不参与", "白痴指数复核", "压缩/合并/降级低价值高成本层"):
         if text not in mermaid:
             findings.append(
                 _finding(
@@ -634,13 +641,53 @@ def _audit_sector_capital_preflight_payload_contract(payload):
                 "sector capital preflight payload is missing layers: " + ", ".join(missing_layers),
             )
         )
+    previous_survivor_keys = None
+    previous_layer_id = ""
     for layer in layers:
         if not isinstance(layer, dict):
             continue
         entries = layer.get("entries") if isinstance(layer.get("entries"), list) else []
+        input_entries = entries
+        if layer.get("id") == "final_action" and zero_final_action_without_target:
+            input_entries = [
+                entry
+                for entry in entries
+                if not (isinstance(entry, dict) and entry.get("status") == "final_action")
+            ]
         eliminated = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "eliminated"]
-        survivors = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "survived"]
-        if int(layer.get("input_count") or 0) != len(entries):
+        if layer.get("id") == "final_action":
+            survivors = [
+                entry
+                for entry in entries
+                if isinstance(entry, dict)
+                and entry.get("status") in {"final_action", "survived"}
+                and _target_identity(entry.get("stock_code") or entry.get("stock_name") or "")
+            ]
+        else:
+            survivors = [entry for entry in entries if isinstance(entry, dict) and entry.get("status") == "survived"]
+        input_keys = {
+            _target_identity((entry.get("stock_code") or entry.get("stock_name") or "") if isinstance(entry, dict) else "")
+            for entry in input_entries
+        }
+        input_keys = {key for key in input_keys if key}
+        survivor_keys = {
+            _target_identity((entry.get("stock_code") or entry.get("stock_name") or "") if isinstance(entry, dict) else "")
+            for entry in survivors
+        }
+        survivor_keys = {key for key in survivor_keys if key}
+        if (
+            previous_survivor_keys is not None
+            and not input_keys.issubset(previous_survivor_keys)
+        ):
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_layer_sequence_mismatch",
+                    f"sector capital preflight layer {layer.get('id')} introduces stocks outside previous survivors from {previous_layer_id}",
+                )
+            )
+        previous_survivor_keys = survivor_keys
+        previous_layer_id = str(layer.get("id") or "")
+        if int(layer.get("input_count") or 0) != len(input_entries):
             findings.append(
                 _finding(
                     "sector_capital_preflight_layer_count_mismatch",
@@ -697,6 +744,37 @@ def _audit_sector_capital_preflight_payload_contract(payload):
                 "sector capital preflight payload is missing idiot-index review rows",
             )
         )
+    tplus_rehearsal = payload.get("tplus_rehearsal") if isinstance(payload.get("tplus_rehearsal"), dict) else {}
+    if not tplus_rehearsal:
+        findings.append(
+            _finding(
+                "sector_capital_preflight_tplus_rehearsal_missing",
+                "sector capital preflight payload is missing T+1/T+2 rehearsal",
+            )
+        )
+    else:
+        if tplus_rehearsal.get("schema_version") != "t0_tplus_rehearsal.v1":
+            findings.append(
+                _finding(
+                    "sector_capital_preflight_tplus_rehearsal_missing",
+                    "sector capital preflight T+1/T+2 rehearsal has an invalid schema version",
+                )
+            )
+        for section_key in ("tplus1", "tplus2"):
+            section = tplus_rehearsal.get(section_key) if isinstance(tplus_rehearsal.get(section_key), dict) else {}
+            missing_fields = [
+                field
+                for field in ("market_emotion", "market_cycle", "sector_emotion", "sector_cycle", "action")
+                if not section.get(field)
+            ]
+            if missing_fields:
+                findings.append(
+                    _finding(
+                        "sector_capital_preflight_tplus_rehearsal_missing",
+                        f"sector capital preflight {section_key} rehearsal is missing: "
+                        + ", ".join(missing_fields),
+                    )
+                )
     return findings
 
 
@@ -2967,6 +3045,78 @@ def _audit_empty_final_object_appendix_current_object(lines):
     return findings
 
 
+def _front_positive_execution_identity(lines):
+    front = _front_page_lines(lines)
+    if _final_summary_is_zero_position(front):
+        return ""
+    for value in (
+        _extract_opening_verdict_final_object(front),
+        _extract_front_execution_object(lines),
+        _extract_execution_unique_target(front),
+        _extract_final_unique_target(front),
+        _extract_closing_action_target(front),
+    ):
+        identity = _target_identity(value)
+        if identity and not _is_empty_target(value):
+            return identity
+    return ""
+
+
+def _audit_positive_final_action_appendix_conflicts(lines):
+    identity = _front_positive_execution_identity(lines)
+    if not identity:
+        return []
+    appendix = _appendix_lines(lines)
+    if not appendix:
+        return []
+    appendix_start_line = len(lines) - len(appendix)
+    conflict_markers = (
+        "还没有缩到一只可买股",
+        "还没有缩到一只合格参与对象",
+        "市场允许出手，但还没有",
+        "市场已允许出手，但还没有",
+        "当前还在等待层",
+        "明天仓位放多少**: 0%",
+        "0%（市场允许出手",
+        "明天先盯哪只",
+        "唯一能买",
+        "可买股",
+        "可买对象",
+        "买点出现",
+        "预计算买点",
+        "筛到可买股",
+    )
+    process_markers = ("过程候选", "过程样本", "过程证据", "回看样本", "不覆盖唯一明日动作")
+    findings = []
+    for index, line in enumerate(appendix, 1):
+        text = str(line or "")
+        if any(marker in text for marker in conflict_markers):
+            findings.append(
+                _finding(
+                    "positive_final_action_appendix_conflict",
+                    f"前台已有正向唯一动作 {identity}，附录仍保留无对象或0%旧口径",
+                    line=appendix_start_line + index,
+                )
+            )
+            continue
+        cells = _split_md_row(text)
+        if not cells:
+            continue
+        if "明天具体怎么做" in cells and "股票" in cells:
+            continue
+        if len(cells) >= 3 and any("明天先盯哪只" in cell or "确认后执行预案" in cell for cell in cells):
+            row_identity = _target_identity(" ".join(cells))
+            if row_identity and row_identity != identity and not any(marker in text for marker in process_markers):
+                findings.append(
+                    _finding(
+                        "positive_final_action_appendix_conflict",
+                        f"前台已有正向唯一动作 {identity}，附录最终动作表仍指向 {row_identity}",
+                        line=appendix_start_line + index,
+                    )
+                )
+    return findings
+
+
 def _audit_unique_focus(lines):
     front = _front_page_lines(lines)
     findings = []
@@ -3135,6 +3285,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_process_candidate_loss_reasons(lines))
     findings.extend(_audit_sniper_target_derivation_consistency(lines))
     findings.extend(_audit_selection_workflow_consistency(lines))
+    findings.extend(_audit_positive_final_action_appendix_conflicts(lines))
     findings.extend(_audit_observation_anchor_consistency(lines))
     findings.extend(_audit_empty_final_object_appendix_current_object(lines))
     findings.extend(_audit_zero_position_decision_attribution(lines))

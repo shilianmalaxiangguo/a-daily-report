@@ -3046,6 +3046,37 @@ class ReportRuntimeTest(unittest.TestCase):
         self.assertEqual(position_decision["signal_grade"], "0")
         self.assertEqual(position_decision["participation_mode"], "observe_0")
 
+    def test_front_page_position_decision_keeps_sector_capital_candidate_under_zero_condition(self):
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={
+                "participation_mode": "attack_50_preview",
+                "target_position_pct": 50,
+                "signal_grade": "50",
+            },
+            selected_position_candidate={
+                "name": "长电科技",
+                "code": "600584",
+                "sector": "半导体",
+                "candidate_origin": "sector_capital_carrier_v1",
+                "conditional_execution_source": "sector_capital_carrier_strategy",
+                "target_position_pct": 50,
+                "participation_window": "09:50-10:10",
+                "buy_window": "09:50-10:10",
+                "fallback_state": "T+1板块早盘失去扩散或核心掉队，回到0%不参与",
+                "anchor_reversal_decision": "可作为主对象",
+            },
+            data={},
+            market_research_snapshot={},
+            final_gate={
+                "can_new_entry": False,
+                "final_action": "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
+            },
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(position_decision["signal_grade"], "50")
+        self.assertEqual(position_decision["participation_mode"], "attack_50_preview")
+
     def test_front_page_position_decision_promotes_candidate_with_100pct_evidence_before_zero_context(self):
         position_decision = report_runtime._build_front_page_position_decision(
             position_decision={
@@ -5684,6 +5715,65 @@ def _runtime_binding_probe(
 
         self.assertTrue(result["report"].startswith("# Runtime Report 2026-04-22"))
 
+    def test_render_markdown_report_runtime_keeps_decision_revision_lines_after_front_rebuild(self):
+        def _fake_legacy_body(*args, **kwargs):
+            return "# Runtime Report\n\n## 八、详细附录\n\n旧正文"
+
+        decision_ledger_artifacts = {
+            "revision_ledger": {
+                "status": "written",
+                "path": "data/decision-ledger/revisions/2026-05-12.jsonl",
+                "latest_revision_id": "2026-05-12-r001-demo",
+                "entries": [
+                    {
+                        "revision_id": "2026-05-12-r001-demo",
+                        "revision_type": "initial",
+                        "diff_summary": "首次结构化决策记录",
+                    }
+                ],
+            }
+        }
+
+        helpers = _build_runtime_execution_test_helpers(
+            lambda specs, stage_context: {"stages": [], "stage_lookup": {}, "context": stage_context},
+            build_report_shell_contract=lambda *args, **kwargs: {"report": ["# Runtime Report"]},
+            _build_runtime_selection_workflow=lambda *args, **kwargs: {
+                "schema_version": "selection_workflow.v1",
+                "candidate_pool": [],
+                "final": {"execution_object": {}, "position_pct": 0, "action_text": "0%不参与"},
+            },
+            _build_runtime_final_target_resolution=lambda *args, **kwargs: {
+                "capital_priority_decision": {"capital_priority": "wait", "reason": "无明日执行对象"}
+            },
+            _build_runtime_elimination_tournament_payload=lambda *args, **kwargs: {
+                "schema_version": "elimination_tournament.v1",
+                "layers": [],
+                "final_action": {"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"},
+            },
+            _build_runtime_sector_capital_preflight_payload=lambda *args, **kwargs: {
+                "schema_version": "sector_capital_preflight.v1",
+                "layers": [],
+                "final_action": {"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"},
+            },
+            render_front_page_v2=lambda lines, **kwargs: list(lines),
+        )
+
+        with patch("report.runtime._render_markdown_report_legacy_body", _fake_legacy_body):
+            result = report_runtime.render_markdown_report_runtime(
+                {
+                    "market_research_snapshot": {},
+                    "execution_stage_context": {},
+                    "decision_ledger_artifacts": decision_ledger_artifacts,
+                },
+                "2026-05-12",
+                helpers=helpers,
+                config={"persist_decision_ledger": True},
+            )
+
+        self.assertIn("### 决策差异记录", result["report"])
+        self.assertIn("- 修订结果：已记录；路径：data/decision-ledger/revisions/2026-05-12.jsonl", result["report"])
+        self.assertIn("- 2026-05-12-r001-demo：首次记录；首次结构化决策记录", result["report"])
+
     def test_calendar_news_source_date_handles_datetime_module_binding(self):
         import datetime as datetime_module
 
@@ -5702,9 +5792,27 @@ def _runtime_binding_probe(
             captured["build"] = kwargs
             return {"trade_date": kwargs["trade_date"], "cases": []}
 
-        def _fake_write_snapshot(snapshot, *, root_dir="."):
-            captured["write"] = {"snapshot": snapshot, "root_dir": root_dir}
-            return {"snapshot_path": "data/decision-ledger/2026-05-12.json"}
+        def _fake_write_snapshot(snapshot, *, root_dir=".", write_decision_revision=True):
+            captured["write"] = {
+                "snapshot": snapshot,
+                "root_dir": root_dir,
+                "write_decision_revision": write_decision_revision,
+            }
+            return {
+                "snapshot_path": "data/decision-ledger/2026-05-12.json",
+                "revision_ledger": {
+                    "status": "written",
+                    "path": "data/decision-ledger/revisions/2026-05-12.jsonl",
+                    "latest_revision_id": "2026-05-12-r001-demo",
+                    "entries": [
+                        {
+                            "revision_id": "2026-05-12-r001-demo",
+                            "revision_type": "initial",
+                            "diff_summary": "首次结构化决策记录",
+                        }
+                    ],
+                },
+            }
 
         previous = report_runtime._install_runtime_bindings(
             {
@@ -5740,6 +5848,120 @@ def _runtime_binding_probe(
         self.assertEqual(captured["build"]["sector_relationship_state"], "混沌接力")
         self.assertEqual(captured["build"]["extreme_conviction_list"][0]["code"], "601991")
         self.assertEqual(captured["write"]["root_dir"], "/tmp/decision-ledger-root")
+        self.assertTrue(captured["write"]["write_decision_revision"])
+        self.assertIn("### 决策差异记录", result["tracking_lines"])
+        self.assertIn("- 修订结果：已记录；路径：data/decision-ledger/revisions/2026-05-12.jsonl", result["tracking_lines"])
+        self.assertIn("- 2026-05-12-r001-demo：首次记录；首次结构化决策记录", result["tracking_lines"])
+
+    def test_runtime_decision_ledger_hook_passes_canonical_final_action(self):
+        captured = {}
+
+        def _fake_build_snapshot(**kwargs):
+            captured["build"] = kwargs
+            return {"trade_date": kwargs["trade_date"], "cases": [], "final_action": kwargs.get("final_action")}
+
+        def _fake_write_snapshot(snapshot, *, root_dir=".", write_json_archive=True, write_decision_revision=True):
+            captured["write"] = {
+                "snapshot": snapshot,
+                "root_dir": root_dir,
+                "write_json_archive": write_json_archive,
+                "write_decision_revision": write_decision_revision,
+            }
+            return {
+                "snapshot_path": "data/decision-ledger/2026-06-12.json",
+                "revision_ledger": {"status": "written", "path": "data/decision-ledger/revisions/2026-06-12.jsonl"},
+            }
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_decision_ledger": True,
+                "decision_ledger_root_dir": "/tmp/decision-ledger-root",
+                "build_decision_ledger_snapshot": _fake_build_snapshot,
+                "write_decision_ledger_artifacts": _fake_write_snapshot,
+            }
+        )
+        try:
+            final_action = report_runtime._decision_ledger_final_action_from_runtime(
+                final_target_resolution={"capital_priority_decision": {"capital_priority": "wait"}},
+                position_decision={"target_position_pct": 0},
+                sector_capital_preflight={
+                    "final_action": {
+                        "label": "50%条件执行",
+                        "position_pct": 50,
+                        "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                        "source": "sector_capital_carrier_strategy",
+                    }
+                },
+            )
+            result = report_runtime._maybe_persist_decision_ledger(
+                data={"source_report": {"path": "reports/replay/2026-06-12_A股日报_完整版_replay.md"}},
+                target_date="2026-06-12",
+                execution_stage_context={"extreme_conviction_list": []},
+                market_research_snapshot={},
+                final_action=final_action,
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(result["snapshot_path"], "data/decision-ledger/2026-06-12.json")
+        self.assertEqual(captured["build"]["final_action"]["label"], "50%条件执行")
+        self.assertEqual(captured["build"]["final_action"]["target"]["code"], "600584")
+        self.assertEqual(captured["write"]["snapshot"]["final_action"]["target"]["name"], "长电科技")
+        self.assertTrue(captured["write"]["write_decision_revision"])
+
+    def test_runtime_decision_ledger_hook_recovers_final_action_from_existing_preflight(self):
+        captured = {}
+
+        def _fake_build_snapshot(**kwargs):
+            captured["build"] = kwargs
+            return {
+                "trade_date": kwargs["trade_date"],
+                "cases": [],
+                "final_action": kwargs.get("final_action"),
+            }
+
+        def _fake_write_snapshot(snapshot, *, root_dir=".", write_json_archive=True, write_decision_revision=True):
+            captured["write"] = {
+                "snapshot": snapshot,
+                "write_decision_revision": write_decision_revision,
+            }
+            return {
+                "snapshot_path": "data/decision-ledger/2026-06-12.json",
+                "revision_ledger": {"status": "unchanged", "path": "data/decision-ledger/revisions/2026-06-12.jsonl"},
+            }
+
+        previous = report_runtime._install_runtime_bindings(
+            {
+                "persist_decision_ledger": True,
+                "decision_ledger_root_dir": "/tmp/decision-ledger-root",
+                "build_decision_ledger_snapshot": _fake_build_snapshot,
+                "write_decision_ledger_artifacts": _fake_write_snapshot,
+            }
+        )
+        try:
+            result = report_runtime._maybe_persist_decision_ledger(
+                data={
+                    "sector_capital_preflight": {
+                        "final_action": {
+                            "label": "50%条件执行",
+                            "position_pct": 50,
+                            "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                            "source": "sector_capital_preflight",
+                        }
+                    }
+                },
+                target_date="2026-06-12",
+                execution_stage_context={"extreme_conviction_list": []},
+                market_research_snapshot={},
+            )
+        finally:
+            report_runtime._restore_runtime_bindings(previous)
+
+        self.assertEqual(result["snapshot_path"], "data/decision-ledger/2026-06-12.json")
+        self.assertEqual(captured["build"]["final_action"]["label"], "50%条件执行")
+        self.assertEqual(captured["build"]["final_action"]["target"]["code"], "600584")
+        self.assertEqual(captured["write"]["snapshot"]["final_action"]["target"]["name"], "长电科技")
+        self.assertTrue(captured["write"]["write_decision_revision"])
 
     def test_runtime_decision_ledger_postgres_only_disables_json_archive_and_local_review_files(self):
         captured = {}
@@ -6496,8 +6718,8 @@ def _runtime_binding_probe(
         report = result["report"]
         self.assertIn("**五项判断复盘统计表**", report)
         self.assertIn("| 市场状态判断 | 进攻/退潮/修复/混沌/冰点是否被次日走势验证 |", report)
-        self.assertIn("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", report)
-        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |", report)
+        self.assertIn("| 判断项 | 统计口径 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |", report)
+        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 已结算表现 | 错在哪 |", report)
         self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 0.00% | 错误 | - | - | 资金次日没有继续选择电力 |", report)
 
     def test_runtime_inserts_daily_judgment_panel_at_front_before_account_advice(self):
@@ -7071,6 +7293,132 @@ def _runtime_binding_probe(
         self.assertIs(data["execution_stage_context"]["selection_workflow"], workflow)
         self.assertIs(data["market_research_snapshot"]["selection_workflow"], workflow)
         self.assertIs(execution_context["market_research_snapshot"]["selection_workflow"], workflow)
+
+    def test_sector_capital_carrier_strategy_becomes_selection_workflow_final_object(self):
+        def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
+            return {
+                "lines": [],
+                "module_logs": [],
+                "context": {
+                    "market_state_snapshot": {"market_state": "修复"},
+                    "mainline_name": "半导体",
+                    "mainline_turnover_summary": {"current_mainline": "半导体"},
+                    "position_decision": {"target_position_pct": 0, "signal_grade": "0"},
+                    "market_research_snapshot": {},
+                },
+            }
+
+        captured = {}
+
+        def _fake_front_page(report, **kwargs):
+            captured["snapshot"] = kwargs["market_research_snapshot"]
+            return ["# front", "", "## 明日账户建议", "| 项目 | 结论 |"]
+
+        helpers = _build_runtime_execution_test_helpers(
+            _run_execution_stages,
+            persist_decision_ledger=False,
+            decision_ledger_root_dir="/tmp/decision-ledger-root",
+            read_decision_ledger_index=lambda path: {"available_trade_dates": [], "by_stock_code": {}},
+            build_report_shell_contract=lambda *args, **kwargs: {"report": []},
+            build_market_trend_sections_contract=lambda *args, **kwargs: {"lines": []},
+            build_legacy_final_conclusion_lines=lambda *args, **kwargs: [],
+            render_supplementary_perspective_section=lambda *args, **kwargs: [],
+            render_ai_market_insight_section=lambda *args, **kwargs: [],
+            _build_strategy_factor_snapshot=lambda *args, **kwargs: {},
+            _build_strategy_plan_context=lambda *args, **kwargs: {},
+            update_strategy_performance_book=lambda *args, **kwargs: {},
+            _normalize_report_timer_steps=lambda *args, **kwargs: [],
+            render_execution_appendix=lambda *args, **kwargs: [],
+            run_report_tail_summary=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_strategy_performance_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            run_execution_appendix_tail=lambda payload: {"value": {"lines": [], "module_logs": [], "exports": {}}},
+            render_front_page_v2=_fake_front_page,
+        )
+        data = {
+            "target_date": "2026-06-12",
+            "hot_plates": [{"name": "半导体", "order": 1, "tag": "主线"}],
+            "sector_fund_flow": {
+                "inflow": [{"name": "半导体", "change_pct": 2.1, "net_inflow_yi": 18.0}]
+            },
+            "turnover_rank": [
+                {
+                    "code": "600584",
+                    "name": "长电科技",
+                    "rank": 6,
+                    "sector": "半导体",
+                    "turnover": 76.0,
+                }
+            ],
+            "integrated_hot_list": [
+                {
+                    "code": "600584",
+                    "name": "长电科技",
+                    "rank": 8,
+                    "sector": "半导体",
+                }
+            ],
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+        }
+
+        report_runtime.render_markdown_report_runtime(
+            data,
+            "2026-06-12",
+            helpers=helpers,
+            config={},
+        )
+
+        workflow = data["selection_workflow"]
+        final = workflow["final"]
+        execution_context = data["execution_stage_context"]
+        preflight = data["sector_capital_preflight"]
+
+        self.assertEqual(final["execution_object"]["code"], "600584")
+        self.assertEqual(final["position_pct"], 50)
+        self.assertEqual(final["action_text"], "50%条件执行")
+        self.assertEqual(execution_context["selected_position_candidate"]["code"], "600584")
+        self.assertEqual(execution_context["position_decision"]["target_position_pct"], 50)
+        self.assertEqual(preflight["final_action"]["target"]["code"], "600584")
+        self.assertEqual(
+            preflight["tplus_rehearsal"]["tplus1"]["participation_qualification"],
+            "有条件参与",
+        )
+        self.assertEqual(preflight["final_action"]["label"], "50%条件执行")
+        self.assertEqual(preflight["final_action"]["position_pct"], 50)
+        self.assertIs(captured["snapshot"]["selection_workflow"], workflow)
+
+    def test_sector_capital_carrier_skips_pseudo_precise_opportunity_comparison(self):
+        selected = {
+            "name": "长电科技",
+            "code": "600584",
+            "sector": "半导体",
+            "candidate_origin": "sector_capital_carrier_v1",
+            "conditional_execution_source": "sector_capital_carrier_strategy",
+            "target_position_pct": 50,
+            "target_role": "attack_prepare",
+            "planned_participation": {
+                "buy_window": "09:50-10:10",
+                "fallback_state": "T+1板块早盘失去扩散或核心掉队，回到0%不参与",
+            },
+        }
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={"target_position_pct": 50, "signal_grade": "50"},
+            selected_position_candidate=selected,
+            data={},
+            market_research_snapshot={},
+        )
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data={},
+            selected_position_candidate=selected,
+            position_decision=position_decision,
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(resolution["new_entry_target"]["code"], "600584")
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry")
+        self.assertEqual(resolution["opportunity_comparison"], {})
 
     def test_final_target_resolution_uses_selection_workflow_final_object(self):
         stale_selected = {
@@ -7866,6 +8214,239 @@ def _runtime_binding_probe(
 
         self.assertEqual(payload["variant"], "replay")
 
+    def test_runtime_elimination_tournament_reads_same_day_trace_and_ledger_artifacts(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "和远气体", "code": "002971", "sector": "化工原料"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "sector": "化工原料",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "brooks_price_action_judge": {"status": "passed", "reason": "风险可控"},
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+        data = {
+            "selection_workflow": workflow,
+            "candidate_trace_artifact": {
+                "payload": {
+                    "trade_date": "2026-06-12",
+                    "traces": [
+                        {
+                            "stock_code": "002971",
+                            "stock_name": "和远气体",
+                            "missing_data": ["account_context"],
+                        }
+                    ]
+                }
+            },
+            "decision_ledger_artifacts": {
+                "index": {
+                    "by_stock_code": {
+                        "002971": [
+                            {
+                                "latest_trade_date": "2026-06-12",
+                                "stock_code": "002971",
+                                "stock_name": "和远气体",
+                                "position_plan_pct": 0,
+                                "planned_participation": {
+                                    "action": "skip",
+                                    "position_plan_pct": 0,
+                                },
+                            }
+                        ]
+                    }
+                }
+            },
+        }
+
+        payload = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data=data,
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+
+        account_layer = next(layer for layer in payload["layers"] if layer["id"] == "account_execution")
+        account_entry = account_layer["entries"][0]
+
+        self.assertEqual(account_entry["status"], "eliminated")
+        self.assertIn("关键数据不完整：account_context", account_entry["reason"])
+        self.assertIn("决策台账仓位=0%", account_entry["reason"])
+        self.assertIn("计划动作=skip", account_entry["reason"])
+        self.assertNotIn("账户/仓位事实缺失", account_entry["reason"])
+
+    def test_runtime_elimination_tournament_ignores_future_trace_artifact(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "中船特气", "code": "688146", "sector": "电子化学品"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "mainline": "电子化学品",
+                    "sector": "电子化学品",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "brooks_price_action_judge": {"status": "passed", "reason": "风险可控"},
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+        data = {
+            "selection_workflow": workflow,
+            "candidate_trace_artifact": {
+                "payload": {
+                    "trade_date": "2026-06-13",
+                    "traces": [
+                        {
+                            "stock_code": "688146",
+                            "stock_name": "中船特气",
+                            "missing_data": ["future_trace_marker"],
+                        }
+                    ],
+                }
+            },
+        }
+
+        payload = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data=data,
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+
+        account_layer = next(layer for layer in payload["layers"] if layer["id"] == "account_execution")
+        account_entry = account_layer["entries"][0]
+
+        self.assertEqual(account_entry["status"], "eliminated")
+        self.assertIn("账户/仓位事实缺失", account_entry["reason"])
+        self.assertNotIn("future_trace_marker", account_entry["reason"])
+
+    def test_runtime_elimination_tournament_ignores_future_ledger_snapshot(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "中船特气", "code": "688146", "sector": "电子化学品"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "mainline": "电子化学品",
+                    "sector": "电子化学品",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "brooks_price_action_judge": {"status": "passed", "reason": "风险可控"},
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+        data = {
+            "selection_workflow": workflow,
+            "decision_ledger_artifacts": {
+                "snapshot": {
+                    "trade_date": "2026-06-13",
+                    "cases": [
+                        {
+                            "stock_code": "688146",
+                            "stock_name": "中船特气",
+                            "position_plan_pct": 0,
+                            "planned_participation": {
+                                "action": "skip",
+                                "position_plan_pct": 0,
+                            },
+                        }
+                    ],
+                }
+            },
+        }
+
+        payload = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data=data,
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+
+        account_layer = next(layer for layer in payload["layers"] if layer["id"] == "account_execution")
+        account_entry = account_layer["entries"][0]
+
+        self.assertEqual(account_entry["status"], "eliminated")
+        self.assertIn("账户/仓位事实缺失", account_entry["reason"])
+        self.assertNotIn("决策台账仓位=0%", account_entry["reason"])
+        self.assertNotIn("计划动作=skip", account_entry["reason"])
+
+    def test_runtime_elimination_tournament_uses_same_day_workflow_trace_without_fake_ledger(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "target_date": "2026-06-12",
+            "candidate_pool": [
+                {
+                    "stock": {"name": "中船特气", "code": "688146", "sector": "电子化学品"},
+                    "candidate_origin": "sector_first",
+                    "entry_basis": "来自市场氛围、板块发酵和板块角色推导",
+                    "mainline": "电子化学品",
+                    "sector": "电子化学品",
+                    "sector_role": "板块锚",
+                    "reversal_decision": "可作为主对象",
+                    "brooks_price_action_judge": {"status": "passed", "reason": "风险可控"},
+                }
+            ],
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+            },
+        }
+
+        payload = report_runtime._build_runtime_elimination_tournament_payload(
+            target_date="2026-06-12",
+            run_mode="replay",
+            data={"selection_workflow": workflow},
+            execution_stage_context={"selection_workflow": workflow},
+            market_research_snapshot={},
+            selection_workflow=workflow,
+            final_target_resolution={},
+            position_decision={"target_position_pct": 0},
+        )
+
+        account_layer = next(layer for layer in payload["layers"] if layer["id"] == "account_execution")
+        account_entry = account_layer["entries"][0]
+
+        self.assertEqual(account_entry["status"], "eliminated")
+        self.assertIn("账户/仓位事实缺失", account_entry["reason"])
+        self.assertNotIn("决策台账仓位=0%", account_entry["reason"])
+
     def test_runtime_stores_sector_capital_preflight_payload_on_all_contexts(self):
         workflow = {
             "schema_version": "selection_workflow.v1",
@@ -7910,6 +8491,37 @@ def _runtime_binding_probe(
         }
         execution_context = {"selection_workflow": workflow}
         market_snapshot = {}
+        carrier_strategy = report_runtime._build_runtime_sector_capital_carrier_strategy(
+            target_date="2026-06-12",
+            data={
+                "target_date": "2026-06-12",
+                "hot_plates": [{"name": "化工原料", "order": 1}],
+                "sector_fund_flow": {"inflow": [{"name": "化工原料", "change_pct": 1.5, "net_inflow_yi": 9.2}]},
+                "turnover_rank": [
+                    {
+                        "code": "002971",
+                        "name": "和远气体",
+                        "rank": 4,
+                        "sector": "化工原料",
+                        "turnover": 62.0,
+                    }
+                ],
+                "integrated_hot_list": [
+                    {
+                        "code": "002971",
+                        "name": "和远气体",
+                        "rank": 8,
+                        "sector": "化工原料",
+                    }
+                ],
+            },
+        )
+        stored_strategy = report_runtime._store_runtime_sector_capital_carrier_strategy(
+            carrier_strategy,
+            data=data,
+            execution_stage_context=execution_context,
+            market_research_snapshot=market_snapshot,
+        )
 
         payload = report_runtime._build_runtime_sector_capital_preflight_payload(
             target_date="2026-06-12",
@@ -7918,6 +8530,7 @@ def _runtime_binding_probe(
             execution_stage_context=execution_context,
             market_research_snapshot=market_snapshot,
             elimination_tournament_payload=elimination,
+            sector_capital_carrier_strategy=carrier_strategy,
         )
         stored = report_runtime._store_runtime_sector_capital_preflight_payload(
             payload,
@@ -7948,19 +8561,58 @@ def _runtime_binding_probe(
             stored["source_payloads"]["elimination_tournament_payload"]["schema_version"],
             "elimination_tournament.v1",
         )
+        self.assertEqual(
+            stored["source_payloads"]["sector_capital_carrier_strategy"]["schema_version"],
+            "sector_capital_carrier_paper_strategy.v1",
+        )
+        self.assertEqual(
+            stored["sector_capital_carrier_strategy"]["primary_candidate"]["stock_label"],
+            "和远气体(002971)",
+        )
+        self.assertEqual(stored_strategy, carrier_strategy)
+        self.assertIs(data["sector_capital_carrier_strategy"], stored_strategy)
+        self.assertIs(execution_context["sector_capital_carrier_strategy"], stored_strategy)
+        self.assertIs(market_snapshot["sector_capital_carrier_strategy"], stored_strategy)
         self.assertIs(data["sector_capital_preflight"], stored)
         self.assertIs(execution_context["sector_capital_preflight"], stored)
         self.assertIs(market_snapshot["sector_capital_preflight"], stored)
         self.assertEqual(stored["trade_date"], "2026-06-12")
         self.assertEqual(stored["layers"][-1]["id"], "final_action")
+        self.assertEqual(stored["tplus_rehearsal"]["schema_version"], "t0_tplus_rehearsal.v1")
+        self.assertIn("日报生成日是T0", stored["tplus_rehearsal"]["t0_boundary"])
+        self.assertIn("不回写T0", stored["tplus_rehearsal"]["review_boundary"])
 
     def test_sector_capital_preflight_front_summary_renders_tournament_rows(self):
         payload = {
             "schema_version": "sector_capital_preflight.v1",
-            "final_action": {
-                "label": "0%不参与",
-                "source": "selection_workflow.final",
-                "reason": "最终没有新增参与对象，动作=0%不参与",
+                "final_action": {
+                    "label": "50%条件执行",
+                    "position_pct": 50,
+                    "target": {"name": "和远气体", "code": "002971", "sector": "化工原料"},
+                    "source": "sector_capital_carrier_strategy",
+                    "reason": "板块被资金选择，且主样本同时具备至少两类资金载体证据",
+                },
+            "tplus_rehearsal": {
+                "schema_version": "t0_tplus_rehearsal.v1",
+                "t0_boundary": "日报生成日是T0；只使用T0已知事实推演T+1和T+2",
+                "review_boundary": "T+1/T+2后验事实只用于复盘批改，不回写T0候选生成或最终动作",
+                "tplus1": {
+                    "participation_qualification": "有条件参与",
+                    "market_emotion": "主线延续观察",
+                    "market_cycle": "周期窗口打开",
+                    "sector_emotion": "板块延续",
+                    "sector_cycle": "主升或二波确认",
+                    "buy_windows": ["09:50-10:10优先等回踩MA5/VWAP/0轴后重新站回"],
+                    "action": "围绕和远气体(002971)执行，不追无回踩的加速",
+                },
+                "tplus2": {
+                    "market_emotion": "延续后分歧或震荡",
+                    "market_cycle": "周期仍在，但进入兑现复核",
+                    "sector_emotion": "延续后分歧",
+                    "sector_cycle": "强者横住续命，后排先兑现",
+                    "sell_windows": ["09:50-10:10看承接是否把分歧修复为延续"],
+                    "action": "先按预案处理，再由后验复盘批改",
+                },
             },
             "layers": [
                 {
@@ -8004,6 +8656,26 @@ def _runtime_binding_probe(
                     "entries": [{"stock_label": "无执行对象", "status": "final_action"}],
                 },
             ],
+            "sector_capital_carrier_strategy": {
+                "schema_version": "sector_capital_carrier_paper_strategy.v1",
+                "action": "paper_participate",
+                "action_label": "板块资金载体主样本",
+                "action_reason": "板块被资金选择，且主样本同时具备至少两类资金载体证据",
+                "primary_candidate": {
+                    "stock_label": "和远气体(002971)",
+                    "reason": "化工原料进入板块候选；个股证据：热榜关注、容量成交；角色：趋势容量核心、板块锚/资金表领涨",
+                },
+                "stages": [
+                    {
+                        "title": "板块线索恢复",
+                        "input_count": 1,
+                        "eliminated_count": 0,
+                        "survivor_count": 1,
+                        "survivors": [{"label": "化工原料", "reason": "资金流入与板块涨幅同向"}],
+                        "eliminated": [],
+                    }
+                ],
+            },
         }
 
         rendered = "\n".join(report_runtime._render_sector_capital_preflight_front_summary(payload))
@@ -8011,8 +8683,15 @@ def _runtime_binding_probe(
         self.assertIn("## 板块资金扩散淘汰赛", rendered)
         self.assertIn("| 市场资金结构 | 3 | 1 | 2（和远气体(002971)、云南锗业(002428)） | 旧记忆股(000001): 旧龙头记忆只能作为过程证据 | 进入板块资金扩散层 |", rendered)
         self.assertIn("| 价格行为确认 | 1 | 1 | 0（无） | 和远气体(002971): 炸板57次且尾盘才回封；高换手连板 | 进入下一层复核 |", rendered)
-        self.assertIn("**最终动作**：0%不参与；来源=selection_workflow.final", rendered)
+        self.assertIn("**最终动作**：50%条件执行；来源=sector_capital_carrier_strategy", rendered)
         self.assertIn("不单独生成明日标的", rendered)
+        self.assertIn("## 板块资金载体预案", rendered)
+        self.assertIn("| T0同源策略动作 | 板块资金载体主样本 |", rendered)
+        self.assertIn("已进入最终动作；按唯一明日动作执行", rendered)
+        self.assertIn("| 板块线索恢复 | 1 | 0 | 1 | 化工原料：资金流入与板块涨幅同向 |", rendered)
+        self.assertIn("## T0推演T+1/T+2交易环境", rendered)
+        self.assertIn("| T+1参与日 | 主线延续观察 | 周期窗口打开 | 板块延续 | 主升或二波确认 | 有条件参与；围绕和远气体(002971)执行，不追无回踩的加速 |", rendered)
+        self.assertIn("T+1/T+2后验事实只用于复盘批改，不回写T0候选生成或最终动作", rendered)
 
     def test_runtime_derivation_chain_keeps_stale_local_candidate_as_process_only(self):
         def _run_execution_stages(stage_specs, stage_context=None, stage_lookup=None):
@@ -10007,6 +10686,66 @@ def _runtime_binding_probe(
         self.assertIn("最终执行条件: 明日目标标的保留50%条件执行", stdout.getvalue())
         self.assertNotIn("最终执行条件: 空仓等待", stdout.getvalue())
 
+    def test_positive_final_action_rewrites_stale_appendix_watch_plan(self):
+        lines = [
+            "##### 附录：Step 5 - 过程候选最终复核",
+            "**明天先盯哪只**: 金安国纪(002636)",
+            "- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明",
+            "##### 附录：明日操作计划",
+            "**最终动作表**（只展示真正具备参与资格的对象）:",
+            "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |",
+            "|----------|------|------|----------|-----------|",
+            "| 👀 明天先盯哪只 | 金安国纪 | 002636 | 09:50-10:10站上97.34后，再看是否走成明天唯一能买的那只 | 92.47 / 3-5天 |",
+            "**明天仓位怎么放**:",
+            "- **现在到底是什么状态**: 还没有缩到一只可买股",
+            "- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）",
+            "- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买",
+            "| 明日买点预计算 | 先确认重点盯盘股，再看能否缩到一只可买股 |",
+            "| 过程候选最终复核 | 跨线明天先盯哪只：金安国纪(002636)；只有走成明天唯一能买的那只才参与 |",
+            "**明日继续观察**（1只，等买点出现）:",
+            "- **接着做什么**: 进入Step 4，为候选组预计算买点并筛出明天唯一能买的那只",
+            "- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑",
+            "- **现在是什么情况**: 市场已允许出手，但还没有缩到一只合格参与对象",
+            "- **接着做什么**: 当前还在等待层，先等买点自己长出来，不提前写成执行对象",
+            "| 今日关注标的 | 盛龙股份(001257)：主线核心候选，优先观察 |",
+            "| 操作风格 | 空仓 |",
+            "| 明日核心标的 | 1+1 / 4只 |",
+            "| 明日风险预判 | 市场已允许出手，但现在还只有重点盯盘股，还没有缩到一只合格参与对象；主观理解只用于观察，不用于提前硬上 |",
+            "| 明日策略 | 不开新仓，只观察：当前裁决不允许新增跟随，先看环境和主线是否继续强化 |",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"name": "云南锗业", "code": "002428", "sector": "小金属"},
+            position_decision={"target_position_pct": 50, "signal_grade": "50"},
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+            },
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("过程候选回看样本", rendered)
+        self.assertIn("| 只看明日执行对象 | 云南锗业 | 002428 | 固定交易窗口条件成立才50%条件执行；不满足回到0%不参与 |", rendered)
+        self.assertIn("- **现在到底是什么状态**: 已收口到唯一明日动作：云南锗业(002428)", rendered)
+        self.assertIn("- **明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%", rendered)
+        self.assertIn("先确认唯一明日动作：云南锗业(002428)是否满足固定交易窗口条件", rendered)
+        self.assertIn("| 今日关注标的 | 唯一明日动作：云南锗业(002428) |", rendered)
+        self.assertIn("| 操作风格 | 50%条件执行；盘前不抢跑 |", rendered)
+        self.assertIn("| 明日核心标的 | 唯一明日动作：云南锗业(002428) |", rendered)
+        self.assertIn("| 明日策略 | 只看明日执行对象云南锗业(002428)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 |", rendered)
+        self.assertNotIn("| 👀 明天先盯哪只 | 金安国纪 | 002636 |", rendered)
+        self.assertNotIn("明天先盯哪只", rendered)
+        self.assertNotIn("唯一能买", rendered)
+        self.assertNotIn("还没有缩到一只可买股", rendered)
+        self.assertNotIn("还没有缩到一只合格参与对象", rendered)
+        self.assertNotIn("当前还在等待层", rendered)
+        self.assertNotIn("操作风格 | 空仓", rendered)
+        self.assertNotIn("不开新仓，只观察", rendered)
+        self.assertNotIn("可买股", rendered)
+        self.assertNotIn("买点出现", rendered)
+        self.assertNotIn("预计算买点", rendered)
+        self.assertNotIn("0%（市场允许出手", rendered)
+
     def test_runtime_appendix_relabels_tomorrow_buy_rows_when_zero_participation(self):
         lines = [
             "**重点观察名单**（只保留最心动的少数，每只都绑定参与窗口）:",
@@ -10890,6 +11629,104 @@ def _runtime_binding_probe(
 
         self.assertIn("## 板块资金扩散淘汰赛", rendered)
         self.assertLess(rendered.index("## 板块资金扩散淘汰赛"), rendered.index("## 明日执行结论"))
+
+    def test_insert_sector_capital_preflight_front_summary_syncs_front_tables_when_action_is_positive(self):
+        payload = {
+            "schema_version": "sector_capital_preflight.v1",
+            "final_action": {
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"name": "长电科技", "code": "600584", "sector": "半导体"},
+                "source": "sector_capital_carrier_strategy",
+                "reason": "板块被资金选择，且主样本同时具备至少两类资金载体证据",
+            },
+            "layers": [
+                {
+                    "id": "final_action",
+                    "title": "唯一明日动作",
+                    "input_count": 1,
+                    "survivor_count": 1,
+                    "entries": [{"stock_label": "长电科技(600584)", "status": "final_action"}],
+                }
+            ],
+        }
+        report_lines = [
+            "# 标题",
+            "",
+            "## 日报裁决总览",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 仓位姿态 | 0%不参与 |",
+            "| 最终对象 | 无 |",
+            "| 对象性质 | 无明日执行对象 |",
+            "| 推导摘要 | 没有可用明日执行对象 |",
+            "",
+            "## 明日执行结论",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 明日仓位 | 0%不参与 |",
+            "| 明日执行对象 | 无 |",
+            "| 执行性质 | 无明日执行对象 |",
+            "| 不满足条件 | 不参与 |",
+        ]
+
+        inserted = report_runtime._insert_sector_capital_preflight_front_summary(report_lines, payload)
+        rendered = "\n".join(inserted)
+
+        self.assertIn("| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |", rendered)
+        self.assertIn("| 最终对象 | 明日执行对象：长电科技(600584) |", rendered)
+        self.assertIn("| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |", rendered)
+        self.assertIn("| 明日执行对象 | 长电科技(600584) |", rendered)
+
+    def test_insert_sector_capital_preflight_front_summary_replaces_stale_existing_section(self):
+        payload = {
+            "schema_version": "sector_capital_preflight.v1",
+            "final_action": {
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"name": "长电科技", "code": "600584", "sector": "半导体"},
+                "source": "sector_capital_carrier_strategy",
+                "reason": "板块被资金选择，且主样本同时具备至少两类资金载体证据",
+            },
+            "layers": [
+                {
+                    "id": "final_action",
+                    "title": "唯一明日动作",
+                    "input_count": 1,
+                    "survivor_count": 1,
+                    "survivors": [{"stock_label": "长电科技(600584)", "status": "final_action"}],
+                    "entries": [{"stock_label": "长电科技(600584)", "status": "final_action"}],
+                }
+            ],
+        }
+        report_lines = [
+            "# 标题",
+            "",
+            "## 日报裁决总览",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 仓位姿态 | 0%不参与 |",
+            "| 最终对象 | 无 |",
+            "",
+            "## 板块资金扩散淘汰赛",
+            "| 层级 | 输入 | 淘汰 | 剩余 | 关键理由 | 下一层依据 |",
+            "|---|---:|---|---|---|---|",
+            "| 唯一明日动作 | 1 | 0 | 0（无） | 旧结论 | 收口到最终动作 |",
+            "",
+            "## 明日执行结论",
+            "| 项目 | 结论 |",
+            "|------|------|",
+            "| 明日仓位 | 0%不参与 |",
+            "| 明日执行对象 | 无 |",
+        ]
+
+        inserted = report_runtime._insert_sector_capital_preflight_front_summary(report_lines, payload)
+        rendered = "\n".join(inserted)
+
+        self.assertNotIn("旧结论", rendered)
+        self.assertIn("| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |", rendered)
+        self.assertIn("| 明日执行对象 | 长电科技(600584) |", rendered)
+        self.assertIn("| 唯一明日动作 | 1 | 0 | 1（长电科技(600584)）", rendered)
 
     def test_zero_appendix_clears_candidate_quality_panel_targets_when_final_wait_has_no_target(self):
         lines = [

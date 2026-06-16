@@ -26,6 +26,22 @@ class ExecutionChainOverviewNodesTest(unittest.TestCase):
         self.assertIn("- **基准指数**: 中证全指涨跌幅+1.23%，中证1000涨跌幅+1.56%", rendered)
         self.assertNotIn("### 分-六步决策路径", rendered)
 
+    def test_render_execution_chain_overview_section_omits_missing_csi500_change(self):
+        lines = render_execution_chain_overview_section(
+            {
+                "csci_change": 1.23,
+                "csi500_change": None,
+                "csi1000_change": 1.56,
+                "market_trend": "强分歧修复",
+                "primary_mainline": "军工",
+                "enabled_node_keys": ["header", "market_summary"],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("- **基准指数**: 中证全指涨跌幅+1.23%，中证1000涨跌幅+1.56%", rendered)
+        self.assertNotIn("中证500涨跌幅+0.00%", rendered)
+
     def test_render_execution_chain_overview_section_does_not_call_primary_mainline_when_attack_evidence_is_chaotic(self):
         lines = render_execution_chain_overview_section(
             {

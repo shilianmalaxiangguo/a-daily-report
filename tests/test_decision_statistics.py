@@ -179,8 +179,8 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("**五项判断复盘统计表**", rendered)
         self.assertIn("统计范围：2026-05-11至2026-05-12", rendered)
         self.assertNotIn("当前可复盘样本", rendered)
-        self.assertIn("| 判断项 | 统计口径 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
-        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 错在哪 |", rendered)
+        self.assertIn("| 判断项 | 统计口径 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertNotIn("| 判断项 | 统计口径 | 样本 | 正确 | 错误 | 待补事实 | 已结算表现 | 错在哪 |", rendered)
         self.assertIn("| 主线判断 | 资金第二天是否继续选择这条线 | 50.00% | 错误 | 电力 | 通信设备 | 资金次日没有继续选择电力 |", rendered)
         self.assertIn("| 参与预演判断 | 竞价、开盘、回封、分歧路径是否命中 | 0.00% | 错误 | 竞价命中 | 开盘承接断档 | 竞价命中但开盘承接断档 |", rendered)
         self.assertIn("历史复盘只统计过去判断，不作为明日新增参与依据。", rendered)
@@ -590,10 +590,10 @@ class DecisionStatisticsTest(unittest.TestCase):
         today_rows = {row["judgment_type"]: row for row in panel["today_rows"]}
         self.assertIn("粤电力Ａ(000539)", today_rows["core_candidate"]["today_judgment"])
         self.assertNotIn("华锋股份", today_rows["core_candidate"]["today_judgment"])
-        self.assertIn("近5个已结算交易日正确率", rendered)
+        self.assertIn("近5个已结算交易日复盘表现", rendered)
         self.assertIn("结算上一交易日：2026-05-29", rendered)
         self.assertIn("今日判断（2026-06-01，等待下一交易日验证）", rendered)
-        self.assertNotIn("### 近5个已结算交易日正确率", rendered)
+        self.assertNotIn("### 近5个已结算交易日复盘表现", rendered)
         self.assertNotIn("### 结算上一交易日：2026-05-29", rendered)
         self.assertNotIn("### 今日判断（2026-06-01，等待下一交易日验证）", rendered)
         self.assertIn("| 市场状态判断 | 混沌 | 下一交易日验证进攻/退潮/修复/混沌/冰点是否成立 |", rendered)
@@ -645,8 +645,8 @@ class DecisionStatisticsTest(unittest.TestCase):
         )
         rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
 
-        self.assertIn("| 判断项 | 正确率 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
-        self.assertNotIn("| 判断项 | 样本 | 正确 | 错误 | 待补事实 | 正确率 | 最近错因 |", rendered)
+        self.assertIn("| 判断项 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |", rendered)
+        self.assertNotIn("| 判断项 | 样本 | 正确 | 错误 | 待补事实 | 已结算表现 | 最近错因 |", rendered)
         self.assertIn("| 市场状态判断 | 0.00% | 错误 | 混沌 | 退潮 | 预判混沌，次日实际为退潮 |", rendered)
         self.assertIn(
             "| 核心候选判断 | 100.00% | 正确 | 京能电力(600578) | 候选进入次日资金视野 | 候选进入次日资金视野，判断成立 |",

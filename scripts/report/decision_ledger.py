@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from selection.candidate_execution_contracts import (
     build_participation_window_from_candidate,
@@ -11,6 +12,7 @@ from selection.candidate_execution_contracts import (
 )
 
 ARTIFACT_VERSION = 1
+DECISION_REVISION_LEDGER_SCHEMA_VERSION = "decision_revision_ledger.v1"
 DEFAULT_CYCLE_LENGTH_TRADE_DAYS = 25
 SELECTION_RULE_VERSION = "extreme-conviction-ledger-v1"
 _NON_SECTOR_LABELS = {
@@ -2170,6 +2172,488 @@ def _read_json_if_exists(path):
         return {}
 
 
+def _postgres_database_configured():
+    return (
+        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
+        or os.environ.get("DATABASE_URL")
+        or ""
+    ).strip().startswith(("postgres://", "postgresql://"))
+
+
+def _postgres_storage_required():
+    return bool(
+        os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1"
+        or _postgres_database_configured()
+    )
+
+
+def _read_jsonl_if_exists(path):
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            rows.append(payload)
+    return rows
+
+
+def _append_jsonl(path, rows):
+    rows = [row for row in list(rows or []) if isinstance(row, dict)]
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
+
+
+def _snapshot_final_action(snapshot):
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    if snapshot.get("decision_revision_policy") == "intermediate_snapshot":
+        return {}
+    return _normalize_final_action_snapshot(snapshot.get("final_action"))
+
+
+def _decision_summary_final_action(summary):
+    summary = summary if isinstance(summary, dict) else {}
+    if "final_action_label" not in summary and "final_target" not in summary:
+        return {}
+    return _normalize_final_action_snapshot(
+        {
+            "label": summary.get("final_action_label"),
+            "target": summary.get("final_target") or {},
+        }
+    )
+
+
+def _latest_final_action_from_revision_ledger(root, trade_date):
+    revisions_path = Path(root) / "data" / "decision-ledger" / "revisions" / f"{_clean_text(trade_date)}.jsonl"
+    for entry in reversed(_read_jsonl_if_exists(revisions_path)):
+        for key in ("current_decision_excerpt", "decision_summary"):
+            final_action = _decision_summary_final_action(entry.get(key))
+            if final_action:
+                return final_action
+        action_change = entry.get("action_change") if isinstance(entry.get("action_change"), dict) else {}
+        final_action = _normalize_final_action_snapshot(action_change.get("after"))
+        if final_action:
+            return final_action
+    return {}
+
+
+def _read_same_day_final_action_from_service(service, trade_date):
+    if service is None:
+        return {}
+    for reader_name in ("read_decision_ledger_snapshot", "load_decision_ledger_snapshot"):
+        reader = getattr(service, reader_name, None)
+        if not callable(reader):
+            continue
+        try:
+            snapshot = reader(trade_date)
+        except TypeError:
+            snapshot = reader(trade_date=trade_date)
+        if not isinstance(snapshot, dict):
+            continue
+        if _clean_text(snapshot.get("trade_date")) and _clean_text(snapshot.get("trade_date")) != _clean_text(trade_date):
+            continue
+        final_action = _snapshot_final_action(snapshot)
+        if final_action:
+            return final_action
+    return {}
+
+
+def _recover_final_action_for_intermediate_snapshot(*, snapshot, previous_snapshot, root, trade_date, service=None):
+    if _normalize_final_action_snapshot((snapshot or {}).get("final_action")):
+        return {}
+    for final_action in (
+        _snapshot_final_action(previous_snapshot),
+        _read_same_day_final_action_from_service(service, trade_date),
+        _latest_final_action_from_revision_ledger(root, trade_date),
+    ):
+        if final_action:
+            return final_action
+    return {}
+
+
+def _remove_file_if_exists(path):
+    try:
+        if path.exists():
+            path.unlink()
+            return True
+    except OSError:
+        return False
+    return False
+
+
+def _utc_timestamp():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _decision_revision_case_summary(case):
+    case = case if isinstance(case, dict) else {}
+    planned = case.get("planned_participation") if isinstance(case.get("planned_participation"), dict) else {}
+    hypothesis = case.get("hypothesis") if isinstance(case.get("hypothesis"), dict) else {}
+    return {
+        "case_id": _clean_text(case.get("case_id")),
+        "stock_code": _normalize_stock_code(case.get("stock_code")),
+        "stock_name": _clean_text(case.get("stock_name")),
+        "sector": _clean_text(case.get("sector") or hypothesis.get("sector_candidate")),
+        "stock_setup": _clean_text(hypothesis.get("stock_setup")),
+        "market_participation_qualification": _clean_text(case.get("market_participation_qualification")),
+        "position_plan_pct": _position_plan_pct_from_value(case.get("position_plan_pct")),
+        "position_plan_label": _clean_text(case.get("position_plan_label")),
+        "planned_window": _clean_text(planned.get("window") or planned.get("buy_window") or planned.get("participation_window")),
+        "planned_action": _clean_text(planned.get("action")),
+        "mainline": _clean_text(case.get("mainline")),
+        "sample_tier": _clean_text(case.get("sample_tier")),
+        "trend_chain_position": _clean_text(case.get("trend_chain_position")),
+        "cancellation_conditions": [
+            _clean_text(item)
+            for item in list(case.get("cancellation_conditions") or planned.get("cancellation_conditions") or [])
+            if _clean_text(item)
+        ],
+        "missing_fields": [
+            _clean_text(item)
+            for item in list(case.get("missing_fields") or [])
+            if _clean_text(item)
+        ],
+    }
+
+
+def _normal_final_action_target(target):
+    target = target if isinstance(target, dict) else {}
+    stock_code = _normalize_stock_code(target.get("stock_code") or target.get("code"))
+    stock_name = _clean_text(target.get("stock_name") or target.get("name"))
+    if not stock_code and not stock_name:
+        return {}
+    normalized = {
+        "stock_code": stock_code,
+        "stock_name": stock_name,
+    }
+    sector = _clean_text(target.get("sector") or target.get("sector_candidate") or target.get("mainline"))
+    if sector:
+        normalized["sector"] = sector
+    return normalized
+
+
+def _normalize_final_action_snapshot(final_action):
+    if not isinstance(final_action, dict) or not final_action:
+        return {}
+    target = _normal_final_action_target(final_action.get("target"))
+    label = _clean_text(final_action.get("label") or final_action.get("final_action_label"))
+    position_pct = _position_plan_pct_from_value(
+        final_action.get("position_pct")
+        if "position_pct" in final_action
+        else final_action.get("target_position_pct")
+    )
+    if not label:
+        label = _position_plan_label(position_pct) if position_pct in (0, 50, 100) else ""
+    if not label and target:
+        label = "50%条件执行"
+    if not label:
+        label = "0%不参与"
+    normalized = {
+        "label": label,
+        "target": target,
+    }
+    if position_pct in (0, 50, 100):
+        normalized["position_pct"] = position_pct
+    source = _clean_text(final_action.get("source"))
+    if source:
+        normalized["source"] = source
+    reason = _clean_text(final_action.get("reason"))
+    if reason:
+        normalized["reason"] = reason
+    return normalized
+
+
+def _decision_revision_summary(snapshot):
+    snapshot = _sanitize_decision_ledger_snapshot(snapshot or {})
+    cases = [_decision_revision_case_summary(case) for case in list(snapshot.get("cases") or [])]
+    cases = [case for case in cases if case.get("case_id") or case.get("stock_code") or case.get("stock_name")]
+    first_case = cases[0] if cases else {}
+    first_raw_case = (snapshot.get("cases") or [{}])[0] if snapshot.get("cases") else {}
+    hypothesis = first_raw_case.get("hypothesis") if isinstance(first_raw_case.get("hypothesis"), dict) else {}
+    actionable_cases = [
+        case
+        for case in cases
+        if case.get("position_plan_pct") in (50, 100)
+        and case.get("market_participation_qualification") == "qualified"
+    ]
+    canonical_final_action = _normalize_final_action_snapshot(snapshot.get("final_action"))
+    if canonical_final_action:
+        final_action_label = canonical_final_action.get("label") or "0%不参与"
+        final_target = canonical_final_action.get("target") or {}
+    elif actionable_cases:
+        final_action_label = actionable_cases[0].get("position_plan_label") or "50%条件执行"
+        final_target = {
+            "stock_code": actionable_cases[0].get("stock_code"),
+            "stock_name": actionable_cases[0].get("stock_name"),
+        }
+    else:
+        final_action_label = "0%不参与"
+        final_target = {}
+    return {
+        "trade_date": _clean_text(snapshot.get("trade_date")),
+        "selection_rule_version": _clean_text(snapshot.get("selection_rule_version"), SELECTION_RULE_VERSION),
+        "selection_input_hash": _clean_text(snapshot.get("selection_input_hash")),
+        "market_branch": _clean_text(hypothesis.get("market_branch")),
+        "sector_relationship_state": _clean_text(hypothesis.get("sector_relationship_state")),
+        "case_count": len(cases),
+        "primary_stock": {
+            "stock_code": first_case.get("stock_code"),
+            "stock_name": first_case.get("stock_name"),
+            "sector": first_case.get("sector"),
+        } if first_case else {},
+        "final_action_label": final_action_label,
+        "final_target": final_target,
+        "cases": cases,
+    }
+
+
+def _decision_summary_hash(summary):
+    return _canonical_json_hash(summary or {})
+
+
+def _has_decision_revision_snapshot(snapshot):
+    return isinstance(snapshot, dict) and bool(_clean_text(snapshot.get("trade_date")))
+
+
+def _revision_id(trade_date, sequence, summary_hash):
+    return f"{_clean_text(trade_date, 'unknown')}-r{int(sequence):03d}-{_clean_text(summary_hash)[:8]}"
+
+
+def _field_change(field, before, after):
+    if before == after:
+        return None
+    return {"field": field, "before": before, "after": after}
+
+
+def _case_map(summary):
+    return {
+        _clean_text(case.get("case_id") or case.get("stock_code") or case.get("stock_name")): case
+        for case in list((summary or {}).get("cases") or [])
+        if isinstance(case, dict)
+    }
+
+
+def _build_decision_revision_diff(previous_summary, current_summary):
+    previous_summary = previous_summary if isinstance(previous_summary, dict) else {}
+    current_summary = current_summary if isinstance(current_summary, dict) else {}
+    changed_decisions = []
+    for field in (
+        "market_branch",
+        "sector_relationship_state",
+        "case_count",
+        "primary_stock",
+        "final_action_label",
+        "final_target",
+        "selection_input_hash",
+    ):
+        change = _field_change(field, previous_summary.get(field), current_summary.get(field))
+        if change:
+            changed_decisions.append(change)
+
+    previous_cases = _case_map(previous_summary)
+    current_cases = _case_map(current_summary)
+    added_keys = [key for key in current_cases if key not in previous_cases]
+    removed_keys = [key for key in previous_cases if key not in current_cases]
+    changed_reasons = []
+    for key in sorted(set(previous_cases) & set(current_cases)):
+        before_case = previous_cases[key]
+        after_case = current_cases[key]
+        for field in (
+            "stock_setup",
+            "market_participation_qualification",
+            "position_plan_label",
+            "planned_window",
+            "planned_action",
+            "cancellation_conditions",
+            "missing_fields",
+        ):
+            change = _field_change(field, before_case.get(field), after_case.get(field))
+            if change:
+                changed_reasons.append({"case_id": key, **change})
+
+    added_evidence = [
+        {
+            "case_id": key,
+            "stock": f"{current_cases[key].get('stock_name')}({current_cases[key].get('stock_code')})",
+            "reason": current_cases[key].get("stock_setup"),
+        }
+        for key in added_keys
+    ]
+    removed_evidence = [
+        {
+            "case_id": key,
+            "stock": f"{previous_cases[key].get('stock_name')}({previous_cases[key].get('stock_code')})",
+            "reason": previous_cases[key].get("stock_setup"),
+        }
+        for key in removed_keys
+    ]
+    action_change = {
+        "changed": previous_summary.get("final_action_label") != current_summary.get("final_action_label")
+        or previous_summary.get("final_target") != current_summary.get("final_target"),
+        "before": {
+            "label": previous_summary.get("final_action_label"),
+            "target": previous_summary.get("final_target") or {},
+        },
+        "after": {
+            "label": current_summary.get("final_action_label"),
+            "target": current_summary.get("final_target") or {},
+        },
+    }
+    summary_parts = []
+    if changed_decisions:
+        summary_parts.append(f"决策字段变化{len(changed_decisions)}项")
+    if changed_reasons:
+        summary_parts.append(f"样本理由变化{len(changed_reasons)}项")
+    if added_evidence:
+        summary_parts.append(f"新增样本{len(added_evidence)}个")
+    if removed_evidence:
+        summary_parts.append(f"移除样本{len(removed_evidence)}个")
+    if action_change["changed"]:
+        summary_parts.append(
+            f"动作由{action_change['before']['label'] or '空'}变为{action_change['after']['label'] or '空'}"
+        )
+    return {
+        "changed_decisions": changed_decisions,
+        "changed_reasons": changed_reasons,
+        "added_evidence": added_evidence,
+        "removed_evidence": removed_evidence,
+        "action_change": action_change,
+        "diff_summary": "；".join(summary_parts) if summary_parts else "结构化决策无变化",
+    }
+
+
+def build_decision_revision_entry(snapshot, *, previous_snapshot=None, base_revision=None, sequence=1, created_at=None):
+    current_summary = _decision_revision_summary(snapshot)
+    previous_summary = _decision_revision_summary(previous_snapshot) if previous_snapshot else {}
+    current_hash = _decision_summary_hash(current_summary)
+    trade_date = current_summary.get("trade_date")
+    base_revision = base_revision if isinstance(base_revision, dict) else {}
+    base_revision_id = _clean_text(base_revision.get("revision_id"))
+    is_initial = not previous_summary
+    entry = {
+        "schema_version": DECISION_REVISION_LEDGER_SCHEMA_VERSION,
+        "revision_id": _revision_id(trade_date, sequence, current_hash),
+        "trade_date": trade_date,
+        "created_at": created_at or _utc_timestamp(),
+        "base_revision_id": "" if is_initial else base_revision_id,
+        "revision_type": "initial" if is_initial else "diff",
+        "current_hash": current_hash,
+        "previous_hash": _decision_summary_hash(previous_summary) if previous_summary else "",
+        "source": "decision_ledger_snapshot",
+    }
+    if is_initial:
+        entry["decision_summary"] = current_summary
+        entry["changed_decisions"] = []
+        entry["changed_reasons"] = []
+        entry["added_evidence"] = []
+        entry["removed_evidence"] = []
+        entry["action_change"] = {
+            "changed": False,
+            "before": {},
+            "after": {
+                "label": current_summary.get("final_action_label"),
+                "target": current_summary.get("final_target") or {},
+            },
+        }
+        entry["diff_summary"] = "首次结构化决策记录"
+        return entry
+    entry.update(_build_decision_revision_diff(previous_summary, current_summary))
+    entry["current_decision_excerpt"] = {
+        "trade_date": current_summary.get("trade_date"),
+        "case_count": current_summary.get("case_count"),
+        "primary_stock": current_summary.get("primary_stock"),
+        "final_action_label": current_summary.get("final_action_label"),
+        "final_target": current_summary.get("final_target") or {},
+    }
+    return entry
+
+
+def write_decision_revision_ledger_artifact(snapshot, *, previous_snapshot=None, root_dir=".", created_at=None):
+    root = Path(root_dir)
+    snapshot = _sanitize_decision_ledger_snapshot(snapshot or {})
+    trade_date = _clean_text(snapshot.get("trade_date"))
+    if not trade_date:
+        return {"status": "skipped", "reason": "missing_trade_date", "entries": []}
+    revisions_path = root / "data" / "decision-ledger" / "revisions" / f"{trade_date}.jsonl"
+    existing_entries = _read_jsonl_if_exists(revisions_path)
+    current_summary = _decision_revision_summary(snapshot)
+    current_hash = _decision_summary_hash(current_summary)
+    if existing_entries and existing_entries[-1].get("current_hash") == current_hash:
+        return {
+            "status": "unchanged",
+            "path": str(revisions_path),
+            "entries": [],
+            "latest_revision_id": existing_entries[-1].get("revision_id"),
+        }
+
+    entries_to_append = []
+    sequence = len(existing_entries) + 1
+    base_revision = existing_entries[-1] if existing_entries else {}
+    previous_snapshot = _sanitize_decision_ledger_snapshot(previous_snapshot or {})
+    if previous_snapshot.get("decision_revision_policy") == "intermediate_snapshot":
+        previous_snapshot = {}
+    if not _has_decision_revision_snapshot(previous_snapshot):
+        previous_snapshot = {}
+    previous_hash = _decision_summary_hash(_decision_revision_summary(previous_snapshot)) if previous_snapshot else ""
+
+    if not existing_entries and previous_snapshot and previous_hash and previous_hash != current_hash:
+        initial_entry = build_decision_revision_entry(
+            previous_snapshot,
+            sequence=sequence,
+            created_at=created_at,
+        )
+        entries_to_append.append(initial_entry)
+        base_revision = initial_entry
+        sequence += 1
+
+    previous_for_diff = previous_snapshot if previous_snapshot and previous_hash != current_hash else None
+    entry = build_decision_revision_entry(
+        snapshot,
+        previous_snapshot=previous_for_diff,
+        base_revision=base_revision,
+        sequence=sequence,
+        created_at=created_at,
+    )
+    if existing_entries and not previous_for_diff:
+        entry["base_revision_id"] = _clean_text(base_revision.get("revision_id"))
+        entry["revision_type"] = "diff"
+        entry["previous_hash"] = _clean_text(base_revision.get("current_hash"))
+        entry.update(
+            {
+                "changed_decisions": [
+                    {
+                        "field": "decision_summary",
+                        "before": "previous revision summary not available in local snapshot",
+                        "after": "current snapshot hash changed",
+                    }
+                ],
+                "changed_reasons": [],
+                "added_evidence": [],
+                "removed_evidence": [],
+                "action_change": {"changed": False, "before": {}, "after": {}},
+                "diff_summary": "当前结构化决策与上一修订不同；缺少上一快照，只记录哈希变化",
+            }
+        )
+    entries_to_append.append(entry)
+    _append_jsonl(revisions_path, entries_to_append)
+    return {
+        "status": "written",
+        "path": str(revisions_path),
+        "entries": entries_to_append,
+        "latest_revision_id": entries_to_append[-1].get("revision_id"),
+    }
+
+
 def _latest_mention(record):
     mentions = list((record or {}).get("mentions") or [])
     return mentions[-1] if mentions else {}
@@ -3726,6 +4210,7 @@ def write_decision_ledger_artifacts(
     review_market_facts_by_stock_code=None,
     database_service=None,
     write_json_archive=True,
+    write_decision_revision=True,
 ):
     root = Path(root_dir)
     snapshot = _sanitize_decision_ledger_snapshot(snapshot or {})
@@ -3733,34 +4218,29 @@ def write_decision_ledger_artifacts(
     ledger_dir = root / "data" / "decision-ledger"
     snapshot_path = ledger_dir / f"{trade_date}.json"
     index_path = ledger_dir / "index.json"
+    previous_same_day_snapshot = _sanitize_decision_ledger_snapshot(_read_json_if_exists(snapshot_path))
     previous_index = {}
     service = database_service
-    postgres_configured = (
-        os.environ.get("A_DAILY_REPORT_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or ""
-    ).strip().startswith(("postgres://", "postgresql://"))
-    if service is None and postgres_configured:
+    postgres_required = _postgres_storage_required()
+    if service is None and postgres_required:
         try:
             from storage.database_service import DatabaseService
 
             service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
             service = service_factory() if callable(service_factory) else DatabaseService.from_environment()
         except Exception as exc:
-            if postgres_configured:
-                return {
-                    "snapshot_path": str(snapshot_path),
-                    "index_path": str(index_path),
-                    "case_count": 0,
-                    "index": {},
-                    "fact_db_sync": {
-                        "status": "failed",
-                        "error_type": type(exc).__name__,
-                        "error": str(exc),
-                    },
-                }
-            service = None
-    if postgres_configured and (
+            return {
+                "snapshot_path": str(snapshot_path),
+                "index_path": str(index_path),
+                "case_count": 0,
+                "index": {},
+                "fact_db_sync": {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            }
+    if postgres_required and (
         service is None
         or not callable(getattr(service, "is_postgres_backed", None))
         or not service.is_postgres_backed()
@@ -3784,7 +4264,7 @@ def write_decision_ledger_artifacts(
     ):
         previous_index = _sanitize_decision_ledger_index(service.read_decision_ledger_index(end_date=trade_date, window_days=25))
     else:
-        if postgres_configured:
+        if postgres_required:
             return {
                 "snapshot_path": str(snapshot_path),
                 "index_path": str(index_path),
@@ -3813,7 +4293,21 @@ def write_decision_ledger_artifacts(
     )
     previous_index = _sanitize_decision_ledger_index(previous_index)
     previous_index = _prune_replaced_same_day_records(previous_index, snapshot)
+    if not write_decision_revision and not snapshot.get("final_action"):
+        recovered_final_action = _recover_final_action_for_intermediate_snapshot(
+            snapshot=snapshot,
+            previous_snapshot=previous_same_day_snapshot,
+            root=root,
+            trade_date=trade_date,
+            service=service,
+        )
+        if recovered_final_action:
+            snapshot["final_action"] = recovered_final_action
     merged_snapshot = _sanitize_decision_ledger_snapshot(merge_snapshot_with_previous_index(snapshot, previous_index))
+    if write_decision_revision:
+        merged_snapshot.pop("decision_revision_policy", None)
+    else:
+        merged_snapshot["decision_revision_policy"] = "intermediate_snapshot"
     index = build_decision_ledger_index(merged_snapshot, previous_index=previous_index)
     fact_db_sync = {"status": "not_run", "rows": 0}
     service_is_postgres = (
@@ -3841,9 +4335,26 @@ def write_decision_ledger_artifacts(
                     "error": str(exc),
                 },
             }
+    stale_json_removed = []
     if write_json_archive:
         _write_json(snapshot_path, merged_snapshot)
         _write_json(index_path, index)
+    elif service_is_postgres and fact_db_sync.get("status") == "success":
+        for stale_path in (snapshot_path, index_path):
+            if _remove_file_if_exists(stale_path):
+                stale_json_removed.append(str(stale_path))
+    if write_decision_revision:
+        revision_ledger = write_decision_revision_ledger_artifact(
+            merged_snapshot,
+            previous_snapshot=previous_same_day_snapshot,
+            root_dir=root,
+            created_at=snapshot.get("generated_at"),
+        )
+    else:
+        revision_ledger = {"status": "not_run", "entries": []}
+    if write_decision_revision and not write_json_archive:
+        revision_ledger = dict(revision_ledger)
+        revision_ledger["reason"] = "PostgreSQL-only 路径不写完整 JSON 快照；仅保留本地结构化决策差异记录"
     if not service_is_postgres and service is not None:
         try:
             current_rows = build_extreme_conviction_mention_rows(index, end_date=trade_date, window_days=1, exclude_a_kill=False)
@@ -3866,6 +4377,8 @@ def write_decision_ledger_artifacts(
         "case_count": len(merged_snapshot.get("cases") or []),
         "index": index,
         "fact_db_sync": fact_db_sync,
+        "revision_ledger": revision_ledger,
+        "stale_json_removed": stale_json_removed,
     }
 
 
@@ -3887,6 +4400,7 @@ def write_decision_ledger_artifacts_from_markdown_report(
     root_dir=".",
     generated_at=None,
     write_json_archive=True,
+    write_decision_revision=True,
     review_market_facts_by_stock_code=None,
 ):
     report_file = Path(report_path)
@@ -3919,6 +4433,7 @@ def write_decision_ledger_artifacts_from_markdown_report(
         snapshot,
         root_dir=root,
         write_json_archive=write_json_archive,
+        write_decision_revision=write_decision_revision,
         review_market_facts_by_stock_code=review_market_facts_by_stock_code,
     )
 
@@ -3953,6 +4468,7 @@ def build_decision_ledger_snapshot(
     sector_relationship_state,
     source_report=None,
     generated_at=None,
+    final_action=None,
 ):
     cases = []
     for idx, item in enumerate(list(extreme_conviction_list or []), 1):
@@ -4050,7 +4566,7 @@ def build_decision_ledger_snapshot(
                 )
         cases.append(case)
 
-    return {
+    snapshot = {
         "artifact_version": ARTIFACT_VERSION,
         "trade_date": trade_date,
         "generated_at": generated_at,
@@ -4065,6 +4581,10 @@ def build_decision_ledger_snapshot(
         "source_report": source_report or {},
         "cases": cases,
     }
+    normalized_final_action = _normalize_final_action_snapshot(final_action)
+    if normalized_final_action:
+        snapshot["final_action"] = normalized_final_action
+    return snapshot
 
 
 def build_decision_ledger_snapshot_from_markdown_report(
@@ -4126,6 +4646,7 @@ def merge_snapshot_with_previous_index(snapshot, previous_index=None):
 __all__ = [
     "build_decision_ledger_snapshot",
     "build_decision_ledger_snapshot_from_markdown_report",
+    "build_decision_revision_entry",
     "build_decision_coverage_summary",
     "build_extreme_conviction_backtest_rows",
     "build_extreme_conviction_mention_rows",
@@ -4143,4 +4664,5 @@ __all__ = [
     "render_extreme_conviction_tracking_lines",
     "write_decision_ledger_artifacts",
     "write_decision_ledger_artifacts_from_markdown_report",
+    "write_decision_revision_ledger_artifact",
 ]

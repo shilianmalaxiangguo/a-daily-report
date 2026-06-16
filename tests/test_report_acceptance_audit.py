@@ -641,6 +641,79 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("empty_final_object_appendix_current_object_conflict", codes)
 
+    def test_audit_flags_stale_appendix_when_front_has_positive_final_action(self):
+        markdown = (
+            "# 2026-06-15 a股市场分析\n\n"
+            "## 日报裁决总览\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |\n"
+            "| 最终对象 | 明日执行对象：云南锗业(002428) |\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日执行对象 | 云南锗业(002428) |\n\n"
+            "## 六、明日执行计划\n"
+            "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
+            "|--------------|------|------|------|--------------|\n"
+            "| 只看明日执行对象 | 云南锗业(002428) | 09:50-10:10 | 固定交易窗口条件 | 不做 |\n\n"
+            "## 七、最终结论\n"
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
+            "| 条件满足才50%条件执行；不满足回到0% | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 固定交易窗口条件成立才执行 |\n\n"
+            "## 八、详细附录\n"
+            "##### 附录：Step 5 - 过程候选最终复核\n"
+            "- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明\n"
+            "\n"
+            "**最终动作表**（只展示真正具备参与资格的对象）:\n"
+            "| 明天具体怎么做 | 股票 | 代码 | 触发条件 | 止损/时间 |\n"
+            "|----------|------|------|----------|-----------|\n"
+            "| 👀 明天先盯哪只 | 金安国纪 | 002636 | 09:50-10:10站上97.34后，再看是否走成明天唯一能买的那只 | 92.47 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("positive_final_action_appendix_conflict", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_positive_appendix_legacy_buy_words_without_zero_wording(self):
+        markdown = (
+            "# 2026-06-15 a股市场分析\n\n"
+            "## 日报裁决总览\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |\n"
+            "| 最终对象 | 明日执行对象：云南锗业(002428) |\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日执行对象 | 云南锗业(002428) |\n\n"
+            "## 六、明日执行计划\n"
+            "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
+            "|--------------|------|------|------|--------------|\n"
+            "| 只看明日执行对象 | 云南锗业(002428) | 09:50-10:10 | 固定交易窗口条件 | 不做 |\n\n"
+            "## 七、最终结论\n"
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
+            "| 条件满足才50%条件执行；不满足回到0% | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 固定交易窗口条件成立才执行 |\n\n"
+            "## 八、详细附录\n"
+            "##### 附录：Step 4 - 明日买点预计算\n"
+            "**明日继续观察**（1只，等买点出现）:\n"
+            "- **现在是什么情况**: 市场已允许出手，但还没有缩到一只合格参与对象\n"
+            "- **接着做什么**: 当前还在等待层，先等买点自己长出来，不提前写成执行对象\n"
+            "- **接着做什么**: 进入Step 4，为候选组预计算买点并筛出明天唯一能买的那只\n"
+            "- **明天没有可买对象**: 仍等待候选证明\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("positive_final_action_appendix_conflict", codes)
+        self.assertFalse(result["passed"])
+
     def test_audit_flags_appendix_code_block_final_object_when_front_final_object_is_empty(self):
         markdown = (
             "# 2026-06-11 a股市场分析\n\n"
@@ -2018,6 +2091,41 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertNotIn("chanlun_tomorrow_decision_missing", {finding["code"] for finding in result["findings"]})
         self.assertTrue(result["passed"], result["findings"])
 
+    def test_audit_allows_zero_position_final_action_note_with_zero_input_count(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"}',
+            final_layer_input_count=0,
+        )
+
+        result = audit_report_markdown(report, companion_html=html)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("sector_capital_preflight_layer_count_mismatch", codes)
+        self.assertNotIn("sector_capital_preflight_final_conflict", codes)
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_audit_counts_positive_final_action_entry_as_final_survivor(self):
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "50%条件执行", "position_pct": 50, "target": {"name": "富瀚微", "code": "300613"}}',
+            final_layer_input_count=1,
+            final_layer_survivor_count=1,
+            final_layer_stock_code="300613",
+            final_layer_stock_name="富瀚微",
+            final_layer_sector="半导体",
+            final_layer_reason="最终对象=富瀚微(300613)，动作=50%条件执行",
+            previous_stock_code="300613",
+            previous_stock_name="富瀚微",
+            previous_sector="半导体",
+        )
+
+        result = audit_report_markdown(GOOD_MARKDOWN, companion_html=html)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("sector_capital_preflight_layer_count_mismatch", codes)
+        self.assertNotIn("sector_capital_preflight_final_conflict", codes)
+        self.assertTrue(result["passed"], result["findings"])
+
     def test_audit_flags_incomplete_sector_capital_preflight_payload(self):
         report = self.zero_position_report_with_decision_attribution()
         html = """
@@ -2035,6 +2143,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("sector_capital_preflight_layers_missing", codes)
         self.assertIn("sector_capital_preflight_decision_list_missing", codes)
         self.assertIn("sector_capital_preflight_idiot_index_missing", codes)
+        self.assertIn("sector_capital_preflight_tplus_rehearsal_missing", codes)
         self.assertFalse(result["passed"])
 
     def test_audit_flags_sector_capital_preflight_positive_final_when_report_is_zero_position(self):
@@ -2066,7 +2175,93 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("sector_capital_preflight_payload_missing", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
-    def _sector_capital_preflight_html(self, *, final_action):
+    def test_audit_flags_sector_capital_preflight_non_monotonic_stock_jump(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = """
+        <!doctype html>
+        <meta name="artifact" content="sector-capital-preflight">
+        <h1>2026-06-12 板块资金扩散生成前复核</h1>
+        <script type="application/json" id="sector-capital-preflight-payload">
+        {
+          "schema_version": "sector_capital_preflight.v1",
+          "derivation_contract": "sector_capital_diffusion_first.v1",
+          "mermaid": "周期窗口 唯一明日动作或不参与 T+1参与预案 T+2情绪周期推演 只批改不回写T0 白痴指数复核 压缩/合并/降级低价值高成本层",
+          "final_action": {"label": "0%不参与", "position_pct": 0, "target": {}, "source": "selection_workflow.final"},
+          "tplus_rehearsal": {
+            "schema_version": "t0_tplus_rehearsal.v1",
+            "tplus1": {"market_emotion":"分歧轮动","market_cycle":"周期窗口待确认","sector_emotion":"板块扩散不足","sector_cycle":"一日脉冲待验证","action":"观察"},
+            "tplus2": {"market_emotion":"震荡","market_cycle":"待确认","sector_emotion":"分歧","sector_cycle":"待确认","action":"后验批改"}
+          },
+          "decision_list": [
+            {"item":"市场能否进攻","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"哪个板块被选择","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"谁是资金载体","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"是否有量化参与痕迹","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"价格行为是否接受","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"周期窗口是否打开","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"},
+            {"item":"账户是否适配","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"}
+          ],
+          "idiot_index_review": [{"step":"涨停池起点","cost_proxy":"高","decision_value":"低","idiot_index_signal":"高","action":"降为证据层"}],
+          "layers": [
+            {"id":"market_capital_structure","input_count":1,"eliminated_count":1,"survivor_count":0,
+             "entries":[{"stock_code":"600403","stock_name":"大有能源","sector":"煤炭开采","status":"eliminated","reason":"不属于当日方向","next_basis":"","elimination_basis":"第一层淘汰"}]},
+            {"id":"sector_capital_diffusion","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"capital_carrier","input_count":1,"eliminated_count":0,"survivor_count":1,
+             "entries":[{"stock_code":"601991","stock_name":"大唐发电","sector":"火力发电","status":"survived","reason":"坏数据：上一层为0后又出现","next_basis":"进入下一层","elimination_basis":""}]},
+            {"id":"carrier_role","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"quant_trace","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"price_action","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"cycle_window","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"counter_evidence_account","input_count":0,"eliminated_count":0,"survivor_count":0,"entries":[]},
+            {"id":"final_action","input_count":0,"eliminated_count":0,"survivor_count":0,
+             "entries":[{"stock_code":"","stock_name":"无执行对象","sector":"","status":"final_action","reason":"0%不参与","next_basis":"","elimination_basis":""}]}
+          ]
+        }
+        </script>
+        """
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn(
+            "sector_capital_preflight_layer_sequence_mismatch",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_sector_capital_preflight_final_action_stock_jump(self):
+        report = self.zero_position_report_with_decision_attribution()
+        html = self._sector_capital_preflight_html(
+            final_action='{"label": "50%条件执行", "position_pct": 50, "target": {"name": "新冒出", "code": "000001"}}',
+            final_layer_input_count=1,
+            final_layer_survivor_count=1,
+            final_layer_stock_code="000001",
+            final_layer_stock_name="新冒出",
+            final_layer_sector="未知",
+            final_layer_reason="最终层不应新增上一层没有留下的股票",
+        )
+
+        result = audit_report_markdown(report, companion_html=html)
+
+        self.assertIn(
+            "sector_capital_preflight_layer_sequence_mismatch",
+            {finding["code"] for finding in result["findings"]},
+        )
+        self.assertFalse(result["passed"])
+
+    def _sector_capital_preflight_html(
+        self,
+        *,
+        final_action,
+        final_layer_input_count=0,
+        final_layer_survivor_count=0,
+        final_layer_stock_code="",
+        final_layer_stock_name="无执行对象",
+        final_layer_sector="",
+        final_layer_reason="0%不参与",
+        previous_stock_code="002971",
+        previous_stock_name="和远气体",
+        previous_sector="化工原料",
+    ):
         layer_ids = (
             "market_capital_structure",
             "sector_capital_diffusion",
@@ -2074,23 +2269,30 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "carrier_role",
             "quant_trace",
             "price_action",
-            "cycle_probability_window",
+            "cycle_window",
             "counter_evidence_account",
             "final_action",
         )
         layers = ",".join(
             (
                 '{"id":"%s","input_count":1,"eliminated_count":0,"survivor_count":1,'
-                '"entries":[{"stock_code":"002971","stock_name":"和远气体","sector":"化工原料",'
+                '"entries":[{"stock_code":"%s","stock_name":"%s","sector":"%s",'
                 '"status":"survived","reason":"板块资金扩散","next_basis":"进入下一层","elimination_basis":""}]}'
             )
-            % layer_id
+            % (layer_id, previous_stock_code, previous_stock_name, previous_sector)
             for layer_id in layer_ids[:-1]
         )
         layers += (
-            ',{"id":"final_action","input_count":1,"eliminated_count":0,"survivor_count":0,'
-            '"entries":[{"stock_code":"","stock_name":"无执行对象","sector":"","status":"final_action",'
-            '"reason":"0%不参与","next_basis":"","elimination_basis":""}]}'
+            ',{"id":"final_action","input_count":%d,"eliminated_count":0,"survivor_count":%d,'
+            '"entries":[{"stock_code":"%s","stock_name":"%s","sector":"%s","status":"final_action",'
+            '"reason":"%s","next_basis":"","elimination_basis":""}]}'
+        ) % (
+            final_layer_input_count,
+            final_layer_survivor_count,
+            final_layer_stock_code,
+            final_layer_stock_name,
+            final_layer_sector,
+            final_layer_reason,
         )
         decisions = ",".join(
             '{"item":"%s","conclusion":"待确认","evidence":"事实","counter_evidence":"反方","tomorrow_check":"明日验证","action":"观察"}'
@@ -2101,7 +2303,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
                 "谁是资金载体",
                 "是否有量化参与痕迹",
                 "价格行为是否接受",
-                "周期概率窗口是否打开",
+                "周期窗口是否打开",
                 "账户是否适配",
             )
         )
@@ -2113,8 +2315,13 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         {{
           "schema_version": "sector_capital_preflight.v1",
           "derivation_contract": "sector_capital_diffusion_first.v1",
-          "mermaid": "周期概率窗口 唯一明日动作或不参与 白痴指数复核 压缩/合并/降级低价值高成本层",
+          "mermaid": "周期窗口 唯一明日动作或不参与 T+1参与预案 T+2情绪周期推演 只批改不回写T0 白痴指数复核 压缩/合并/降级低价值高成本层",
           "final_action": {final_action},
+          "tplus_rehearsal": {{
+            "schema_version": "t0_tplus_rehearsal.v1",
+            "tplus1": {{"market_emotion":"分歧轮动","market_cycle":"周期窗口待确认","sector_emotion":"板块扩散不足","sector_cycle":"一日脉冲待验证","action":"观察"}},
+            "tplus2": {{"market_emotion":"震荡","market_cycle":"待确认","sector_emotion":"分歧","sector_cycle":"待确认","action":"后验批改"}}
+          }},
           "decision_list": [{decisions}],
           "idiot_index_review": [{{"step":"涨停池起点","cost_proxy":"高","decision_value":"低","idiot_index_signal":"高","action":"降为证据层"}}],
           "layers": [{layers}]

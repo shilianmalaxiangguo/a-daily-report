@@ -95,6 +95,7 @@ from daily_report_render import (
 )
 from report.markdown_report_html import render_markdown_report_file
 from report.elimination_tournament import (
+    build_sector_capital_preflight_daily_context,
     build_sector_capital_preflight_payload,
     save_elimination_tournament_html,
     save_sector_capital_preflight_html,
@@ -355,9 +356,11 @@ from input.iwencai_runtime import (
     get_total_turnover_from_iwencai,
     get_turnover_rank_from_iwencai,
     get_wind_a_from_iwencai,
+    get_csi500_from_iwencai,
     get_csi1000_from_iwencai,
 )
 from input.tushare_runtime import (
+    get_csi500_from_tushare_first,
     get_csi1000_from_tushare_first,
     get_margin_pressure_from_tushare_first,
     get_etf_turnover_series_from_sina_first,
@@ -3888,6 +3891,14 @@ def load_daily_report_data_from_postgres(target_date):
         step_status = data.setdefault("step_status", {})
         if isinstance(step_status, dict):
             step_status["中证1000获取"] = True
+    csi500 = data.get("csi500_index") or {}
+    if isinstance(csi500, dict) and _safe_float(csi500.get("price", csi500.get("点位", 0))) > 0:
+        data_status = data.setdefault("data_status", {})
+        if isinstance(data_status, dict):
+            data_status["中证500"] = True
+        step_status = data.setdefault("step_status", {})
+        if isinstance(step_status, dict):
+            step_status["中证500获取"] = True
     data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True
@@ -4087,10 +4098,15 @@ def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path=
     for finding in result.get("findings", []):
         line_suffix = f":{finding['line']}" if "line" in finding else ""
         print(f"{finding['code']}{line_suffix} {finding['message']}")
+    debug_dir = Path(".generated/report-audit-failures")
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    debug_path = debug_dir / "latest_failed_report.md"
+    debug_path.write_text(full_report, encoding="utf-8")
+    print(f"日报失败草稿已保存: {debug_path}")
     raise ReportCriticalDataMissingError("日报一致性检查未通过，停止生成")
 
 
-def _audit_existing_official_report_or_raise(target_date, official_report_path):
+def _audit_existing_official_report_or_raise(target_date, official_report_path, *, strict=True):
     path = Path(official_report_path)
     if not path.exists():
         return None
@@ -4100,7 +4116,11 @@ def _audit_existing_official_report_or_raise(target_date, official_report_path):
     for finding in result.get("findings", []):
         line_suffix = f":{finding['line']}" if "line" in finding else ""
         print(f"{finding['code']}{line_suffix} {finding['message']}")
-    raise ReportCriticalDataMissingError(f"{target_date} 已有正式日报一致性检查未通过，停止生成")
+    message = f"{target_date} 已有正式日报一致性检查未通过"
+    if strict:
+        raise ReportCriticalDataMissingError(f"{message}，停止生成")
+    print(f"{message}；本次只生成实验稿，不改写正式历史。")
+    return result
 
 
 def _daily_report_data_path_label(args):
@@ -4130,11 +4150,42 @@ def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LED
     return path
 
 
+def _sector_capital_source_payloads(data, target_date=""):
+    data = data if isinstance(data, dict) else {}
+    execution_context = data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {}
+    market_snapshot = data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {}
+    return {
+        key: value
+        for key, value in {
+            "selection_workflow": data.get("selection_workflow"),
+            "final_target_resolution": data.get("final_target_resolution"),
+            "two_layer_decision_payload": data.get("two_layer_decision_payload"),
+            "sniper_target_derivation": data.get("sniper_target_derivation"),
+            "elimination_tournament_payload": data.get("elimination_tournament_payload"),
+            "daily_context": build_sector_capital_preflight_daily_context(
+                data,
+                execution_context,
+                market_snapshot,
+                trade_date=target_date or data.get("target_date") or data.get("trade_date"),
+            ),
+        }.items()
+        if isinstance(value, dict) and value
+    }
+
+
 def _try_save_elimination_tournament_html(data, target_date, *, saved_report_paths=None):
     try:
         payload = (data or {}).get("elimination_tournament_payload")
         if not isinstance(payload, dict) or not payload:
             raise ValueError("淘汰赛 payload 缺失")
+        display_payload = build_sector_capital_preflight_payload(
+            trade_date=target_date,
+            sector_capital_preflight=(data or {}).get("sector_capital_preflight"),
+            source_payloads=_sector_capital_source_payloads(data, target_date),
+            elimination_tournament_payload=payload,
+        )
+        if isinstance(display_payload, dict) and display_payload:
+            payload = display_payload
         full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
         if not full_report_path.exists():
             raise FileNotFoundError(str(full_report_path))
@@ -4152,21 +4203,10 @@ def _try_save_elimination_tournament_html(data, target_date, *, saved_report_pat
 
 def _try_save_sector_capital_preflight_html(data, target_date, *, saved_report_paths=None):
     try:
-        source_payloads = {
-            key: value
-            for key, value in {
-                "selection_workflow": (data or {}).get("selection_workflow"),
-                "final_target_resolution": (data or {}).get("final_target_resolution"),
-                "two_layer_decision_payload": (data or {}).get("two_layer_decision_payload"),
-                "sniper_target_derivation": (data or {}).get("sniper_target_derivation"),
-                "elimination_tournament_payload": (data or {}).get("elimination_tournament_payload"),
-            }.items()
-            if isinstance(value, dict) and value
-        }
         payload = build_sector_capital_preflight_payload(
             trade_date=target_date,
             sector_capital_preflight=(data or {}).get("sector_capital_preflight"),
-            source_payloads=source_payloads,
+            source_payloads=_sector_capital_source_payloads(data, target_date),
             elimination_tournament_payload=(data or {}).get("elimination_tournament_payload"),
         )
         if not isinstance(payload, dict) or not payload:
@@ -4394,7 +4434,7 @@ def main():
             official_record = _find_strategy_record(official_ledger.get('records', []), target_date)
             official_report_path = _get_report_output_path(target_date, mode=LEDGER_MODE_FROZEN)
             if official_record or os.path.exists(official_report_path):
-                _audit_existing_official_report_or_raise(target_date, official_report_path)
+                _audit_existing_official_report_or_raise(target_date, official_report_path, strict=False)
                 run_mode = LEDGER_MODE_REPLAY
                 print("🧊 检测到该日期已有官方历史，本次自动切换为实验模式，不改写历史。")
 
@@ -4424,6 +4464,7 @@ def main():
                 run_mode=run_mode,
                 position_report_text="",
                 persist_runtime_artifacts=False,
+                persist_decision_ledger=True,
             )
             tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
             chanlun_html = _build_sh_index_chanlun_html_for_audit(

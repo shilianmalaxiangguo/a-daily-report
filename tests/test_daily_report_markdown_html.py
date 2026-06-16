@@ -36,6 +36,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "| 指数 | 收盘 | 涨跌幅 | 解读 |",
                     "|------|------|--------|------|",
                     "| 上证指数 | 3385.36 | +0.45% | 小幅修复 |",
+                    "| 中证500 | 5830.25 | +0.82% | 中盘修复 |",
                     "| 中证1000 | 6210.12 | -1.25% | 小票承压 |",
                     "",
                     "| 日期 | ETF两市成交额 | 较前日 | 有成交ETF数 |",
@@ -121,8 +122,10 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-cold">-4.20%</span></td>', html)
         self.assertIn("<td>31006.90亿</td>", html)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.45%</span></td>', html)
+        self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.82%</span></td>', html)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-cold">-1.25%</span></td>', html)
         self.assertIn("<td>3385.36</td>", html)
+        self.assertIn("<td>5830.25</td>", html)
         self.assertEqual(html.count('<td class="has-signal"><span class="signal-marker signal-cold">4406.74亿</span></td>'), 2)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">5552.59亿</span></td>', html)
         self.assertIn("<td>5198.92亿</td>", html)
@@ -689,6 +692,44 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('href="#结算上一交易日2026-06-04"', html)
         self.assertNotIn('href="#今日判断2026-06-05等待下一交易日验证"', html)
         self.assertIn("<p><strong>今日判断（2026-06-05，等待下一交易日验证）</strong></p>", html)
+
+    def test_render_sanitizes_legacy_pseudo_precision_wording(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 日报",
+                    "",
+                    "| 层级 | 淘汰 | 留存 | 备注 |",
+                    "|------|------|------|------|",
+                    "| 周期概率窗口 | 1 | 0 | 概率窗口只作条件链合并判断，不输出精确胜率。 |",
+                    "",
+                    "### 近5个已结算交易日正确率（2026-06-04至2026-06-10）",
+                    "| 判断项 | 正确率 |",
+                    "|--------|--------|",
+                    "| 市场状态判断 | 待补事实 |",
+                    "",
+                    "##### 附录：Step 5 - PK决胜局（期望值模型）",
+                    "> **只看什么**：环境、主线、触发、可交易性和历史胜率收益。",
+                    "",
+                    "昨日涨停/连板/T字板已经被资金选择，次日冲高或再涨停概率高于普通上涨样本。",
+                ]
+            ),
+            title="日报",
+            trade_date="2026-06-12",
+        )
+
+        self.assertIn("周期窗口", html)
+        self.assertIn("不输出精确预测", html)
+        self.assertIn("近5个已结算交易日复盘表现", html)
+        self.assertIn("过程候选最终复核", html)
+        self.assertIn("历史复盘样本", html)
+        self.assertIn("次日是否继续被资金承接需要窗口确认", html)
+        self.assertNotIn("周期概率窗口", html)
+        self.assertNotIn("正确率", html)
+        self.assertNotIn("精确胜率", html)
+        self.assertNotIn("期望值模型", html)
+        self.assertNotIn("历史胜率收益", html)
+        self.assertNotIn("概率高于普通上涨样本", html)
 
     def test_render_file_defaults_to_html_sibling(self):
         with TemporaryDirectory() as tempdir:

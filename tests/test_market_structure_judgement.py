@@ -141,6 +141,21 @@ class MarketStructureJudgementTest(unittest.TestCase):
         self.assertIn("同时偏弱", judgement["index_profit_relation"])
         self.assertTrue(any("-2.10%" in item for item in judgement["fact_basis"]))
 
+    def test_ignores_empty_csi500_payload_when_choosing_weaker_index(self):
+        judgement = build_market_structure_judgement(
+            data={
+                "csi500_index": {"price": 0, "change_pct": 0},
+                "csi1000_index": {"price": 8521.23, "change_pct": -2.1},
+                "market_stats": {"up_count": 947, "down_count": 4300},
+                "total_turnover": 32600.0,
+            },
+            market_research_snapshot={},
+        )
+
+        self.assertIn("同时偏弱", judgement["index_profit_relation"])
+        self.assertTrue(any("-2.10%" in item for item in judgement["fact_basis"]))
+        self.assertFalse(any("+0.00%" in item for item in judgement["fact_basis"]))
+
     def test_no_section_when_inputs_are_empty(self):
         judgement = build_market_structure_judgement(data={}, market_research_snapshot={})
 

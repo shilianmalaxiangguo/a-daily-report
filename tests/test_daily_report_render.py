@@ -62,6 +62,11 @@ def _complete_report_facts(overrides=None):
             "change_pct": 1.2,
             "data_source": "tushare.index_daily",
         },
+        "csi500_index": {
+            "price": 6262.0,
+            "change_pct": 0.9,
+            "data_source": "tushare.index_daily",
+        },
         "csi1000_index": {
             "price": 6123.45,
             "change_pct": 1.1,
@@ -85,6 +90,11 @@ def _complete_report_facts(overrides=None):
                 "step": "request.wind_a",
                 "status": "success",
                 "details": {"provider": "tushare.index_daily", "price": 6686.86, "row_count": 1},
+            },
+            {
+                "step": "request.csi500",
+                "status": "success",
+                "details": {"provider": "tushare.index_daily", "price": 6262.0, "row_count": 1},
             },
             {
                 "step": "request.csi1000",
@@ -464,6 +474,21 @@ Top50长趋势表不该进入轻量版
         self.assertFalse(render_mock.call_args_list[0].kwargs["persist_candidate_traces"])
         self.assertFalse(render_mock.call_args_list[1].kwargs["persist_candidate_traces"])
 
+    def test_build_report_outputs_can_enable_decision_ledger_separately(self):
+        data = _complete_report_facts({"foo": "bar"})
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
+            build_report_outputs(
+                data,
+                "2026-04-22",
+                run_mode="replay",
+                emit_preflight=False,
+                persist_runtime_artifacts=False,
+                persist_decision_ledger=True,
+            )
+
+        self.assertTrue(render_mock.call_args_list[0].kwargs["persist_decision_ledger"])
+        self.assertFalse(render_mock.call_args_list[1].kwargs["persist_decision_ledger"])
+
     def test_persist_report_runtime_artifacts_reuses_report_runtime_context(self):
         data = {
             "execution_stage_context": {
@@ -627,6 +652,119 @@ Top50长趋势表不该进入轻量版
         self.assertEqual(same_day_rows, {"000417", "300657", "001259"})
         self.assertNotIn("600850", index["by_stock_code"])
         self.assertNotIn("603082", index["by_stock_code"])
+
+    def test_save_replay_outputs_markdown_sync_does_not_override_runtime_revision(self):
+        runtime_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+        final_report = """
+**极度看好名单**（旧正文表只作过程样本）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 极看理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|
+| 1 | 和远气体 | 002971 | 化工原料 | 过程样本 | 炸板57次且尾盘才回封 | 只观察 |
+"""
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(runtime_snapshot, root_dir=root)
+            revision_path = root / "data" / "decision-ledger" / "revisions" / "2026-06-12.jsonl"
+            before = revision_path.read_text(encoding="utf-8").splitlines()
+
+            save_report_outputs(
+                {REPORT_VARIANT_FULL: final_report, REPORT_VARIANT_SUMMARY: "# summary"},
+                "2026-06-12",
+                mode=LEDGER_MODE_REPLAY,
+                output_dir=str(root),
+                sync_replay_decision_ledger=True,
+            )
+
+            after = revision_path.read_text(encoding="utf-8").splitlines()
+            latest = json.loads(after[-1])
+            snapshot = json.loads(
+                (root / "data" / "decision-ledger" / "2026-06-12.json").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(len(after), len(before))
+        self.assertEqual(latest["decision_summary"]["final_action_label"], "50%条件执行")
+        self.assertEqual(latest["decision_summary"]["final_target"]["stock_code"], "600584")
+        self.assertEqual(snapshot["final_action"]["label"], "50%条件执行")
+        self.assertEqual(snapshot["final_action"]["target"]["stock_code"], "600584")
+
+    def test_save_replay_outputs_postgres_only_markdown_sync_keeps_runtime_final_action(self):
+        runtime_snapshot = build_decision_ledger_snapshot(
+            trade_date="2026-06-12",
+            extreme_conviction_list=[
+                {"code": "002971", "name": "和远气体", "sector": "化工原料", "attack_state": "0%"},
+            ],
+            market_branch="板块资金扩散",
+            sector_relationship_state="半导体扩散",
+            final_action={
+                "label": "50%条件执行",
+                "position_pct": 50,
+                "target": {"code": "600584", "name": "长电科技", "sector": "半导体"},
+                "source": "sector_capital_preflight",
+            },
+        )
+        final_report = """
+**极度看好名单**（旧正文表只作过程样本）:
+| 优先级 | 股票 | 代码 | 所属板块 | 核心身份 | 极看理由 | 明日原则 |
+|--------|------|------|----------|----------|----------|----------|
+| 1 | 和远气体 | 002971 | 化工原料 | 过程样本 | 炸板57次且尾盘才回封 | 只观察 |
+"""
+
+        class StubService:
+            def __init__(self):
+                self.saved_snapshots = []
+
+            def is_postgres_backed(self):
+                return True
+
+            def read_decision_ledger_index(self, end_date=None, window_days=25):
+                return {}
+
+            def replace_decision_ledger_snapshot(self, payload):
+                self.saved_snapshots.append(payload)
+                return {"cases": len(payload.get("cases") or []), "mentions": 1}
+
+        service = StubService()
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            write_decision_ledger_artifacts(
+                runtime_snapshot,
+                root_dir=root,
+                database_service=service,
+                write_json_archive=False,
+            )
+            revision_path = root / "data" / "decision-ledger" / "revisions" / "2026-06-12.jsonl"
+            before = revision_path.read_text(encoding="utf-8").splitlines()
+
+            with patch.dict(os.environ, {"A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME": "1"}, clear=False):
+                with patch("storage.database_service.DatabaseService.fact_store_from_environment", return_value=service):
+                    save_report_outputs(
+                        {REPORT_VARIANT_FULL: final_report, REPORT_VARIANT_SUMMARY: "# summary"},
+                        "2026-06-12",
+                        mode=LEDGER_MODE_REPLAY,
+                        output_dir=str(root),
+                        postgres_only=True,
+                        sync_replay_decision_ledger=True,
+                    )
+
+            after = revision_path.read_text(encoding="utf-8").splitlines()
+
+        self.assertEqual(len(after), len(before))
+        self.assertEqual(service.saved_snapshots[-1]["final_action"]["label"], "50%条件执行")
+        self.assertEqual(service.saved_snapshots[-1]["final_action"]["target"]["stock_code"], "600584")
 
     def test_save_replay_outputs_does_not_sync_decision_ledger_by_default(self):
         stale_snapshot = build_decision_ledger_snapshot(
@@ -1842,6 +1980,26 @@ Top50长趋势表不该进入轻量版
         self.assertEqual(rendered, "legacy report")
         self.assertTrue(captured["persist_candidate_traces"])
         self.assertEqual(captured["candidate_trace_root_dir"], "/tmp/candidate-trace-root")
+
+    def test_generate_markdown_report_forwards_decision_ledger_config(self):
+        fake_demo = types.ModuleType("daily_report_entry_demo")
+        captured = {}
+
+        def _fake_generate_markdown_report(*args, **kwargs):
+            captured.update(kwargs)
+            return "legacy report"
+
+        fake_demo.generate_markdown_report = _fake_generate_markdown_report
+
+        with patch.dict(sys.modules, {"daily_report_entry_demo": fake_demo}):
+            rendered = generate_markdown_report(
+                {"foo": "bar"},
+                "2026-04-21",
+                persist_decision_ledger=True,
+            )
+
+        self.assertEqual(rendered, "legacy report")
+        self.assertTrue(captured["persist_decision_ledger"])
 
     def test_generate_markdown_report_prefers_sections_path_when_sections_exist(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")

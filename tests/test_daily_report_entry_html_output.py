@@ -170,7 +170,22 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         with TemporaryDirectory() as tempdir:
             full_path = Path(tempdir) / "2026-06-05_A股日报_完整版_replay.md"
             html_path = full_path.with_suffix(".html")
-            full_path.write_text("# 2026-06-05 A股日报\n\n## 市场脊梁\n\n正文", encoding="utf-8")
+            full_path.write_text(
+                "\n".join(
+                    [
+                        "# 2026-06-05 A股日报",
+                        "",
+                        "## 市场脊梁",
+                        "",
+                        "| 指数 | 收盘 | 涨跌幅 | 解读 |",
+                        "|------|------|--------|------|",
+                        "| 中证500 | 5830.25 | +0.82% | 中盘修复 |",
+                        "",
+                        "正文",
+                    ]
+                ),
+                encoding="utf-8",
+            )
             html_path.write_text("<html><body>OLD_POSTGRES_SHORT_HTML</body></html>", encoding="utf-8")
 
             path = daily_report_entry_demo._try_save_daily_report_html_from_saved_markdown(
@@ -186,6 +201,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertIn("bear-shell", html)
         self.assertIn("Markdown日报", html)
         self.assertIn("市场脊梁", html)
+        self.assertIn("中证500", html)
+        self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.82%</span></td>', html)
 
     def test_normal_path_skips_snapshot_when_postgres_fact_sync_succeeds(self):
         order = []
@@ -476,6 +493,72 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         )
         self.assertIn("0%不参与", html)
 
+    def test_elimination_tournament_html_uses_same_sector_preflight_chain(self):
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-06-08_A股日报_完整版_replay.md"
+            full_path.write_text("# 2026-06-08 A股日报", encoding="utf-8")
+            data = self._valid_data()
+            data["elimination_tournament_payload"] = {
+                "schema_version": "elimination_tournament.v1",
+                "trade_date": "2026-06-08",
+                "variant": "replay",
+                "final_action": {
+                    "label": "0%不参与",
+                    "position_pct": 0,
+                    "target": {},
+                    "source": "selection_workflow.final",
+                    "reason": "无明日执行对象，保持观察",
+                },
+                "layers": [
+                    {
+                        "id": "sector",
+                        "title": "板块层",
+                        "entries": [
+                            {
+                                "stock": {"name": "大唐发电", "code": "601991", "sector": "火力发电"},
+                                "status": "eliminated",
+                                "candidate_origin": "legacy_signal_only",
+                                "reason": "涨停、连板、T字板、一字板、热榜或旧龙头记忆只能作为过程证据，不能作为新仓入口",
+                            }
+                        ],
+                    }
+                ],
+            }
+            data["hot_plates"] = [{"name": "电力", "order": 1}]
+            data["current_mainline_history_record"] = {"leading_line": "电力"}
+            data["execution_stage_context"] = {
+                "crossline_observation_stocks": [
+                    {
+                        "code": "601991",
+                        "name": "大唐发电",
+                        "sector": "火力发电",
+                        "source": "hot_capacity_anchor_source",
+                        "source_tier": "anchor_reversal_source",
+                        "pattern": "放量冲高",
+                    }
+                ]
+            }
+
+            path = daily_report_entry_demo._try_save_elimination_tournament_html(
+                data,
+                "2026-06-08",
+                saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+            )
+
+            html = path.read_text(encoding="utf-8")
+
+        self.assertEqual(path.name, "2026-06-08_明日标的选股淘汰赛.html")
+        embedded = _embedded_json_payload(html, "elimination-payload")
+        by_id = {layer["id"]: layer for layer in embedded["layers"]}
+        self.assertEqual(by_id["market_capital_structure"]["survivor_count"], 1)
+        self.assertEqual(by_id["market_capital_structure"]["survivors"][0]["stock_label"], "大唐发电(601991)")
+        self.assertEqual(by_id["carrier_role"]["survivor_count"], 1)
+        self.assertEqual(by_id["quant_trace"]["input_count"], 1)
+        self.assertEqual(by_id["price_action"]["input_count"], 1)
+        self.assertEqual(by_id["price_action"]["eliminated_count"], 1)
+        self.assertEqual(by_id["final_action"]["survivor_count"], 0)
+        self.assertIn("趋势龙头/二波预期", html)
+
     def test_markdown_audit_failure_stops_before_runtime_artifact_persistence(self):
         data = self._valid_data()
 
@@ -498,6 +581,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         build_mock.assert_called_once()
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
+        self.assertTrue(build_mock.call_args.kwargs["persist_decision_ledger"])
         persist_mock.assert_not_called()
         save_markdown_mock.assert_not_called()
         save_chanlun_mock.assert_not_called()
@@ -527,6 +611,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         build_mock.assert_called_once()
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
+        self.assertTrue(build_mock.call_args.kwargs["persist_decision_ledger"])
         persist_mock.assert_called_once()
         save_markdown_mock.assert_called_once()
         save_chanlun_mock.assert_called_once()

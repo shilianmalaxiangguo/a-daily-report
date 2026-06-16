@@ -84,6 +84,7 @@ ALLOW_EMPTY_DATA_STATUS_LABELS = {
     "涨停股板块分布",
     "跌停池",
     "跌停股板块分布",
+    "中证500",
 }
 
 
@@ -180,10 +181,8 @@ def _critical_payload_valid(data, payload_key):
     data = data or {}
     if payload_key == "total_turnover":
         return _safe_float(data.get("total_turnover")) > 0
-    if payload_key in {"wind_a_alternative", "csi1000_index"}:
-        payload = data.get("wind_a_alternative") or {}
-        if payload_key == "csi1000_index":
-            payload = data.get("csi1000_index") or {}
+    if payload_key in {"wind_a_alternative", "csi500_index", "csi1000_index"}:
+        payload = data.get(payload_key) or {}
         if not isinstance(payload, dict):
             return False
         return _safe_float(payload.get("price", payload.get("点位", 0))) > 0
@@ -696,7 +695,7 @@ def _build_registered_status_failure_checks(data, known_labels=None):
 def _critical_value(data, payload_key):
     if payload_key == "total_turnover":
         return round(_safe_float(data.get("total_turnover")), 2)
-    if payload_key in {"wind_a_alternative", "csi1000_index"}:
+    if payload_key in {"wind_a_alternative", "csi500_index", "csi1000_index"}:
         payload = data.get(payload_key) or {}
         if isinstance(payload, dict):
             return round(_safe_float(payload.get("price", payload.get("点位", 0))), 2)
@@ -1324,6 +1323,7 @@ def generate_markdown_report(
     has_personal_positions: bool = False,
     run_mode: str = LEDGER_MODE_FROZEN,
     persist_strategy_tracking: bool = True,
+    persist_decision_ledger: bool = False,
     persist_candidate_traces: bool = False,
     candidate_trace_root_dir: str | None = None,
     postgres_only: bool = False,
@@ -1350,6 +1350,7 @@ def generate_markdown_report(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=persist_strategy_tracking,
+        persist_decision_ledger=persist_decision_ledger,
         persist_candidate_traces=persist_candidate_traces,
         candidate_trace_root_dir=candidate_trace_root_dir,
         postgres_only=postgres_only,
@@ -1365,6 +1366,7 @@ def build_report_outputs(
     position_report_text: str = "",
     emit_preflight: bool = True,
     persist_runtime_artifacts: bool = True,
+    persist_decision_ledger: bool | None = None,
 ):
     preflight = build_report_preflight(data, target_date)
     if emit_preflight:
@@ -1373,6 +1375,7 @@ def build_report_outputs(
     _raise_if_critical_data_missing(data, target_date, preflight=preflight)
     shared_runtime_cache = {}
     postgres_only = bool((data or {}).get("postgres_only"))
+    persist_decision_ledger = bool(persist_runtime_artifacts) if persist_decision_ledger is None else bool(persist_decision_ledger)
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -1381,7 +1384,7 @@ def build_report_outputs(
         has_personal_positions=has_personal_positions,
         run_mode=run_mode,
         persist_strategy_tracking=False,
-        persist_decision_ledger=bool(persist_runtime_artifacts),
+        persist_decision_ledger=bool(persist_decision_ledger),
         decision_ledger_root_dir=str(_module_dir().parent),
         persist_candidate_traces=bool(persist_runtime_artifacts),
         candidate_trace_root_dir=str(_module_dir().parent),
@@ -1671,6 +1674,7 @@ def _sync_replay_decision_ledger_from_full_report(saved_paths, target_date: str,
         sector_relationship_state="以最终报告重点观察名单为准",
         root_dir=root_dir,
         write_json_archive=not bool(postgres_only),
+        write_decision_revision=False,
         review_market_facts_by_stock_code={} if postgres_only else None,
     )
     if result.get("skipped_empty_markdown"):

@@ -752,6 +752,29 @@ class DailyReportSkillDocsTest(unittest.TestCase):
         self.assertIn("普通观察对象", sanitized)
         self.assertNotIn(old_permission_word, sanitized)
 
+    def test_user_visible_wording_rewrites_pseudo_precise_trading_language(self):
+        text = (
+            "周期概率窗口只作条件链合并判断，不输出精确胜率；"
+            "近5个已结算交易日正确率；"
+            "PK决胜局（期望值模型）只看历史胜率收益；"
+            "次日冲高或再涨停概率高于普通上涨样本。"
+        )
+
+        sanitized = sanitize_user_visible_text(text)
+
+        self.assertIn("周期窗口", sanitized)
+        self.assertIn("不输出精确预测", sanitized)
+        self.assertIn("近5个已结算交易日复盘表现", sanitized)
+        self.assertIn("过程候选最终复核", sanitized)
+        self.assertIn("历史复盘样本", sanitized)
+        self.assertIn("次日是否继续被资金承接需要窗口确认", sanitized)
+        self.assertNotIn("周期概率窗口", sanitized)
+        self.assertNotIn("正确率", sanitized)
+        self.assertNotIn("精确胜率", sanitized)
+        self.assertNotIn("期望值模型", sanitized)
+        self.assertNotIn("历史胜率收益", sanitized)
+        self.assertNotIn("概率高于普通上涨样本", sanitized)
+
     def test_context_docs_wiki_and_public_reports_do_not_contain_retired_strategy_markers(self):
         forbidden = (
             _m("门", "控"),

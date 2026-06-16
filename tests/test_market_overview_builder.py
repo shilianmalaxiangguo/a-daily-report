@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.market_overview_builder import build_market_trend_sections_contract
+from report.market_overview_nodes import resolve_unified_market_sentiment
 
 
 class _MarginPressureFactStore:
@@ -39,6 +40,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
                     "创业板指": {"点位": 2123.45, "涨跌幅": -1.35},
                 },
                 "wind_a_alternative": {"点位": 5432.1, "涨跌幅": 0.31},
+                "csi500_index": {"点位": 6262.0, "涨跌幅": 0.90},
                 "csi1000_index": {"点位": 6123.4, "涨跌幅": 1.10},
                 "total_turnover": 16888.0,
                 "zt_pool": [{"code": "000001"}] * 35,
@@ -53,6 +55,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("### 1. 指数与市场底色", rendered)
         self.assertIn("| 指标 | 数值 | 涨跌幅 | 解读 |", rendered)
         self.assertIn("| 上证指数 | 3200.12 | +0.52% |", rendered)
+        self.assertIn("| 中证500 | 6262.00 | +0.90% |", rendered)
         self.assertIn("| 中证1000 | 6123.40 | +1.10% |", rendered)
         self.assertIn("| 两市成交额 | 16888.00亿 | - |", rendered)
         self.assertIn("| 涨停 / 跌停 | 35 / 3 | - |", rendered)
@@ -92,6 +95,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
                     "深证成指": {"点位": 10123.45, "涨跌幅": -0.21},
                 },
                 "wind_a_alternative": {"点位": 5432.1, "涨跌幅": 0.31},
+                "csi500_index": {"price": 0, "change_pct": 0},
                 "total_turnover": 16888.0,
                 "zt_pool": [{"code": "000001"}] * 35,
                 "dt_pool": [{"code": "000002"}] * 3,
@@ -104,11 +108,58 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("## 二、市场基底", rendered)
         self.assertIn("| 上证指数 | 3200.12 | +0.52% | 温和修复 |", rendered)
         self.assertIn("| 中证全指 | 5432.10 | +0.31% | 温和修复 |", rendered)
+        self.assertIn("| 中证500 | 待补 | 待补 | 待补 |", rendered)
         self.assertIn("| 两市成交额 | 16888.00亿 | - | 量能不差，但赚钱效应不足 |", rendered)
         self.assertIn("| 涨停 / 跌停 | 35 / 3 | - | 活跃度还在，但亏钱端不轻 |", rendered)
         self.assertIn("| 涨跌比 | 3600 / 1600 | - | 多头仍占优 |", rendered)
         self.assertIn("### 2. 市场状态结论", rendered)
         self.assertTrue(any(log["step"] == "render.market_trend_sections" for log in result["module_logs"]))
+
+    def test_build_market_trend_sections_contract_renders_csi500_missing_change_as_pending(self):
+        result = build_market_trend_sections_contract(
+            data={
+                "indices": {
+                    "上证指数": {"点位": 3200.12, "涨跌幅": 0.52},
+                    "中证500": {"点位": 6262.0},
+                },
+                "wind_a_alternative": {"点位": 5432.1},
+                "csi500_index": {"price": 6262.0},
+                "csi1000_index": {"price": 6123.4},
+                "total_turnover": 16888.0,
+                "zt_pool": [{"code": "000001"}] * 35,
+                "dt_pool": [{"code": "000002"}] * 3,
+                "market_stats": {"up_count": 3600, "down_count": 1600},
+            },
+            target_date="2026-04-22",
+            enabled_node_keys=["indices"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 中证500 | 待补 | 待补 | 待补 |", rendered)
+        self.assertIn("| 中证全指 | 待补 | 待补 | 待补 |", rendered)
+        self.assertIn("| 中证1000 | 待补 | 待补 | 待补 |", rendered)
+        self.assertNotIn("中证500 | 6262.00 | +0.00%", rendered)
+
+    def test_unified_market_sentiment_ignores_invalid_csi500_index_risk(self):
+        base_data = {
+            "indices": {"上证指数": {"点位": 3200.12, "涨跌幅": 0.52}},
+            "total_turnover": 16888.0,
+            "zt_pool": [],
+            "dt_pool": [],
+            "market_stats": {"up_count": 2600, "down_count": 1800},
+        }
+
+        invalid = resolve_unified_market_sentiment(
+            {**base_data, "csi500_index": {"price": 0, "change_pct": -2.0}},
+            target_date="2026-04-22",
+        )
+        valid = resolve_unified_market_sentiment(
+            {**base_data, "csi500_index": {"price": 6262.0, "change_pct": -2.0}},
+            target_date="2026-04-22",
+        )
+
+        self.assertEqual(invalid["state"], "震荡")
+        self.assertEqual(valid["state"], "冰点")
 
     def test_build_market_trend_sections_contract_labels_small_deep_v_as_intraday_repair(self):
         result = build_market_trend_sections_contract(
