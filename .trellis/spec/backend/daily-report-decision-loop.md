@@ -1466,6 +1466,33 @@ action already produced by the report's decision layer?
             "action": "str",
         }
     ],
+    "tplus_rehearsal": {
+        "schema_version": "t0_tplus_rehearsal.v1",
+        "t0_boundary": "日报生成日是T0；只使用T0已知事实推演T+1和T+2",
+        "review_boundary": "T+1/T+2后验事实只用于复盘批改，不回写T0候选生成或最终动作",
+        "basis": "str",
+        "tplus1": {
+            "participation_qualification": "有条件参与 | 重点观察，不追高 | 只观察承接，不新增参与 | 不参与",
+            "market_emotion": "str",
+            "market_cycle": "str",
+            "sector_emotion": "str",
+            "sector_cycle": "str",
+            "buy_windows": ["str"],
+            "confirmation_conditions": ["str"],
+            "cancellation_conditions": ["str"],
+            "missed_entry_plan": "str",
+            "action": "str",
+        },
+        "tplus2": {
+            "market_emotion": "str",
+            "market_cycle": "str",
+            "sector_emotion": "str",
+            "sector_cycle": "str",
+            "sell_windows": ["str"],
+            "review_points": ["str"],
+            "action": "str",
+        },
+    },
     "layers": [
         {
             "id": "market_capital_structure | sector_capital_diffusion | capital_carrier | quant_trace | price_action | counter_evidence_account | final_action",
@@ -1515,12 +1542,66 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
   stock is eliminated in `price_action`, later layers such as
   `cycle_probability_window` and `counter_evidence_account` must show zero
   input instead of repeating the same stock as another eliminated row.
+- The visible main chain must be a monotonic filter: each layer's candidate
+  input may only come from the immediately previous layer's survivors. Legacy
+  limit-up / hot-rank / old-memory evidence must be eliminated in the layer
+  where it fails the sector-first condition; it must not reappear as a later
+  side layer with a new positive input count.
+- If a legacy limit-up / hot-rank sample is present, its elimination reason
+  must be refreshed from the target-date daily context when available. The
+  reason must say whether it has or has not been proven as the board anchor /
+  sector leader through reverse evidence such as same-sector limit-up, hot-plate
+  presence, mainline record, or fund-flow trace. Do not leave a stale generic
+  "old signal only" reason when richer target-date facts exist.
+- If `price_action` leaves a stock alive but the copied final action is still
+  0%, `cycle_probability_window` must not reuse the price-acceptance reason as
+  the elimination reason. It must name the unresolved condition from
+  `final_action.failure_conditions` when present. If the final action has no
+  concrete failure condition, render the row as missing detail, e.g.
+  "price accepted, but the final action did not provide the specific cycle /
+  account / time-window reason", rather than inventing an account or time-window
+  failure.
+- The account / risk-reward layer may say "decision-ledger position is 0%" only
+  when a same-candidate ledger row explicitly carries `position_plan_pct` or a
+  planned-participation `position_plan_pct`. If no ledger position field exists,
+  render the account position as missing detail; do not turn the absence of a
+  ledger row into a 0% position fact.
+- Runtime replay must read same-date frozen evidence before declaring account
+  or trace detail missing. Candidate traces may come from
+  `execution_stage_context.candidate_traces`, `candidate_traces`,
+  `candidate_trace_artifact.traces`, or `candidate_trace_artifact.payload.traces`.
+  Decision-ledger rows may come from `decision_ledger_snapshot`,
+  `decision_ledger`, `decision_ledger_artifacts.snapshot`, or same-date rows in
+  `decision_ledger_artifacts.index`. If none of those same-date facts exists,
+  the bracket must render the account/position fact as missing rather than
+  inventing a ledger position.
+- A legacy limit-up / hot-rank sample can continue only when target-date visible
+  context proves both of these facts: the sector was actually selected by the
+  market structure, and the stock has trend / second-wave observation evidence.
+  This continuation is only a reverse-check qualification. It may continue
+  through `carrier_role` as a trend/capacity carrier, then must pass
+  `quant_trace` and `price_action` before any later account or cycle layer sees
+  it. Example: for a 2026-06-08 electric-power replay, 大唐发电(601991) and
+  华电辽能(600396) may continue as trend / second-wave samples when 电力 is the
+  selected direction, while 华电能源(600726) may appear as same-sector trend-anchor
+  evidence. If their price-action evidence says `价格行为证据不足` or `不新增资格`,
+  they stop in `price_action`; none of those facts alone creates a new tomorrow
+  target.
 - Companion HTML must include readable embedded JSON for audit and must show
   per-layer input, eliminated, and survivor counts.
 - Companion HTML must show `decision_list` and `idiot_index_review`. These
   sections explain where conclusions came from and which report layers are
   costly versus useful; they must not re-rank candidates or create a new final
   object.
+- Companion HTML and the report front summary must show `tplus_rehearsal`.
+  This is a T0 forward rehearsal, not hindsight review: T+1 describes
+  participation qualification, buy windows, confirmation, cancellation, and
+  missed-entry handling; T+2 describes market emotion, market cycle, sector
+  emotion, sector cycle, and sell/hold handling.
+- `tplus_rehearsal` must be derived only from T0 payloads and the already
+  resolved final action. T+1/T+2 price, minute, return, and hindsight emotion
+  facts are allowed only in replay/review surfaces and must not change T0
+  candidate generation, tournament layers, or final action.
 - Acceptance audit must treat a positive companion final action conflicting
   with Markdown 0% as a report error, and must flag unreadable embedded JSON as
   a companion error.
@@ -1534,9 +1615,15 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
 | Companion HTML lacks readable JSON payload | Return a companion-payload-missing finding |
 | Layer counts disagree with entry statuses | Fix payload builder or renderer before shipping |
 | Later derived layer repeats a stock already eliminated by `price_action` | Keep later layer input empty; preserve the original price-action reason where the stock actually failed |
+| Trend / second-wave carrier lacks explicit price acceptance | Stop it in `price_action`; do not default missing price evidence to a pass |
+| Price action accepts a stock, but final action remains 0% with no failure condition | Stop in `cycle_probability_window` with missing-detail wording; do not infer account/time-window failure |
+| Account layer lacks a ledger position field for the candidate | Render account/position fact missing; do not write "decision-ledger position is 0%" |
+| Same-date candidate trace or decision-ledger artifact exists but runtime ignores it | Treat as a replay read-path bug; wire the frozen same-date artifact before reporting the field as missing |
 | `elimination_tournament_payload` is missing | Render the fixed Mermaid and explicit missing-layer notes; do not synthesize winners |
 | Source containers disagree | Prefer `final_target_resolution`, then `selection_workflow.final`; record the chosen source |
 | `decision_list` or `idiot_index_review` is missing | Build the default explanatory rows from layers/final action; do not leave the user with only a long bracket |
+| `tplus_rehearsal` is missing or lacks T+1/T+2 market/sector emotion/cycle fields | Return a companion T+1/T+2 rehearsal finding before publishing |
+| T+1/T+2 hindsight facts influence T0 candidates, tournament layers, or final action | Treat as a replay-boundary bug; move those facts into review-only output |
 | Idiot-index rows contain score-like formulas | Replace with high/middle/low cost-value classification and handling action |
 
 ### 5. Good / Base / Bad Cases
@@ -1544,14 +1631,23 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
 | Case | Input | Expected Output |
 |---|---|---|
 | Good visible chain | Final object 0%, process candidates present | HTML shows each layer and ends at `0%不参与` with no new target |
+| Good legacy-signal stop | Old limit-up / hot-rank samples have no selected-sector trend or second-wave evidence | Market-structure layer shows those samples as input and eliminated; all following candidate layers show zero input |
+| Good electric second-wave reverse check | 2026-06-08-style electric-power context selects 电力 and has 大唐发电 / 华电辽能 trend-second-wave evidence, but price action says evidence is insufficient | Market-structure, sector-diffusion, carrier, role, and quant-trace layers keep those samples; `price_action` eliminates them with the explicit price reason; later layers show zero input |
+| Good legacy refresh | Existing preflight payload lacks daily-context detail but elimination payload has it | Rebuilt HTML refreshes the legacy sample reason with target-date hot rank, mainline and same-sector evidence |
 | Good decision list | Layer rows exist | HTML shows decision item, conclusion, evidence, counter-evidence, tomorrow check, and action |
 | Good idiot-index review | Costly old report layers exist | HTML classifies them as high/middle/low process-efficiency issues and states compress/merge/downgrade/keep action |
+| Good T+1/T+2 rehearsal | Final action is 0% and price layer has no survivor | HTML and report front summary show T+1 no new buy window plus T+2 weak/rotation rehearsal, with review-only boundary |
 | Good positive action | Final object names one 50% target | Companion final action names the same target and source |
 | Good price-action stop | Price-action layer eliminates 和远气体 for failed seal / late reseal / high turnover | Cycle and account layers show zero input; the price-action row keeps the explicit risk reason |
+| Good missing final reason | Price-action layer keeps 中船特气 / 兆易创新, final action is 0%, and no `failure_conditions` exist | Cycle layer says the specific cycle/account/time-window reason is missing and keeps final action at `0%不参与` |
+| Good missing ledger position | Price-action layer keeps a candidate but no `decision_ledger` row exists | Account layer eliminates with account/position facts missing plus final 0%; no ledger-0 wording appears |
+| Good same-date artifact read | Replay data contains `candidate_trace_artifact.payload.traces` and same-date `decision_ledger_artifacts.index` rows | Account layer uses the trace missing fields and explicit ledger position instead of saying the ledger is absent |
 | Base incomplete evidence | Older replay lacks layer evidence | Mermaid renders, layer notes state missing detail, final action still comes from runtime truth |
 | Bad second target | Companion picks a different stock from process rows | Audit fails or renderer relabels the row as process evidence |
 | Bad repeated elimination | Price-action layer eliminates a stock, then cycle/account layers eliminate the same stock again | Replace later rows with zero-input layers so the bracket shows where the path actually stopped |
+| Bad side-layer jump | Market/sector layer has zero survivors, then a later "old signal" layer shows several input stocks | Remove the side layer from the main chain; keep those stocks eliminated at the first layer where they fail |
 | Bad hidden final | HTML shows counts but no readable JSON payload | Audit returns a companion-payload-missing finding |
+| Bad hindsight leak | Replay T+2 return changes T0 final action or resurrects a stock | Audit/review must reject the artifact or move the fact to review-only fields |
 | Bad fake efficiency math | Idiot-index table computes a formula that affects selection | Remove the formula and keep it as process-efficiency commentary only |
 
 ### 6. Tests Required
@@ -1561,12 +1657,34 @@ save_sector_capital_preflight_html(payload, report_markdown_path) -> Path | None
   decision list, idiot-index review list, and zero-position process-candidate
   handling, including the rule that later derived layers do not repeat a
   stock already eliminated by price-action evidence.
+- `tests.test_elimination_tournament` must also cover monotonic candidate
+  counts for sector-capital preflight: legacy-only samples without selected-sector
+  trend / second-wave evidence stop in the market-structure layer, while
+  2026-06-08-style electric-power trend samples can continue through role reverse
+  and quant trace, then stop at price action when price evidence is insufficient.
+  No side layer may introduce new stock input after a
+  zero-survivor layer.
+- `tests.test_elimination_tournament` must cover accepted price-action rows
+  under a 0% final action: explicit `failure_conditions` must be shown in the
+  cycle layer, while missing failure conditions must be rendered as missing
+  detail rather than inferred account/time-window failure.
+- `tests.test_elimination_tournament` must cover missing account-ledger rows:
+  no `position_plan_pct` source means missing account detail, not a rendered
+  0% ledger-position fact.
+- `tests.test_report_runtime` must cover runtime replay reading same-date
+  `candidate_trace_artifact` and `decision_ledger_artifacts` before rendering
+  account/position detail as missing.
 - `tests.test_daily_report_entry_html_output` covers companion path naming and
   save behavior beside replay/official Markdown paths.
 - `tests.test_report_runtime` covers runtime storage in all available context
   containers without changing the final object.
 - `tests.test_report_acceptance_audit` covers readable JSON extraction,
   companion/Markdown final-action consistency, and positive-final conflict.
+- `tests.test_elimination_tournament` and `tests.test_report_runtime` cover
+  `tplus_rehearsal.v1` schema, Mermaid T+1/T+2 labels, HTML rendering, embedded
+  JSON, and front-summary rendering.
+- `tests.test_report_acceptance_audit` covers missing or malformed
+  `tplus_rehearsal` as a companion-payload contract finding.
 
 ### 7. Wrong vs Correct
 
@@ -1589,6 +1707,24 @@ already-resolved final action: 0%不参与.
 
 Why correct: the user can audit the sector-first chain without losing the single
 final-action contract.
+
+#### Wrong
+
+```text
+T+2实际涨幅很好，所以回头把T0最终动作改成参与。
+```
+
+Why wrong: hindsight facts are review evidence only; using them to change T0
+selection destroys forward-replay boundaries.
+
+#### Correct
+
+```text
+T0输出0%不参与；T+1/T+2事实只批改预案是否保守、是否不可买、卖出窗口是否更优。
+```
+
+Why correct: the report learns from hindsight without letting hindsight create
+the original decision.
 
 ## Full Attack Roadmap
 
