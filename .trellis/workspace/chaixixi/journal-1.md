@@ -150,3 +150,36 @@ Added opportunity-cost comparison for old-position versus snapshot opportunities
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 日报HTML盘面反馈复盘模块
+
+**Date**: 2026-06-23
+**Task**: 日报HTML盘面反馈复盘模块
+**Branch**: `develop`
+
+### Summary
+
+Bear/readable 日报 HTML 新增盘面反馈复盘图卡：从标准 Markdown 表格解析上证、当前持仓、昨日目标/今日买入对象的分时点和事件，渲染涨跌幅与相对上证双区图，并保留 1x/2x 满仓口径脚注。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `026d0a6d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
