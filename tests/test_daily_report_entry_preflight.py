@@ -33,6 +33,30 @@ def _with_html_required_facts(data):
 
 
 class DailyReportEntryPreflightTest(unittest.TestCase):
+    def test_chanlun_tomorrow_decision_follows_zero_position_report_summary(self):
+        import daily_report_entry_demo
+
+        decision = daily_report_entry_demo._align_chanlun_tomorrow_decision_with_report(
+            {
+                "final_action": "50%条件执行只围绕主线核心",
+                "can_new_entry": True,
+                "target_position_pct": 50,
+            },
+            "\n".join(
+                [
+                    "# 2026-06-22 a股市场分析",
+                    "| 仓位姿态 | 0%不参与 |",
+                    "| 最终对象 | 无 |",
+                    "| 明日执行对象 | 无 |",
+                    "> **最终动作**：0%不参与；最终没有新增参与对象",
+                ]
+            ),
+        )
+
+        self.assertEqual(decision["final_action"], "0%不参与；不新增参与")
+        self.assertFalse(decision["can_new_entry"])
+        self.assertEqual(decision["target_position_pct"], 0)
+
     def test_report_preflight_fails_when_core_fields_are_untracked_or_missing(self):
         from daily_report_render import build_report_preflight
 

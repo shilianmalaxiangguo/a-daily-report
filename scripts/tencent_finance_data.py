@@ -64,10 +64,62 @@ class TencentFinanceData:
     def get_calendar_events(self, target_date=None):
         if self._legacy is not None and hasattr(self._legacy, "get_calendar_events"):
             try:
-                return self._legacy.get_calendar_events(target_date)
+                return _filter_calendar_events_by_target_date(
+                    _normalize_calendar_events(self._legacy.get_calendar_events(target_date)),
+                    target_date,
+                )
             except TypeError:
-                return self._legacy.get_calendar_events()
-        return []
+                try:
+                    return _filter_calendar_events_by_target_date(
+                        _normalize_calendar_events(self._legacy.get_calendar_events()),
+                        target_date,
+                    )
+                except Exception:
+                    return self._fetch_calendar_events_from_cls(target_date)
+            except Exception:
+                return self._fetch_calendar_events_from_cls(target_date)
+        return self._fetch_calendar_events_from_cls(target_date)
+
+    def _fetch_calendar_events_from_cls(self, target_date=None):
+        url = "https://www.cls.cn/api/calendar/web/list"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Referer": "https://www.cls.cn/calendar",
+            "Origin": "https://www.cls.cn",
+        }
+        response = self.session.get(url, headers=headers, timeout=15)
+        data = response.json()
+        if not isinstance(data, dict) or data.get("code") != 200:
+            return []
+        events = []
+        for day_data in data.get("data") or []:
+            if not isinstance(day_data, dict):
+                continue
+            calendar_day = day_data.get("calendar_day", "")
+            if target_date and str(calendar_day or "") != str(target_date):
+                continue
+            week = day_data.get("week", "")
+            for item in day_data.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                event_data = item.get("event")
+                if not isinstance(event_data, dict):
+                    continue
+                title = str(event_data.get("title") or "").strip()
+                if not title:
+                    continue
+                events.append(
+                    {
+                        "date": calendar_day,
+                        "week": week,
+                        "time": item.get("calendar_time", ""),
+                        "title": title,
+                        "star": event_data.get("star", 0),
+                        "country": event_data.get("country", ""),
+                        "type": item.get("type"),
+                    }
+                )
+        return events
 
     def get_xuangubao_news(self, pages=5):
         if self._legacy is not None and hasattr(self._legacy, "get_xuangubao_news"):
@@ -123,3 +175,22 @@ class TencentFinanceData:
 
 
 __all__ = ["TencentFinanceData"]
+
+
+def _normalize_calendar_events(events):
+    normalized = []
+    for event in events or []:
+        if isinstance(event, dict):
+            normalized.append(event)
+    return normalized
+
+
+def _filter_calendar_events_by_target_date(events, target_date=None):
+    if not target_date:
+        return list(events or [])
+    target = str(target_date)
+    return [
+        event
+        for event in (events or [])
+        if str((event or {}).get("date") or (event or {}).get("calendar_day") or "") == target
+    ]

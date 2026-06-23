@@ -91,6 +91,7 @@ Use this contract when changing:
     "mainline_attack_evidence_labels": ["str"],
     "sample_tier": "high | middle | low | missed | observation | old_position",
     "trend_chain_position": "leader | same_chain | laggard | crossline | unknown",
+    "old_position_plan": "old_position_plan.v1 | None",
     "planned_participation": "planned_participation.v1 | None",
     "cancellation_conditions": ["str"],
     "source_dates": {
@@ -99,6 +100,29 @@ Use this contract when changing:
         "price_source_date": "YYYY-MM-DD | None"
     },
     "missing_fields": ["str"]
+}
+```
+
+#### `old_position_plan.v1`
+
+Use this when the user provides a current holding, especially when the final
+new-entry result is 0%.
+
+```python
+{
+    "schema_version": "old_position_plan.v1",
+    "holding": {"code": "str", "name": "str", "position_pct": "int | None"},
+    "account_exposure_mode": "1x | 2x | single_full_slot | dual_full_slot | unknown",
+    "position_sizing_rule": "full_or_empty | half_roll | mixed | unknown",
+    "trade_role": "old_position | tplus2_exit | failed_buy | unknown",
+    "risk_reward_assessment": "favorable | neutral | unfavorable | incomplete",
+    "relative_strength_basis": "str",
+    "rebound_exit_zone": "str | None",
+    "invalidation_lines": ["str"],
+    "tail_exit_allowed": "bool",
+    "tail_exit_condition": "str",
+    "action": "hold | reduce | exit | wait_for_repair",
+    "evidence_sources": ["str"]
 }
 ```
 
@@ -196,6 +220,24 @@ Use this contract when changing:
 - Final action must be easier to find than process evidence.
 - Final action must include `position_plan_pct`, a participation window or `no_trade`, confirmation conditions, and cancellation conditions.
 - A 0% result is valid only when the report explains no qualified target, weak market, invalid trend chain, failed cancellation condition, account mismatch, old-position handling, or incomplete key data.
+- If a current holding is provided, the final action must not describe 0% only
+  as no new entry. It must also render an `old_position_plan.v1` with the
+  holding, account exposure mode, position sizing rule, trade role,
+  risk-reward assessment, rebound exit zone, invalidation lines, whether
+  tail-session exit is still allowed, and the evidence source used for that
+  judgment.
+- When the user says `1x` or `2x`, do not convert that into two 50% positions
+  by default. In the user's full-or-empty model, `1x` means one full-position
+  signal must be chosen, while `2x` means two full-position signals are carried
+  concurrently or two independent full-position accounts run in parallel. Use
+  half-position wording only when the user or the selected strategy explicitly
+  says half-roll / 50% / base-position.
+- Tail-session exit is allowed only while the holding has not triggered its
+  invalidation lines and has not shown sustained relative weakness. If minute
+  comparison evidence shows the holding staying materially weaker than the
+  index, rebound highs stepping down, or a break of the prior low / planned
+  support, the old-position plan must move from tail-session default to rebound
+  exit or invalidation exit.
 - When a report carries `selection_workflow.derivation_contract = "sector_first_strict.v1"`, the front page and report payload must treat `selection_workflow.final` as the only source of the final execution object. If that final object is empty or `position_pct <= 0`, older `selected_position_candidate` / `unique_action_target` values may remain as observation evidence, but they must not reappear as a new execution object.
 - When `selection_workflow.final` is empty or final position is 0%, process-candidate action text must be observation-only at every layer: candidate generation, Step 2 tables, action-plan context, appendix tables, final Markdown sanitation, and HTML source text. Phrases such as `命中才参与`, `后再参与`, or `继续强就只做它` are invalid in process-candidate rows under a 0% final result; render `只观察承接，不新增参与` or `只作过程回放，不新增参与` instead.
 - Next-day attribution must keep execution, final observation, process candidate, and historical evidence in separate settlement buckets. A process candidate that rises or reaches limit-up the next day can count only as `process_candidate_hit`; it must not count as `execution_hit` unless it was `final_target_resolution.new_entry_target` and the report position was above 0%.
@@ -229,6 +271,9 @@ Use this contract when changing:
 | Review facts are missing | Use `待补事实`; do not count as hit or failed rehearsal |
 | Historical replay uses a current-only data source | Stop using that source for the historical field; record the missing field |
 | Performance metric has no price source date | Keep metric null and record missing `price_source_date` |
+| Current holding exists but 0% result only says no new entry | Treat the report as incomplete until `old_position_plan.v1` explains the holding action |
+| User mentions 1x / 2x but the report renders A and B as 50% each | Treat as an account-model error; preserve full-or-empty semantics unless half-roll is explicitly selected |
+| Tail-session exit remains allowed after prior low / support breaks or relative weakness persists | Treat the old-position action as stale; render rebound exit or invalidation exit instead |
 | Mainline score exists without evidence labels | Keep score out of the user-facing report until labels are available |
 | Statistics text claims 60/120 days but coverage is shorter | Render the true coverage or mark the long window as a target only |
 | Coverage has reports but no snapshots for a date | Keep the date in report coverage but record missing snapshot facts |
@@ -259,7 +304,10 @@ Use this contract when changing:
 | Base five-judgment table | no market-state settlement evidence | Market-state row renders `待补事实` and does not affect accuracy |
 | Good empty-final appendix | final object empty, process candidate keeps price/sector evidence | All action cells say observation/process review; no current object or participation-style action appears |
 | Good process-candidate follow-up | process candidate limit-up next day while report position was 0% | Process bucket records a hit; execution bucket stays 0 |
+| Good holding plus 0% result | User holds 太极实业, final new-entry result is 0%, minute comparison shows sustained relative weakness | Report says no new entry and separately gives old-position risk-reward, rebound exit, invalidation exit, and tail-session permission |
+| Good 1x / 2x rendering | User says their model is full-or-empty and discusses 1x / 2x | Report describes 1x as full-position choose-one and 2x as concurrent full-position exposure, not A/B at 50% each |
 | Bad fake precision | report shows 0.00% or exact metric without source date | metric removed or marked missing |
+| Bad holding plus no-trade wording | User holds a stock, report only says "no new entry" | Report is incomplete because the old-position action is missing |
 | Bad language-only judgment | strong wording exists but no fields | no performance credit until fieldized |
 | Bad five-judgment inference | market state inferred from `market_branch` text | keep missing until settlement evidence exists |
 | Bad long-window claim | only 42 official reports available but text says 120-day review | replace with true coverage and mark 120-day as expansion target |
@@ -274,6 +322,13 @@ When implementation changes this contract, add or update tests that assert:
 - replay reports keep target-date facts separate from current facts,
 - performance windows use 1-day, 3-day, and 5-day target-date price data,
 - missing fields remain visible instead of becoming fake numeric values,
+- reports with user holdings and 0% new-entry output render `old_position_plan.v1`
+  rather than only saying no new entry,
+- 1x / 2x account wording preserves the user's full-or-empty model and does
+  not rewrite it as two 50% slots unless half-roll is explicitly selected,
+- old-position rendering moves away from tail-session default when minute
+  comparison evidence shows sustained relative weakness, lower rebound highs,
+  or a break of prior low / planned support,
 - statistics and tracking surfaces render the true covered sample count and date range,
 - five-judgment statistics render exactly five rows with missing facts outside the accuracy denominator,
 - front-page daily judgment panel renders recent five settled trading days, previous trading day settlement, and current trading day judgment separately,

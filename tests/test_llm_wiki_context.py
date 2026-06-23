@@ -17,7 +17,7 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-06-07")
+        self.assertEqual(context["version"], "2026-06-16")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
@@ -95,6 +95,8 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("强弱校准字段 -> 趋势连续性、开盘主动性、分歧承接优先于便宜和做T便利", context["field_mappings"])
         self.assertIn("强票账户不适配 -> 买不了也保留为板块锚，只是不参与当前账户比较", context["field_mappings"])
         self.assertIn("替代票源头校准 -> 更强标的账户可买时优先更强标的，不能用好做T的弱替代覆盖", context["field_mappings"])
+        self.assertIn("去弱留强第一原则表达 -> 短线账户把资金放到当下相对强、承接清楚、失败条件可承受的对象；弱仓处理和强票参与必须分别取得资格", context["field_mappings"])
+        self.assertIn("新旧仓双资格 -> 卖旧仓看旧仓是否失去持仓资格，买新仓看新仓是否取得执行资格；不能用旧仓变弱直接推出新仓满仓", context["field_mappings"])
         self.assertIn("板块节奏 -> 量化环境下先看板块路径和资金选择，再看单一龙头定价", context["field_mappings"])
         self.assertIn("窄池子进攻 -> 指数强但上涨家数弱时，不按普涨处理，先看资金集中选择哪些板块路径", context["field_mappings"])
         self.assertIn("量化仍在 -> 板块成交占比维持或扩张、板块宽度扩散、核心承接稳定、竞争方向掉队", context["field_mappings"])
@@ -124,6 +126,10 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("形态交易脚本 -> 上升趋势顺势回踩，下降趋势只做右侧确认，V/M/W/A按确认与破坏执行", context["field_mappings"])
         self.assertIn("高位后手不追形态 -> 烂板、停顿、空中加油都不给后手追涨资格；只看次日或分歧后的重新承接", context["field_mappings"])
         self.assertIn("三类形态处理 -> 烂板看次日强承接，停顿等放量转强，空中加油按已有仓管理；新仓等充分换手或回踩确认", context["field_mappings"])
+        self.assertIn("追涨杀跌动作中性 -> 追涨杀跌只是动作，质量取决于趋势地基、盈亏同源点、股性、时间窗口和失效线；无规则情绪动作不参与", context["field_mappings"])
+        self.assertIn("趋势地基 -> 长期趋势、平台消化、缩量回踩承接、放量不崩和板块降温后仍横住，才说明资金共识扎实", context["field_mappings"])
+        self.assertIn("盈亏同源点 -> 对了能快速脱离成本并打开空间，错了会很快跌破强弱线或结构；必须贴近认错线并先算亏损边界", context["field_mappings"])
+        self.assertIn("股性过滤 -> 涨停频率、早盘主动性、板块地位和辨识度决定资金效率；磨叽票不因形态好自动升级", context["field_mappings"])
         self.assertIn("紧急止损规则 -> 收盘同破MA7/MA10、放量大跌超7%、连续3日MA3下方、MA20下拐", context["field_mappings"])
         self.assertIn("成交量确认 -> 放量破位优先信风险，缩量破位必须看能否收回", context["field_mappings"])
         self.assertIn("指数价跌量增 -> 指数或全市场大跌且两市成交额放大，优先按卖压释放、量化踩踏或出货风险处理", context["field_mappings"])
@@ -458,6 +464,10 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("同天样本先强度后账户买不了不降级", digest)
         self.assertIn("强票可买不用弱替代", digest)
         self.assertIn("汰弱留强新旧", digest)
+        self.assertIn(
+            "去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。",
+            context["daily_discipline_lines"],
+        )
         self.assertIn("震荡市连跌轻仓低吸、反弹卖回", digest)
         self.assertIn("一九行情看图优先", digest)
         self.assertIn("题材降权图形走差抓紧降风险", digest)
@@ -965,6 +975,7 @@ class LlmWikiContextTest(unittest.TestCase):
             "价格趋势优先",
             "指标组合不能凌驾常用K线",
             "A股量价本地化",
+            "叙事后置",
             "成交量是资金表态",
             "放量只是资金表态；价格没有强收盘、回踩不破和后续行情时，只提高观察级别，不生成买入资格。",
             "趋势区间谱系",
@@ -975,6 +986,7 @@ class LlmWikiContextTest(unittest.TestCase):
             "交易者等式",
             "对我的交易启发",
             "0轴、均线、前高、涨停、题材发酵都只是观察信号，不是买入资格",
+            "不在亏损后按图索因，也不在想买时按因索图",
             "A股还要叠加 T+1、涨跌停、账户一手金额、公告风险、板块主线和交易窗口",
         ]:
             self.assertIn(required, wiki_text)
@@ -982,6 +994,7 @@ class LlmWikiContextTest(unittest.TestCase):
         for required in [
             "布鲁克斯价格趋势优先 -> 所有走势最终反映到价格趋势；先看价格趋势、常用K线和收盘位置，指标组合只作辅助证据",
             "布鲁克斯A股量价本地化 -> 价格是最终裁判，成交量是资金表态；量先用于识别谁在行动，参与资格必须由价格后续确认",
+            "叙事后置 -> 资金、消息、基本面和量化解释都必须反馈到图上；先看趋势、承接、跟随、失败和失效线，原因只解释背景不替代参与资格",
             "量价四象限 -> 放量上涨强收盘看进攻，放量冲高回落看分歧，缩量回踩趋势未破等二次确认，放量破位先处理风险",
             "低位突放巨量 -> 只提高研究和观察优先级，必须等后续行情，不直接生成买入资格",
             "布鲁克斯趋势区间谱系 -> 先判强趋势/普通趋势/宽幅通道/交易区间，再决定顺势、等待还是只观察",

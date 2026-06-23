@@ -101,6 +101,44 @@ class _NoArgTencentFinanceData:
         return list(self._calendar_events)
 
 
+def _target_date_lhb_snapshot(target_date):
+    return {
+        "lhb_net_buy_top10": [
+            {
+                "rank": 1,
+                "code": "000988",
+                "name": "华工科技",
+                "net_buy_amount_yi": 16.99,
+                "sector": "通信设备",
+                "trade_date": target_date,
+            }
+        ],
+        "lhb_net_sell_top10": [],
+        "lhb_analysis": [
+            {
+                "代码": "000988",
+                "net_buy_amount": 1699000000,
+                "trade_date": target_date,
+            }
+        ],
+        "provider": "tushare.top_list",
+        "fallback_used": False,
+    }
+
+
+def _minimal_sector_first_preflight_inputs(target_date):
+    return {
+        "market_state_snapshot": {"trade_date": target_date, "source": "test.fixture"},
+        "mainline_turnover_summary": {"trade_date": target_date, "source": "test.fixture"},
+        "selected_position_candidate": {"code": "000988", "name": "华工科技", "trade_date": target_date},
+        "final_target_resolution": {
+            "target": {"code": "000988", "name": "华工科技"},
+            "final_action": "观察",
+            "trade_date": target_date,
+        },
+    }
+
+
 class ReportReplayTest(unittest.TestCase):
     def setUp(self):
         def _offline_xuangubao(target_date, helpers):
@@ -2157,6 +2195,7 @@ def _replay_probe(target_date, refresh_sources=None):
             "turnover_data": {"total_turnover_yi": 0.0, "date": "2026-05-13"},
             "turnover_rank": [],
             "turnover_over_100b": [],
+            "market_stats": {"up_count": 2600, "down_count": 2100, "flat_count": 120, "stock_count": 4820},
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
             "csi1000_index": {
                 "name": "中证1000",
@@ -2178,12 +2217,14 @@ def _replay_probe(target_date, refresh_sources=None):
             ],
             "hot_rank_sample_size": 50,
             "hot_rank_sample_target": 50,
+            **_minimal_sector_first_preflight_inputs("2026-05-13"),
             "data_status": {
                 "两市成交额": False,
                 "主要指数": True,
                 "中证全指": False,
                 "中证1000": True,
                 "成交额排名": False,
+                "大盘涨跌统计": True,
                 "选股通盘中异动": True,
             },
             "step_status": {
@@ -2192,6 +2233,7 @@ def _replay_probe(target_date, refresh_sources=None):
                 "中证全指获取": False,
                 "中证1000获取": True,
                 "成交额排名获取": False,
+                "涨停跌停数据获取": True,
                 "选股通盘中异动获取": True,
             },
             "module_logs": [
@@ -2278,6 +2320,7 @@ def _replay_probe(target_date, refresh_sources=None):
                     },
                 ],
                 "get_wind_a_from_tushare": lambda target_date: {},
+                "get_lhb_snapshot_from_tushare": _target_date_lhb_snapshot,
             },
         )
 
@@ -3391,6 +3434,7 @@ def _replay_probe(target_date, refresh_sources=None):
             "indices": [{"code": "sh000001"}],
             "total_turnover": 32642.12,
             "wind_a_alternative": {"price": 0.0, "data_source": "akshare.stock_zh_index_daily_em"},
+            "market_stats": {"up_count": 2600, "down_count": 2100, "flat_count": 120, "stock_count": 4820},
             "csi1000_index": {
                 "name": "中证1000",
                 "code": "000852",
@@ -3412,12 +3456,14 @@ def _replay_probe(target_date, refresh_sources=None):
             ],
             "hot_rank_sample_size": 50,
             "hot_rank_sample_target": 50,
+            **_minimal_sector_first_preflight_inputs("2026-05-13"),
             "data_status": {
                 "两市成交额": True,
                 "主要指数": True,
                 "中证全指": False,
                 "中证1000": True,
                 "成交额排名": True,
+                "大盘涨跌统计": True,
                 "选股通盘中异动": True,
             },
             "step_status": {
@@ -3426,6 +3472,7 @@ def _replay_probe(target_date, refresh_sources=None):
                 "中证全指获取": False,
                 "中证1000获取": True,
                 "成交额排名获取": True,
+                "涨停跌停数据获取": True,
                 "选股通盘中异动获取": True,
             },
             "module_logs": [
@@ -3490,6 +3537,7 @@ def _replay_probe(target_date, refresh_sources=None):
                     "data_source": "tushare.index_daily",
                     "trade_date": target_date,
                 },
+                "get_lhb_snapshot_from_tushare": _target_date_lhb_snapshot,
             },
         )
 

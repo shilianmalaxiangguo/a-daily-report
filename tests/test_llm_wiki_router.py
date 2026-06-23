@@ -83,6 +83,32 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertEqual(facts["candidate"]["identity"], "市场核心")
         self.assertEqual(facts["candidate"]["one_lot_amount"], 18000)
 
+    def test_builds_fact_tags_from_final_target_resolution_capital_priority(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "market_research_snapshot": {
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "华电辽能(600396)：已有仓先按MA5T处理",
+                    },
+                    "final_target_resolution": {
+                        "new_entry_target": {"name": "工业富联", "code": "601138"},
+                        "existing_position_target": {"name": "华电辽能", "code": "600396"},
+                        "capital_priority_decision": {
+                            "capital_priority": "new_entry_after_old_exit",
+                            "reason": "先处理旧仓，买工业富联；固定交易窗口条件成立才参与，不满足回到0%",
+                        },
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(facts["position"]["state"], "旧仓")
+        self.assertEqual(facts["position"]["action"], "换仓")
+        self.assertIn("新机会", facts["candidate"]["quality"])
+        self.assertIn("换仓", facts["candidate"]["quality"])
+        self.assertEqual(facts["capital_priority"], "new_entry_after_old_exit")
+
     def test_routes_market_structure_prior_for_strong_index_weak_breadth(self):
         hits = route_llm_wiki_knowledge(
             {
@@ -144,10 +170,69 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("换仓", hit["triggered_by"])
         self.assertIn("旧仓", hit["triggered_by"])
         self.assertIn("新机会", hit["triggered_by"])
-        self.assertIn("先判旧仓是否仍被市场选择", hit["impact"])
-        self.assertIn("窗口和亏损边界清楚", hit["impact"])
+        self.assertIn("先判旧仓是否失去持仓资格", hit["impact"])
+        self.assertIn("再判新机会是否取得执行资格", hit["impact"])
         self.assertIn("不卖强补弱", hit["impact"])
+        self.assertIn("不用FOMO把两笔判断合成一次满仓替换", hit["impact"])
         self.assertEqual(hit["report_slot"], "资金优先级")
+
+    def test_routes_first_principle_fomo_to_cull_weak_keep_strong(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "我彻底FOMO了，A股短线第一性原理是不是去弱留强，旧仓卖了以后能不能满仓换更强方向",
+                "position": {"state": "旧仓", "action": "换仓"},
+                "candidate": {"quality": ["新机会", "满仓"]},
+            },
+            scenario="intraday_question",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "position.cull-weak-keep-strong")
+        self.assertIn("去弱留强", hit["triggered_by"])
+        self.assertIn("第一性原理", hit["triggered_by"])
+        self.assertIn("FOMO", hit["triggered_by"])
+        self.assertIn("满仓", hit["triggered_by"])
+        self.assertIn("卖旧仓看旧仓资格", hit["impact"])
+        self.assertIn("买新仓看新仓资格", hit["impact"])
+
+    def test_routes_daily_report_final_resolution_to_cull_weak_keep_strong(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "工业富联", "code": "601138"},
+                    "existing_position_target": {"name": "华电辽能", "code": "600396"},
+                    "capital_priority_decision": {
+                        "capital_priority": "new_entry_after_old_exit",
+                        "reason": "先处理旧仓，买工业富联；固定交易窗口条件成立才参与，不满足回到0%",
+                    },
+                },
+            }
+        )
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report")
+
+        hit = next(item for item in hits if item["knowledge_id"] == "position.cull-weak-keep-strong")
+        self.assertIn("旧仓", hit["triggered_by"])
+        self.assertIn("新机会", hit["triggered_by"])
+        self.assertIn("换仓", hit["triggered_by"])
+
+    def test_daily_report_new_entry_without_position_does_not_create_old_position_hit(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "existing_position_summary": {"has_position": False},
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "工业富联", "code": "601138"},
+                    "capital_priority_decision": {
+                        "capital_priority": "new_entry",
+                        "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                    },
+                },
+            }
+        )
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report")
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertNotIn("position.cull-weak-keep-strong", ids)
+        self.assertNotIn("position", facts)
+        self.assertNotIn("candidate", facts)
 
     def test_routes_intraday_question_prior_for_do_t_questions(self):
         hits = route_llm_wiki_knowledge(
@@ -220,7 +305,7 @@ class LlmWikiRouterTest(unittest.TestCase):
     def test_routes_brooks_price_action_trend_framework(self):
         hits = route_llm_wiki_knowledge(
             {
-                "question": "按布鲁克斯价格行为看，不看指标组合时，成交量放量算资金表态吗，这里是始终入场方向还是等二次入场，交易者等式划不划算",
+                "question": "按布鲁克斯价格行为看，不看基本面和指标组合时，成交量放量算资金表态吗，这里是始终入场方向还是等二次入场，交易者等式划不划算，别按图索因也别先用叙事安慰自己",
             },
             scenario="intraday_question",
         )
@@ -236,6 +321,8 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("成交量", hit["triggered_by"])
         self.assertIn("放量", hit["triggered_by"])
         self.assertIn("资金表态", hit["triggered_by"])
+        self.assertIn("基本面", hit["triggered_by"])
+        self.assertIn("按图索因", hit["triggered_by"])
         self.assertIn("始终入场", hit["triggered_by"])
         self.assertIn("二次入场", hit["triggered_by"])
         self.assertIn("交易者等式", hit["triggered_by"])
@@ -243,6 +330,31 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("成交量只作资金表态证据", hit["impact"])
         self.assertIn("同一失效线", hit["impact"])
         self.assertEqual(hit["report_slot"], "价格行为判断")
+        self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_entry_quality_three_conditions_for_chasing_rise(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "这篇追涨杀跌文章讲的买点是不是看趋势地基、盈亏同源和股性，异动K线后反包才更可信",
+            },
+            scenario="intraday_question",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("price-action.entry-quality-three-conditions", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "price-action.entry-quality-three-conditions")
+        self.assertEqual(hit["prior"], "entry-quality-prior")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/价格行为与能量框架.md")
+        self.assertIn("追涨杀跌", hit["triggered_by"])
+        self.assertIn("买点", hit["triggered_by"])
+        self.assertIn("趋势地基", hit["triggered_by"])
+        self.assertIn("盈亏同源", hit["triggered_by"])
+        self.assertIn("股性", hit["triggered_by"])
+        self.assertIn("异动K", hit["triggered_by"])
+        self.assertIn("反包", hit["triggered_by"])
+        self.assertIn("先验趋势地基", hit["impact"])
+        self.assertIn("贴近认错线", hit["impact"])
+        self.assertEqual(hit["report_slot"], "买点质量")
         self.assertEqual(hit["confidence"], "reviewed")
 
     def test_routes_anti_fake_precision_first_principle(self):

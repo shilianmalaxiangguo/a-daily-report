@@ -40,6 +40,73 @@ class TencentFinanceDataTest(unittest.TestCase):
         self.assertEqual(result["000001"]["high"], 12.8)
         self.assertEqual(result["000001"]["low"], 11.7)
 
+    def test_get_calendar_events_filters_cls_fallback_to_target_date_when_legacy_fails(self):
+        module = __import__("tencent_finance_data", fromlist=["tencent_finance_data"])
+
+        class _Legacy:
+            def get_calendar_events(self, target_date=None):
+                raise AttributeError("'NoneType' object has no attribute 'get'")
+
+        class _Response:
+            def json(self):
+                return {
+                    "code": 200,
+                    "data": [
+                        {
+                            "calendar_day": "2026-06-18",
+                            "week": "星期四",
+                            "items": [
+                                {
+                                    "calendar_time": "2026-06-18 00:00:00",
+                                    "type": 2,
+                                    "event": {
+                                        "title": "目标日事件",
+                                        "star": 4,
+                                        "country": "中国",
+                                    },
+                                },
+                                {"calendar_time": "2026-06-18 00:00:00", "type": 2, "event": None},
+                            ],
+                        },
+                        {
+                            "calendar_day": "2026-06-19",
+                            "week": "星期五",
+                            "items": [
+                                {
+                                    "calendar_time": "2026-06-19 00:00:00",
+                                    "type": 2,
+                                    "event": {
+                                        "title": "腾讯云数据库商业化计费",
+                                        "star": 5,
+                                        "country": "中国",
+                                    },
+                                },
+                                {"calendar_time": "2026-06-19 00:00:00", "type": 2, "event": None},
+                            ],
+                        }
+                    ],
+                }
+
+        class _Session:
+            def __init__(self):
+                self.headers = {}
+
+            def get(self, url, headers=None, timeout=0):
+                self.url = url
+                self.headers_arg = headers
+                self.timeout = timeout
+                return _Response()
+
+        data = module.TencentFinanceData()
+        data._legacy = _Legacy()
+        data.session = _Session()
+
+        result = data.get_calendar_events("2026-06-18")
+
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["title"], "目标日事件")
+        self.assertEqual(result[0]["date"], "2026-06-18")
+
 
 if __name__ == "__main__":
     unittest.main()

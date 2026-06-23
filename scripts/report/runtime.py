@@ -64,6 +64,7 @@ from report.front_summary_renderer import sanitize_front_page_text
 from report.action_plan_renderer import render_action_plan_result, render_action_plan_section
 from report.pk_decision_renderer import render_pk_decision_section as _default_render_pk_decision_section
 from hooks.report.use_report_sections import (
+    build_daily_discipline_note,
     build_knowledge_hits_note,
     build_knowledge_compounding_candidate_note,
     build_knowledge_update_note,
@@ -565,6 +566,8 @@ def _should_apply_pure_zero_participation_cleanup(lines):
 
 def _has_existing_position_zero_new_entry_surface(lines):
     text = "\n".join(str(line or "") for line in list(lines or []))
+    if "持仓继续独立评估" in text or "不因新机会自动处理" in text:
+        return False
     has_existing_position = (
         "已有昨日持仓优先处理" in text
         or "先处理旧仓，不新增参与" in text
@@ -846,7 +849,22 @@ def _front_page_observation_anchor_label(lines):
     return ""
 
 
+def _front_page_has_positive_execution_object(lines):
+    front_lines = []
+    for line in list(lines or []):
+        text = str(line or "")
+        if text == "## 八、详细附录":
+            break
+        front_lines.append(text)
+    front_text = "\n".join(front_lines)
+    if "明日执行对象" not in front_text and "明日执行目标" not in front_text:
+        return False
+    return "50%条件执行" in front_text or "100%核心进攻" in front_text
+
+
 def _align_appendix_observation_anchor_from_front_page(lines):
+    if _front_page_has_positive_execution_object(lines):
+        return list(lines or [])
     anchor_label = _front_page_observation_anchor_label(lines)
     if not anchor_label:
         return list(lines or [])
@@ -2229,6 +2247,28 @@ def _runtime_old_position_for_opportunity(data=None, market_research_snapshot=No
     return old_position
 
 
+def _runtime_existing_position_requires_action(existing=None):
+    existing = existing if isinstance(existing, dict) else {}
+    text = _first_runtime_text(existing.get("summary"), existing.get("action"), existing.get("role"))
+    if not text:
+        return False
+    if any(marker in text for marker in ("独立评估", "持有观察", "继续持有")):
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "先处理旧仓",
+            "释放旧仓资金",
+            "新开仓0手",
+            "优先处理",
+            "先卖",
+            "先按",
+            "MA5T",
+            "修复",
+        )
+    )
+
+
 def _runtime_candidate_for_opportunity(candidate=None):
     candidate = dict(candidate or {}) if isinstance(candidate, dict) else {}
     if not candidate:
@@ -2310,16 +2350,21 @@ def _runtime_opportunity_comparison(
     position_decision=None,
     market_research_snapshot=None,
 ):
-    if _candidate_from_sector_capital_carrier(selected_position_candidate):
-        return {}
     new_target = _runtime_candidate_for_opportunity(selected_position_candidate)
     if not new_target:
         return {}
+    old_position = _runtime_old_position_for_opportunity(data=data, market_research_snapshot=market_research_snapshot)
+    if _candidate_from_sector_capital_carrier(selected_position_candidate) and not old_position:
+        return {}
+    new_target = _runtime_enrich_opportunity_payload(
+        new_target,
+        data=data,
+        reference_target=selected_position_candidate,
+    )
     requested_pct = max(
         _front_page_target_pct(position_decision),
         _front_page_candidate_position_pct(selected_position_candidate),
     )
-    old_position = _runtime_old_position_for_opportunity(data=data, market_research_snapshot=market_research_snapshot)
     account_profile = _runtime_account_profile(data=data, market_research_snapshot=market_research_snapshot)
     account_capital = _first_runtime_text(account_profile.get("capital_text"), account_profile.get("account_capital")) or None
     comparison = build_opportunity_comparison(
@@ -2452,7 +2497,8 @@ def _runtime_tradable_proxy_ready(data=None, selected_position_candidate=None, m
 
 def _runtime_old_position_priority_active(data=None, market_research_snapshot=None):
     summary = _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot)
-    return bool(summary.get("has_position") or summary.get("summary"))
+    existing = _runtime_existing_position_target(summary, data=data)
+    return _runtime_existing_position_requires_action(existing)
 
 
 def _build_runtime_selection_workflow(
@@ -2897,10 +2943,11 @@ def _build_runtime_final_target_resolution(
     new_entry_ready = bool(new_entry and target_pct >= 50)
     account_observation_target = dict(new_entry) if new_entry and unbuyable_core and not proxy_ready else {}
     execution_new_entry = {} if account_observation_target else new_entry
-    old_position_first = bool(existing and new_entry and not (new_entry_ready or proxy_ready))
+    existing_requires_action = _runtime_existing_position_requires_action(existing)
+    old_position_first = bool(existing_requires_action and new_entry and not (new_entry_ready or proxy_ready))
     priority = (
         "new_entry_after_old_exit"
-        if existing and (new_entry_ready or proxy_ready)
+        if existing_requires_action and (new_entry_ready or proxy_ready)
         else (
             "tradable_proxy"
             if proxy_ready
@@ -3764,24 +3811,40 @@ def _render_sector_capital_carrier_strategy_front_summary(strategy, final_action
     action_label = _clean_runtime_cell(strategy.get("action_label") or "-")
     primary_label = _clean_runtime_cell(primary.get("stock_label") or "无")
     reason = _clean_runtime_cell(strategy.get("action_reason") or primary.get("reason") or "-")
+    if final_position <= 0:
+        reason = reason.replace("主样本", "复核样本")
     if final_position > 0:
         relation = "已进入最终动作；按唯一明日动作执行"
     elif strategy.get("action") in {"paper_participate", "paper_watch"}:
-        relation = "与当前最终动作不一致：先作为策略差异复核，不新增第二个明日对象"
+        relation = "不进入明日对象：只作为差异复核记录，不新增参与"
     else:
         relation = "与当前最终动作一致：没有恢复出可参与资金载体"
     if final_position > 0:
+        title = "## 板块资金载体预案"
+        action_row_name = "T0同源策略动作"
+        action_row_value = action_label
+        sample_row_name = "主样本"
+        relation_row_name = "与最终动作关系"
+        stage_header = "| 环节 | 输入 | 淘汰 | 剩余 | 代表剩余/淘汰理由 |"
+        stage_divider = "|---|---:|---:|---:|---|"
         boundary = "本预案已并入唯一明日动作；T+1固定窗口条件不成立则回到0%不参与。"
     else:
-        boundary = "本预案只用 T0 板块、资金和个股载体事实做差异复核；最终仓位仍以唯一明日动作表为准。"
+        title = "## 板块资金载体差异复核"
+        action_row_name = "T0同源策略动作"
+        action_row_value = "差异复核，不新增参与"
+        sample_row_name = "复核样本"
+        relation_row_name = "处理结果"
+        stage_header = "| 复核环节 | 输入 | 排除 | 记录证据数 | 代表复核事实 |"
+        stage_divider = "|---|---:|---:|---:|---|"
+        boundary = "本复核只说明T0资金样本，不产生明日对象；最终仓位仍以唯一明日动作表为准。"
     lines = [
-        "## 板块资金载体预案",
+        title,
         "| 项目 | 结论 |",
         "|---|---|",
-        f"| T0同源策略动作 | {action_label} |",
-        f"| 主样本 | {primary_label} |",
+        f"| {action_row_name} | {action_row_value} |",
+        f"| {sample_row_name} | {primary_label} |",
         f"| 依据 | {reason} |",
-        f"| 与最终动作关系 | {relation} |",
+        f"| {relation_row_name} | {relation} |",
         "",
         f"> **边界**：{boundary}",
         "",
@@ -3790,11 +3853,14 @@ def _render_sector_capital_carrier_strategy_front_summary(strategy, final_action
     if stages:
         lines.extend(
             [
-                "| 环节 | 输入 | 淘汰 | 剩余 | 代表剩余/淘汰理由 |",
-                "|---|---:|---:|---:|---|",
+                stage_header,
+                stage_divider,
             ]
         )
         for stage in stages:
+            title_text = _clean_runtime_cell(stage.get("title") or "复核层")
+            if final_position <= 0 and title_text == "纸面动作":
+                title_text = "差异复核收口"
             survivors = stage.get("survivors") if isinstance(stage.get("survivors"), list) else []
             eliminated = stage.get("eliminated") if isinstance(stage.get("eliminated"), list) else []
             sample = survivors[0] if survivors else eliminated[0] if eliminated else {}
@@ -3807,8 +3873,12 @@ def _render_sector_capital_carrier_strategy_front_summary(strategy, final_action
                     )
                     if part
                 )
+            if final_position <= 0:
+                sample_text = sample_text.replace("主样本", "复核样本")
+            if final_position <= 0 and sample_text and "不进入明日对象" not in sample_text:
+                sample_text = f"{sample_text}；只作差异复核，不进入明日对象"
             lines.append(
-                f"| {_clean_runtime_cell(stage.get('title') or '复核层')} "
+                f"| {title_text} "
                 f"| {int(stage.get('input_count') or 0)} "
                 f"| {int(stage.get('eliminated_count') or 0)} "
                 f"| {int(stage.get('survivor_count') or 0)} "
@@ -6046,7 +6116,6 @@ def _build_front_page_position_decision(
         requested_target_pct >= 50
         and opportunity_comparison
         and not proxy_ready
-        and not _candidate_from_sector_capital_carrier(selected_position_candidate)
         and _runtime_opportunity_risk_should_block_position(opportunity_comparison)
     ):
         return _force_observation_for_opportunity_risk(position_decision, opportunity_comparison)
@@ -6131,7 +6200,6 @@ def _build_effective_front_page_final_gate(
         return final_gate
     if (
         opportunity_comparison
-        and not _candidate_from_sector_capital_carrier(selected_position_candidate)
         and _runtime_opportunity_comparison_blocks_participation(opportunity_comparison)
     ):
         updated = dict(final_gate)
@@ -6787,6 +6855,9 @@ def _normalize_positive_final_action_appendix_lines(
         )
         return "| " + " | ".join(row.get(field, "") for field in fields) + " |"
 
+    def _positive_context_summary():
+        return f"只看明日执行对象{target_label}；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与"
+
     for line in list(lines or []):
         text = str(line or "")
         stripped = text.strip()
@@ -6916,10 +6987,31 @@ def _normalize_positive_final_action_appendix_lines(
         if any(marker in text for marker in ("过程候选", "过程样本", "过程回看")):
             if target_label not in text and "不覆盖唯一明日动作" not in text:
                 text = f"{text}（过程证据，不覆盖唯一明日动作：{target_label}）"
+        if "市场条件：未满足(🟠 只处理旧仓)" in text:
+            text = text.replace(
+                "市场条件：未满足(🟠 只处理旧仓)",
+                "市场条件：未满足(过程候选不覆盖唯一明日动作)",
+            )
         if text.startswith("| 主买对象 | 暂无 |"):
+            text = f"| 主买对象 | {target_label} |"
+        elif text.startswith("| 市场情绪状态 |") and "只处理旧仓" in text:
+            text = f"| 市场情绪状态 | 50%条件执行；只看{target_label}固定交易窗口条件 |"
+        elif text.startswith("| 账户后台任务负担 |") and "有持仓需先处理" in text:
+            text = "| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |"
+        elif text.startswith("| 持仓优先动作 |") and "先处理旧仓" in text:
+            text = "| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |"
+        elif text.startswith("| 今日新增上限 |") and re.search(r"\|\s*0\s*\|", text):
+            text = "| 今日新增上限 | 50%条件执行；条件不成立回0% |"
+        elif text.startswith("| 主买对象 |") and target_label not in text:
             text = f"| 主买对象 | {target_label} |"
         elif text.startswith("| 补位对象 |") and target_label not in text:
             text = "| 补位对象 | 过程候选回看样本，不覆盖唯一明日动作 |"
+        elif text.startswith("| 明天能不能开仓 |") and "只处理旧仓" in text:
+            text = f"| 明天是否参与 | 50%条件执行 | {_positive_context_summary()} | 动作锚定到唯一明日动作 |"
+        elif text.startswith("| 明日大盘预期 |") and "只处理旧仓" in text:
+            text = f"| 明日大盘预期 | {_positive_context_summary()}；市场背景只作参考 |"
+        elif text.startswith("| 明日环境与跟随裁决 |") and "只处理旧仓" in text:
+            text = f"| 明日环境与跟随裁决 | {_positive_context_summary()}；市场背景只作参考 |"
         if text.startswith("| 今日关注标的 |"):
             text = f"| 今日关注标的 | {action_label} |"
         elif text.startswith("| 操作风格 | 空仓 |"):
@@ -6938,6 +7030,21 @@ def _normalize_positive_final_action_appendix_lines(
                 f"| 明日策略 | 只看明日执行对象{target_label}；"
                 "固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 |"
             )
+        elif text.startswith("- **明日裁决**:") and "只处理旧仓" in text:
+            text = f"- **明日裁决**: 50%条件执行；只看{target_label}固定交易窗口条件"
+        elif text.startswith("**明日裁决**:") and "只处理旧仓" in text:
+            text = f"**明日裁决**: 50%条件执行；只看{target_label}固定交易窗口条件"
+        elif text.startswith("**开盘前动作**:") and (
+            "只处理旧仓" in text or "若你有旧仓先去弱留强，不新增参与" in text
+        ):
+            text = f"**开盘前动作**: {_positive_context_summary()}；市场背景只作参考"
+        elif text.startswith("- **明天具体怎么做**:") and "只处理旧仓" in text:
+            text = (
+                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；"
+                "持仓独立评估，不满足固定交易窗口条件就回到0%不参与"
+            )
+        elif "若你有旧仓，只处理旧仓，不做新增" in text:
+            text = text.replace("若你有旧仓，只处理旧仓，不做新增", f"只看{target_label}是否满足固定交易窗口条件")
         normalized.append(text)
     return normalized
 
@@ -8298,6 +8405,15 @@ def _refresh_llm_wiki_knowledge_hits(data, llm_wiki_context):
     return _attach_llm_wiki_knowledge_hits(data, llm_wiki_context)
 
 
+def _append_report_note_once(report, lines, marker):
+    report_text = str(report or "").rstrip()
+    if not lines:
+        return report_text.strip()
+    if marker and marker in report_text:
+        return report_text.strip()
+    return "\n".join([report_text, "", *lines]).strip()
+
+
 def render_markdown_report_runtime(
     data,
     target_date,
@@ -8336,14 +8452,13 @@ def render_markdown_report_runtime(
         _restore_runtime_bindings(previous)
     _attach_topic_lifecycle_snapshot(data)
     knowledge_note_lines = build_knowledge_update_note(data if isinstance(data, dict) else {})
-    if knowledge_note_lines:
-        report = "\n".join([report.rstrip(), "", *knowledge_note_lines]).strip()
+    report = _append_report_note_once(report, knowledge_note_lines, "## 知识复利提示")
     candidate_note_lines = build_knowledge_compounding_candidate_note(llm_wiki_context)
-    if candidate_note_lines:
-        report = "\n".join([report.rstrip(), "", *candidate_note_lines]).strip()
+    report = _append_report_note_once(report, candidate_note_lines, "## 知识复利候选")
+    discipline_note_lines = build_daily_discipline_note(llm_wiki_context)
+    report = _append_report_note_once(report, discipline_note_lines, "去弱留强是短线执行表达")
     knowledge_hit_lines = build_knowledge_hits_note(llm_wiki_context)
-    if knowledge_hit_lines:
-        report = "\n".join([report.rstrip(), "", *knowledge_hit_lines]).strip()
+    report = _append_report_note_once(report, knowledge_hit_lines, "## 经验库命中")
 
     return {
         "report": report,

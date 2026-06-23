@@ -17,11 +17,14 @@ from typing import Any, Dict
 import types
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from knowledge.llm_wiki_context import build_llm_wiki_context
 from knowledge.topic_lifecycle import (
     build_topic_lifecycle_snapshot,
     write_topic_lifecycle_artifact,
 )
+from hooks.report.use_report_sections import build_daily_discipline_note
 from report.html_report_view import build_daily_report_view, missing_required_fact_labels
+from report.surface_wording import sanitize_user_visible_text
 try:
     import daily_report_analysis_utils as analysis_utils
 except ImportError:  # pragma: no cover - local compatibility shim for this repo snapshot
@@ -1283,8 +1286,26 @@ def _sanitize_report_section_text(text):
     return "\n".join(_sanitize_report_section_lines(str(text or "").splitlines())).strip()
 
 
+def _append_daily_discipline_to_sections(sections):
+    sections = dict(sections or {})
+    if not sections:
+        return sections
+    rendered = "\n".join(str(value or "") for value in sections.values())
+    if "去弱留强是短线执行表达" in rendered:
+        return sections
+    discipline_lines = build_daily_discipline_note(build_llm_wiki_context())
+    if not discipline_lines:
+        return sections
+    review_note = "\n".join(
+        [discipline_lines[0].replace("## ", "### ", 1), *discipline_lines[1:]]
+    )
+    review = str(sections.get("review") or "").strip()
+    sections["review"] = "\n\n".join(part for part in (review, review_note) if part).strip()
+    return sections
+
+
 def generate_markdown_report_from_sections(sections):
-    sections = sections or {}
+    sections = _append_daily_discipline_to_sections(sections or {})
     ordered_keys = ["preamble", "environment", "observation", "execution", "review", "summary"]
     rendered_sections = []
     seen_no_trade_conclusion = False
@@ -1301,7 +1322,7 @@ def generate_markdown_report_from_sections(sections):
         section_text = "\n".join(section_lines).strip()
         if section_text:
             rendered_sections.append(section_text)
-    return "\n\n".join(rendered_sections)
+    return sanitize_user_visible_text("\n\n".join(rendered_sections))
 
 
 def _extract_sections(data):

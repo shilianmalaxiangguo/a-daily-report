@@ -68,8 +68,10 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("| 军工一号 | 000001 | 军工 | 09:30-09:35 | 50% |", report)
         self.assertIn("| 算力二号 | 000002 | 算力 | 09:50-10:10 | 50% |", report)
         self.assertIn("卖出处理和买入处理分开判断", report)
+        self.assertIn("持仓按防守线独立评估", report)
         self.assertNotIn("卖出用于买入", report)
         self.assertNotIn("为了买而卖", report)
+        self.assertNotIn("只处理旧仓风险", report)
 
     def test_render_formats_lot_based_t0_holding_position(self):
         from portfolio.position_strategy_report import render_position_strategy_report

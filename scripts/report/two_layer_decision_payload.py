@@ -789,23 +789,9 @@ def _why_this_not_others(final_stock, final_identity, candidate_pool_verdict, ob
     losers = candidate_pool_verdict.get("important_losers", []) if isinstance(candidate_pool_verdict, dict) else []
     if not final_stock:
         if losers:
-            loser = losers[0]
-            dims = loser.get("dimension_results") if isinstance(loser.get("dimension_results"), dict) else {}
-            dimension_text = "、".join(
-                text
-                for text in (
-                    f"主线/板块={clean_text(dims.get('mainline_sector'))}",
-                    f"个股结构={clean_text(dims.get('stock_structure'))}",
-                    f"资金确认={clean_text(dims.get('funds_confirmation'))}",
-                    f"账户匹配={clean_text(dims.get('account_fit'))}",
-                    f"风险/缺失={clean_text(dims.get('risk_missing_data'))}",
-                )
-                if not text.endswith("=")
-            )
-            reason = clean_text(loser.get("loss_reason"), "关键数据缺失")
             return (
-                f"没有可用明日执行对象；{_stock_label(loser.get('stock'))}保留为过程候选："
-                f"{reason}；维度差异：{dimension_text}"
+                "没有可用明日执行对象；过程候选只保留在后文复盘表，不在首屏指定个股；"
+                "资金载体差异复核对象不覆盖最终动作；最终不新增参与"
             )
         if observation_target:
             return "没有可用明日执行对象；过程候选仅保留在附录和快照"

@@ -1664,7 +1664,7 @@ def _account_layer(candidates, trace_by_key, ledger_by_key, final_action):
                 reason="；".join(clean_text(item) for item in reason_parts if clean_text(item))
                 or final_action.get("reason")
                 or "账户、仓位或盈亏比证据不足",
-                elimination_basis="不取得明日新增参与资格",
+                elimination_basis="暂无新增参与资格",
                 extra=extra,
             )
         )
@@ -2477,7 +2477,7 @@ def _build_quant_trace_layer(role_layer, price_layer):
             "title": "量化参与痕迹",
             "entries": entries,
             "source_layer_id": clean_text(_as_dict(role_layer).get("source_layer_id") or _as_dict(role_layer).get("id")),
-            "note": "只记录可见行为：重心抬高、回踩承接、放量不崩、缩量不死；不写成确定是哪类资金买入。",
+            "note": "只记录可见行为：重心抬高、回踩承接、放量不崩、缩量不死；不写成确定是哪类资金介入。",
         }
     )
 

@@ -189,6 +189,17 @@ def build_knowledge_hits_note(llm_wiki):
     ]
 
 
+def build_daily_discipline_note(llm_wiki):
+    lines = [
+        str(item or "").strip()
+        for item in (llm_wiki or {}).get("daily_discipline_lines") or []
+        if str(item or "").strip()
+    ]
+    if not lines:
+        return []
+    return ["## 交易原则", *[f"- {line}" for line in lines]]
+
+
 def _build_review_section(knowledge, llm_wiki=None, request=None):
     wiki = llm_wiki or {}
     request = request or {}
@@ -206,6 +217,9 @@ def _build_review_section(knowledge, llm_wiki=None, request=None):
     candidate_lines = build_knowledge_compounding_candidate_note(wiki)
     if candidate_lines:
         lines.extend(["", candidate_lines[0].replace("## ", "### ", 1), *candidate_lines[1:]])
+    discipline_lines = build_daily_discipline_note(wiki)
+    if discipline_lines:
+        lines.extend(["", discipline_lines[0].replace("## ", "### ", 1), *discipline_lines[1:]])
     knowledge_hit_lines = build_knowledge_hits_note(wiki)
     if knowledge_hit_lines:
         lines.extend(["", knowledge_hit_lines[0].replace("## ", "### ", 1), *knowledge_hit_lines[1:]])

@@ -35,12 +35,26 @@ KNOWLEDGE_INDEX = [
         "prior": "capital-priority-prior",
         "source_path": "wiki/交易思想/价格行为与能量框架.md",
         "title": "汰弱留强与旧仓新机会分离",
-        "topics": ["汰弱留强", "资金优先级", "旧仓新机会分离", "换仓"],
-        "trigger_terms": ["汰弱留强", "汰强留弱", "卖强补弱", "弱替代", "浮盈浮亏", "换仓", "旧仓", "新机会"],
+        "topics": ["去弱留强", "汰弱留强", "资金优先级", "旧仓新机会分离", "换仓", "第一性原理", "FOMO"],
+        "trigger_terms": [
+            "去弱留强",
+            "汰弱留强",
+            "汰强留弱",
+            "卖强补弱",
+            "弱替代",
+            "浮盈浮亏",
+            "换仓",
+            "旧仓",
+            "新机会",
+            "第一性原理",
+            "FOMO",
+            "fomo",
+            "满仓",
+        ],
         "scenarios": ["daily_report", "intraday_question", "review"],
         "report_slot": "资金优先级",
         "confidence": "verified",
-        "impact": "先判旧仓是否仍被市场选择，再判新机会是否更强且窗口和亏损边界清楚；不卖强补弱，不用做T便利性替代强弱比较。",
+        "impact": "先判旧仓是否失去持仓资格，卖旧仓看旧仓资格；再判新机会是否取得执行资格，买新仓看新仓资格；不卖强补弱，也不用FOMO把两笔判断合成一次满仓替换。",
     },
     {
         "id": "intraday.do-t-risk-control",
@@ -163,11 +177,16 @@ KNOWLEDGE_INDEX = [
         "prior": "price-action-prior",
         "source_path": "wiki/交易思想/布鲁克斯价格行为趋势.md",
         "title": "布鲁克斯价格行为趋势框架",
-        "topics": ["价格行为", "价格趋势优先", "A股量价本地化", "趋势区间谱系", "始终入场", "二次入场", "交易者等式"],
+        "topics": ["价格行为", "价格趋势优先", "A股量价本地化", "叙事后置", "趋势区间谱系", "始终入场", "二次入场", "交易者等式"],
         "trigger_terms": [
             "布鲁克斯",
             "价格行为",
             "价格趋势",
+            "叙事后置",
+            "按图索因",
+            "按因索图",
+            "基本面",
+            "找原因",
             "量价",
             "成交量",
             "放量",
@@ -185,6 +204,31 @@ KNOWLEDGE_INDEX = [
         "report_slot": "价格行为判断",
         "confidence": "reviewed",
         "impact": "先判趋势/交易区间，再看信号是否有后续行情；成交量只作资金表态证据，必须由价格强收盘、回踩不破或后续行情确认；错过强趋势只允许小仓按同一失效线参与。",
+    },
+    {
+        "id": "price-action.entry-quality-three-conditions",
+        "prior": "entry-quality-prior",
+        "source_path": "wiki/交易思想/价格行为与能量框架.md",
+        "title": "追涨杀跌动作中性与买点三条件",
+        "topics": ["追涨杀跌", "买点质量", "趋势地基", "盈亏同源点", "股性过滤", "异动K线"],
+        "trigger_terms": [
+            "追涨杀跌",
+            "追涨",
+            "杀跌",
+            "买点",
+            "趋势地基",
+            "地基",
+            "盈亏同源",
+            "股性",
+            "异动K线",
+            "异动K",
+            "旱地拔葱",
+            "反包",
+        ],
+        "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
+        "report_slot": "买点质量",
+        "confidence": "reviewed",
+        "impact": "追涨杀跌只是动作，先验趋势地基、盈亏同源点和股性；无地基急拉只观察，贴近认错线且次日重新承接后才进入参与评估。",
     },
     {
         "id": "discipline.present-execution",
@@ -325,6 +369,39 @@ def _account_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _final_target_resolution_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    market_research_snapshot = _first_dict(data.get("market_research_snapshot"))
+    execution_stage_context = _first_dict(data.get("execution_stage_context"))
+    return _first_dict(
+        data.get("final_target_resolution"),
+        execution_stage_context.get("final_target_resolution"),
+        market_research_snapshot.get("final_target_resolution"),
+    )
+
+
+def _existing_position_summary_from_data(data: Dict[str, Any]) -> Dict[str, Any]:
+    personal_position_context = _first_dict(data.get("personal_position_context"))
+    market_research_snapshot = _first_dict(data.get("market_research_snapshot"))
+    return _first_dict(
+        data.get("existing_position_summary"),
+        personal_position_context.get("existing_position_summary"),
+        market_research_snapshot.get("existing_position_summary"),
+    )
+
+
+def _has_existing_position(position: Dict[str, Any]) -> bool:
+    if not isinstance(position, dict) or not position:
+        return False
+    if position.get("has_position") is False:
+        return False
+    if position.get("position_count") == 0:
+        return False
+    identity_keys = ("name", "stock_name", "code", "stock_code", "symbol")
+    if any(str(position.get(key) or "").strip() for key in identity_keys):
+        return True
+    return bool(position.get("has_position"))
+
+
 def _build_account_candidate_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     account = _account_from_data(data)
     candidate = _candidate_from_data(data)
@@ -359,6 +436,60 @@ def _build_account_candidate_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"account": account_facts, "candidate": candidate_facts}
 
 
+def _build_position_capital_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
+    resolution = _final_target_resolution_from_data(data)
+    decision = _first_dict(resolution.get("capital_priority_decision"))
+    existing_position = _first_dict(
+        resolution.get("existing_position_target"),
+        _existing_position_summary_from_data(data),
+    )
+    new_entry = _first_dict(
+        resolution.get("new_entry_target"),
+        resolution.get("tradable_proxy_target"),
+        resolution.get("watch_target"),
+    )
+
+    position_facts: Dict[str, Any] = {}
+    candidate_facts: Dict[str, Any] = {}
+    capital_priority = str(decision.get("capital_priority") or "").strip()
+    reason = str(decision.get("reason") or "").strip()
+    old_position_priority = {
+        "old_position_t",
+        "old_position",
+        "existing_position",
+        "existing_position_t",
+        "new_entry_after_old_exit",
+    }
+    switch_priority = {"new_entry_after_old_exit"}
+    new_entry_priority = {"new_entry", "tradable_proxy"}
+    has_existing_position = _has_existing_position(existing_position)
+
+    if has_existing_position or capital_priority in old_position_priority:
+        position_facts["state"] = "旧仓"
+    if capital_priority in switch_priority:
+        position_facts["action"] = "换仓"
+        candidate_facts.setdefault("quality", []).append("新机会")
+    elif new_entry and has_existing_position and capital_priority in new_entry_priority:
+        candidate_facts.setdefault("quality", []).append("新机会")
+    if new_entry and capital_priority in switch_priority:
+        candidate_facts.setdefault("quality", []).append("换仓")
+    if "满仓" in reason:
+        candidate_facts.setdefault("quality", []).append("满仓")
+    if reason and position_facts:
+        position_facts["capital_priority_reason"] = reason
+    if capital_priority and position_facts:
+        position_facts["capital_priority"] = capital_priority
+
+    result: Dict[str, Any] = {}
+    if position_facts:
+        result["position"] = position_facts
+    if candidate_facts:
+        result["candidate"] = candidate_facts
+    if capital_priority:
+        result["capital_priority"] = capital_priority
+    return result
+
+
 def build_llm_wiki_fact_tags(data: Dict[str, Any] | None) -> Dict[str, Any]:
     """Extract compact fact tags used by the explainable Wiki router."""
     if not isinstance(data, dict):
@@ -374,6 +505,20 @@ def build_llm_wiki_fact_tags(data: Dict[str, Any] | None) -> Dict[str, Any]:
     account_candidate = _build_account_candidate_fact_tags(data)
     for key, value in account_candidate.items():
         if value:
+            facts[key] = value
+    position_capital = _build_position_capital_fact_tags(data)
+    for key, value in position_capital.items():
+        if not value:
+            continue
+        if isinstance(value, dict) and isinstance(facts.get(key), dict):
+            merged = dict(facts[key])
+            for nested_key, nested_value in value.items():
+                if isinstance(nested_value, list) and isinstance(merged.get(nested_key), list):
+                    merged[nested_key] = list(dict.fromkeys([*merged[nested_key], *nested_value]))
+                else:
+                    merged[nested_key] = nested_value
+            facts[key] = merged
+        else:
             facts[key] = value
     return facts
 

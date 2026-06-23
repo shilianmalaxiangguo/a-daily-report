@@ -74,6 +74,7 @@ def _parse_position_string_legacy_body(position_str):
 
     parsing_text = _strip_position_context_prefixes(raw_text)
     percent_positions = _extract_percent_positions(parsing_text)
+    code_only_positions = _extract_code_only_positions(parsing_text)
     named_lot_positions = _extract_named_lot_holdings(parsing_text)
     if named_lot_positions:
         named_lot_positions[0].update(account_fields)
@@ -87,6 +88,13 @@ def _parse_position_string_legacy_body(position_str):
         _apply_t0_trade_fields(raw_text, percent_positions)
         _apply_t0_review_note(t0_review_note, percent_positions)
         return [{key: value for key, value in position.items() if value is not None} for position in percent_positions]
+
+    if code_only_positions:
+        code_only_positions[0].update(account_fields)
+        _apply_percent_fields(code_only_positions, percent_positions)
+        _apply_t0_trade_fields(raw_text, code_only_positions)
+        _apply_t0_review_note(t0_review_note, code_only_positions)
+        return [{key: value for key, value in position.items() if value is not None} for position in code_only_positions]
 
     lot_matches = list(re.finditer(r"(\d+(?:\.\d+)?)\s*手\s*([\u4e00-\u9fa5A-Za-z0-9*STst]+)", parsing_text))
     if not lot_matches:
@@ -231,6 +239,18 @@ def _extract_percent_positions(raw_text):
 
     patterns = [
         re.compile(
+            r"(?:^|[，,。；;\s])(?P<full_position>全仓|满仓)(?!吃满)\s*"
+            r"(?:仓位|仓)?\s*的?\s*(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16}|\d{6})"
+        ),
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<fraction>三分之一|三分之一仓|三分之?一|三分之|1/3|三分)\s*"
+            r"(?:仓位|仓)?\s*的?\s*(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16}|\d{6})"
+        ),
+        re.compile(
+            r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16}|\d{6})\s*"
+            r"(?P<full_position>全仓|满仓)(?!吃满)"
+        ),
+        re.compile(
             r"(?:^|[，,。；;\s])(?P<name>[\u4e00-\u9fa5A-Za-z*STst]{2,16})\s*"
             r"(?P<position>\d+(?:\.\d+)?)\s*%"
         ),
@@ -248,13 +268,59 @@ def _extract_percent_positions(raw_text):
             name = _clean_position_name(match.group("name"))
             if _is_position_name_noise(name):
                 continue
-            position_pct = float(match.group("position"))
+            if "position" in pattern.groupindex:
+                position_pct = float(match.group("position"))
+            elif "full_position" in pattern.groupindex:
+                position_pct = 100.0
+            else:
+                position_pct = 33.0
+            code = name if name.isdigit() and len(name) == 6 else ""
+            position_name = _known_position_name_for_code(code) or name
             key = (name, position_pct)
             if key in seen:
                 continue
             seen.add(key)
-            positions.append({"name": name, "position": position_pct})
+            position = {"name": position_name, "position": position_pct}
+            if code:
+                position["code"] = code
+                kind = _known_position_kind_for_code(code)
+                if kind:
+                    position["position_kind"] = kind
+            positions.append(position)
     return positions
+
+
+def _extract_code_only_positions(raw_text):
+    import re
+
+    positions = []
+    seen = set()
+    for match in re.finditer(r"(?:^|[，,。；;\s])(?P<code>\d{6})(?!\d)", str(raw_text or "")):
+        code = match.group("code")
+        if code in seen:
+            continue
+        seen.add(code)
+        positions.append(
+            {
+                "name": _known_position_name_for_code(code) or code,
+                "code": code,
+                "position_kind": _known_position_kind_for_code(code),
+            }
+        )
+    return positions
+
+
+def _known_position_name_for_code(code):
+    return {
+        "159995": "芯片ETF",
+    }.get(str(code or "").strip(), "")
+
+
+def _known_position_kind_for_code(code):
+    code = str(code or "").strip()
+    if code in {"159995"}:
+        return "etf"
+    return ""
 
 
 def _is_percent_after_named_position(raw_text, match):
@@ -283,6 +349,10 @@ def _apply_percent_fields(positions, percent_positions):
         name = str(position.get("name") or "").strip()
         if name in percent_by_name:
             position["position"] = percent_by_name[name]
+            continue
+        code = str(position.get("code") or position.get("stock_code") or "").strip()
+        if code in percent_by_name:
+            position["position"] = percent_by_name[code]
 
 
 def _extract_t0_trade_fields(raw_text):
@@ -406,6 +476,12 @@ def _is_position_name_noise(name):
     if upper in {"T", "T0", "T1", "T+0", "T+1"}:
         return True
     noise_words = {
+        "接近",
+        "几乎",
+        "差不多",
+        "大概",
+        "约",
+        "将近",
         "旧仓",
         "底仓",
         "仓",
@@ -433,7 +509,21 @@ def _position_share_text(position):
         shares = int(float(position.get("lots")) * 100)
     if shares:
         return f"{shares}股"
+    if position.get("position") not in (None, ""):
+        return f"{_format_number(position.get('position'))}%仓位"
     return _format_lots(position.get("lots"))
+
+
+def _is_cleared_position(position):
+    for key in ("position", "shares", "lots"):
+        value = position.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(value) <= 0
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _format_t0_trade_text(position):
@@ -500,12 +590,14 @@ def build_personal_position_context(data, positions):
     holding_summaries = []
     primary_close = ""
     primary_support = str(primary.get("support_band") or "42.84~43.05").strip()
+    all_cleared = all(_is_cleared_position(position) for position in positions)
     for index, position in enumerate(positions):
         position = dict(position)
         quote = _find_position_quote(data, position)
         name = position.get("name") or quote.get("name") or quote.get("名称") or "旧仓"
         code = position.get("code") or position.get("stock_code") or quote.get("code") or quote.get("代码") or ""
-        share_text = _position_share_text(position)
+        cleared_position = _is_cleared_position(position)
+        share_text = "" if cleared_position else _position_share_text(position)
         t0_trade_text = _format_t0_trade_text(position)
         cost = _format_number(position.get("cost"))
         close = _format_number(quote.get("close") or quote.get("price") or quote.get("最新价"))
@@ -520,16 +612,25 @@ def build_personal_position_context(data, positions):
             summary_parts.append(t0_trade_text)
         if cost:
             summary_parts.append(f"成本{cost}")
-        prefix = "" if t0_trade_text and not share_text else "持有"
+        if cleared_position:
+            prefix = "已清仓"
+        else:
+            prefix = "" if t0_trade_text and not share_text else "持有"
         holding_summaries.append(f"{prefix}{'，'.join(summary_parts)}")
         if index == 0:
             primary_close = close
-    decision = "先处理旧仓"
-    if primary.get("trade_action") == "做T":
+    independent_holding = _is_independent_position(primary)
+    decision = "持仓继续独立评估，不因新机会自动处理"
+    if all_cleared:
+        decision = "明日不买回"
+    elif primary.get("trade_action") == "做T":
         decision = "若仍有旧仓，先按买点失败仓处理，09:50-10:10不能修复则优先处理"
     elif len(positions) == 1 and primary_close:
         decision = f"先看{primary_close}能否守住，跌破{primary_support}或09:50-10:10收不回先卖"
-    summary = "；".join(holding_summaries) + f"；{decision}；新开仓0手"
+    elif not independent_holding:
+        decision = "先处理旧仓"
+    suffix = f"；{decision}" if independent_holding else f"；{decision}；新开仓0手"
+    summary = "；".join(holding_summaries) + suffix
     return {
         "account_profile": {"capital_text": _format_account_profile(primary)},
         "existing_position_summary": {
@@ -537,6 +638,11 @@ def build_personal_position_context(data, positions):
             "summary": summary,
         },
     }
+
+
+def _is_independent_position(position):
+    text = " ".join(str(position.get(key) or "") for key in ("name", "code", "position_kind", "holding_note"))
+    return "ETF" in text.upper() or "159995" in text
 
 
 def _analyze_position_management_legacy_body(data, target_date, positions):

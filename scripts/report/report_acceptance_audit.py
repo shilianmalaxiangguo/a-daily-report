@@ -1410,14 +1410,31 @@ def _audit_candidate_identity_conflicts(lines):
             crossline_codes.update(codes or recent_codes)
     if not crossline_codes:
         return []
+
+    def _has_positive_mainline_core_identity(cells):
+        for cell in cells:
+            text = str(cell or "").strip()
+            if not text or "主线核心" not in text:
+                continue
+            if text in {"主线核心", "主线核心候选"} or text.startswith("主线核心"):
+                return True
+            if re.search(r"(?:身份|来源池|对象口径|角色)[:：]\s*主线核心", text):
+                return True
+            negative_context = re.search(r"(?:不是|非|不标|不能|无确认|为0|缺少).{0,12}主线核心", text)
+            if negative_context:
+                continue
+            if re.search(r"(?:^|[；;|])\s*主线核心(?:$|[；;/、，,])", text):
+                return True
+        return False
+
     findings = []
     for index, line in enumerate(lines, 1):
         cells = _split_md_row(line)
         if not cells or _is_separator_cells(cells):
             continue
-        row_text = " ".join(cells)
-        if "主线核心" not in row_text:
+        if not _has_positive_mainline_core_identity(cells):
             continue
+        row_text = " ".join(cells)
         codes = _stock_codes_in_text(row_text)
         if not codes or not (codes & crossline_codes):
             continue

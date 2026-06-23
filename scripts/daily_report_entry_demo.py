@@ -3961,6 +3961,44 @@ def _resolve_chanlun_tomorrow_decision(data):
     return final_gate if isinstance(final_gate, dict) and final_gate else None
 
 
+def _report_markdown_has_zero_tomorrow_decision(report_markdown):
+    front_text = str(report_markdown or "").split("\n## 八、详细附录", 1)[0]
+    has_zero_position = any(
+        marker in front_text
+        for marker in (
+            "| 仓位姿态 | 0%不参与 |",
+            "| 明日仓位 | 0%不参与 |",
+            "> **最终动作**：0%不参与",
+        )
+    )
+    has_empty_target = any(
+        marker in front_text
+        for marker in (
+            "| 最终对象 | 无 |",
+            "| 明日执行对象 | 无 |",
+            "最终没有新增参与对象",
+        )
+    )
+    return bool(has_zero_position and has_empty_target)
+
+
+def _align_chanlun_tomorrow_decision_with_report(decision, report_markdown):
+    if not _report_markdown_has_zero_tomorrow_decision(report_markdown):
+        return decision
+    aligned = dict(decision or {})
+    aligned.update(
+        {
+            "final_action": "0%不参与；不新增参与",
+            "can_new_entry": False,
+            "operation_state": "不参与",
+            "max_position_pct": 0,
+            "target_position_pct": 0,
+            "position_pct": 0,
+        }
+    )
+    return aligned
+
+
 def _has_existing_position_context(data):
     if not isinstance(data, dict):
         return False
@@ -4467,6 +4505,10 @@ def main():
                 persist_decision_ledger=True,
             )
             tomorrow_decision = _resolve_chanlun_tomorrow_decision(data)
+            tomorrow_decision = _align_chanlun_tomorrow_decision_with_report(
+                tomorrow_decision,
+                report_outputs.get(REPORT_VARIANT_FULL, ""),
+            )
             chanlun_html = _build_sh_index_chanlun_html_for_audit(
                 target_date,
                 tomorrow_decision=tomorrow_decision,

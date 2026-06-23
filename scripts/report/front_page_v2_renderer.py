@@ -2040,6 +2040,27 @@ def _existing_position_summary(snapshot):
     }
 
 
+def _existing_position_requires_action(holding):
+    text = str((holding or {}).get("summary") or "").strip()
+    if not text:
+        return False
+    if "持仓继续独立评估" in text or "不因新机会自动处理" in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "先处理旧仓",
+            "已有昨日持仓优先处理",
+            "新开仓0手",
+            "优先处理",
+            "先卖",
+            "先按",
+            "MA5T",
+            "修复",
+        )
+    )
+
+
 def _account_capital_text(snapshot):
     profile = (snapshot or {}).get("account_profile") or {}
     if not isinstance(profile, dict):
@@ -2368,6 +2389,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             secondary_row_label = "持仓确认"
             backup_label = "持仓未输入，执行前先确认旧仓情况"
     elif holding:
+        holding_requires_action = _existing_position_requires_action(holding)
         if has_main_target and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
             target_label = _t0_target_label(main_target)
             account_constraint = f"{capital_text}；先处理旧仓腾出资金"
@@ -2377,6 +2399,17 @@ def _account_status_lines(snapshot=None, final_gate=None):
             secondary_row_label = "明日执行目标"
             backup_label = f"{target_label}：{main_role}"
             new_entry_limit = "资金释放后1"
+            price_condition = _account_price_condition_text(snapshot, main_target, position_state)
+        elif has_main_target and not holding_requires_action and position_state.get("grade") != "0":
+            target_label = _t0_target_label(main_target)
+            account_constraint = f"{capital_text}；已有持仓继续独立评估"
+            position_label = position_state.get("discipline") or "50%条件执行"
+            tomorrow_action = f"持仓独立评估；{target_label}固定交易窗口条件成立才参与，不满足回到0%"
+            primary_row_label = "当前持仓"
+            main_label = holding.get("summary") or "已有持仓继续独立评估"
+            secondary_row_label = "明日执行目标"
+            backup_label = f"{target_label}：{main_role}"
+            new_entry_limit = "条件满足后1"
             price_condition = _account_price_condition_text(snapshot, main_target, position_state)
         else:
             account_constraint = f"{capital_text}；已有昨日持仓优先处理"

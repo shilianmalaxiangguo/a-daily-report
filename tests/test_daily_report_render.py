@@ -1945,10 +1945,23 @@ Top50长趋势表不该进入轻量版
             }
         )
 
-        self.assertEqual(rendered, "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n## Summary")
+        self.assertEqual(
+            rendered,
+            "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n### 交易原则\n- 去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。\n\n## Summary",
+        )
+        self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)
 
     def test_generate_markdown_report_from_sections_handles_none(self):
         self.assertEqual(generate_markdown_report_from_sections(None), "")
+
+    def test_generate_markdown_report_from_sections_does_not_duplicate_daily_discipline(self):
+        rendered = generate_markdown_report_from_sections(
+            {
+                "review": "## Review\n\n### 交易原则\n- 去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。",
+            }
+        )
+
+        self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)
 
     def test_generate_markdown_report_uses_legacy_path_when_sections_are_absent(self):
         fake_demo = types.ModuleType("daily_report_entry_demo")
@@ -2018,4 +2031,7 @@ Top50长趋势表不该进入轻量版
                 "2026-04-21",
             )
 
-        self.assertEqual(rendered, "# Preamble\n\n## Summary")
+        self.assertIn("# Preamble", rendered)
+        self.assertIn("### 交易原则", rendered)
+        self.assertIn("## Summary", rendered)
+        self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)

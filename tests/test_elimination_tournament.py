@@ -1208,7 +1208,7 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
             {
                 "status": "eliminated",
                 "reason": "决策台账仓位=0%；0%不参与",
-                "elimination_basis": "不取得明日新增参与资格",
+                "elimination_basis": "暂无新增参与资格",
                 "next_basis": "",
             }
         )
@@ -1233,7 +1233,7 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         self.assertEqual(counter_layer["input_count"], 1)
         self.assertEqual(counter_layer["eliminated_count"], 1)
         self.assertIn("决策台账仓位=0%", counter_layer["entries"][0]["reason"])
-        self.assertIn("不取得明日新增参与资格", counter_layer["entries"][0]["elimination_basis"])
+        self.assertIn("暂无新增参与资格", counter_layer["entries"][0]["elimination_basis"])
 
     def test_cycle_window_marks_missing_reason_when_zero_final_has_no_failure_condition(self):
         source = self._payload()

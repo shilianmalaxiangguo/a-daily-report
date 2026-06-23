@@ -369,6 +369,62 @@ assert report == "# report"
         self.assertIn("持有华电辽能(600396)，200股，T+1仓，今日做T买入2手、卖出2手", summary)
         self.assertNotIn("持有T", summary)
 
+    def test_parse_position_string_keeps_one_third_159995_as_independent_etf_holding(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("我现在三分之一仓位的159995")
+        context = module.build_personal_position_context({}, positions)
+
+        self.assertEqual(
+            positions,
+            [
+                {
+                    "name": "芯片ETF",
+                    "code": "159995",
+                    "position_kind": "etf",
+                    "position": 33.0,
+                }
+            ],
+        )
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理",
+        )
+
+    def test_parse_position_string_reads_full_position_stock_phrase(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("全仓太极实业")
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600667", "name": "太极实业"}]},
+            positions,
+        )
+
+        self.assertEqual(positions, [{"name": "太极实业", "position": 100.0}])
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "持有太极实业(600667)，100%仓位；先处理旧仓；新开仓0手",
+        )
+
+    def test_zero_percent_position_is_rendered_as_cleared_not_holding(self):
+        module = self._load_module()
+
+        positions = module.parse_position_string("太极实业 0% 当日盈利 -620 -7%")
+        context = module.build_personal_position_context(
+            {"turnover_rank": [{"code": "600667", "name": "太极实业"}]},
+            positions,
+        )
+
+        self.assertEqual(
+            positions,
+            [{"name": "太极实业", "position": 0.0, "daily_profit": -620.0, "daily_profit_pct": -7.0}],
+        )
+        self.assertEqual(
+            context["existing_position_summary"]["summary"],
+            "已清仓太极实业(600667)；明日不买回；新开仓0手",
+        )
+        self.assertNotIn("持有太极实业(600667)，0%仓位", context["existing_position_summary"]["summary"])
+
     def test_analyze_position_management_runtime_exposes_helper_bindings(self):
         module = self._load_module()
         exec(

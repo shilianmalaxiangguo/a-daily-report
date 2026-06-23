@@ -217,6 +217,37 @@ class UseReportSectionsTest(unittest.TestCase):
         self.assertIn("| 命中经验 | 触发事实 | 本次影响 | 来源 |", review)
         self.assertIn("| 指数强但赚钱效应弱 | 指数上涨；上涨家数偏弱 | 只保留主线核心，不从旧方向强行扩散候选。 | 板块中枢与主线延续 |", review)
 
+    def test_report_sections_surface_daily_discipline_lines(self):
+        ctx = build_empty_context({"target_date": "2026-06-16"})
+        ctx = merge_hook_patches(
+            ctx,
+            {
+                "knowledge": {
+                    "trading_philosophy": {
+                        "version": "2026-04-22",
+                        "source": "skillhub",
+                        "source_path": "/tmp/source.md",
+                    },
+                    "llm_wiki": {
+                        "version": "2026-06-16",
+                        "source": "llm_wiki",
+                        "daily_discipline_lines": [
+                            "去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。",
+                        ],
+                    },
+                },
+            },
+        )
+
+        result = run(ctx)
+
+        review = result["patches"]["sections"]["review"]
+        self.assertIn("交易原则", review)
+        self.assertIn(
+            "去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。",
+            review,
+        )
+
     def test_report_sections_hide_knowledge_hits_table_when_absent(self):
         ctx = build_empty_context({"target_date": "2026-05-29"})
         ctx = merge_hook_patches(

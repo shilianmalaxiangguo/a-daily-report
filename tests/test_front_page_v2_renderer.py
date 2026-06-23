@@ -1592,6 +1592,41 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 观察对象 | 华天科技(002185)：仅作观察对象 |", account_section)
         self.assertIn("| 新开仓上限 | 0 |", account_section)
 
+    def test_front_page_t0_card_keeps_independent_etf_holding_separate_from_new_target(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-18",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理",
+                    },
+                    "selected_position_candidate": {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                },
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；已有持仓继续独立评估 |", account_section)
+        self.assertIn(
+            "| 明日动作 | 持仓独立评估；太极实业(600667)固定交易窗口条件成立才参与，不满足回到0% |",
+            account_section,
+        )
+        self.assertIn("| 当前持仓 | 持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理 |", account_section)
+        self.assertIn("| 明日执行目标 | 太极实业(600667)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 新开仓上限 | 条件满足后1 |", account_section)
+        self.assertNotIn("先处理旧仓", account_section)
+
     def test_front_page_account_advice_uses_knowledge_hit_for_unbuyable_core(self):
         rendered = "\n".join(
             render_front_page_v2(

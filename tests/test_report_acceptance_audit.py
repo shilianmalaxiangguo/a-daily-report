@@ -2782,6 +2782,21 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertIn("candidate_identity_conflict", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
+    def test_audit_allows_crossline_row_with_negative_mainline_core_reason(self):
+        ok = GOOD_MARKDOWN.replace(
+            "## 八、详细附录",
+            "- 👀 江海股份(002484) - 跨线继续看谁\n"
+            "跨线对象（元件），只用于观察强弱，不代表主攻线切换。\n\n"
+            "## 八、详细附录\n"
+            "| 层级 | 候选 | 来源池 | 未满足/缺失 |\n"
+            "|------|------|------|------|\n"
+            "| 观察层 | 江海股份(002484) | watch_anchor | 不是主线核心，继续观察 |",
+        )
+
+        result = audit_report_markdown(ok)
+
+        self.assertNotIn("candidate_identity_conflict", {finding["code"] for finding in result["findings"]})
+
     def test_audit_flags_success_rates_that_ignore_request_degradation(self):
         bad = GOOD_MARKDOWN.replace(
             "## 八、详细附录",

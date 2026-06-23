@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import html
 import json
 import re
@@ -158,6 +159,166 @@ LOCAL_MERMAID_RENDERER_SCRIPT = """
   </script>
 """
 
+WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
+  <script>
+    (function() {
+      const payloadNode = document.getElementById('sector-window-chart-payload');
+      const returnNode = document.getElementById('sector-window-return-chart');
+      const excessNode = document.getElementById('sector-window-excess-chart');
+      if (!payloadNode || !returnNode || !excessNode) return;
+
+      const chartNodes = [returnNode, excessNode];
+      const setMessage = (message) => {
+        chartNodes.forEach((node) => {
+          node.classList.add('is-empty');
+          node.textContent = message;
+        });
+      };
+
+      let payload = { rows: [] };
+      try {
+        payload = JSON.parse(payloadNode.textContent || '{}');
+      } catch (error) {
+        setMessage('图表数据解析失败，请查看下方表格。');
+        return;
+      }
+
+      const rows = Array.isArray(payload.rows) ? payload.rows : [];
+      if (!rows.length) {
+        setMessage('暂无可绘制的窗口折算收益图。');
+        return;
+      }
+      if (!window.echarts) {
+        setMessage('图表依赖未加载，请查看下方表格。');
+        return;
+      }
+
+      const numberOrNull = (row, key) => {
+        const value = row ? row[key] : null;
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      };
+      const escapeHtml = (value) => String(value || '').replace(/[&<>"']/g, (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      }[char]));
+      const pct = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}%` : '待补');
+      const point = (value) => (typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}个百分点` : '待补');
+      const labels = rows.map((row) => row.short_label || row.label || '');
+      const commonGrid = { left: 54, right: 32, top: 62, bottom: 86, containLabel: true };
+      const axisLabel = { interval: 0, lineHeight: 16, color: '#475467', fontSize: 11 };
+
+      const returnChart = window.echarts.init(returnNode, null, { renderer: 'canvas' });
+      returnChart.setOption({
+        color: ['#0f766e', '#2563eb', '#b42318'],
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            const index = params && params.length ? params[0].dataIndex : 0;
+            const row = rows[index] || {};
+            const lines = [
+              escapeHtml(row.label),
+              `参与/原样本：${escapeHtml(row.sample_text || '待补')}`,
+              `折算周期：${escapeHtml(row.period_count || '待补')}`
+            ];
+            params.forEach((item) => {
+              lines.push(`${item.marker}${item.seriesName}：${pct(item.value)}`);
+            });
+            return lines.join('<br>');
+          }
+        },
+        legend: { top: 8, textStyle: { color: '#475467' } },
+        grid: commonGrid,
+        xAxis: { type: 'category', data: labels, axisLabel },
+        yAxis: [
+          { type: 'value', name: '收益', axisLabel: { formatter: '{value}%' }, splitLine: { lineStyle: { color: '#eef2f7' } } },
+          { type: 'value', name: '回撤', axisLabel: { formatter: '{value}%' }, splitLine: { show: false } }
+        ],
+        series: [
+          {
+            name: '累计代理收益',
+            type: 'bar',
+            barMaxWidth: 24,
+            data: rows.map((row) => numberOrNull(row, 'cumulative_return_pct'))
+          },
+          {
+            name: '月化代理收益',
+            type: 'bar',
+            barMaxWidth: 24,
+            data: rows.map((row) => numberOrNull(row, 'monthly_return_pct'))
+          },
+          {
+            name: '最大回撤',
+            type: 'line',
+            yAxisIndex: 1,
+            symbolSize: 7,
+            data: rows.map((row) => numberOrNull(row, 'max_drawdown_pct'))
+          }
+        ]
+      });
+
+      const excessChart = window.echarts.init(excessNode, null, { renderer: 'canvas' });
+      excessChart.setOption({
+        color: ['#1d4ed8', '#0f766e', '#d97706', '#be123c'],
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: function(params) {
+            const index = params && params.length ? params[0].dataIndex : 0;
+            const row = rows[index] || {};
+            const lines = [
+              escapeHtml(row.label),
+              `参与/原样本：${escapeHtml(row.sample_text || '待补')}`
+            ];
+            params.forEach((item) => {
+              lines.push(`${item.marker}${item.seriesName}：${point(item.value)}`);
+            });
+            return lines.join('<br>');
+          }
+        },
+        legend: { top: 8, textStyle: { color: '#475467' } },
+        grid: commonGrid,
+        xAxis: { type: 'category', data: labels, axisLabel },
+        yAxis: { type: 'value', name: '百分点', axisLabel: { formatter: '{value}' }, splitLine: { lineStyle: { color: '#eef2f7' } } },
+        series: [
+          {
+            name: '跑赢上证',
+            type: 'bar',
+            barMaxWidth: 18,
+            data: rows.map((row) => numberOrNull(row, 'excess_shanghai_pct'))
+          },
+          {
+            name: '跑赢全A',
+            type: 'bar',
+            barMaxWidth: 18,
+            data: rows.map((row) => numberOrNull(row, 'excess_all_a_pct'))
+          },
+          {
+            name: '跑赢中证500',
+            type: 'bar',
+            barMaxWidth: 18,
+            data: rows.map((row) => numberOrNull(row, 'excess_csi500_pct'))
+          },
+          {
+            name: '跑赢创业板',
+            type: 'bar',
+            barMaxWidth: 18,
+            data: rows.map((row) => numberOrNull(row, 'excess_chinext_pct'))
+          }
+        ]
+      });
+
+      window.addEventListener('resize', () => {
+        returnChart.resize();
+        excessChart.resize();
+      });
+    })();
+  </script>
+"""
+
 from daily_report_entry_demo import load_daily_report_data_from_postgres
 from daily_report_snapshot_io import load_data_snapshot
 from daily_report_render import ReportCriticalDataMissingError
@@ -222,6 +383,24 @@ def _json_for_html(payload):
         .replace(">", "\\u003e")
         .replace("</", "<\\/")
     )
+
+
+def _echarts_source_path():
+    return PROJECT_ROOT / ".generated" / "vendor" / "echarts" / "echarts.min.js"
+
+
+def _echarts_loader_html():
+    source_path = _echarts_source_path()
+    if source_path.exists():
+        return (
+            '<script src="../../.generated/vendor/echarts/echarts.min.js"></script>'
+            "<script>"
+            "if(!window.echarts){document.write('<script src=\""
+            f"{_html(source_path.as_uri())}"
+            "\"><\\/script>');}"
+            "</script>"
+        )
+    return ""
 
 
 def _stock_code(value):
@@ -584,6 +763,8 @@ def _attach_paper_target_review(
     decision_date=None,
     decision_data=None,
     minute_refill=None,
+    account_capital=10000,
+    lot_size=100,
 ):
     candidates = paper_strategy.get("paper_candidates") if isinstance(paper_strategy, dict) else []
     evaluations = []
@@ -605,6 +786,9 @@ def _attach_paper_target_review(
             decision_date=decision_date,
             decision_data=decision_data,
             minute_refill=minute_refill,
+            account_capital=account_capital,
+            lot_size=lot_size,
+            paper_action=paper_strategy.get("action"),
         )
         evaluations.append(evaluation)
     primary_label = _clean((paper_strategy.get("primary_candidate") or {}).get("stock_label")) if isinstance(paper_strategy, dict) else ""
@@ -626,6 +810,20 @@ def _attach_paper_target_review(
 def _fmt_pct(value):
     try:
         return f"{float(value):.2f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_signed_pct(value):
+    try:
+        return f"{float(value):+.2f}%"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _fmt_signed_point(value):
+    try:
+        return f"{float(value):+.2f}个百分点"
     except (TypeError, ValueError):
         return ""
 
@@ -1564,8 +1762,17 @@ def _build_price_path_review(code, decision_date, buy_date, sell_date, decision_
 def _build_window_matrix(stock, buy_date, sell_date, buy_bar, sell_bar):
     rows = []
     missing_fields = []
+    code = _stock_code((stock or {}).get("code"))
+    buy_day_change_pct = _bar_change_pct(buy_bar)
+    buy_limit_state = _limit_state(code, buy_bar)
+    buy_close_near_limit = (
+        buy_day_change_pct >= _stock_limit_pct(code) - 0.5
+        if buy_day_change_pct is not None
+        else False
+    )
     for buy_window in BUY_WINDOWS:
         entry_price = _window_price(buy_bar, buy_window["price_field"])
+        entry_change_pct = _bar_field_change_pct(buy_bar, buy_window["price_field"])
         if entry_price is None:
             missing_fields.append(f"tplus1_{buy_window['id']}_entry_price")
         for sell_window in SELL_WINDOWS:
@@ -1583,6 +1790,17 @@ def _build_window_matrix(stock, buy_date, sell_date, buy_bar, sell_bar):
                     "sell_proxy_label": sell_window["proxy_label"],
                     "entry_price": round(entry_price, 4) if entry_price is not None else None,
                     "exit_price": round(exit_price, 4) if exit_price is not None else None,
+                    "buy_day_change_pct": round(buy_day_change_pct, 2) if buy_day_change_pct is not None else None,
+                    "buy_window_entry_change_pct": (
+                        round(entry_change_pct, 2) if entry_change_pct is not None else None
+                    ),
+                    "buy_limit_state": buy_limit_state,
+                    "buy_close_near_limit": buy_close_near_limit,
+                    "buy_window_buyability_note": (
+                        "T+1买入日已接近涨停，尾盘或高位代理不等于真实可买到"
+                        if buy_close_near_limit
+                        else "T+1买入日未显示接近涨停；仍需分时成交确认"
+                    ),
                     "return_pct": round(return_pct, 2) if return_pct is not None else None,
                     "basis": (
                         "缺少分时成交价，使用日线代理；不能当作精确窗口成交；"
@@ -1594,6 +1812,98 @@ def _build_window_matrix(stock, buy_date, sell_date, buy_bar, sell_bar):
                 }
             )
     return rows, sorted(set(missing_fields))
+
+
+def _entry_price_for_buy_window(review, buy_window_id):
+    review = review if isinstance(review, dict) else {}
+    buy_window = next((item for item in BUY_WINDOWS if item["id"] == buy_window_id), {})
+    for row in review.get("window_matrix") or []:
+        if isinstance(row, dict) and row.get("buy_window_id") == buy_window_id:
+            return _safe_float(row.get("entry_price"), None)
+    price_path = review.get("price_path_review") if isinstance(review.get("price_path_review"), dict) else {}
+    tplus1 = price_path.get("tplus1") if isinstance(price_path.get("tplus1"), dict) else {}
+    return _window_price(tplus1, buy_window.get("price_field"))
+
+
+def _small_account_fit(entry_price, *, account_capital, lot_size, buyability_status="", paper_action=""):
+    entry_price = _safe_float(entry_price, None)
+    account_capital = _safe_float(account_capital, None)
+    lot_size = _safe_int(lot_size, 100)
+    if entry_price is None or entry_price <= 0 or not account_capital or account_capital <= 0 or lot_size <= 0:
+        return {
+            "entry_price": round(entry_price, 4) if entry_price is not None else None,
+            "one_lot_amount": None,
+            "one_lot_account_pct": None,
+            "account_fit": "待补",
+            "position_50pct_basis": "缺少买入代理价，不能换算50%仓位",
+            "small_account_action": "价格事实待补，只观察，不新增参与",
+        }
+    one_lot_amount = entry_price * lot_size
+    one_lot_pct = one_lot_amount / account_capital * 100
+    if one_lot_amount > account_capital:
+        account_fit = "当前账户买不了一手"
+        position_basis = "50%条件执行无法落账；一手金额超过账户本金"
+        action = "只观察，不参与；换更小资金载体或继续空仓"
+    elif one_lot_pct >= 80:
+        account_fit = "一手接近满仓"
+        position_basis = "50%不能精确落账；一手就是接近满仓暴露"
+        action = "按龙空龙处理：只有唯一核心、固定窗口和贴近认错线同时满足，才考虑一手；否则空仓"
+    elif one_lot_pct > 60:
+        account_fit = "一手高占用"
+        position_basis = "50%不能精确落账；一手已经明显超过半仓"
+        action = "一手就是上限；条件不够硬就不做"
+    elif one_lot_pct >= 40:
+        account_fit = "一手约等50%"
+        position_basis = "50%条件执行可以用一手近似，不再拆更小仓位"
+        action = "满足唯一核心和窗口条件时，一手近似50%；不满足回到空仓"
+    else:
+        account_fit = "一手低占用"
+        position_basis = "50%需要按一手或多手近似，不能用小数仓位表达"
+        action = "可用一手起步，但仍只在固定窗口和买入资格成立时参与"
+    if buyability_status in {"追高风险", "可能买不到"}:
+        if one_lot_amount > account_capital:
+            action = "当前账户买不了一手；只观察，不参与，买点复核不改变账户约束"
+        elif one_lot_pct >= 80:
+            action = "按龙空龙处理，但买点复核偏紧，只观察承接，不追高；账户可买不等于可以买"
+        else:
+            action = "买点复核偏紧，只观察承接，不追高；账户可买不等于可以买"
+    elif _clean(paper_action) != "paper_participate":
+        action = "纸面动作不是参与，账户层只保留观察或空仓"
+    return {
+        "entry_price": round(entry_price, 4),
+        "one_lot_amount": round(one_lot_amount, 2),
+        "one_lot_account_pct": round(one_lot_pct, 2),
+        "account_fit": account_fit,
+        "position_50pct_basis": position_basis,
+        "small_account_action": action,
+    }
+
+
+def _build_account_fit_review(review, *, account_capital, lot_size, buyability_status="", paper_action=""):
+    windows = []
+    for buy_window in BUY_WINDOWS:
+        fit = _small_account_fit(
+            _entry_price_for_buy_window(review, buy_window["id"]),
+            account_capital=account_capital,
+            lot_size=lot_size,
+            buyability_status=buyability_status,
+            paper_action=paper_action,
+        )
+        fit.update(
+            {
+                "buy_window_id": buy_window["id"],
+                "buy_window": buy_window["window"],
+                "buy_proxy_label": buy_window["proxy_label"],
+            }
+        )
+        windows.append(fit)
+    return {
+        "schema_version": "small_account_fit_review.v1",
+        "account_capital": round(_safe_float(account_capital, 0), 2),
+        "lot_size": _safe_int(lot_size, 100),
+        "windows": windows,
+        "basis": "A股最小交易单位按一手换算；策略仓位表达意图，实际仓位按一手金额落账",
+    }
 
 
 def _best_trade_window_combo(evaluation):
@@ -1618,6 +1928,9 @@ def _build_tplus2_exit_review(
     decision_date=None,
     decision_data=None,
     minute_refill=None,
+    account_capital=10000,
+    lot_size=100,
+    paper_action="",
 ):
     stock = _stock_from_candidate(entry)
     code = stock.get("code")
@@ -1626,6 +1939,16 @@ def _build_tplus2_exit_review(
         buy_bar = _daily_price_bar_for(code, buy_date, buy_data, price_refill=price_refill)
         decision_bar, buy_bar, _ = _link_price_path_pre_close(decision_bar, buy_bar, {})
         minute_bars = minute_refill(code, buy_date) if callable(minute_refill) else []
+        price_path = _build_price_path_review(
+            code,
+            decision_date or "",
+            buy_date,
+            sell_date or "",
+            decision_bar,
+            buy_bar,
+            {},
+        )
+        buyability = _build_buyability_review(code, buy_bar, minute_bars, buy_data=buy_data)
         return {
             "stock": stock,
             "stock_label": _stock_label(stock),
@@ -1634,16 +1957,15 @@ def _build_tplus2_exit_review(
             "entry_basis": "T+1收盘价代理",
             "data_basis": "缺少T+2交易日，不能计算卖出窗口收益",
             "missing_fields": ["tplus2_sell_date"],
-            "price_path_review": _build_price_path_review(
-                code,
-                decision_date or "",
-                buy_date,
-                sell_date or "",
-                decision_bar,
-                buy_bar,
-                {},
+            "price_path_review": price_path,
+            "buyability_review": buyability,
+            "small_account_fit_review": _build_account_fit_review(
+                {"price_path_review": price_path, "window_matrix": []},
+                account_capital=account_capital,
+                lot_size=lot_size,
+                buyability_status=buyability.get("status"),
+                paper_action=paper_action,
             ),
-            "buyability_review": _build_buyability_review(code, buy_bar, minute_bars, buy_data=buy_data),
             "window_matrix": [],
             "windows": [
                 {
@@ -1664,6 +1986,8 @@ def _build_tplus2_exit_review(
     minute_bars = minute_refill(code, buy_date) if callable(minute_refill) else []
     entry_price = _safe_float(buy_bar.get("close"))
     window_matrix, matrix_missing_fields = _build_window_matrix(stock, buy_date, sell_date, buy_bar, sell_bar)
+    price_path = _build_price_path_review(code, decision_date or "", buy_date, sell_date, decision_bar, buy_bar, sell_bar)
+    buyability = _build_buyability_review(code, buy_bar, minute_bars, buy_data=buy_data)
     missing_fields = []
     if entry_price is None:
         missing_fields.append("tplus1_entry_close_price")
@@ -1706,8 +2030,15 @@ def _build_tplus2_exit_review(
         "sell_source": sell_bar.get("source", ""),
         "data_basis": "未发现股票级分时窗口价格，本表用日线开盘/日内中枢/收盘做代理",
         "missing_fields": sorted(set(missing_fields)),
-        "price_path_review": _build_price_path_review(code, decision_date or "", buy_date, sell_date, decision_bar, buy_bar, sell_bar),
-        "buyability_review": _build_buyability_review(code, buy_bar, minute_bars, buy_data=buy_data),
+        "price_path_review": price_path,
+        "buyability_review": buyability,
+        "small_account_fit_review": _build_account_fit_review(
+            {"price_path_review": price_path, "window_matrix": window_matrix},
+            account_capital=account_capital,
+            lot_size=lot_size,
+            buyability_status=buyability.get("status"),
+            paper_action=paper_action,
+        ),
         "window_matrix": window_matrix,
         "windows": windows,
     }
@@ -1924,17 +2255,65 @@ def _cached_loader(loader):
     return load
 
 
+def _forward_replay_data_is_thin(data):
+    if not isinstance(data, dict) or not data:
+        return True
+    report_spine_keys = (
+        "selection_workflow",
+        "final_target_resolution",
+        "two_layer_decision_payload",
+        "sniper_target_derivation",
+        "elimination_tournament_payload",
+    )
+    evidence_keys = (
+        "hot_plates",
+        "zt_pool",
+        "zt_pool_by_sector",
+        "sector_fund_flow",
+        "integrated_hot_list",
+        "turnover_rank",
+        "market_stats",
+        "new_high_feedback",
+        "indices",
+    )
+    has_spine = any(data.get(key) for key in report_spine_keys)
+    replay_evidence_count = sum(1 for key in evidence_keys if data.get(key))
+    has_replay_evidence = replay_evidence_count >= 2 or any(
+        data.get(key)
+        for key in (
+            "sector_fund_flow",
+            "integrated_hot_list",
+            "turnover_rank",
+            "zt_pool_by_sector",
+        )
+    )
+    return not (has_spine and has_replay_evidence)
+
+
 def load_daily_report_data_for_forward_replay(target_date):
+    postgres_data = None
+    postgres_exc = None
     try:
-        return load_daily_report_data_from_postgres(target_date)
-    except Exception as postgres_exc:
-        snapshot_data, _ = load_data_snapshot(str(target_date or ""))
-        if isinstance(snapshot_data, dict) and snapshot_data:
-            data = dict(snapshot_data)
-            data["forward_replay_source"] = "snapshot"
-            data["forward_replay_postgres_error"] = f"{type(postgres_exc).__name__}: {postgres_exc}"
+        postgres_data = load_daily_report_data_from_postgres(target_date)
+        if not _forward_replay_data_is_thin(postgres_data):
+            data = dict(postgres_data)
+            data["forward_replay_source"] = data.get("forward_replay_source") or "postgres"
             return data
+    except Exception as exc:
+        postgres_exc = exc
+
+    snapshot_data, _ = load_data_snapshot(str(target_date or ""))
+    if isinstance(snapshot_data, dict) and snapshot_data:
+        data = dict(snapshot_data)
+        data["forward_replay_source"] = "snapshot"
+        if postgres_exc:
+            data["forward_replay_postgres_error"] = f"{type(postgres_exc).__name__}: {postgres_exc}"
+        elif isinstance(postgres_data, dict):
+            data["forward_replay_postgres_note"] = "PostgreSQL事实偏薄，改用冻结快照"
+        return data
+    if postgres_exc:
         raise postgres_exc
+    return postgres_data or {}
 
 
 def discover_forward_replay_pairs(
@@ -2372,11 +2751,285 @@ def _build_exit_window_summary(pair_payloads):
     }
 
 
+def _build_equity_curve(samples):
+    ordered = sorted(
+        (item for item in samples if isinstance(item, dict) and item.get("return_pct") is not None),
+        key=lambda item: _clean(item.get("decision_date")),
+    )
+    equity = 1.0
+    peak = 1.0
+    max_drawdown_pct = 0.0
+    max_drawdown_sample = {}
+    curve_points = []
+    for sample in ordered:
+        return_pct = _safe_float(sample.get("return_pct"), None)
+        if return_pct is None:
+            continue
+        equity *= 1 + return_pct / 100
+        if equity > peak:
+            peak = equity
+        drawdown_pct = ((equity / peak) - 1) * 100 if peak else 0.0
+        point = {
+            "decision_date": sample.get("decision_date"),
+            "buy_date": sample.get("buy_date"),
+            "sell_date": sample.get("sell_date"),
+            "stock": sample.get("stock"),
+            "buy_window": sample.get("buy_window"),
+            "sell_window": sample.get("sell_window"),
+            "return_pct": round(return_pct, 2),
+            "net_value": round(equity, 4),
+            "cumulative_return_pct": round((equity - 1) * 100, 2),
+            "drawdown_pct": round(drawdown_pct, 2),
+        }
+        curve_points.append(point)
+        if drawdown_pct < max_drawdown_pct:
+            max_drawdown_pct = drawdown_pct
+            max_drawdown_sample = point
+    return {
+        "sample_count": len(curve_points),
+        "final_net_value": round(equity, 4) if curve_points else None,
+        "cumulative_return_pct": round((equity - 1) * 100, 2) if curve_points else None,
+        "max_drawdown_pct": round(max_drawdown_pct, 2) if curve_points else None,
+        "max_drawdown_sample": max_drawdown_sample,
+        "curve_points": curve_points,
+        "basis": "按T0日期顺序把每笔日线代理收益复利累乘；未计手续费、滑点和空仓收益，不等于真实成交曲线",
+    }
+
+
+def _index_point_from_text(value):
+    match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*/", _clean(value))
+    if not match:
+        return None
+    return _safe_float(match.group(1), None)
+
+
+def _build_index_benchmark_summary(pair_payloads):
+    ordered_all = sorted(
+        (pair for pair in pair_payloads if isinstance(pair, dict)),
+        key=lambda item: _clean(item.get("effective_decision_date")),
+    )
+    expected_start_date = _clean(ordered_all[0].get("effective_decision_date")) if ordered_all else ""
+    expected_end_date = _clean(ordered_all[-1].get("effective_decision_date")) if ordered_all else ""
+    ordered = sorted(
+        (
+            pair for pair in pair_payloads
+            if isinstance(pair, dict) and isinstance(pair.get("t0_market_context"), dict)
+        ),
+        key=lambda item: _clean(item.get("effective_decision_date")),
+    )
+    benchmarks = []
+    for label, key in (
+        ("上证指数", "T0上证指数"),
+        ("全A指数", "T0全A指数"),
+        ("中证500", "T0中证500"),
+        ("创业板指", "T0创业板指"),
+    ):
+        start_pair = next(
+            (pair for pair in ordered if _index_point_from_text(pair.get("t0_market_context", {}).get(key)) is not None),
+            {},
+        )
+        end_pair = next(
+            (
+                pair for pair in reversed(ordered)
+                if _index_point_from_text(pair.get("t0_market_context", {}).get(key)) is not None
+            ),
+            {},
+        )
+        start_point = _index_point_from_text(start_pair.get("t0_market_context", {}).get(key))
+        end_point = _index_point_from_text(end_pair.get("t0_market_context", {}).get(key))
+        start_date = _clean(start_pair.get("effective_decision_date"))
+        end_date = _clean(end_pair.get("effective_decision_date"))
+        coverage_complete = bool(
+            expected_start_date
+            and expected_end_date
+            and start_date == expected_start_date
+            and end_date == expected_end_date
+            and start_point is not None
+            and end_point is not None
+        )
+        cumulative_return_pct = None
+        if coverage_complete and start_point and end_point:
+            cumulative_return_pct = (end_point / start_point - 1) * 100
+        benchmarks.append(
+            {
+                "id": key,
+                "label": label,
+                "start_date": start_date,
+                "end_date": end_date,
+                "expected_start_date": expected_start_date,
+                "expected_end_date": expected_end_date,
+                "coverage_complete": coverage_complete,
+                "coverage_note": (
+                    "覆盖样本首尾"
+                    if coverage_complete
+                    else "未覆盖样本首尾，仅展示可用点位，不计算跑赢"
+                ),
+                "start_point": round(start_point, 2) if start_point is not None else None,
+                "end_point": round(end_point, 2) if end_point is not None else None,
+                "cumulative_return_pct": (
+                    round(cumulative_return_pct, 2) if cumulative_return_pct is not None else None
+                ),
+            }
+        )
+    return {
+        "rows": benchmarks,
+        "basis": "指数收益按样本T0指数点位首尾计算，和策略窗口使用同一批T0样本；只作市场背景对照",
+    }
+
+
+def _annualized_pct_from_net_value(net_value, periods, annual_periods):
+    net_value = _safe_float(net_value, None)
+    periods = _safe_float(periods, None)
+    if net_value is None or net_value <= 0 or not periods or periods <= 0:
+        return None
+    return (net_value ** (annual_periods / periods) - 1) * 100
+
+
+def _open_buy_near_limit(sample):
+    entry_change = _safe_float((sample or {}).get("buy_window_entry_change_pct"), None)
+    if entry_change is None:
+        return False
+    code = _stock_code((sample or {}).get("stock"))
+    return entry_change >= _stock_limit_pct(code) - 0.5
+
+
+def _samples_for_combo(pair_payloads, buy_window_id, sell_window_id):
+    samples = []
+    for pair in pair_payloads:
+        strategy = pair.get("paper_strategy") if isinstance(pair.get("paper_strategy"), dict) else {}
+        target_summary = strategy.get("target_summary") if isinstance(strategy.get("target_summary"), dict) else {}
+        primary_stock = _clean(target_summary.get("primary_stock"))
+        evaluations = strategy.get("target_evaluations") if isinstance(strategy.get("target_evaluations"), list) else []
+        primary = next((item for item in evaluations if _clean(item.get("stock_label")) == primary_stock), None)
+        if not primary:
+            continue
+        review = primary.get("tplus2_exit_review") if isinstance(primary.get("tplus2_exit_review"), dict) else {}
+        result = next(
+            (
+                item for item in review.get("window_matrix") or []
+                if isinstance(item, dict)
+                and item.get("buy_window_id") == buy_window_id
+                and item.get("sell_window_id") == sell_window_id
+            ),
+            {},
+        )
+        return_pct = _safe_float(result.get("return_pct"), None)
+        if return_pct is None:
+            continue
+        samples.append(
+            {
+                "decision_date": pair.get("effective_decision_date"),
+                "buy_date": pair.get("buy_date"),
+                "sell_date": pair.get("sell_date"),
+                "stock": primary_stock,
+                "buy_window": result.get("buy_window"),
+                "sell_window": result.get("sell_window"),
+                "return_pct": round(return_pct, 2),
+                "buy_close_near_limit": result.get("buy_close_near_limit"),
+                "buy_window_entry_change_pct": result.get("buy_window_entry_change_pct"),
+            }
+        )
+    return samples
+
+
+def _build_window_performance_comparison(pair_payloads, matrix_summary, benchmark_summary):
+    period_count = max(1, len(pair_payloads))
+    benchmark_rows = benchmark_summary.get("rows") if isinstance(benchmark_summary, dict) else []
+    benchmark_returns = {
+        item.get("label"): item.get("cumulative_return_pct")
+        for item in benchmark_rows or []
+        if isinstance(item, dict)
+    }
+
+    def build_row(label, buy_window_id, sell_window_id, samples, exclusion, all_sample_count=None):
+        curve = _build_equity_curve(samples)
+        sample_count = curve.get("sample_count", 0)
+        returns = [_safe_float(sample.get("return_pct"), None) for sample in samples]
+        returns = [item for item in returns if item is not None]
+        cumulative_return = curve.get("cumulative_return_pct")
+        row = {
+            "label": label,
+            "buy_window_id": buy_window_id,
+            "sell_window_id": sell_window_id,
+            "buy_window": samples[0].get("buy_window") if samples else "",
+            "sell_window": samples[0].get("sell_window") if samples else "",
+            "sample_count": sample_count,
+            "all_sample_count": all_sample_count if all_sample_count is not None else sample_count,
+            "period_count": period_count,
+            "average_return_pct": round(sum(returns) / len(returns), 2) if returns else None,
+            "final_net_value": curve.get("final_net_value"),
+            "cumulative_return_pct": cumulative_return,
+            "monthly_return_pct": (
+                round(_annualized_pct_from_net_value(curve.get("final_net_value"), period_count, 21), 2)
+                if sample_count else None
+            ),
+            "annualized_return_pct": (
+                round(_annualized_pct_from_net_value(curve.get("final_net_value"), period_count, 252), 2)
+                if sample_count else None
+            ),
+            "max_drawdown_pct": curve.get("max_drawdown_pct"),
+            "exclusion": exclusion,
+            "basis": "按21/252个交易日折算；空仓日按净值不变处理；未计手续费、滑点和真实分时成交",
+        }
+        for benchmark_label in ("上证指数", "全A指数", "中证500", "创业板指"):
+            benchmark_return = _safe_float(benchmark_returns.get(benchmark_label), None)
+            row[f"excess_{benchmark_label}"] = (
+                round(cumulative_return - benchmark_return, 2)
+                if cumulative_return is not None and benchmark_return is not None
+                else None
+            )
+        return row
+
+    rows = []
+    matrix_rows = matrix_summary.get("rows") if isinstance(matrix_summary, dict) else []
+    for item in matrix_rows or []:
+        if not isinstance(item, dict) or item.get("average_return_pct") is None:
+            continue
+        rows.append(
+            build_row(
+                f"{item.get('buy_window')}买 / {item.get('sell_window')}卖（原始）",
+                item.get("buy_window_id"),
+                item.get("sell_window_id"),
+                _samples_for_combo(pair_payloads, item.get("buy_window_id"), item.get("sell_window_id")),
+                "未剔除接近涨停买点",
+            )
+        )
+
+    filtered_configs = [
+        (
+            "09:30-09:35买 / 14:30-14:55卖（剔除开盘接近涨停）",
+            "open_0930_0935",
+            "late_1430_1455",
+            lambda sample: not _open_buy_near_limit(sample),
+            "剔除T+1开盘买点已接近涨停的样本",
+        ),
+        (
+            "14:30-14:55买 / 14:30-14:55卖（剔除收盘接近涨停）",
+            "late_1430_1455",
+            "late_1430_1455",
+            lambda sample: not sample.get("buy_close_near_limit"),
+            "剔除T+1收盘接近涨停的样本",
+        ),
+    ]
+    for label, buy_window_id, sell_window_id, predicate, exclusion in filtered_configs:
+        all_samples = _samples_for_combo(pair_payloads, buy_window_id, sell_window_id)
+        samples = [sample for sample in all_samples if predicate(sample)]
+        rows.append(build_row(label, buy_window_id, sell_window_id, samples, exclusion, all_sample_count=len(all_samples)))
+
+    return {
+        "period_count": period_count,
+        "rows": rows,
+        "basis": "同一T0样本区间内比较策略窗口和指数首尾表现；月化/年化只是折算口径，不代表真实成交承诺",
+    }
+
+
 def _build_trade_window_matrix_summary(pair_payloads):
     rows = []
+    all_samples = []
     for buy_window in BUY_WINDOWS:
         for sell_window in SELL_WINDOWS:
             returns = []
+            combo_samples = []
             positive_count = 0
             best_sample = {}
             worst_sample = {}
@@ -2406,9 +3059,23 @@ def _build_trade_window_matrix_summary(pair_payloads):
                     "buy_date": pair.get("buy_date"),
                     "sell_date": pair.get("sell_date"),
                     "stock": primary_stock,
+                    "buy_window": result.get("buy_window") or buy_window["window"],
+                    "buy_proxy_label": result.get("buy_proxy_label") or buy_window["proxy_label"],
+                    "sell_window": result.get("sell_window") or sell_window["window"],
+                    "sell_proxy_label": result.get("sell_proxy_label") or sell_window["proxy_label"],
+                    "entry_price": result.get("entry_price"),
+                    "exit_price": result.get("exit_price"),
+                    "buy_day_change_pct": result.get("buy_day_change_pct"),
+                    "buy_window_entry_change_pct": result.get("buy_window_entry_change_pct"),
+                    "buy_limit_state": result.get("buy_limit_state"),
+                    "buy_close_near_limit": result.get("buy_close_near_limit"),
+                    "buy_window_buyability_note": result.get("buy_window_buyability_note"),
                     "return_pct": round(return_pct, 2),
+                    "basis": result.get("basis"),
                 }
                 returns.append(return_pct)
+                all_samples.append(sample)
+                combo_samples.append(sample)
                 if return_pct > 0:
                     positive_count += 1
                 if not best_sample or return_pct > best_sample["return_pct"]:
@@ -2416,6 +3083,26 @@ def _build_trade_window_matrix_summary(pair_payloads):
                 if not worst_sample or return_pct < worst_sample["return_pct"]:
                     worst_sample = sample
             avg_return = round(sum(returns) / len(returns), 2) if returns else None
+            buy_window_entry_changes = [
+                _safe_float(sample.get("buy_window_entry_change_pct"), None)
+                for sample in combo_samples
+                if _safe_float(sample.get("buy_window_entry_change_pct"), None) is not None
+            ]
+            buy_day_changes = [
+                _safe_float(sample.get("buy_day_change_pct"), None)
+                for sample in combo_samples
+                if _safe_float(sample.get("buy_day_change_pct"), None) is not None
+            ]
+            near_limit_count = sum(1 for sample in combo_samples if sample.get("buy_close_near_limit"))
+            buyability_note = "暂无买入日涨停状态"
+            if combo_samples:
+                if near_limit_count:
+                    buyability_note = (
+                        f"{near_limit_count}/{len(combo_samples)} 个T+1买入日收盘接近涨停；"
+                        "尾盘买入代理可能只是理论可买"
+                    )
+                else:
+                    buyability_note = "T+1买入日收盘未显示接近涨停；仍需分时成交确认"
             rows.append(
                 {
                     "id": f"{buy_window['id']}__{sell_window['id']}",
@@ -2428,15 +3115,27 @@ def _build_trade_window_matrix_summary(pair_payloads):
                     "sample_count": len(returns),
                     "average_return_pct": avg_return,
                     "positive_count": positive_count,
+                    "average_buy_day_change_pct": (
+                        round(sum(buy_day_changes) / len(buy_day_changes), 2) if buy_day_changes else None
+                    ),
+                    "average_buy_window_entry_change_pct": (
+                        round(sum(buy_window_entry_changes) / len(buy_window_entry_changes), 2)
+                        if buy_window_entry_changes else None
+                    ),
+                    "near_limit_buy_count": near_limit_count,
+                    "buyability_note": buyability_note,
                     "best_sample": best_sample,
                     "worst_sample": worst_sample,
+                    "equity_curve": _build_equity_curve(combo_samples),
                     "basis": "股票级分时缺失，使用T+1/T+2日线代理统计" if returns else "样本价格事实不足",
                 }
             )
     valid_rows = [row for row in rows if row["average_return_pct"] is not None]
     best_row = max(valid_rows, key=lambda item: item["average_return_pct"]) if valid_rows else {}
     best_combo = {
+        "buy_window_id": best_row.get("buy_window_id", ""),
         "buy_window": best_row.get("buy_window", ""),
+        "sell_window_id": best_row.get("sell_window_id", ""),
         "sell_window": best_row.get("sell_window", ""),
         "average_return_pct": best_row.get("average_return_pct"),
         "sample_count": best_row.get("sample_count", 0),
@@ -2453,9 +3152,20 @@ def _build_trade_window_matrix_summary(pair_payloads):
         )
     else:
         recommendation = "缺少可计算样本，不能判断窗口代理组合"
+    recommended_curve = best_row.get("equity_curve") if isinstance(best_row.get("equity_curve"), dict) else {}
     return {
         "rows": rows,
         "best_combo": best_combo,
+        "recommended_equity_curve": recommended_curve,
+        "top_gain_samples": sorted(
+            (item for item in all_samples if item["return_pct"] > 0),
+            key=lambda item: item["return_pct"],
+            reverse=True,
+        )[:10],
+        "top_loss_samples": sorted(
+            (item for item in all_samples if item["return_pct"] < 0),
+            key=lambda item: item["return_pct"],
+        )[:10],
         "recommendation": recommendation,
         "data_basis": "T+1和T+2都只按日线开盘/日内中枢/收盘做代理；没有股票分钟成交价时不做精确窗口收益，也不形成交易建议",
     }
@@ -2526,6 +3236,66 @@ def _build_buyability_summary(pair_payloads):
         "missing_dates": missing_dates,
         "rows": rows,
         "basis": "只统计纸面主样本的T+1买点可达性；分时事实不足时可用涨停池、热榜和日线代理识别追高或待确认，但不宣称真实可执行",
+    }
+
+
+def _primary_paper_evaluation(pair):
+    pair = pair if isinstance(pair, dict) else {}
+    strategy = pair.get("paper_strategy") if isinstance(pair.get("paper_strategy"), dict) else {}
+    target_summary = strategy.get("target_summary") if isinstance(strategy.get("target_summary"), dict) else {}
+    primary_stock = _clean(target_summary.get("primary_stock"))
+    evaluations = strategy.get("target_evaluations") if isinstance(strategy.get("target_evaluations"), list) else []
+    return next((item for item in evaluations if _clean(item.get("stock_label")) == primary_stock), {})
+
+
+def _small_account_fit_for_window(evaluation, buy_window_id):
+    review = evaluation.get("tplus2_exit_review") if isinstance(evaluation, dict) else {}
+    account_review = review.get("small_account_fit_review") if isinstance(review, dict) and isinstance(review.get("small_account_fit_review"), dict) else {}
+    return next(
+        (
+            item for item in account_review.get("windows") or []
+            if isinstance(item, dict) and item.get("buy_window_id") == buy_window_id
+        ),
+        {},
+    )
+
+
+def _build_small_account_summary(pair_payloads, preferred_buy_window_id):
+    distribution = Counter()
+    action_distribution = Counter()
+    rows = []
+    for pair in pair_payloads:
+        evaluation = _primary_paper_evaluation(pair)
+        if not evaluation:
+            continue
+        fit = _small_account_fit_for_window(evaluation, preferred_buy_window_id)
+        if not fit:
+            continue
+        distribution[_clean(fit.get("account_fit"), "待补")] += 1
+        action_distribution[_clean(fit.get("small_account_action"), "待补")] += 1
+        rows.append(
+            {
+                "decision_date": pair.get("effective_decision_date"),
+                "buy_date": pair.get("buy_date"),
+                "sell_date": pair.get("sell_date"),
+                "stock": evaluation.get("stock_label"),
+                "buy_window": fit.get("buy_window"),
+                "entry_price": fit.get("entry_price"),
+                "one_lot_amount": fit.get("one_lot_amount"),
+                "one_lot_account_pct": fit.get("one_lot_account_pct"),
+                "account_fit": fit.get("account_fit"),
+                "position_50pct_basis": fit.get("position_50pct_basis"),
+                "small_account_action": fit.get("small_account_action"),
+            }
+        )
+    return {
+        "schema_version": "small_account_summary.v1",
+        "sample_count": len(rows),
+        "preferred_buy_window_id": preferred_buy_window_id,
+        "distribution": dict(distribution),
+        "action_distribution": dict(action_distribution),
+        "rows": rows,
+        "basis": "按全样本较高买入窗口换算一手金额；账户结论只修正实际可做性，不改写T0纸面主样本",
     }
 
 
@@ -2779,6 +3549,8 @@ def build_forward_replay_pair(
     loader=load_daily_report_data_for_forward_replay,
     price_refill=None,
     minute_refill=None,
+    account_capital=10000,
+    lot_size=100,
 ):
     decision_data, coverage = _load_effective_decision_data(requested_decision_date, loader=loader)
     buy_data = loader(buy_date)
@@ -2808,6 +3580,8 @@ def build_forward_replay_pair(
             decision_date=decision_date,
             decision_data=decision_data,
             minute_refill=minute_refill,
+            account_capital=account_capital,
+            lot_size=lot_size,
         )
         evaluations.append(evaluation)
     paper_strategy = _attach_paper_target_review(
@@ -2820,6 +3594,8 @@ def build_forward_replay_pair(
         decision_date=decision_date,
         decision_data=decision_data,
         minute_refill=minute_refill,
+        account_capital=account_capital,
+        lot_size=lot_size,
     )
     emotion_projection = _build_t0_emotion_projection(decision_data, paper_strategy)
     layer_rows = _layer_rows(preflight)
@@ -2839,6 +3615,10 @@ def build_forward_replay_pair(
     preflight_final_action = preflight.get("final_action") or {}
     paper_review_object = _review_object_from_paper_strategy(paper_strategy)
     paper_review_contrast = _paper_review_contrast(legacy_final_action, paper_review_object)
+    t0_market_context = _market_context_for_pair(
+        {"effective_decision_date": decision_date},
+        lambda _date: decision_data,
+    )
     return _attach_pair_diagnostics({
         "requested_decision_date": requested_decision_date,
         "effective_decision_date": decision_date,
@@ -2889,6 +3669,7 @@ def build_forward_replay_pair(
         "preflight_final_action": preflight_final_action,
         "paper_review_object": paper_review_object,
         "paper_review_contrast": paper_review_contrast,
+        "t0_market_context": t0_market_context,
         "layers": layer_rows,
         "evaluations": evaluations,
         "paper_strategy": paper_strategy,
@@ -3104,6 +3885,22 @@ def _build_forward_replay_summary(pair_payloads, discovery=None):
             "next_action": "先修历史事实字段匹配，不继续调最终动作",
         }
 
+    exit_window_summary = _build_exit_window_summary(pair_payloads)
+    trade_window_matrix_summary = _build_trade_window_matrix_summary(pair_payloads)
+    buyability_summary = _build_buyability_summary(pair_payloads)
+    target_action_summary = _build_target_action_summary(pair_payloads)
+    emotion_transition_summary = _build_emotion_transition_summary(pair_payloads)
+    emotion_projection_summary = _build_emotion_projection_summary(pair_payloads)
+    index_benchmark_summary = _build_index_benchmark_summary(pair_payloads)
+    window_performance_comparison = _build_window_performance_comparison(
+        pair_payloads,
+        trade_window_matrix_summary,
+        index_benchmark_summary,
+    )
+    small_account_summary = _build_small_account_summary(
+        pair_payloads,
+        _clean(trade_window_matrix_summary.get("best_combo", {}).get("buy_window_id"), "open_0930_0935"),
+    )
     return {
         "sample_count": sample_count,
         "zero_only": zero_only,
@@ -3121,12 +3918,15 @@ def _build_forward_replay_summary(pair_payloads, discovery=None):
         "paper_candidate_count_min": min(paper_candidate_counts) if paper_candidate_counts else 0,
         "paper_candidate_count_max": max(paper_candidate_counts) if paper_candidate_counts else 0,
         "paper_hit_samples": paper_hit_samples,
-        "exit_window_summary": _build_exit_window_summary(pair_payloads),
-        "trade_window_matrix_summary": _build_trade_window_matrix_summary(pair_payloads),
-        "buyability_summary": _build_buyability_summary(pair_payloads),
-        "target_action_summary": _build_target_action_summary(pair_payloads),
-        "emotion_transition_summary": _build_emotion_transition_summary(pair_payloads),
-        "emotion_projection_summary": _build_emotion_projection_summary(pair_payloads),
+        "exit_window_summary": exit_window_summary,
+        "trade_window_matrix_summary": trade_window_matrix_summary,
+        "buyability_summary": buyability_summary,
+        "small_account_summary": small_account_summary,
+        "target_action_summary": target_action_summary,
+        "index_benchmark_summary": index_benchmark_summary,
+        "window_performance_comparison": window_performance_comparison,
+        "emotion_transition_summary": emotion_transition_summary,
+        "emotion_projection_summary": emotion_projection_summary,
         "comparison_verdict": comparison_verdict,
         "diagnosis_distribution": dict(diagnosis_distribution),
         "diagnosis_dates": {key: dates for key, dates in diagnosis_dates.items()},
@@ -3154,6 +3954,8 @@ def build_forward_replay_payload(
     price_refill=None,
     minute_refill=None,
     trade_calendar_refill=None,
+    account_capital=10000,
+    lot_size=100,
 ):
     pair_payloads = []
     for item in pairs:
@@ -3170,6 +3972,8 @@ def build_forward_replay_payload(
                 loader=loader,
                 price_refill=price_refill,
                 minute_refill=minute_refill,
+                account_capital=account_capital,
+                lot_size=lot_size,
             )
         )
     dates = []
@@ -3181,6 +3985,16 @@ def build_forward_replay_payload(
     price_summary = _price_refill_summary(price_refill)
     minute_summary = _minute_refill_summary(minute_refill)
     calendar_summary = _trade_calendar_refill_summary(trade_calendar_refill)
+    notes = [
+        "T0事实只用于生成候选和淘汰链；T+1事实只用于复核买入日表现；T+2事实只用于复核卖出窗口代理收益",
+        "页面不展示T+1或T+2自己的最终动作，避免把后续判断误读成T0依据",
+        "涨停、热榜、连板是证据，不直接等同于板块锚或执行对象",
+        "回测汇总只用于诊断条件链和卖出窗口，不作精确绩效推断",
+        "当前未发现股票级分时窗口价格时，T+1买入和T+2卖出都只按日线代理展示",
+        minute_summary.get("basis", ""),
+        price_summary.get("basis", ""),
+        calendar_summary.get("basis", ""),
+    ]
     return {
         "schema_version": "sector_forward_replay.v1",
         "sample_count": len(pair_payloads),
@@ -3192,16 +4006,13 @@ def build_forward_replay_payload(
         "price_refill_summary": price_summary,
         "minute_refill_summary": minute_summary,
         "trade_calendar_refill_summary": calendar_summary,
-        "notes": [
-            "T0事实只用于生成候选和淘汰链；T+1事实只用于复核买入日表现；T+2事实只用于复核卖出窗口代理收益",
-            "页面不展示T+1或T+2自己的最终动作，避免把后续判断误读成T0依据",
-            "涨停、热榜、连板是证据，不直接等同于板块锚或执行对象",
-            "回测汇总只用于诊断条件链和卖出窗口，不作精确绩效推断",
-            "当前未发现股票级分时窗口价格时，T+1买入和T+2卖出都只按日线代理展示",
-            minute_summary.get("basis", ""),
-            price_summary.get("basis", ""),
-            calendar_summary.get("basis", ""),
-        ],
+        "small_account": {
+            "schema_version": "small_account_context.v1",
+            "account_capital": round(_safe_float(account_capital, 0), 2),
+            "lot_size": _safe_int(lot_size, 100),
+            "basis": "按用户1w账户和A股一手交易单位换算；50%仍是策略意图，实际落账看一手金额",
+        },
+        "notes": [note for note in notes if note],
     }
 
 
@@ -3689,6 +4500,21 @@ def _render_exit_window_summary_rows(summary):
     return "\n".join(rows) or '<tr><td colspan="8">暂无可计算窗口</td></tr>'
 
 
+def _buyability_metrics_text(item):
+    if not isinstance(item, dict) or not item:
+        return "待补"
+    parts = []
+    if item.get("average_buy_window_entry_change_pct") is not None:
+        parts.append(f"买入点均涨幅{_fmt_signed_pct(item.get('average_buy_window_entry_change_pct'))}")
+    if item.get("average_buy_day_change_pct") is not None:
+        parts.append(f"T+1日均涨幅{_fmt_signed_pct(item.get('average_buy_day_change_pct'))}")
+    parts.append(f"收盘接近涨停{item.get('near_limit_buy_count', 0)}/{item.get('sample_count', 0)}")
+    note = _clean(item.get("buyability_note"))
+    if note:
+        parts.append(note)
+    return "；".join(parts)
+
+
 def _render_trade_window_matrix_summary_rows(summary):
     matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
     rows = []
@@ -3702,12 +4528,238 @@ def _render_trade_window_matrix_summary_rows(summary):
             f"<td>{_html(item.get('sample_count'))}</td>"
             f"<td>{_html(_fmt_pct(item.get('average_return_pct')) if item.get('average_return_pct') is not None else '待补')}</td>"
             f"<td>{_html(item.get('positive_count'))}</td>"
+            f"<td>{_html(_buyability_metrics_text(item))}</td>"
             f"<td>{_html(_sample_text(item.get('best_sample')))}</td>"
             f"<td>{_html(_sample_text(item.get('worst_sample')))}</td>"
             f"<td>{_html(item.get('basis'))}</td>"
             "</tr>"
         )
-    return "\n".join(rows) or '<tr><td colspan="10">暂无可计算买卖窗口组合</td></tr>'
+    return "\n".join(rows) or '<tr><td colspan="11">暂无可计算买卖窗口组合</td></tr>'
+
+
+def _trade_window_matrix_summary_grid(summary):
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    rows = matrix_summary.get("rows") if isinstance(matrix_summary.get("rows"), list) else []
+    by_key = {
+        (row.get("buy_window_id"), row.get("sell_window_id")): row
+        for row in rows if isinstance(row, dict)
+    }
+    best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
+    best_id = f"{best_combo.get('buy_window_id')}__{best_combo.get('sell_window_id')}" if best_combo else ""
+    body_rows = []
+    for buy_window in BUY_WINDOWS:
+        cells = [
+            f"<th>{_html(buy_window['window'])}<br><small>{_html(buy_window['proxy_label'])}</small></th>"
+        ]
+        for sell_window in SELL_WINDOWS:
+            row = by_key.get((buy_window["id"], sell_window["id"])) or {}
+            if row.get("average_return_pct") is None:
+                cell = "待补"
+            else:
+                cell = (
+                    f"{_fmt_signed_pct(row.get('average_return_pct'))}"
+                    f"<br><small>正收益 {row.get('positive_count', 0)}/{row.get('sample_count', 0)}</small>"
+                    f"<br><small>买点均涨幅 {_fmt_signed_pct(row.get('average_buy_window_entry_change_pct')) if row.get('average_buy_window_entry_change_pct') is not None else '待补'}</small>"
+                    f"<br><small>收盘接近涨停 {row.get('near_limit_buy_count', 0)}/{row.get('sample_count', 0)}</small>"
+                )
+                if row.get("id") == best_id:
+                    cell += "<br><small>较高组合</small>"
+            cells.append(f"<td>{cell}</td>")
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    header = "".join(
+        f"<th>{_html(window['window'])}<br><small>{_html(window['proxy_label'])}</small></th>"
+        for window in SELL_WINDOWS
+    )
+    return (
+        "<table class=\"matrix-table\">"
+        f"<thead><tr><th>T+1买入 \\ T+2卖出</th>{header}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _render_trade_return_rank_rows(summary, key):
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    samples = matrix_summary.get(key) if isinstance(matrix_summary.get(key), list) else []
+    rows = []
+    for index, item in enumerate(samples[:10], 1):
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{_html(item.get('decision_date'))} → {_html(item.get('buy_date'))} → {_html(item.get('sell_date') or '待补')}</td>"
+            f"<td>{_html(item.get('stock'))}</td>"
+            f"<td>{_html(item.get('buy_window'))}<br><small>{_html(item.get('buy_proxy_label'))}</small></td>"
+            f"<td>{_html(item.get('sell_window'))}<br><small>{_html(item.get('sell_proxy_label'))}</small></td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('return_pct')))}</td>"
+            f"<td>{_html(item.get('entry_price') if item.get('entry_price') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('exit_price') if item.get('exit_price') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('basis'))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="9">暂无可计算单笔样本</td></tr>'
+
+
+def _render_equity_curve_summary_rows(summary):
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    rows = []
+    for item in matrix_summary.get("rows") or []:
+        curve = item.get("equity_curve") if isinstance(item.get("equity_curve"), dict) else {}
+        max_drawdown_sample = curve.get("max_drawdown_sample") if isinstance(curve.get("max_drawdown_sample"), dict) else {}
+        rows.append(
+            "<tr>"
+            f"<td>{_html(item.get('buy_window'))}</td>"
+            f"<td>{_html(item.get('sell_window'))}</td>"
+            f"<td>{_html(curve.get('sample_count', 0))}</td>"
+            f"<td>{_html(curve.get('final_net_value') if curve.get('final_net_value') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(curve.get('cumulative_return_pct')) if curve.get('cumulative_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(curve.get('max_drawdown_pct')) if curve.get('max_drawdown_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_sample_text(max_drawdown_sample))}</td>"
+            f"<td>{_html(curve.get('basis') or item.get('basis'))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="8">暂无可计算收益曲线</td></tr>'
+
+
+def _render_index_benchmark_rows(summary):
+    benchmark = summary.get("index_benchmark_summary") if isinstance(summary.get("index_benchmark_summary"), dict) else {}
+    rows = []
+    for item in benchmark.get("rows") or []:
+        rows.append(
+            "<tr>"
+            f"<td>{_html(item.get('label'))}</td>"
+            f"<td>{_html(item.get('start_date'))}</td>"
+            f"<td>{_html(item.get('start_point') if item.get('start_point') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('end_date'))}</td>"
+            f"<td>{_html(item.get('end_point') if item.get('end_point') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('cumulative_return_pct')) if item.get('cumulative_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('coverage_note') or '待补')}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="7">暂无可计算指数对照</td></tr>'
+
+
+def _render_window_performance_comparison_rows(summary):
+    comparison = summary.get("window_performance_comparison") if isinstance(summary.get("window_performance_comparison"), dict) else {}
+    rows = []
+    for item in comparison.get("rows") or []:
+        sample_text = f"{item.get('sample_count', 0)}/{item.get('all_sample_count', item.get('sample_count', 0))}"
+        rows.append(
+            "<tr>"
+            f"<td>{_html(item.get('label'))}</td>"
+            f"<td>{_html(sample_text)}</td>"
+            f"<td>{_html(item.get('period_count') if item.get('period_count') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('average_return_pct')) if item.get('average_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('final_net_value') if item.get('final_net_value') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('monthly_return_pct')) if item.get('monthly_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('cumulative_return_pct')) if item.get('cumulative_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('annualized_return_pct')) if item.get('annualized_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('max_drawdown_pct')) if item.get('max_drawdown_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_point(item.get('excess_上证指数')) if item.get('excess_上证指数') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_point(item.get('excess_全A指数')) if item.get('excess_全A指数') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_point(item.get('excess_中证500')) if item.get('excess_中证500') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_point(item.get('excess_创业板指')) if item.get('excess_创业板指') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('exclusion'))}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="14">暂无可计算窗口折算收益</td></tr>'
+
+
+def _chart_number(value):
+    number = _safe_float(value, None)
+    return round(number, 2) if number is not None else None
+
+
+def _short_window_performance_label(label):
+    text = _clean(label)
+    text = text.replace("09:30-09:35", "9:30")
+    text = text.replace("09:50-10:10", "9:50")
+    text = text.replace("14:30-14:55", "14:30")
+    text = text.replace("（原始）", "")
+    text = text.replace("（剔除开盘接近涨停）", "\n剔开盘接近涨停")
+    text = text.replace("（剔除收盘接近涨停）", "\n剔收盘接近涨停")
+    text = text.replace(" / ", "\n")
+    return text
+
+
+def _window_performance_chart_payload(summary):
+    comparison = summary.get("window_performance_comparison") if isinstance(summary.get("window_performance_comparison"), dict) else {}
+    rows = []
+    for item in comparison.get("rows") or []:
+        if not isinstance(item, dict):
+            continue
+        label = _clean(item.get("label"))
+        if not label:
+            continue
+        sample_count = item.get("sample_count", 0)
+        all_sample_count = item.get("all_sample_count", sample_count)
+        rows.append(
+            {
+                "label": label,
+                "short_label": _short_window_performance_label(label),
+                "sample_text": f"{sample_count}/{all_sample_count}",
+                "period_count": item.get("period_count"),
+                "average_return_pct": _chart_number(item.get("average_return_pct")),
+                "monthly_return_pct": _chart_number(item.get("monthly_return_pct")),
+                "cumulative_return_pct": _chart_number(item.get("cumulative_return_pct")),
+                "annualized_return_pct": _chart_number(item.get("annualized_return_pct")),
+                "max_drawdown_pct": _chart_number(item.get("max_drawdown_pct")),
+                "excess_shanghai_pct": _chart_number(item.get("excess_上证指数")),
+                "excess_all_a_pct": _chart_number(item.get("excess_全A指数")),
+                "excess_csi500_pct": _chart_number(item.get("excess_中证500")),
+                "excess_chinext_pct": _chart_number(item.get("excess_创业板指")),
+                "exclusion": _clean(item.get("exclusion")),
+            }
+        )
+    return {
+        "schema_version": "sector_window_performance_echarts.v1",
+        "basis": _clean(comparison.get("basis")),
+        "rows": rows,
+    }
+
+
+def _render_window_performance_chart(summary):
+    payload = _window_performance_chart_payload(summary)
+    if not payload.get("rows"):
+        return '<p class="chart-empty">暂无可绘制的窗口折算收益图</p>'
+    return f"""
+              <div class="performance-chart-grid" aria-label="窗口折算收益与指数对照图">
+                <section class="performance-chart-card">
+                  <header>
+                    <strong>窗口日线代理收益与回撤</strong>
+                    <span>非真实分时成交</span>
+                  </header>
+                  <div class="performance-chart" id="sector-window-return-chart" role="img" aria-label="窗口收益与回撤柱线图"></div>
+                </section>
+                <section class="performance-chart-card">
+                  <header>
+                    <strong>日线代理跑赢指数对照</strong>
+                    <span>只在指数覆盖样本首尾时计算</span>
+                  </header>
+                  <div class="performance-chart" id="sector-window-excess-chart" role="img" aria-label="窗口跑赢指数柱状图"></div>
+                </section>
+              </div>
+              <script type="application/json" id="sector-window-chart-payload">{_json_for_html(payload)}</script>
+    """
+
+
+def _render_recommended_curve_rows(summary):
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    curve = matrix_summary.get("recommended_equity_curve") if isinstance(matrix_summary.get("recommended_equity_curve"), dict) else {}
+    points = curve.get("curve_points") if isinstance(curve.get("curve_points"), list) else []
+    rows = []
+    for item in points:
+        rows.append(
+            "<tr>"
+            f"<td>{_html(item.get('decision_date'))} → {_html(item.get('buy_date'))} → {_html(item.get('sell_date') or '待补')}</td>"
+            f"<td>{_html(item.get('stock'))}</td>"
+            f"<td>{_html(item.get('buy_window'))} / {_html(item.get('sell_window'))}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('return_pct')))}</td>"
+            f"<td>{_html(item.get('net_value') if item.get('net_value') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('cumulative_return_pct')) if item.get('cumulative_return_pct') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_signed_pct(item.get('drawdown_pct')) if item.get('drawdown_pct') is not None else '待补')}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="7">暂无较高组合收益曲线</td></tr>'
 
 
 def _render_target_action_rows(summary):
@@ -3785,6 +4837,466 @@ def _render_buyability_sample_rows(summary):
             "</tr>"
         )
     return "\n".join(rows) or '<tr><td colspan="8">暂无真实可买性样本</td></tr>'
+
+
+def _render_small_account_summary_rows(summary):
+    small_summary = summary.get("small_account_summary") if isinstance(summary.get("small_account_summary"), dict) else {}
+    rows = []
+    for item in (small_summary.get("rows") or [])[:80]:
+        rows.append(
+            "<tr>"
+            f"<td>{_html(item.get('decision_date'))} → {_html(item.get('buy_date'))} → {_html(item.get('sell_date') or '待补')}</td>"
+            f"<td>{_html(item.get('stock'))}</td>"
+            f"<td>{_html(item.get('buy_window') or '待补')}</td>"
+            f"<td>{_html(item.get('entry_price') if item.get('entry_price') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('one_lot_amount') if item.get('one_lot_amount') is not None else '待补')}</td>"
+            f"<td>{_html(_fmt_pct(item.get('one_lot_account_pct')) if item.get('one_lot_account_pct') is not None else '待补')}</td>"
+            f"<td>{_html(item.get('account_fit') or '待补')}</td>"
+            f"<td>{_html(item.get('position_50pct_basis') or '待补')}</td>"
+            f"<td>{_html(item.get('small_account_action') or '待补')}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="9">暂无小账户换算样本</td></tr>'
+
+
+def _preferred_report_path(trade_date):
+    candidates = [
+        PROJECT_ROOT / "reports" / "replay" / f"{trade_date}_A股日报_完整版_replay.md",
+        PROJECT_ROOT / "reports" / f"{trade_date}_A股日报_完整版.md",
+    ]
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _read_report_text(trade_date):
+    path = _preferred_report_path(trade_date)
+    if not path:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _first_markdown_table_row(text, labels):
+    labels = tuple(labels)
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if cells and cells[0] in labels:
+            return cells
+    return []
+
+
+def _index_row_from_data(data, *names):
+    data = data if isinstance(data, dict) else {}
+    indices = data.get("indices") if isinstance(data.get("indices"), dict) else {}
+    for name in names:
+        if isinstance(indices.get(name), dict):
+            return indices.get(name)
+    for key in ("wind_a_alternative", "csi500_index", "csi1000_index"):
+        row = data.get(key)
+        if not isinstance(row, dict):
+            continue
+        row_name = _clean(row.get("name"))
+        row_code = _stock_code(row.get("code"))
+        if any(name == row_name or name in row_name or row_name in name or name == row_code for name in names):
+            return row
+    return {}
+
+
+def _format_index_value(row):
+    row = row if isinstance(row, dict) else {}
+    price = _safe_float(row.get("price", row.get("close", row.get("点位"))), None)
+    change = _safe_float(row.get("change_pct", row.get("涨跌幅")), None)
+    if price is None or price == 0 or change is None:
+        return ""
+    return f"{price:.2f} / {_fmt_signed_pct(change)}"
+
+
+def _index_text(data, report_text, label, *names):
+    value = _format_index_value(_index_row_from_data(data, *names))
+    if value:
+        return value
+    cells = _first_markdown_table_row(report_text, (label, *names))
+    if len(cells) >= 3:
+        point_text = re.sub(r"[点,，\\s]", "", cells[1])
+        point = _safe_float(point_text, None)
+        change = _safe_float(cells[2].replace("%", ""), None)
+        if point is not None and point != 0 and change is not None:
+            return f"{point:.2f} / {_fmt_signed_pct(change)}"
+    return "待补"
+
+
+class IndexContextRefill:
+    def __init__(self, *, fetch_csi500_fn=None, startup_error=""):
+        self.fetch_csi500_fn = fetch_csi500_fn
+        self.startup_error = startup_error
+        self.cache = {}
+        self.summary = {
+            "schema_version": "index_context_refill.v1",
+            "attempted": 0,
+            "filled": 0,
+            "missing": 0,
+            "errors": 0,
+            "error_samples": [],
+        }
+
+    def csi500_text(self, trade_date):
+        trade_date = _date_text(trade_date)
+        if not trade_date:
+            return ""
+        if not self.fetch_csi500_fn:
+            if self.startup_error:
+                self.summary["errors"] += 1
+                self.summary["missing"] += 1
+                self.summary["error_samples"].append(f"{trade_date}: {self.startup_error}")
+            return ""
+        if trade_date in self.cache:
+            return self.cache[trade_date]
+        if self.startup_error:
+            self.summary["errors"] += 1
+            self.summary["missing"] += 1
+            self.summary["error_samples"].append(f"{trade_date}: {self.startup_error}")
+            self.cache[trade_date] = ""
+            return ""
+        self.summary["attempted"] += 1
+        try:
+            payload = self.fetch_csi500_fn(trade_date)
+        except Exception as exc:
+            self.summary["errors"] += 1
+            self.summary["missing"] += 1
+            self.summary["error_samples"].append(f"{trade_date}: {type(exc).__name__}: {exc}")
+            self.cache[trade_date] = ""
+            return ""
+        text = _format_index_value(payload if isinstance(payload, dict) else {})
+        if text:
+            self.summary["filled"] += 1
+        else:
+            self.summary["missing"] += 1
+        self.cache[trade_date] = text
+        return text
+
+
+def build_tushare_index_context_refill(*, fetch_csi500_fn=None):
+    if fetch_csi500_fn is None:
+        try:
+            from input.tushare_runtime import get_csi500_from_tushare_first as fetch_csi500_fn
+        except Exception as exc:
+            return IndexContextRefill(startup_error=f"{type(exc).__name__}: {exc}")
+    return IndexContextRefill(fetch_csi500_fn=fetch_csi500_fn)
+
+
+def _market_breadth_text(data, report_text):
+    stats = data.get("market_stats") if isinstance(data, dict) and isinstance(data.get("market_stats"), dict) else {}
+    up_count = _safe_int(stats.get("up_count"), 0)
+    down_count = _safe_int(stats.get("down_count"), 0)
+    if up_count > 0 or down_count > 0:
+        return f"{up_count} / {down_count}"
+    cells = _first_markdown_table_row(report_text, ("涨跌比",))
+    if len(cells) >= 2:
+        match = re.search(r"(\d+)\s*[:/]\s*(\d+)", cells[1])
+        if match:
+            up_count = _safe_int(match.group(1), 0)
+            down_count = _safe_int(match.group(2), 0)
+            if up_count > 0 or down_count > 0:
+                return f"{up_count} / {down_count}"
+    return "待补"
+
+
+def _new_high_signal(all_a_share_pct):
+    pct = _safe_float(all_a_share_pct, None)
+    if pct is None:
+        return ""
+    if pct < 2:
+        return "趋势扩散偏冷"
+    if pct <= 5:
+        return "趋势扩散震荡"
+    return "趋势扩散偏热"
+
+
+def _new_high_text(data, report_text):
+    feedback = data.get("new_high_feedback") if isinstance(data, dict) and isinstance(data.get("new_high_feedback"), dict) else {}
+    count = _safe_int(feedback.get("new_high_count"), 0)
+    pct = _safe_float(feedback.get("all_a_share_pct"), None)
+    if count > 0 and pct is not None:
+        return f"{count} / {pct:.2f}% / {_new_high_signal(pct)}"
+    match = re.search(r"阶段新高\s*(\d+)\s*只，占全A约\s*([0-9.]+)%", report_text)
+    if match:
+        pct = _safe_float(match.group(2), None)
+        return f"{_safe_int(match.group(1), 0)} / {pct:.2f}% / {_new_high_signal(pct)}"
+    return "待补"
+
+
+def _market_context_for_pair(pair, loader):
+    trade_date = _clean(pair.get("effective_decision_date"))
+    data = {}
+    try:
+        data = loader(trade_date)
+    except Exception:
+        data = {}
+    report_text = _read_report_text(trade_date)
+    return {
+        "T0上证指数": _index_text(data, report_text, "上证指数", "上证指数", "000001"),
+        "T0全A指数": _index_text(data, report_text, "中证全指", "中证全指", "000985"),
+        "T0中证500": _index_text(data, report_text, "中证500", "中证500", "000905"),
+        "T0创业板指": _index_text(data, report_text, "创业板指", "创业板指", "399006"),
+        "T0涨跌家数": _market_breadth_text(data, report_text),
+        "T0创新高全A占比": _new_high_text(data, report_text),
+    }
+
+
+def _apply_index_context_refill(row, pair, index_context_refill):
+    if not row or not index_context_refill:
+        return
+    refill_text = index_context_refill.csi500_text(pair.get("effective_decision_date"))
+    if refill_text:
+        row["T0中证500"] = refill_text
+
+
+def _apply_index_context_refill_to_payload(payload, index_context_refill):
+    if not isinstance(payload, dict) or not index_context_refill:
+        return payload
+    for pair in payload.get("pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        context = pair.get("t0_market_context")
+        if not isinstance(context, dict):
+            context = {}
+            pair["t0_market_context"] = context
+        row = {"T0中证500": context.get("T0中证500")}
+        _apply_index_context_refill(row, pair, index_context_refill)
+        if row.get("T0中证500"):
+            context["T0中证500"] = row["T0中证500"]
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if summary:
+        summary["index_benchmark_summary"] = _build_index_benchmark_summary(payload.get("pairs") or [])
+        summary["window_performance_comparison"] = _build_window_performance_comparison(
+            payload.get("pairs") or [],
+            summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {},
+            summary["index_benchmark_summary"],
+        )
+    return payload
+
+
+def _best_pair_matrix_row(evaluation):
+    review = evaluation.get("tplus2_exit_review") if isinstance(evaluation, dict) else {}
+    review = review if isinstance(review, dict) else {}
+    best = {}
+    for row in review.get("window_matrix") or []:
+        if not isinstance(row, dict) or row.get("return_pct") is None:
+            continue
+        if not best or float(row.get("return_pct")) > float(best.get("return_pct")):
+            best = row
+    return best
+
+
+def _paper_status_label(strategy):
+    strategy = strategy if isinstance(strategy, dict) else {}
+    action = _clean(strategy.get("action"))
+    if action == "paper_participate":
+        return "有纸面主样本"
+    if action == "paper_watch":
+        return "观察但不参与"
+    return "明确不参与"
+
+
+def build_forward_replay_daily_rows(payload, *, loader=load_daily_report_data_for_forward_replay, index_context_refill=None):
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
+    buy_window_id = _clean(best_combo.get("buy_window_id"), "open_0930_0935")
+    sell_window_id = _clean(best_combo.get("sell_window_id"), "late_1430_1455")
+    rows = []
+    for pair in payload.get("pairs") or []:
+        strategy = pair.get("paper_strategy") if isinstance(pair.get("paper_strategy"), dict) else {}
+        target_summary = strategy.get("target_summary") if isinstance(strategy.get("target_summary"), dict) else {}
+        primary_stock = _clean(target_summary.get("primary_stock"), "无主样本")
+        primary = _primary_paper_evaluation(pair)
+        review = primary.get("tplus2_exit_review") if isinstance(primary.get("tplus2_exit_review"), dict) else {}
+        matrix_row = next(
+            (
+                item for item in review.get("window_matrix") or []
+                if isinstance(item, dict)
+                and item.get("buy_window_id") == buy_window_id
+                and item.get("sell_window_id") == sell_window_id
+            ),
+            {},
+        )
+        best_daily = _best_pair_matrix_row(primary)
+        buyability = review.get("buyability_review") if isinstance(review.get("buyability_review"), dict) else {}
+        account_fit = _small_account_fit_for_window(primary, buy_window_id)
+        row = {
+            "T0日期": pair.get("effective_decision_date"),
+            "T+1买入日": pair.get("buy_date"),
+            "T+2卖出日": pair.get("sell_date") or "",
+            "状态": _paper_status_label(strategy),
+            "纸面主样本": primary_stock,
+            "建议T+1买入窗口": best_combo.get("buy_window") if primary else "不参与/只观察",
+            "建议T+2卖出窗口": best_combo.get("sell_window") if primary else "不参与/只观察",
+            "全样本最佳组合代理收益": _fmt_signed_pct(matrix_row.get("return_pct")) if matrix_row.get("return_pct") is not None else "",
+            "当日样本内最高组合": (
+                f"{_clean(best_daily.get('buy_window'))} / {_clean(best_daily.get('sell_window'))}"
+                if best_daily else ""
+            ),
+            "当日样本内最高代理收益": _fmt_signed_pct(best_daily.get("return_pct")) if best_daily.get("return_pct") is not None else "",
+            "T+1买点复核": _clean(buyability.get("status")) if primary else "",
+            "复核结论": _clean(target_summary.get("primary_outcome_label"), "没有纸面主样本"),
+            "说明": _clean(strategy.get("action_reason")),
+            "账户本金": _clean((payload.get("small_account") or {}).get("account_capital"), "10000"),
+            "T+1买入代理价": account_fit.get("entry_price") if account_fit else "",
+            "一手金额": account_fit.get("one_lot_amount") if account_fit else "",
+            "一手占账户比例": _fmt_pct(account_fit.get("one_lot_account_pct")) if account_fit.get("one_lot_account_pct") is not None else "",
+            "账户可做性": account_fit.get("account_fit") if account_fit else "",
+            "小账户动作建议": account_fit.get("small_account_action") if account_fit else "",
+            "50%仓位口径": account_fit.get("position_50pct_basis") if account_fit else "",
+        }
+        row.update(_market_context_for_pair(pair, loader))
+        _apply_index_context_refill(row, pair, index_context_refill)
+        rows.append(row)
+    return rows
+
+
+def _write_csv_rows(rows, output_path):
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(rows[0].keys()) if rows else []
+    with path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+        writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    return path
+
+
+def _matrix_markdown_table(matrix_summary):
+    matrix_summary = matrix_summary if isinstance(matrix_summary, dict) else {}
+    rows = matrix_summary.get("rows") if isinstance(matrix_summary.get("rows"), list) else []
+    by_key = {
+        (row.get("buy_window_id"), row.get("sell_window_id")): row
+        for row in rows if isinstance(row, dict)
+    }
+    best_id = ""
+    best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
+    if best_combo:
+        best_id = f"{best_combo.get('buy_window_id')}__{best_combo.get('sell_window_id')}"
+    lines = [
+        "| T+1买入窗口 \\ T+2卖出窗口 | 09:30-09:35 | 09:50-10:10 | 14:30-14:55 |",
+        "|---|---:|---:|---:|",
+    ]
+    for buy_window in BUY_WINDOWS:
+        cells = [buy_window["window"]]
+        for sell_window in SELL_WINDOWS:
+            row = by_key.get((buy_window["id"], sell_window["id"])) or {}
+            text = "待补"
+            if row.get("average_return_pct") is not None:
+                text = f"{_fmt_signed_pct(row.get('average_return_pct'))}（{row.get('positive_count', 0)}/{row.get('sample_count', 0)}）"
+            if row.get("id") == best_id:
+                text += " **较高**"
+            cells.append(text)
+        lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def render_forward_replay_markdown_summary(payload, rows, *, title="板块资金扩散前向回测窗口摘要", scope_note=""):
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    target_summary = summary.get("target_action_summary") if isinstance(summary.get("target_action_summary"), dict) else {}
+    matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
+    best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
+    buyability_summary = summary.get("buyability_summary") if isinstance(summary.get("buyability_summary"), dict) else {}
+    small_summary = summary.get("small_account_summary") if isinstance(summary.get("small_account_summary"), dict) else {}
+    account = payload.get("small_account") if isinstance(payload.get("small_account"), dict) else {}
+    coverage = summary.get("coverage") if isinstance(summary.get("coverage"), dict) else {}
+    missing_dates = coverage.get("missing_dates") if isinstance(coverage.get("missing_dates"), list) else []
+    first_t0 = rows[0]["T0日期"] if rows else ""
+    last_t0 = rows[-1]["T0日期"] if rows else ""
+    lines = [
+        f"# {title}",
+        "",
+        "## 结论",
+        f"- 请求区间：{coverage.get('requested_start_date') or payload.get('start_date')} 至 {coverage.get('requested_end_date') or payload.get('end_date')}；可结算 T0 覆盖 {first_t0 or '待补'} 至 {last_t0 or '待补'}，形成 {len(rows)} 个 T0/T+1/T+2 日期对。",
+        f"- 可结算窗口样本：有纸面主样本 {target_summary.get('target_day_count', 0)} 天，观察但不参与 {target_summary.get('watch_day_count', 0)} 天，明确不参与 {target_summary.get('skip_day_count', 0)} 天。",
+        f"- 当前样本内较高组合：T+1 `{best_combo.get('buy_window') or '待补'}` 买入代理，T+2 `{best_combo.get('sell_window') or '待补'}` 卖出代理，平均代理表现 {_fmt_signed_pct(best_combo.get('average_return_pct')) if best_combo.get('average_return_pct') is not None else '待补'}，样本 {best_combo.get('sample_count', 0)}。",
+        f"- 买点复核：早盘未明显追高 {buyability_summary.get('early_not_chasing_day_count', 0)} 天，追高风险 {buyability_summary.get('risk_day_count', 0)} 天，可能买不到 {buyability_summary.get('unbuyable_day_count', 0)} 天，待分时确认 {buyability_summary.get('pending_confirm_day_count', 0)} 天；所以本表是日线代理复盘，不等于真实成交证明。",
+        f"- 小账户口径：账户本金 {account.get('account_capital', 10000)} 元，一手 {account.get('lot_size', 100)} 股；`50%条件执行` 是策略意图，实际参与必须看一手金额、固定窗口和买入资格。",
+    ]
+    if scope_note:
+        lines.append(f"- {scope_note}")
+    if missing_dates:
+        lines.append(f"- 缺失 T0 事实日 {len(missing_dates)} 天；缺失日期不生成每日标的。")
+    lines.extend(
+        [
+            "",
+            "## 窗口矩阵图",
+            _matrix_markdown_table(matrix_summary),
+            "",
+            "> 括号内为正收益数/样本数；所有窗口收益均为日线代理，不是逐笔成交回测。",
+            "",
+            "## 小账户一手换算",
+            f"- 账户可做性分布：{_distribution_text(small_summary.get('distribution'))}",
+            f"- 小账户动作分布：{_distribution_text(small_summary.get('action_distribution'))}",
+            "- 结论：小资金账户里，50%不总是可精确执行；高价股一手若超过60%账户，就按“一手就是上限”处理，超过80%时只有唯一核心、固定窗口和贴近认错线同时满足才考虑，否则空仓。",
+            "",
+            "## 每日标的与窗口",
+            "| T0日期 | T+1 | T+2 | 状态 | 纸面主样本 | T0上证 | T0全A | T0中证500 | T0创业板 | T0涨跌家数 | T0创新高占比 | T+1窗口 | T+2窗口 | 全样本最佳组合收益 | 一手金额 | 一手占账户 | 账户可做性 | 小账户动作 | 买点复核 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |",
+        ]
+    )
+    for row in rows:
+        lines.append(
+            "| {T0日期} | {T+1买入日} | {T+2卖出日} | {状态} | {纸面主样本} | {T0上证指数} | {T0全A指数} | {T0中证500} | {T0创业板指} | {T0涨跌家数} | {T0创新高全A占比} | {建议T+1买入窗口} | {建议T+2卖出窗口} | {全样本最佳组合代理收益} | {一手金额} | {一手占账户比例} | {账户可做性} | {小账户动作建议} | {T+1买点复核} |".format(**row)
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _t0_market_context_from_pair(pair):
+    context = pair.get("t0_market_context") if isinstance(pair, dict) and isinstance(pair.get("t0_market_context"), dict) else {}
+    if context:
+        return context
+    data = pair.get("decision_data") if isinstance(pair, dict) and isinstance(pair.get("decision_data"), dict) else {}
+    if data:
+        return _market_context_for_pair(pair, lambda _date: data)
+    return {}
+
+
+def _render_t0_market_context_rows(payload):
+    rows = []
+    for pair in payload.get("pairs") or []:
+        if not isinstance(pair, dict):
+            continue
+        context = _t0_market_context_from_pair(pair)
+        rows.append(
+            "<tr>"
+            f"<td>{_html(pair.get('effective_decision_date'))}</td>"
+            f"<td>{_html(context.get('T0上证指数') or '待补')}</td>"
+            f"<td>{_html(context.get('T0全A指数') or '待补')}</td>"
+            f"<td>{_html(context.get('T0中证500') or '待补')}</td>"
+            f"<td>{_html(context.get('T0创业板指') or '待补')}</td>"
+            f"<td>{_html(context.get('T0涨跌家数') or '待补')}</td>"
+            f"<td>{_html(context.get('T0创新高全A占比') or '待补')}</td>"
+            "</tr>"
+        )
+    return "\n".join(rows) or '<tr><td colspan="7">暂无T0市场底色</td></tr>'
+
+
+def save_forward_replay_csv_and_summary(
+    payload,
+    output_prefix,
+    *,
+    loader=load_daily_report_data_for_forward_replay,
+    scope_note="",
+    index_context_refill=None,
+):
+    rows = build_forward_replay_daily_rows(payload, loader=loader, index_context_refill=index_context_refill)
+    csv_path = _write_csv_rows(rows, f"{output_prefix}_每日标的窗口回测_含T0市场底色_含小账户.csv")
+    summary_path = Path(f"{output_prefix}_窗口回测摘要_含小账户.md")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(
+        render_forward_replay_markdown_summary(payload, rows, scope_note=scope_note),
+        encoding="utf-8",
+    )
+    return {"csv": csv_path, "summary": summary_path, "rows": rows}
 
 
 def _distribution_text(mapping):
@@ -3879,6 +5391,7 @@ def _render_global_summary(payload):
     best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
     target_summary = summary.get("target_action_summary") if isinstance(summary.get("target_action_summary"), dict) else {}
     buyability_summary = summary.get("buyability_summary") if isinstance(summary.get("buyability_summary"), dict) else {}
+    small_account_summary = summary.get("small_account_summary") if isinstance(summary.get("small_account_summary"), dict) else {}
     emotion_summary = summary.get("emotion_transition_summary") if isinstance(summary.get("emotion_transition_summary"), dict) else {}
     projection_summary = summary.get("emotion_projection_summary") if isinstance(summary.get("emotion_projection_summary"), dict) else {}
     price_refill = payload.get("price_refill_summary") if isinstance(payload.get("price_refill_summary"), dict) else {}
@@ -3938,6 +5451,11 @@ def _render_global_summary(payload):
           <p>{_html(minute_refill.get("basis"))}</p>
           <p>{_html(buyability_summary.get("basis") or "没有分时事实的样本只保留纸面窗口，不宣称真实可执行。")}</p>
           <p>{_html(f"早盘未明显追高{buyability_summary.get('early_not_chasing_day_count', 0)}天；追高风险{buyability_summary.get('risk_day_count', 0)}天；可能买不到{buyability_summary.get('unbuyable_day_count', 0)}天；待分时确认{buyability_summary.get('pending_confirm_day_count', 0)}天；代理事实仍缺{buyability_summary.get('missing_day_count', 0)}天。")}</p>
+        </div>
+        <div class="comparison-box">
+          <strong>小账户一手换算</strong>
+          <p>{_html(small_account_summary.get("basis") or "按一手金额换算账户实际仓位。")}</p>
+          <p>{_html("；".join(f"{key}{value}天" for key, value in (small_account_summary.get("distribution") or {}).items()) or "暂无可换算样本")}</p>
         </div>
         <div class="comparison-box">
           <strong>T+1到T+2情绪迁移</strong>
@@ -4026,8 +5544,35 @@ def _render_global_summary(payload):
             <div class="table-scroll tall"><table><thead><tr><th>日期</th><th>主样本</th><th>结论</th><th>理由</th><th>09:35前最高涨幅</th><th>09:35收盘涨幅</th><th>分时条数</th><th>来源</th></tr></thead><tbody>{_render_buyability_sample_rows(summary)}</tbody></table></div>
           </details>
           <details open>
-            <summary><strong>T+1买入 x T+2卖出窗口矩阵</strong><span>按日线代理统计，不伪装分时成交</span></summary>
-            <div class="table-scroll tall"><table><thead><tr><th>T+1买入窗口</th><th>买入价格代理</th><th>T+2卖出窗口</th><th>卖出价格代理</th><th>样本</th><th>平均代理表现</th><th>正收益数</th><th>较高样本</th><th>较低样本</th><th>依据</th></tr></thead><tbody>{_render_trade_window_matrix_summary_rows(summary)}</tbody></table></div>
+            <summary><strong>小账户一手换算</strong><span>50%是策略意图，实际看一手金额</span></summary>
+            <div class="table-scroll tall"><table><thead><tr><th>日期</th><th>主样本</th><th>T+1买入窗口</th><th>买入代理价</th><th>一手金额</th><th>一手占账户</th><th>账户可做性</th><th>50%仓位口径</th><th>小账户动作</th></tr></thead><tbody>{_render_small_account_summary_rows(summary)}</tbody></table></div>
+          </details>
+          <details open>
+            <summary><strong>代理收益曲线与最大回撤</strong><span>按每个T0样本一次参与复利累乘，仍为日线代理</span></summary>
+            <div class="table-scroll"><table><thead><tr><th>T+1买入窗口</th><th>T+2卖出窗口</th><th>样本</th><th>期末净值</th><th>累计代理收益</th><th>最大回撤</th><th>回撤触发样本</th><th>依据</th></tr></thead><tbody>{_render_equity_curve_summary_rows(summary)}</tbody></table></div>
+            <div class="table-scroll tall"><table><thead><tr><th>日期链</th><th>主样本</th><th>窗口</th><th>单笔代理表现</th><th>净值</th><th>累计代理收益</th><th>当时回撤</th></tr></thead><tbody>{_render_recommended_curve_rows(summary)}</tbody></table></div>
+          </details>
+	          <details open>
+	            <summary><strong>窗口折算收益与指数对照</strong><span>按21/252个交易日折算，跑赢指数用同区间累计收益差</span></summary>
+	            {_render_window_performance_chart(summary)}
+	            <div class="table-scroll tall"><table><thead><tr><th>情况</th><th>参与/原样本</th><th>折算周期</th><th>单笔均值</th><th>期末净值</th><th>月化代理收益</th><th>累计代理收益</th><th>年化代理收益</th><th>最大回撤</th><th>跑赢上证</th><th>跑赢全A</th><th>跑赢中证500</th><th>跑赢创业板</th><th>剔除口径</th></tr></thead><tbody>{_render_window_performance_comparison_rows(summary)}</tbody></table></div>
+	            <div class="table-scroll"><table><thead><tr><th>指数</th><th>起始T0</th><th>起始点位</th><th>结束T0</th><th>结束点位</th><th>区间涨跌</th><th>覆盖状态</th></tr></thead><tbody>{_render_index_benchmark_rows(summary)}</tbody></table></div>
+	          </details>
+          <details open>
+            <summary><strong>买卖时间收益矩阵</strong><span>单元格为平均代理表现；括号逻辑看正收益数/样本数</span></summary>
+            <div class="table-scroll">{_trade_window_matrix_summary_grid(summary)}</div>
+          </details>
+          <details open>
+            <summary><strong>单笔代理收益前10</strong><span>看最好样本来自哪一天、哪个买卖窗口</span></summary>
+            <div class="table-scroll tall"><table><thead><tr><th>序号</th><th>日期链</th><th>主样本</th><th>T+1买入窗口</th><th>T+2卖出窗口</th><th>代理表现</th><th>买入代理价</th><th>卖出代理价</th><th>依据</th></tr></thead><tbody>{_render_trade_return_rank_rows(summary, "top_gain_samples")}</tbody></table></div>
+          </details>
+          <details open>
+            <summary><strong>单笔代理亏损前10</strong><span>看最差样本的波动来源</span></summary>
+            <div class="table-scroll tall"><table><thead><tr><th>序号</th><th>日期链</th><th>主样本</th><th>T+1买入窗口</th><th>T+2卖出窗口</th><th>代理表现</th><th>买入代理价</th><th>卖出代理价</th><th>依据</th></tr></thead><tbody>{_render_trade_return_rank_rows(summary, "top_loss_samples")}</tbody></table></div>
+          </details>
+          <details open>
+            <summary><strong>T+1买入 x T+2卖出窗口矩阵</strong><span>按日线代理统计，不伪装分时成交；补看买点涨幅与接近涨停</span></summary>
+            <div class="table-scroll tall"><table><thead><tr><th>T+1买入窗口</th><th>买入价格代理</th><th>T+2卖出窗口</th><th>卖出价格代理</th><th>样本</th><th>平均代理表现</th><th>正收益数</th><th>买点与涨停风险</th><th>较高样本</th><th>较低样本</th><th>依据</th></tr></thead><tbody>{_render_trade_window_matrix_summary_rows(summary)}</tbody></table></div>
           </details>
           <details open>
             <summary><strong>T+2卖出窗口统计</strong><span>按日线代理统计，不伪装分时成交</span></summary>
@@ -4124,6 +5669,9 @@ def render_forward_replay_html(payload):
             """
         )
     notes = "".join(f"<li>{_html(note)}</li>" for note in payload.get("notes", []))
+    scope_remark = ""
+    if payload.get("start_date") == "2026-04-01" and payload.get("summary", {}).get("coverage", {}).get("requested_end_date") == "2026-06-12":
+        scope_remark = "<p class=\"subtitle\">扩展观察区间，不与主区间同权重；只用于加看 2026-06-08 至 2026-06-12 的新增样本。</p>"
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -4271,37 +5819,74 @@ def render_forward_replay_html(payload):
       background: #fafbfe;
     }}
     summary::-webkit-details-marker {{ display: none; }}
-    summary span {{ color: var(--muted); font-size: 12px; font-weight: 700; }}
-    pre {{ margin: 0; padding: 14px; overflow-x: auto; white-space: pre; }}
-    .table-scroll {{ max-height: 340px; overflow: auto; }}
-    .table-scroll.tall {{ max-height: 440px; }}
-    table {{ width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }}
-    th, td {{ border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
-    th {{ position: sticky; top: 0; background: #f8fafc; color: var(--muted); z-index: 1; }}
-    .layer-details {{ margin: 12px; }}
-    .paper-summary {{
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-      gap: 10px;
-      padding: 12px;
-      border-bottom: 1px solid var(--line);
-      background: #fcfffe;
-    }}
+	    summary span {{ color: var(--muted); font-size: 12px; font-weight: 700; }}
+	    pre {{ margin: 0; padding: 14px; overflow-x: auto; white-space: pre; }}
+	    .table-scroll {{ max-height: 340px; overflow: auto; }}
+	    .table-scroll.tall {{ max-height: 440px; }}
+	    table {{ width: 100%; min-width: 980px; border-collapse: collapse; font-size: 13px; }}
+	    th, td {{ border-bottom: 1px solid var(--line); padding: 9px 10px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
+	    th {{ position: sticky; top: 0; background: #f8fafc; color: var(--muted); z-index: 1; }}
+	    .performance-chart-grid {{
+	      display: grid;
+	      grid-template-columns: repeat(2, minmax(0, 1fr));
+	      gap: 12px;
+	      padding: 12px;
+	      background: #fbfcff;
+	      border-bottom: 1px solid var(--line);
+	    }}
+	    .performance-chart-card {{
+	      min-width: 0;
+	      border: 1px solid var(--line);
+	      border-radius: 8px;
+	      background: #fff;
+	      overflow: hidden;
+	    }}
+	    .performance-chart-card header {{
+	      display: flex;
+	      align-items: baseline;
+	      justify-content: space-between;
+	      gap: 12px;
+	      padding: 10px 12px 0;
+	    }}
+	    .performance-chart-card header strong {{ font-size: 14px; }}
+	    .performance-chart-card header span {{ color: var(--muted); font-size: 12px; font-weight: 700; }}
+	    .performance-chart {{
+	      width: 100%;
+	      min-height: 340px;
+	    }}
+	    .performance-chart.is-empty, .chart-empty {{
+	      display: grid;
+	      place-items: center;
+	      min-height: 180px;
+	      margin: 0;
+	      color: var(--muted);
+	      font-size: 13px;
+	      background: #fbfcff;
+	    }}
+	    .layer-details {{ margin: 12px; }}
+	    .paper-summary {{
+	      display: grid;
+	      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+	      gap: 10px;
+	      padding: 12px;
+	      border-bottom: 1px solid var(--line);
+	      background: #fcfffe;
+	    }}
     .paper-summary div {{
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 10px 12px;
       min-width: 0;
     }}
-    .input-line {{ margin: 12px 14px; }}
-    .split-tables {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 12px 12px; }}
-    .split-tables h4 {{ margin: 0 0 8px; font-size: 14px; }}
-    @media (max-width: 860px) {{
-      main {{ padding: 20px 12px 32px; }}
-      .summary-grid, .pair-head dl, .pair-head, .split-tables {{ grid-template-columns: 1fr; }}
-      .pair-head {{ display: block; }}
-      .flow-node {{ flex-basis: 220px; }}
-    }}
+	    .input-line {{ margin: 12px 14px; }}
+	    .split-tables {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 0 12px 12px; }}
+	    .split-tables h4 {{ margin: 0 0 8px; font-size: 14px; }}
+	    @media (max-width: 860px) {{
+	      main {{ padding: 20px 12px 32px; }}
+	      .summary-grid, .pair-head dl, .pair-head, .split-tables, .performance-chart-grid {{ grid-template-columns: 1fr; }}
+	      .pair-head {{ display: block; }}
+	      .flow-node {{ flex-basis: 220px; }}
+	    }}
   </style>
 </head>
 <body>
@@ -4309,6 +5894,7 @@ def render_forward_replay_html(payload):
     <section class="top">
       <h1>板块资金扩散前向回测</h1>
       <p class="subtitle">用T0事实生成候选与淘汰链，用T+1事实复核买入日表现，再用T+2事实复核三段卖出窗口。T+1和T+2不参与T0候选生成、淘汰链生成或最终动作生成。</p>
+      {scope_remark}
       <div class="summary-grid">
         <div><dt>样本数</dt><dd>{payload.get("sample_count", 0)}</dd></div>
         <div><dt>起始日期</dt><dd>{_html(payload.get("start_date"))}</dd></div>
@@ -4317,10 +5903,27 @@ def render_forward_replay_html(payload):
       </div>
       <ul>{notes}</ul>
     </section>
+    <section class="pair-section">
+      <header class="pair-head">
+        <div>
+          <p class="eyebrow">T0市场底色</p>
+          <h2>指数、涨跌家数与创新高占比</h2>
+          <p>只展示决策日当天的市场底色，用来判断当天是震荡、冰点还是热点，不替代T0候选与最终动作。</p>
+        </div>
+      </header>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>T0日期</th><th>上证指数</th><th>全A指数</th><th>中证500</th><th>创业板指</th><th>涨跌家数</th><th>创新高全A占比</th></tr></thead>
+          <tbody>{_render_t0_market_context_rows(payload)}</tbody>
+        </table>
+      </div>
+    </section>
     {_render_global_summary(payload)}
     {''.join(pair_sections)}
   </main>
   <script type="application/json" id="sector-forward-replay-payload">{_json_for_html(payload)}</script>
+  {_echarts_loader_html()}
+  {WINDOW_PERFORMANCE_ECHARTS_SCRIPT}
   {LOCAL_MERMAID_RENDERER_SCRIPT}
 </body>
 </html>
@@ -4367,6 +5970,27 @@ def main(argv=None):
         "--output",
         default="reports/replay/2026-06-08_2026-06-09_板块资金扩散前向回测.html",
         help="输出 HTML 路径",
+    )
+    parser.add_argument(
+        "--export-prefix",
+        help="同时导出 CSV 和 Markdown 摘要的路径前缀，例如 reports/replay/2026-04-01_2026-06-05",
+    )
+    parser.add_argument(
+        "--scope-note",
+        default="",
+        help="写入 Markdown 摘要的区间说明",
+    )
+    parser.add_argument(
+        "--account-capital",
+        type=float,
+        default=10000.0,
+        help="小账户换算本金，默认10000元",
+    )
+    parser.add_argument(
+        "--lot-size",
+        type=int,
+        default=100,
+        help="一手股数，默认100股",
     )
     parser.add_argument(
         "--tushare-refill",
@@ -4416,9 +6040,22 @@ def main(argv=None):
         default=5,
         help="TuShare分时连续错误达到该次数后停止继续请求，默认5次",
     )
+    parser.add_argument(
+        "--tushare-index-context-refill",
+        action="store_true",
+        default=True,
+        help="用TuShare优先补齐导出表里的T0中证500历史指数背景；默认开启",
+    )
+    parser.add_argument(
+        "--no-tushare-index-context-refill",
+        action="store_false",
+        dest="tushare_index_context_refill",
+        help="关闭导出表T0中证500历史指数补齐",
+    )
     args = parser.parse_args(argv)
     loader = _cached_loader(load_daily_report_data_for_forward_replay)
     price_refill = build_tushare_daily_price_refill() if args.tushare_refill else None
+    index_context_refill = build_tushare_index_context_refill() if args.tushare_index_context_refill else None
     minute_refill = (
         build_tushare_minute_price_refill(
             timeout_seconds=args.tushare_minute_timeout,
@@ -4451,9 +6088,22 @@ def main(argv=None):
         price_refill=price_refill,
         minute_refill=minute_refill,
         trade_calendar_refill=trade_calendar_refill,
+        account_capital=args.account_capital,
+        lot_size=args.lot_size,
     )
+    _apply_index_context_refill_to_payload(payload, index_context_refill)
     path = save_forward_replay_html(payload, args.output)
     print(path)
+    if args.export_prefix:
+        artifacts = save_forward_replay_csv_and_summary(
+            payload,
+            args.export_prefix,
+            loader=loader,
+            scope_note=args.scope_note,
+            index_context_refill=index_context_refill,
+        )
+        print(artifacts["csv"])
+        print(artifacts["summary"])
 
 
 if __name__ == "__main__":
