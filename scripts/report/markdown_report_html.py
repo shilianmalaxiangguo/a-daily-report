@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -43,9 +44,13 @@ def _echarts_source_path() -> Path:
     return _repo_root() / ".generated" / "vendor" / "echarts" / "echarts.min.js"
 
 
-def _echarts_loader_html() -> str:
+def _echarts_loader_html(output_path: str | Path | None = None) -> str:
     source_path = _echarts_source_path()
     if source_path.exists():
+        if output_path is not None:
+            output_dir = Path(output_path).resolve().parent
+            relative_path = os.path.relpath(source_path, output_dir).replace(os.sep, "/")
+            return f'<script src="{_html(relative_path)}"></script>'
         return f'<script src="{_html(source_path.as_uri())}"></script>'
     return '<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
 
@@ -951,6 +956,186 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
     return sorted(items, key=lambda item: float(item.get("amount") or 0), reverse=True)
 
 
+def _intraday_feedback_number(value: str) -> float | None:
+    text = _plain_cell_text(value)
+    if not text or text in {"-", "待确认", "数据暂缺"}:
+        return None
+    parsed = _numeric_pct_point(text) if "pct" in text.lower() else _numeric_percent(text)
+    if parsed is not None:
+        return parsed
+    if re.fullmatch(r"[+-]?\d+(?:\.\d+)?", text):
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_intraday_time(value: str) -> str:
+    text = _plain_cell_text(value)
+    match = re.search(r"(\d{1,2}):(\d{2})(?::\d{2})?", text)
+    if not match:
+        return text
+    return f"{int(match.group(1)):02d}:{match.group(2)}"
+
+
+def _is_intraday_index_identity(name: str, role: str) -> bool:
+    text = f"{name} {role}"
+    return "指数" in text or name in {"上证", "沪指", "上证综指"}
+
+
+def _intraday_feedback_series_key(name: str, code: str, role: str) -> str:
+    if _is_intraday_index_identity(name, role):
+        return name or code
+    return code or name
+
+
+def _is_intraday_feedback_point_table(headers: list[str]) -> bool:
+    return (
+        _header_index(headers, "时间", "时刻") >= 0
+        and _header_index(headers, "对象", "标的", "名称") >= 0
+        and _header_index(headers, "代码", "股票代码", "证券代码") >= 0
+        and _header_index(headers, "角色") >= 0
+        and _header_index(headers, "涨跌幅", "涨幅", "分时涨跌幅") >= 0
+        and _header_index(headers, "相对上证", "相对沪指", "相对指数") >= 0
+    )
+
+
+def _is_intraday_feedback_event_table(headers: list[str]) -> bool:
+    return (
+        _header_index(headers, "时间", "时刻") >= 0
+        and _header_index(headers, "对象", "标的", "名称") >= 0
+        and _header_index(headers, "事件", "触发", "标注") >= 0
+    )
+
+
+def _collect_intraday_feedback_point_items(headers: list[str], rows: list[list[str]]) -> list[dict[str, object]]:
+    time_index = _header_index(headers, "时间", "时刻")
+    name_index = _header_index(headers, "对象", "标的", "名称")
+    code_index = _header_index(headers, "代码", "股票代码", "证券代码")
+    role_index = _header_index(headers, "角色")
+    change_index = _header_index(headers, "涨跌幅", "涨幅", "分时涨跌幅")
+    relative_index = _header_index(headers, "相对上证", "相对沪指", "相对指数")
+    items: list[dict[str, object]] = []
+    for row in rows:
+        time_text = _normalize_intraday_time(_cell_at(row, time_index))
+        name = _plain_cell_text(_cell_at(row, name_index))
+        code = _plain_cell_text(_cell_at(row, code_index))
+        role = _plain_cell_text(_cell_at(row, role_index)) or "观察对象"
+        change_pct = _intraday_feedback_number(_cell_at(row, change_index))
+        if not time_text or not name or change_pct is None:
+            continue
+        relative_pct = _intraday_feedback_number(_cell_at(row, relative_index))
+        if relative_pct is None and _is_intraday_index_identity(name, role):
+            relative_pct = 0.0
+        items.append(
+            {
+                "time": time_text,
+                "name": name,
+                "code": code,
+                "role": role,
+                "series_key": _intraday_feedback_series_key(name, code, role),
+                "change_pct": change_pct,
+                "relative_pct": relative_pct,
+            }
+        )
+    return items
+
+
+def _dedupe_intraday_feedback_items(items: list[dict[str, object]]) -> list[dict[str, object]]:
+    roles_by_key: dict[str, list[str]] = {}
+    for item in items:
+        key = str(item.get("series_key") or item.get("code") or item.get("name") or "")
+        role = str(item.get("role") or "").strip()
+        if not key or not role:
+            continue
+        roles = roles_by_key.setdefault(key, [])
+        if role not in roles:
+            roles.append(role)
+
+    deduped: list[dict[str, object]] = []
+    seen_points: set[tuple[str, str]] = set()
+    for item in items:
+        key = str(item.get("series_key") or item.get("code") or item.get("name") or "")
+        time_text = str(item.get("time") or "")
+        point_key = (key, time_text)
+        if not key or not time_text or point_key in seen_points:
+            continue
+        seen_points.add(point_key)
+        normalized = dict(item)
+        roles = roles_by_key.get(key) or []
+        if roles:
+            normalized["role"] = " / ".join(roles)
+        deduped.append(normalized)
+    return deduped
+
+
+def _collect_intraday_feedback_event_items(headers: list[str], rows: list[list[str]]) -> list[dict[str, object]]:
+    time_index = _header_index(headers, "时间", "时刻")
+    name_index = _header_index(headers, "对象", "标的", "名称")
+    code_index = _header_index(headers, "代码", "股票代码", "证券代码")
+    event_index = _header_index(headers, "事件", "触发", "标注")
+    price_index = _header_index(headers, "价格", "价位")
+    note_index = _header_index(headers, "说明", "备注")
+    events: list[dict[str, object]] = []
+    for row in rows:
+        time_text = _normalize_intraday_time(_cell_at(row, time_index))
+        name = _plain_cell_text(_cell_at(row, name_index))
+        code = _plain_cell_text(_cell_at(row, code_index))
+        event = _plain_cell_text(_cell_at(row, event_index))
+        if not time_text or not event:
+            continue
+        events.append(
+            {
+                "time": time_text,
+                "name": name,
+                "code": code,
+                "series_key": _intraday_feedback_series_key(name, code, ""),
+                "event": event,
+                "price": _plain_cell_text(_cell_at(row, price_index)),
+                "note": _plain_cell_text(_cell_at(row, note_index)),
+            }
+        )
+    return events
+
+
+def _collect_intraday_feedback_account_conclusion(lines: list[str]) -> str:
+    for line in lines:
+        text = _plain_cell_text(line).strip()
+        text = re.sub(r"^[>\-\*\s]+", "", text)
+        match = re.search(r"账户(?:复盘)?结论\s*[:：]\s*(.+)$", text)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def _collect_intraday_feedback_review(lines: list[str]) -> dict[str, object]:
+    items: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+    index = 0
+    while index < len(lines):
+        if not _is_table_start(lines, index):
+            index += 1
+            continue
+
+        headers, rows, index = _collect_table(lines, index)
+        if _is_intraday_feedback_point_table(headers):
+            items.extend(_collect_intraday_feedback_point_items(headers, rows))
+            continue
+        if _is_intraday_feedback_event_table(headers):
+            events.extend(_collect_intraday_feedback_event_items(headers, rows))
+            continue
+
+    items = _dedupe_intraday_feedback_items(items)
+    if not items:
+        return {}
+    return {
+        "items": items,
+        "events": events,
+        "account_conclusion": _collect_intraday_feedback_account_conclusion(lines),
+    }
+
+
 def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str, object]:
     lines = markdown_text.splitlines()
     sector_items = _collect_sector_turnover_chart_items(lines, trade_date)
@@ -959,7 +1144,14 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
     turnover_sector_items = _collect_turnover_sector_share_items(turnover_items)
     board_tag_items = _collect_board_tag_rank_items(lines)
     lhb_items = _collect_lhb_flow_items(lines)
+    intraday_feedback_review = _collect_intraday_feedback_review(lines)
     payload: dict[str, object] = {}
+    if intraday_feedback_review:
+        payload["intraday_feedback_review"] = {
+            **intraday_feedback_review,
+            "title": "盘面反馈复盘",
+            "subtitle": "同屏比较上证、旧仓和目标对象的分时强弱",
+        }
     if market_turnover_items:
         payload["market_turnover_top50_trend"] = {
             "items": market_turnover_items,
@@ -1360,6 +1552,7 @@ def render_markdown_report_html(
     title: str = "A股日报",
     trade_date: str = "",
     source_label: str = "Markdown日报",
+    output_path: str | Path | None = None,
 ) -> str:
     markdown_text = _sanitize_reader_markdown_text(markdown_text)
     lines = markdown_text.splitlines()
@@ -1461,6 +1654,33 @@ def render_markdown_report_html(
             continue
 
         if _is_table_start(lines, index):
+            intraday_feedback_chart = bear_chart_payload.get("intraday_feedback_review")
+            if (
+                isinstance(intraday_feedback_chart, dict)
+                and "intraday_feedback_review" not in inserted_charts
+                and _is_intraday_feedback_point_table(_split_table_row(lines[index]))
+            ):
+                items = (
+                    intraday_feedback_chart.get("items")
+                    if isinstance(intraday_feedback_chart.get("items"), list)
+                    else []
+                )
+                account_conclusion = str(intraday_feedback_chart.get("account_conclusion") or "").strip()
+                footnote = "图表来自下方盘面反馈分时点表"
+                if account_conclusion:
+                    footnote = f"{footnote}；账户结论：{account_conclusion}"
+                fragments.append(
+                    _bear_chart_card_html(
+                        "intraday_feedback_review",
+                        eyebrow="盘面记录",
+                        title="盘面反馈复盘",
+                        subtitle="把上证、当前持仓和昨日目标/今日买入对象放到同一张分时强弱图里。",
+                        footnote=footnote,
+                        item_count=len(items),
+                        tall=True,
+                    )
+                )
+                inserted_charts.add("intraday_feedback_review")
             market_turnover_chart = bear_chart_payload.get("market_turnover_top50_trend")
             if (
                 isinstance(market_turnover_chart, dict)
@@ -1568,7 +1788,7 @@ def render_markdown_report_html(
         outline_nav=nav,
         mobile_nav=mobile_nav,
         document_body="\n".join(fragments),
-        echarts_loader=_echarts_loader_html(),
+        echarts_loader=_echarts_loader_html(output_path),
         chart_payload=_json_for_html_script(bear_chart_payload),
     )
 
@@ -1588,6 +1808,7 @@ def render_markdown_report_file(
         title=title or source.stem,
         trade_date=trade_date,
         source_label=source_label,
+        output_path=output,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")

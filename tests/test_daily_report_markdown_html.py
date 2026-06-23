@@ -393,6 +393,77 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["count"], 9)
         self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["share_pct"], 8.3)
 
+    def test_render_adds_bear_echarts_for_intraday_feedback_review(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 盘面反馈复盘",
+                    "账户结论：1x满仓二选一；旧仓弱于指数，优先释放资金。",
+                    "",
+                    "#### 盘面反馈分时点",
+                    "| 时间 | 对象 | 代码 | 角色 | 涨跌幅 | 相对上证 |",
+                    "|------|------|------|------|--------|----------|",
+                    "| 09:31 | 上证指数 | 000001 | 上证指数 | -0.20% | 0.00% |",
+                    "| 09:31 | 太极实业 | 600667 | 当前持仓 | -4.52% | -4.32% |",
+                    "| 09:31 | 长电科技 | 600584 | 昨日目标 | +1.40% | +1.60% |",
+                    "| 09:31 | 长电科技 | 600584 | 今日买入 | +1.40% | +1.60% |",
+                    "| 09:48 | 上证指数 | 000001 | 上证指数 | -0.38% | 0.00% |",
+                    "| 09:48 | 太极实业 | 600667 | 当前持仓 | -6.10% | -5.72% |",
+                    "| 09:48 | 长电科技 | 600584 | 今日买入 | +2.10% | +2.48% |",
+                    "",
+                    "#### 盘面反馈事件",
+                    "| 时间 | 对象 | 事件 | 价格 | 说明 |",
+                    "|------|------|------|------|------|",
+                    "| 09:48 | 太极实业 | 跌破昨低 | 21.40 | 旧仓失效 |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-06-23",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+        review_payload = payload["intraday_feedback_review"]
+        series_keys = {item["series_key"] for item in review_payload["items"]}
+
+        self.assertIn('data-bear-chart="intraday_feedback_review"', html)
+        self.assertIn("renderIntradayFeedbackReviewChart", html)
+        self.assertIn("markPoint", html)
+        self.assertIn("1x满仓二选一；旧仓弱于指数，优先释放资金。", html)
+        self.assertNotIn("各50%", html)
+        self.assertEqual(series_keys, {"上证指数", "600667", "600584"})
+        self.assertEqual(
+            [item for item in review_payload["items"] if item["series_key"] == "600584"][0]["role"],
+            "昨日目标 / 今日买入",
+        )
+        self.assertEqual(len([item for item in review_payload["items"] if item["series_key"] == "600584"]), 2)
+        self.assertEqual(review_payload["events"][0]["event"], "跌破昨低")
+        self.assertEqual(review_payload["account_conclusion"], "1x满仓二选一；旧仓弱于指数，优先释放资金。")
+
+    def test_render_omits_intraday_feedback_chart_without_valid_points(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 盘面反馈复盘",
+                    "账户结论：2x满仓并行；这里还没有分时事实。",
+                    "",
+                    "| 时间 | 对象 | 事件 | 价格 | 说明 |",
+                    "|------|------|------|------|------|",
+                    "| 09:48 | 太极实业 | 跌破昨低 | 21.40 | 旧仓失效 |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-06-23",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+
+        self.assertNotIn('data-bear-chart="intraday_feedback_review"', html)
+        self.assertNotIn("intraday_feedback_review", payload)
+
     def test_render_marks_etf_turnover_only_at_extreme_boundaries(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -741,6 +812,17 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
             self.assertEqual(output, source.with_suffix(".html"))
             self.assertTrue(output.exists())
             self.assertIn("标题", output.read_text(encoding="utf-8"))
+
+    def test_render_file_uses_relative_local_echarts_path(self):
+        with TemporaryDirectory(dir=ROOT) as tempdir:
+            source = Path(tempdir) / "daily.md"
+            source.write_text("# 标题\n\n| 日期 | Top50占比 | Top50成交额 | 两市成交额 |\n|---|---:|---:|---:|\n| 2026-06-22 | 10% | 100 | 1000 |", encoding="utf-8")
+
+            output = render_markdown_report_file(source, title="标题", trade_date="2026-06-22")
+            html = output.read_text(encoding="utf-8")
+
+        self.assertIn('.generated/vendor/echarts/echarts.min.js', html)
+        self.assertNotIn('script src="file://', html)
 
     def test_render_omits_stale_price_band_section_for_target_date(self):
         html = render_markdown_report_html(

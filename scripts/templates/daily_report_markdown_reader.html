@@ -1114,10 +1114,10 @@
 	        return chart;
 	      };
 
-	      const renderTurnoverTop30Chart = (node, payload) => {
-	        const items = Array.isArray(payload?.items) ? payload.items : [];
-	        if (!items.length || !window.echarts) {
-	          return null;
+		      const renderTurnoverTop30Chart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
 	        }
 	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
 	        chart.setOption({
@@ -1168,16 +1168,213 @@
 	              },
 	            },
 	          }],
-	        });
-	        return chart;
-	      };
+		        });
+		        return chart;
+		      };
 
-	      const renderedCharts = Array.from(document.querySelectorAll("[data-bear-chart]"))
-	        .map((node) => {
-	          const key = node.dataset.bearChart;
-	          if (key === "market_turnover_top50_trend") {
-	            return renderMarketTurnoverTop50TrendChart(node, chartPayload.market_turnover_top50_trend);
-	          }
+		      const renderIntradayFeedbackReviewChart = (node, payload) => {
+		        const items = Array.isArray(payload?.items) ? payload.items : [];
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const events = Array.isArray(payload?.events) ? payload.events : [];
+		        const finiteNumber = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+		        const times = Array.from(new Set(items.map((item) => String(item.time || "")).filter(Boolean))).sort();
+		        const groups = new Map();
+		        for (const item of items) {
+		          const key = String(item.series_key || item.code || item.name || "");
+		          if (!key || !item.time) {
+		            continue;
+		          }
+		          if (!groups.has(key)) {
+		            const code = item.code && item.code !== item.name ? `(${item.code})` : "";
+		            const role = item.role ? ` · ${item.role}` : "";
+		            groups.set(key, {
+		              key,
+		              name: item.name || key,
+		              code: item.code || "",
+		              role: item.role || "",
+		              label: `${item.name || key}${code}${role}`,
+		              points: new Map(),
+		            });
+		          }
+		          groups.get(key).points.set(item.time, item);
+		        }
+		        const groupedItems = Array.from(groups.values());
+		        const palette = [chartTone.text, chartTone.red, chartTone.green, "#2F7FB8", "#A88400", "#A75E9B"];
+		        const zeroLine = (name) => ({
+		          silent: true,
+		          symbol: "none",
+		          label: {
+		            color: chartTone.muted,
+		            formatter: name,
+		            position: "middle",
+		            padding: [2, 6],
+		            borderRadius: 999,
+		            backgroundColor: "rgba(255,255,255,0.78)",
+		          },
+		          lineStyle: { color: chartTone.line, type: "dashed" },
+		          data: [{ yAxis: 0 }],
+		        });
+		        const eventMarkPoints = (group) => events
+		          .filter((event) => {
+		            const eventKey = String(event.series_key || event.code || event.name || "");
+		            return event.time && group.points.has(event.time) && (!eventKey || eventKey === group.key || event.name === group.name);
+		          })
+		          .map((event) => {
+		            const point = group.points.get(event.time);
+		            const value = finiteNumber(point?.change_pct);
+		            if (value === null) {
+		              return null;
+		            }
+		            return {
+		              name: event.event || "事件",
+		              coord: [event.time, value],
+		              value: event.price || event.event || "",
+		              itemStyle: { color: chartTone.red },
+		              label: {
+		                color: chartTone.text,
+		                formatter: event.event || "事件",
+		              },
+		              event,
+		            };
+		          })
+		          .filter(Boolean);
+		        const topSeries = groupedItems.map((group, index) => {
+		          const marks = eventMarkPoints(group);
+		          return {
+		            name: group.label,
+		            type: "line",
+		            smooth: 0.18,
+		            symbol: "circle",
+		            symbolSize: 5,
+		            xAxisIndex: 0,
+		            yAxisIndex: 0,
+		            lineStyle: { width: 2.2, color: palette[index % palette.length] },
+		            itemStyle: { color: palette[index % palette.length] },
+		            data: times.map((time) => {
+		              const item = group.points.get(time);
+		              return { value: finiteNumber(item?.change_pct), item, group };
+		            }),
+		            ...(index === 0 ? { markLine: zeroLine("0轴") } : {}),
+		            ...(marks.length
+		              ? {
+		                  markPoint: {
+		                    symbol: "pin",
+		                    symbolSize: 46,
+		                    label: { fontSize: 10 },
+		                    data: marks,
+		                  },
+		                }
+		              : {}),
+		          };
+		        });
+		        const relativeSeries = groupedItems.map((group, index) => ({
+		          name: `${group.label} 相对上证`,
+		          type: "line",
+		          smooth: 0.18,
+		          symbol: "none",
+		          xAxisIndex: 1,
+		          yAxisIndex: 1,
+		          lineStyle: { width: 1.8, type: "dashed", color: palette[index % palette.length], opacity: 0.82 },
+		          itemStyle: { color: palette[index % palette.length] },
+		          data: times.map((time) => {
+		            const item = group.points.get(time);
+		            return { value: finiteNumber(item?.relative_pct), item, group };
+		          }),
+		          ...(index === 0 ? { markLine: zeroLine("相对0轴") } : {}),
+		        }));
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          ...baseChartOption(),
+		          color: palette,
+		          legend: {
+		            top: 8,
+		            left: 8,
+		            right: 8,
+		            type: "scroll",
+		            itemWidth: 10,
+		            itemHeight: 10,
+		            textStyle: { color: chartTone.muted, fontSize: 12 },
+		            data: groupedItems.map((group) => group.label),
+		          },
+		          grid: [
+		            { left: 58, right: 28, top: 58, height: "45%", containLabel: false },
+		            { left: 58, right: 28, top: "70%", height: "20%", containLabel: false },
+		          ],
+		          tooltip: {
+		            ...baseChartOption().tooltip,
+		            trigger: "axis",
+		            formatter: (params) => {
+		              const list = Array.isArray(params) ? params : [params];
+		              const first = list[0] || {};
+		              return [
+		                `<strong>${escapeText(first.axisValue || "")}</strong>`,
+		                ...list.map((param) => {
+		                  const item = param.data?.item || {};
+		                  const value = param.value === null || param.value === undefined ? "待确认" : formatSignedPct(param.value);
+		                  const eventLines = events
+		                    .filter((event) => event.time === first.axisValue && (event.series_key === item.series_key || event.name === item.name))
+		                    .map((event) => `事件：${escapeText(event.event || "")}${event.note ? ` · ${escapeText(event.note)}` : ""}`);
+		                  return [
+		                    `${param.marker || ""}${escapeText(param.seriesName)}：${escapeText(value)}`,
+		                    ...eventLines,
+		                  ].filter(Boolean).join("<br>");
+		                }),
+		              ].filter(Boolean).join("<br>");
+		            },
+		          },
+		          xAxis: [
+		            {
+		              type: "category",
+		              data: times,
+		              axisLabel: { color: chartTone.muted },
+		              axisTick: { show: false },
+		              axisLine: { lineStyle: { color: chartTone.line } },
+		            },
+		            {
+		              type: "category",
+		              gridIndex: 1,
+		              data: times,
+		              axisLabel: { color: chartTone.muted },
+		              axisTick: { show: false },
+		              axisLine: { lineStyle: { color: chartTone.line } },
+		            },
+		          ],
+		          yAxis: [
+		            {
+		              type: "value",
+		              name: "涨跌幅",
+		              nameTextStyle: { color: chartTone.muted },
+		              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		            {
+		              type: "value",
+		              gridIndex: 1,
+		              name: "相对上证",
+		              nameTextStyle: { color: chartTone.muted },
+		              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
+		              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
+		            },
+		          ],
+		          dataZoom: [
+		            { type: "inside", xAxisIndex: [0, 1], filterMode: "none" },
+		          ],
+		          series: [...topSeries, ...relativeSeries],
+		        });
+		        return chart;
+		      };
+
+		      const renderedCharts = Array.from(document.querySelectorAll("[data-bear-chart]"))
+		        .map((node) => {
+		          const key = node.dataset.bearChart;
+		          if (key === "intraday_feedback_review") {
+		            return renderIntradayFeedbackReviewChart(node, chartPayload.intraday_feedback_review);
+		          }
+		          if (key === "market_turnover_top50_trend") {
+		            return renderMarketTurnoverTop50TrendChart(node, chartPayload.market_turnover_top50_trend);
+		          }
 	          if (key === "sector_turnover_share") {
 	            return renderSectorTurnoverShareChart(node, chartPayload.sector_turnover_share);
 	          }
