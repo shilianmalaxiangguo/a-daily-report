@@ -305,7 +305,81 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertNotIn("默认不买", non_ice_scripts)
         self.assertNotIn("极度看好全部降为观察", non_ice_scripts)
 
-    def test_daily_entry_generates_position_strategy_only_when_positions_exist(self):
+    def test_render_includes_ta_tb_tc_timeline_for_old_position_and_tomorrow_target(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={
+                "execution_stage_context": {
+                    "extreme_conviction_list": [
+                        {
+                            "code": "000586",
+                            "name": "汇源通信",
+                            "sector": "通信设备",
+                            "planned_participation": {
+                                "buy_window": "09:50-10:10",
+                                "attack_state": "50%",
+                            },
+                        }
+                    ]
+                }
+            },
+            target_date="2026-06-26",
+            positions=[{"name": "华电辽能", "position": 100.0}],
+        )
+
+        self.assertTrue(report.startswith("| 轨道 | 标的 | 2026-06-26（周五） |"))
+        self.assertNotIn("```mermaid", report)
+        self.assertNotIn("gantt", report)
+        self.assertIn("| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |", report)
+        self.assertIn("| Ta旧仓 | 华电辽能 | Ta+0 旧仓占用 | Ta+1 继续处理旧仓 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |", report)
+        self.assertIn("| Tb明日目标 | 汇源通信(000586) | 空仓 | Tb+0 明日目标 | Tb+1 只按昨晚预案执行或取消 | Tb+2 未执行则回到空仓 |", report)
+        self.assertIn("| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |", report)
+        self.assertIn("第一列是报告日，下一交易日是执行日", report)
+        self.assertNotIn("旧路径来源", report)
+        self.assertNotIn("2026-06-27（周六）", report)
+        self.assertNotIn("2026-06-28（周日）", report)
+        self.assertNotIn("| 槽位 | 标的 |", report)
+
+    def test_render_empty_tomorrow_target_states_missing_tb_tc_and_early_ta_exit(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={},
+            target_date="2026-06-26",
+            positions=[{"name": "太极实业", "position": 100.0}],
+        )
+
+        self.assertIn("| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |", report)
+        self.assertIn("| Ta旧仓 | 太极实业 | Ta+0 旧仓占用 | Ta+1 继续处理旧仓 | Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓 | 空仓 |", report)
+        self.assertIn("| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |", report)
+        self.assertIn("| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |", report)
+        self.assertIn("没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，优先处理旧仓", report)
+        self.assertIn("Tb 表示明日目标；Tb+0 是条件买入，不是无条件买入；Tb+1 要继续按昨晚预案处理持有或取消路径；没有明日目标时，必须写明没有Tb+0 / 没有Tb+1。", report)
+
+    def test_render_uses_previous_report_target_and_current_markdown_target_for_timeline(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "2026-06-26_A股日报_执行摘要.md").write_text(
+                "| 最终对象 | 明日执行对象：太极实业(600667) |\n",
+                encoding="utf-8",
+            )
+            report = render_position_strategy_report(
+                data={},
+                target_date="2026-06-29",
+                positions=[],
+                source_report_markdown="| 明日执行对象 | 深科技(000021) |\n",
+                output_root=root,
+            )
+
+        self.assertIn("| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |", report)
+        self.assertIn("| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |", report)
+        self.assertIn("| Tb明日目标 | 深科技(000021) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |", report)
+        self.assertIn("第一列是上一份日报路径在本轮报告前的占用日", report)
+
+    def test_daily_entry_generates_position_strategy_for_day_order_table_without_positions(self):
         script = textwrap.dedent(
             f"""
             import sys
@@ -371,7 +445,7 @@ class PositionStrategyReportTest(unittest.TestCase):
                 report_output_calls.append(kwargs)
                 return {{"full": "# full", "summary": "# summary"}}
 
-            with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-19", "--replay", "--position", "我的仓位是军工一号 30%"]), \\
+            with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-19", "--replay"]), \\
                  patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(fake_data, "2026-05-19")), \\
                  patch.object(daily_report_entry_demo, "build_report_preflight", return_value={{"failures": []}}), \\
                  patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \\
@@ -385,12 +459,15 @@ class PositionStrategyReportTest(unittest.TestCase):
 
             assert exit_code == 0
             assert len(report_output_calls) == 1
-            assert report_output_calls[0].get("has_personal_positions") is True
+            assert report_output_calls[0].get("has_personal_positions") is False
             assert report_output_calls[0].get("position_report_text", "") == ""
-            assert fake_data["personal_position_context"]["existing_position_summary"]["has_position"] is True
+            assert "personal_position_context" not in fake_data
             assert len(calls) == 1
             assert calls[0][1:] == ("2026-05-19", "replay")
-            assert "军工一号" in calls[0][0]
+            assert calls[0][0].startswith("| 轨道 | 标的 |")
+            assert "```mermaid" not in calls[0][0]
+            assert "Tb+0" in calls[0][0]
+            assert "Tc+0" in calls[0][0]
             """
         )
 

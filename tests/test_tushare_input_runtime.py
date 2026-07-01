@@ -29,6 +29,7 @@ from input.tushare_runtime import (
     get_top50_turnover_share_series_from_tushare_first,
     get_turnover_rank_from_tushare_first,
     get_wind_a_from_tushare_first,
+    get_star50_from_tushare_first,
     get_csi500_from_tushare_first,
     get_csi1000_from_tushare_first,
 )
@@ -1666,6 +1667,197 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertIn(("akshare_one_year_high",), calls)
         self.assertIn(("upsert_new_high", "2026-05-21", "akshare.stock_rank_cxg_ths.one_year_high"), calls)
 
+    def test_new_high_feedback_enriches_akshare_rows_from_turnover_rank_when_quotes_missing(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                return []
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                return {
+                    "available": False,
+                    "status": "insufficient_history",
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                }
+
+            def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+                calls.append(("quotes", trade_date, tuple(stock_codes or [])))
+                return []
+
+            def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
+                calls.append(("turnover", trade_date, limit, rank_scope))
+                return [
+                    {
+                        "rank_no": 1,
+                        "stock_code": "300706",
+                        "name": "阿石创",
+                        "sector": "半导体",
+                        "amount_yi": 36.8,
+                        "pct_chg": 19.06,
+                    }
+                ]
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("leading_sectors")))
+                return row
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return FakeService()
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-06-29",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: [],
+            fetch_stock_basic_map_fn=lambda: {"300706": {"name": "阿石创", "list_date": "20200102"}},
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [],
+            fetch_stock_risk_map_fn=lambda target_date: {},
+            fetch_akshare_one_year_high_rows_fn=lambda: [
+                {"股票代码": "300706", "股票简称": "阿石创", "涨跌幅": 19.06, "最新价": 88.8}
+            ],
+            database_service_cls=FakeDatabaseService,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["top_stocks"][0]["sector"], "半导体")
+        self.assertAlmostEqual(result["top_stocks"][0]["amount_yi"], 36.8)
+        self.assertEqual(result["leading_sectors"], "半导体")
+        self.assertIn(("turnover", "2026-06-29", 100, "all_a"), calls)
+
+    def test_new_high_feedback_rebuilds_stale_fact_snapshot_with_missing_amount_and_sector(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [
+                    {
+                        "trade_date": "2026-06-29",
+                        "new_high_count": 1,
+                        "all_a_share_pct": 0.02,
+                        "leading_sectors": "待补充板块",
+                        "sector_distribution": [{"sector": "待补充板块", "new_high_count": 1}],
+                        "top_stocks": [
+                            {
+                                "code": "300706",
+                                "name": "阿石创",
+                                "sector": "待补充板块",
+                                "amount_yi": 0,
+                                "pct_chg": 19.06,
+                                "topdays": 250,
+                            }
+                        ],
+                    }
+                ]
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                calls.append(("quote_builder", trade_date))
+                return {
+                    "available": False,
+                    "status": "insufficient_history",
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                }
+
+            def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+                calls.append(("quotes", trade_date, tuple(stock_codes or [])))
+                return [{"stock_code": "300706", "sector": "半导体", "amount_yi": 36.8}]
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("leading_sectors")))
+                return row
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return FakeService()
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-06-29",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: [],
+            fetch_stock_basic_map_fn=lambda: {"300706": {"name": "阿石创", "list_date": "20200102"}},
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [],
+            fetch_stock_risk_map_fn=lambda target_date: {},
+            fetch_akshare_one_year_high_rows_fn=lambda: [
+                {"股票代码": "300706", "股票简称": "阿石创", "涨跌幅": 19.06, "最新价": 88.8}
+            ],
+            database_service_cls=FakeDatabaseService,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "akshare.stock_rank_cxg_ths.one_year_high")
+        self.assertEqual(result["leading_sectors"], "半导体")
+        self.assertEqual(result["top_stocks"][0]["sector"], "半导体")
+        self.assertAlmostEqual(result["top_stocks"][0]["amount_yi"], 36.8)
+        self.assertIn(("quote_builder", "2026-06-29"), calls)
+        self.assertIn(("upsert_new_high", "2026-06-29", "半导体"), calls)
+
+    def test_new_high_feedback_rebuilds_stale_fact_snapshot_with_missing_amount_only(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [
+                    {
+                        "trade_date": "2026-06-30",
+                        "new_high_count": 1,
+                        "all_a_share_pct": 0.02,
+                        "leading_sectors": "半导体",
+                        "sector_distribution": [{"sector": "半导体", "new_high_count": 1}],
+                        "top_stocks": [
+                            {
+                                "code": "300540",
+                                "name": "蜀道装备",
+                                "sector": "半导体",
+                                "amount_yi": 0,
+                                "pct_chg": 20.01,
+                                "topdays": 250,
+                            }
+                        ],
+                    }
+                ]
+
+            def build_new_high_feedback_from_recent_quotes(self, trade_date, **kwargs):
+                calls.append(("quote_builder", trade_date))
+                return {
+                    "available": False,
+                    "status": "insufficient_history",
+                    "source": "storage.stock_daily_quotes_recent.high_break",
+                }
+
+            def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+                calls.append(("quotes", trade_date, tuple(stock_codes or [])))
+                return [{"stock_code": "300540", "sector": "专用机械", "amount_yi": 12.717934}]
+
+            def upsert_new_high_feedback_daily(self, row):
+                calls.append(("upsert_new_high", row.get("trade_date"), row.get("top_stocks", [{}])[0].get("amount_yi")))
+                return row
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return FakeService()
+
+        result = get_new_high_feedback_from_tushare_first(
+            "2026-06-30",
+            fetch_stock_factor_pro_rows_fn=lambda trade_date: [],
+            fetch_stock_basic_map_fn=lambda: {"300540": {"name": "蜀道装备", "list_date": "20200102"}},
+            fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [],
+            fetch_stock_risk_map_fn=lambda target_date: {},
+            fetch_akshare_one_year_high_rows_fn=lambda: [
+                {"股票代码": "300540", "股票简称": "蜀道装备", "涨跌幅": 20.01, "最新价": 37.9}
+            ],
+            database_service_cls=FakeDatabaseService,
+        )
+
+        self.assertTrue(result["available"])
+        self.assertEqual(result["source"], "akshare.stock_rank_cxg_ths.one_year_high")
+        self.assertEqual(result["top_stocks"][0]["sector"], "专用机械")
+        self.assertAlmostEqual(result["top_stocks"][0]["amount_yi"], 12.717934)
+        self.assertIn(("quote_builder", "2026-06-30"), calls)
+        self.assertIn(("upsert_new_high", "2026-06-30", 12.717934), calls)
+
     def test_new_high_feedback_still_uses_akshare_when_stock_basic_times_out(self):
         calls = []
 
@@ -2715,6 +2907,24 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertAlmostEqual(result["change_pct"], 1.0)
         self.assertEqual(fallback_calls, [])
 
+    def test_wind_a_retries_tushare_index_daily_before_legacy_fallback(self):
+        calls = []
+
+        def flaky_fetcher(code, start_date, end_date, is_index=False):
+            calls.append((code, start_date, end_date, is_index))
+            if len(calls) < 3:
+                raise TimeoutError("temporary timeout")
+            return [
+                {"date": "2026-05-12", "close": 6200},
+                {"date": "2026-05-13", "close": 6262},
+            ]
+
+        with patch.object(tushare_runtime, "fetch_daily_price_bars", side_effect=flaky_fetcher):
+            result = get_wind_a_from_tushare_first("2026-05-13")
+
+        self.assertEqual(result["data_source"], "tushare.index_daily")
+        self.assertEqual(len(calls), 3)
+
     def test_tushare_index_daily_uses_csi_code_for_wind_a(self):
         calls = []
 
@@ -2791,6 +3001,27 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertTrue(calls[0][3])
         self.assertEqual(result["name"], "中证1000")
         self.assertEqual(result["code"], "000852")
+        self.assertEqual(result["data_source"], "tushare.index_daily")
+        self.assertAlmostEqual(result["change_pct"], 1.0)
+
+    def test_star50_uses_tushare_index_daily_primary(self):
+        calls = []
+
+        result = get_star50_from_tushare_first(
+            "2026-05-13",
+            fetch_daily_price_bars_fn=lambda code, start_date, end_date, is_index=False: calls.append(
+                (code, start_date, end_date, is_index)
+            )
+            or [
+                {"date": "2026-05-12", "close": 1660.0},
+                {"date": "2026-05-13", "close": 1676.6},
+            ],
+        )
+
+        self.assertEqual(calls[0][0], "000688")
+        self.assertTrue(calls[0][3])
+        self.assertEqual(result["name"], "科创50")
+        self.assertEqual(result["code"], "000688")
         self.assertEqual(result["data_source"], "tushare.index_daily")
         self.assertAlmostEqual(result["change_pct"], 1.0)
 

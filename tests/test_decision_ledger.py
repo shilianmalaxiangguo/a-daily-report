@@ -3126,6 +3126,56 @@ class DecisionLedgerTest(unittest.TestCase):
         self.assertIn("不作为明日新增参与依据", rendered)
         self.assertNotIn("同时成立时买", rendered)
 
+    def test_extreme_conviction_backtest_marks_final_execution_target(self):
+        index = {
+            "by_stock_code": {
+                "600584": [
+                    {
+                        "stock_code": "600584",
+                        "stock_name": "长电科技",
+                        "latest_trade_date": "2026-06-24",
+                        "cycle_day": 1,
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "participation_window": "竞价表态 + 回封观察",
+                            "buy_window": "09:30-09:35",
+                            "limit_up_inertia_level": "高惯性",
+                            "next_day_limit_probability_band": "资金选择后的承接观察样本",
+                        },
+                        "mentions": [{"mention_trade_date": "2026-06-24", "source_section": "极度看好名单"}],
+                    }
+                ],
+                "000566": [
+                    {
+                        "stock_code": "000566",
+                        "stock_name": "海南海药",
+                        "latest_trade_date": "2026-06-24",
+                        "cycle_day": 1,
+                        "planned_participation": {
+                            "source_tier": "extreme_conviction",
+                            "participation_window": "竞价表态 + 回封观察",
+                            "buy_window": "09:30-09:35",
+                            "limit_up_inertia_level": "高惯性",
+                            "next_day_limit_probability_band": "资金选择后的承接观察样本",
+                        },
+                        "mentions": [{"mention_trade_date": "2026-06-24", "source_section": "极度看好名单"}],
+                    }
+                ],
+            }
+        }
+        final_action = {
+            "label": "50%条件执行",
+            "position_pct": 50,
+            "target": {"stock_code": "600584", "stock_name": "长电科技"},
+        }
+
+        rendered = "\n".join(render_extreme_conviction_backtest_lines(index, final_action=final_action))
+
+        self.assertIn("| 2026-06-24 | 长电科技 | 600584 | 明日执行对象 |", rendered)
+        self.assertIn("长电科技(600584)已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与", rendered)
+        self.assertIn("| 2026-06-24 | 海南海药 | 000566 | 高惯性 / 资金选择后的承接观察样本 |", rendered)
+        self.assertIn("等待计划窗口事实回写；不作为明日新增参与依据", rendered)
+
     def test_writer_auto_reviews_previous_extreme_conviction_cases_from_market_facts(self):
         first = build_decision_ledger_snapshot(
             trade_date="2026-05-13",

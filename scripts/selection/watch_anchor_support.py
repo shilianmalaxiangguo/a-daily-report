@@ -581,7 +581,7 @@ def _build_cycle_triplet_texts_legacy_body(position_decision=None, candidate=Non
         if target_position_pct == 50:
             observation_cycle = f"先给{holding_window_text}主线观察合同，重点看它是否继续 act right"
         elif 0 < target_position_pct < 50:
-            observation_cycle = f"先给{holding_window_text}主线观察合同，重点看它是否继续走势符合强势标准，再决定是否进入50%条件执行"
+            observation_cycle = f"先给{holding_window_text}主线观察合同，重点看它是否继续走势符合强势标准，结果进入复盘和下一份日报判断"
         else:
             observation_cycle = f"先给{holding_window_text}观察合同，只观察不追，等它自己继续证明"
 
@@ -592,26 +592,26 @@ def _build_cycle_triplet_texts_legacy_body(position_decision=None, candidate=Non
         intervention_cycle = f"{trigger_after_text}按50%执行，才算被市场正式指派接货，不做模糊试单"
     elif 0 < target_position_pct < 50:
         if second_shot_ready and second_shot_breakout_price is not None:
-            intervention_cycle = f"已完成{second_shot_breakout_price:.2f}二次突破，{trigger_after_text}评估50%条件执行"
+            intervention_cycle = f"已完成{second_shot_breakout_price:.2f}二次突破，{trigger_after_text}只记录承接，结果进入复盘和下一份日报判断"
         else:
-            intervention_cycle = f"{trigger_after_text}才评估50%条件执行，确认后才算被市场指派接货，不满足继续0%不参与"
+            intervention_cycle = f"{trigger_after_text}只保留观察，结果进入复盘和下一份日报判断；不满足继续0%不参与"
     elif execute_anchor_window_text:
         if second_shot_breakout_price is not None:
-            intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才评估50%条件执行；普通结构只看09:50-10:10窗口"
+            intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才保留复盘观察；普通结构只看09:50-10:10窗口"
         else:
-            intervention_cycle = f"{trigger_after_text}再评估是否进入50%条件执行"
+            intervention_cycle = f"{trigger_after_text}只记录承接，结果进入复盘和下一份日报判断"
     elif candidate:
         if watch_source == "gem_breathing_20cm":
             upgrade_text = str(gem_contract.get("upgrade_condition_text", "") or "").strip()
             reset_price = _round_or_none(gem_contract.get("reset_breakout_price"))
             if 0 < target_position_pct < 50:
-                intervention_cycle = f"{trigger_after_text}才评估50%条件执行，确认后才算被市场指派接货，不满足继续0%不参与"
+                intervention_cycle = f"{trigger_after_text}只保留观察，结果进入复盘和下一份日报判断；不满足继续0%不参与"
             elif second_shot_breakout_price is not None:
-                intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才评估50%条件执行；普通结构只看09:50-10:10窗口"
+                intervention_cycle = f"只有重新站上{second_shot_breakout_price:.2f}且固定交易窗口内条件成立，才保留复盘观察；普通结构只看09:50-10:10窗口"
             elif reset_price is not None:
-                intervention_cycle = f"只有重新站上{reset_price:.2f}且固定交易窗口内条件成立，才评估50%条件执行；普通结构只看09:50-10:10窗口"
+                intervention_cycle = f"只有重新站上{reset_price:.2f}且固定交易窗口内条件成立，才保留复盘观察；普通结构只看09:50-10:10窗口"
             elif upgrade_text:
-                intervention_cycle = f"{upgrade_text}；确认后才评估50%条件执行"
+                intervention_cycle = f"{upgrade_text}；确认后也只进入复盘和下一份日报判断"
             else:
                 intervention_cycle = f"{trigger_after_text}才评估是否出手，确认前不提前接货"
         else:

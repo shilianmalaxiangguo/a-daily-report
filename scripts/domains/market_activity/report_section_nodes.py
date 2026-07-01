@@ -90,6 +90,15 @@ def _first_positive_float(*values):
     return 0.0
 
 
+def _first_available_float(row, keys, default=0.0):
+    row = row or {}
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return _safe_float(value, default)
+    return float(default)
+
+
 def _optional_float(value):
     if value in (None, ""):
         return None
@@ -518,7 +527,10 @@ def build_sector_fund_inflow_node(context, node_meta=None, node_lookup=None):
     sector_fund_flow = data.get("sector_fund_flow") or {}
     if sector_fund_flow.get("inflow"):
         for idx, sector in enumerate(sector_fund_flow["inflow"][:10], 1):
-            lines.append(f"| {idx} | {sector.get('name', '?')} | {sector.get('zljlr', 0):+.2f}亿 | {sector.get('zdf', 0):+.2f}% |")
+            net_flow = _first_available_float(sector, ("zljlr", "net_amount", "net_inflow_yi", "net_inflow"))
+            change_pct = _first_available_float(sector, ("zdf", "change_pct", "pct_change"))
+            sector_name = sector.get("name") or sector.get("sector") or sector.get("sector_name") or sector.get("industry") or "?"
+            lines.append(f"| {idx} | {sector_name} | {net_flow:+.2f}亿 | {change_pct:+.2f}% |")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 
@@ -533,7 +545,10 @@ def build_sector_fund_outflow_node(context, node_meta=None, node_lookup=None):
     sector_fund_flow = data.get("sector_fund_flow") or {}
     if sector_fund_flow.get("outflow"):
         for idx, sector in enumerate(sector_fund_flow["outflow"][:10], 1):
-            lines.append(f"| {idx} | {sector.get('name', '?')} | {abs(sector.get('zljlr', 0)):.2f}亿 | {sector.get('zdf', 0):+.2f}% |")
+            net_flow = _first_available_float(sector, ("zljlr", "net_amount", "net_inflow_yi", "net_inflow"))
+            change_pct = _first_available_float(sector, ("zdf", "change_pct", "pct_change"))
+            sector_name = sector.get("name") or sector.get("sector") or sector.get("sector_name") or sector.get("industry") or "?"
+            lines.append(f"| {idx} | {sector_name} | {abs(net_flow):.2f}亿 | {change_pct:+.2f}% |")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

@@ -755,11 +755,11 @@ def _build_gem_breathing_contract_legacy_body(candidate=None):
     )
     active_window_days = min(max(holding_days_max, 3), 5)
     if confirm_price is not None and support_price is not None:
-        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}且不破{support_price:.2f}，才评估50%条件执行"
+        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}且不破{support_price:.2f}，只进入复盘和下一份日报判断"
     elif confirm_price is not None:
-        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}，才评估50%条件执行"
+        upgrade_condition_text = f"09:50-10:10站上{confirm_price:.2f}，只进入复盘和下一份日报判断"
     else:
-        upgrade_condition_text = "先完成右侧确认，并且固定交易窗口内条件成立，才评估50%条件执行；普通结构只看09:50-10:10窗口"
+        upgrade_condition_text = "先完成右侧确认，并且固定交易窗口内条件成立，也只进入复盘和下一份日报判断；普通结构只看09:50-10:10窗口"
     return {
         "active": bool(confirm_price or support_price or reset_breakout_price),
         "contract_kind": "gem_breathing_20cm",
@@ -977,7 +977,7 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
         if textbook_ready and not right_side_ok:
             reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%条件执行；固定交易窗口内条件不满足则0%不参与。"
         else:
-            reason = "20cm 只作为右侧补充分支；主线、确认链、固定交易窗口条件和风险边界都清楚时，才评估50%条件执行；不满足则0%不参与。"
+            reason = "20cm 只作为右侧补充分支；主线、确认链、固定交易窗口条件和风险边界都清楚时，按昨晚预案检查执行资格；不满足则0%不参与。"
     elif breathing_prep.get("active") and elasticity_context.get("active"):
         reason = f"{breathing_prep.get('note') or '创业板20cm呼吸感预启动。'}；{elasticity_context.get('reason', '')}"
     elif breathing_prep.get("active"):

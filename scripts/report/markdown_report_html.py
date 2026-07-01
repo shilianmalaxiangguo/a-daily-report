@@ -55,6 +55,38 @@ def _echarts_loader_html(output_path: str | Path | None = None) -> str:
     return '<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js"></script>'
 
 
+def _mermaid_source_path() -> Path:
+    return _repo_root() / ".generated" / "vendor" / "mermaid" / "mermaid.min.js"
+
+
+def _mermaid_loader_html(output_path: str | Path | None = None, *, enabled: bool = False) -> str:
+    if not enabled:
+        return ""
+    source_path = _mermaid_source_path()
+    if source_path.exists():
+        if output_path is not None:
+            output_dir = Path(output_path).resolve().parent
+            relative_path = os.path.relpath(source_path, output_dir).replace(os.sep, "/")
+            script_src = relative_path
+        else:
+            script_src = source_path.as_uri()
+    else:
+        script_src = "https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.min.js"
+    return (
+        f'<script src="{_html(script_src)}"></script>'
+        "<script>"
+        "(function(){"
+        "const renderMermaid=()=>{"
+        "if(!window.mermaid){return;}"
+        "window.mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'base'});"
+        "window.mermaid.run({querySelector:'.markdown-body .mermaid'});"
+        "};"
+        "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',renderMermaid,{once:true});}else{renderMermaid();}"
+        "})();"
+        "</script>"
+    )
+
+
 def _html(value: object) -> str:
     return escape(str(value if value is not None else ""), quote=True)
 
@@ -517,6 +549,338 @@ def _is_table_start(lines: list[str], index: int) -> bool:
     )
 
 
+def _is_position_timeline_table(headers: list[str], rows: list[list[str]]) -> bool:
+    header_texts = [_table_header_text(header) for header in headers]
+    if len(header_texts) < 5 or header_texts[:2] != ["轨道", "标的"]:
+        return False
+    lane_names = {_plain_cell_text(row[0]) for row in rows if row}
+    return {"Ta旧仓", "Tb明日目标", "Tc复核位"}.issubset(lane_names)
+
+
+def _markdown_starts_with_position_timeline(markdown_text: str) -> bool:
+    for line in str(markdown_text or "").splitlines():
+        if not line.strip():
+            continue
+        return line.lstrip().startswith("| 轨道 | 标的 |")
+    return False
+
+
+def _position_timeline_lane_html(value: str) -> str:
+    text = _plain_cell_text(value)
+    match = re.match(r"^([A-Z][a-z]?)(.*)$", text)
+    if not match:
+        return f'<span class="timeline-lane-code">{_html(text)}</span>'
+    code = match.group(1)
+    label = match.group(2).strip()
+    return (
+        f'<span class="timeline-lane-code">{_html(code)}</span>'
+        f'<span class="timeline-lane-label">{_html(label)}</span>'
+    )
+
+
+def _position_timeline_lane_class(value: str) -> str:
+    text = _plain_cell_text(value)
+    if text.startswith("Ta"):
+        return "timeline-row-ta"
+    if text.startswith("Tb"):
+        return "timeline-row-tb"
+    if text.startswith("Tc"):
+        return "timeline-row-tc"
+    return "timeline-row-neutral"
+
+
+def _position_timeline_asset_html(value: str) -> str:
+    text = _plain_cell_text(value)
+    if text in {"", "-", "无", "空仓"}:
+        return f'<span class="timeline-asset-empty">{_html(text or "无")}</span>'
+    match = re.match(r"^(.+?)\((\d{6})\)$", text)
+    if not match:
+        return f'<span class="timeline-asset-name">{_html(text)}</span>'
+    return (
+        f'<span class="timeline-asset-name">{_html(match.group(1))}</span>'
+        f'<span class="timeline-asset-code">{_html(match.group(2))}</span>'
+    )
+
+
+def _position_timeline_date_html(value: str) -> str:
+    text = _plain_cell_text(value)
+    match = re.match(r"^(.+?)（(.+?)）$", text)
+    if not match:
+        return f'<span class="timeline-date-main">{_html(text)}</span>'
+    return (
+        f'<span class="timeline-date-main">{_html(match.group(1))}</span>'
+        f'<span class="timeline-date-weekday">（{_html(match.group(2))}）</span>'
+    )
+
+
+def _position_timeline_action_badge(value: str) -> str:
+    text = _plain_cell_text(value)
+    if "Ta+2" in text or "尽早卖出" in text:
+        return "必执行"
+    if text.startswith("Tb+0"):
+        return "条件买入"
+    if text.startswith("Tb+1"):
+        return "持仓处理"
+    if text.startswith("没有Tb+0"):
+        return "空仓"
+    return ""
+
+
+def _position_timeline_segment_is_selected(value: str) -> bool:
+    text = _plain_cell_text(value)
+    return "Ta+2" in text or "尽早卖出" in text or text.startswith("Tb+1")
+
+
+def _position_timeline_cell_text(rows: list[list[str]], index: int, date_count: int, lane_prefix: str = "") -> str:
+    for row in rows:
+        lane = _plain_cell_text(row[0] if row else "")
+        if lane_prefix and not lane.startswith(lane_prefix):
+            continue
+        cells = row[2 : 2 + date_count]
+        if index < len(cells):
+            text = _plain_cell_text(cells[index])
+            if text:
+                return text
+    return ""
+
+
+def _position_timeline_report_index(rows: list[list[str]], date_count: int) -> int:
+    for index in range(date_count):
+        if "报告日确认明日目标" in _position_timeline_cell_text(rows, index, date_count, "Tb"):
+            return index
+    return 0
+
+
+def _position_timeline_selected_indexes(rows: list[list[str]], date_count: int) -> set[int]:
+    report_index = _position_timeline_report_index(rows, date_count)
+    execution_index = report_index + 1
+    if execution_index < date_count:
+        return {execution_index}
+    return set()
+
+
+def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_count: int) -> str:
+    day_texts: list[str] = []
+    ta_text = ""
+    tb_text = ""
+    for row in rows:
+        cells = row[2 : 2 + date_count]
+        if index < len(cells):
+            text = _plain_cell_text(cells[index])
+            day_texts.append(text)
+            lane = _plain_cell_text(row[0] if row else "")
+            if lane.startswith("Ta"):
+                ta_text = text
+            elif lane.startswith("Tb"):
+                tb_text = text
+    has_ta_exit = any("Ta+2" in text or "尽早卖出" in text for text in day_texts)
+    has_tb_hold = any(text.startswith("Tb+1") for text in day_texts)
+    has_tb_buy = any(text.startswith("Tb+0") for text in day_texts)
+    has_no_tb = tb_text.startswith("没有Tb")
+    has_empty_ta = ta_text in {"空仓", "Ta+0 空仓"}
+    if has_ta_exit and has_no_tb and not has_tb_hold and not has_tb_buy:
+        return "空仓执行"
+    if has_tb_hold:
+        return "持仓处理"
+    if ta_text.startswith("Ta+1"):
+        return "持仓处理"
+    if has_ta_exit:
+        return "卖出处理"
+    if has_tb_buy:
+        return "条件买入"
+    if has_no_tb and has_empty_ta and not has_tb_hold and not has_tb_buy:
+        return "空仓执行"
+    return ""
+
+
+def _position_timeline_execution_tag_class(tag: str) -> str:
+    if "空仓" in tag:
+        return "is-empty"
+    if "买入" in tag:
+        return "is-buy"
+    if "卖出" in tag:
+        return "is-sell"
+    if "持仓" in tag:
+        return "is-hold"
+    return "is-neutral"
+
+
+def _position_timeline_date_markers_html(
+    index: int,
+    report_index: int,
+    selected_indexes: set[int],
+    execution_tags: dict[int, str],
+) -> str:
+    parts: list[str] = []
+    if index == report_index:
+        parts.append('<span class="timeline-date-context">报告日</span>')
+    elif index < report_index:
+        parts.append('<span class="timeline-date-source">旧路径来源</span>')
+    if index in selected_indexes:
+        parts.append('<span class="timeline-date-action">执行日</span>')
+    tag = execution_tags.get(index, "")
+    if tag:
+        tag_class = _position_timeline_execution_tag_class(tag)
+        parts.append(
+            f'<span class="timeline-date-intent {tag_class}">{_html(tag)}</span>'
+        )
+    return "".join(parts)
+
+
+def _position_timeline_state_parts(value: str) -> tuple[str, str]:
+    text = _plain_cell_text(value)
+    missing_match = re.match(r"^(没有(?:Ta|Tb|Tc)\+\d+)[，,、\s]*(.*)$", text)
+    if missing_match:
+        return missing_match.group(1), missing_match.group(2).strip()
+    state_match = re.match(r"^((?:Ta|Tb|Tc)\+\d+)\s*(.*)$", text)
+    if state_match:
+        return state_match.group(1), state_match.group(2).strip()
+    return text, ""
+
+
+def _position_timeline_state_class(value: str) -> str:
+    text = _plain_cell_text(value)
+    if text.startswith("没有"):
+        return "is-missing"
+    if text == "空仓" or text == "Ta+0 空仓":
+        return "is-empty"
+    if "Ta+2" in text or "尽早卖出" in text:
+        return "is-exit"
+    if text.startswith("Ta+"):
+        return "is-ta"
+    if text.startswith("Tb+"):
+        return "is-tb"
+    if text.startswith("Tc+"):
+        return "is-tc"
+    return "is-neutral"
+
+
+def _position_timeline_segment_html(value: str) -> str:
+    code, description = _position_timeline_state_parts(value)
+    class_name = _position_timeline_state_class(value)
+    action_badge = _position_timeline_action_badge(value)
+    selected_class = " is-selected" if _position_timeline_segment_is_selected(value) else ""
+    description_html = (
+        f'<span class="timeline-state-text">{_html(description)}</span>' if description else ""
+    )
+    badge_html = (
+        f'<span class="timeline-action-badge">{_html(action_badge)}</span>' if action_badge else ""
+    )
+    return (
+        f'<span class="timeline-bar-segment {class_name}{selected_class}">'
+        f'<span class="timeline-state-code">{_html(code)}</span>'
+        f"{description_html}"
+        f"{badge_html}"
+        "</span>"
+    )
+
+
+def _position_timeline_track_groups(cells: list[str]) -> list[tuple[int, list[str]]]:
+    groups: list[tuple[int, list[str]]] = []
+    start: int | None = None
+    active_cells: list[str] = []
+    for index, cell in enumerate(cells):
+        class_name = _position_timeline_state_class(cell)
+        text = _plain_cell_text(cell)
+        is_track_item = bool(text) and class_name != "is-empty"
+        if is_track_item:
+            if start is None:
+                start = index
+            active_cells.append(cell)
+            continue
+        if start is not None:
+            groups.append((start, active_cells))
+            start = None
+            active_cells = []
+    if start is not None:
+        groups.append((start, active_cells))
+    return groups
+
+
+def _position_timeline_bar_class(cells: list[str]) -> str:
+    classes = {_position_timeline_state_class(cell) for cell in cells}
+    if classes == {"is-missing"}:
+        return "is-missing"
+    return "is-active"
+
+
+def _position_timeline_track_html(cells: list[str]) -> str:
+    groups = _position_timeline_track_groups(cells)
+    bars: list[str] = []
+    for start, group_cells in groups:
+        segments = "".join(_position_timeline_segment_html(cell) for cell in group_cells)
+        bars.append(
+            f'<div class="timeline-bar {_position_timeline_bar_class(group_cells)}" '
+            f'style="--bar-start: {start + 1}; --bar-span: {len(group_cells)}; '
+            f'--bar-segments: {len(group_cells)}">{segments}</div>'
+        )
+    return (
+        f'<div class="timeline-track" style="--timeline-days: {len(cells)}">'
+        f"{''.join(bars)}"
+        "</div>"
+    )
+
+
+def _render_position_timeline_table(
+    headers: list[str],
+    rows: list[list[str]],
+    stock_refs: tuple[str, ...],
+) -> str:
+    date_headers = headers[2:]
+    report_index = _position_timeline_report_index(rows, len(date_headers))
+    selected_indexes = _position_timeline_selected_indexes(rows, len(date_headers))
+    execution_tags = {
+        index: _position_timeline_execution_tag(rows, index, len(date_headers))
+        for index in selected_indexes
+    }
+    colgroup = (
+        '<colgroup><col class="timeline-col-lane"><col class="timeline-col-asset">'
+        '<col class="timeline-col-track">'
+        + "</colgroup>"
+    )
+    header_cells = [
+        '<th class="timeline-axis-origin" scope="col"><span>轨道</span></th>',
+        '<th class="timeline-axis-asset" scope="col"><span>标的</span></th>',
+        (
+            '<th class="timeline-axis-track" scope="col">'
+            f'<div class="timeline-axis-grid" style="--timeline-days: {len(date_headers)}">'
+            + "".join(
+                (
+                    f'<span class="timeline-axis-date{" is-report-day" if index == report_index else ""}'
+                    f'{" is-selected" if index in selected_indexes else ""}">'
+                    f'{_position_timeline_date_html(header)}'
+                    f'{_position_timeline_date_markers_html(index, report_index, selected_indexes, execution_tags)}'
+                    "</span>"
+                )
+                for index, header in enumerate(date_headers)
+            )
+            + "</div></th>"
+        ),
+    ]
+    body_rows: list[str] = []
+    for row in rows:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        lane = padded[0]
+        asset = padded[1]
+        row_class = _position_timeline_lane_class(lane)
+        track = _position_timeline_track_html(padded[2 : len(headers)])
+        body_rows.append(
+            f'<tr class="timeline-row {row_class}">'
+            f'<th class="timeline-lane" scope="row">{_position_timeline_lane_html(lane)}</th>'
+            f'<td class="timeline-asset">{_position_timeline_asset_html(asset)}</td>'
+            f'<td class="timeline-track-cell" style="--timeline-days: {len(date_headers)}">{track}</td>'
+            "</tr>"
+        )
+    body = "\n".join(body_rows)
+    return (
+        '<div class="position-timeline-shell" role="region" aria-label="Ta Tb Tc 持仓时间轴">'
+        '<div class="position-timeline-scroll">'
+        '<table class="position-timeline-table">'
+        f"{colgroup}<thead><tr>{''.join(header_cells)}</tr></thead><tbody>{body}</tbody>"
+        "</table></div></div>"
+    )
+
+
 def _is_fenced_code_start(line: str) -> bool:
     return line.strip().startswith("```")
 
@@ -532,12 +896,40 @@ def _render_fenced_code(lines: list[str], index: int) -> tuple[str, int]:
             break
         code_lines.append(lines[index])
         index += 1
+    code_text = "\n".join(code_lines)
+    if language == "mermaid":
+        axis_labels: list[str] = []
+        filtered_code_lines = []
+        for code_line in code_lines:
+            axis_match = re.match(r"^\s*%%\s*bear-axis:\s*(.*?)\s*$", code_line)
+            if axis_match:
+                axis_labels = [item.strip() for item in axis_match.group(1).split("|") if item.strip()]
+                continue
+            filtered_code_lines.append(code_line)
+        code_text = "\n".join(filtered_code_lines)
+        kind_attr = ' data-mermaid-kind="gantt"' if re.search(r"(?m)^\s*gantt\s*$", code_text) else ""
+        axis_html = ""
+        if axis_labels:
+            axis_items = "".join(
+                f'<span class="bear-gantt-axis-item">{_html(label)}</span>' for label in axis_labels
+            )
+            axis_html = f'<div class="bear-gantt-axis" aria-label="交易日时间轴">{axis_items}</div>'
+        diagram_html = (
+            '<div class="fenced-code mermaid" data-mermaid-diagram="true"'
+            + kind_attr
+            + ">"
+            + _html(code_text)
+            + "</div>"
+        )
+        if axis_html:
+            return f'<div class="bear-gantt-shell">{axis_html}{diagram_html}</div>', index
+        return diagram_html, index
     lang_attr = f' lang="{_html(language)}"' if language else ""
     return (
         '<pre class="fenced-code"><code class="fenced-code-content"'
         + lang_attr
         + ">"
-        + _html("\n".join(code_lines))
+        + _html(code_text)
         + "</code></pre>",
         index,
     )
@@ -1459,6 +1851,9 @@ def _render_table(
             rows.append(_split_table_row(lines[index]))
         index += 1
 
+    if _is_position_timeline_table(headers, rows):
+        return _render_position_timeline_table(headers, rows, stock_refs), index
+
     header_html = "".join(f"<th>{_inline(header, stock_refs)}</th>" for header in headers)
     is_cycle_calendar = _is_cycle_calendar_section(section_title)
     is_cycle_sector_surface = _is_cycle_sector_surface(section_title)
@@ -1563,6 +1958,7 @@ def render_markdown_report_html(
     headings: list[Heading] = []
     fragments: list[str] = []
     inserted_charts: set[str] = set()
+    has_mermaid_diagram = False
     index = 0
     current_h2_title = ""
     current_section_title = ""
@@ -1748,6 +2144,8 @@ def render_markdown_report_html(
 
         if _is_fenced_code_start(stripped):
             code_html, index = _render_fenced_code(lines, index)
+            if 'data-mermaid-diagram="true"' in code_html:
+                has_mermaid_diagram = True
             fragments.append(code_html)
             continue
 
@@ -1789,6 +2187,7 @@ def render_markdown_report_html(
         mobile_nav=mobile_nav,
         document_body="\n".join(fragments),
         echarts_loader=_echarts_loader_html(output_path),
+        mermaid_loader=_mermaid_loader_html(output_path, enabled=has_mermaid_diagram),
         chart_payload=_json_for_html_script(bear_chart_payload),
     )
 
@@ -1800,11 +2199,15 @@ def render_markdown_report_file(
     title: str = "",
     trade_date: str = "",
     source_label: str = "Markdown日报",
+    prepend_markdown: str = "",
 ) -> Path:
     source = Path(markdown_path)
     output = Path(html_path) if html_path is not None else source.with_suffix(".html")
+    markdown_text = source.read_text(encoding="utf-8")
+    if str(prepend_markdown or "").strip() and not _markdown_starts_with_position_timeline(markdown_text):
+        markdown_text = f"{str(prepend_markdown).strip()}\n\n{markdown_text.lstrip()}"
     html = render_markdown_report_html(
-        source.read_text(encoding="utf-8"),
+        markdown_text,
         title=title or source.stem,
         trade_date=trade_date,
         source_label=source_label,

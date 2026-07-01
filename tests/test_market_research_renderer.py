@@ -1787,7 +1787,7 @@ class MarketResearchRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("明日不新增参与", rendered)
-        self.assertIn("只观察风险是否钝化、主攻线承接和唯一对象是否重新成立", rendered)
+        self.assertIn("只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断", rendered)
         self.assertNotIn("分层参与", rendered)
         self.assertNotIn("买入后再用30分钟结构定止损", rendered)
 

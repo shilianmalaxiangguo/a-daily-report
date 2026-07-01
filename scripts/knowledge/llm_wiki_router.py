@@ -19,6 +19,51 @@ KNOWLEDGE_INDEX = [
         "impact": "指数强但赚钱效应弱时，只保留主线核心，不从旧方向强行扩散候选。",
     },
     {
+        "id": "market.sector-grid-first-selection",
+        "prior": "market-structure-prior",
+        "source_path": "wiki/板块补充/板块中枢与主线延续.md",
+        "title": "水池九宫格与先选板块",
+        "topics": [
+            "结构性行情",
+            "全市场水池",
+            "水池九宫格",
+            "先选板块",
+            "板块网格化",
+            "资金水位",
+            "蓝色粗水柱",
+            "红色细水柱",
+            "主线抱团",
+            "边角标的",
+        ],
+        "trigger_terms": [
+            "结构性行情",
+            "全市场水池",
+            "水池九宫格",
+            "九宫格",
+            "网格化",
+            "板块网格化",
+            "先选板块",
+            "板块先行",
+            "资金水位",
+            "蓝色粗水柱",
+            "红色细水柱",
+            "水柱",
+            "蓝柱",
+            "红柱",
+            "主线抱团",
+            "机构抱团",
+            "短线题材",
+            "边角标的",
+            "轮动不到",
+            "资金灌入",
+            "板块格子",
+        ],
+        "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
+        "report_slot": "市场结构判断",
+        "confidence": "reviewed",
+        "impact": "结构性行情先问资金灌入哪个板块格子，再在格子内区分机构主线、短线题材和边角标的；先选板块不是只看板块名字，而是看成交占比、宽度、核心承接和竞争方向，边角标的不因轮动自动取得参与资格。",
+    },
+    {
         "id": "account.unbuyable-core-anchor",
         "prior": "account-execution-prior",
         "source_path": "wiki/交易思想/实际账户情况.md",
@@ -55,6 +100,62 @@ KNOWLEDGE_INDEX = [
         "report_slot": "资金优先级",
         "confidence": "verified",
         "impact": "先判旧仓是否失去持仓资格，卖旧仓看旧仓资格；再判新机会是否取得执行资格，买新仓看新仓资格；不卖强补弱，也不用FOMO把两笔判断合成一次满仓替换。",
+    },
+    {
+        "id": "discipline.fomo-external-stimulus",
+        "prior": "trade-discipline-prior",
+        "source_path": "wiki/交易思想/价格行为与能量框架.md",
+        "title": "FOMO 不是交易指令",
+        "topics": ["FOMO", "卖飞", "买回", "情绪隔离", "主力情绪", "薛定谔持股", "必卖日执行"],
+        "trigger_terms": [
+            "FOMO",
+            "fomo",
+            "卖飞",
+            "买回",
+            "反包",
+            "主力",
+            "情绪",
+            "后悔",
+            "踏空",
+            "薛定谔",
+            "必卖",
+            "空仓",
+            "旧仓",
+            "0轴卖",
+            "纪律成本",
+            "可复制",
+            "小亏",
+        ],
+        "scenarios": ["intraday_question", "review", "daily_report"],
+        "report_slot": "交易纪律",
+        "confidence": "verified",
+        "impact": "FOMO 是外部价格刺激被自己接住后的情绪，不是执行资格；反包先批改情绪反应，不直接批改前一日信息集。必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；卖出后第一天因反包、后悔或怕踏空想买回，默认不执行，只能收盘后重新进入 T0 评估。",
+    },
+    {
+        "id": "discipline.tplus-slot-timeline",
+        "prior": "trade-discipline-prior",
+        "source_path": "wiki/交易思想/价格行为与能量框架.md",
+        "title": "Ta/Tb/Tc 日序时间表",
+        "topics": ["Ta/Tb/Tc", "日序", "T+2必卖", "空仓", "没有Tb", "没有Tc"],
+        "trigger_terms": [
+            "Ta",
+            "Tb",
+            "Tc",
+            "Ta+2",
+            "Tb+0",
+            "Tb+1",
+            "Tc+0",
+            "T+2必卖",
+            "日序",
+            "甘特图",
+            "没有Tb",
+            "没有Tc",
+            "全天空仓",
+        ],
+        "scenarios": ["daily_report", "intraday_question", "review"],
+        "report_slot": "持仓日序",
+        "confidence": "reviewed",
+        "impact": "Ta/Tb/Tc 要表格化呈现账户时间占用：Ta 是旧仓，处在 Ta+2 时优先退出；Tb 只来自今晚日报写入的明日目标，没有目标就写没有 Tb+0；Tc 只能由下一份日报重新决定，没有 Tc+0 时不得盘中临时补位。",
     },
     {
         "id": "intraday.do-t-risk-control",
@@ -199,6 +300,16 @@ KNOWLEDGE_INDEX = [
             "信号K线",
             "急速与通道",
             "交易者等式",
+            "假底",
+            "进攻雏形",
+            "再等等",
+            "重心上移",
+            "缩量横盘",
+            "前高",
+            "利空不深跌",
+            "利好不大涨",
+            "阳包阴",
+            "突破阳线",
         ],
         "scenarios": ["daily_report", "intraday_question", "candidate_quality", "review"],
         "report_slot": "价格行为判断",
@@ -339,6 +450,7 @@ def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
     summary_text = str(judgement.get("summary_text") or "")
     fact_basis_text = " ".join(str(item or "") for item in judgement.get("fact_basis") or [])
     index_relation = str(judgement.get("index_profit_relation") or "")
+    combined_text = " ".join([summary_text, fact_basis_text, index_relation])
     market_facts: Dict[str, Any] = {}
     if "指数强" in index_relation or "指数强" in summary_text:
         market_facts["index_trend"] = "上涨"
@@ -346,6 +458,14 @@ def _build_market_fact_tags(data: Dict[str, Any]) -> Dict[str, Any]:
         market_facts["breadth"] = "上涨家数偏弱"
     if "结构集中" in summary_text:
         market_facts["turnover_distribution"] = "成交集中"
+    if "结构性行情" in combined_text:
+        market_facts["market_form"] = "结构性行情"
+    if "九宫格" in combined_text or "网格化" in combined_text or "板块格子" in combined_text:
+        market_facts["sector_grid"] = "水池九宫格"
+    if "先选板块" in combined_text or "板块先行" in combined_text:
+        market_facts["selection_order"] = "先选板块"
+    if "边角" in combined_text:
+        market_facts["corner_sample"] = "边角标的"
     return market_facts
 
 

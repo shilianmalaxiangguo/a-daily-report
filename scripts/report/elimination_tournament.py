@@ -1065,7 +1065,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
         layer["survivors"] = [final_entry]
         layer["eliminated"] = []
         layer["input_entries"] = [final_entry]
-        layer["note"] = "唯一明日动作来自板块资金扩散链路；T+1固定窗口条件不成立则回到0%不参与。"
+        layer["note"] = "唯一明日动作来自板块资金扩散链路；T+1只按昨晚预案检查执行资格，不满足则回到0%不参与。"
         synced.append(_normalize_preflight_layer(layer))
         replaced = True
     if not replaced:
@@ -1081,7 +1081,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
                     "survivors": [final_entry],
                     "eliminated": [],
                     "input_entries": [final_entry],
-                    "note": "唯一明日动作来自板块资金扩散链路；T+1固定窗口条件不成立则回到0%不参与。",
+                    "note": "唯一明日动作来自板块资金扩散链路；T+1只按昨晚预案检查执行资格，不满足则回到0%不参与。",
                 }
             )
         )

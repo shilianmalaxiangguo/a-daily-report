@@ -7,6 +7,8 @@ from report.sniper_target_derivation import clean_text, normalize_stock_code
 
 SCHEMA_VERSION = "two_layer_daily_decision.v1"
 EMPTY_STOCK_TEXTS = {"", "-", "无", "暂无", "不做", "无明日执行对象", "无执行对象", "无执行目标"}
+PREMARKET_50_EXECUTION_TEXT = "已决定50%条件执行；盘中不满足取消，回到0%不参与"
+PREMARKET_50_TRIGGER_TEXT = "按昨晚预案检查执行资格；不满足回到0%不参与"
 
 
 def _safe_float(value, default=0.0):
@@ -303,7 +305,7 @@ def _discipline_evidence(context, final_object):
 
 def _final_action_text(has_target, selected_label):
     if has_target:
-        return f"只在固定窗口条件成立时参与{selected_label}"
+        return f"只看{selected_label}；{PREMARKET_50_TRIGGER_TEXT}"
     if selected_label and selected_label != "暂无":
         return f"只观察{selected_label}，不新增参与"
     return "空仓等待或只处理旧仓"
@@ -535,7 +537,7 @@ def _position_stance_payload(target, observation_target, priority, position_deci
             "reason_from_sector_window": f"主方向：{mainline}",
             "reason_from_leader_validation": f"最终对象进入{stance}校验",
             "not_participate_reason": "",
-            "passes_forward": f"允许{stance}，条件不满足回到0%不参与",
+            "passes_forward": f"已决定{stance}，条件不满足回到0%不参与",
         }
     return {
         "stance": "0%不参与",
@@ -1129,7 +1131,7 @@ def render_front_decision_layer(payload):
         "## 明日执行结论",
         "| 项目 | 结论 |",
         "|------|------|",
-        f"| 明日仓位 | 条件满足才{position_plan}；不满足回到0% |",
+        f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT if position_plan == '50%条件执行' else f'已决定{position_plan}；不满足回到0%'} |",
         f"| 明日执行对象 | {target_label} |",
         f"| 执行性质 | {position_plan} |",
         f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",

@@ -564,7 +564,7 @@ def build_gem_textbook_front_text(candidate=None, position_decision=None):
     if 0 < target_position_pct < 50:
         next_step = f"当前已进入50%条件执行，{trigger_text}后才允许动手，不满足转为0%不参与"
     elif label == "A级教材":
-        next_step = "当前还差右侧确认和09:50-10:10窗口，确认后才评估50%条件执行" if not ready else f"反馈已接近到位，{trigger_text}后可评估50%条件执行"
+        next_step = "当前还差右侧确认和09:50-10:10窗口，确认后也只进入复盘和下一份日报判断" if not ready else f"反馈已接近到位，{trigger_text}后进入复盘和下一份日报判断"
     elif label == "B级教材":
         next_step = "先保留观察合同，等它走成右侧确认后再考虑升级"
     elif label == "C级观察样本":
@@ -853,7 +853,7 @@ def build_quant_anchor_plan(candidate=None):
         if "顶部" in zone:
             action = "区间顶部锚点冲不过先止盈；放量吃掉并回踩不破，才恢复候选资格"
         elif "底部" in zone:
-            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP且09:50-10:10窗口条件满足后，才允许50%条件执行"
+            action = "区间底部锚点只作承接观察；未站回VWAP前不直接参与，缩量止跌、站回VWAP且09:50-10:10窗口条件满足后，也只进入复盘和下一份日报判断"
         elif "吃掉" in zone or "消化" in hidden:
             action = "锚点被放量吃掉并回踩不破，只恢复候选资格；不能自动升级主买"
         elif "高潮" in zone or "反包" in zone:

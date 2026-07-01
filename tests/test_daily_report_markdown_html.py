@@ -12,6 +12,151 @@ from report.markdown_report_html import render_markdown_report_file, render_mark
 
 
 class DailyReportMarkdownHtmlTest(unittest.TestCase):
+    def test_render_ta_tb_tc_timeline_table_as_first_bear_html_block(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                    "|------|------|------|------|------|------|",
+                    "| Ta旧仓 | 华电辽能 | Ta+0 旧仓占用 | Ta+1 继续处理旧仓 | Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓 | 空仓 |",
+                    "| Tb明日目标 | 汇源通信(000586) | 空仓 | Tb+0 明日目标 | Tb+1 只按昨晚预案执行或取消 | Tb+2 未执行则回到空仓 |",
+                    "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |",
+                    "",
+                    "# 2026-06-26 持仓策略",
+                    "",
+                    "正文",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-06-26",
+        )
+
+        body_index = html.index('<div class="markdown-body">')
+        timeline_index = html.index('class="position-timeline-shell"', body_index)
+        h1_index = html.index("<h1", body_index)
+        self.assertLess(timeline_index, h1_index)
+        self.assertIn('role="region" aria-label="Ta Tb Tc 持仓时间轴"', html)
+        self.assertIn('<table class="position-timeline-table">', html)
+        self.assertIn('<span class="timeline-date-main">2026-06-26</span><span class="timeline-date-weekday">（周五）</span>', html)
+        self.assertIn('<span class="timeline-date-main">2026-07-01</span><span class="timeline-date-weekday">（周三）</span>', html)
+        self.assertIn('<span class="timeline-axis-date is-report-day"><span class="timeline-date-main">2026-06-26</span>', html)
+        self.assertIn('<span class="timeline-date-context">报告日</span>', html)
+        self.assertIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-29</span>', html)
+        self.assertNotIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-30</span>', html)
+        self.assertIn('<span class="timeline-date-action">执行日</span>', html)
+        self.assertEqual(html.count('<span class="timeline-date-action">执行日</span>'), 1)
+        self.assertIn('<span class="timeline-date-intent is-hold">持仓处理</span>', html)
+        self.assertNotIn('<span class="timeline-date-action">需执行</span>', html)
+        self.assertIn('<span class="timeline-lane-code">Ta</span><span class="timeline-lane-label">旧仓</span>', html)
+        self.assertIn('<span class="timeline-lane-code">Tb</span><span class="timeline-lane-label">明日目标</span>', html)
+        self.assertIn('<span class="timeline-lane-code">Tc</span><span class="timeline-lane-label">复核位</span>', html)
+        self.assertIn('<tr class="timeline-row timeline-row-ta">', html)
+        self.assertIn('<tr class="timeline-row timeline-row-tb">', html)
+        self.assertIn('<tr class="timeline-row timeline-row-tc">', html)
+        self.assertIn('<span class="timeline-asset-name">汇源通信</span><span class="timeline-asset-code">000586</span>', html)
+        self.assertIn('<span class="timeline-asset-empty">无</span>', html)
+        self.assertIn('<th class="timeline-axis-track" scope="col"><div class="timeline-axis-grid" style="--timeline-days: 4">', html)
+        self.assertIn('<td class="timeline-track-cell" style="--timeline-days: 4"><div class="timeline-track" style="--timeline-days: 4">', html)
+        self.assertIn('<div class="timeline-bar is-active" style="--bar-start: 1; --bar-span: 3; --bar-segments: 3">', html)
+        self.assertIn('<div class="timeline-bar is-active" style="--bar-start: 2; --bar-span: 3; --bar-segments: 3">', html)
+        self.assertIn('<div class="timeline-bar is-missing" style="--bar-start: 3; --bar-span: 1; --bar-segments: 1">', html)
+        self.assertIn('<span class="timeline-bar-segment is-exit is-selected"><span class="timeline-state-code">Ta+2</span>', html)
+        self.assertIn('<span class="timeline-action-badge">必执行</span>', html)
+        self.assertIn('<span class="timeline-bar-segment is-tb"><span class="timeline-state-code">Tb+0</span>', html)
+        self.assertIn('<span class="timeline-action-badge">条件买入</span>', html)
+        self.assertIn('<span class="timeline-bar-segment is-tb is-selected"><span class="timeline-state-code">Tb+1</span>', html)
+        self.assertIn('<span class="timeline-action-badge">持仓处理</span>', html)
+        self.assertIn('<span class="timeline-bar-segment is-missing"><span class="timeline-state-code">没有Tc+0</span>', html)
+        self.assertNotIn('<code class="stock-ref">汇源通信(000586)</code>', html)
+        self.assertNotIn('class="timeline-day-cell"', html)
+        self.assertNotIn('timeline-bar-segment is-empty', html)
+        self.assertIn(".position-timeline-table", html)
+        self.assertIn("min-width: 1040px", html)
+        self.assertIn("--timeline-lane-width: 76px", html)
+        self.assertIn("--timeline-asset-width: 116px", html)
+        self.assertIn("--timeline-grid-line", html)
+        self.assertIn("--timeline-minor-line", html)
+        self.assertIn(".position-timeline-table thead th", html)
+        self.assertIn("white-space: normal", html)
+        self.assertIn(".timeline-axis-date.is-selected", html)
+        self.assertIn(".timeline-action-badge", html)
+        self.assertIn(".timeline-date-intent.is-empty", html)
+        self.assertIn(".timeline-date-intent.is-hold", html)
+        self.assertIn(".timeline-bar-segment.is-selected .timeline-action-badge", html)
+        self.assertIn(".timeline-bar-segment.is-selected::before", html)
+        self.assertIn("padding-left: 18px", html)
+        self.assertIn("width: 3px", html)
+        self.assertIn("linear-gradient(90deg, var(--timeline-grid-line) 1px, transparent 1px)", html)
+        self.assertIn("--timeline-row-accent: #007aff", html)
+        self.assertIn("--timeline-row-accent: #ff9500", html)
+        self.assertIn("--timeline-row-accent: #30b0c7", html)
+        self.assertNotIn("mermaid.min.js", html)
+        self.assertNotIn("bear-gantt-shell", html)
+
+    def test_render_empty_execution_day_intent_when_no_tb_path(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                    "|------|------|------|------|------|------|",
+                    "| Ta旧仓 | 华电辽能 | Ta+0 旧仓占用 | Ta+1 继续处理旧仓 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |",
+                    "| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |",
+                    "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-06-26",
+        )
+
+        self.assertIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-29</span>', html)
+        self.assertNotIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-30</span>', html)
+        self.assertIn('<span class="timeline-date-action">执行日</span>', html)
+        self.assertIn('<span class="timeline-date-intent is-hold">持仓处理</span>', html)
+        self.assertIn('<span class="timeline-bar-segment is-exit is-selected"><span class="timeline-state-code">Ta+2</span>', html)
+        self.assertNotIn('<span class="timeline-bar-segment is-tb is-selected"><span class="timeline-state-code">Tb+1</span>', html)
+
+    def test_render_empty_execution_day_intent_when_no_old_position_or_tb_path(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                    "|------|------|------|------|------|------|",
+                    "| Ta旧仓 | 空仓 | Ta+0 空仓 | 空仓 | 空仓 | 空仓 |",
+                    "| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |",
+                    "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-06-26",
+        )
+
+        self.assertIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-29</span>', html)
+        self.assertIn('<span class="timeline-date-action">执行日</span>', html)
+        self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
+        self.assertNotIn('<span class="timeline-bar-segment is-exit is-selected"><span class="timeline-state-code">Ta+2</span>', html)
+        self.assertNotIn('<span class="timeline-bar-segment is-tb is-selected"><span class="timeline-state-code">Tb+1</span>', html)
+
+    def test_render_report_day_moves_after_previous_path_source(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                    "|------|------|------|------|------|------|",
+                    "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |",
+                    "| Tb明日目标 | 深科技(000021) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |",
+                    "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-06-29",
+        )
+
+        self.assertIn('<span class="timeline-date-source">旧路径来源</span>', html)
+        self.assertIn('<span class="timeline-axis-date is-report-day"><span class="timeline-date-main">2026-06-29</span>', html)
+        self.assertIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-30</span>', html)
+        self.assertNotIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-29</span>', html)
+        self.assertEqual(html.count('<span class="timeline-date-action">执行日</span>'), 1)
+
     def test_render_builds_bear_outline_and_escapes_text(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -111,6 +256,8 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("pre.fenced-code", html)
         self.assertIn('<pre class="fenced-code"><code class="fenced-code-content" lang="sql">', html)
         self.assertIn("select * from daily_report_fact_fields where value &gt; 20;", html)
+        self.assertNotIn("mermaid.min.js", html)
+        self.assertNotIn("mermaid.run({querySelector:'.markdown-body .mermaid'})", html)
         self.assertIn("<hr>", html)
         self.assertNotIn('content: "📝"', html)
         self.assertIn("box-decoration-break: clone", html)
@@ -812,6 +959,61 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
             self.assertEqual(output, source.with_suffix(".html"))
             self.assertTrue(output.exists())
             self.assertIn("标题", output.read_text(encoding="utf-8"))
+
+    def test_render_file_prepends_position_timeline_into_bear_html(self):
+        timeline = "\n".join(
+            [
+                "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Ta旧仓 | 空仓 | Ta+0 空仓 | 空仓 | 空仓 | 空仓 |",
+                "| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |",
+                "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |",
+                "",
+                "- 顶部长时间轴按日报视角展示：第一列是报告日，下一交易日是执行日。",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "daily.md"
+            source.write_text("# 标题\n\n## 二级\n正文", encoding="utf-8")
+
+            output = render_markdown_report_file(
+                source,
+                title="标题",
+                trade_date="2026-06-26",
+                prepend_markdown=timeline,
+            )
+            html = output.read_text(encoding="utf-8")
+
+        body_index = html.index('<div class="markdown-body">')
+        timeline_index = html.index('class="position-timeline-shell"', body_index)
+        h1_index = html.index("<h1", body_index)
+        self.assertLess(timeline_index, h1_index)
+        self.assertIn('<span class="timeline-date-context">报告日</span>', html)
+        self.assertIn('<span class="timeline-date-action">执行日</span>', html)
+
+    def test_render_file_does_not_duplicate_existing_position_timeline(self):
+        timeline = "\n".join(
+            [
+                "| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |",
+                "| Tb明日目标 | 深科技(000021) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |",
+                "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            source = Path(tempdir) / "daily.md"
+            source.write_text(f"{timeline}\n\n# 标题\n正文", encoding="utf-8")
+
+            output = render_markdown_report_file(
+                source,
+                title="标题",
+                trade_date="2026-06-29",
+                prepend_markdown=timeline,
+            )
+            html = output.read_text(encoding="utf-8")
+
+        self.assertEqual(html.count('class="position-timeline-shell"'), 1)
 
     def test_render_file_uses_relative_local_echarts_path(self):
         with TemporaryDirectory(dir=ROOT) as tempdir:

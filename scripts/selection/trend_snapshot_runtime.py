@@ -1958,7 +1958,7 @@ def _apply_st_resume_observation_policy(candidate, risk_context):
     updated["systemic_risk_review"] = {
         "status": "降主动性",
         "reason": reason,
-        "action": "保留主买/补位比较，但只在固定交易窗口内条件成立后评估50%条件执行；风险扩散未钝化就回到0%。",
+        "action": "保留主买/补位比较；已决定50%条件执行的对象只检查执行资格，观察对象只进入复盘和下一份日报判断；风险扩散未钝化就回到0%。",
         "position_cap_pct": 50,
     }
     final_review = dict(updated.get("final_risk_review") or {})

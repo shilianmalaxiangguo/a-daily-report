@@ -8,6 +8,8 @@ from typing import Any, Callable
 
 from daily_report_entry_demo import replay_from_snapshot
 from daily_report_render import assert_report_required_facts_complete, build_report_outputs, save_report_outputs
+from observability.opik_runtime import build_report_run_observer
+from observability.report_quality import build_report_quality_score, persist_report_quality_score
 from report.decision_ledger import write_decision_ledger_artifacts_from_markdown_report
 from report.report_run_audit import audit_daily_report_run
 
@@ -30,6 +32,7 @@ class DailyReportAgentDependencies:
         write_decision_ledger_artifacts_from_markdown_report
     )
     audit_run: Callable[..., dict[str, Any]] = audit_daily_report_run
+    build_observer: Callable[..., Any] = build_report_run_observer
     now: Callable[[], datetime] = datetime.now
 
 
@@ -76,10 +79,26 @@ class DailyReportAgentRunner:
         output_paths: dict[str, str] = {}
         decision_ledger_result: dict[str, Any] | None = None
         audit_result: dict[str, Any] | None = None
+        observer = self.dependencies.build_observer(
+            run_name=f"daily-report.agent.{request.target_date}",
+            trace_input={
+                "target_date": request.target_date,
+                "mode": request.mode,
+                "update_decision_ledger": request.update_decision_ledger,
+                "review_prior_participation": request.review_prior_participation,
+            },
+            metadata={"runner": "agent_runner.daily_report_agent_runner"},
+        )
 
         try:
             load_data = self.dependencies.load_data or _default_load_data
-            data = load_data(request)
+            data = load_data(request) or {}
+            observer.record_step(
+                "load_data",
+                status="success",
+                input_payload={"target_date": request.target_date, "mode": request.mode},
+                output_payload={"data_keys": list(data.keys())[:30], "empty": not bool(data)},
+            )
             if request.mode == "replay" and not data:
                 raise ReplayDataMissingError(f"回放数据不存在，停止生成：{request.target_date}")
             report_outputs = self.dependencies.build_report_outputs(
@@ -89,12 +108,30 @@ class DailyReportAgentRunner:
                 emit_preflight=False,
                 persist_runtime_artifacts=False,
             )
+            observer.record_step(
+                "build_report_outputs",
+                status="success",
+                input_payload={"target_date": request.target_date, "mode": request.mode},
+                output_payload={"output_variants": list(report_outputs.keys())},
+            )
             assert_report_required_facts_complete(data, request.target_date, run_mode=request.mode)
+            observer.record_step(
+                "preflight_check",
+                status="success",
+                input_payload={"target_date": request.target_date, "mode": request.mode},
+                output_payload={"result": "facts_complete"},
+            )
             output_paths = self.dependencies.save_report_outputs(
                 report_outputs,
                 request.target_date,
                 mode=request.mode,
                 output_dir=str(run_dir),
+            )
+            observer.record_step(
+                "save_report_outputs",
+                status="success",
+                input_payload={"target_date": request.target_date, "mode": request.mode},
+                output_payload={"output_variants": list(output_paths.keys())},
             )
             full_report_path = _select_full_report_path(output_paths)
             full_markdown = _select_full_report_markdown(report_outputs, full_report_path)
@@ -108,6 +145,12 @@ class DailyReportAgentRunner:
                     root_dir=str(self.root_dir),
                     generated_at=started_at,
                 )
+                observer.record_step(
+                    "decision_ledger",
+                    status="success",
+                    input_payload={"target_date": request.target_date},
+                    output_payload=_compact_decision_ledger(decision_ledger_result),
+                )
 
             audit_result = self.dependencies.audit_run(
                 target_date=request.target_date,
@@ -116,11 +159,24 @@ class DailyReportAgentRunner:
                 decision_ledger_result=decision_ledger_result,
                 decision_ledger_required=request.update_decision_ledger,
             )
+            observer.record_step(
+                "audit_run",
+                status="success" if audit_result.get("passed") else "needs_review",
+                input_payload={"target_date": request.target_date},
+                output_payload=_compact_audit(audit_result),
+            )
             if not audit_result.get("passed"):
                 status = "needs_review"
         except Exception as exc:
             status = "error"
             error = {"type": type(exc).__name__, "message": str(exc)}
+            observer.record_step(
+                "agent_run",
+                status="error",
+                input_payload={"target_date": request.target_date, "mode": request.mode},
+                output_payload={},
+                error=exc,
+            )
             finding_code = exc.code if isinstance(exc, RunnerFailure) else "runner_error"
             audit_result = {
                 "target_date": request.target_date,
@@ -149,6 +205,37 @@ class DailyReportAgentRunner:
             "decision_ledger": _compact_decision_ledger(decision_ledger_result),
             "error": error,
         }
+        report_quality_score = build_report_quality_score(
+            target_date=request.target_date,
+            run_status=status,
+            mode=request.mode,
+            audit_result=audit_result,
+            decision_ledger_result=decision_ledger_result,
+            output_paths=output_paths,
+            error=(error or {}).get("message") if error else None,
+            report_expected=True,
+            decision_ledger_expected=request.update_decision_ledger,
+        )
+        report_quality_ledger = persist_report_quality_score(
+            report_quality_score,
+            root_dir=self.root_dir,
+            run_id=f"daily-report.agent.{request.target_date}",
+            recorded_at=finished_at,
+        )
+        report_quality_score["local_ledger"] = report_quality_ledger
+        payload["report_quality_score"] = report_quality_score
+        observer.finish(
+            status=status,
+            output_payload={
+                "target_date": request.target_date,
+                "mode": request.mode,
+                "output_variants": list(output_paths.keys()),
+                "audit_passed": bool((audit_result or {}).get("passed")),
+                "finding_count": int((audit_result or {}).get("finding_count") or 0),
+                "report_quality_score": report_quality_score,
+                "report_quality_ledger": report_quality_ledger,
+            },
+        )
 
         self._write_json(run_dir / "run.json", payload)
         self._write_json(run_dir / "audit.json", audit_result)
@@ -194,6 +281,20 @@ def _compact_decision_ledger(result: dict[str, Any] | None) -> dict[str, Any]:
         "snapshot_path": result.get("snapshot_path", ""),
         "index_path": result.get("index_path", ""),
         "fact_db_sync": result.get("fact_db_sync") or {},
+    }
+
+
+def _compact_audit(result: dict[str, Any] | None) -> dict[str, Any]:
+    result = result or {}
+    return {
+        "passed": bool(result.get("passed")),
+        "usable": bool(result.get("usable")),
+        "finding_count": int(result.get("finding_count") or 0),
+        "finding_codes": [
+            finding.get("code", "")
+            for finding in list(result.get("findings") or [])[:20]
+            if isinstance(finding, dict)
+        ],
     }
 
 

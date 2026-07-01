@@ -434,7 +434,7 @@ def _build_gem_horizontal_compare_cards_legacy_body(gem_cycle_cards=None, review
         if latest_status_label in ('再突破成功但升级偏慢', '已升级到条件执行预演', '已升级到50%条件执行', '已走成再突破'):
             same_point = '两者都属于价格上先证明自己的样本，都是市场先替判断作证。'
             key_difference = '区别是20cm弹性和波动都更大，不能直接按10cm唯一动作给50%，必须先过右侧确认、void、reset这条合同链。'
-            system_translation = '系统里要先核对void/trigger/reset三价，再决定是否进入50%条件执行；固定交易窗口内条件不成立就保持0%不参与，不能把20cm再突破直接翻译成10cm唯一执行。'
+            system_translation = '系统里要先核对void/trigger/reset三价；固定交易窗口内条件不成立就保持0%不参与，确认结果只进入复盘和下一份日报判断，不能把20cm再突破直接翻译成10cm唯一执行。'
         elif latest_status_label in ('仍在观察窗口', '已触发右侧确认'):
             same_point = '两者都还停在“有观察资格、没买入资格”的阶段，本质都还没走成唯一动作。'
             key_difference = '区别是20cm多了一层呼吸感合同窗口；窗口过期或失守void，就要比10cm更快降权。'

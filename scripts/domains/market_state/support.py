@@ -1720,7 +1720,7 @@ def _derive_mainline_pulse_snapshot_legacy_body(
         elif allow_attack_50_ready and not should_reduce:
             execution_bias = "conditional_defense"
             pulse_action_bias = "只保留固定交易窗口预案"
-            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做固定交易窗口预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口，条件成立后才评估50%条件执行。"
+            pulse_action_reason = f"{leading_line or '主线'}仍有观察价值，但环境条件未正式满足；只做固定交易窗口观察预案，强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口，结果进入复盘和下一份日报判断。"
         elif should_reduce or state_code == "contract":
             execution_bias = "reduce_only"
             pulse_action_bias = "只减不加"

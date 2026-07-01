@@ -96,7 +96,15 @@ def _normalize_new_high_dates(value) -> List[str]:
 
 
 def _sector_name_from_entry(entry: Dict[str, Any]) -> str:
-    return _safe_str(_first_value(entry, "name", "sector_name", "板块", "行业"))
+    return _safe_str(_first_value(entry, "name", "sector", "sector_name", "板块", "行业", "industry"))
+
+
+def _sector_net_flow_yi(entry: Dict[str, Any]) -> float:
+    return _safe_float(_first_value(entry, "zljlr", "net_amount", "net_inflow_yi", "net_inflow"))
+
+
+def _sector_change_pct(entry: Dict[str, Any]) -> float:
+    return _safe_float(_first_value(entry, "zdf", "change_pct", "pct_change"))
 
 
 def _sector_entries(sector_fund_flow: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -630,7 +638,7 @@ def extract_sector_data_from_fund_flow(
     inflow_sectors = sector_fund_flow.get("inflow") or []
 
     for sector in inflow_sectors[:10]:  # 取前10个板块
-        sector_name = sector.get("name") or sector.get("sector_name")
+        sector_name = _sector_name_from_entry(sector)
         if not sector_name:
             continue
 
@@ -888,9 +896,9 @@ def _build_markdown_sections(
     for idx, sector in enumerate(inflow[:10], 1):
         sections.append(
             f"| {idx} | "
-            f"{sector.get('name', '?')} | "
-            f"{_safe_float(sector.get('zljlr', 0)):+.2f}亿 | "
-            f"{_safe_float(sector.get('zdf', 0)):+.2f}% |"
+            f"{_sector_name_from_entry(sector) or '?'} | "
+            f"{_sector_net_flow_yi(sector):+.2f}亿 | "
+            f"{_sector_change_pct(sector):+.2f}% |"
         )
 
     sections.append("")

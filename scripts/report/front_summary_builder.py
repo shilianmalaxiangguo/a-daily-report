@@ -428,7 +428,7 @@ def render_mvp_focus_summary_contract(
         if final_gate.get("can_new_entry"):
             watch_target_text = (
                 f"{watch_anchor.get('name', '-')}({watch_anchor.get('code', '-')})，"
-                "先看固定交易窗口内条件，只有走成明天唯一能买的那只才参与"
+	                "先看固定交易窗口承接，结果进入复盘和下一份日报判断，不新增参与"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''}"
             )
         else:

@@ -7211,7 +7211,7 @@ def _runtime_binding_probe(
 
         self.assertIn("## 明日执行结论", report)
         self.assertIn("| 明日执行对象 | 豫能控股(001896) |", report)
-        self.assertIn("## 50%条件执行条件", report)
+        self.assertIn("## 满仓条件执行条件", report)
         self.assertIn("低开承接型", report)
         self.assertIn("主动进攻型", report)
         self.assertIn("## 推导审计层", report)
@@ -8983,7 +8983,7 @@ def _runtime_binding_probe(
         self.assertEqual(resolution["existing_position_target"]["name"], "华电辽能")
         self.assertEqual(resolution["display_target"]["code"], "601138")
         self.assertIn("| 最终结果 | 工业富联(601138) |", result["report"])
-        self.assertIn("| 明日动作 | 先处理旧仓，买工业富联(601138)；固定交易窗口条件成立才参与，不满足回到0% |", result["report"])
+        self.assertIn("| 明日动作 | 先处理旧仓，买工业富联(601138)；按昨晚预案检查执行资格；不满足回到0%不参与 |", result["report"])
         self.assertIn("+-- 小账户资金取舍: new_entry_after_old_exit", result["report"])
         self.assertIn("+-- 旧仓处理: 华电辽能(600396)", result["report"])
         self.assertIn("+-- 最终结果: 工业富联(601138)", result["report"])
@@ -9585,6 +9585,63 @@ def _runtime_binding_probe(
         self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry")
         self.assertEqual(resolution["new_entry_target"]["code"], "600667")
         self.assertEqual(resolution["existing_position_target"]["code"], "159995")
+        self.assertNotIn("先处理旧仓", resolution["capital_priority_decision"]["reason"])
+
+    def test_runtime_keeps_inferred_previous_report_path_from_blocking_tomorrow_target(self):
+        selected = {
+            "name": "深科技",
+            "code": "000021",
+            "sector": "半导体",
+            "target_role": "sector_anchor",
+            "candidate_role": "板块锚",
+            "target_position_pct": 50,
+            "participation_window": "09:50-10:10",
+            "buy_window": "09:50-10:10",
+            "condition": "板块延续且承接确认",
+            "fallback_state": "不满足回到0%",
+            "strength_evidence": ["半导体资金扩散", "板块锚"],
+            "observation_price": 58.86,
+            "probe_entry_price": 58.86,
+            "close": 58.86,
+            "price": 58.86,
+            "ma5": 57.9,
+            "ma10": 57.5,
+            "vwap": 58.0,
+            "invalid_price": 57.8,
+            "stop_price": 57.8,
+            "target_price": 63.0,
+        }
+        data = {
+            "personal_position_context": {
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "上一份日报目标 太极实业(600667)，本日报按旧仓路径复核；旧仓路径与明日目标分开记录，不因旧仓路径取消明日目标。",
+                    "source_report_date": "2026-06-28",
+                    "inferred_from_previous_report": True,
+                }
+            }
+        }
+
+        position_decision = report_runtime._build_front_page_position_decision(
+            position_decision={"target_position_pct": 0, "signal_grade": "0"},
+            selected_position_candidate=selected,
+            data=data,
+            market_research_snapshot={},
+        )
+        resolution = report_runtime._build_runtime_final_target_resolution(
+            data=data,
+            selected_position_candidate=selected,
+            position_decision=position_decision,
+            market_research_snapshot={},
+        )
+
+        self.assertEqual(position_decision["target_position_pct"], 50)
+        self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "new_entry")
+        self.assertEqual(resolution["new_entry_target"]["code"], "000021")
+        self.assertEqual(resolution["display_target"]["code"], "000021")
+        self.assertEqual(resolution["existing_position_target"]["code"], "600667")
+        self.assertTrue(resolution["existing_position_target"]["inferred_from_previous_report"])
+        self.assertEqual(resolution["opportunity_comparison"].get("old_position", {}).get("name"), "")
         self.assertNotIn("先处理旧仓", resolution["capital_priority_decision"]["reason"])
 
     def test_runtime_builds_final_target_resolution_for_unbuyable_core_proxy(self):
@@ -10835,20 +10892,63 @@ def _runtime_binding_probe(
 
         rendered = result["report"]
         self.assertIn("| 明日执行对象 | 汇源通信(000586) |", rendered)
-        self.assertIn("| 进攻仓位三态 | 50% |", rendered)
-        self.assertIn("| 明日最大仓位 | 50% |", rendered)
+        self.assertIn("| 进攻仓位三态 | 满仓条件执行 |", rendered)
+        self.assertIn("| 明日最大仓位 | 满仓或0%不参与 |", rendered)
         self.assertIn("| 只看明日执行对象 | 汇源通信(000586) | 09:30-09:35或09:50-10:10 |", rendered)
-        self.assertIn("| 条件满足才50%条件执行；不满足回到0% |", rendered)
-        self.assertIn("- **进攻仓位三态**: 50%条件执行", rendered)
-        self.assertIn("- **明天仓位放多少**: 50%条件执行；盘前不抢跑", rendered)
+        self.assertIn("| 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |", rendered)
+        self.assertIn("- **进攻仓位三态**: 满仓条件执行", rendered)
+        self.assertIn("- **明天仓位放多少**: 已决定满仓条件执行；盘中不满足取消，回到0%不参与", rendered)
         self.assertNotIn("没有唯一对象，完整候选仅保留在附录和快照", rendered)
         self.assertNotIn("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", rendered)
         self.assertNotIn("- **进攻仓位三态**: 0%不参与", rendered)
         self.assertNotIn("盘前0%；参与窗口命中后才评估50%条件执行", rendered)
         self.assertNotIn("| 明日执行对象 | 无 |", rendered)
         self.assertNotIn("| 进攻仓位三态 | 0% |", rendered)
-        self.assertIn("最终执行条件: 明日目标标的保留50%条件执行", stdout.getvalue())
+        self.assertNotIn("| 进攻仓位三态 | 50% |", rendered)
+        self.assertNotIn("| 明日最大仓位 | 50% |", rendered)
+        self.assertIn("最终执行条件: 明日目标标的已决定满仓条件执行", stdout.getvalue())
         self.assertNotIn("最终执行条件: 空仓等待", stdout.getvalue())
+
+    def test_full_or_empty_account_output_rewrites_half_position_surface(self):
+        lines = [
+            "| 仓位姿态 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |",
+            "| 对象性质 | 50%条件执行 |",
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |",
+            "| 执行性质 | 50%条件执行 |",
+            "## 50%条件执行条件",
+            "| 低开承接型 | 收回VWAP | 09:50-10:10 | 50%条件执行 |",
+            "| 进攻仓位三态 | 50% |",
+            "| 明日最大仓位 | 50% |",
+            "| 普通候选 | 09:50-10:10确认站回MA5/VWAP/0轴才可做50% | 强核心全天强且偏离MA5不大，14:30-14:55最多25%试仓 |",
+            "| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T；50%底仓跟随，50%机动仓只在确认后做T |",
+            "- **风险点**: 暂无明确风险",
+            "FINAL[\"最终：长电科技(600584)\\n仓位：50%\"]",
+            "- 传给下一步：{'position_pct': 50}",
+        ]
+
+        normalized = report_runtime._normalize_full_or_empty_account_visible_lines(
+            lines,
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+                "new_entry_target": {"code": "600584", "name": "长电科技"},
+            },
+            position_decision={"target_position_pct": 50},
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("已决定满仓条件执行；盘中不满足取消，回到0%不参与", rendered)
+        self.assertIn("## 满仓条件执行条件", rendered)
+        self.assertIn("| 进攻仓位三态 | 满仓条件执行 |", rendered)
+        self.assertIn("| 明日最大仓位 | 满仓或0%不参与 |", rendered)
+        self.assertIn("才可满仓条件执行", rendered)
+        self.assertIn("只做尾盘复核，不默认试仓", rendered)
+        self.assertIn("旧仓独立处理，机动仓只在确认后做T", rendered)
+        self.assertIn("风险点**: 跌多涨少、跌停扩散和收缩防守仍在，不支持无条件买入", rendered)
+        self.assertIn("账户动作：满仓条件执行", rendered)
+        self.assertIn("'账户动作': '满仓条件执行'", rendered)
+        self.assertNotIn("50%条件执行", rendered)
+        self.assertNotIn("仓位：50%", rendered)
+        self.assertNotIn("'position_pct': 50", rendered)
 
     def test_positive_final_action_rewrites_stale_appendix_watch_plan(self):
         lines = [
@@ -10889,14 +10989,14 @@ def _runtime_binding_probe(
         rendered = "\n".join(normalized)
 
         self.assertIn("过程候选回看样本", rendered)
-        self.assertIn("| 只看明日执行对象 | 云南锗业 | 002428 | 固定交易窗口条件成立才50%条件执行；不满足回到0%不参与 |", rendered)
+        self.assertIn("| 只看明日执行对象 | 云南锗业 | 002428 | 按昨晚预案检查执行资格；不满足回到0%不参与 |", rendered)
         self.assertIn("- **现在到底是什么状态**: 已收口到唯一明日动作：云南锗业(002428)", rendered)
-        self.assertIn("- **明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%", rendered)
-        self.assertIn("先确认唯一明日动作：云南锗业(002428)是否满足固定交易窗口条件", rendered)
+        self.assertIn("- **明天仓位放多少**: 已决定50%条件执行；盘中不满足取消，回到0%不参与", rendered)
+        self.assertIn("先确认唯一明日动作：云南锗业(002428)的执行资格", rendered)
         self.assertIn("| 今日关注标的 | 唯一明日动作：云南锗业(002428) |", rendered)
         self.assertIn("| 操作风格 | 50%条件执行；盘前不抢跑 |", rendered)
         self.assertIn("| 明日核心标的 | 唯一明日动作：云南锗业(002428) |", rendered)
-        self.assertIn("| 明日策略 | 只看明日执行对象云南锗业(002428)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 |", rendered)
+        self.assertIn("| 明日策略 | 只看明日执行对象云南锗业(002428)；按昨晚预案检查执行资格；不满足回到0%不参与 |", rendered)
         self.assertNotIn("| 👀 明天先盯哪只 | 金安国纪 | 002636 |", rendered)
         self.assertNotIn("明天先盯哪只", rendered)
         self.assertNotIn("唯一能买", rendered)
@@ -10909,6 +11009,118 @@ def _runtime_binding_probe(
         self.assertNotIn("买点出现", rendered)
         self.assertNotIn("预计算买点", rendered)
         self.assertNotIn("0%（市场允许出手", rendered)
+
+    def test_final_execution_target_normalizer_rewrites_late_stale_watch_lines(self):
+        lines = [
+            "**次日市场环境**: 50%条件执行 / 撤退态 - 环境关闭，只做等待，不做新增参与",
+            "> **⚠️ 重要提醒**: Step 0 不再单独猜市场，而是直接引用统一市场研究快照；明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断。",
+            "**状态依据**：环境关闭，只做等待，不做新增参与；收缩防守；跌停、涨跌比或仓位限制已经进入收缩区，市场先谈防守，不谈进攻。；顶层环境以执行条件为准，不再沿用旧的偏多口径。",
+            "- **环境推导**: 环境关闭，只做等待，不做新增参与；收缩防守；跌停、涨跌比或仓位限制已经进入收缩区，市场先谈防守，不谈进攻。；顶层环境以执行条件为准，不再沿用旧的偏多口径。",
+            "- **主线修正**: 大盘环境没有给到出手条件，先离场再等下一次趋势",
+            "- ✅ 保持空仓：当前不新增参与",
+            "- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开",
+            "- ✅ 不做新仓日内回转：次日不做日内回转；若有旧仓，只按旧仓处理策略处理",
+            "| 明日观察位预计算 | 不开新仓，只保留重点观察谁 |",
+            "**怎么执行**：最终0%时不按固定交易窗口执行，只观察指数图形、主攻线承接，结果进入复盘和下一份日报判断。",
+            "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接；结果进入复盘和下一份日报判断，继续0%不参与。",
+            "#### 附录：🟡 明日市场环境：0%不参与 / 撤退态",
+            "### 2. 明日条件执行对象",
+            "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 | 参与窗 |",
+            "|------|------|--------|--------|--------|--------------|----------|--------|",
+            "| 暂无 | - | - | - | - | - | - | - |",
+            "### 3. 备用观察",
+            "**暂不关注**: 11只（条件链不足）",
+            "- 长裕集团(603407) - 高标强承接 - 无明显异动 - 4进5，若竞价高开可能继续",
+            "- 长电科技(600584) - 候选观察 - 无明显异动 - 需看明日竞价强弱",
+            "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 |",
+            "|------|------|--------|--------|--------|--------------|----------|",
+            "| 明日主买对象 | 海南海药(000566) | 观察样本 | MA10 | MA20 | 缩量回撤到MA10附近 | 通过 |",
+            "| 明日补位对象 | 金安国纪(002636) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近 | 通过 |",
+            "**明天仓位怎么放**:",
+            "- **进攻仓位三态**: 50%条件执行",
+            "- **明日裁决**: 50%条件执行；只看长电科技(600584)固定交易窗口条件",
+            "- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与",
+            "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，结果进入复盘和下一份日报判断，未命中继续0%",
+            "- **现在是什么情况**: 0%，先不跟随，继续观察，等下一轮真正的新启动；主观理解只用于观察，不用于提前硬上",
+            "- **传给下一步**: 可执行0只 / 等待2只 / 不可交易0只 / 拒绝0只",
+            "- **进攻仓位**: 0%不参与；无合格标的或取消条件已经出现",
+            "**⚠️ 当前不抢跑**: 0%不参与，本轮只等待固定交易窗口条件。",
+            "**观察优先对象**: 海南海药(000566)",
+            "- **盘前不抢跑**: 海南海药(000566)只保留盘中确认路径，不按盘前0%直接否定",
+            "- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，也只进入复盘和下一份日报判断；未命中继续0%不参与",
+            "- **跨线继续看谁**: 海南海药(000566)",
+            "- **现在重点看什么**: 09:50-10:10观察价4.49；关键位/带4.27~4.33（支撑/失效）",
+            "- **出手时怎么做**: 盘前0%就是不买新仓；09:50-10:10窗口只记录承接，不评估新增参与",
+            "- **明天能不能开仓**: 0%，先不跟随，继续观察，等下一轮真正的新启动；不为新故事切掉旧事实；主观理解只用于观察，不用于提前硬上",
+            "- 当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件",
+            "- 重点观察优先对象是否继续走强；确认后也只进入复盘和下一份日报判断，未确认保持0%",
+            "| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |",
+            "|--------|------|------|----------|----------|----------|--------|----------|----------|----------|----------|----------|------------|----------|----------|----------|",
+            "| 2026-06-24 | 长电科技 | 600584 | 高惯性 / 资金选择后的承接观察样本 | 待验证 | 09:30-09:35 | 待计算 默认要求盈亏比不低于2:1；缺少观察位、作废线或上方空间时，不能把均线回归当观察位，只观察等价格事实补齐 | 待补事实 | 等待复盘 | 待补事实 | 待补事实 | 待补事实 | 待补事实 | 2026-06-24 | T+1/T+3/T+5表现与回撤字段 | 等待计划窗口事实回写；不作为新增参与依据 |",
+        ]
+
+        normalized = report_runtime._normalize_positive_final_action_appendix_lines(
+            lines,
+            selected_position_candidate={"code": "600584", "name": "长电科技"},
+            position_decision={"target_position_pct": 50},
+        )
+        normalized = report_runtime._normalize_final_execution_target_appendix_rows(
+            normalized,
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+                "new_entry_target": {"code": "600584", "name": "长电科技"},
+            },
+            position_decision={"target_position_pct": 50},
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("**次日市场环境**: 50%条件执行 / 执行资格检查 - 已决定长电科技(600584)，只按昨晚预案检查执行资格", rendered)
+        self.assertIn("市场背景只作参考，最终只看明日执行对象长电科技(600584)的执行资格", rendered)
+        self.assertIn("市场背景偏谨慎，最终只看明日执行对象长电科技(600584)的执行资格", rendered)
+        self.assertIn("大盘背景偏谨慎；不覆盖唯一明日动作：长电科技(600584)", rendered)
+        self.assertIn("- ✅ 盘前不抢跑：长电科技(600584)只按昨晚预案检查执行资格", rendered)
+        self.assertIn("- ✅ 禁止临时换目标：只看明日执行对象长电科技(600584)", rendered)
+        self.assertIn("| 明日观察位预计算 | 只服务唯一明日动作：长电科技(600584)的执行资格检查；其它候选只作过程证据 |", rendered)
+        self.assertIn("**怎么执行**：只看明日执行对象长电科技(600584)；按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("> **真到盘中怎么做**：只看明日执行对象长电科技(600584)；按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("#### 附录：🟡 明日市场环境：50%条件执行 / 执行资格检查", rendered)
+        self.assertIn("| 明日执行对象 | 长电科技(600584) | 固定交易窗口 | - | - | 按昨晚预案检查执行资格；不满足回到0%不参与 | 已决定50%条件执行 | 09:30-09:35或09:50-10:10 |", rendered)
+        self.assertIn("**暂不关注**: 10只（条件链不足）", rendered)
+        self.assertIn("| 过程候选回看 | 海南海药(000566) | 观察样本 | MA10 | MA20 | 缩量回撤到MA10附近 | 过程证据，不覆盖唯一明日动作 |", rendered)
+        self.assertIn("| 过程候选回看 | 金安国纪(002636) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近 | 过程证据，不覆盖唯一明日动作 |", rendered)
+        self.assertIn("- **明天仓位放多少**: 已决定50%条件执行；盘中不满足取消，回到0%不参与", rendered)
+        self.assertIn("- **明天具体怎么做**: 只看明日执行对象长电科技(600584)；按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("- **现在是什么情况**: 已收口到唯一明日动作：长电科技(600584)；其它候选只作过程证据", rendered)
+        self.assertIn("- **传给下一步**: 明日执行对象1只（长电科技(600584)）/ 其它候选只作过程证据", rendered)
+        self.assertIn("- **进攻仓位**: 50%条件执行；只看长电科技(600584)固定交易窗口条件", rendered)
+        self.assertIn("**⚠️ 当前不抢跑**: 50%条件执行，盘前不抢跑；只检查长电科技(600584)的执行资格。", rendered)
+        self.assertIn("- **盘前不抢跑**: 长电科技(600584)只按昨晚预案检查执行资格", rendered)
+        self.assertIn("只作过程观察；不覆盖长电科技(600584)的执行资格检查", rendered)
+        self.assertIn("- **跨线回看样本**: 过程候选只作复盘证据，不覆盖唯一明日动作", rendered)
+        self.assertIn("- **现在重点看什么**: 只检查长电科技(600584)的执行资格；其它候选只作复盘观察", rendered)
+        self.assertIn("- **出手时怎么做**: 只看明日执行对象长电科技(600584)；按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("- 当前是50%条件执行，本时段只检查长电科技(600584)的执行资格", rendered)
+        self.assertIn("- 只检查长电科技(600584)的执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("- **明天是否参与**: 50%条件执行；只看明日执行对象长电科技(600584)；按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("| 2026-06-24 | 长电科技 | 600584 | 明日执行对象 |", rendered)
+        self.assertIn("长电科技(600584)已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与", rendered)
+        self.assertNotIn("长电科技(600584) - 候选观察", rendered)
+        self.assertNotIn("长电科技(600584) - 明日执行对象 - 已进入明日执行计划", rendered)
+        self.assertNotIn("明日买入决定：不买新仓；观察对象只复盘，不参与", rendered)
+        self.assertNotIn("结果进入复盘和下一份日报判断，未命中继续0%", rendered)
+        self.assertNotIn("| 暂无 | - | - | - | - | - | - | - |", rendered)
+        self.assertNotIn("| 明日主买对象 | 海南海药", rendered)
+        self.assertNotIn("| 明日补位对象 | 金安国纪", rendered)
+        self.assertNotIn("**观察优先对象**: 海南海药", rendered)
+        self.assertNotIn("盘前0%就是不买新仓", rendered)
+        self.assertNotIn("当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件", rendered)
+        self.assertNotIn("未确认保持0%", rendered)
+        self.assertNotIn("明日不新增参与", rendered)
+        self.assertNotIn("继续0%不参与", rendered)
+        self.assertNotIn("只做等待，不做新增参与", rendered)
+        self.assertNotIn("大盘环境没有给到出手条件，先离场", rendered)
+        self.assertNotIn("只观察等价格事实补齐", rendered)
+        self.assertNotIn("不作为新增参与依据", rendered)
 
     def test_positive_final_action_keeps_independent_etf_holding_from_old_position_appendix(self):
         lines = [
@@ -10956,19 +11168,51 @@ def _runtime_binding_probe(
         self.assertIn("| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |", rendered)
         self.assertIn("| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |", rendered)
         self.assertIn("| 今日新增上限 | 50%条件执行；条件不成立回0% |", rendered)
-        self.assertIn("| 明天是否参与 | 50%条件执行 | 只看明日执行对象太极实业(600667)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 | 动作锚定到唯一明日动作 |", rendered)
-        self.assertIn("| 明日大盘预期 | 只看明日执行对象太极实业(600667)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与；市场背景只作参考 |", rendered)
-        self.assertIn("| 明日环境与跟随裁决 | 只看明日执行对象太极实业(600667)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与；市场背景只作参考 |", rendered)
+        self.assertIn("| 明天是否参与 | 50%条件执行 | 只看明日执行对象太极实业(600667)；按昨晚预案检查执行资格；不满足回到0%不参与 | 动作锚定到唯一明日动作 |", rendered)
+        self.assertIn("| 明日大盘预期 | 只看明日执行对象太极实业(600667)；按昨晚预案检查执行资格；不满足回到0%不参与；市场背景只作参考 |", rendered)
+        self.assertIn("| 明日环境与跟随裁决 | 只看明日执行对象太极实业(600667)；按昨晚预案检查执行资格；不满足回到0%不参与；市场背景只作参考 |", rendered)
         self.assertIn("市场条件：未满足(过程候选不覆盖唯一明日动作)", rendered)
         self.assertIn("**明日裁决**: 50%条件执行；只看太极实业(600667)固定交易窗口条件", rendered)
-        self.assertIn("**开盘前动作**: 只看明日执行对象太极实业(600667)；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与；市场背景只作参考", rendered)
+        self.assertIn("**开盘前动作**: 只看明日执行对象太极实业(600667)；按昨晚预案检查执行资格；不满足回到0%不参与；市场背景只作参考", rendered)
         self.assertIn("- **明日裁决**: 50%条件执行；只看太极实业(600667)固定交易窗口条件", rendered)
-        self.assertIn("持仓独立评估，不满足固定交易窗口条件就回到0%不参与", rendered)
-        self.assertIn("只看太极实业(600667)是否满足固定交易窗口条件", rendered)
+        self.assertIn("持仓独立评估，按昨晚预案检查执行资格；不满足回到0%不参与", rendered)
+        self.assertIn("只检查太极实业(600667)的执行资格", rendered)
         self.assertNotIn("若你有旧仓先去弱留强", rendered)
         self.assertNotIn("先处理旧仓", rendered)
         self.assertNotIn("只处理旧仓", rendered)
         self.assertNotIn("不新增参与；若有旧仓", rendered)
+
+    def test_positive_final_action_relabels_inferred_old_path_account_panel(self):
+        lines = [
+            "##### 附录：# 今日总决策面板",
+            "| 字段 | 内容 |",
+            "|------|------|",
+            "| 市场情绪状态 | 满仓条件执行；只看深科技(000021)固定交易窗口条件 |",
+            "| 账户后台任务负担 | 无持仓负担 |",
+            "| 持仓优先动作 | 无旧仓时只等固定交易窗口条件 |",
+            "| 今日新增上限 | 满仓条件执行；条件不成立回0% |",
+            "| 主买对象 | 深科技(000021) |",
+        ]
+
+        normalized = report_runtime._normalize_attack_preview_appendix_lines(
+            lines,
+            selected_position_candidate={"name": "深科技", "code": "000021", "sector": "半导体"},
+            position_decision={"target_position_pct": 100, "signal_grade": "100"},
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+                "existing_position_target": {
+                    "name": "太极实业",
+                    "code": "600667",
+                    "inferred_from_previous_report": True,
+                },
+            },
+        )
+        rendered = "\n".join(normalized)
+
+        self.assertIn("| 账户后台任务负担 | 旧路径需复核，不覆盖唯一明日动作 |", rendered)
+        self.assertIn("| 持仓优先动作 | 旧路径与明日目标分开处理 |", rendered)
+        self.assertNotIn("无持仓负担", rendered)
+        self.assertNotIn("无旧仓", rendered)
 
     def test_runtime_appendix_relabels_tomorrow_buy_rows_when_zero_participation(self):
         lines = [
@@ -11045,15 +11289,15 @@ def _runtime_binding_probe(
         )
         rendered = "\n".join(normalized)
 
-        self.assertIn("明日不新增参与，只观察风险是否钝化、主攻线承接和观察对象是否重新成立", rendered)
+        self.assertIn("明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断", rendered)
         self.assertIn("- **进攻仓位三态**: 0%不参与", rendered)
-        self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
+        self.assertIn("- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与", rendered)
         self.assertIn("0%不参与，不抢跑，只保留候选观察的盘中复核路径", rendered)
         self.assertIn("- 0%不参与：最终结论不允许新增参与，只观察风险是否钝化", rendered)
         self.assertIn("- **确认后怎么做**: 只保留观察；未出现执行资格前不新增参与；未命中继续0%不参与", rendered)
         self.assertIn("- **出手时怎么做**: 盘前0%只代表不抢跑；只观察，不新增参与", rendered)
         self.assertIn("- 以观察和处理持仓为主；不做新开仓", rendered)
-        self.assertIn("观察对象是否重新成立", rendered)
+        self.assertIn("结果进入复盘和下一份日报判断", rendered)
         self.assertIn("重点观察复核脚本", rendered)
         self.assertIn("| 观察窗口 | 观察状态 | 检查步骤 | 回封观察 | 作废条件 |", rendered)
         self.assertIn("| 09:50-10:10 | 0%不参与 | 主线承接 / 站上确认价 | 快速回封 | 不满足继续0% |", rendered)
@@ -11531,17 +11775,17 @@ def _runtime_binding_probe(
         rendered = "\n".join(normalized)
 
         self.assertIn("50%条件执行 / 防守态", rendered)
-        self.assertIn("50%条件执行；固定交易窗口内条件成立才执行，不满足回到0%", rendered)
+        self.assertIn("已决定50%条件执行；盘中不满足取消，回到0%不参与", rendered)
         self.assertIn("- **进攻仓位三态**: 50%条件执行", rendered)
         self.assertIn("当前是50%条件执行", rendered)
         self.assertIn("- **明天仓位放多少**: 50%条件执行；条件不成立回0%", rendered)
         self.assertIn("明日执行目标只按固定交易窗口处理", rendered)
-        self.assertIn("**⚠️ 当前不抢跑**: 0%不参与，本轮只等待固定交易窗口条件。", rendered)
+        self.assertIn("**⚠️ 当前不抢跑**: 50%条件执行，盘前不抢跑；只检查华电能源(600726)的执行资格。", rendered)
         self.assertNotIn("预计", rendered)
         self.assertNotIn("当前按0%不参与", rendered)
         self.assertNotIn("0%不参与不开新仓", rendered)
         self.assertNotIn("0%新仓", rendered)
-        self.assertNotIn("不新增参与", rendered)
+        self.assertNotIn("不新增参与：已决定50%条件执行", rendered)
         self.assertNotIn("当前先不开新仓", rendered)
         self.assertNotIn("- **进攻仓位三态**: 0%不参与", rendered)
 
@@ -11557,8 +11801,8 @@ def _runtime_binding_probe(
 
         rendered = "\n".join(report_runtime._sanitize_report_lines(lines))
 
-        self.assertIn("最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。", rendered)
-        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。", rendered)
+        self.assertIn("最终0%时不按观察窗口执行；只观察指数图形、主攻线承接，结果进入复盘和下一份日报判断。", rendered)
+        self.assertIn("- **执行节奏**: 最终0%时不按观察窗口执行；只观察指数图形、主攻线承接，结果进入复盘和下一份日报判断。", rendered)
         self.assertNotIn("强核心走竞价表态", rendered)
         self.assertNotIn("普通结构才等60分钟确认", rendered)
 
@@ -11655,7 +11899,7 @@ def _runtime_binding_probe(
 
         self.assertIn("观察对象：605111 新洁能（半导体）", rendered)
         self.assertIn("只观察605111 新洁能（半导体），成立才保留观察；未出现执行资格前不新增参与；不满足继续0%", rendered)
-        self.assertIn("- **明天仓位放多少**: 盘前0%；暂无新增参与资格，只观察风险是否钝化", rendered)
+        self.assertIn("- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与", rendered)
         self.assertNotIn("参与窗口命中", rendered)
         self.assertIn("| 09:50-10:10 | 新洁能站上63.22且板块承接不塌 | 只观察 | 买后用60.06做失效 | 不满足继续0% |", rendered)
         self.assertIn("| 新洁能(605111) | 仅观察 | 0 | 0 | 中 | 等确认 | 观察 | 触发后只观察 |", rendered)
@@ -11989,9 +12233,9 @@ def _runtime_binding_probe(
         inserted = report_runtime._insert_sector_capital_preflight_front_summary(report_lines, payload)
         rendered = "\n".join(inserted)
 
-        self.assertIn("| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |", rendered)
+        self.assertIn("| 仓位姿态 | 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |", rendered)
         self.assertIn("| 最终对象 | 明日执行对象：长电科技(600584) |", rendered)
-        self.assertIn("| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |", rendered)
+        self.assertIn("| 明日仓位 | 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |", rendered)
         self.assertIn("| 明日执行对象 | 长电科技(600584) |", rendered)
 
     def test_insert_sector_capital_preflight_front_summary_replaces_stale_existing_section(self):
@@ -12040,7 +12284,7 @@ def _runtime_binding_probe(
         rendered = "\n".join(inserted)
 
         self.assertNotIn("旧结论", rendered)
-        self.assertIn("| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |", rendered)
+        self.assertIn("| 仓位姿态 | 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |", rendered)
         self.assertIn("| 明日执行对象 | 长电科技(600584) |", rendered)
         self.assertIn("| 唯一明日动作 | 1 | 0 | 1（长电科技(600584)）", rendered)
 

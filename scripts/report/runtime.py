@@ -545,7 +545,14 @@ def _number_report_tables(lines, postgres_only=False):
     return numbered
 
 
-_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = "最终0%时不按观察窗口执行，只观察指数图形、主攻线承接和观察对象是否重新成立。"
+PREMARKET_50_EXECUTION_TEXT = "已决定50%条件执行；盘中不满足取消，回到0%不参与"
+PREMARKET_50_EXECUTION_SHORT_TEXT = "已决定50%条件执行；不满足回到0%"
+PREMARKET_50_TRIGGER_TEXT = "按昨晚预案检查执行资格；不满足回到0%不参与"
+PREMARKET_FULL_EXECUTION_TEXT = "已决定满仓条件执行；盘中不满足取消，回到0%不参与"
+PREMARKET_FULL_EXECUTION_SHORT_TEXT = "已决定满仓条件执行；不满足回到0%"
+ZERO_OBSERVATION_REVIEW_TEXT = "最终0%时不按观察窗口执行；只观察指数图形、主攻线承接，结果进入复盘和下一份日报判断。"
+ZERO_OBSERVATION_REVIEW_SHORT_TEXT = "明日买入决定：不买新仓；观察对象只复盘，不参与"
+_ZERO_PARTICIPATION_OBSERVATION_FRAMEWORK = ZERO_OBSERVATION_REVIEW_TEXT
 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT = "盘前0%；" + "参与窗口" + "命中后才评估50%条件执行"
 
 
@@ -725,13 +732,13 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("观察" + "锚：", "观察对象："),
         ("最终观察" + "锚", "最终观察对象"),
         ("50%条件执行需要先等固定交易窗口内条件成立；未确认前按0%处理，确认后按失效价和单笔-5%底线处理风险", "0%不参与：最终结论不允许新增参与，只观察风险是否钝化"),
-        ("盘前0%；固定交易窗口条件满足后才评估50%条件执行", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
-        ("盘前0%；固定交易窗口条件满足后才保留观察，不能转成新增参与", "盘前0%；暂无新增参与资格，只观察风险是否钝化"),
-        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与", "只保留观察；未出现执行资格前不新增参与；未命中继续0%不参与"),
+        ("盘前0%；固定交易窗口条件满足后才评估50%条件执行", ZERO_OBSERVATION_REVIEW_SHORT_TEXT),
+        ("盘前0%；固定交易窗口条件满足后才保留观察，不能转成新增参与", ZERO_OBSERVATION_REVIEW_SHORT_TEXT),
+        ("09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与", "只保留观察；盘中不生成新买入决定；未命中继续0%不参与"),
         ("盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%条件执行", "盘前0%只代表不抢跑；只观察，不新增参与"),
         ("以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%条件执行", "以观察和处理持仓为主；不做新开仓"),
         ("确认后才评估50%条件执行，未确认保持0%", "确认后也只保留观察，未确认保持0%"),
-        ("才评估50%条件执行", "才保留观察；未出现执行资格前不新增参与"),
+        ("才评估50%条件执行", "才保留观察；盘中不生成新买入决定"),
         ("触发后50%条件执行", "触发后只观察"),
         ("50%条件执行", "只观察"),
         ("50%条件执行", "只观察"),
@@ -740,7 +747,7 @@ def _normalize_tomorrow_action_soft_words_under_zero_participation(lines):
         ("观察" + "锚强弱", "观察对象强弱"),
         ("观察" + "锚缺少", "观察对象缺少"),
         ("观察" + "锚不能", "观察对象不能"),
-        ("观察" + "锚重新成立", "观察对象重新成立"),
+        ("观察" + "锚重新成立", "观察对象只进入复盘和下一份日报判断"),
         ("只保留观察" + "锚", "只保留观察对象"),
         ("暂不保留观察" + "锚", "暂不保留观察对象"),
         ("没有观察" + "锚", "没有观察对象"),
@@ -1375,7 +1382,7 @@ def _normalize_extreme_observation_text_fields(value, *, parent_key=""):
         return value
     text = value.replace("明日主买对象", "候选观察").replace("明日补位对象", "候选观察补充")
     if parent_key in {"reason", "stock_setup", "market_branch", "final_action", "decision_action"}:
-        text = text.replace("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", "明日不新增参与，只观察风险是否钝化、主攻线承接和唯一对象是否重新成立")
+        text = text.replace("空仓等待，禁止参与；若你有仓位，只做退出不做幻想", "明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断")
     return text
 
 
@@ -1846,7 +1853,7 @@ def _build_decision_revision_ledger_lines(decision_ledger_result=None):
     return lines
 
 
-def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target_date=""):
+def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target_date="", final_action=None):
     render_tracking_lines = (
         globals().get("render_extreme_conviction_tracking_lines")
         or _default_render_extreme_conviction_tracking_lines
@@ -1883,7 +1890,9 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
     )
     if not index:
         return revision_lines
-    lines = list(render_tracking_lines(index) or [])
+    if final_action is None and isinstance(index, dict):
+        final_action = (index.get("final_action_by_trade_date") or {}).get(target_date)
+    lines = list(render_tracking_lines(index, final_action=final_action) or [])
     lines.extend(revision_lines)
     mention_rows = _query_extreme_conviction_mention_rows_for_tracking(
         globals().get("decision_ledger_root_dir", "."),
@@ -1891,7 +1900,7 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
         window_days=25,
     )
     if mention_rows and callable(render_mention_rows):
-        mention_lines = list(render_mention_rows(mention_rows) or [])
+        mention_lines = list(render_mention_rows(mention_rows, final_action=final_action) or [])
         if callable(build_coverage_summary) and mention_lines:
             summary = build_coverage_summary(index, surface="tracking")
             sample_count = int((summary or {}).get("sample_count") or 0)
@@ -1904,9 +1913,9 @@ def _build_decision_ledger_tracking_lines(decision_ledger_result=None, *, target
                 )
         lines.extend(mention_lines)
     elif callable(render_mention_lines):
-        lines.extend(list(render_mention_lines(index) or []))
+        lines.extend(list(render_mention_lines(index, final_action=final_action) or []))
     if callable(render_backtest_lines):
-        lines.extend(list(render_backtest_lines(index) or []))
+        lines.extend(list(render_backtest_lines(index, final_action=final_action) or []))
     if callable(build_five_judgment_statistics) and callable(render_five_judgment_statistics_lines):
         cutoff_date = str(target_date or _decision_ledger_tracking_end_date(index, decision_ledger_result) or "").strip()
         statistics = build_five_judgment_statistics(index, target_date=cutoff_date)
@@ -1973,7 +1982,7 @@ def _runtime_user_visible_trade_text(value):
         ("观察" + "锚：", "观察对象："),
         ("观察" + "锚性质", "观察对象性质"),
         ("观察" + "锚去留", "观察对象去留"),
-        ("观察" + "锚重新成立", "观察对象重新成立"),
+        ("观察" + "锚重新成立", "观察对象只进入复盘和下一份日报判断"),
         ("观察" + "锚是否", "观察对象是否"),
         ("观察" + "锚强弱", "观察对象强弱"),
         ("观察" + "锚缺少", "观察对象缺少"),
@@ -2216,9 +2225,20 @@ def _runtime_existing_position_target(summary, data=None):
     text = _first_runtime_text(summary.get("summary"))
     if not text:
         return {}
+    inherited_fields = {
+        key: summary.get(key)
+        for key in ("source_report_date", "inferred_from_previous_report")
+        if summary.get(key) not in (None, "")
+    }
     match = re.search(r"([\u4e00-\u9fffA-Za-z0-9Ａ-Ｚａ-ｚ]+)\((\d{6})\)", text)
     if match:
-        return {"name": match.group(1), "code": match.group(2), "role": "旧仓处理", "summary": text}
+        return {
+            "name": match.group(1),
+            "code": match.group(2),
+            "role": "旧仓处理",
+            "summary": text,
+            **inherited_fields,
+        }
     data = data if isinstance(data, dict) else {}
     if data.get("target_date") == "2026-06-03" and "持有T" in text:
         known = _runtime_known_stock_from_data(data, "600396")
@@ -2228,14 +2248,17 @@ def _runtime_existing_position_target(summary, data=None):
                 "code": known["code"],
                 "role": "旧仓处理",
                 "summary": text,
+                **inherited_fields,
             }
-    return {"name": text, "role": "旧仓处理", "summary": text}
+    return {"name": text, "role": "旧仓处理", "summary": text, **inherited_fields}
 
 
 def _runtime_old_position_for_opportunity(data=None, market_research_snapshot=None):
     summary = _runtime_existing_position_summary(data=data, market_research_snapshot=market_research_snapshot)
     old_position = _runtime_existing_position_target(summary, data=data)
     if not old_position:
+        return {}
+    if old_position.get("inferred_from_previous_report") is True:
         return {}
     text = _first_runtime_text(summary.get("summary"), old_position.get("summary"))
     old_position["old_logic_state"] = "weakening" if any(marker in text for marker in ("买点失败", "优先处理", "转弱", "失效")) else "valid"
@@ -2249,6 +2272,8 @@ def _runtime_old_position_for_opportunity(data=None, market_research_snapshot=No
 
 def _runtime_existing_position_requires_action(existing=None):
     existing = existing if isinstance(existing, dict) else {}
+    if existing.get("inferred_from_previous_report") is True:
+        return False
     text = _first_runtime_text(existing.get("summary"), existing.get("action"), existing.get("role"))
     if not text:
         return False
@@ -2970,9 +2995,9 @@ def _build_runtime_final_target_resolution(
                 if priority == "new_entry"
                 else (
                     (
-                        f"先处理旧仓，目标标的{new_entry_label}，小资金账户可用{proxy_label}替代；固定交易窗口条件成立才参与，不满足回到0%"
+                        f"先处理旧仓，目标标的{new_entry_label}，小资金账户可用{proxy_label}替代；{PREMARKET_50_TRIGGER_TEXT}"
                         if proxy_ready
-                        else f"先处理旧仓，买{new_entry_label}；固定交易窗口条件成立才参与，不满足回到0%"
+                        else f"先处理旧仓，买{new_entry_label}；{PREMARKET_50_TRIGGER_TEXT}"
                     )
                     if priority == "new_entry_after_old_exit"
                     else "无明日执行对象，保持观察"
@@ -3547,8 +3572,8 @@ def _apply_sector_capital_carrier_strategy_to_runtime(
             "target_position_pct": max(current_pct, 50),
             "signal_grade": "50",
             "candidate_feedback_ready": True,
-            "final_action": "条件满足才50%条件执行；不满足回到0%",
-            "sizing_reason": "板块资金扩散链路选出唯一资金载体；T+1固定窗口条件成立才参与，不成立回到0%。",
+            "final_action": PREMARKET_50_EXECUTION_TEXT,
+            "sizing_reason": "板块资金扩散链路选出唯一资金载体；T+1只按昨晚预案检查执行资格，不满足回到0%。",
             "single_focus_constraint": {
                 "status": "clear",
                 "reason": "唯一对象来自板块资金扩散链路，先看板块延续和价格回踩确认。",
@@ -3990,12 +4015,18 @@ def _sync_front_page_tables_with_preflight_action(report_lines, payload):
     target = action.get("target") if isinstance(action.get("target"), dict) else {}
     target_label = _runtime_stock_label(target) or _target_candidate_label(target)
     action_label = _clean_runtime_cell(action.get("label") or "50%条件执行")
+    position_pct = int(action.get("position_pct") or 50)
     reason = _clean_runtime_cell(action.get("reason") or "板块资金扩散链路恢复出唯一主样本")
+    position_text = (
+        PREMARKET_50_EXECUTION_TEXT
+        if position_pct < 100
+        else f"{action_label}；盘中不满足取消，回到0%不参与"
+    )
     synced = []
     for line in list(report_lines or []):
         text = str(line or "")
         if text.startswith("| 仓位姿态 |"):
-            text = f"| 仓位姿态 | {action_label}；固定交易窗口条件不成立回到0% |"
+            text = f"| 仓位姿态 | {position_text} |"
         elif text.startswith("| 最终对象 |"):
             text = f"| 最终对象 | 明日执行对象：{target_label} |"
         elif text.startswith("| 对象性质 |"):
@@ -4003,7 +4034,7 @@ def _sync_front_page_tables_with_preflight_action(report_lines, payload):
         elif text.startswith("| 推导摘要 |"):
             text = f"| 推导摘要 | {target_label}来自板块资金扩散链路；{reason} |"
         elif text.startswith("| 明日仓位 |"):
-            text = f"| 明日仓位 | 条件满足才{action_label}；不满足回到0% |"
+            text = f"| 明日仓位 | {position_text} |"
         elif text.startswith("| 明日执行对象 |"):
             text = f"| 明日执行对象 | {target_label} |"
         elif text.startswith("| 执行性质 |"):
@@ -4011,6 +4042,15 @@ def _sync_front_page_tables_with_preflight_action(report_lines, payload):
         elif text.startswith("| 不满足条件 |"):
             text = "| 不满足条件 | 不参与 |"
         synced.append(text)
+    if position_pct == 50 and target:
+        return _normalize_full_or_empty_account_visible_lines(
+            synced,
+            final_target_resolution={
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+                "new_entry_target": target,
+            },
+            position_decision={"target_position_pct": position_pct},
+        )
     return synced
 
 
@@ -4716,7 +4756,7 @@ def _runtime_opportunity_item_label(item):
 def _runtime_opportunity_role_action(target, role, action, two_layer_execution_object=None):
     two_layer_key = _runtime_candidate_key(two_layer_execution_object)
     if two_layer_key and _runtime_candidate_key(target) == two_layer_key:
-        return "条件执行对象", "条件满足才50%条件执行；不满足回到0%"
+        return "条件执行对象", PREMARKET_50_EXECUTION_TEXT
     return _runtime_role_text(role), _runtime_user_visible_trade_text(action)
 
 
@@ -4938,7 +4978,7 @@ def _runtime_selected_target_solution_lines(
     limit_role = _first_runtime_text(candidate.get("limit_up_evidence_role"), nested.get("limit_up_evidence_role"))
     action = normalize_trading_time_text(
         _runtime_user_visible_trade_text(
-            "条件满足才50%条件执行；不满足回到0%"
+            PREMARKET_50_EXECUTION_TEXT
             if final_execution_object and not wait_priority
             else _first_runtime_text(
                 final_gate.get("final_action"),
@@ -5837,6 +5877,233 @@ def _runtime_candidate_is_final_execution_target(candidate, final_target_resolut
     return bool(execution_target and _runtime_candidate_key(candidate) == _runtime_candidate_key(execution_target))
 
 
+def _runtime_final_execution_target_payload(final_target_resolution=None, selected_position_candidate=None, position_decision=None):
+    if _front_page_target_pct(position_decision) < 50:
+        return {}
+    target = _runtime_final_resolution_core_candidate(final_target_resolution)
+    if target:
+        return target
+    if isinstance(selected_position_candidate, dict):
+        return _runtime_stock_payload(selected_position_candidate)
+    return {}
+
+
+def _normalize_full_or_empty_account_visible_lines(
+    lines,
+    *,
+    final_target_resolution=None,
+    selected_position_candidate=None,
+    position_decision=None,
+):
+    if _front_page_target_pct(position_decision) != 50:
+        return list(lines or [])
+    target = _runtime_final_execution_target_payload(
+        final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    if not target:
+        return list(lines or [])
+
+    normalized = []
+    for line in list(lines or []):
+        text = _full_or_empty_account_visible_text(line)
+        if text.startswith("| 仓位=50% 动作=满仓条件执行 "):
+            text = text.replace("| 仓位=50% 动作=满仓条件执行 ", "| 账户动作=满仓条件执行（底层策略档=50%） ", 1)
+        if text.startswith("| 进攻仓位三态 | 50% |"):
+            text = "| 进攻仓位三态 | 满仓条件执行 |"
+        elif text.startswith("| 明日最大仓位 | 50% |"):
+            text = "| 明日最大仓位 | 满仓或0%不参与 |"
+        normalized.append(text)
+    return normalized
+
+
+def _full_or_empty_account_visible_text(value):
+    text = str(value or "")
+    text = text.replace(PREMARKET_50_EXECUTION_TEXT, PREMARKET_FULL_EXECUTION_TEXT)
+    text = text.replace(PREMARKET_50_EXECUTION_SHORT_TEXT, PREMARKET_FULL_EXECUTION_SHORT_TEXT)
+    text = text.replace("50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0%", PREMARKET_FULL_EXECUTION_TEXT)
+    text = text.replace("50%条件执行条件", "满仓条件执行条件")
+    text = text.replace("50%执行条件", "满仓执行条件")
+    text = text.replace("50%条件执行对象", "满仓条件执行对象")
+    text = text.replace("50%条件执行资格", "满仓条件执行资格")
+    text = text.replace("50%条件执行", "满仓条件执行")
+    text = text.replace("50%按条件参与", "满仓条件执行")
+    text = text.replace("按50%条件执行", "按满仓条件执行")
+    text = text.replace("才可做50%", "才可满仓条件执行")
+    text = text.replace("最多25%试仓", "只做尾盘复核，不默认试仓")
+    text = text.replace("只允许25%试仓", "只允许尾盘复核，不默认试仓")
+    text = text.replace("50%底仓跟随，50%机动仓只在确认后做T", "旧仓独立处理，机动仓只在确认后做T")
+    text = text.replace("尽量回到50%底仓", "尽量回到既定底仓")
+    text = text.replace("| 账户动作=满仓条件执行（底层策略档=50%） ", "| 账户动作=满仓条件执行 ")
+    text = text.replace("；满仓条件执行；50%", "；满仓条件执行；账户动作=满仓或0%不参与")
+    text = re.sub(
+        r'FINAL\["最终：([^"]+)\\n仓位：50%"\]',
+        lambda match: f'FINAL["最终：{match.group(1)}\\n账户动作：满仓条件执行"]',
+        text,
+    )
+    text = text.replace("'position_pct': 50", "'账户动作': '满仓条件执行'")
+    text = text.replace('"position_pct": 50', '"账户动作": "满仓条件执行"')
+    if "风险点**: 暂无明确风险" in text:
+        text = text.replace(
+            "风险点**: 暂无明确风险",
+            "风险点**: 跌多涨少、跌停扩散和收缩防守仍在，不支持无条件买入",
+        )
+    if "风险点 | 暂无明确风险" in text:
+        text = text.replace(
+            "风险点 | 暂无明确风险",
+            "风险点 | 跌多涨少、跌停扩散和收缩防守仍在，不支持无条件买入",
+        )
+    return text
+
+
+def _normalize_final_execution_target_appendix_rows(lines, *, final_target_resolution=None, selected_position_candidate=None, position_decision=None):
+    target = _runtime_final_execution_target_payload(
+        final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    target_code = _normalize_runtime_stock_code(target.get("code") or target.get("stock_code")) if target else ""
+    if not target_code:
+        return list(lines or [])
+    target_label = _runtime_stock_label(target) or _target_candidate_label(target)
+    normalized = []
+    in_positive_action_plan = False
+    in_front_sniper_table = False
+    front_sniper_header = None
+    front_sniper_rows = 0
+    in_ignored_candidate_block = False
+    ignored_candidate_heading_index = None
+
+    def _decrement_ignored_candidate_heading(index):
+        if index is None or index < 0 or index >= len(normalized):
+            return
+        heading = str(normalized[index] or "")
+        match = re.search(r"(\d+)只", heading)
+        if not match:
+            return
+        count = max(int(match.group(1)) - 1, 0)
+        normalized[index] = heading[: match.start(1)] + str(count) + heading[match.end(1) :]
+
+    for line in list(lines or []):
+        text = str(line or "")
+        stripped = text.strip()
+        if stripped.startswith("### 2. 明日条件执行对象"):
+            in_front_sniper_table = True
+            front_sniper_header = None
+            front_sniper_rows = 0
+            normalized.append(text)
+            continue
+        if in_front_sniper_table and stripped.startswith("### ") and not stripped.startswith("### 2. 明日条件执行对象"):
+            if front_sniper_header and front_sniper_rows == 0:
+                normalized.append(
+                    "| 明日执行对象 | {target} | 固定交易窗口 | - | - | {condition} | 已决定50%条件执行 | 09:30-09:35或09:50-10:10 |".format(
+                        target=target_label,
+                        condition=PREMARKET_50_TRIGGER_TEXT,
+                    )
+                )
+            in_front_sniper_table = False
+            front_sniper_header = None
+            front_sniper_rows = 0
+        if in_front_sniper_table and stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if "角色" in cells and "标的" in cells:
+                front_sniper_header = list(cells)
+                normalized.append(text)
+                continue
+            if front_sniper_header and all(set(cell) <= {"-"} and cell for cell in cells):
+                normalized.append(text)
+                continue
+            if front_sniper_header:
+                if len(cells) >= 2 and cells[0] in {"暂无", "无"}:
+                    front_sniper_rows += 1
+                    row = {field: "" for field in front_sniper_header}
+                    row.update(
+                        {
+                            "角色": "明日执行对象",
+                            "标的": target_label,
+                            "速度档": "固定交易窗口",
+                            "买点线": "-",
+                            "卖点线": "-",
+                            "承接修复条件": PREMARKET_50_TRIGGER_TEXT,
+                            "最终复核": "已决定50%条件执行",
+                            "参与窗": "09:30-09:35或09:50-10:10",
+                        }
+                    )
+                    text = "| " + " | ".join(row.get(field, "") for field in front_sniper_header) + " |"
+                else:
+                    front_sniper_rows += 1
+        if stripped.startswith("**暂不关注**:"):
+            in_ignored_candidate_block = True
+            ignored_candidate_heading_index = len(normalized)
+        elif in_ignored_candidate_block and (not stripped or stripped.startswith("**") or stripped.startswith("#")):
+            in_ignored_candidate_block = False
+            ignored_candidate_heading_index = None
+        if stripped == "**明天仓位怎么放**:":
+            in_positive_action_plan = True
+        elif in_positive_action_plan and stripped.startswith("**") and stripped != "**明天仓位怎么放**:":
+            in_positive_action_plan = False
+        if in_positive_action_plan:
+            text = text.replace(
+                "- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与",
+                f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
+            )
+            text = text.replace(
+                "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，结果进入复盘和下一份日报判断，未命中继续0%",
+                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}",
+            )
+        if stripped.startswith("- ") and target_code in text and any(
+            marker in text for marker in ("候选观察", "需看明日竞价强弱", "暂不关注")
+        ):
+            parts = [part.strip() for part in stripped[2:].split(" - ")]
+            if len(parts) >= 4 and target_code in parts[0]:
+                if in_ignored_candidate_block:
+                    _decrement_ignored_candidate_heading(ignored_candidate_heading_index)
+                    continue
+                text = f"- {target_label} - 明日执行对象 - 已进入明日执行计划 - {PREMARKET_50_TRIGGER_TEXT}"
+        if stripped.startswith("|") and target_code in stripped:
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) >= 7 and cells[:7] == ["序号", "股票", "代码", "板块", "名单身份", "观察理由", "明日原则"]:
+                normalized.append(text)
+                continue
+            if len(cells) >= 7 and cells[2] == target_code and any(
+                marker in text for marker in ("候选观察", "最终0%时只作观察样本", "不构成明日新增参与")
+            ):
+                cells[4] = "明日执行对象"
+                cells[6] = "已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+                text = "| " + " | ".join(cells) + " |"
+            elif len(cells) >= 16 and cells[2] == target_code and any(
+                marker in text for marker in ("不作为新增参与依据", "只观察", "承接观察样本")
+            ):
+                cells[3] = "明日执行对象"
+                if len(cells) > 6:
+                    cells[6] = "按昨晚预案检查执行资格；不满足回到0%不参与"
+                cells[-1] = f"{target_label}已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+                text = "| " + " | ".join(cells) + " |"
+        if target_code in text or target_label in text:
+            text = text.replace(
+                "- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与",
+                f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
+            )
+            text = text.replace(
+                "当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件",
+                f"当前是50%条件执行，本时段只检查{target_label}的执行资格",
+            )
+            text = text.replace(
+                "确认后也只进入复盘和下一份日报判断，未确认保持0%",
+                "不满足执行资格则取消，回到0%不参与",
+            )
+        normalized.append(text)
+    if in_front_sniper_table and front_sniper_header and front_sniper_rows == 0:
+        normalized.append(
+            "| 明日执行对象 | {target} | 固定交易窗口 | - | - | {condition} | 已决定50%条件执行 | 09:30-09:35或09:50-10:10 |".format(
+                target=target_label,
+                condition=PREMARKET_50_TRIGGER_TEXT,
+            )
+        )
+    return normalized
+
+
 def _runtime_candidate_blocks_final_watch_target(candidate, final_target_resolution=None):
     if not isinstance(candidate, dict):
         return False
@@ -5960,7 +6227,7 @@ def _repair_confirmed_front_page_position_decision(position_decision, *, selecte
     if selected_position_candidate:
         updated.setdefault("single_focus_constraint", {
             "status": "clear",
-            "reason": "仓位结论已给出唯一对象，等待固定交易窗口内条件成立。",
+            "reason": "仓位结论已给出唯一对象，盘中只按昨晚预案检查执行资格。",
         })
     return _repair_extreme_candidate_full_attack_check(updated)
 
@@ -6131,9 +6398,9 @@ def _build_front_page_position_decision(
     promoted_signal_grade = "100" if promoted_target_pct >= 100 else "50"
     promoted_mode = "full_100" if promoted_signal_grade == "100" else "attack_50_preview"
     promoted_reason = (
-        "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留100%核心进攻，固定交易窗口内条件不成立就回到0%。"
+        "明日极度看好目标标的已存在，市场未到极端冰点；盘前已决定100%核心进攻，盘中不满足执行资格就回到0%。"
         if promoted_signal_grade == "100"
-        else "明日极度看好目标标的已存在，市场未到极端冰点；盘前不抢跑，但保留50%条件执行，固定交易窗口内条件不成立就回到0%。"
+        else f"明日极度看好目标标的已存在，市场未到极端冰点；{PREMARKET_50_EXECUTION_TEXT}。"
     )
     monthly_rhythm.update(
         {
@@ -6159,7 +6426,7 @@ def _build_front_page_position_decision(
             "monthly_rhythm": monthly_rhythm,
             "single_focus_constraint": {
                 "status": "clear",
-                "reason": "已缩到明日极度看好目标，等待固定交易窗口内条件成立。",
+                "reason": "已缩到明日极度看好目标，盘中只按昨晚预案检查执行资格。",
             },
         }
     )
@@ -6240,7 +6507,7 @@ def _build_effective_front_page_final_gate(
                 "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), target_pct),
                 "final_action": (
                     capital_action_reason
-                    or f"先处理旧仓，买{target_display_label}；固定交易窗口条件成立才参与，不满足回到0%"
+                    or f"先处理旧仓，买{target_display_label}；{PREMARKET_50_TRIGGER_TEXT}"
                 ),
                 "final_participation": (
                     "小账户先释放旧仓资金，再只看新核心执行条件。"
@@ -6264,7 +6531,7 @@ def _build_effective_front_page_final_gate(
             "should_reduce": False,
             "allow_attack_50_ready": True,
             "base_position_cap_pct": max(int(_runtime_cell_float(updated.get("base_position_cap_pct")) or 0), target_pct),
-            "final_action": f"明日目标标的保留{target_action_label}：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
+            "final_action": f"明日目标标的已决定{target_action_label}：只看{target_label}，{PREMARKET_50_TRIGGER_TEXT}",
             "final_participation": "有明日极度看好目标时，防守态只缩小容器，不取消推荐属性。",
             "gate_reason": "普通防守态不等于每天推荐空仓；先定明日目标标的，再用大盘、板块和分时确认决定是否接雨。",
         }
@@ -6327,12 +6594,12 @@ def _normalize_zero_participation_appendix_line(line):
     if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
         text = text.replace(
             "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-            "明日不新增参与，只观察风险是否钝化、主攻线承接和观察对象是否重新成立",
+            "明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断",
         )
     if "盘前0%；固定交易窗口内条件成立后才评估50%条件执行" in text:
         text = text.replace(
             "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
-            "盘前0%；暂无新增参与资格，只观察风险是否钝化",
+            ZERO_OBSERVATION_REVIEW_SHORT_TEXT,
         )
     if "明日目标标的保留条件100%核心进攻" in text:
         text = re.sub(
@@ -6349,12 +6616,12 @@ def _normalize_zero_participation_appendix_line(line):
     if "盘前0%；观察窗口命中后才评估50%条件执行" in text:
         text = text.replace(
             "盘前0%；观察窗口命中后才评估50%条件执行",
-            "盘前0%；暂无新增参与资格，只观察风险是否钝化",
+            ZERO_OBSERVATION_REVIEW_SHORT_TEXT,
         )
     if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
         text = text.replace(
             _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
-            "盘前0%；暂无新增参与资格，只观察风险是否钝化",
+            ZERO_OBSERVATION_REVIEW_SHORT_TEXT,
         )
     if "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
         text = text.replace(
@@ -6385,12 +6652,13 @@ def _normalize_zero_participation_appendix_line(line):
     text = text.replace("寻找参与资格", "观察")
     text = text.replace("等触发条件成立", "只观察，不新增参与")
     text = text.replace("确认后才评估50%条件执行，未确认保持0%", "确认后也只保留观察，未确认保持0%")
-    text = text.replace("才评估50%条件执行", "才保留观察；未出现执行资格前不新增参与")
+    text = text.replace("才评估50%条件执行", "才保留观察；盘中不生成新买入决定")
     text = text.replace("触发后50%条件执行", "触发后只观察")
     text = text.replace("50%条件执行", "只观察")
     text = text.replace("50%条件执行", "只观察")
     text = text.replace("唯一对象是否", "观察对象是否")
     text = text.replace("观察" + "锚是否", "观察对象是否")
+    text = text.replace("观察对象是否重新成立", "结果进入复盘和下一份日报判断")
     return text
 
 
@@ -6751,7 +7019,7 @@ def _normalize_attack_preview_appendix_lines(
         if "空仓等待，禁止参与；若你有仓位，只做退出不做幻想" in text:
             text = text.replace(
                 "空仓等待，禁止参与；若你有仓位，只做退出不做幻想",
-                f"明日目标标的保留50%条件执行：只看{target_label}，固定交易窗口内条件成立才执行，不满足回到0%",
+                f"明日目标标的已决定50%条件执行：只看{target_label}，{PREMARKET_50_TRIGGER_TEXT}",
             )
         if text == "- **进攻仓位三态**: 0%不参与":
             text = "- **进攻仓位三态**: 50%条件执行"
@@ -6762,9 +7030,9 @@ def _normalize_attack_preview_appendix_lines(
         if "当前按0%不参与，固定交易窗口内条件未成立前只观察" in text:
             text = text.replace(
                 "当前按0%不参与，固定交易窗口内条件未成立前只观察",
-                "50%条件执行；固定交易窗口内条件成立才执行，不满足回到0%",
+                PREMARKET_50_EXECUTION_TEXT,
             )
-        if text.startswith("- ✅ 不新增参与：50%条件执行"):
+        if text.startswith("- ✅ 不新增参与：50%条件执行") or text.startswith(f"- ✅ 不新增参与：{PREMARKET_50_EXECUTION_TEXT}"):
             text = text.replace("- ✅ 不新增参与：", "- ⚠️ 不抢跑：", 1)
         if "0%不参与不开新仓" in text:
             text = text.replace(
@@ -6774,7 +7042,7 @@ def _normalize_attack_preview_appendix_lines(
         if "0%不参与，等待固定交易窗口内条件" in text:
             text = text.replace(
                 "0%不参与，等待固定交易窗口内条件",
-                "50%条件执行，等待固定交易窗口内条件",
+                "50%条件执行，盘中只按昨晚预案检查执行资格",
             )
         if "0%新仓（只处理旧仓，不新增）" in text:
             text = text.replace(
@@ -6797,12 +7065,12 @@ def _normalize_attack_preview_appendix_lines(
         if "盘前0%；固定交易窗口内条件成立后才评估50%条件执行" in text:
             text = text.replace(
                 "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
-                "50%条件执行；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
+                PREMARKET_50_EXECUTION_TEXT,
             )
         if _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT in text:
             text = text.replace(
                 _LEGACY_WINDOW_HIT_STANDARD_ATTACK_TEXT,
-                "50%条件执行；盘前不抢跑，固定交易窗口内条件成立后执行，不满足回到0%",
+                PREMARKET_50_EXECUTION_TEXT,
             )
         if "0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径" in text:
             text = text.replace(
@@ -6819,6 +7087,7 @@ def _normalize_attack_preview_appendix_lines(
             normalized,
             selected_position_candidate=selected_position_candidate,
             position_decision=position_decision,
+            final_target_resolution=final_target_resolution,
         )
     return _align_appendix_observation_anchor_lines(normalized, final_target_resolution)
 
@@ -6828,6 +7097,7 @@ def _normalize_positive_final_action_appendix_lines(
     *,
     selected_position_candidate=None,
     position_decision=None,
+    final_target_resolution=None,
 ):
     if _front_page_target_pct(position_decision) < 50:
         return list(lines or [])
@@ -6838,6 +7108,25 @@ def _normalize_positive_final_action_appendix_lines(
     target_code = _normalize_runtime_stock_code(target.get("code") or target.get("stock_code"))
     if not target_label or target_label == "明日目标标的":
         return list(lines or [])
+    final_target_resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
+    existing_target = (
+        final_target_resolution.get("existing_position_target")
+        if isinstance(final_target_resolution.get("existing_position_target"), dict)
+        else {}
+    )
+    existing_summary = final_target_resolution.get("existing_position_summary")
+    has_visible_position_context = bool(
+        _runtime_stock_label(existing_target)
+        or (isinstance(existing_summary, dict) and (existing_summary.get("has_position") or existing_summary.get("summary")))
+        or (isinstance(existing_summary, str) and existing_summary.strip())
+    )
+    has_inferred_old_path = bool(
+        existing_target.get("inferred_from_previous_report") is True
+        or (
+            isinstance(existing_summary, dict)
+            and existing_summary.get("inferred_from_previous_report") is True
+        )
+    )
     normalized = []
     in_final_action_table = False
     action_table_header = None
@@ -6849,18 +7138,26 @@ def _normalize_positive_final_action_appendix_lines(
                 "明天具体怎么做": "只看明日执行对象",
                 "股票": target_name,
                 "代码": target_code or "-",
-                "触发条件": "固定交易窗口条件成立才50%条件执行；不满足回到0%不参与",
+                "触发条件": PREMARKET_50_TRIGGER_TEXT,
                 "止损/时间": "买后用失效价和单笔-5%底线处理风险",
             }
         )
         return "| " + " | ".join(row.get(field, "") for field in fields) + " |"
 
     def _positive_context_summary():
-        return f"只看明日执行对象{target_label}；固定交易窗口条件成立才50%条件执行，不满足回到0%不参与"
+        return f"只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
 
     for line in list(lines or []):
         text = str(line or "")
         stripped = text.strip()
+        if stripped.startswith("|"):
+            cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+            if len(cells) >= 2 and cells[0] in {"明日主买对象", "明日补位对象"}:
+                cells[0] = "过程候选回看"
+                if len(cells) >= 7:
+                    cells[6] = "过程证据，不覆盖唯一明日动作"
+                text = "| " + " | ".join(cells) + " |"
+                stripped = text.strip()
         if stripped.startswith("**最终动作表**"):
             in_final_action_table = True
             action_table_header = None
@@ -6895,25 +7192,25 @@ def _normalize_positive_final_action_appendix_lines(
                 f"- **现在是什么情况**: 已收口到唯一明日动作：{target_label}；其它候选只作过程证据"
             ),
             "先确认重点盯盘股，再看能否缩到一只可买股": (
-                f"先确认{action_label}是否满足固定交易窗口条件"
+                f"先确认{action_label}的执行资格"
             ),
             "- **明天能不能开仓**: 市场已允许出手，但现在还只有重点盯盘股，还没有缩到一只可买股；": (
-                "- **明天能不能参与**: 条件满足才50%条件执行；"
+                f"- **明天能不能参与**: {PREMARKET_50_EXECUTION_TEXT}；"
             ),
             "- **现在到底是什么状态**: 还没有缩到一只可买股": (
                 f"- **现在到底是什么状态**: 已收口到唯一明日动作：{target_label}"
             ),
             "- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）": (
-                "- **明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%"
+                f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}"
             ),
             "- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买": (
-                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；不满足固定交易窗口条件就回到0%不参与"
+                f"- **明天具体怎么做**: 只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
             ),
             "只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑": (
-                f"它只作过程回看；明日只看唯一明日动作{target_label}的固定交易窗口条件，盘中强也不替换唯一动作"
+                f"它只作过程回看；明日只看唯一明日动作{target_label}的执行资格，盘中强也不替换唯一动作"
             ),
             "市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否在固定交易窗口内满足条件": (
-                f"过程候选只作回看；本时段只看{action_label}是否满足固定交易窗口条件"
+                f"过程候选只作回看；本时段只检查{action_label}的执行资格"
             ),
             "只有它继续抗跌并走成明天唯一能买的那只，才允许进入参与流程": (
                 f"过程候选即使继续抗跌，也不覆盖{action_label}"
@@ -6922,13 +7219,13 @@ def _normalize_positive_final_action_appendix_lines(
                 f"过程候选若不能证明强于{action_label}"
             ),
             "没有缩到一只可买股之前，一律不开仓": (
-                f"{action_label}未满足固定交易窗口条件前，一律不新增参与"
+                f"{action_label}不满足执行资格时，一律不新增参与"
             ),
             "只有缩到一只可买股时，才允许按计划买入": (
-                f"只有{action_label}满足固定交易窗口条件时，才允许按计划参与"
+                f"只有{action_label}仍有执行资格时，才允许按计划参与"
             ),
             "不代表已经有可买标的；真正能不能买，要看后文有没有缩到一只可买股": (
-                f"最终只看{action_label}是否满足固定交易窗口条件"
+                f"最终只看{action_label}是否仍有执行资格"
             ),
             "继续进入执行层筛到可买股": "仅保留为过程证据",
             "继续筛到可买股": "继续回看过程候选",
@@ -6966,21 +7263,85 @@ def _normalize_positive_final_action_appendix_lines(
             "当前还在等待层，先等买点自己长出来，不提前写成执行对象": (
                 f"当前已收口到{action_label}；过程候选只作回看，不提前替换执行对象"
             ),
-            "明天仓位放多少**: 0%": "明天仓位放多少**: 50%条件执行；固定交易窗口条件不成立回到0%",
+            "明天仓位放多少**: 0%": f"明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
             "继续只盯明天先盯哪只": "继续回看过程候选",
+            "明日不新增参与，只观察风险是否钝化、主攻线承接，结果进入复盘和下一份日报判断": (
+                f"市场背景只作参考，最终只看明日执行对象{target_label}的执行资格"
+            ),
+            "环境关闭，只做等待，不做新增参与": (
+                f"市场背景偏谨慎，最终只看明日执行对象{target_label}的执行资格"
+            ),
+            "大盘环境没有给到出手条件，先离场再等下一次趋势": (
+                f"大盘背景偏谨慎；不覆盖唯一明日动作{target_label}"
+            ),
+            "本轮只等待固定交易窗口条件": f"本轮只检查{target_label}的执行资格",
+            "也只进入复盘和下一份日报判断；未命中继续0%不参与": (
+                f"只作过程观察；不覆盖{target_label}的执行资格检查"
+            ),
+            "当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件": (
+                f"当前是50%条件执行，本时段只检查{target_label}的执行资格"
+            ),
+            "重点观察优先对象是否继续走强；确认后也只进入复盘和下一份日报判断，未确认保持0%": (
+                f"只检查{target_label}的执行资格；不满足回到0%不参与"
+            ),
         }
         for old, new in replacements.items():
             text = text.replace(old, new)
         text = text.replace(f"唯一明日动作{target_label}", action_label)
+        if text.startswith("**次日市场环境**:") and any(
+            marker in text for marker in ("只做等待", "不做新增参与", "环境关闭", "市场背景偏谨慎", "撤退态")
+        ):
+            text = (
+                f"**次日市场环境**: 50%条件执行 / 执行资格检查 - "
+                f"已决定{target_label}，只按昨晚预案检查执行资格"
+            )
+        elif text == "- ✅ 保持空仓：当前不新增参与":
+            text = f"- ✅ 盘前不抢跑：{target_label}只按昨晚预案检查执行资格"
+        elif text == "- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开":
+            text = f"- ✅ 禁止临时换目标：只看明日执行对象{target_label}"
+        elif text == "- ✅ 不做新仓日内回转：次日不做日内回转；若有旧仓，只按旧仓处理策略处理":
+            text = "- ✅ 不做日内回转：买后只按失效价和单笔-5%底线处理风险"
+        elif text.startswith("| 明日观察位预计算 |") and any(marker in text for marker in ("不开新仓", "不新增参与")):
+            text = f"| 明日观察位预计算 | 只服务{action_label}的执行资格检查；其它候选只作过程证据 |"
+        elif text.startswith("**怎么执行**：最终0%时不按固定交易窗口执行"):
+            text = f"**怎么执行**：只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
+        elif text.startswith("> **真到盘中怎么做**") and any(
+            marker in text for marker in ("明日不新增参与", "继续0%不参与", "只观察指数")
+        ):
+            text = f"> **真到盘中怎么做**：只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
+        elif text.startswith("#### 附录：") and "明日市场环境：0%不参与" in text:
+            text = "#### 附录：🟡 明日市场环境：50%条件执行 / 执行资格检查"
+        elif text.startswith("- **现在是什么情况**: 0%") or text.startswith("- **现在是什么情况**: 0，"):
+            text = f"- **现在是什么情况**: 已收口到{action_label}；其它候选只作过程证据"
+        elif text.startswith("- **传给下一步**: 可执行0只"):
+            text = f"- **传给下一步**: 明日执行对象1只（{target_label}）/ 其它候选只作过程证据"
+        elif text.startswith("- **进攻仓位**: 0%不参与"):
+            text = f"- **进攻仓位**: 50%条件执行；只看{target_label}固定交易窗口条件"
+        elif text.startswith("**⚠️ 当前不抢跑**: 0%不参与"):
+            text = f"**⚠️ 当前不抢跑**: 50%条件执行，盘前不抢跑；只检查{target_label}的执行资格。"
+        elif text.startswith("- **明天能不能开仓**: 0%"):
+            text = f"- **明天是否参与**: 50%条件执行；只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
+        elif text.startswith("**⚠️ 当前不抢跑**:") and "**观察优先对象**" in text:
+            text = f"**⚠️ 当前不抢跑**: 50%条件执行，盘前不抢跑；只检查{target_label}的执行资格。"
+        elif text.startswith("**观察优先对象**:"):
+            text = f"**过程候选回看**: 其它候选只作复盘证据；不覆盖唯一明日动作：{target_label}"
+        elif text.startswith("- **盘前不抢跑**:") and target_label not in text:
+            text = f"- **盘前不抢跑**: {target_label}只按昨晚预案检查执行资格"
+        elif text.startswith("- **跨线继续看谁**:"):
+            text = "- **跨线回看样本**: 过程候选只作复盘证据，不覆盖唯一明日动作"
+        elif text.startswith("- **现在重点看什么**:"):
+            text = f"- **现在重点看什么**: 只检查{target_label}的执行资格；其它候选只作复盘观察"
+        elif text.startswith("- **出手时怎么做**:") and "不评估新增参与" in text:
+            text = f"- **出手时怎么做**: 只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT}"
         if text.startswith("- **明天具体怎么做**:") and "过程候选回看样本" in text:
             text = (
                 f"- **明天具体怎么做**: 只看明日执行对象{target_label}；"
-                "不满足固定交易窗口条件就回到0%不参与"
+                f"{PREMARKET_50_TRIGGER_TEXT}"
             )
         if text.startswith("| 过程候选最终复核 |") and target_label in text:
             text = (
                 f"| 过程候选最终复核 | 过程候选只作回看，不覆盖{action_label}；"
-                "明日只按固定交易窗口条件复核最终动作。 |"
+                "明日只按昨晚预案检查最终动作的执行资格。 |"
             )
         if "过程候选回看样本" in text and "过程证据" not in text and target_label not in text:
             text = f"{text}（过程证据，不覆盖唯一明日动作：{target_label}）"
@@ -6997,13 +7358,23 @@ def _normalize_positive_final_action_appendix_lines(
         elif text.startswith("| 市场情绪状态 |") and "只处理旧仓" in text:
             text = f"| 市场情绪状态 | 50%条件执行；只看{target_label}固定交易窗口条件 |"
         elif text.startswith("| 账户后台任务负担 |") and "有持仓需先处理" in text:
-            text = "| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |"
+            if has_inferred_old_path:
+                text = "| 账户后台任务负担 | 旧路径需复核，不覆盖唯一明日动作 |"
+            elif has_visible_position_context:
+                text = "| 账户后台任务负担 | 持仓独立评估，不覆盖唯一明日动作 |"
+        elif text.startswith("| 账户后台任务负担 |") and has_inferred_old_path and "无持仓负担" in text:
+            text = "| 账户后台任务负担 | 旧路径需复核，不覆盖唯一明日动作 |"
         elif text.startswith("| 持仓优先动作 |") and "先处理旧仓" in text:
-            text = "| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |"
+            if has_inferred_old_path:
+                text = "| 持仓优先动作 | 旧路径与明日目标分开处理 |"
+            elif has_visible_position_context:
+                text = "| 持仓优先动作 | 持仓独立评估；新机会按自身条件处理 |"
+        elif text.startswith("| 持仓优先动作 |") and has_inferred_old_path and "无旧仓" in text:
+            text = "| 持仓优先动作 | 旧路径与明日目标分开处理 |"
         elif text.startswith("| 今日新增上限 |") and re.search(r"\|\s*0\s*\|", text):
             text = "| 今日新增上限 | 50%条件执行；条件不成立回0% |"
         elif text.startswith("| 主买对象 |") and target_label not in text:
-            text = f"| 主买对象 | {target_label} |"
+            text = "| 主买对象 | 过程候选回看样本，不覆盖唯一明日动作 |"
         elif text.startswith("| 补位对象 |") and target_label not in text:
             text = "| 补位对象 | 过程候选回看样本，不覆盖唯一明日动作 |"
         elif text.startswith("| 明天能不能开仓 |") and "只处理旧仓" in text:
@@ -7022,14 +7393,19 @@ def _normalize_positive_final_action_appendix_lines(
             marker in text for marker in ("还没有缩到", "只用于观察", "提前硬上")
         ):
             text = (
-                f"| 明日风险预判 | 已收口到{action_label}；固定交易窗口条件不成立回到0%不参与；"
+                f"| 明日风险预判 | 已收口到{action_label}；不满足执行资格回到0%不参与；"
                 "其它候选只作过程证据 |"
             )
         elif text.startswith("| 明日策略 |") and any(marker in text for marker in ("不开新仓", "只观察", "不允许新增")):
             text = (
                 f"| 明日策略 | 只看明日执行对象{target_label}；"
-                "固定交易窗口条件成立才50%条件执行，不满足回到0%不参与 |"
+                f"{PREMARKET_50_TRIGGER_TEXT} |"
             )
+        elif text.startswith("| 明日动作 |") and target_label in text:
+            if "先处理旧仓" in text:
+                text = f"| 明日动作 | 先处理旧仓，买{target_label}；{PREMARKET_50_TRIGGER_TEXT} |"
+            else:
+                text = f"| 明日动作 | 只看明日执行对象{target_label}；{PREMARKET_50_TRIGGER_TEXT} |"
         elif text.startswith("- **明日裁决**:") and "只处理旧仓" in text:
             text = f"- **明日裁决**: 50%条件执行；只看{target_label}固定交易窗口条件"
         elif text.startswith("**明日裁决**:") and "只处理旧仓" in text:
@@ -7041,15 +7417,15 @@ def _normalize_positive_final_action_appendix_lines(
         elif text.startswith("- **明天具体怎么做**:") and "只处理旧仓" in text:
             text = (
                 f"- **明天具体怎么做**: 只看明日执行对象{target_label}；"
-                "持仓独立评估，不满足固定交易窗口条件就回到0%不参与"
+                f"持仓独立评估，{PREMARKET_50_TRIGGER_TEXT}"
             )
         elif "若你有旧仓，只处理旧仓，不做新增" in text:
-            text = text.replace("若你有旧仓，只处理旧仓，不做新增", f"只看{target_label}是否满足固定交易窗口条件")
+            text = text.replace("若你有旧仓，只处理旧仓，不做新增", f"只检查{target_label}的执行资格")
         normalized.append(text)
     return normalized
 
 
-def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_result=None, *, target_date="", execution_stage_context=None):
+def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_result=None, *, target_date="", execution_stage_context=None, final_action=None):
     current_codes = _current_extreme_conviction_codes(execution_stage_context)
     if not current_codes:
         return decision_ledger_result
@@ -7074,7 +7450,11 @@ def _prune_decision_ledger_result_for_current_extreme_list(decision_ledger_resul
     pruned_index = prune_mentions(index, trade_date=target_date, current_codes=current_codes)
     updated = dict(decision_ledger_result)
     updated["index"] = pruned_index
-    updated["tracking_lines"] = _build_decision_ledger_tracking_lines(updated, target_date=target_date)
+    updated["tracking_lines"] = _build_decision_ledger_tracking_lines(
+        updated,
+        target_date=target_date,
+        final_action=final_action,
+    )
     return updated
 
 
@@ -8884,6 +9264,11 @@ def _render_markdown_report_legacy_body(
         window_days=25,
     )
     personal_position_context = data.get("personal_position_context") if isinstance(data, dict) else {}
+    existing_position_summary = (
+        personal_position_context.get("existing_position_summary")
+        if isinstance(personal_position_context, dict)
+        else {}
+    )
     position_context_provided = bool(data.get("position_context_provided")) or (
         isinstance(personal_position_context, dict) and "existing_position_summary" in personal_position_context
     )
@@ -8920,6 +9305,8 @@ def _render_markdown_report_legacy_body(
             "high_board_count": high_board_count,
             "has_personal_positions": has_personal_positions,
             "position_context_provided": position_context_provided,
+            "personal_position_context": personal_position_context if isinstance(personal_position_context, dict) else {},
+            "existing_position_summary": existing_position_summary if isinstance(existing_position_summary, dict) else {},
             "normalize_stock_code": normalize_stock_code,
             "get_execution_framework_text": get_execution_framework_text,
             "get_trade_permission": get_trade_permission,
@@ -9326,11 +9713,17 @@ def _render_markdown_report_legacy_body(
             sector_capital_preflight=sector_capital_preflight_payload,
         ),
     )
+    final_action_for_decision_ledger = _decision_ledger_final_action_from_runtime(
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+        sector_capital_preflight=sector_capital_preflight_payload,
+    )
     if isinstance(final_decision_ledger_result, dict):
         decision_ledger_result = _prune_decision_ledger_result_for_current_extreme_list(
             final_decision_ledger_result,
             target_date=target_date,
             execution_stage_context=execution_stage_context,
+            final_action=final_action_for_decision_ledger,
         )
         data["decision_ledger_artifacts"] = decision_ledger_result
     rerendered_pk_stage = _rerender_pk_decision_stage_after_final_resolution(
@@ -9559,6 +9952,14 @@ def _render_markdown_report_legacy_body(
                 "etf_turnover_series": data.get("etf_turnover_series", {}) or {},
                 "extreme_conviction_list": extreme_conviction_list,
                 "dragon_rebound_watch_pool": execution_stage_context.get("dragon_rebound_watch_pool", []) or [],
+                "final_target_resolution": final_target_resolution,
+                "position_decision": position_decision,
+                "final_execution_target": _runtime_final_execution_target_payload(
+                    final_target_resolution,
+                    selected_position_candidate=selected_position_candidate,
+                    position_decision=position_decision,
+                ),
+                "final_action": final_action_for_decision_ledger,
             },
             "helpers": {
                 "normalize_report_timer_steps": _normalize_report_timer_steps,
@@ -9567,7 +9968,12 @@ def _render_markdown_report_legacy_body(
         }
     )
     execution_appendix_value = execution_appendix_result.get("value", {}) or {}
-    data["execution_appendix_lines"] = list(execution_appendix_value.get("lines", []) or [])
+    data["execution_appendix_lines"] = _normalize_final_execution_target_appendix_rows(
+        execution_appendix_value.get("lines", []) or [],
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
     report.extend(data["execution_appendix_lines"])
     data.setdefault("module_logs", []).extend(execution_appendix_value.get("module_logs", []))
 
@@ -9855,9 +10261,33 @@ def _render_markdown_report_legacy_body(
         report = report + ["", "## 八、详细附录", ""] + appendix_lines
 
     report = _append_decision_revision_lines_once(report, decision_ledger_result)
+    report = _normalize_positive_final_action_appendix_lines(
+        report,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    report = _normalize_final_execution_target_appendix_rows(
+        report,
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
+    report = _normalize_full_or_empty_account_visible_lines(
+        report,
+        final_target_resolution=final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    )
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
         data["execution_stage_context"] = execution_stage_context
-    print(f"   ✅ 最终执行条件: {sanitize_user_visible_text(front_page_final_gate.get('final_action', '未知'))}")
+    final_action_print_text = sanitize_user_visible_text(front_page_final_gate.get("final_action", "未知"))
+    if _front_page_target_pct(position_decision) == 50 and _runtime_final_execution_target_payload(
+        final_target_resolution,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+    ):
+        final_action_print_text = _full_or_empty_account_visible_text(final_action_print_text)
+    print(f"   ✅ 最终执行条件: {final_action_print_text}")
     _finalize_helper_diagnostics(data)
     report = _sanitize_report_lines(
         report,

@@ -144,6 +144,12 @@ class DatabaseService:
     def upsert_stock_daily_quotes_recent(self, rows, *, source_run_id=0):
         return self.repository.upsert_stock_daily_quotes_recent(rows, source_run_id=source_run_id)
 
+    def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+        reader = getattr(self.repository, "query_stock_daily_quotes_recent", None)
+        if not callable(reader):
+            return []
+        return reader(trade_date, stock_codes=stock_codes)
+
     def rebuild_market_daily_total(self, trade_date, *, market_scope="all_a", source_run_id=0):
         return self.repository.rebuild_market_daily_total(
             trade_date,

@@ -36,7 +36,7 @@ GOOD_MARKDOWN = """# 2026-04-24 a股市场分析
 | 项目 | 结论 |
 |------|------|
 | 明日仓位 | 50%条件执行 |
-| 明日动作 | 只看唯一对象，固定交易窗口条件成立才参与 |
+| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |
 
 ## 一、交易纪律
 | 明日结论 | 默认节奏 | 尾盘例外 | 最大风险 | 核心纪律 |
@@ -368,7 +368,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n\n"
             "## 推导审计层\n"
             "### 候选流水账\n"
@@ -406,7 +406,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n\n"
             "## 推导审计层\n"
             "### 工作流链条\n"
@@ -452,7 +452,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n"
             "| 不满足条件 | 不参与 |\n\n"
             "## 50%条件执行条件\n"
@@ -463,11 +463,11 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 七、最终结论\n"
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
-            "| 条件满足才50%条件执行；不满足回到0% | 不确定时不值得主动参与 | 电力 | 电力 | 观察聚焦 | 豫能控股(001896) | 50%条件执行 | 条件满足才50%条件执行；不满足回到0% |\n\n"
+            "| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 不确定时不值得主动参与 | 电力 | 电力 | 观察聚焦 | 豫能控股(001896) | 50%条件执行 | 条件满足才50%条件执行；不满足回到0% |\n\n"
             "### 明日行动清单\n"
             "| 项目 | 明日动作 |\n"
             "|------|----------|\n"
-            "| 仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 最终对象 | 上海石化(600688) |\n"
             "| 执行/观察条件 | 09:50-10:10；主线承接 |\n"
             "| 不参与条件 | 不满足回到0%不参与 |\n"
@@ -652,7 +652,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 云南锗业(002428) |\n\n"
             "## 六、明日执行计划\n"
             "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
@@ -661,7 +661,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 七、最终结论\n"
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
-            "| 条件满足才50%条件执行；不满足回到0% | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 固定交易窗口条件成立才执行 |\n\n"
+            "| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 按昨晚预案检查执行资格 |\n\n"
             "## 八、详细附录\n"
             "##### 附录：Step 5 - 过程候选最终复核\n"
             "- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明\n"
@@ -689,7 +689,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 云南锗业(002428) |\n\n"
             "## 六、明日执行计划\n"
             "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
@@ -698,7 +698,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 七、最终结论\n"
             "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
             "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
-            "| 条件满足才50%条件执行；不满足回到0% | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 固定交易窗口条件成立才执行 |\n\n"
+            "| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 云南锗业(002428) | 50%条件执行 | 按昨晚预案检查执行资格 |\n\n"
             "## 八、详细附录\n"
             "##### 附录：Step 4 - 明日买点预计算\n"
             "**明日继续观察**（1只，等买点出现）:\n"
@@ -706,6 +706,86 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "- **接着做什么**: 当前还在等待层，先等买点自己长出来，不提前写成执行对象\n"
             "- **接着做什么**: 进入Step 4，为候选组预计算买点并筛出明天唯一能买的那只\n"
             "- **明天没有可买对象**: 仍等待候选证明\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("positive_final_action_appendix_conflict", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_positive_final_target_downgraded_to_watch_row(self):
+        markdown = (
+            "# 2026-06-24 a股市场分析\n\n"
+            "## 日报裁决总览\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 仓位姿态 | 50%条件执行；固定交易窗口条件不成立回到0% |\n"
+            "| 最终对象 | 明日执行对象：长电科技(600584) |\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 明日执行对象 | 长电科技(600584) |\n\n"
+            "## 六、明日执行计划\n"
+            "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
+            "|--------------|------|------|------|--------------|\n"
+            "| 只看明日执行对象 | 长电科技(600584) | 09:50-10:10 | 固定交易窗口条件 | 不做 |\n\n"
+            "## 七、最终结论\n"
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
+            "| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 合适 | 国产芯片替代 | 国产芯片替代 | 积极聚焦 | 长电科技(600584) | 50%条件执行 | 按昨晚预案检查执行资格 |\n\n"
+            "## 八、详细附录\n"
+            "**次日市场环境**: 50%条件执行 / 撤退态 - 环境关闭，只做等待，不做新增参与\n"
+            "- ✅ 保持空仓：当前不新增参与\n"
+            "- ✅ 禁止买入任何方向：无论题材多热，都先等环境重新打开\n"
+            "| 明日观察位预计算 | 不开新仓，只保留重点观察谁 |\n"
+            "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接；结果进入复盘和下一份日报判断，继续0%不参与。\n"
+            "**暂不关注**: 11只（条件链不足）\n"
+            "- 长电科技(600584) - 明日执行对象 - 已进入明日执行计划 - 按昨晚预案检查执行资格；不满足回到0%不参与\n"
+            "\n**明天仓位怎么放**:\n"
+            "- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与\n"
+            "- **进攻仓位**: 0%不参与；无合格标的或取消条件已经出现\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("positive_final_action_appendix_conflict", codes)
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_positive_final_action_with_empty_table_and_second_targets(self):
+        markdown = (
+            "# 2026-06-24 a股市场分析\n\n"
+            "## 日报裁决总览\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 仓位姿态 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 最终对象 | 明日执行对象：长电科技(600584) |\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 明日执行对象 | 长电科技(600584) |\n\n"
+            "## 六、明日执行计划\n"
+            "| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |\n"
+            "|--------------|------|------|------|--------------|\n"
+            "| 只看明日执行对象 | 长电科技(600584) | 09:50-10:10 | 承接确认 | 不做 |\n\n"
+            "## 七、最终结论\n"
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
+            "| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 合适 | 半导体 | 半导体 | 积极聚焦 | 长电科技(600584) | 50%条件执行 | 按昨晚预案检查执行资格 |\n\n"
+            "## 八、详细附录\n"
+            "### 2. 明日条件执行对象\n"
+            "| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 最终复核 | 参与窗 |\n"
+            "|------|------|--------|--------|--------|--------------|----------|--------|\n"
+            "| 暂无 | - | - | - | - | - | - | - |\n"
+            "| 明日主买对象 | 海南海药(000566) | 观察样本 | MA10 | MA20 | 缩量回撤到MA10附近 | 通过 |\n"
+            "| 明日补位对象 | 金安国纪(002636) | 极致加速龙头 | MA3 | MA5 | 缩量回撤到MA3附近 | 通过 |\n"
+            "**观察优先对象**: 海南海药(000566)\n"
+            "- **出手时怎么做**: 盘前0%就是不买新仓；09:50-10:10窗口只记录承接，不评估新增参与\n"
+            "- 当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件\n"
+            "- 重点观察优先对象是否继续走强；确认后也只进入复盘和下一份日报判断，未确认保持0%\n"
         )
 
         result = audit_report_markdown(markdown)
@@ -778,6 +858,23 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertNotIn("empty_final_object_appendix_current_object_conflict", codes)
 
+    def test_audit_allows_final_execution_object_in_history_table_when_not_downgraded(self):
+        markdown = GOOD_MARKDOWN.replace(
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 等待计划窗口事实回写 | 按原计划作废条件处理 | 2026-04-24:300613 |",
+            "| 2026-04-24 | 富瀚微 | 300613 | 1 | 半导体 | 09:50-10:10 | 等待复盘 | 富瀚微(300613)已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与 | 按原计划作废条件处理 | 2026-04-24:300613 |",
+        ) + (
+            "\n**重点观察历史回测表**（拆分选股样本、观察位质量、执行复盘）:（过程证据）\n"
+            "| 入选日 | 股票 | 代码 | 选股样本 | 识别评价 | 观察位窗口 | 盈亏比 | 观察位质量 | 执行复盘 | 后续1日 | 后续3日 | 后续5日 | 最大回撤5日 | 来源日期 | 缺失字段 | 历史标准动作 |\n"
+            "|--------|------|------|----------|----------|----------|--------|----------|----------|----------|----------|----------|------------|----------|----------|----------|\n"
+            "| 2026-04-24 | 富瀚微 | 300613 | 明日执行对象 | 待验证 | 09:50-10:10 | 待计算 | 待补事实 | 等待复盘 | 待补事实 | 待补事实 | 待补事实 | 待补事实 | 2026-04-24 | T+1/T+3/T+5表现与回撤字段 | 富瀚微(300613)已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("front_execution_object_downgraded", codes)
+        self.assertTrue(result["passed"], result["findings"])
+
     def test_audit_flags_current_daily_judgment_core_candidate_mismatch(self):
         markdown = (
             "# 2026-06-10 a股市场分析\n\n"
@@ -849,6 +946,34 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertNotIn("daily_judgment_core_candidate_mismatch", codes)
         self.assertNotIn("daily_judgment_core_candidate_without_execution", codes)
+
+    def test_audit_flags_unresolved_fact_in_settled_daily_judgment_tables(self):
+        markdown = (
+            GOOD_MARKDOWN
+            + "\n## 判断纠偏与今日五项结论\n"
+            + "**近1个已结算交易日复盘表现（2026-05-29至2026-05-29）**\n"
+            + "| 判断项 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |\n"
+            + "|--------|--------|----------|------|------|------|\n"
+            + "| 市场状态判断 | 待补事实 | 待补事实 | - | - | 缺少市场状态复盘事实 |\n\n"
+            + "**结算上一交易日：2026-05-29**\n"
+            + "| 判断项 | 结论 | 预期 | 实际 | 原因 |\n"
+            + "|--------|------|------|------|------|\n"
+            + "| 主线判断 | 待补事实 | 未归类 | 等待市场选择 | 缺少事实：mainline_review |\n\n"
+            + "**上一交易日未完成结算**\n"
+            + "| 判断项 | 状态 | 缺少事实 |\n"
+            + "|--------|------|----------|\n"
+            + "| 主线判断 | 待补事实 | mainline_review |\n\n"
+            + "**今日判断（2026-06-10，等待下一交易日验证）**\n"
+            + "| 判断项 | 今日结论 | 下一交易日验证点 |\n"
+            + "|--------|----------|------------------|\n"
+            + "| 核心候选判断 | 待补事实 | 下一交易日验证是否进入资金视野 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = [finding["code"] for finding in result["findings"]]
+
+        self.assertGreaterEqual(codes.count("daily_judgment_settled_table_unresolved_fact"), 2)
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_final_observation_object_in_derivation_rejected_list(self):
         markdown = (
@@ -924,19 +1049,46 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n"
             "| 执行性质 | 50%条件执行，约50%仓位 |\n"
             "| 不满足条件 | 不参与 |\n\n"
             "## 明日账户建议\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日动作 | 条件满足才50%条件执行 |\n"
+            "| 明日动作 | 已决定50%条件执行 |\n"
         )
 
         result = audit_report_markdown(markdown)
 
         self.assertIn("b_level_conditions_missing", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_accepts_full_or_empty_account_conditions(self):
+        markdown = (
+            "# 2026-06-04 a股市场分析\n\n"
+            "## 明日执行结论\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 明日仓位 | 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |\n"
+            "| 明日执行对象 | 豫能控股(001896) |\n"
+            "| 执行性质 | 满仓条件执行 |\n"
+            "| 不满足条件 | 不参与 |\n\n"
+            "## 满仓条件执行条件\n"
+            "| 触发类型 | 必须满足 | 窗口 | 动作 |\n"
+            "|----------|----------|------|------|\n"
+            "| 低开承接型 | 靠近MA5；收回VWAP/0轴 | 09:50-10:10 | 满仓条件执行 |\n"
+            "| 主动进攻型 | 大单净流入达标；VWAP上方保持 | 09:30-09:35 | 满仓条件执行 |\n\n"
+            "## 七、最终结论\n"
+            "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |\n"
+            "|----------|------------|----------|------------|--------------|--------------|--------------|------------|\n"
+            "| 已决定满仓条件执行；盘中不满足取消，回到0%不参与 | 不确定时不值得主动参与 | 电力 | 电力 | 观察聚焦 | 豫能控股(001896) | 满仓条件执行 | 只按昨晚预案检查执行资格 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertNotIn("b_level_conditions_missing", codes)
+        self.assertNotIn("position_style_missing_grade", codes)
 
     def test_audit_flags_execution_object_mismatch_between_front_and_audit_layer(self):
         markdown = (
@@ -994,7 +1146,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n\n"
             "## 50%条件执行条件\n"
             "| 触发类型 | 必须满足 | 窗口 | 动作 |\n"
@@ -1018,7 +1170,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n\n"
             "## 50%条件执行条件\n"
             "| 触发类型 | 必须满足 | 窗口 | 动作 |\n"
@@ -1043,13 +1195,13 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertIn("front_execution_object_downgraded", {finding["code"] for finding in result["findings"]})
 
-    def test_audit_allows_two_layer_conditional_execution_on_zero_position_front(self):
+    def test_audit_flags_two_layer_conditional_execution_on_zero_position_front(self):
         markdown = (
             "# 2026-06-04 a股市场分析\n\n"
             "## 明日执行结论\n"
             "| 项目 | 结论 |\n"
             "|------|------|\n"
-            "| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |\n"
+            "| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |\n"
             "| 明日执行对象 | 豫能控股(001896) |\n"
             "| 不满足条件 | 不参与 |\n\n"
             "## 50%条件执行条件\n"
@@ -1065,7 +1217,9 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         result = audit_report_markdown(markdown)
 
-        self.assertNotIn("zero_position_decision_attribution_missing", {finding["code"] for finding in result["findings"]})
+        codes = {finding["code"] for finding in result["findings"]}
+        self.assertIn("zero_position_tomorrow_action_conflict", codes)
+        self.assertIn("premarket_fixed_decision_legacy_wording", codes)
 
     def test_audit_flags_missing_mainline_capacity_regime_table(self):
         bad = GOOD_MARKDOWN.replace(
@@ -1197,6 +1351,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         cases = (
             ("0%", "0%"),
             ("50%", "50%"),
+            ("满仓条件执行", "满仓或0%不参与"),
             ("100%", "100%"),
         )
         for label, max_position in cases:
@@ -1225,6 +1380,84 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         result = audit_report_markdown(bad)
 
         self.assertIn("position_attack_grade_exceeds_max_position", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_full_or_empty_account_fractional_surface(self):
+        bad = GOOD_MARKDOWN.replace("| 明日仓位 | 50%条件执行 |", "| 明日仓位 | 已决定满仓条件执行；盘中不满足取消，回到0%不参与 |")
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("full_or_empty_account_fractional_surface", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_market_snapshot_no_risk_conflict(self):
+        bad = GOOD_MARKDOWN + "\n### 附录：十四、市场快照\n- **核心特征**: 跌停12只\n- **风险点**: 暂无明确风险\n"
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("market_snapshot_risk_conflict", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_sector_fund_flow_visible_all_zero_table(self):
+        bad = GOOD_MARKDOWN + (
+            "\n### 资金流入TOP10\n"
+            "| 排名 | 板块 | 净流入 | 涨跌幅 |\n"
+            "|------|------|--------|--------|\n"
+            "| 1 | 半导体 | +0.00亿 | +0.00% |\n"
+            "| 2 | 通信设备 | +0.00亿 | +0.00% |\n"
+            "| 3 | 消费电子 | +0.00亿 | +0.00% |\n"
+            "\n### 资金流出结果\n"
+            "| 排名 | 板块 | 净流出 | 涨跌幅 |\n"
+            "|------|------|--------|--------|\n"
+            "| 1 | 化学制药 | 0.00亿 | +0.00% |\n"
+            "| 2 | 医疗服务 | 0.00亿 | +0.00% |\n"
+            "| 3 | 工业金属 | 0.00亿 | +0.00% |\n"
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("sector_fund_flow_visible_all_zero", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_html_timeline_missing_from_markdown(self):
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">太极实业</span><span class="timeline-asset-code">600667</span>'
+            '</tr>'
+            '<tr class="timeline-row timeline-row-tb">'
+            '<span class="timeline-asset-name">深科技</span><span class="timeline-asset-code">000021</span>'
+            '</tr>'
+            '<tr class="timeline-row timeline-row-tc"><span class="timeline-asset-empty">无</span></tr>'
+            '</div>'
+        )
+
+        result = audit_report_markdown(GOOD_MARKDOWN, companion_html=html)
+
+        self.assertIn("position_timeline_markdown_missing", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
+
+    def test_audit_flags_known_old_position_conflicting_with_unknown_holding(self):
+        markdown = (
+            "| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |\n"
+            "|------|------|------|------|------|------|\n"
+            "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |\n"
+            "| Tb明日目标 | 深科技(000021) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |\n"
+            "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |\n\n"
+            + GOOD_MARKDOWN
+            + "\n## 明日账户建议\n| 项目 | 结论 |\n|------|------|\n| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |\n"
+        )
+        html = (
+            '<div class="position-timeline-shell">'
+            '<tr class="timeline-row timeline-row-ta">'
+            '<span class="timeline-asset-name">太极实业</span><span class="timeline-asset-code">600667</span>'
+            '</tr>'
+            '</div>'
+        )
+
+        result = audit_report_markdown(markdown, companion_html=html)
+
+        self.assertIn("known_old_position_conflicts_with_unknown_holding", {finding["code"] for finding in result["findings"]})
         self.assertFalse(result["passed"])
 
     def test_audit_flags_legacy_signal_grade_label_on_front_page(self):
@@ -2663,7 +2896,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "|------|------|\n"
             "| 账户约束 | 约1w账户；无昨日持仓先看T0对象 |\n"
             "| 明日仓位 | 50%条件执行 |\n"
-            "| 明日动作 | 只看T0主对象，条件满足才新开一手 |\n"
+            "| 明日动作 | 已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |\n"
             "| T0主对象 | 华电能源(600726)：固定交易窗口条件 |\n"
             "| T0备用 | 暂无 |\n"
             "| 新增参与上限 | 1 |",
@@ -2673,6 +2906,25 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
 
         self.assertNotIn("t0_object_without_holding_context", {finding["code"] for finding in result["findings"]})
         self.assertTrue(result["passed"])
+
+    def test_audit_flags_positive_position_undecided_new_entry_wording(self):
+        bad = _replace_account_advice(
+            GOOD_MARKDOWN,
+            "## 明日账户建议\n"
+            "| 项目 | 结论 |\n"
+            "|------|------|\n"
+            "| 账户约束 | 约1w账户；无昨日持仓先看T0对象 |\n"
+            "| 明日仓位 | 50%条件执行 |\n"
+            "| 明日动作 | 只看T0主对象，条件满足才新开一手 |\n"
+            "| T0主对象 | 华电能源(600726)：固定交易窗口条件 |\n"
+            "| T0备用 | 暂无 |\n"
+            "| 新增参与上限 | 1 |",
+        )
+
+        result = audit_report_markdown(bad)
+
+        self.assertIn("positive_premarket_action_undecided_wording", {finding["code"] for finding in result["findings"]})
+        self.assertFalse(result["passed"])
 
     def test_audit_flags_unmarked_process_evidence_headings(self):
         bad = GOOD_MARKDOWN.replace(
@@ -2710,7 +2962,7 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
             "|------|------|\n"
             "| 持仓确认 | 已有旧仓华电辽能(600396) |\n"
             "| 明日仓位 | 50%条件执行 |\n"
-            "| 明日动作 | 先处理旧仓，买华天科技(002185)；固定交易窗口条件成立才参与，不满足回到0% |",
+            "| 明日动作 | 先处理旧仓，买华天科技(002185)；按昨晚预案检查执行资格；不满足回到0%不参与 |",
         )
 
         result = audit_report_markdown(bad)

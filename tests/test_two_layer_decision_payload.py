@@ -21,7 +21,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
                 "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
                 "capital_priority_decision": {
                     "capital_priority": "new_entry",
-                    "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                    "reason": "按昨晚预案检查执行资格；不满足回到0%不参与",
                 },
             },
             position_decision={"target_position_pct": 50},
@@ -32,7 +32,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["front_decision"]["position_plan"], "50%条件执行")
         self.assertEqual(payload["front_decision"]["position_pct"], 50)
-        self.assertIn("| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |", text)
+        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", text)
         self.assertIn("## 50%条件执行条件", text)
         for forbidden in ("A" + "档", "B" + "档", "C" + "档", "一" + "档", "二" + "档", "三" + "档", "50%" + " / 条件执行"):
             self.assertNotIn(forbidden, text)
@@ -201,8 +201,12 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["final_object"]["identity"], "无")
         self.assertEqual(payload["final_object"]["stock"], {})
-        self.assertIn("没有可用明日执行对象；和远气体(002971)保留为过程候选", payload["final_object"]["why_this_not_others"])
-        self.assertIn("没有可用明日执行对象；和远气体(002971)保留为过程候选", payload["opening_verdict"]["summary"])
+        self.assertIn("没有可用明日执行对象", payload["final_object"]["why_this_not_others"])
+        self.assertIn("过程候选只保留在后文复盘表", payload["final_object"]["why_this_not_others"])
+        self.assertIn("最终不新增参与", payload["final_object"]["why_this_not_others"])
+        self.assertIn("没有可用明日执行对象", payload["opening_verdict"]["summary"])
+        self.assertIn("过程候选只保留在后文复盘表", payload["opening_verdict"]["summary"])
+        self.assertIn("最终不新增参与", payload["opening_verdict"]["summary"])
         self.assertGreater(len(payload["candidate_pool_verdict"]["pool_source"]), 0)
         self.assertEqual(payload["front_decision"]["execution_object"], {})
 
@@ -339,7 +343,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
             },
             position_decision={
                 "target_position_pct": 50,
-                "final_action": "条件满足才50%条件执行；不满足回到0%",
+                "final_action": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
             },
             execution_stage_context={
                 "market_state_snapshot": {"market_state": "退潮"},
@@ -443,7 +447,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertIn("| 明日执行对象 | 无 |", text)
         self.assertNotIn("| 明日执行对象 | 豫能控股(001896) |", text)
         self.assertNotIn("| 最终对象 | 观察对象：豫能控股(001896) |", text)
-        self.assertNotIn("条件满足才50%条件执行", text)
+        self.assertNotIn("已决定50%条件执行", text)
         self.assertEqual(packet["canonical_role"], "观察对象")
         self.assertEqual(packet["canonical_target"], {})
         self.assertEqual(packet["final_action"]["position_pct"], 0)
@@ -528,10 +532,10 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
                 "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
                 "capital_priority_decision": {
                     "capital_priority": "new_entry",
-                    "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                    "reason": "按昨晚预案检查执行资格；不满足回到0%不参与",
                 },
             },
-            position_decision={"target_position_pct": 0, "final_action": "条件满足才50%条件执行；不满足回到0%"},
+            position_decision={"target_position_pct": 0, "final_action": "已决定50%条件执行；盘中不满足取消，回到0%不参与"},
             execution_stage_context={},
         )
 
@@ -539,7 +543,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["front_decision"]["position_plan"], "50%条件执行")
         self.assertEqual(payload["front_decision"]["position_pct"], 50)
-        self.assertIn("| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |", text)
+        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", text)
         self.assertNotIn("条件满足才0%不参与", text)
 
     def test_process_target_only_does_not_create_execution_object(self):
@@ -580,7 +584,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
                 "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
                 "capital_priority_decision": {
                     "capital_priority": "new_entry",
-                    "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                    "reason": "按昨晚预案检查执行资格；不满足回到0%不参与",
                 },
             },
             position_decision={"target_position_pct": 50},
@@ -741,7 +745,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
                 "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
                 "capital_priority_decision": {
                     "capital_priority": "new_entry",
-                    "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                    "reason": "按昨晚预案检查执行资格；不满足回到0%不参与",
                 },
             },
             position_decision={"target_position_pct": 50},

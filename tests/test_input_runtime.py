@@ -85,6 +85,24 @@ sys.modules.update(
 
 
 class InputRuntimeTest(unittest.TestCase):
+    def test_margin_pressure_retry_returns_first_available_payload(self):
+        runtime = importlib.import_module("input.runtime")
+        calls = []
+
+        def _fetcher(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {"available": False, "rows": []}
+            if len(calls) == 2:
+                raise TimeoutError("temporary timeout")
+            return {"available": True, "rows": [{"trade_date": "2026-06-25"}]}
+
+        result = runtime._fetch_margin_pressure_with_retry(_fetcher, "2026-06-26")
+
+        self.assertTrue(result["available"])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[0]["target_date"], "2026-06-26")
+
     def _new_stock_runtime_helpers(
         self,
         *,

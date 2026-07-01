@@ -30,6 +30,23 @@ class LlmWikiRouterTest(unittest.TestCase):
             },
         )
 
+    def test_builds_fact_tags_from_sector_grid_first_selection(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "market_structure_judgement": {
+                    "summary_text": "结构性行情用水池九宫格理解，先选板块，再看个股是不是边角标的",
+                    "index_profit_relation": "指数强不等于普涨",
+                    "fact_basis": ["资金灌入主线板块格子", "板块网格化明显"],
+                }
+            }
+        )
+
+        self.assertEqual(facts["market"]["index_trend"], "上涨")
+        self.assertEqual(facts["market"]["market_form"], "结构性行情")
+        self.assertEqual(facts["market"]["sector_grid"], "水池九宫格")
+        self.assertEqual(facts["market"]["selection_order"], "先选板块")
+        self.assertEqual(facts["market"]["corner_sample"], "边角标的")
+
     def test_builds_fact_tags_from_account_and_candidate_context(self):
         facts = build_llm_wiki_fact_tags(
             {
@@ -96,7 +113,7 @@ class LlmWikiRouterTest(unittest.TestCase):
                         "existing_position_target": {"name": "华电辽能", "code": "600396"},
                         "capital_priority_decision": {
                             "capital_priority": "new_entry_after_old_exit",
-                            "reason": "先处理旧仓，买工业富联；固定交易窗口条件成立才参与，不满足回到0%",
+                            "reason": "先处理旧仓，买工业富联；按昨晚预案检查执行资格；不满足回到0%不参与",
                         },
                     },
                 },
@@ -131,6 +148,49 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("只保留主线核心", first["impact"])
         self.assertEqual(first["report_slot"], "市场结构判断")
         self.assertEqual(first["confidence"], "verified")
+
+    def test_routes_sector_grid_first_selection_for_structural_market(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "market": {
+                    "market_form": "结构性行情",
+                    "sector_grid": "水池九宫格",
+                    "selection_order": "先选板块",
+                    "corner_sample": "边角标的",
+                },
+                "question": "这张图说的九宫格和我说的板块先行、轮动不到边角标的是不是一个意思",
+            },
+            scenario="review",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("market.sector-grid-first-selection", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "market.sector-grid-first-selection")
+        self.assertEqual(hit["prior"], "market-structure-prior")
+        self.assertEqual(hit["source_path"], "wiki/板块补充/板块中枢与主线延续.md")
+        self.assertIn("结构性行情", hit["triggered_by"])
+        self.assertIn("水池九宫格", hit["triggered_by"])
+        self.assertIn("先选板块", hit["triggered_by"])
+        self.assertIn("边角标的", hit["triggered_by"])
+        self.assertIn("资金灌入哪个板块格子", hit["impact"])
+        self.assertIn("边角标的不因轮动自动取得参与资格", hit["impact"])
+        self.assertEqual(hit["report_slot"], "市场结构判断")
+        self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_sector_grid_first_selection_from_water_pillar_terms(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "全市场水池里蓝色粗水柱和红色细水柱分别代表什么，为什么边角标的轮动不到",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "market.sector-grid-first-selection")
+        self.assertIn("全市场水池", hit["triggered_by"])
+        self.assertIn("蓝色粗水柱", hit["triggered_by"])
+        self.assertIn("红色细水柱", hit["triggered_by"])
+        self.assertIn("水柱", hit["triggered_by"])
+        self.assertIn("边角标的", hit["triggered_by"])
 
     def test_routes_account_prior_without_downgrading_market_identity(self):
         hits = route_llm_wiki_knowledge(
@@ -194,6 +254,40 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("卖旧仓看旧仓资格", hit["impact"])
         self.assertIn("买新仓看新仓资格", hit["impact"])
 
+    def test_routes_fomo_buyback_after_must_sell_day_to_discipline(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "昨天必卖后今天反包，我很后悔，空仓旧仓是不是应该0轴卖而不是买回",
+                "position": {"state": "旧仓"},
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "discipline.fomo-external-stimulus")
+        self.assertIn("必卖", hit["triggered_by"])
+        self.assertIn("反包", hit["triggered_by"])
+        self.assertIn("空仓", hit["triggered_by"])
+        self.assertIn("旧仓", hit["triggered_by"])
+        self.assertIn("0轴卖", hit["triggered_by"])
+        self.assertIn("反包先批改情绪反应", hit["impact"])
+        self.assertIn("旧仓退出流动性", hit["impact"])
+
+    def test_routes_ta_tb_tc_timeline_to_slot_timeline_knowledge(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "Ta+2 旧仓要先卖，明日标的无，没有Tb+0，没有Tc+0，空仓时间尽可能接近全天",
+                "position": {"state": "旧仓", "name": "太极实业"},
+            },
+            scenario="daily_report",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "discipline.tplus-slot-timeline")
+        self.assertIn("Ta+2", hit["triggered_by"])
+        self.assertIn("没有Tb", hit["triggered_by"])
+        self.assertIn("没有Tc", hit["triggered_by"])
+        self.assertIn("Ta 是旧仓", hit["impact"])
+        self.assertIn("没有目标就写没有 Tb+0", hit["impact"])
+
     def test_routes_daily_report_final_resolution_to_cull_weak_keep_strong(self):
         facts = build_llm_wiki_fact_tags(
             {
@@ -202,7 +296,7 @@ class LlmWikiRouterTest(unittest.TestCase):
                     "existing_position_target": {"name": "华电辽能", "code": "600396"},
                     "capital_priority_decision": {
                         "capital_priority": "new_entry_after_old_exit",
-                        "reason": "先处理旧仓，买工业富联；固定交易窗口条件成立才参与，不满足回到0%",
+                        "reason": "先处理旧仓，买工业富联；按昨晚预案检查执行资格；不满足回到0%不参与",
                     },
                 },
             }
@@ -222,7 +316,7 @@ class LlmWikiRouterTest(unittest.TestCase):
                     "new_entry_target": {"name": "工业富联", "code": "601138"},
                     "capital_priority_decision": {
                         "capital_priority": "new_entry",
-                        "reason": "固定交易窗口条件成立才参与，不满足回到0%",
+                        "reason": "按昨晚预案检查执行资格；不满足回到0%不参与",
                     },
                 },
             }
@@ -331,6 +425,28 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("同一失效线", hit["impact"])
         self.assertEqual(hit["report_slot"], "价格行为判断")
         self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_fake_bottom_attack_shape_to_brooks_price_action_trend_framework(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "假底、进攻雏形、再等等、重心上移、缩量横盘、前高附近、利空不深跌、利好不大涨、阳包阴和突破阳线怎么看",
+            },
+            scenario="intraday_question",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("price-action.brooks-trend-framework", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "price-action.brooks-trend-framework")
+        self.assertIn("假底", hit["triggered_by"])
+        self.assertIn("进攻雏形", hit["triggered_by"])
+        self.assertIn("再等等", hit["triggered_by"])
+        self.assertIn("重心上移", hit["triggered_by"])
+        self.assertIn("缩量横盘", hit["triggered_by"])
+        self.assertIn("前高", hit["triggered_by"])
+        self.assertIn("利空不深跌", hit["triggered_by"])
+        self.assertIn("利好不大涨", hit["triggered_by"])
+        self.assertIn("阳包阴", hit["triggered_by"])
+        self.assertIn("突破阳线", hit["triggered_by"])
 
     def test_routes_entry_quality_three_conditions_for_chasing_rise(self):
         hits = route_llm_wiki_knowledge(

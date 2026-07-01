@@ -32,7 +32,8 @@ class RuntimeContractsTest(unittest.TestCase):
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "主线弱转强执行预备态")
         self.assertIn("固定交易窗口", result["permission_reason"])
-        self.assertIn("50%条件执行", result["permission_reason"])
+        self.assertIn("结果进入复盘和下一份日报判断", result["permission_reason"])
+        self.assertNotIn("50%条件执行", result["permission_reason"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), result["permission_reason"])
 
     def test_trade_permission_maps_20cm_watch_contract_to_50_attack_preview(self):
@@ -48,7 +49,8 @@ class RuntimeContractsTest(unittest.TestCase):
 
         self.assertFalse(result["can_execute"])
         self.assertEqual(result["permission_label"], "创业板20cm预启动观察权")
-        self.assertIn("50%条件执行", result["permission_reason"])
+        self.assertIn("结果进入复盘和下一份日报判断", result["permission_reason"])
+        self.assertNotIn("50%条件执行", result["permission_reason"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), result["permission_reason"])
 
     def test_trade_permission_grants_conviction_execute_on_resilient_abnormal(self):

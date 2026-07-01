@@ -251,6 +251,52 @@ class MarketActivityRequestTest(unittest.TestCase):
             )
         )
 
+    def test_collect_market_activity_pool_request_bundle_uses_postgres_breadth_when_stats_are_zero(self):
+        timer = _TimerStub()
+        emitted = []
+        _FakeDatabaseService.market_breadth = {
+            "up_count": 2469,
+            "down_count": 2933,
+            "flat_count": 108,
+            "zt_count": 196,
+            "dt_count": 83,
+            "stock_count": 5510,
+            "source": "storage.stock_daily_quotes_recent",
+        }
+
+        result = collect_market_activity_pool_request_bundle(
+            "2026-06-29",
+            get_limit_up_pool=lambda date_str: (
+                _FrameStub([{"代码": "000001", "名称": "涨停一号", "所属行业": "半导体", "涨停统计": "首板"}]),
+                {"000001"},
+            ),
+            get_limit_down_pool=lambda date_str: (
+                _FrameStub([{"代码": "000002", "名称": "跌停一号", "所属行业": "白酒Ⅱ"}]),
+                {"000002"},
+            ),
+            fetch_market_activity_df=lambda: _MarketActivityFrameStub(
+                [
+                    {"item": "上涨", "value": 0},
+                    {"item": "下跌", "value": 0},
+                ]
+            ),
+            request_registry={"database_service_cls": _FakeDatabaseService},
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertTrue(result["data_status"]["大盘涨跌统计"])
+        self.assertEqual(result["results"]["market_stats"]["up_count"], 2469)
+        self.assertEqual(result["results"]["market_stats"]["down_count"], 2933)
+        self.assertTrue(
+            any(
+                log["step"] == "request.market_stats"
+                and log["status"] == "success"
+                and log["details"].get("provider") == "storage.stock_daily_quotes_recent"
+                for log in result["module_logs"]
+            )
+        )
+
     def test_historical_pool_request_reads_postgres_breadth_before_current_market_activity(self):
         timer = _TimerStub()
         emitted = []
@@ -852,6 +898,8 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual(legacy_calls, [])
         self.assertEqual(result["results"]["hot_plates"][0]["data_source"], "tushare.ths_hot")
         self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["data_source"], "tushare.moneyflow_ind_ths")
+        self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["zljlr"], 12.5)
+        self.assertEqual(result["results"]["sector_fund_flow"]["outflow"][0]["zljlr"], -8.0)
         self.assertEqual(result["results"]["sector_fund_flow"]["provider"], "tushare.moneyflow_ind_ths")
         self.assertFalse(result["results"]["sector_fund_flow"]["fallback_used"])
         self.assertEqual(result["results"]["concept_fund_flow"]["rows"][0]["data_source"], "tushare.ths_member+tushare.moneyflow")
@@ -1092,6 +1140,10 @@ class MarketActivityRequestTest(unittest.TestCase):
         self.assertEqual([item["name"] for item in result["results"]["sector_change_up"][:2]], ["白酒", "电力"])
         self.assertEqual([item["name"] for item in result["results"]["sector_change_down"][:2]], ["贵金属", "工业金属"])
         self.assertEqual(result["results"]["sector_change_up"][0]["data_source"], "tushare.moneyflow_ind_ths.derived_change")
+        self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["zljlr"], 22.0)
+        self.assertEqual(result["results"]["sector_fund_flow"]["inflow"][0]["zdf"], 0.95)
+        self.assertEqual(result["results"]["sector_fund_flow"]["outflow"][0]["zljlr"], -59.0)
+        self.assertEqual(result["results"]["sector_fund_flow"]["outflow"][0]["zdf"], -3.68)
         self.assertTrue(result["data_status"]["板块涨幅排行"])
         self.assertTrue(result["data_status"]["板块跌幅排行"])
         self.assertTrue(result["step_status"]["板块涨跌幅排行获取"])

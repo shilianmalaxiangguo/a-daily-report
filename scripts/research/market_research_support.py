@@ -1117,10 +1117,10 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
                 "code": "bridge_prep",
                 "label": "🟡 条件执行预备态",
                 "reason": pulse_action_reason or state_machine_snapshot.get("transition_reason") or f"当前处于{energy_state}，但主攻线优势已经开始拉开。",
-                "action": "先不开新仓，只为最强对象保留条件执行预备态；若次日09:50-10:10窗口满足条件，再升级唯一执行候选",
+                "action": "先不开新仓，只为最强对象保留观察预备态；若次日09:50-10:10窗口满足条件，结果进入复盘和下一份日报判断",
             }
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
-            action_text = "只看主线核心是否在固定交易窗口内满足条件：强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口；条件成立后才评估50%条件执行，否则按0%不参与"
+            action_text = "只看主线核心是否在固定交易窗口内满足条件：强核心看09:30-09:35竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口；结果进入复盘和下一份日报判断，否则按0%不参与"
             if special_probe_action:
                 action_text = f"{special_probe_action}；{action_text}"
             return {

@@ -49,7 +49,7 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
 
     best_stock = pk_candidates[0]
     signal = best_stock.get("signal")
-    lines = [f"**✅ 明天唯一能买的那只**: {best_stock.get('name')}({best_stock.get('code')})"]
+    lines = [f"**✅ 明日执行对象**: {best_stock.get('name')}({best_stock.get('code')})"]
     if signal:
         lines.append(f"> **买点**: {signal.signal_type}")
         lines.append(
@@ -60,7 +60,7 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
         lines.append(f"> **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
         lines.append("> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口分层参与，买后用失效价和单笔-5%底线处理风险")
     else:
-        lines.append("> **真到盘中怎么做**: 明日只在固定交易窗口内条件成立后执行，买后用失效价和单笔-5%底线处理风险")
+        lines.append("> **真到盘中怎么做**: 明日只按昨晚预案检查执行资格，买后用失效价和单笔-5%底线处理风险")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 

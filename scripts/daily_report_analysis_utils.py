@@ -298,8 +298,8 @@ def merge_position_gate(position_level, exit_analysis):
             "should_reduce": False,
             "allow_attack_50_ready": True,
             "base_position_cap_pct": 0,
-            "final_action": "0%不参与，只看主线核心；09:50-10:10窗口内条件成立后才评估50%条件执行，否则不参与",
-            "final_participation": "这不是随手上车的位置，只能观察、持有强者，或等固定交易窗口内条件成立后的条件执行",
+            "final_action": "0%不参与，只看主线核心；09:50-10:10窗口内条件成立也只进入复盘和下一份日报判断，否则不参与",
+            "final_participation": "这不是随手上车的位置，只能观察、持有强者；观察结果进入复盘和下一份日报判断",
             "gate_reason": "市场环境还没完全满足进攻条件，先让子弹飞一会儿",
         }
     if light == "黄灯":

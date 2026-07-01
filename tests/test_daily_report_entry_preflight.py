@@ -342,6 +342,102 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
 
         save_snapshot_mock.assert_not_called()
 
+    def test_main_records_optional_opik_observer_for_regular_entry(self):
+        import daily_report_entry_demo
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+                self.finish_payload = None
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+            def finish(self, **kwargs):
+                self.finish_payload = kwargs
+
+        observer = StubObserver()
+        data = _with_html_required_facts({
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "成交额排名": True,
+                "中证1000": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "total_turnover": 1000,
+            "wind_a_alternative": {"price": 5000, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+        })
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-22", "--no-report"]), \
+             patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
+             patch.object(
+                 daily_report_entry_demo,
+                 "import_daily_report_data_to_postgres",
+                 return_value={"source": "unit", "field_count": 3},
+             ), \
+             patch.object(daily_report_entry_demo, "build_report_run_observer", return_value=observer):
+            result = daily_report_entry_demo.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(
+            [name for name, _ in observer.steps],
+            ["load_daily_data", "report_preflight", "postgres_sync"],
+        )
+        self.assertEqual(observer.finish_payload["status"], "success")
+        self.assertTrue(observer.finish_payload["output_payload"]["no_report"])
+        self.assertEqual(
+            observer.finish_payload["output_payload"]["report_quality_score"]["schema_version"],
+            "report_quality_score.v1",
+        )
+        self.assertTrue(
+            observer.finish_payload["output_payload"]["report_quality_score"]["categories"]["data_readiness"]["passed"]
+        )
+        self.assertEqual(
+            observer.finish_payload["output_payload"]["report_quality_ledger"]["status"],
+            "written",
+        )
+        self.assertEqual(
+            observer.finish_payload["output_payload"]["report_quality_score"]["local_ledger"]["status"],
+            "written",
+        )
+
+    def test_main_finishes_optional_opik_observer_on_error(self):
+        import daily_report_entry_demo
+        from daily_report_render import ReportCriticalDataMissingError
+
+        class StubObserver:
+            def __init__(self):
+                self.steps = []
+                self.finish_payload = None
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+            def finish(self, **kwargs):
+                self.finish_payload = kwargs
+
+        observer = StubObserver()
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-05-22", "--no-report"]), \
+             patch.object(
+                 daily_report_entry_demo,
+                 "get_daily_data",
+                 side_effect=ReportCriticalDataMissingError("关键数据不完整，停止生成"),
+             ), \
+             patch.object(daily_report_entry_demo, "build_report_run_observer", return_value=observer):
+            with self.assertRaises(ReportCriticalDataMissingError):
+                daily_report_entry_demo.main()
+
+        self.assertEqual([name for name, _ in observer.steps], ["daily_report_entry"])
+        self.assertEqual(observer.finish_payload["status"], "error")
+        self.assertIn("关键数据不完整，停止生成", observer.finish_payload["output_payload"]["error"])
+        self.assertEqual(observer.finish_payload["output_payload"]["report_quality_score"]["status"], "error")
+        self.assertEqual(observer.finish_payload["output_payload"]["report_quality_ledger"]["status"], "written")
+
     def test_main_audits_full_report_with_chanlun_html_after_generation(self):
         import daily_report_entry_demo
 
@@ -935,6 +1031,54 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertTrue(data["data_status"]["中证500"])
         self.assertTrue(data["step_status"]["中证500获取"])
         self.assertTrue(data["postgres_only"])
+
+    def test_postgres_only_load_refreshes_stale_new_high_feedback(self):
+        import daily_report_entry_demo
+
+        class FakeService:
+            def load_daily_report_snapshot(self, target_date):
+                return {
+                    "source": f"postgresql://daily-report-facts/{target_date}",
+                    "field_count": 10,
+                    "target_field_count": 10,
+                    "data": {
+                        "new_high_feedback": {
+                            "available": True,
+                            "new_high_count": 1,
+                            "all_a_share_pct": 0.02,
+                            "leading_sectors": "半导体",
+                            "sector_distribution": [{"sector": "半导体", "new_high_count": 1}],
+                            "top_stocks": [
+                                {
+                                    "code": "300706",
+                                    "name": "阿石创",
+                                    "sector": "半导体",
+                                    "amount_yi": 0,
+                                }
+                            ],
+                        }
+                    },
+                }
+
+        refreshed = {
+            "available": True,
+            "source": "akshare.stock_rank_cxg_ths.one_year_high",
+            "new_high_count": 1,
+            "all_a_share_pct": 0.02,
+            "leading_sectors": "半导体",
+            "sector_distribution": [{"sector": "半导体", "new_high_count": 1, "amount_yi": 36.8}],
+            "top_stocks": [{"code": "300706", "name": "阿石创", "sector": "半导体", "amount_yi": 36.8}],
+        }
+
+        with patch.object(daily_report_entry_demo, "_postgres_daily_report_service", return_value=FakeService()), \
+             patch.object(daily_report_entry_demo, "get_new_high_feedback_from_tushare_first", return_value=refreshed) as refresh_mock:
+            data = daily_report_entry_demo.load_daily_report_data_from_postgres("2026-06-29")
+
+        refresh_mock.assert_called_once_with("2026-06-29")
+        self.assertEqual(data["new_high_feedback"]["leading_sectors"], "半导体")
+        self.assertEqual(data["new_high_feedback"]["top_stocks"][0]["sector"], "半导体")
+        self.assertGreater(data["new_high_feedback"]["top_stocks"][0]["amount_yi"], 0)
+        self.assertEqual(data["module_logs"][-1]["step"], "postgres.refresh_new_high_feedback")
 
     def test_postgres_only_load_restores_sector_first_runtime_packets_from_same_date_facts(self):
         import daily_report_entry_demo

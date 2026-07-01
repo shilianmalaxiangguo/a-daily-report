@@ -2740,6 +2740,80 @@ class PostgresDailyFactDb:
             conn.commit()
         return len(normalized_rows)
 
+    def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+        trade_date = _date_or_none(trade_date)
+        if not trade_date:
+            return []
+        codes = [
+            _text(code).split(".", 1)[0].zfill(6)
+            for code in stock_codes or []
+            if _text(code)
+        ]
+        columns = (
+            "trade_date",
+            "ts_code",
+            "stock_code",
+            "market",
+            "name",
+            "open",
+            "high",
+            "low",
+            "close",
+            "pct_chg",
+            "vol",
+            "amount_yi",
+            "source_run_id",
+        )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                if codes:
+                    cursor.execute(
+                        """
+                        SELECT trade_date, ts_code, stock_code, market, name, open, high, low,
+                               close, pct_chg, vol, amount_yi, source_run_id
+                        FROM stock_daily_quotes_recent
+                        WHERE trade_date = %s AND stock_code = ANY(%s)
+                        ORDER BY stock_code
+                        """,
+                        (trade_date, codes),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT trade_date, ts_code, stock_code, market, name, open, high, low,
+                               close, pct_chg, vol, amount_yi, source_run_id
+                        FROM stock_daily_quotes_recent
+                        WHERE trade_date = %s
+                        ORDER BY stock_code
+                        """,
+                        (trade_date,),
+                    )
+                rows = cursor.fetchall()
+        result = []
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            result.append(
+                {
+                    "trade_date": _text(item.get("trade_date")),
+                    "ts_code": _text(item.get("ts_code")),
+                    "stock_code": _text(item.get("stock_code")),
+                    "code": _text(item.get("stock_code")),
+                    "market": _text(item.get("market")),
+                    "name": _text(item.get("name")),
+                    "open": _safe_float(item.get("open")),
+                    "high": _safe_float(item.get("high")),
+                    "low": _safe_float(item.get("low")),
+                    "close": _safe_float(item.get("close")),
+                    "pct_chg": _safe_float(item.get("pct_chg")),
+                    "vol": _safe_float(item.get("vol")),
+                    "amount_yi": _safe_float(item.get("amount_yi")),
+                    "source_run_id": _safe_int(item.get("source_run_id")),
+                    "data_source": "storage.stock_daily_quotes_recent",
+                    "source": "storage.stock_daily_quotes_recent",
+                }
+            )
+        return result
+
     def _normalize_monthly_account_ledger(self, row):
         row = row or {}
         trade_date = _date_or_none(row.get("trade_date") or row.get("date"))
@@ -5817,7 +5891,10 @@ class PostgresDailyFactDb:
                     "stock_code": _text(row.get("stock_code") or row.get("code")),
                     "ts_code": _text(row.get("ts_code")),
                     "name": _text(row.get("name") or row.get("stock_name")),
+                    "sector": _text(row.get("sector") or row.get("industry") or row.get("所属行业") or row.get("所属板块")),
+                    "industry": _text(row.get("industry") or row.get("sector") or row.get("所属行业") or row.get("所属板块")),
                     "amount_yi": _safe_float(row.get("amount_yi", row.get("turnover"))),
+                    "turnover": _safe_float(row.get("turnover", row.get("amount_yi"))),
                     "pct_chg": _safe_float(row.get("pct_chg", row.get("change_pct"))),
                     "trade_date": _text(row.get("trade_date")) or _text(trade_date),
                 }
@@ -6399,6 +6476,9 @@ class PostgresDailyFactDb:
 
     def query_margin_pressure_series(self, end_date, *, window_days=25):
         value = self._load_daily_report_fact_value(end_date, "margin_pressure")
+        if isinstance(value, dict):
+            return dict(value)
+        value = self._load_latest_daily_report_fact_value_before_or_on(end_date, "margin_pressure")
         if isinstance(value, dict):
             return dict(value)
         return {"source": "postgres.daily_report_facts.margin_pressure", "rows": []}

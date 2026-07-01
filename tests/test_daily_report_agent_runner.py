@@ -95,6 +95,28 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             self.assertEqual(result["error"]["message"], "回放数据不存在，停止生成：2026-05-24")
             self._assert_error_run_artifacts(root, expected_code="replay_data_missing")
 
+    def test_runner_treats_none_replay_data_as_missing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            def build_outputs(data, target_date, **kwargs):
+                raise AssertionError("report rendering should not run without replay data")
+
+            runner = DailyReportAgentRunner(
+                root_dir=root,
+                dependencies=DailyReportAgentDependencies(
+                    load_data=lambda request: None,
+                    build_report_outputs=build_outputs,
+                    now=lambda: datetime(2026, 5, 24, 15, 1, 2),
+                ),
+            )
+
+            result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+
+            self.assertEqual(result["status"], "error")
+            self.assertEqual(result["error"]["message"], "回放数据不存在，停止生成：2026-05-24")
+            self._assert_error_run_artifacts(root, expected_code="replay_data_missing")
+
     def test_runner_writes_run_artifacts_and_pending_participation_review(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -184,6 +206,15 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             self.assertEqual(payload["status"], "success")
             self.assertTrue(payload["audit"]["passed"])
             self.assertEqual(payload["decision_ledger"]["case_count"], 1)
+            quality_ledger = payload["report_quality_score"]["local_ledger"]
+            self.assertEqual(quality_ledger["status"], "written")
+            quality_path = Path(quality_ledger["score_path"])
+            quality_index_path = Path(quality_ledger["index_path"])
+            self.assertTrue(quality_path.exists())
+            self.assertTrue(quality_index_path.exists())
+            self.assertEqual(quality_path.name, "2026-05-24_replay.json")
+            quality_snapshot = json.loads(quality_path.read_text(encoding="utf-8"))
+            self.assertEqual(quality_snapshot["run_id"], "daily-report.agent.2026-05-24")
 
             audit_payload = json.loads((run_dir / "audit.json").read_text(encoding="utf-8"))
             self.assertTrue(audit_payload["passed"])
@@ -326,6 +357,72 @@ class DailyReportAgentRunnerTest(unittest.TestCase):
             runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
 
             self._assert_error_run_artifacts(root)
+
+    def test_runner_records_optional_opik_steps(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            class StubObserver:
+                def __init__(self):
+                    self.steps = []
+                    self.finish_payload = None
+
+                def record_step(self, name, **kwargs):
+                    self.steps.append((name, kwargs))
+
+                def finish(self, **kwargs):
+                    self.finish_payload = kwargs
+
+            observer = StubObserver()
+
+            def save_outputs(outputs, target_date, mode, output_dir=None):
+                output_root = Path(output_dir)
+                output_root.mkdir(parents=True, exist_ok=True)
+                report_path = output_root / "full.md"
+                report_path.write_text(outputs["full"], encoding="utf-8")
+                return {"full": str(report_path)}
+
+            runner = DailyReportAgentRunner(
+                root_dir=root,
+                dependencies=DailyReportAgentDependencies(
+                    load_data=lambda request: {"sample": True},
+                    build_report_outputs=lambda data, target_date, **kwargs: {"full": "# report"},
+                    save_report_outputs=save_outputs,
+                    write_decision_ledger_from_markdown=lambda report_path, **kwargs: {"case_count": 0},
+                    audit_run=lambda **kwargs: {
+                        "target_date": kwargs["target_date"],
+                        "passed": True,
+                        "usable": True,
+                        "findings": [],
+                        "finding_count": 0,
+                    },
+                    build_observer=lambda **kwargs: observer,
+                    now=lambda: datetime(2026, 5, 24, 15, 1, 2),
+                ),
+            )
+
+            with patch("agent_runner.daily_report_agent_runner.assert_report_required_facts_complete", return_value={}):
+                result = runner.run(DailyReportAgentRequest(target_date="2026-05-24", mode="replay"))
+
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["report_quality_score"]["schema_version"], "report_quality_score.v1")
+            self.assertEqual(result["report_quality_score"]["status"], "pass")
+            self.assertEqual(
+                [name for name, _ in observer.steps],
+                [
+                    "load_data",
+                    "build_report_outputs",
+                    "preflight_check",
+                    "save_report_outputs",
+                    "decision_ledger",
+                    "audit_run",
+                ],
+            )
+            self.assertEqual(observer.finish_payload["status"], "success")
+            self.assertEqual(
+                observer.finish_payload["output_payload"]["report_quality_score"]["schema_version"],
+                "report_quality_score.v1",
+            )
 
     def _assert_error_run_artifacts(self, root, expected_code="runner_error"):
         run_dir = root / "reports" / "runs" / "2026-05-24"

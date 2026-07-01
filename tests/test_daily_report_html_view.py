@@ -1773,7 +1773,7 @@ class DailyReportHtmlViewTest(unittest.TestCase):
             snapshot={
                 "market_research_snapshot": {
                     "front_page_final_gate": {
-                        "final_action": "50%条件执行，条件满足才50%条件执行",
+                        "final_action": "50%条件执行，已决定50%条件执行",
                     },
                     "position_decision": {
                         "target_position_pct": 50,

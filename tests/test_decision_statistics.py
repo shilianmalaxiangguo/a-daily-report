@@ -927,6 +927,52 @@ class DecisionStatisticsTest(unittest.TestCase):
         self.assertIn("**上一交易日未完成结算**", rendered)
         self.assertIn("| 市场状态判断 | 待补事实 | market_state_review |", rendered)
 
+    def test_recent_settled_performance_table_only_renders_resolved_items(self):
+        index = {
+            "available_trade_dates": ["2026-05-29", "2026-06-01"],
+            "by_stock_code": {
+                "002806": [
+                    {
+                        "stock_code": "002806",
+                        "stock_name": "华锋股份",
+                        "mentions": [
+                            {
+                                "mention_trade_date": "2026-05-29",
+                                "source_section": "极度看好名单",
+                                "participation_review": {
+                                    "status": "预演作废",
+                                    "reason": "作废条件出现，原参与方案不再成立。",
+                                    "fact_inputs": {"cancellation_triggered": True},
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+
+        panel = build_daily_judgment_review_panel(
+            index,
+            "2026-06-01",
+            current_context={"market_state": "混沌", "mainline": "无确认主线"},
+            recent_days=5,
+        )
+        rendered = "\n".join(render_daily_judgment_review_panel_lines(panel))
+        recent_block = rendered.split("**结算上一交易日：2026-05-29**", 1)[0]
+
+        self.assertNotIn("待补事实", recent_block)
+        self.assertNotIn("市场状态判断", recent_block)
+        self.assertNotIn("主线判断", recent_block)
+        self.assertNotIn("核心候选判断", recent_block)
+        self.assertIn(
+            "| 参与预演判断 | 0.00% | 错误 | 预演路径按计划展开 | 预演作废 | 作废条件出现，原参与方案不再成立。 |",
+            recent_block,
+        )
+        self.assertIn(
+            "| 取消条件判断 | 100.00% | 正确 | 取消条件出现时回到0%不参与 | 预演作废 | 作废条件出现，原参与方案不再成立。 |",
+            recent_block,
+        )
+
     def test_previous_day_mixed_settlement_keeps_missing_part_separate(self):
         index = {
             "available_trade_dates": ["2026-05-29", "2026-06-01"],

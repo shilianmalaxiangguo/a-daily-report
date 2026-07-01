@@ -30,6 +30,9 @@ class CalendarEventsRequestTest(unittest.TestCase):
         )
 
         self.assertEqual(result["results"]["calendar_events"][0]["date"], "2026-04-22")
+        self.assertEqual(result["results"]["calendar_events"][0]["query_date"], "2026-04-22")
+        self.assertEqual(result["results"]["calendar_events"][0]["source_date"], "2026-04-22")
+        self.assertEqual(result["results"]["calendar_events"][0]["calendar_scope"], "target_date")
         self.assertTrue(result["data_status"]["预期日历"])
         self.assertTrue(result["step_status"]["预期日历获取"])
         self.assertEqual(timer.records[0], ("预期日历获取", 10))
@@ -56,7 +59,44 @@ class CalendarEventsRequestTest(unittest.TestCase):
         self.assertEqual(calls, [{"target_date": "2026-05-18"}, {}])
         self.assertTrue(result["data_status"]["预期日历"])
         self.assertTrue(result["step_status"]["预期日历获取"])
-        self.assertEqual(result["results"]["calendar_events"], [{"title": "政策发布"}])
+        self.assertEqual(result["results"]["calendar_events"][0]["title"], "政策发布")
+        self.assertEqual(result["results"]["calendar_events"][0]["query_date"], "2026-05-18")
+        self.assertEqual(result["results"]["calendar_events"][0]["calendar_scope"], "legacy_unfiltered")
+
+    def test_collect_calendar_events_request_bundle_marks_window_when_target_day_empty(self):
+        timer = _TimerStub()
+        emitted = []
+        calls = []
+
+        def _fetch_calendar_events(target_date=None):
+            calls.append(target_date)
+            if target_date:
+                return []
+            return [{"title": "机器人大会", "date": "2026-06-27"}]
+
+        result = collect_calendar_events_request_bundle(
+            "2026-06-26",
+            fetch_calendar_events=_fetch_calendar_events,
+            timer=timer,
+            emit=emitted.append,
+        )
+
+        self.assertEqual(calls, ["2026-06-26", None])
+        self.assertTrue(result["data_status"]["预期日历"])
+        self.assertTrue(result["step_status"]["预期日历获取"])
+        event = result["results"]["calendar_events"][0]
+        self.assertEqual(event["date"], "2026-06-27")
+        self.assertEqual(event["query_date"], "2026-06-26")
+        self.assertEqual(event["source_date"], "2026-06-27")
+        self.assertEqual(event["calendar_scope"], "upcoming_window")
+        self.assertEqual(
+            result["module_logs"][0]["details"]["calendar_scope"],
+            "upcoming_window",
+        )
+        self.assertEqual(
+            result["module_logs"][0]["details"]["source_dates"],
+            ["2026-06-27"],
+        )
 
 
 if __name__ == "__main__":

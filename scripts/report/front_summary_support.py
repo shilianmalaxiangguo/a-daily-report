@@ -452,7 +452,7 @@ def _build_front_follow_action_text_legacy_body(
 
     if watch_anchor and watch_source == "gem_breathing_20cm":
         note_text = str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
-        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；命中09:50-10:10窗口内满足条件后才评估50%条件执行"
+        text = "不开新仓，只观察创业板20cm预启动是否走成右侧确认；命中09:50-10:10窗口也只进入复盘和下一份日报判断"
         if note_text:
             text = f"{text}；{note_text}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -466,8 +466,8 @@ def _build_front_follow_action_text_legacy_body(
         if execute_anchor_window_text:
             return execute_anchor_window_text
         if probe_state == "probe_crossline_upgrade_ready":
-            return f"跨线对象已先走势符合强势标准；只在固定交易窗口内条件成立后评估50%条件执行，{trigger_text}后才动手，不满足转为0%不参与"
-        return f"只允许一只进入50%条件执行；{trigger_text}后才动手，不满足转为0%不参与"
+            return f"跨线对象已先走势符合强势标准；已决定50%条件执行，{trigger_text}后只检查执行资格，不满足转为0%不参与"
+        return f"只允许一只进入50%条件执行；{trigger_text}后只检查执行资格，不满足转为0%不参与"
     if execution_bias == "avoid":
         text = "0%，先不跟随，继续观察，等下一轮真正的新启动"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -481,13 +481,13 @@ def _build_front_follow_action_text_legacy_body(
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if watch_anchor and "跨线异常" in watch_anchor_type:
         if final_gate.get("can_new_entry"):
-            text = "不开仓，先看特殊标的有没有深跌/抗跌，再决定这轮调整是继续收还是重新攻；只有它走成明天唯一能买的那只才考虑买入"
+            text = "不开仓，先看特殊标的有没有深跌/抗跌；结果进入复盘和下一份日报判断，不在盘中升级买入"
             return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
         text = "不开新仓，只观察特殊标的有没有深跌/抗跌，再决定这轮调整何时结束"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if watch_anchor and "异常" in watch_anchor_type:
         if final_gate.get("can_new_entry"):
-            return "不开仓，先看特殊标的有没有深跌/抗跌，再决定这轮调整是继续收还是重新攻；只有它走成明天唯一能买的那只才考虑买入"
+            return "不开仓，先看特殊标的有没有深跌/抗跌；结果进入复盘和下一份日报判断，不在盘中升级买入"
         return "不开新仓，只观察特殊标的有没有深跌/抗跌，再决定这轮调整何时结束"
     if execution_bias == "watch_only" and final_gate.get("can_new_entry"):
         text = f"0%，主线脉冲已进入{pulse_stage or '钝化'}段，只观察不加仓"
@@ -501,10 +501,10 @@ def _build_front_follow_action_text_legacy_body(
 
     if final_gate.get("can_new_entry"):
         if focus_group or keep_group:
-            return "不开仓，先缩小范围，等市场自己选出明天唯一能买的那只"
+            return "不开仓，先缩小范围，结果进入复盘和下一份日报判断"
         if delete_group:
             return "不开仓，先回避走弱对象，等新的强票走出来"
-        return "不开仓，继续观察，等市场自己选出明天唯一能买的那只"
+        return "不开仓，继续观察，结果进入复盘和下一份日报判断"
 
     if focus_group:
         return f"{guard_label}不开新仓，只盯最强那几只，先不抢跑"
@@ -587,8 +587,8 @@ def _build_bridge_prep_context_legacy_body(
         and follow_state == "跌不下去"
         and "主线" in watch_anchor_type
     )
-    upgrade_text = f"若次日09:50-10:10站上{confirm_price:.2f}且不破{guard_price:.2f}，才升级为唯一执行候选"
-    summary_prefix = "0%不参与中优先保留一只固定交易窗口执行候选：" if priority_keep else "0%不参与中保留一只固定交易窗口执行候选："
+    upgrade_text = f"若次日09:50-10:10站上{confirm_price:.2f}且不破{guard_price:.2f}，只记录承接，结果进入复盘和下一份日报判断"
+    summary_prefix = "0%不参与中优先保留一只固定交易窗口观察对象：" if priority_keep else "0%不参与中保留一只固定交易窗口观察对象："
     return {
         "active": True,
         "label": "条件执行预备态",
@@ -660,22 +660,22 @@ def _build_front_structure_layer_text_legacy_body(
     if watch_anchor and watch_source == "gem_breathing_20cm":
         note_text = str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
         if 0 < target_position_pct < 50:
-            text = f"创业板20cm预启动进入50%条件执行；{trigger_text}后才动手，不满足继续0%不参与"
+            text = f"创业板20cm预启动已决定50%条件执行；{trigger_text}后只检查执行资格，不满足继续0%不参与"
         else:
-            text = "创业板20cm预启动只先进观察池；先看右侧确认和09:50-10:10窗口，再决定是否进入50%条件执行"
+            text = "创业板20cm预启动只先进观察池；先看右侧确认和09:50-10:10窗口，确认结果进入复盘和下一份日报判断"
         if note_text:
             text = f"{text}；{note_text}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
 
     if target_position_pct == 50 and best_stock:
-        text = f"市场已允许出手，而且已经缩到一只可买股；只做50%条件执行，{trigger_text}后才动手"
+        text = f"市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，{trigger_text}后只检查执行资格"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if 0 < target_position_pct < 50:
         if execute_anchor_window_text:
-            return "50%条件执行；执行候选观察对象已进入二次突破升级阶段，仍需固定交易窗口内条件确认"
+            return "50%条件执行；观察对象已进入二次突破确认阶段，T+1只检查昨晚预案的执行资格"
         if probe_state == "probe_crossline_upgrade_ready":
-            return f"50%条件执行；跨线对象已先走势符合强势标准，{trigger_text}后才动手，不直接当成主攻线切换"
-        return f"50%条件执行；{trigger_text}后才动手，不满足继续0%不参与"
+            return f"50%条件执行；跨线对象已先走势符合强势标准，{trigger_text}后只检查执行资格，不直接当成主攻线切换"
+        return f"50%条件执行；{trigger_text}后只检查执行资格，不满足继续0%不参与"
     if execution_bias == "avoid":
         text = "0%，先不跟随，继续观察，等下一轮真正的新启动"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text

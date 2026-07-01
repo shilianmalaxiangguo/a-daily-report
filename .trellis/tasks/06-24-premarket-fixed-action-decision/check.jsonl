@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/daily-report-decision-loop.md","reason":"Records the durable report contract: tomorrow actions are decided in the evening report; T+1 only executes, cancels, reduces risk, or records review observation."}
+{"file":"wiki/交易思想/交易错题本.md","reason":"Captures the trading-discipline lesson that no same-day buy can be created from an observation object that was not decided in the prior report."}
+{"file":"wiki/交易思想/扣分系统与动作分层.md","reason":"Aligns action-layer wording so observation and recovery samples do not become same-day new participation."}
+{"file":"wiki/交易思想/价格行为与能量框架.md","reason":"Aligns current-execution doctrine with fixed prior-report decisions and next-report review handling."}

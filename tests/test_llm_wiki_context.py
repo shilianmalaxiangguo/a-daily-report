@@ -17,7 +17,7 @@ class LlmWikiContextTest(unittest.TestCase):
     def test_build_llm_wiki_context_materializes_compact_chinese_nodes(self):
         context = build_llm_wiki_context()
 
-        self.assertEqual(context["version"], "2026-06-16")
+        self.assertEqual(context["version"], "2026-06-26")
         self.assertEqual(context["source"], "llm_wiki")
         self.assertEqual(context["language"], "zh-CN")
         self.assertIn("wiki/交易思想/缠论体系.md", context["source_paths"])
@@ -44,6 +44,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("普通结构观察 -> 09:50-10:10窗口；强核心快路径 -> 09:30-09:35竞价表态、开盘前几分钟或回封", context["field_mappings"])
         self.assertIn("参与时机 -> open_core开盘核心 / ten_confirm 09:50-10:10窗口 / tail_exception尾盘14:30-14:55例外 / no_trade不交易", context["field_mappings"])
         self.assertIn("买卖窗口期 -> 只在09:30-09:35、09:50-10:10、14:30-14:55三段处理买卖；窗口外不新增买卖动作，只等待下一窗口或处理既定风险", context["field_mappings"])
+        self.assertIn("Ta/Tb/Tc日序表 -> Ta旧仓按T+2优先退出，Tb只来自今晚明日目标，空仓必须写没有Tb+0/没有Tc+0", context["field_mappings"])
         self.assertIn("统一来源 -> 日报写入decision-ledger planned_participation，报告和复盘只消费同一份结构化计划，不各自重算", context["field_mappings"])
         self.assertIn("极度看好复盘 -> 日报生成时用行情表回写participation_review，封死买不到不算收益命中", context["field_mappings"])
         self.assertIn("明日主买对象 -> 非0%且参与资格成立时给1只主买和1只补位；最终0%时统一降为候选观察", context["field_mappings"])
@@ -58,6 +59,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("最终风险复核 -> 公告风险、连续长上影未修复、跌破对应卖点线收不回，取消主买和补位资格", context["field_mappings"])
         self.assertIn("趋势审美复核 -> 明日极度看好先看近120日日K，上升趋势/平台震荡/缩量回踩有承接才保留；A杀/放量下杀/反抽不过关键线/高低点下移只观察", context["field_mappings"])
         self.assertIn("选股形态审美 -> 先看120日日K的呼吸感、蛇形走位、重心上移、平台消化和缩量回踩；A杀、破位弱反抽、放量下杀不参与", context["field_mappings"])
+        self.assertIn("图形美学 -> 假底先按反抽看；真正的进攻雏形通常是小K线、缩量横盘、重心上移、靠近前高，最终等阳包阴或突破阳线确认", context["field_mappings"])
         self.assertIn("形态待修复池 -> 历史好形态或趋势比价链样本当前承接转弱但未A杀时保留跟踪；重新站回短中线承接后再评估，继续走坏取关淘汰", context["field_mappings"])
         self.assertIn("龙回头观察池 -> 历史辨识度仍在但A杀或弱反抽未修复时单独观察；不进正式名单，重新站回短中线承接后再评估，继续走坏取关淘汰", context["field_mappings"])
         self.assertIn("日报固定附录 -> 必须渲染附录A：明日极度看好列表、附录A：龙回头观察池，让个股名单可快速定位", context["field_mappings"])
@@ -185,7 +187,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("选股买点拆分 -> 好票高成本保护选股资格但不追高；差票低成本的MA/VWAP只作已有仓处理参考", context["field_mappings"])
         self.assertIn("后台任务负担 -> 未处理风险仓会占用注意力，先处理持仓风险再看新增机会，高负担时不新增参与", context["field_mappings"])
         self.assertIn("动作五层 -> 主买、补位、核心观察、修复观察、不参与；持仓动作和新开仓动作分开输出", context["field_mappings"])
-        self.assertIn("盘中问股继承 -> 先读前一晚动作层级和今日新增上限；不参与不能直升主买或补位，观察类只在恢复条件命中后上调", context["field_mappings"])
+        self.assertIn("盘中问股继承 -> 先读前一晚动作层级和今日新增上限；不参与不能直升主买或补位，观察类恢复条件命中也只进入复盘和下一份日报判断", context["field_mappings"])
         self.assertIn("复盘校准 -> 记录当时判断、实际走势、买点出现、用户偏离、错误归因和样本保护结果；不因单个收益结果自动调权重", context["field_mappings"])
         self.assertIn("误判归因顺序 -> 先分随机结果、决策层缺陷、AI摩擦；价格强弱和账户约束读错归决策层，话术太绝归AI摩擦，不因单次涨跌改规则", context["field_mappings"])
         self.assertIn("容量强度锚 -> 高成交高热度板块核心保留为强弱参照；账户占用过高可不参与，但不能从最终观察视野消失", context["field_mappings"])
@@ -268,6 +270,28 @@ class LlmWikiContextTest(unittest.TestCase):
             context["field_mappings"],
         )
         self.assertIn("载体错配先判周期", digest)
+
+    def test_sector_grid_first_selection_enters_llm_wiki(self):
+        context = build_llm_wiki_context()
+        wiki_text = (ROOT / "wiki/板块补充/板块中枢与主线延续.md").read_text(encoding="utf-8")
+        digest = context["report_digest_text"]
+
+        self.assertIn("### 水池九宫格与先选板块", wiki_text)
+        self.assertIn("统一翻译成 `先选板块`", wiki_text)
+        self.assertIn("边角标的不在资金优先灌入区", wiki_text)
+        self.assertIn(
+            "水池九宫格 -> 全市场资金水池被板块网格化，结构性行情先看资金灌入哪个板块格子，再看个股属于主线、短线还是边角",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "先选板块 -> 指数强不等于普涨；先判被资金选择的板块路径和资金柱高度，再评估个股角色、承接、价格和账户",
+            context["field_mappings"],
+        )
+        self.assertIn(
+            "边角标的 -> 没站在被资金选择的格子里时，不因轮动自动取得参与资格；先承认位置不占优，再决定是否继续观察",
+            context["field_mappings"],
+        )
+        self.assertIn("水池九宫格先选板块", digest)
 
     def test_build_llm_wiki_context_exposes_knowledge_compounding_candidates(self):
         context = build_llm_wiki_context()
@@ -366,7 +390,7 @@ class LlmWikiContextTest(unittest.TestCase):
             self.assertIn(required, wiki_text)
 
         for required in [
-            "当下执行 -> 盘中新增参与只能来自当下价格、量能、板块、资金、辨识度、承接、时间窗口和失效线",
+            "当下执行 -> 盘中只执行、取消或降风险昨晚日报已决定的动作；新增证据只能进入复盘和下一份日报判断",
             "心理时间校准 -> 未来大机会、长期价值兑现、新股首日暴涨和题材后续发酵，只能进入观察或研究，不能压迫当下动作",
             "短线当下性 -> 短线不期待遥不可及的兑现，也不赌神迹；计划可以面向未来，执行只能落在当前可验证事实",
         ]:
@@ -468,14 +492,26 @@ class LlmWikiContextTest(unittest.TestCase):
             "去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。",
             context["daily_discipline_lines"],
         )
+        self.assertIn(
+            "反包先批改情绪反应，不直接批改前一日信息集；正确动作出现亏损结果，仍按可控小亏和纪律成本复盘。",
+            context["daily_discipline_lines"],
+        )
+        self.assertIn(
+            "必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；价格只决定卖得舒服还是狼狈，不重新决定卖不卖。",
+            context["daily_discipline_lines"],
+        )
+        self.assertIn(
+            "Ta/Tb/Tc日序表必须区分换仓日和空仓日：有Tb明日目标时，Ta+2默认按昨晚预案尾盘卖出；没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，才优先处理旧仓，让账户尽可能接近全天空仓。",
+            context["daily_discipline_lines"],
+        )
         self.assertIn("震荡市连跌轻仓低吸、反弹卖回", digest)
         self.assertIn("一九行情看图优先", digest)
         self.assertIn("题材降权图形走差抓紧降风险", digest)
         self.assertIn("趋势股图形走弱越跌越减", digest)
         self.assertIn("MA组合只做执行锚点", digest)
         self.assertIn("板块节奏优先", digest)
-        self.assertIn("指数强上涨家数弱按窄池子", digest)
-        self.assertIn("量化仍在看成交占比扩张宽度扩散核心承接", digest)
+        self.assertIn("指数强家数弱按窄池子", digest)
+        self.assertIn("量化仍在看占比宽度核心承接", digest)
         self.assertIn("占比回落后排掉队核心跌回VWAP或关键均线先退出", digest)
         self.assertIn("迹象到规律再到实战运用", digest)
         self.assertIn("弱方向掉队强方向扩散承接才参与", digest)
@@ -681,6 +717,20 @@ class LlmWikiContextTest(unittest.TestCase):
             "不新增独立选股逻辑",
         ]:
             self.assertIn(required, wiki_text)
+
+    def test_price_action_wiki_records_fake_bottom_and_attack_shape(self):
+        price_action = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
+
+        for required in [
+            "图形美学：假底与进攻雏形",
+            "真正的进攻雏形通常不制造立刻想买的兴奋，而是让人想再等等",
+            "小K线、窄振幅、缩量横盘、收盘重心缓慢上移",
+            "逐步靠近前高本身不是终点风险",
+            "利空不深跌、利好不大涨",
+            "阳包阴、突破阳线或明确异动",
+            "票虽好，但是要再等等",
+        ]:
+            self.assertIn(required, price_action)
 
     def test_price_action_wiki_records_low_volume_sideways_and_intraday_leader_rules(self):
         wiki_text = (ROOT / "wiki/交易思想/价格行为与能量框架.md").read_text(encoding="utf-8")
@@ -986,6 +1036,7 @@ class LlmWikiContextTest(unittest.TestCase):
             "交易者等式",
             "对我的交易启发",
             "0轴、均线、前高、涨停、题材发酵都只是观察信号，不是买入资格",
+            "布鲁克斯式触发不是任意一根K线高点更高就买，而是在合适背景下突破前一根信号K线高点后，市场继续给出后续行情；没有背景时，创新高也可能只是反抽。",
             "不在亏损后按图索因，也不在想买时按因索图",
             "A股还要叠加 T+1、涨跌停、账户一手金额、公告风险、板块主线和交易窗口",
         ]:
@@ -998,11 +1049,12 @@ class LlmWikiContextTest(unittest.TestCase):
             "量价四象限 -> 放量上涨强收盘看进攻，放量冲高回落看分歧，缩量回踩趋势未破等二次确认，放量破位先处理风险",
             "低位突放巨量 -> 只提高研究和观察优先级，必须等后续行情，不直接生成买入资格",
             "布鲁克斯趋势区间谱系 -> 先判强趋势/普通趋势/宽幅通道/交易区间，再决定顺势、等待还是只观察",
-            "布鲁克斯后续行情确认 -> 单根K线、0轴、MA和涨停只触发观察，必须有承接、强收盘和不快速跌回才可能升级参与条件",
+            "布鲁克斯后续行情确认 -> 单根K线、0轴、MA和涨停只触发观察；承接、强收盘和不快速跌回只能进入复盘和下一份日报，不能盘中生成新增参与",
             "始终入场方向 -> 错过强趋势早期买点后，只能用小仓位、同一失效线和同一风险预算参与，不用满仓追涨补偿",
             "二次入场确认 -> 更差价格常是为更高确认度付出的成本；所谓二次机会更便宜时先怀疑趋势转弱",
             "形态失败燃料 -> 失败突破、失败反转和失败回踩会套住交易者，止损和反手可能给相反方向提供动力",
             "交易者等式 -> 参与前说清成功概率、目标空间、失败损失和账户伤害，说不清只观察",
+            "图形美学 -> 假底先按反抽看；真正的进攻雏形通常是小K线、缩量横盘、重心上移、靠近前高，最终等阳包阴或突破阳线确认",
         ]:
             self.assertIn(required, field_mappings)
 

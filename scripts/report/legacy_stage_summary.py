@@ -120,7 +120,7 @@ def _build_execution_row(context, stage_meta=None):
         guidance = "只等明日目标标的在固定交易窗口内满足条件"
     elif trade_gate_open:
         if best_stock:
-            guidance = "只等明天唯一能买的那只自己走出来"
+	            guidance = "只等当晚已决定的明日执行对象满足执行资格"
         elif watch_anchor:
             guidance = "先确认重点盯盘股，再看能否缩到一只可买股"
         else:
@@ -153,7 +153,7 @@ def _build_decisive_row(context, stage_meta=None):
     if watch_anchor:
         stock_label = f"{watch_anchor.get('name')}({watch_anchor.get('code')})"
         if trade_gate_open:
-            guidance = f"{stock_label}；先看固定交易窗口内条件，只有走成明天唯一能买的那只才参与"
+	            guidance = f"{stock_label}；先看固定交易窗口承接，结果进入复盘和下一份日报判断，不新增参与"
         else:
             guidance = f"{stock_label}；仅作强弱观察，不构成买入指令"
         if watch_anchor_type:

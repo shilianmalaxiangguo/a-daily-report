@@ -589,7 +589,7 @@ def build_personal_position_context(data, positions):
     primary = dict(positions[0])
     holding_summaries = []
     primary_close = ""
-    primary_support = str(primary.get("support_band") or "42.84~43.05").strip()
+    primary_support = str(primary.get("support_band") or "").strip()
     all_cleared = all(_is_cleared_position(position) for position in positions)
     for index, position in enumerate(positions):
         position = dict(position)
@@ -626,7 +626,8 @@ def build_personal_position_context(data, positions):
     elif primary.get("trade_action") == "做T":
         decision = "若仍有旧仓，先按买点失败仓处理，09:50-10:10不能修复则优先处理"
     elif len(positions) == 1 and primary_close:
-        decision = f"先看{primary_close}能否守住，跌破{primary_support}或09:50-10:10收不回先卖"
+        support_clause = f"跌破{primary_support}或" if primary_support else ""
+        decision = f"先看{primary_close}能否守住，{support_clause}09:50-10:10收不回先卖"
     elif not independent_holding:
         decision = "先处理旧仓"
     suffix = f"；{decision}" if independent_holding else f"；{decision}；新开仓0手"

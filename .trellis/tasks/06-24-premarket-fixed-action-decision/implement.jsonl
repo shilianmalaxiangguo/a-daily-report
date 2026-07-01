@@ -1,0 +1,5 @@
+{"file":"scripts/report/report_acceptance_audit.py","reason":"Extends report acceptance checks for legacy intraday-upgrade wording and 0% observation/new-entry conflicts."}
+{"file":"scripts/report/runtime.py","reason":"Normalizes generated report wording so 0% observation remains review-only and positive position actions are already-decided plans."}
+{"file":"scripts/report/front_page_v2_renderer.py","reason":"Aligns HTML/front-page action wording with fixed premarket decisions and cancellation language."}
+{"file":"scripts/decision/runtime_contracts.py","reason":"Ensures can_execute=false observation contracts do not contain 50% execution semantics."}
+{"file":"scripts/knowledge/llm_wiki_context.py","reason":"Updates LLM wiki runtime context so intraday questions inherit prior report actions and route observation evidence to review."}

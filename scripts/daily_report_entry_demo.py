@@ -53,6 +53,7 @@ import types
 import time
 import signal
 import threading
+import re
 from enum import Enum
 from pathlib import Path
 
@@ -485,6 +486,8 @@ from report.strategy_tracking_support import (
     resolve_probe_role_family as run_resolve_probe_role_family,
     summarize_ev_signal_review as run_summarize_ev_signal_review,
 )
+from observability.opik_runtime import build_report_run_observer
+from observability.report_quality import build_report_quality_score, persist_report_quality_score
 from storage.database_service import DatabaseService
 from report.strategy_tracking_ev import (
     build_strategy_ev_calibration as run_build_strategy_ev_calibration,
@@ -3785,6 +3788,56 @@ def _postgres_loaded_data_has_target_facts(result, data):
     return False
 
 
+def _missing_new_high_sector_text(value):
+    text = str(value or "").strip()
+    return not text or text in {"-", "未知", "未归类", "待补充板块", "待补事实", "暂无"}
+
+
+def _new_high_feedback_needs_target_refresh(snapshot):
+    if not isinstance(snapshot, dict) or not snapshot.get("available"):
+        return False
+    top_stocks = [row for row in (snapshot.get("top_stocks") or []) if isinstance(row, dict)]
+    if not top_stocks:
+        return False
+    all_amount_missing = all(
+        _safe_float(row.get("amount_yi") or row.get("turnover") or row.get("成交额")) <= 0
+        for row in top_stocks
+    )
+    all_stock_sectors_missing = all(
+        _missing_new_high_sector_text(row.get("sector") or row.get("industry") or row.get("所属板块"))
+        for row in top_stocks
+    )
+    sector_rows = [row for row in (snapshot.get("sector_distribution") or []) if isinstance(row, dict)]
+    all_distribution_missing = not sector_rows or all(_missing_new_high_sector_text(row.get("sector")) for row in sector_rows)
+    leading_missing = _missing_new_high_sector_text(snapshot.get("leading_sectors"))
+    return bool(all_amount_missing or (all_stock_sectors_missing and all_distribution_missing and leading_missing))
+
+
+def _refresh_postgres_new_high_feedback_if_stale(data, target_date):
+    if not isinstance(data, dict):
+        return data
+    if not _new_high_feedback_needs_target_refresh(data.get("new_high_feedback")):
+        return data
+    try:
+        refreshed = get_new_high_feedback_from_tushare_first(target_date)
+    except Exception:
+        return data
+    if isinstance(refreshed, dict) and refreshed.get("available") and not _new_high_feedback_needs_target_refresh(refreshed):
+        data["new_high_feedback"] = refreshed
+        data.setdefault("module_logs", []).append(
+            {
+                "step": "postgres.refresh_new_high_feedback",
+                "status": "success",
+                "output": {
+                    "source": refreshed.get("source"),
+                    "new_high_count": refreshed.get("new_high_count"),
+                    "leading_sectors": refreshed.get("leading_sectors"),
+                },
+            }
+        )
+    return data
+
+
 def _stock_identity_present(value):
     if not isinstance(value, dict):
         return False
@@ -3902,6 +3955,7 @@ def load_daily_report_data_from_postgres(target_date):
     data["postgres_source"] = result.get("source") or data.get("postgres_source") or ""
     data["postgres_field_count"] = result.get("field_count", 0)
     data["postgres_only"] = True
+    _refresh_postgres_new_high_feedback_if_stale(data, target_date)
     _restore_postgres_sector_first_runtime_facts(data, target_date)
     return data
 
@@ -4169,7 +4223,143 @@ def _daily_report_data_path_label(args):
     return "live"
 
 
-def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LEDGER_MODE_FROZEN, saved_report_paths=None):
+_REPORT_TARGET_PATTERNS = (
+    re.compile(r"明日执行对象[：:| ]+([^|\n：:]+?)\((\d{6})\)"),
+    re.compile(r"最终对象[：:| ]+明日执行对象[：: ]*([^|\n：:]+?)\((\d{6})\)"),
+    re.compile(r"最终对象=([^，,\n|：:]+?)\((\d{6})\)"),
+)
+
+
+def _entry_previous_trade_day(value):
+    try:
+        current = datetime.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return ""
+    current = current - datetime.timedelta(days=1)
+    while current.weekday() >= 5:
+        current = current - datetime.timedelta(days=1)
+    return current.isoformat()
+
+
+def _extract_report_target_from_markdown(markdown_text):
+    text = str(markdown_text or "")
+    for pattern in _REPORT_TARGET_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return {"name": match.group(1).strip(), "code": match.group(2).strip()}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        label = cells[0]
+        value = " | ".join(cells[1:])
+        if label in {"最终对象", "明日执行对象", "最终结果"} or "明日执行对象" in label:
+            match = re.search(r"([^|\n：:]+?)\((\d{6})\)", value)
+            if match:
+                return {"name": match.group(1).strip(), "code": match.group(2).strip()}
+    return {}
+
+
+def _read_previous_report_target_for_entry(target_date, reports_root=None):
+    previous = _entry_previous_trade_day(target_date)
+    if not previous:
+        return {}
+    root = Path(reports_root) if reports_root else Path(__file__).resolve().parents[1] / "reports"
+    for suffix in ("_A股日报_执行摘要.md", "_A股日报_完整版.md"):
+        path = root / f"{previous}{suffix}"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        target = _extract_report_target_from_markdown(text)
+        if target:
+            target["source_report_date"] = previous
+            return target
+    return {}
+
+
+def _inject_previous_report_target_as_existing_position(data, target_date, reports_root=None):
+    if not isinstance(data, dict):
+        return {}
+    personal_position_context = data.get("personal_position_context")
+    if isinstance(personal_position_context, dict) and personal_position_context.get("existing_position_summary"):
+        return {}
+    if data.get("existing_position_summary"):
+        return {}
+    previous_target = _read_previous_report_target_for_entry(target_date, reports_root=reports_root)
+    if not previous_target:
+        return {}
+    label = previous_target.get("name") or ""
+    code = previous_target.get("code") or ""
+    if code:
+        label = f"{label}({code})" if label else code
+    if not label:
+        return {}
+    summary = {
+        "has_position": True,
+        "summary": f"上一份日报目标 {label}，本日报按旧仓路径复核；旧仓路径与明日目标分开记录，不因旧仓路径取消明日目标。",
+        "source_report_date": previous_target.get("source_report_date"),
+        "inferred_from_previous_report": True,
+    }
+    context = dict(personal_position_context or {}) if isinstance(personal_position_context, dict) else {}
+    context["existing_position_summary"] = summary
+    data["personal_position_context"] = context
+    data["position_context_provided"] = True
+    return summary
+
+
+def _extract_position_timeline_markdown(position_strategy_report):
+    lines = str(position_strategy_report or "").splitlines()
+    if not lines or not lines[0].lstrip().startswith("| 轨道 | 标的 |"):
+        return ""
+    collected = []
+    for line in lines:
+        if line.startswith("#"):
+            break
+        collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def _markdown_has_position_timeline(markdown_text):
+    for line in str(markdown_text or "").splitlines():
+        if not line.strip():
+            continue
+        return line.lstrip().startswith("| 轨道 | 标的 |")
+    return False
+
+
+def _prepend_position_timeline_markdown(markdown_text, position_timeline_markdown):
+    timeline = str(position_timeline_markdown or "").strip()
+    if not timeline or _markdown_has_position_timeline(markdown_text):
+        return str(markdown_text or "")
+    return f"{timeline}\n\n{str(markdown_text or '').lstrip()}"
+
+
+def _sync_position_timeline_into_saved_markdown(saved_report_paths=None, position_timeline_markdown=""):
+    timeline = str(position_timeline_markdown or "").strip()
+    if not timeline:
+        return False
+    full_report_value = (saved_report_paths or {}).get(REPORT_VARIANT_FULL)
+    if not full_report_value:
+        return False
+    full_report_path = Path(full_report_value)
+    if not full_report_path.exists() or not full_report_path.is_file():
+        return False
+    current_text = full_report_path.read_text(encoding="utf-8")
+    updated_text = _prepend_position_timeline_markdown(current_text, timeline)
+    if updated_text == current_text:
+        return True
+    full_report_path.write_text(updated_text, encoding="utf-8")
+    return True
+
+
+def _try_save_daily_report_html_from_saved_markdown(
+    target_date,
+    *,
+    run_mode=LEDGER_MODE_FROZEN,
+    saved_report_paths=None,
+    prepend_markdown="",
+):
     try:
         full_report_path = Path((saved_report_paths or {}).get(REPORT_VARIANT_FULL) or "")
         if not full_report_path.exists():
@@ -4180,6 +4370,7 @@ def _try_save_daily_report_html_from_saved_markdown(target_date, *, run_mode=LED
             title=f"{target_date} A股日报",
             trade_date=target_date,
             source_label="Markdown日报",
+            prepend_markdown=prepend_markdown,
         )
     except Exception as exc:
         print(f"HTML 日报未生成：{exc}")
@@ -4444,6 +4635,23 @@ def main():
         os.environ["A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME"] = "1"
 
     saved_report_paths = {}
+    observer = build_report_run_observer(
+        run_name=f"daily-report.entry.{target_date}",
+        trace_input={
+            "target_date": target_date,
+            "replay": bool(args.replay),
+            "postgres_only": bool(args.postgres_only),
+            "no_report": bool(args.no_report),
+            "stock": args.stock or "",
+        },
+        metadata={"runner": "daily_report_entry_demo"},
+    )
+    run_status = "success"
+    run_error = None
+    report_preflight = {}
+    audit_result = {}
+    data = {}
+    position_timeline_markdown = ""
     try:
         if args.postgres_only:
             print(f"📅 从 PostgreSQL 读取日报事实: {target_date}")
@@ -4453,15 +4661,35 @@ def main():
         else:
             print(f"📅 获取数据: {target_date}")
             data = get_daily_data(target_date)
+        observer.record_step(
+            "load_daily_data",
+            status="success",
+            input_payload={
+                "target_date": target_date,
+                "replay": bool(args.replay),
+                "postgres_only": bool(args.postgres_only),
+            },
+            output_payload={"data_keys": list((data or {}).keys())[:30], "empty": not bool(data)},
+        )
         if data:
             report_preflight = build_report_preflight(data, target_date)
+            preflight_failures = list(report_preflight.get("failures") or [])
+            observer.record_step(
+                "report_preflight",
+                status="error" if preflight_failures else "success",
+                input_payload={"target_date": target_date},
+                output_payload={
+                    "failure_count": len(preflight_failures),
+                    "failures": preflight_failures,
+                },
+            )
             for line in render_report_preflight_lines(report_preflight):
                 print(line)
-            if report_preflight.get("failures"):
+            if preflight_failures:
                 raise ReportCriticalDataMissingError(
                     "{} 日报生成已终止：关键数据缺失或获取失败（{}）。\n{}".format(
                         target_date,
-                        "、".join(report_preflight.get("failures") or []),
+                        "、".join(preflight_failures),
                         "\n".join(render_report_preflight_lines(report_preflight)),
                     )
                 )
@@ -4493,6 +4721,10 @@ def main():
             has_personal_positions = bool(positions) or _has_existing_position_context(data)
             if has_personal_positions:
                 data["position_context_provided"] = True
+            else:
+                injected_existing = _inject_previous_report_target_as_existing_position(data, target_date)
+                if injected_existing and not injected_existing.get("inferred_from_previous_report"):
+                    has_personal_positions = True
 
             report_outputs = build_report_outputs(
                 data,
@@ -4518,6 +4750,16 @@ def main():
                 report_outputs.get(REPORT_VARIANT_RUN_LOG, ""),
                 audit_result,
             )
+            observer.record_step(
+                "build_report_outputs",
+                status="success" if audit_result.get("passed") else "needs_review",
+                input_payload={"target_date": target_date, "run_mode": run_mode},
+                output_payload={
+                    "output_variants": list(report_outputs.keys()),
+                    "audit_passed": bool(audit_result.get("passed")),
+                    "finding_count": int(audit_result.get("finding_count") or len(audit_result.get("findings") or [])),
+                },
+            )
 
         postgres_synced = False
         if data:
@@ -4525,10 +4767,26 @@ def main():
                 result = import_daily_report_data_to_postgres(target_date, data)
                 print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
                 postgres_synced = True
+                observer.record_step(
+                    "postgres_sync",
+                    status="success",
+                    input_payload={"target_date": target_date, "postgres_only": True},
+                    output_payload={
+                        "source": result.get("source", ""),
+                        "field_count": result.get("field_count", 0),
+                    },
+                )
             else:
                 try:
                     result = import_daily_report_data_to_postgres(target_date, data)
                 except Exception as exc:
+                    observer.record_step(
+                        "postgres_sync",
+                        status="error",
+                        input_payload={"target_date": target_date, "postgres_only": False},
+                        output_payload={},
+                        error=exc,
+                    )
                     print(f"PostgreSQL 日报事实未同步：{exc}")
                     raise ReportCriticalDataMissingError(
                         "PostgreSQL 日报事实未同步，停止生成；不会写入日报或完整 JSON 快照。"
@@ -4536,6 +4794,15 @@ def main():
                 else:
                     print(f"🐘 PostgreSQL 日报事实已同步: {result.get('source', '')} / fields={result.get('field_count', 0)}")
                     postgres_synced = True
+                    observer.record_step(
+                        "postgres_sync",
+                        status="success",
+                        input_payload={"target_date": target_date, "postgres_only": False},
+                        output_payload={
+                            "source": result.get("source", ""),
+                            "field_count": result.get("field_count", 0),
+                        },
+                    )
 
         if postgres_synced and not args.no_report and data:
             _try_persist_report_runtime_artifacts(data, target_date, run_mode=run_mode)
@@ -4547,6 +4814,12 @@ def main():
                 mode=run_mode,
                 overwrite_existing=bool(args.overwrite_official and run_mode == LEDGER_MODE_FROZEN),
                 postgres_only=bool(args.postgres_only),
+            )
+            observer.record_step(
+                "save_report_outputs",
+                status="success",
+                input_payload={"target_date": target_date, "run_mode": run_mode},
+                output_payload={"output_variants": list(saved_report_paths.keys())},
             )
             _try_save_elimination_tournament_html(
                 data,
@@ -4567,14 +4840,18 @@ def main():
                 allow_live_fallback=not args.postgres_only,
             )
             print(f"上证指数缠论HTML已生成: {chanlun_html_path}")
-            if positions:
-                position_strategy_report = render_position_strategy_report(
-                    data,
-                    target_date,
-                    positions,
-                    source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
-                )
-                save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
+            position_strategy_report = render_position_strategy_report(
+                data,
+                target_date,
+                positions,
+                source_report_markdown=report_outputs.get(REPORT_VARIANT_FULL, ""),
+            )
+            save_position_strategy_report(position_strategy_report, target_date, mode=run_mode)
+            position_timeline_markdown = _extract_position_timeline_markdown(position_strategy_report)
+            _sync_position_timeline_into_saved_markdown(
+                saved_report_paths,
+                position_timeline_markdown,
+            )
 
         if args.stock and data:
             stock_report = generate_single_stock_diagnostic_markdown(
@@ -4593,6 +4870,7 @@ def main():
                     target_date,
                     run_mode=run_mode,
                     saved_report_paths=saved_report_paths,
+                    prepend_markdown=position_timeline_markdown,
                 )
             elapsed_seconds = time.perf_counter() - report_started_at
             _append_daily_report_duration_log(
@@ -4604,7 +4882,49 @@ def main():
             )
 
         return 0
+    except Exception as exc:
+        run_status = "error"
+        run_error = exc
+        observer.record_step(
+            "daily_report_entry",
+            status="error",
+            input_payload={"target_date": target_date},
+            output_payload={},
+            error=exc,
+        )
+        raise
     finally:
+        report_quality_score = build_report_quality_score(
+            target_date=target_date,
+            run_status=run_status,
+            mode=run_mode if "run_mode" in locals() else "",
+            preflight=report_preflight,
+            audit_result=audit_result,
+            decision_ledger_result=(data or {}).get("decision_ledger_artifacts") if isinstance(data, dict) else None,
+            output_paths=saved_report_paths,
+            error=run_error,
+            report_expected=not bool(args.no_report),
+            decision_ledger_expected=not bool(args.no_report),
+        )
+        report_quality_ledger = persist_report_quality_score(
+            report_quality_score,
+            root_dir=Path(__file__).resolve().parents[1],
+            run_id=f"daily-report.entry.{target_date}",
+        )
+        report_quality_score["local_ledger"] = report_quality_ledger
+        observer.finish(
+            status=run_status,
+            output_payload={
+                "target_date": target_date,
+                "replay": bool(args.replay),
+                "postgres_only": bool(args.postgres_only),
+                "no_report": bool(args.no_report),
+                "report_saved": bool(saved_report_paths),
+                "error": str(run_error) if run_error else "",
+                "report_quality_score": report_quality_score,
+                "report_quality_ledger": report_quality_ledger,
+            },
+        )
         _POSTGRES_ONLY_RUNTIME = False
         if previous_postgres_only_guard is None:
             os.environ.pop("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME", None)

@@ -266,6 +266,33 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertEqual(panel_fields["account_attention_load"], "无持仓负担")
         self.assertEqual(panel_fields["holding_priority_action"], "无旧仓时只等参与窗口")
 
+    def test_candidate_quality_scorecard_keeps_inferred_old_path_separate_from_empty_position(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction_cn": "退潮防守",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "position_context_provided": True,
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "上一份日报目标 太极实业(600667)，本日报按旧仓路径复核。",
+                    "inferred_from_previous_report": True,
+                },
+                "best_stock": None,
+                "watch_anchor": None,
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["candidate_quality_scorecard", "export_stage_state"],
+        )
+
+        panel_fields = result["exports"]["candidate_quality_panel_fields"]
+        self.assertEqual(panel_fields["account_attention_load"], "旧路径需复核")
+        self.assertEqual(panel_fields["holding_priority_action"], "旧路径与明日目标分开处理")
+
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(
             {
@@ -694,8 +721,9 @@ class PkDecisionStageTest(unittest.TestCase):
         exports = result["exports"]
         rendered = "\n".join(exports["position_section_lines"] + exports["first_hour_lines"] + exports["intraday_lines"])
         self.assertIn("0%不参与", rendered)
-        self.assertIn("50%条件执行", rendered)
+        self.assertIn("不新增参与", rendered)
         self.assertIn("固定交易窗口条件", rendered)
+        self.assertNotIn("50%条件执行", rendered)
         self.assertNotIn("禁止新开仓", rendered)
         self.assertNotIn(_m("最多", "旧小仓"), rendered)
         self.assertNotIn(_m("旧", "小仓", "条件", "试错"), rendered)
@@ -769,8 +797,9 @@ class PkDecisionStageTest(unittest.TestCase):
         )
         self.assertIn("极度看好", rendered)
         self.assertIn("09:50-10:10观察价60.50", rendered)
-        self.assertIn("固定交易窗口内条件成立后才评估50%条件执行", rendered)
-        self.assertIn("命中后才评估50%条件执行", rendered)
+        self.assertIn("只按昨晚预案检查执行资格；不满足取消", rendered)
+        self.assertIn("结果进入复盘和下一份日报判断", rendered)
+        self.assertNotIn("才评估50%条件执行", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("必须空仓", rendered)
 
@@ -1971,7 +2000,9 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["exports"]["conclusion_lines"])
         self.assertIn("盘前不抢跑", rendered)
         self.assertIn("09:50-10:10", rendered)
-        self.assertIn("50%条件执行", rendered)
+        self.assertIn("不买新仓", rendered)
+        self.assertIn("不评估新增参与", rendered)
+        self.assertNotIn("50%条件执行", rendered)
         self.assertNotIn("明天没有可买对象", rendered)
         self.assertNotIn("当前先不买", rendered)
 

@@ -316,9 +316,10 @@ assert report == "# report"
         )
 
         self.assertIn(
-            "先看45.1能否守住，跌破42.84~43.05或09:50-10:10收不回先卖",
+            "先看45.1能否守住，09:50-10:10收不回先卖",
             context["existing_position_summary"]["summary"],
         )
+        self.assertNotIn("42.84~43.05", context["existing_position_summary"]["summary"])
 
     def test_personal_position_context_preserves_multiple_lot_holdings(self):
         module = self._load_module()

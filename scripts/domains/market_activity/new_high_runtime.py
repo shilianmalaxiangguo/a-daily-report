@@ -86,8 +86,42 @@ def _amount_yi(row):
     amount = _safe_float((row or {}).get("amount_yi"))
     if amount > 0:
         return amount
+    turnover_yi = _safe_float((row or {}).get("turnover_yi"))
+    if turnover_yi > 0:
+        return turnover_yi
+    turnover = _safe_float((row or {}).get("turnover"))
+    if turnover > 0:
+        return turnover
+    chinese_amount = _safe_float((row or {}).get("成交额"))
+    if chinese_amount > 0:
+        return chinese_amount
     amount_raw = _safe_float((row or {}).get("amount"))
     return round(amount_raw / 100000.0, 6) if amount_raw > 0 else 0.0
+
+
+def _valid_sector(value):
+    text = str(value or "").strip()
+    if not text or text in {"-", "未知", "未归类", "待补充板块", "待补事实", "暂无"}:
+        return ""
+    return text
+
+
+def _quote_lookup_key_map(rows):
+    mapped = {}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        keys = []
+        for key in ("stock_code", "code", "代码", "ts_code"):
+            value = str(row.get(key) or "").strip()
+            if not value:
+                continue
+            keys.append(value.upper())
+            keys.append(_clean_code(value))
+        for key in keys:
+            if key:
+                mapped[key] = row
+    return mapped
 
 
 def _pct(value, denominator):
@@ -172,6 +206,7 @@ def build_new_high_feedback_snapshot(
     factor_rows,
     *,
     stock_basic_map=None,
+    quote_rows=None,
     stock_risk_map=None,
     target_date="",
     topdays_threshold=DEFAULT_NEW_HIGH_TOPDAYS,
@@ -204,6 +239,7 @@ def build_new_high_feedback_snapshot(
         "missing_code": 0,
     }
     stocks = []
+    quote_map = _quote_lookup_key_map(quote_rows)
     for row in factor_rows:
         row = row or {}
         code = _clean_code(row.get("stock_code") or row.get("ts_code") or row.get("code"))
@@ -222,17 +258,30 @@ def build_new_high_feedback_snapshot(
         if _is_new_or_recent(basic.get("list_date"), target_date or row.get("trade_date"), recent_listing_days):
             excluded_counts["new_or_recent"] += 1
             continue
-        sector = str(basic.get("industry") or row.get("industry") or row.get("sector") or "待补充板块").strip()
+        quote = quote_map.get(code) or quote_map.get(ts_code)
+        sector = ""
+        for source_row in (basic, row, quote or {}):
+            for sector_key in ("industry", "sector", "所属行业", "所属板块", "板块", "行业"):
+                sector = _valid_sector((source_row or {}).get(sector_key))
+                if sector:
+                    break
+            if sector:
+                break
+        sector = sector or "待补充板块"
+        amount_yi = _amount_yi(row)
+        quote_amount = _amount_yi(quote or {})
+        if amount_yi <= 0 and quote_amount > 0:
+            amount_yi = quote_amount
         stocks.append(
             {
                 "code": code,
                 "ts_code": ts_code,
-                "name": name or code,
+                "name": name or str((quote or {}).get("name") or (quote or {}).get("stock_name") or "").strip() or code,
                 "sector": sector or "待补充板块",
-                "close": _safe_float(row.get("close")),
-                "high": _safe_float(row.get("high")),
-                "pct_chg": round(_safe_float(row.get("pct_chg") or row.get("pct_change")), 2),
-                "amount_yi": _amount_yi(row),
+                "close": _safe_float(row.get("close") or (quote or {}).get("close")),
+                "high": _safe_float(row.get("high") or (quote or {}).get("high")),
+                "pct_chg": round(_safe_float(row.get("pct_chg") or row.get("pct_change") or (quote or {}).get("pct_chg")), 2),
+                "amount_yi": amount_yi,
                 "topdays": _safe_int(row.get("topdays")),
             }
         )

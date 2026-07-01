@@ -158,3 +158,67 @@ class PipelineRunnerTest(unittest.TestCase):
         self.assertEqual(ctx["runtime"]["module_logs"][0]["hook_name"], "input.hot_rank")
         self.assertEqual(ctx["runtime"]["module_logs"][0]["status"], "error")
         self.assertIn("hook failed", ctx["runtime"]["module_logs"][0]["error"])
+
+    def test_run_pipeline_records_optional_opik_steps(self):
+        class StubObserver:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.steps = []
+                self.finish_payload = None
+                self.instances.append(self)
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+            def finish(self, **kwargs):
+                self.finish_payload = kwargs
+
+        with patch(
+            "orchestrator.pipeline_runner.build_report_run_observer",
+            side_effect=lambda **kwargs: StubObserver(**kwargs),
+        ):
+            run_pipeline(
+                request={"target_date": "2026-04-21"},
+                hooks=[("input.hot_rank", stub_input), ("report.markdown_document", stub_report)],
+            )
+
+        observer = StubObserver.instances[0]
+        self.assertEqual(observer.kwargs["run_name"], "daily-report.pipeline.2026-04-21")
+        self.assertEqual([name for name, _ in observer.steps], ["input.hot_rank", "report.markdown_document"])
+        self.assertEqual(observer.steps[0][1]["status"], "success")
+        self.assertEqual(observer.finish_payload["status"], "success")
+        self.assertEqual(
+            observer.finish_payload["output_payload"]["report_quality_score"]["schema_version"],
+            "report_quality_score.v1",
+        )
+
+    def test_run_pipeline_finishes_opik_run_as_error_when_patch_merge_fails(self):
+        class StubObserver:
+            instances = []
+
+            def __init__(self, **kwargs):
+                self.steps = []
+                self.finish_payload = None
+                self.instances.append(self)
+
+            def record_step(self, name, **kwargs):
+                self.steps.append((name, kwargs))
+
+            def finish(self, **kwargs):
+                self.finish_payload = kwargs
+
+        def invalid_result(ctx):
+            return None
+
+        with patch(
+            "orchestrator.pipeline_runner.build_report_run_observer",
+            side_effect=lambda **kwargs: StubObserver(**kwargs),
+        ):
+            with self.assertRaises(AttributeError):
+                run_pipeline(request={"target_date": "2026-04-21"}, hooks=[("input.invalid", invalid_result)])
+
+        observer = StubObserver.instances[0]
+        self.assertEqual(observer.finish_payload["status"], "error")
+        self.assertEqual(observer.finish_payload["output_payload"]["report_quality_score"]["status"], "error")

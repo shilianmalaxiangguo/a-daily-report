@@ -159,11 +159,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "save_daily_report_html") as structured_html_mock:
             daily_report_entry_demo.main()
 
-        bear_html_mock.assert_called_once_with(
-            "2026-06-10",
-            run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
-            saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+        bear_html_mock.assert_called_once()
+        self.assertEqual(bear_html_mock.call_args.args, ("2026-06-10",))
+        self.assertEqual(bear_html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(
+            bear_html_mock.call_args.kwargs["saved_report_paths"],
+            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
+        prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
+        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
+        self.assertIn("顶部长时间轴按日报视角展示", prepend_markdown)
         structured_html_mock.assert_not_called()
 
     def test_saved_markdown_html_sync_overwrites_existing_reader_html(self):
@@ -203,6 +208,98 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertIn("市场脊梁", html)
         self.assertIn("中证500", html)
         self.assertIn('<td class="has-signal"><span class="signal-marker signal-hot">+0.82%</span></td>', html)
+
+    def test_sync_position_timeline_into_saved_markdown(self):
+        timeline = "\n".join(
+            [
+                "| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理 | 空仓 |",
+                "| Tb明日目标 | 深科技(000021) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |",
+                "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-06-29_A股日报_完整版.md"
+            full_path.write_text("# 2026-06-29 A股日报\n\n正文", encoding="utf-8")
+
+            synced = daily_report_entry_demo._sync_position_timeline_into_saved_markdown(
+                {daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+                timeline,
+            )
+            text = full_path.read_text(encoding="utf-8")
+            synced_again = daily_report_entry_demo._sync_position_timeline_into_saved_markdown(
+                {daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+                timeline,
+            )
+            text_again = full_path.read_text(encoding="utf-8")
+
+        self.assertTrue(synced)
+        self.assertTrue(text.startswith("| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） |"))
+        self.assertIn("太极实业(600667)", text)
+        self.assertIn("深科技(000021)", text)
+        self.assertEqual(text, text_again)
+        self.assertTrue(synced_again)
+
+    def test_inject_previous_report_target_as_existing_position_context(self):
+        data = {}
+        with TemporaryDirectory() as tempdir:
+            reports_root = Path(tempdir)
+            (reports_root / "2026-06-26_A股日报_执行摘要.md").write_text(
+                "| 最终对象 | 明日执行对象：太极实业(600667) |\n",
+                encoding="utf-8",
+            )
+
+            summary = daily_report_entry_demo._inject_previous_report_target_as_existing_position(
+                data,
+                "2026-06-29",
+                reports_root=reports_root,
+            )
+
+        self.assertTrue(summary["has_position"])
+        self.assertTrue(summary["inferred_from_previous_report"])
+        self.assertIn("太极实业(600667)", summary["summary"])
+        self.assertNotIn("先处理旧仓", summary["summary"])
+        self.assertEqual(summary["source_report_date"], "2026-06-26")
+        self.assertTrue(data["position_context_provided"])
+        self.assertEqual(data["personal_position_context"]["existing_position_summary"], summary)
+
+    def test_inferred_previous_report_target_does_not_mark_manual_position(self):
+        data = self._valid_data()
+        report_output_calls = []
+
+        def capture_report_outputs(*args, **kwargs):
+            report_output_calls.append(kwargs)
+            return self._report_outputs()
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-29", "--replay"]), \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-06-29")), \
+             patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
+             patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "_read_previous_report_target_for_entry", return_value={
+                 "name": "太极实业",
+                 "code": "600667",
+                 "source_report_date": "2026-06-26",
+             }), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", side_effect=capture_report_outputs), \
+             patch.object(daily_report_entry_demo, "_resolve_chanlun_tomorrow_decision", return_value={"position_pct": 0}), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-29", "field_count": 8}), \
+             patch.object(daily_report_entry_demo, "_try_persist_report_runtime_artifacts", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "render_position_strategy_report", return_value="| 轨道 | 标的 | 2026-06-28（周日） |\n|------|------|------|\n| Ta旧仓 | 太极实业(600667) | 旧路径复核 |"), \
+             patch.object(daily_report_entry_demo, "save_position_strategy_report", return_value="/tmp/strategy.md"), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")):
+            daily_report_entry_demo.main()
+
+        self.assertEqual(len(report_output_calls), 1)
+        self.assertFalse(report_output_calls[0]["has_personal_positions"])
+        self.assertTrue(data["position_context_provided"])
+        summary = data["personal_position_context"]["existing_position_summary"]
+        self.assertTrue(summary["inferred_from_previous_report"])
+        self.assertIn("太极实业(600667)", summary["summary"])
 
     def test_normal_path_skips_snapshot_when_postgres_fact_sync_succeeds(self):
         order = []
@@ -376,11 +473,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         save_markdown_mock.assert_called_once()
         save_chanlun_mock.assert_called_once()
         sync_mock.assert_called_once()
-        html_mock.assert_called_once_with(
-            "2026-06-05",
-            run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
-            saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+        html_mock.assert_called_once()
+        self.assertEqual(html_mock.call_args.args, ("2026-06-05",))
+        self.assertEqual(html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(
+            html_mock.call_args.kwargs["saved_report_paths"],
+            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
+        prepend_markdown = html_mock.call_args.kwargs["prepend_markdown"]
+        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
+        self.assertIn("第一列是报告日，下一交易日是执行日", prepend_markdown)
 
     def test_bear_html_runs_after_report_runtime_data_exports(self):
         data = self._valid_data()
@@ -616,11 +718,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         save_markdown_mock.assert_called_once()
         save_chanlun_mock.assert_called_once()
         sync_mock.assert_called_once()
-        bear_html_mock.assert_called_once_with(
-            "2026-06-05",
-            run_mode=daily_report_entry_demo.LEDGER_MODE_FROZEN,
-            saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
+        bear_html_mock.assert_called_once()
+        self.assertEqual(bear_html_mock.call_args.args, ("2026-06-05",))
+        self.assertEqual(bear_html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
+        self.assertEqual(
+            bear_html_mock.call_args.kwargs["saved_report_paths"],
+            {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
+        prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
+        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
+        self.assertIn("第一列是报告日，下一交易日是执行日", prepend_markdown)
         chart_html_mock.assert_not_called()
 
     def test_postgres_only_market_total_only_stops_before_any_artifact_save(self):

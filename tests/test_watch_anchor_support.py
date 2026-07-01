@@ -523,7 +523,7 @@ assert selected == ({"code": "300001"}, "创业板20cm预启动先看谁")
         )
 
         self.assertIn("先给4日呼吸感观察合同", result["observation_cycle"])
-        self.assertEqual(result["intervention_cycle"], "09:50-10:10窗口内满足条件后才评估50%条件执行，确认后才算被市场指派接货，不满足继续0%不参与")
+        self.assertEqual(result["intervention_cycle"], "09:50-10:10窗口内满足条件后只保留观察，结果进入复盘和下一份日报判断；不满足继续0%不参与")
         self.assertNotIn(_m("3", "0%", "条件", "试错"), result["observation_cycle"] + result["intervention_cycle"] + result["exit_cycle"])
         self.assertIn("失守9.88就作废", result["exit_cycle"])
         self.assertIn("4日观察到期也作废", result["exit_cycle"])

@@ -181,7 +181,7 @@ def _participation_bool(decision: dict[str, Any]) -> bool | None:
         return False
     if text.startswith("0%") or " 0%" in text or "，0%" in text or "；0%" in text or "/ 0%" in text:
         return False
-    positive_tokens = ("可参与", "条件执行", "50%条件执行", "100%核心", "条件满足才50%条件执行")
+    positive_tokens = ("可参与", "条件执行", "50%条件执行", "100%核心", "已决定50%条件执行")
     if any(token in text for token in positive_tokens):
         return True
     return False

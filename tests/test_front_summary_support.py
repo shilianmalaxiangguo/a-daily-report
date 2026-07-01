@@ -282,7 +282,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
             },
         )
 
-        self.assertEqual(result, "市场已允许出手，而且已经缩到一只可买股；只做50%条件执行，09:50-10:10站上12.34且不破11.80后才动手；不为新故事切掉旧事实")
+        self.assertEqual(result, "市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，09:50-10:10站上12.34且不破11.80后只检查执行资格；不为新故事切掉旧事实")
 
     def test_front_follow_action_text_passes_focus_keep_counts_to_position_sizing(self):
         support = self._load_module()

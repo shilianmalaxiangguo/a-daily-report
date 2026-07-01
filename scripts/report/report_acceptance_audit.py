@@ -240,7 +240,7 @@ LEGACY_POSITION_STYLE_MARKERS = (
     _m("二", "档"),
     _m("三", "档"),
 )
-POSITION_STYLE_GRADE_MARKERS = ("0%不参与", "50%条件执行", "100%核心进攻")
+POSITION_STYLE_GRADE_MARKERS = ("0%不参与", "50%条件执行", "满仓条件执行", "100%核心进攻")
 LEGACY_OBSERVATION_SURFACE_MARKERS = (
     _m("观察", "锚"),
     _m("观察", "锚点"),
@@ -265,16 +265,22 @@ ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS = (
     _m("条件", "50%"),
     "50%条件执行",
     "才评估50%条件执行",
+    "条件满足才50%条件执行",
+    "参与窗口命中后才评估50%条件执行",
+    "固定交易窗口条件成立才参与",
+    "固定交易窗口条件成立才50%条件执行",
+    "观察对象重新成立",
     "观察唯一对象",
     "按09:30-09:35窗口处理",
     "本时段只确认主线核心是否在固定交易窗口内满足条件",
 )
 MONTHLY_RHYTHM_HEADING = "### 月度攻防与进攻仓位"
 MONTHLY_RHYTHM_REQUIRED_LABELS = ("本月模式", "当月收益", "盈利垫", "进攻仓位三态", "明日最大仓位")
-POSITION_ATTACK_GRADE_LABELS = {"0%", "50%", "100%"}
+POSITION_ATTACK_GRADE_LABELS = {"0%", "50%", "满仓条件执行", "100%"}
 POSITION_ATTACK_GRADE_MIN_POSITION = {
     "0%": 0,
     "50%": 50,
+    "满仓条件执行": 50,
     "100%": 100,
 }
 LEGACY_CANDIDATE_SECTION_TITLES = ("### 1. 主线内观察候选", "### 1. 主线内可执行候选", "### 2. 跨线观察候选")
@@ -446,6 +452,35 @@ def _parse_percent_int(value):
 def _is_separator_cells(cells):
     joined = "".join(cells).replace(" ", "")
     return bool(joined) and set(joined) <= {"-", ":"}
+
+
+def _parse_visible_number(value):
+    match = re.search(r"[+-]?\d+(?:\.\d+)?", str(value or "").replace(",", ""))
+    if not match:
+        return None
+    try:
+        return float(match.group(0))
+    except ValueError:
+        return None
+
+
+def _table_rows_after_heading(lines, heading):
+    rows = []
+    in_section = False
+    for line in lines:
+        text = str(line or "").strip()
+        if text == heading:
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if text.startswith("#") and text != heading:
+            break
+        cells = _split_md_row(text)
+        if not cells or _is_separator_cells(cells):
+            continue
+        rows.append(cells)
+    return rows
 
 
 def _clean_html_cell(value):
@@ -957,7 +992,11 @@ def _audit_monthly_rhythm_section(lines):
                 "进攻仓位三态 must be one of: 0%, 50%, 100%",
             )
         )
-    max_position = _parse_percent_int(section_values.get("明日最大仓位"))
+    max_position_text = section_values.get("明日最大仓位")
+    if max_position_text == "满仓或0%不参与":
+        max_position = 100
+    else:
+        max_position = _parse_percent_int(max_position_text)
     min_position = POSITION_ATTACK_GRADE_MIN_POSITION.get(attack_grade)
     if max_position is not None and min_position is not None and min_position > max_position:
         findings.append(
@@ -1271,6 +1310,61 @@ def _audit_position_context_contradictions(lines):
                     )
                 )
                 break
+    return findings
+
+
+def _extract_html_timeline_assets(companion_html):
+    text = str(companion_html or "")
+    if "position-timeline-shell" not in text:
+        return {}
+    assets = {}
+    row_pattern = re.compile(
+        r'<tr\b[^>]*class=["\'][^"\']*timeline-row-(?P<lane>ta|tb|tc)[^"\']*["\'][^>]*>(?P<body>.*?)</tr>',
+        re.I | re.S,
+    )
+    for match in row_pattern.finditer(text):
+        body = match.group("body")
+        name_match = re.search(r'<span\b[^>]*class=["\']timeline-asset-name["\'][^>]*>(.*?)</span>', body, re.I | re.S)
+        code_match = re.search(r'<span\b[^>]*class=["\']timeline-asset-code["\'][^>]*>(.*?)</span>', body, re.I | re.S)
+        empty_match = re.search(r'<span\b[^>]*class=["\']timeline-asset-empty["\'][^>]*>(.*?)</span>', body, re.I | re.S)
+        if name_match:
+            name = html.unescape(re.sub(r"<[^>]+>", "", name_match.group(1))).strip()
+            code = html.unescape(re.sub(r"<[^>]+>", "", code_match.group(1))).strip() if code_match else ""
+            assets[match.group("lane").lower()] = f"{name}({code})" if code else name
+        elif empty_match:
+            assets[match.group("lane").lower()] = html.unescape(re.sub(r"<[^>]+>", "", empty_match.group(1))).strip()
+    return assets
+
+
+def _markdown_has_position_timeline(lines):
+    for line in lines:
+        if not str(line or "").strip():
+            continue
+        return str(line).lstrip().startswith("| 轨道 | 标的 |")
+    return False
+
+
+def _audit_position_timeline_parity(lines, companion_html=None):
+    html_assets = _extract_html_timeline_assets(companion_html)
+    markdown_has_timeline = _markdown_has_position_timeline(lines)
+    findings = []
+    if html_assets and not markdown_has_timeline:
+        findings.append(
+            _finding(
+                "position_timeline_markdown_missing",
+                "Bear HTML 已有 Ta/Tb/Tc 时间轴时，Markdown 也必须写出同一张可读表",
+            )
+        )
+    old_asset = html_assets.get("ta", "")
+    if old_asset and old_asset not in {"无", "空仓", "-"}:
+        full_text = "\n".join(str(line or "") for line in lines)
+        if "持仓未输入" in full_text and (old_asset in full_text or (companion_html and old_asset in str(companion_html))):
+            findings.append(
+                _finding(
+                    "known_old_position_conflicts_with_unknown_holding",
+                    f"Ta旧仓已指向 {old_asset}，正文不能继续写持仓未输入",
+                )
+            )
     return findings
 
 
@@ -2045,10 +2139,207 @@ def _final_summary_has_conditional_zero_plan(lines):
     return has_observation_prefix and has_participation_plan
 
 
+PREMARKET_FIXED_DECISION_LEGACY_MARKERS = (
+    "盘前0%；参与窗口命中后才评估50%条件执行",
+    "盘前0%；观察窗口命中后才评估50%条件执行",
+    "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
+    "盘前0%；固定交易窗口条件满足后才评估50%条件执行",
+    "条件成立才评估50%条件执行",
+    "条件满足才50%条件执行",
+    "命中固定交易窗口条件才评估50%条件执行",
+    "固定交易窗口内条件成立后才评估50%条件执行",
+    "固定交易窗口条件成立才参与",
+    "固定交易窗口条件成立才50%条件执行",
+    "观察对象重新成立",
+)
+POSITIVE_PREMARKET_UNDECIDED_ACTION_MARKERS = (
+    "条件满足才新开",
+    "命中才新开",
+    "买入区间命中才",
+    "再决定是否进入50%",
+    "再评估50%",
+    "才评估50%",
+)
+POSITIVE_PREMARKET_DECIDED_MARKERS = ("已决定", "昨晚预案")
+
+
+def _audit_premarket_fixed_decision_language(lines):
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        for marker in PREMARKET_FIXED_DECISION_LEGACY_MARKERS:
+            if marker not in text:
+                continue
+            findings.append(
+                _finding(
+                    "premarket_fixed_decision_legacy_wording",
+                    "明天买卖决定必须在当晚日报里完成；盘中条件只能执行或取消既定预案，不能把观察对象临时升级成买入对象",
+                    line=offset,
+                )
+            )
+            break
+    return findings
+
+
+FULL_OR_EMPTY_ACCOUNT_MAX_POSITION_MARKERS = (
+    "已决定满仓条件执行",
+    "满仓条件执行",
+)
+FULL_OR_EMPTY_ACCOUNT_FRACTIONAL_SURFACE_MARKERS = (
+    "才可做50%",
+    "25%试仓",
+    "50%底仓",
+    "50%机动仓",
+)
+
+
+def _audit_full_or_empty_account_visible_language(lines):
+    front = _front_page_lines(lines)
+    if not front:
+        return []
+    front_text = "\n".join(str(line or "") for line in front)
+    if not any(marker in front_text for marker in FULL_OR_EMPTY_ACCOUNT_MAX_POSITION_MARKERS):
+        return []
+
+    findings = []
+    section_values = {}
+    section_offsets = {}
+    for offset, line in enumerate(front, 1):
+        cells = _split_md_row(line)
+        if len(cells) >= 2 and not _is_separator_cells(cells):
+            label = cells[0]
+            if label in MONTHLY_RHYTHM_REQUIRED_LABELS:
+                section_values[label] = cells[1]
+                section_offsets[label] = offset
+
+    if section_values.get("进攻仓位三态") == "50%":
+        findings.append(
+            _finding(
+                "full_or_empty_account_fractional_surface",
+                "满仓/空仓账户已有正向执行对象时，前台不能把进攻仓位写成50%；应写满仓条件执行或0%不参与",
+                line=section_offsets.get("进攻仓位三态"),
+            )
+        )
+    if section_values.get("明日最大仓位") == "50%":
+        findings.append(
+            _finding(
+                "full_or_empty_account_fractional_surface",
+                "满仓/空仓账户已有正向执行对象时，前台不能把明日最大仓位写成50%；应写满仓或0%不参与",
+                line=section_offsets.get("明日最大仓位"),
+            )
+        )
+
+    for offset, line in enumerate(front, 1):
+        text = str(line or "")
+        if any(marker in text for marker in FULL_OR_EMPTY_ACCOUNT_FRACTIONAL_SURFACE_MARKERS):
+            findings.append(
+                _finding(
+                    "full_or_empty_account_fractional_surface",
+                    "满仓/空仓账户的前台交易纪律不能出现半仓、25%试仓、50%底仓等分仓表达",
+                    line=offset,
+                )
+            )
+    return findings
+
+
+def _audit_market_snapshot_risk_consistency(lines):
+    full_text = "\n".join(str(line or "") for line in list(lines or []))
+    if "风险点**: 暂无明确风险" not in full_text and "风险点 | 暂无明确风险" not in full_text:
+        return []
+    risky_markers = (
+        "跌停12",
+        "跌停 12",
+        "涨跌比 1434 / 4034",
+        "震荡偏风险",
+        "收缩防守",
+        "下跌家数偏多",
+    )
+    if not any(marker in full_text for marker in risky_markers):
+        return []
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        if "风险点**: 暂无明确风险" in text or "风险点 | 暂无明确风险" in text:
+            findings.append(
+                _finding(
+                    "market_snapshot_risk_conflict",
+                    "市场已显示跌多涨少或收缩防守时，市场快照不能写暂无明确风险",
+                    line=offset,
+                )
+            )
+    return findings
+
+
+def _audit_sector_fund_flow_visible_zero_tables(lines):
+    findings = []
+    for heading in ("### 资金流入TOP10", "### 资金流出结果"):
+        rows = _table_rows_after_heading(lines, heading)
+        data_rows = [row for row in rows if len(row) >= 4 and row[0] != "排名"]
+        if len(data_rows) < 3:
+            continue
+        named_rows = [row for row in data_rows if row[1] and row[1] not in {"-", "暂无", "无"}]
+        if len(named_rows) < 3:
+            continue
+        numeric_pairs = [
+            (_parse_visible_number(row[2]), _parse_visible_number(row[3]))
+            for row in named_rows
+        ]
+        numeric_pairs = [pair for pair in numeric_pairs if pair[0] is not None and pair[1] is not None]
+        if len(numeric_pairs) < 3:
+            continue
+        if all(abs(net_flow) < 0.0001 and abs(change_pct) < 0.0001 for net_flow, change_pct in numeric_pairs):
+            findings.append(
+                _finding(
+                    "sector_fund_flow_visible_all_zero",
+                    f"{heading} 有有效板块名称，但净流入/净流出和涨跌幅整表为0；需检查行业资金字段是否已正确归一",
+                )
+            )
+    return findings
+
+
+def _audit_positive_premarket_fixed_decision_language(lines):
+    front = _front_page_lines(lines)
+    if _positive_participation_pct(front) < 50:
+        return []
+
+    findings = []
+    section = _front_account_section_with_offsets(lines)
+    target_lines = section or list(enumerate(front, 1))
+    for offset, line in target_lines:
+        text = str(line or "")
+        if any(marker in text for marker in POSITIVE_PREMARKET_UNDECIDED_ACTION_MARKERS):
+            findings.append(
+                _finding(
+                    "positive_premarket_action_undecided_wording",
+                    "50%或100%正仓位必须表达为当晚已决定的执行计划；盘中只检查执行资格，不满足取消或回到0%",
+                    line=offset,
+                )
+            )
+
+    if section:
+        rows = []
+        for offset, line in section:
+            cells = _split_md_row(line)
+            if len(cells) >= 2 and not _is_separator_cells(cells):
+                rows.append((offset, cells[0], cells[1]))
+        key_text = "\n".join(str(value or "") for _, label, value in rows if label in ("明日动作", "价格条件", "明日仓位"))
+        if key_text and not any(marker in key_text for marker in POSITIVE_PREMARKET_DECIDED_MARKERS):
+            findings.append(
+                _finding(
+                    "positive_premarket_action_missing_decided_wording",
+                    "50%或100%正仓位必须写清当晚已决定执行，并说明盘中只按昨晚预案检查执行资格",
+                    line=section[0][0],
+                )
+            )
+    return findings
+
+
 def _positive_participation_pct(lines):
     text = "\n".join(str(line or "") for line in list(lines or []))
     if any(marker in text for marker in ("100%核心进攻", "100%核心进攻", "条件100%核心进攻")):
         return 100
+    if "满仓条件执行" in text:
+        return 50
     if any(marker in text for marker in ("50%条件执行", _m("条件", "50%", "预演"))):
         return 50
     return 0
@@ -2353,14 +2644,6 @@ def _audit_zero_position_decision_attribution(lines):
         return []
     front_execution_object = _extract_front_execution_object(lines)
     front_text = "\n".join(str(line or "") for line in front)
-    if (
-        front_execution_object
-        and _target_identity(front_execution_object)
-        and "## 50%条件执行条件" in front_text
-        and "条件满足才50%条件执行" in front_text
-    ):
-        return []
-
     required_labels = ("明日仓位", "执行目标", "不参与依据", "无执行目标原因", "责任归因")
     values = {}
     offsets = {}
@@ -2514,10 +2797,15 @@ def _audit_two_layer_execution_object_consistency(lines):
 
 def _audit_b_level_conditions(lines):
     front_text = "\n".join(str(line or "") for line in _front_page_lines(lines))
-    if "## 50%条件执行条件" not in front_text:
+    has_condition_heading = "## 50%条件执行条件" in front_text or "## 满仓条件执行条件" in front_text
+    if not has_condition_heading:
         has_execution_conclusion = "## 明日执行结论" in front_text and "| 明日执行对象 |" in front_text
         execution_object_is_none = "| 明日执行对象 | 无 |" in front_text
-        if not (has_execution_conclusion and not execution_object_is_none and "50%条件执行" in front_text):
+        if not (
+            has_execution_conclusion
+            and not execution_object_is_none
+            and ("50%条件执行" in front_text or "满仓条件执行" in front_text)
+        ):
             return []
     if "低开承接型" in front_text and "主动进攻型" in front_text:
         return []
@@ -2717,6 +3005,36 @@ def _audit_daily_judgment_core_candidate_consistency(lines):
                 line=offset,
             )
         )
+    return findings
+
+
+def _audit_daily_judgment_settled_fact_visibility(lines):
+    findings = []
+    in_settled_block = False
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "").strip()
+        if text.startswith("**近") and "已结算交易日复盘表现" in text:
+            in_settled_block = True
+            continue
+        if text.startswith("**结算上一交易日"):
+            in_settled_block = True
+            continue
+        if text.startswith("**上一交易日未完成结算") or text.startswith("**今日判断"):
+            in_settled_block = False
+            continue
+        if not in_settled_block:
+            continue
+        cells = _split_md_row(line)
+        if len(cells) < 2 or _is_separator_cells(cells) or cells[0] == "判断项" or cells[0] == "暂无已结算项":
+            continue
+        if "待补事实" in " ".join(cells):
+            findings.append(
+                _finding(
+                    "daily_judgment_settled_table_unresolved_fact",
+                    "已结算复盘表不能把待补事实作为结论输出，应放到未完成结算区",
+                    line=offset,
+                )
+            )
     return findings
 
 
@@ -3102,11 +3420,41 @@ def _audit_positive_final_action_appendix_conflicts(lines):
         "买点出现",
         "预计算买点",
         "筛到可买股",
+        "明日买入决定：不买新仓；观察对象只复盘，不参与",
+        "只做等待，不做新增参与",
+        "保持空仓：当前不新增参与",
+        "禁止买入任何方向",
+        "明日不新增参与",
+        "继续0%不参与",
+        "进攻仓位**: 0%不参与",
+        "盘前0%就是不买新仓",
+        "当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件",
+        "未确认保持0%",
     )
     process_markers = ("过程候选", "过程样本", "过程证据", "回看样本", "不覆盖唯一明日动作")
     findings = []
+    in_ignored_candidate_block = False
+    in_positive_execution_table = False
     for index, line in enumerate(appendix, 1):
         text = str(line or "")
+        stripped = text.strip()
+        if stripped.startswith("#") and "明日条件执行对象" in stripped:
+            in_positive_execution_table = True
+        elif in_positive_execution_table and stripped.startswith("#"):
+            in_positive_execution_table = False
+        if stripped.startswith("**暂不关注**:"):
+            in_ignored_candidate_block = True
+        elif in_ignored_candidate_block and (not stripped or stripped.startswith("**") or stripped.startswith("#")):
+            in_ignored_candidate_block = False
+        if in_ignored_candidate_block and identity and identity in _target_identity(text):
+            findings.append(
+                _finding(
+                    "positive_final_action_appendix_conflict",
+                    f"前台已有正向唯一动作 {identity}，附录仍把同一对象放入暂不关注或条件链不足分组",
+                    line=appendix_start_line + index,
+                )
+            )
+            continue
         if any(marker in text for marker in conflict_markers):
             findings.append(
                 _finding(
@@ -3116,10 +3464,62 @@ def _audit_positive_final_action_appendix_conflicts(lines):
                 )
             )
             continue
+        if identity and identity in _target_identity(text) and any(
+            marker in text for marker in ("候选观察", "需看明日竞价强弱", "不作为新增参与依据", "最终0%时只作观察样本")
+        ):
+            findings.append(
+                _finding(
+                    "positive_final_action_appendix_conflict",
+                    f"前台已有正向唯一动作 {identity}，附录仍把同一对象写成观察或0%旧口径",
+                    line=appendix_start_line + index,
+                )
+            )
+            continue
+        if stripped.startswith(
+            (
+                "**观察优先对象**",
+                _m("**观察优先", "锚点**"),
+                "- **盘前不抢跑**:",
+                "- **跨线继续看谁**:",
+                "- **现在重点看什么**:",
+            )
+        ):
+            line_identity = _target_identity(stripped)
+            if line_identity and line_identity != identity and not any(marker in text for marker in process_markers):
+                findings.append(
+                    _finding(
+                        "positive_final_action_appendix_conflict",
+                        f"前台已有正向唯一动作 {identity}，附录仍把 {line_identity} 写成当前观察优先对象",
+                        line=appendix_start_line + index,
+                    )
+                )
+                continue
         cells = _split_md_row(text)
         if not cells:
             continue
         if "明天具体怎么做" in cells and "股票" in cells:
+            continue
+        if len(cells) >= 2 and cells[0] == "角色" and "标的" in cells:
+            continue
+        if len(cells) >= 2 and cells[0] in {"明日主买对象", "明日补位对象"}:
+            row_identity = _target_identity(" ".join(cells[1:]))
+            if row_identity and row_identity != identity and not any(marker in text for marker in process_markers):
+                findings.append(
+                    _finding(
+                        "positive_final_action_appendix_conflict",
+                        f"前台已有正向唯一动作 {identity}，附录仍把 {row_identity} 写成明日主买或补位对象",
+                        line=appendix_start_line + index,
+                    )
+                )
+                continue
+        if in_positive_execution_table and len(cells) >= 2 and cells[0] in {"暂无", "无"}:
+            findings.append(
+                _finding(
+                    "positive_final_action_appendix_conflict",
+                    f"前台已有正向唯一动作 {identity}，附录明日条件执行对象表仍为空",
+                    line=appendix_start_line + index,
+                )
+            )
             continue
         if len(cells) >= 3 and any("明天先盯哪只" in cell or "确认后执行预案" in cell for cell in cells):
             row_identity = _target_identity(" ".join(cells))
@@ -3283,6 +3683,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_degraded_fake_zero(lines))
     findings.extend(_audit_market_breadth_incomplete(lines))
     findings.extend(_audit_position_context_contradictions(lines))
+    findings.extend(_audit_position_timeline_parity(lines, companion_html))
     findings.extend(_audit_account_advice_position_contract(lines))
     findings.extend(_audit_opportunity_comparison_contract(lines))
     findings.extend(_audit_incomplete_candidate_execution_plan(lines))
@@ -3298,6 +3699,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(audit_new_stock_visibility(markdown)["findings"])
     findings.extend(_audit_final_object_identity_consistency(lines))
     findings.extend(_audit_daily_judgment_core_candidate_consistency(lines))
+    findings.extend(_audit_daily_judgment_settled_fact_visibility(lines))
     findings.extend(_audit_derivation_audit_rejection_consistency(lines))
     findings.extend(_audit_process_candidate_loss_reasons(lines))
     findings.extend(_audit_sniper_target_derivation_consistency(lines))
@@ -3308,6 +3710,11 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_zero_position_decision_attribution(lines))
     findings.extend(_audit_zero_position_tomorrow_action_consistency(lines))
     findings.extend(_audit_zero_position_participation_language(lines))
+    findings.extend(_audit_premarket_fixed_decision_language(lines))
+    findings.extend(_audit_full_or_empty_account_visible_language(lines))
+    findings.extend(_audit_market_snapshot_risk_consistency(lines))
+    findings.extend(_audit_sector_fund_flow_visible_zero_tables(lines))
+    findings.extend(_audit_positive_premarket_fixed_decision_language(lines))
     findings.extend(_audit_chanlun_tomorrow_decision_consistency(lines, companion_html))
     findings.extend(_audit_position_state_rendering(lines))
     findings.extend(_audit_next_day_attribution_contract(lines))

@@ -337,6 +337,31 @@ class MarketActivityDomainReportSectionsTest(unittest.TestCase):
         self.assertNotIn("### 资金流出结果", rendered)
         self.assertNotIn("消费", rendered)
 
+    def test_build_market_activity_report_sections_renders_sector_fund_alias_fields(self):
+        result = build_market_activity_report_sections(
+            data={
+                "hot_rank_top30": [],
+                "zt_pool": [],
+                "dt_pool": [],
+                "turnover_rank": [],
+                "sector_fund_flow": {
+                    "inflow": [{"sector": "半导体", "net_amount": 31.2, "change_pct": 2.45}],
+                    "outflow": [{"industry": "通信设备", "net_inflow_yi": -18.6, "pct_change": -1.27}],
+                },
+                "lianban_data": [],
+            },
+            target_date="2026-06-29",
+            stock_full_info={},
+            get_stock_status=lambda *args, **kwargs: "正常",
+            get_stock_sector=lambda *args, **kwargs: "半导体",
+            analyze_candlestick_pattern=lambda *args, **kwargs: ("阳线", 80, "强"),
+            enabled_node_keys=["sector_fund_inflow", "sector_fund_outflow"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 1 | 半导体 | +31.20亿 | +2.45% |", rendered)
+        self.assertIn("| 1 | 通信设备 | 18.60亿 | -1.27% |", rendered)
+
     def test_build_market_activity_report_sections_exports_sector_diffusion_for_postgres(self):
         result = build_market_activity_report_sections(
             data={

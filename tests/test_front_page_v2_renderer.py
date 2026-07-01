@@ -255,7 +255,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 观察对象去留 | 明日收盘前未满足恢复评估条件，移出前台观察 |", rendered)
         self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", rendered)
         self.assertIn("| 只看观察对象 | 600578 京能电力（电力） |", rendered)
-        self.assertIn("观察对象重新成立", rendered)
+        self.assertIn("观察对象只进入复盘和下一份日报判断", rendered)
         self.assertNotIn("观察" + "锚", rendered)
         self.assertNotIn("| 唯一对象 | 条件观察", rendered)
         self.assertNotIn("唯一对象是否", rendered)
@@ -750,6 +750,63 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 电力 | 大唐发电 | 豫能控股 | 核心继续承接 |", core_section)
         self.assertIn("| 科技 | 工业富联 | 胜宏科技 | 旧线观察回流 |", core_section)
         self.assertIn("| 消费 | 中百集团 | 桂发祥 | 弹性待验证 |", core_section)
+
+    def test_front_page_core_validation_falls_back_to_selection_workflow_candidates(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-29",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {
+                        "current_mainline": "化学制药",
+                        "cycle_stage": "启动",
+                        "mainline_capacity_regime_summary": {
+                            "primary_line": "化学制药",
+                            "other_lines": "医疗服务、国产芯片替代",
+                            "sector_relationship_state": "双主线竞争",
+                            "mainline_process": "启动",
+                            "tomorrow_action": "不把每次轮动都当新主线，候选只保留判断样本",
+                        },
+                    },
+                    "selection_workflow": {
+                        "schema_version": "selection_workflow.v1",
+                        "final": {
+                            "position_pct": 100,
+                            "execution_object": {"name": "深科技", "code": "000021", "sector": "消费电子"},
+                        },
+                        "candidate_pool": [
+                            {
+                                "name": "深科技",
+                                "code": "000021",
+                                "sector": "消费电子",
+                                "status": "最终执行对象",
+                                "entered_reason": "半导体进入板块候选；角色：趋势容量核心、板块锚/资金表领涨、量化弹性",
+                            },
+                            {
+                                "name": "柏诚股份",
+                                "code": "601133",
+                                "sector": "专业工程",
+                                "status": "过程候选",
+                                "entered_reason": "化学制药板块锚定龙 / 2连板 / 趋势审美",
+                            },
+                            {
+                                "name": "太龙药业",
+                                "code": "600222",
+                                "sector": "化学制药",
+                                "status": "过程候选",
+                                "entered_reason": "化学制药大阳线封板，作为弹性载体继续验证",
+                            },
+                        ],
+                    },
+                    "selected_position_candidate": {"name": "深科技", "code": "000021", "sector": "消费电子"},
+                },
+            )
+        )
+
+        core_section = rendered[rendered.index("### 龙头 / 核心验证") : rendered.index("### 1. 周期日历主视图")]
+        self.assertIn("| 化学制药 | 柏诚股份(601133) | 太龙药业(600222) | 化学制药板块锚定龙 / 2连板 / 趋势审美 |", core_section)
+        self.assertIn("| 国产芯片替代 | 深科技(000021) |", core_section)
+        self.assertNotIn("| 化学制药 | 待补事实 | 待补事实 | 待验证 |", core_section)
 
     def test_front_page_derivation_chain_waits_until_after_market_spine(self):
         rendered = "\n".join(
@@ -1273,7 +1330,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         self.assertLess(rendered.index("## 明日账户建议"), rendered.index("## 一、交易纪律"))
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 账户约束 | 约1w账户；未输入持仓，先确认旧仓，再看观察对象是否重新成立 |", account_section)
+        self.assertIn("| 账户约束 | 约1w账户；未输入持仓，先确认旧仓；观察对象只进入复盘和下一份日报判断 |", account_section)
         self.assertIn("| 明日仓位 | 0%不参与 |", account_section)
         self.assertIn("| 明日动作 | 0%不参与；只保留观察对象，不新开 |", account_section)
         self.assertIn("| 观察对象 | 华天科技(002185)：观察对象，不是执行目标 |", account_section)
@@ -1315,7 +1372,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日执行目标 | 豫能控股(001896)：条件满足才50%条件执行 |", account_section)
+        self.assertIn("| 明日执行目标 | 豫能控股(001896)：已决定50%条件执行；不满足回到0% |", account_section)
         self.assertNotIn("不是执行对象", account_section)
         self.assertNotIn("不能定义明日执行对象", account_section)
 
@@ -1346,11 +1403,11 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 明日仓位 | 条件满足才50%条件执行；不满足回到0% |", rendered)
+        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", rendered)
         self.assertIn("| 执行目标 | 豫能控股(001896) |", rendered)
         self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)
         self.assertIn("| 只看明日执行对象 | 豫能控股(001896) | 09:30-09:35或09:50-10:10 |", rendered)
-        self.assertIn("| 条件满足才50%条件执行；不满足回到0% | 不确定时不值得主动参与 |", rendered)
+        self.assertIn("| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 不确定时不值得主动参与 |", rendered)
         self.assertIn("| 豫能控股(001896) | 50%条件执行 |", rendered)
         self.assertNotIn("观察" + "锚性质", rendered)
         self.assertNotIn("不是执行对象", rendered)
@@ -1437,12 +1494,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
-        self.assertIn("| 明日动作 | 先确认旧仓情况，再看明日执行目标 |", account_section)
+        self.assertIn("| 明日动作 | 先确认旧仓情况；已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
         self.assertIn("| 明日执行目标 | 大唐发电(601991)：固定交易窗口条件 |", account_section)
         self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
         self.assertNotIn("无旧仓", account_section)
         self.assertNotIn("确认没有旧仓", account_section)
-        self.assertIn("| 价格条件 | 买入区间：MA5附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
+        self.assertIn("| 价格条件 | 执行条件：MA5附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
+        self.assertNotIn("命中才新开", account_section)
         self.assertIn("| 新开仓上限 | 1 |", account_section)
         self.assertNotIn("| T0主对象 |", account_section)
         self.assertNotIn("预计", account_section)
@@ -1476,7 +1534,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
         self.assertIn("| 备用观察 | 暂无 |", account_section)
-        self.assertIn("| 价格条件 | 买入区间：MA7附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
+        self.assertIn("| 价格条件 | 执行条件：MA7附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn("| 明日动作 | 已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日执行目标 | 无昨日持仓，不涉及明日执行对象 |", account_section)
         self.assertNotIn("预计", account_section)
 
@@ -1507,7 +1567,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 明日仓位 | 100%核心进攻 |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
-        self.assertIn("| 价格条件 | 买入区间：MA7附近；09:50-10:10看承接，不满足0%不参与 |", account_section)
+        self.assertIn("| 价格条件 | 执行条件：MA7附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn("| 明日动作 | 已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日仓位 | 50%条件执行 |", account_section)
         self.assertNotIn("预计", account_section)
 
@@ -1551,12 +1613,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
-        self.assertIn("| 明日动作 | 先确认旧仓情况，再看明日执行目标 |", account_section)
+        self.assertIn("| 明日动作 | 先确认旧仓情况；已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
         self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
         self.assertNotIn("无旧仓", account_section)
         self.assertNotIn("确认没有旧仓", account_section)
-        self.assertIn("| 价格条件 | 买入区间：MA5附近；09:50-10:10站上9.21且不破8.75，不满足0%不参与 |", account_section)
+        self.assertIn("| 价格条件 | 执行条件：MA5附近；按昨晚预案检查执行资格：09:50-10:10站上9.21且不破8.75；不满足取消，回到0%不参与 |", account_section)
+        self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日仓位 | 0%不参与 |", account_section)
         self.assertNotIn("| 观察对象 | 华电能源(600726)：观察" + "锚，不是执行对象 |", account_section)
         self.assertNotIn("预计", account_section)
@@ -1619,7 +1682,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 账户约束 | 约1w账户；已有持仓继续独立评估 |", account_section)
         self.assertIn(
-            "| 明日动作 | 持仓独立评估；太极实业(600667)固定交易窗口条件成立才参与，不满足回到0% |",
+            "| 明日动作 | 持仓独立评估；太极实业(600667)按昨晚预案检查执行资格；不满足回到0%不参与 |",
             account_section,
         )
         self.assertIn("| 当前持仓 | 持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理 |", account_section)
@@ -1904,7 +1967,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 账户约束 | 约1w账户；未输入持仓，先确认旧仓，再看观察对象是否重新成立 |", account_section)
+        self.assertIn("| 账户约束 | 约1w账户；未输入持仓，先确认旧仓；观察对象只进入复盘和下一份日报判断 |", account_section)
         self.assertNotIn("无昨日持仓", account_section)
 
     def test_front_page_zero_participation_keeps_candidate_as_observation_not_t0(self):
@@ -1954,7 +2017,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     },
                     "existing_position_summary": {
                         "has_position": True,
-                        "summary": "持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手",
+                        "summary": "持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，09:50-10:10收不回先卖；新开仓0手",
                     },
                     "selected_position_candidate": {
                         "name": "华天科技",
@@ -1973,7 +2036,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 账户约束 | 1w本金；总资产10126.52；当日盈利126.52（+1.27%）；已有昨日持仓优先处理 |", account_section)
         self.assertIn("| 明日动作 | 先处理旧仓，不新增参与 |", account_section)
         self.assertIn(
-            "| 旧仓处理 | 持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，跌破42.84~43.05或09:50-10:10收不回先卖；新开仓0手 |",
+            "| 旧仓处理 | 持有晶方科技(603005)1手，成本43.835；先看45.10能否守住，09:50-10:10收不回先卖；新开仓0手 |",
             account_section,
         )
         self.assertIn("| 观察对象 | 华天科技(002185)：仅作观察对象 |", account_section)
@@ -2180,7 +2243,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("### 2. 明日候选观察", rendered)
         self.assertIn("| 角色 | 标的 | 速度档 | 买点线 | 卖点线 | 承接修复条件 | 观察复核 | 观察窗 |", rendered)
         self.assertIn("| 暂无 | - | - | - | - | - | - | - |", rendered)
-        self.assertIn("| 只保留观察对象和备用观察 | 完整候选单保留在结构化快照与附录 | 最终0%时只观察，不做新增参与；观察对象重新成立也只作为盘中复核 |", rendered)
+        self.assertIn("| 只保留观察对象和备用观察 | 完整候选单保留在结构化快照与附录 | 最终0%时只观察，不做新增参与；观察对象只进入复盘和下一份日报判断 |", rendered)
         self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", rendered)
         self.assertNotIn("### 2. 明日主买与补位", rendered)
         self.assertNotIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)

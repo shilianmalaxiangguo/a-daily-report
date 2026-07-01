@@ -502,6 +502,7 @@ def _build_panel_fields(
     step0_prediction_cn,
     has_personal_positions,
     position_context_provided,
+    existing_position_summary=None,
     daily_new_entry_limit,
     best_stock,
     watch_anchor,
@@ -509,9 +510,14 @@ def _build_panel_fields(
     backup_candidate = watch_anchor
     if _candidate_key(best_stock) and _candidate_key(best_stock) == _candidate_key(watch_anchor):
         backup_candidate = None
+    existing_position_summary = existing_position_summary if isinstance(existing_position_summary, dict) else {}
+    inferred_old_path = bool(existing_position_summary.get("has_position") and existing_position_summary.get("summary"))
     if has_personal_positions:
         account_attention_load = "有持仓需先处理"
         holding_priority_action = "先处理旧仓，再看新增"
+    elif inferred_old_path:
+        account_attention_load = "旧路径需复核"
+        holding_priority_action = "旧路径与明日目标分开处理"
     elif position_context_provided:
         account_attention_load = "无持仓负担"
         holding_priority_action = "无旧仓时只等参与窗口"
@@ -595,6 +601,11 @@ def build_candidate_quality_scorecard_payload(context):
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
     position_context_provided = bool(context.get("position_context_provided", False))
+    existing_position_summary = context.get("existing_position_summary")
+    if not isinstance(existing_position_summary, dict):
+        personal_position_context = context.get("personal_position_context")
+        if isinstance(personal_position_context, dict):
+            existing_position_summary = personal_position_context.get("existing_position_summary")
     display_observation_candidates = context.get("display_observation_candidates", context.get("observation_candidates", [])) or []
     display_observation_candidates = _replace_or_prepend_candidate(display_observation_candidates, current_watch_target)
     waiting_stocks = context.get("waiting_stocks", []) or []
@@ -640,6 +651,7 @@ def build_candidate_quality_scorecard_payload(context):
         step0_prediction_cn=step0_prediction_cn,
         has_personal_positions=has_personal_positions,
         position_context_provided=position_context_provided,
+        existing_position_summary=existing_position_summary,
         daily_new_entry_limit=daily_new_entry_limit,
         best_stock=best_stock,
         watch_anchor=watch_anchor,

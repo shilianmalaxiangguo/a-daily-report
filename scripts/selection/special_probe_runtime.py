@@ -461,7 +461,7 @@ def _get_abnormal_follow_risk_signal_legacy_body(stock):
             "light": "🟡 黄灯",
             "delta": -4,
             "reason": "创业板20cm预启动仍在收拢观察期，先确认它有没有走成右侧确认",
-            "forecast": "先看右侧确认和固定交易窗口内条件，再决定是否进入50%条件执行；普通结构只看09:50-10:10窗口",
+            "forecast": "先看右侧确认和固定交易窗口内承接，确认结果进入复盘和下一份日报判断；普通结构只看09:50-10:10窗口",
         }
 
     if not state:
@@ -1000,8 +1000,8 @@ def _build_special_probe_verdict_legacy_body(
             return {
                 "code": "crossline_probe_upgrade_ready",
                 "label": "跨线可升级探针",
-                "summary_text": f"{name}({code}) 虽然仍属跨线对象，但已经先走势符合强势标准：承接未坏、确认链完整，且连续反馈已出现；只进入50%条件执行，不直接当成主攻线切换。",
-                "action": "先按跨线可升级探针对待；若继续走势符合强势标准且固定交易窗口内条件成立，才评估50%条件执行。",
+                "summary_text": f"{name}({code}) 虽然仍属跨线对象，但已经先走势符合强势标准：承接未坏、确认链完整，且连续反馈已出现；只进入复盘和下一份日报判断，不直接当成主攻线切换。",
+                "action": "先按跨线可升级探针对待；若继续走势符合强势标准且固定交易窗口内条件成立，也只进入复盘和下一份日报判断。",
                 "probe_candidate": crossline_probe,
                 "probe_state": "probe_crossline_upgrade_ready",
                 "allows_attack_50_ready": True,
@@ -1031,8 +1031,8 @@ def _build_special_probe_verdict_legacy_body(
             return {
                 "code": "mainline_probe_upgrade_ready",
                 "label": "主线可升级探针",
-                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据，若次日继续走势符合强势标准且固定交易窗口内条件成立，才评估50%条件执行。",
-                "action": "先盯主线可升级探针是否继续证明自己；若次日继续走势符合强势标准，再评估50%条件执行。",
+                "summary_text": f"{name}({code}) 已被识别成主线可升级探针：承接未坏、确认链完整，且出现连续反馈/修复证据；若次日继续走势符合强势标准，也只进入复盘和下一份日报判断。",
+                "action": "先盯主线可升级探针是否继续证明自己；若次日继续走势符合强势标准，也只进入复盘和下一份日报判断。",
                 "probe_candidate": mainline_probe,
                 "probe_state": upgrade_probe_context.get("probe_state"),
                 "allows_attack_50_ready": bool(upgrade_probe_context.get("allows_attack_50_ready")),

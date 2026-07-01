@@ -59,6 +59,51 @@ def _stock_code(item):
     return item.get("stock_code") or item.get("code") or "-"
 
 
+def _normalize_stock_code(value):
+    text = str(value or "").strip()
+    if "." in text:
+        text = text.split(".", 1)[0]
+    digits = "".join(ch for ch in text if ch.isdigit())
+    return digits or text
+
+
+def _final_execution_stock_code(context):
+    target = (context or {}).get("final_execution_target")
+    if not isinstance(target, dict):
+        target = {}
+    final_action = (context or {}).get("final_action")
+    if not target and isinstance(final_action, dict):
+        target = final_action.get("target") if isinstance(final_action.get("target"), dict) else {}
+    if not target:
+        resolution = (context or {}).get("final_target_resolution")
+        resolution = resolution if isinstance(resolution, dict) else {}
+        decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+        if str(decision.get("capital_priority") or "").strip() in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
+            for key in ("new_entry_target", "tradable_proxy_target", "display_target"):
+                candidate = resolution.get(key)
+                if isinstance(candidate, dict) and candidate:
+                    target = candidate
+                    break
+    return _normalize_stock_code(target.get("stock_code") or target.get("code")) if target else ""
+
+
+def _candidate_visible_row(idx, item, final_execution_code):
+    role = item.get("sniper_role") or item.get("execution_layer") or item.get("role")
+    principle = item.get("conviction_rule") or item.get("next_action") or item.get("principle")
+    if final_execution_code and _normalize_stock_code(_stock_code(item)) == final_execution_code:
+        role = "明日执行对象"
+        principle = "已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+    return [
+        idx,
+        _stock_name(item),
+        _stock_code(item),
+        item.get("sector"),
+        role,
+        item.get("conviction_reason") or item.get("reason"),
+        principle,
+    ]
+
+
 def _review_reasons(item):
     review = item.get("trend_aesthetic_review") or {}
     if isinstance(review, dict):
@@ -391,21 +436,14 @@ def _build_mainline_continuity_node(context, node_meta=None, node_lookup=None):
 def _build_visible_candidate_lists_node(context, node_meta=None, node_lookup=None):
     extreme_conviction_list = _context_value(context, "extreme_conviction_list", []) or []
     dragon_rebound_watch_pool = _context_value(context, "dragon_rebound_watch_pool", []) or []
+    final_execution_code = _final_execution_stock_code(context)
     lines = []
     _append_table(
         lines,
         "### 附录A：明日极度看好列表",
         ["序号", "股票", "代码", "板块", "名单身份", "观察理由", "明日原则"],
         [
-            [
-                idx,
-                _stock_name(item),
-                _stock_code(item),
-                item.get("sector"),
-                item.get("sniper_role") or item.get("execution_layer") or item.get("role"),
-                item.get("conviction_reason") or item.get("reason"),
-                item.get("conviction_rule") or item.get("next_action") or item.get("principle"),
-            ]
+            _candidate_visible_row(idx, item, final_execution_code)
             for idx, item in enumerate(extreme_conviction_list, 1)
             if isinstance(item, dict)
         ],

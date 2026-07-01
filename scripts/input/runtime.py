@@ -40,6 +40,29 @@ __all__ = ["run_input_runtime"]
 _MISSING = object()
 
 
+def _margin_pressure_payload_available(payload):
+    rows = (payload or {}).get("rows") if isinstance(payload, dict) else []
+    return bool((payload or {}).get("available") and rows)
+
+
+def _fetch_margin_pressure_with_retry(fetcher, target_date):
+    if not callable(fetcher):
+        return {}
+    last_payload = {}
+    last_error = None
+    for _attempt in range(3):
+        try:
+            last_payload = fetcher(target_date=target_date, window_days=25, calibration_days=250) or {}
+        except Exception as error:
+            last_error = error
+            continue
+        if _margin_pressure_payload_available(last_payload):
+            return last_payload
+    if last_error is not None and not last_payload:
+        raise last_error
+    return last_payload
+
+
 def _safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -557,10 +580,7 @@ def _run_input_runtime_legacy_body(target_date=None):
             margin_pressure_fetcher = (
                 request_registry.get("margin_pressure") if isinstance(request_registry, dict) else None
             )
-            if callable(margin_pressure_fetcher):
-                margin_pressure = margin_pressure_fetcher(target_date=target_date, window_days=25, calibration_days=250)
-            else:
-                margin_pressure = {}
+            margin_pressure = _fetch_margin_pressure_with_retry(margin_pressure_fetcher, target_date)
             results["margin_pressure"] = margin_pressure or {}
             margin_rows = (margin_pressure or {}).get("rows") or []
             data_status["融资承接压力"] = bool((margin_pressure or {}).get("available") and margin_rows)

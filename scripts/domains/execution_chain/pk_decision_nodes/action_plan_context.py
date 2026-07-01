@@ -445,13 +445,13 @@ def build_action_plan_context_payload(context):
         exit_rules = build_candidate_exit_rules(watch_anchor, stop_plan)
         action_rows.append(
             {
-                "action": "👀 明天先盯哪只",
+	                "action": "👀 明天只复盘哪只",
                 "name": watch_anchor.get("name"),
                 "code": watch_anchor.get("code"),
                 "trigger": (
-                    f"09:50-10:10站上{confirm_price:.2f}后，再看是否走成明天唯一能买的那只"
-                    if confirm_price
-                    else "先看09:50-10:10窗口，再看是否走成明天唯一能买的那只"
+	                    f"09:50-10:10站上{confirm_price:.2f}后只记录承接，结果进入复盘和下一份日报判断"
+	                    if confirm_price
+	                    else "先看09:50-10:10窗口承接，结果进入复盘和下一份日报判断"
                 ),
                 "risk_window": f"{(price_focus or {}).get('key_zone_display', '-')} / "
                 f"{format_holding_window_text(exit_rules.get('holding_days_min'), exit_rules.get('holding_days_max'))}",
@@ -469,7 +469,7 @@ def build_action_plan_context_payload(context):
                 "action": "⏳ 确认后执行预案",
                 "name": candidate.get("name"),
                 "code": candidate.get("code"),
-                "trigger": f"{confirm_text}，且板块承接不塌，固定交易窗口内条件成立后才评估50%条件执行",
+                "trigger": f"{confirm_text}，且板块承接不塌，只按昨晚预案检查执行资格；不满足取消",
                 "risk_window": (price_focus or {}).get("key_zone_display", "-"),
             }
         )
@@ -544,8 +544,8 @@ def build_action_plan_context_payload(context):
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 0%不参与，禁止抢跑，但保留重点观察名单的盘中确认路径",
-                    "- **明天仓位放多少**: 盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
-                    "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，命中后才评估50%条件执行，未命中继续0%",
+                    "- **明天仓位放多少**: 明日买入决定：不买新仓；观察对象只复盘，不参与",
+                    "- **明天具体怎么做**: 09:50-10:10只看重点观察/主线核心是否主动证明自己，结果进入复盘和下一份日报判断，未命中继续0%",
                 ]
             )
         else:
@@ -562,8 +562,8 @@ def build_action_plan_context_payload(context):
                 position_section_lines.extend(
                     [
                         "- **现在到底是什么状态**: 还没有缩到一只可买股",
-                        "- **明天仓位放多少**: 0%（市场允许出手，但还没有可买股前不开仓）",
-                        "- **明天具体怎么做**: 只观察明天先盯哪只，等它走成明天唯一能买的那只后再买",
+	                        "- **明天仓位放多少**: 0%（明日买入决定：不买新仓）",
+	                        "- **明天具体怎么做**: 只观察重点盯盘股承接，结果进入复盘和下一份日报判断",
                     ]
                 )
             else:
@@ -584,11 +584,11 @@ def build_action_plan_context_payload(context):
             )
         elif step0_prediction == "NEUTRAL":
             position_section_lines.extend(
-                [
-                    "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    "- **明天仓位放多少**: 50%条件执行（只在固定交易窗口内条件成立后）",
-                    "- **明天具体怎么做**: 严格按买点触发，不追涨；固定交易窗口内条件不满足就转为0%",
-                ]
+	                [
+	                    "- **现在到底是什么状态**: 已经缩到一只可买股",
+	                    "- **明天仓位放多少**: 已决定50%条件执行；盘中不满足取消，回到0%不参与",
+	                    "- **明天具体怎么做**: 严格按昨晚预案检查执行资格，不追涨；不满足就转为0%",
+	                ]
             )
         else:
             position_section_lines.extend(
@@ -667,13 +667,13 @@ def build_action_plan_context_payload(context):
             "- 跌破执行止损线 → 无条件止损",
         ]
     elif trade_gate_open and watch_anchor:
-        first_hour_lines = [
-            "- 市场允许出手，但当前还不是明天唯一能买的那只，本时段先看重点盯盘股能否在固定交易窗口内满足条件",
-            "- 只有它继续抗跌并走成明天唯一能买的那只，才允许进入参与流程",
-        ]
-        intraday_lines = [
-            "- 继续只盯明天先盯哪只，不做多票分散",
-            "- 它如果始终走不成明天唯一能买的那只 → 当天继续等待，不抢跑",
+	        first_hour_lines = [
+	            "- 市场允许出手，但当前没有当晚已决定的执行对象，本时段只观察重点盯盘股承接",
+	            "- 重点盯盘股即使继续抗跌，也只进入复盘和下一份日报判断",
+	        ]
+	        intraday_lines = [
+	            "- 继续只盯观察对象，不做多票分散",
+	            "- 它如果始终不能证明强于市场 → 当天继续等待，不抢跑",
             "- 若候选盘中直接走坏或失守关键位/带 → 取消它的执行资格",
         ]
     else:
@@ -690,11 +690,11 @@ def build_action_plan_context_payload(context):
                 ]
             else:
                 first_hour_lines = [
-                    "- 当前是0%不参与，本时段只确认主线核心是否在固定交易窗口内满足条件",
-                    "- 重点观察优先对象是否继续走强；确认后才评估50%条件执行，未确认保持0%",
+                    "- 当前是0%不参与，本时段只观察主线核心是否在固定交易窗口内满足条件",
+                    "- 重点观察优先对象是否继续走强；确认后也只进入复盘和下一份日报判断，未确认保持0%",
                 ]
                 intraday_lines = [
-                    "- 以观察和处理持仓为主；新仓只允许固定交易窗口内条件成立后的主线核心50%条件执行",
+                    "- 以观察和处理持仓为主；新仓只按昨晚日报已决定的对象执行或取消",
                     "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
                     "- 若观察标的全天未形成更强确认 → 继续等待",
                 ]

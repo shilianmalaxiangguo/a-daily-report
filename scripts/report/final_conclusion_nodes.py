@@ -72,7 +72,7 @@ def _build_mvp_target_row(context):
             return (
                 "| 明天先盯哪只 | "
                 f"{watch_anchor.get('name')}({watch_anchor.get('code')})，"
-                f"先看{LAYERED_PARTICIPATION_TEXT}是否成立，只有走成明天唯一能买的那只才参与"
+	                f"先看{LAYERED_PARTICIPATION_TEXT}承接，结果进入复盘和下一份日报判断，不新增参与"
                 f"{'；' + watch_anchor_note if watch_anchor_note else ''} |"
             )
         return (
@@ -116,8 +116,8 @@ def _build_full_mode_strategy_row(context):
     if watch_anchor:
         if trade_gate_open:
             guidance = (
-                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先看固定交易窗口内条件，"
-                "只有走成明天唯一能买的那只才参与"
+	                f"先盯重点盯盘股：只盯{watch_anchor.get('name')}，先看固定交易窗口承接，"
+	                "结果进入复盘和下一份日报判断，不新增参与"
             )
             if watch_anchor_note:
                 guidance = f"{guidance}；{watch_anchor_note}"

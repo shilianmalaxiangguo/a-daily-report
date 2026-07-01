@@ -245,6 +245,18 @@ new-entry result is 0%.
 - 50% and 100% results require a planned participation record. If no record exists, render the item as observation and record the missing field.
 - Review labels must be derived from explicit next-day facts. If facts are missing, use `待补事实` instead of inventing a result.
 - Metrics may summarize past judgments, but they must not create tomorrow's action without the report action contract.
+- Tomorrow's buy/sell decision must be fixed in the T0 report. Intraday
+  conditions on T+1 may execute, cancel, reduce risk, or record observation
+  evidence only. They must not create a new buy decision or upgrade a process
+  candidate / observation target into a same-day execution object.
+- A 50% or 100% report is a pre-decided plan with an execution target,
+  position size, execution window, and cancellation conditions. Wording such
+  as "conditions become true, then evaluate 50%" is invalid because it turns
+  the intraday check into a new decision. Render it as "already decided 50%;
+  cancel or return to 0% if the execution qualification fails."
+- A 0% report with an observation target must say no new buy is decided.
+  Observation evidence, even if strong on T+1, can only feed settlement,
+  review, and the next report's decision.
 - Historical replay must preserve target-date boundaries through `report_date`, `review_date`, `source_dates`, and `missing_fields`.
 - Every tracking, backtest, statistics, or probability surface must carry `sample_count`, `start_date`, and `end_date` or explicitly mark coverage as missing.
 - A long-window label such as 60-day or 120-day is valid only when source facts and decision-ledger settlement rows cover that window.
@@ -285,6 +297,8 @@ new-entry result is 0%.
 | Core-candidate row already has a stale resolved result | Recompute and replace the same `report_date` plus `judgment_type` row from latest auditable facts |
 | Sector-first chain is missing market, sector, leader, price-action, or account-execution inputs | Stop generation and list the missing items before saving report artifacts |
 | Final result is 0% or empty but process table contains participation-style wording | Rewrite the row to observation/process-review wording and keep the candidate out of current/final object fields |
+| Report says a 0% observation target can become 50% on T+1 when conditions become true | Treat as invalid wording; T+1 evidence is review/next-report input only |
+| Report says a 50% target will be decided intraday instead of already decided at T0 | Render as an already decided conditional execution plan; conditions only execute or cancel |
 | Process candidate is +10% next day but was not the new-entry target | Count it as `process_candidate_hit`; keep `execution_hit_count` at 0 |
 | Report date has a previous trading day | Render the previous trading day's five judgment settlement before today's new five judgment rows |
 | Previous trading day has only partial settlement facts | Render resolved rows in the settlement table and missing rows in a separate unresolved section |

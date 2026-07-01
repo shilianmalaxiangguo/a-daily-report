@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as _dt
+import re
 from pathlib import Path
 
 
@@ -22,25 +24,25 @@ MARKET_SCENARIOS = [
     {
         "heading": "上证单边下跌",
         "holding_action": "持仓按防守线独立评估；下降趋势：MA20下方不主动开新仓；跌破计划防守线、反抽不过均价线或同步新低时执行卖出。",
-        "new_action": "只保留明日目标标的的条件仓位，至少等下一次V反或W底确认后再评估50%条件执行。",
+        "new_action": "只保留明日目标标的的条件仓位；若昨晚已决定50%条件执行，下一次V反或W底确认只用于检查执行资格，不满足回到0%。",
         "forbidden": "不因跌得多就买，不用新机会抵消旧仓亏损。",
     },
     {
         "heading": "上证M顶",
         "holding_action": "把冲高二次不过高当卖点；M顶：跌破MA7先降风险，跌破MA10认错；跌回均价线或破日内平台时降低隔夜暴露。",
-        "new_action": "只保留明日目标标的的条件仓位；只有重新放量突破日内高点并站稳才评估50%条件执行。",
+        "new_action": "只保留明日目标标的的条件仓位；只有重新放量突破日内高点并站稳才按昨晚预案检查执行资格。",
         "forbidden": "不把派发形态误判成进攻延续，不卖飞追回。",
     },
     {
         "heading": "上证W底",
         "holding_action": "W底：第二脚不破低点，站回MA3/MA7后才试；持仓先于指数修复时可继续观察，W失败则先降风险。",
-        "new_action": "第二脚确认、站回MA3/MA7、板块锚点止跌后，才允许50%条件执行。",
+        "new_action": "若昨晚已决定50%条件执行，第二脚确认、站回MA3/MA7、板块锚点止跌后只检查执行资格；不满足回到0%。",
         "forbidden": "不在第一脚低点提前猜底，不为了摊低成本新增仓位。",
     },
     {
         "heading": "上证V反",
         "holding_action": "已降风险的旧仓先看能否强于锚点；V反：先站回MA3，再看MA7是否收复；V反失败时继续防守。",
-        "new_action": "只做右侧确认后的买入预演，指数回0、板块止跌、目标承接同时成立才可做。",
+        "new_action": "只做右侧确认后的买入预演；昨晚已决定的对象在指数回0、板块止跌、目标承接同时成立时才执行，否则取消。",
         "forbidden": "不在第一脚急跌中补仓，不用可能V反取消防守线。",
     },
     {
@@ -205,6 +207,286 @@ def _render_tomorrow_target_lines(candidates, data):
         ]
     )
     return lines
+
+
+def _active_tomorrow_target(candidates, data):
+    if candidates and not _is_extreme_ice_point(data):
+        return candidates[0]
+    target = _extract_current_report_target(data)
+    if target and not _is_extreme_ice_point(data):
+        return target
+    return None
+
+
+def _position_label(position):
+    name = _clean_text(position.get("name") or position.get("stock_name"), "")
+    code = _normalize_code(position.get("code") or position.get("stock_code") or position.get("代码"))
+    return f"{name}({code})" if name and code else name
+
+
+def _position_names(positions):
+    names = []
+    for position in positions or []:
+        name = _position_label(position)
+        if name:
+            names.append(name)
+    return names
+
+
+def _target_label(item):
+    if not item:
+        return "无"
+    name = _candidate_name(item)
+    code = _candidate_code(item)
+    return f"{name}({code})" if code else name
+
+
+_STOCK_REF_PATTERN = re.compile(r"([^，,\n|：:]+?)\((\d{6})\)")
+
+_TARGET_PATTERNS = (
+    re.compile(r"明日执行对象[：:| ]+([^|\n：:]+?)\((\d{6})\)"),
+    re.compile(r"最终对象[：:| ]+明日执行对象[：: ]*([^|\n：:]+?)\((\d{6})\)"),
+    re.compile(r"最终对象=([^，,\n|：:]+?)\((\d{6})\)"),
+    re.compile(r"最终执行对象[：: ]+([^，,\n|：:]+?)\((\d{6})\)"),
+)
+
+
+def _stock_like_from_value(value):
+    if not isinstance(value, dict):
+        return {}
+    source = value
+    if isinstance(value.get("execution_object"), dict):
+        source = value.get("execution_object") or {}
+    stock = value.get("stock") if isinstance(value.get("stock"), dict) else {}
+    name = _clean_text(
+        source.get("name")
+        or source.get("stock_name")
+        or source.get("股票")
+        or stock.get("name")
+        or stock.get("stock_name"),
+        "",
+    )
+    code = _candidate_code(source) or _candidate_code(stock)
+    if not name and not code:
+        return {}
+    item = dict(source)
+    item["name"] = name or code
+    item["code"] = code
+    sector = _clean_text(source.get("sector") or source.get("所属板块") or source.get("industry") or stock.get("sector"), "")
+    if sector:
+        item["sector"] = sector
+    plan = source.get("planned_participation") if isinstance(source.get("planned_participation"), dict) else {}
+    if not plan:
+        plan = {
+            key: source.get(key)
+            for key in ("buy_window", "participation_window", "condition", "fallback_state", "target_position_pct")
+            if source.get(key) not in (None, "")
+        }
+    if plan:
+        item["planned_participation"] = plan
+    return item
+
+
+def _selection_workflow_final_target(workflow):
+    if not isinstance(workflow, dict):
+        return {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    target = _stock_like_from_value(final.get("execution_object") if isinstance(final.get("execution_object"), dict) else final)
+    if not target:
+        return {}
+    position_pct = _as_float(final.get("position_pct"))
+    if position_pct is not None and position_pct <= 0:
+        return {}
+    plan = target.get("planned_participation") if isinstance(target.get("planned_participation"), dict) else {}
+    plan = dict(plan)
+    if final.get("action_text") and not plan.get("attack_state"):
+        plan["attack_state"] = str(final.get("action_text"))
+    if final.get("fail_action") and not plan.get("fallback_state"):
+        plan["fallback_state"] = str(final.get("fail_action"))
+    if position_pct is not None and not plan.get("target_position_pct"):
+        plan["target_position_pct"] = position_pct
+    if plan:
+        target["planned_participation"] = plan
+    return target
+
+
+def _extract_current_report_target(data):
+    data = data or {}
+    containers = [
+        data,
+        data.get("execution_stage_context") if isinstance(data.get("execution_stage_context"), dict) else {},
+        data.get("market_research_snapshot") if isinstance(data.get("market_research_snapshot"), dict) else {},
+    ]
+    for context in containers:
+        resolution = context.get("final_target_resolution") if isinstance(context, dict) else {}
+        if isinstance(resolution, dict):
+            for key in ("new_entry_target", "display_target", "ascii_trace_target", "process_target"):
+                target = _stock_like_from_value(resolution.get(key))
+                if target:
+                    return target
+        workflow_target = _selection_workflow_final_target(context.get("selection_workflow") if isinstance(context, dict) else {})
+        if workflow_target:
+            return workflow_target
+        for key in ("selected_position_candidate", "current_core_candidate"):
+            target = _stock_like_from_value(context.get(key) if isinstance(context, dict) else {})
+            if target:
+                return target
+    return {}
+
+
+def _extract_report_target_from_markdown(markdown_text):
+    text = str(markdown_text or "")
+    for pattern in _TARGET_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return {"name": match.group(1).strip(), "code": match.group(2).strip()}
+    for line in text.splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        label = cells[0]
+        value = " | ".join(cells[1:])
+        if label in {"最终对象", "明日执行对象", "最终结果"} or "明日执行对象" in label:
+            match = _STOCK_REF_PATTERN.search(value)
+            if match:
+                return {"name": match.group(1).strip(), "code": match.group(2).strip()}
+    return {}
+
+
+def _previous_trade_day(value):
+    try:
+        current = _dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return ""
+    current = current - _dt.timedelta(days=1)
+    while current.weekday() >= 5:
+        current = current - _dt.timedelta(days=1)
+    return current.isoformat()
+
+
+def _read_previous_report_target(target_date, output_root=None):
+    previous = _previous_trade_day(target_date)
+    if not previous:
+        return {}
+    root = Path(output_root) if output_root else Path(__file__).resolve().parents[2] / "reports"
+    for suffix in ("_A股日报_执行摘要.md", "_A股日报_完整版.md"):
+        path = root / f"{previous}{suffix}"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        target = _extract_report_target_from_markdown(text)
+        if target:
+            target["source_report_date"] = previous
+            return target
+    return {}
+
+
+def _weekday_cn(value):
+    try:
+        day = _dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return ""
+    return ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[day.weekday()]
+
+
+def _add_trade_days(value, days):
+    try:
+        current = _dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return ""
+    remaining = max(0, int(days))
+    while remaining > 0:
+        current = current + _dt.timedelta(days=1)
+        if current.weekday() < 5:
+            remaining -= 1
+    return current.isoformat()
+
+
+def _add_calendar_days(value, days):
+    try:
+        current = _dt.date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return ""
+    current = current + _dt.timedelta(days=int(days))
+    return current.isoformat()
+
+
+def _date_weekday_label(value):
+    text = str(value or "").strip()
+    weekday = _weekday_cn(text)
+    return f"{text}（{weekday}）" if weekday else text
+
+
+def _render_day_order_timeline_lines(candidates, data, positions, target_date, previous_report_target=None):
+    target = _active_tomorrow_target(candidates, data)
+    if not target and isinstance(data, dict):
+        target = _extract_report_target_from_markdown(data.get("source_report_markdown", ""))
+    holding_names = _position_names(positions)
+    previous_report_target = previous_report_target or {}
+    if not holding_names and previous_report_target:
+        holding_names = [_target_label(previous_report_target)]
+    report_day = str(target_date or "").strip()
+    has_previous_source = bool((previous_report_target or {}).get("source_report_date"))
+    first_day = _add_calendar_days(report_day, -1) if has_previous_source else report_day
+    second_day = report_day if has_previous_source else _add_trade_days(report_day, 1)
+    third_day = _add_trade_days(report_day, 1) if has_previous_source else _add_trade_days(report_day, 2)
+    fourth_day = _add_trade_days(report_day, 2) if has_previous_source else _add_trade_days(report_day, 3)
+    first_day_label = _date_weekday_label(first_day)
+    second_day_label = _date_weekday_label(second_day)
+    third_day_label = _date_weekday_label(third_day)
+    fourth_day_label = _date_weekday_label(fourth_day)
+    ta_label = "、".join(holding_names) if holding_names else "空仓"
+    tb_label = _target_label(target) if target else "空仓"
+    ta_first_text = "上一份日报目标，进入旧仓/旧路径复核" if has_previous_source and holding_names else ("Ta+0 旧仓占用" if holding_names else "Ta+0 空仓")
+    ta_second_text = ("Ta+1 继续处理旧仓或取消路径" if has_previous_source else "Ta+1 继续处理旧仓") if holding_names else "空仓"
+    tb_second_text = "报告日确认明日目标" if has_previous_source and target else ("Tb+0 明日目标" if target else "没有Tb+0，空仓")
+    tb_third_text = "Tb+0 条件买入，不是无条件买入" if has_previous_source and target else ("Tb+1 只按昨晚预案执行或取消" if target else "没有Tb+1，空仓")
+    tb_fourth_text = "Tb+1 只按昨晚预案执行或取消" if has_previous_source and target else ("Tb+2 未执行则回到空仓" if target else "空仓")
+    tc_third_text = "没有Tc+0，不提前占用"
+    tc_fourth_text = "下一份日报再复核" if has_previous_source else "空仓"
+    if holding_names and target:
+        ta_third_text = "Ta+2 默认按昨晚预案尾盘卖出；失去持有资格才提前处理"
+        ta_note = "- Ta 表示旧仓占用；有Tb明日目标时，Ta+2 默认按昨晚预案尾盘卖出；只有旧仓失去持有资格、跌破计划线或持续弱于指数时，才提前处理。"
+    elif holding_names:
+        ta_third_text = "Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓"
+        ta_note = "- Ta 表示旧仓占用；没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，优先处理旧仓，让账户尽可能接近全天空仓；仍有承接的正常持仓按预案尾盘处理。"
+    else:
+        ta_third_text = "空仓"
+        ta_note = "- Ta 表示旧仓占用；无旧仓时，Ta轨道保持空仓。"
+    timeline_note = (
+        "- 顶部长时间轴按日报视角展示：第一列是上一份日报路径在本轮报告前的占用日，报告日确认明日目标，下一交易日是执行日；轨道内继续展示 Ta/Tb/Tc 后续路径。"
+        if has_previous_source
+        else "- 顶部长时间轴按日报视角展示：第一列是报告日，下一交易日是执行日；轨道内继续展示 Ta/Tb/Tc 后续路径。"
+    )
+
+    return [
+        "| 轨道 | 标的 | " + " | ".join([first_day_label, second_day_label, third_day_label, fourth_day_label]) + " |",
+        "|------|------|" + "|".join(["------"] * 4) + "|",
+        (
+            f"| Ta旧仓 | {ta_label} | "
+            f"{ta_first_text} | "
+            f"{ta_second_text} | "
+            f"{ta_third_text} | "
+            "空仓 |"
+        ),
+        (
+            f"| Tb明日目标 | {tb_label} | 空仓 | "
+            f"{tb_second_text} | "
+            f"{tb_third_text} | "
+            f"{tb_fourth_text} |"
+        ),
+        (
+            "| Tc复核位 | 无 | 空仓 | 空仓 | "
+            f"{tc_third_text} | {tc_fourth_text} |"
+        ),
+        "",
+        timeline_note,
+        ta_note,
+        "- Tb 表示明日目标；Tb+0 是条件买入，不是无条件买入；Tb+1 要继续按昨晚预案处理持有或取消路径；没有明日目标时，必须写明没有Tb+0 / 没有Tb+1。",
+        "- Tc 表示下一份日报的复核位；默认不提前占用，必须写明没有Tc+0。",
+        "",
+    ]
 
 
 def _item_name(item):
@@ -461,10 +743,15 @@ def _render_candidate_rows(candidates, scenario):
     return ["| - | - | - | - | - | 当前无明日极度看好候选 | 不参与 | - |"]
 
 
-def render_position_strategy_report(data, target_date, positions, source_report_markdown=""):
+def render_position_strategy_report(data, target_date, positions, source_report_markdown="", output_root=None):
+    data = dict(data or {})
+    if source_report_markdown:
+        data.setdefault("source_report_markdown", source_report_markdown)
     candidates = _extract_extreme_conviction_list(data, source_report_markdown=source_report_markdown)
     tracking_items = _extract_tracking_memory_items(data)
+    previous_report_target = _read_previous_report_target(target_date, output_root=output_root)
     lines = [
+        *_render_day_order_timeline_lines(candidates, data, positions, target_date, previous_report_target=previous_report_target),
         f"# {target_date} 持仓策略",
         "",
         "## 核心原则",

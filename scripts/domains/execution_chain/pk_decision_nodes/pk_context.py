@@ -210,7 +210,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
     if trade_gate_open:
         if display_pending_candidates:
             if len(display_pending_candidates) >= 2:
-                pending_lines.append(f"**重点盯盘股排序**（{len(display_pending_candidates)}只，先看谁最可能走成明天唯一能买的那只）:")
+                pending_lines.append(f"**重点盯盘股排序**（{len(display_pending_candidates)}只，只看谁更适合进入复盘和下一份日报）:")
                 pending_lines.append("| 股票 | 来源 | 09:50-10:10观察价 | 候选顺位 | 说明 |")
                 pending_lines.append("|------|------|--------------|----------|------|")
                 for idx, candidate in enumerate(display_pending_candidates[:5], 1):
@@ -239,7 +239,7 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
                 pending_lines.append(f"- **价格怎么盯**: {top_price_focus_text}")
             if should_surface_price_note(top_price_focus):
                 pending_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(top_price_focus)}")
-            pending_lines.append("- **升级条件**: 明日先09:50-10:10窗口满足条件，再走成明天唯一能买的那只，不能直接追价")
+            pending_lines.append("- **观察纪律**: 明日只记录09:50-10:10窗口承接，不在盘中升级为买入对象")
             pending_lines.append("")
         else:
             pending_lines.extend(["**当前没有能下手的票**: 无需PK", ""])
@@ -338,10 +338,10 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             conclusion_lines.append(
                 f"- **盘前不抢跑**: {ten_confirm_upgrade_candidate.get('name')}({ten_confirm_upgrade_candidate.get('code')})只保留盘中确认路径，不按盘前0%直接否定"
             )
-            conclusion_lines.append("- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，才评估50%条件执行；未命中继续0%不参与")
+            conclusion_lines.append("- **确认后怎么做**: 09:50-10:10站上确认价，且板块承接不塌，也只进入复盘和下一份日报判断；未命中继续0%不参与")
         elif trade_gate_open and watch_anchor:
             conclusion_lines.append(f"- **明天先盯哪只**: {watch_anchor.get('name')}({watch_anchor.get('code')})")
-            conclusion_lines.append("- **现在是什么情况**: 市场允许出手，但还没有缩到一只可买股，明日先等它自己证明")
+            conclusion_lines.append("- **现在是什么情况**: 市场允许出手，但当晚没有已决定执行对象，明日只观察它自己证明")
         else:
             conclusion_lines.append("- **明天没有可买对象**: 明日不产生买入动作")
         conclusion_lines.append(f"- **明天能不能开仓**: {front_structure_layer_text}")
@@ -362,9 +362,9 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {build_observation_price_note_text(price_focus)}")
             if trade_gate_open:
-                conclusion_lines.append("- **出手时怎么做**: 只能等它走成明天唯一能买的那只后再买，盘中强也不允许提前抢跑")
+                conclusion_lines.append("- **出手时怎么做**: 不新增参与；盘中强也只进入复盘和下一份日报判断")
             elif ten_confirm_upgrade_candidate:
-                conclusion_lines.append("- **出手时怎么做**: 盘前0%只代表不抢跑；09:50-10:10窗口内条件成立后，再评估50%条件执行")
+                conclusion_lines.append("- **出手时怎么做**: 盘前0%就是不买新仓；09:50-10:10窗口只记录承接，不评估新增参与")
             elif final_gate.get("allow_attack_50_ready"):
                 conclusion_lines.append("- **当前先不抢**: 0%不参与，只做固定交易窗口条件确认；强核心看竞价表态、开盘前几分钟或回封，普通结构只看09:50-10:10窗口")
             else:

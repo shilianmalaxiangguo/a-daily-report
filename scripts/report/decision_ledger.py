@@ -95,6 +95,39 @@ def _clean_text(value, default=""):
     return text or default
 
 
+def _final_execution_target_from_action(final_action):
+    action = final_action if isinstance(final_action, dict) else {}
+    position_pct = _position_plan_pct_from_value(
+        action.get("position_pct")
+        if "position_pct" in action
+        else action.get("target_position_pct")
+    )
+    target = action.get("target") if isinstance(action.get("target"), dict) else {}
+    stock_code = _normalize_stock_code(target.get("stock_code") or target.get("code"))
+    if stock_code and position_pct in (50, 100):
+        return {
+            "stock_code": stock_code,
+            "stock_name": _clean_text(target.get("stock_name") or target.get("name")),
+        }
+    return {}
+
+
+def _same_stock_code(stock_code, target):
+    return bool(target and _normalize_stock_code(stock_code) == _normalize_stock_code(target.get("stock_code")))
+
+
+def _final_execution_label(target):
+    name = _clean_text(target.get("stock_name"))
+    code = _normalize_stock_code(target.get("stock_code"))
+    if name and code:
+        return f"{name}({code})"
+    return name or code or "明日执行对象"
+
+
+def _final_execution_history_action(target):
+    return f"{_final_execution_label(target)}已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+
+
 def _is_valid_sector_label(value):
     label = str(value or "").strip()
     return bool(label and label not in _NON_SECTOR_LABELS)
@@ -2946,8 +2979,9 @@ def _history_action_text(value):
     return text
 
 
-def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
+def render_extreme_conviction_tracking_lines(index, *, max_rows=8, final_action=None):
     index = index or {}
+    final_target = _final_execution_target_from_action(final_action)
     rows = []
     for records in (index.get("by_stock_code") or {}).values():
         for record in list(records or []):
@@ -2969,6 +3003,7 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
                     "review_status": review.get("status") or record.get("participation_review_status") or record.get("status"),
                     "next_action": review.get("next_action") or review.get("same_day_action") or "等待下一次固定交易窗口条件确认",
                     "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
+                    "is_final_execution_target": _same_stock_code(record.get("stock_code"), final_target),
                     "_record": record,
                 }
             )
@@ -2993,7 +3028,11 @@ def render_extreme_conviction_tracking_lines(index, *, max_rows=8):
                 planned_window=_clean_markdown_cell(row.get("planned_window")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
-                next_action=_clean_markdown_cell(_history_action_text(row.get("next_action"))),
+                next_action=_clean_markdown_cell(
+                    _final_execution_history_action(final_target)
+                    if row.get("is_final_execution_target")
+                    else _history_action_text(row.get("next_action"))
+                ),
                 invalidation=_clean_markdown_cell(row.get("invalidation")),
             )
         )
@@ -3201,9 +3240,10 @@ def _format_backtest_coverage_summary_line(summary, *, max_rows=None):
     return "".join(parts)
 
 
-def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25, exclude_a_kill=True):
+def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25, exclude_a_kill=True, final_action=None):
     index = index or {}
     end_date = _clean_text(end_date or index.get("latest_trade_date"))
+    final_target = _final_execution_target_from_action(final_action)
     rows = []
     for records in (index.get("by_stock_code") or {}).values():
         for record in list(records or []):
@@ -3238,6 +3278,7 @@ def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25,
                         "fact_status": review.get("fact_status") or _review_status_for_facts(review_status),
                         "next_action": review.get("next_action") or review.get("same_day_action") or "等待计划窗口事实回写",
                         "invalidation": planned.get("ma20_invalidation") or planned.get("cancellation") or "按原计划作废条件处理",
+                        "is_final_execution_target": _same_stock_code(record.get("stock_code"), final_target),
                         "reason": mention.get("reason") or "",
                         "source_section": mention.get("source_section") or "",
                         "is_a_kill_eliminated": _is_a_kill_eliminated_record(record),
@@ -3266,9 +3307,10 @@ def build_extreme_conviction_mention_rows(index, *, end_date="", window_days=25,
     return [row for row in rows if row.get("mention_trade_date") in recent_date_set]
 
 
-def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
+def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None, final_action=None):
     if max_rows is not None:
         rows = list(rows or [])[-int(max_rows):]
+    final_target = _final_execution_target_from_action(final_action)
     lines = ["**明日极度看好近25日跟踪表**（按入选日展示，排除A杀样本）:"]
     if not rows:
         lines.append("- 暂无近25个交易日内的明日极度看好样本。")
@@ -3286,7 +3328,11 @@ def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
                 sector_candidate=_clean_markdown_cell(row.get("sector_candidate")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 review_status=_clean_markdown_cell(row.get("review_status")),
-                next_action=_clean_markdown_cell(_history_action_text(row.get("next_action"))),
+                next_action=_clean_markdown_cell(
+                    _final_execution_history_action(final_target)
+                    if row.get("is_final_execution_target")
+                    else _history_action_text(row.get("next_action"))
+                ),
                 invalidation=_clean_markdown_cell(row.get("invalidation")),
                 record_id=_clean_markdown_cell(row.get("record_id")),
             )
@@ -3295,9 +3341,9 @@ def render_extreme_conviction_mention_tracking_rows(rows, *, max_rows=None):
     return lines
 
 
-def render_extreme_conviction_mention_tracking_lines(index, *, end_date="", window_days=25, max_rows=None):
-    rows = build_extreme_conviction_mention_rows(index, end_date=end_date, window_days=window_days)
-    lines = render_extreme_conviction_mention_tracking_rows(rows, max_rows=max_rows)
+def render_extreme_conviction_mention_tracking_lines(index, *, end_date="", window_days=25, max_rows=None, final_action=None):
+    rows = build_extreme_conviction_mention_rows(index, end_date=end_date, window_days=window_days, final_action=final_action)
+    lines = render_extreme_conviction_mention_tracking_rows(rows, max_rows=max_rows, final_action=final_action)
     summary = build_decision_coverage_summary(index, surface="tracking")
     if lines:
         lines.insert(1, _format_coverage_summary_line(summary, window_days=window_days))
@@ -3312,8 +3358,9 @@ def _backtest_row_review_status(review, record, *, allow_record_status=True):
     return status
 
 
-def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
+def build_extreme_conviction_backtest_rows(index, *, max_rows=12, final_action=None):
     index = index or {}
+    final_target = _final_execution_target_from_action(final_action)
     rows = []
     for records in (index.get("by_stock_code") or {}).values():
         for record in list(records or []):
@@ -3364,6 +3411,7 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
                         "selection_result_lesson": selection_result.get("lesson") or "",
                         "position_plan_pct": _position_plan_pct(planned, record),
                         "position_plan_label": _position_plan_label(_position_plan_pct(planned, record)),
+                        "is_final_execution_target": _same_stock_code(record.get("stock_code"), final_target),
                         "source_dates": source_dates,
                         "price_source_date": source_dates.get("price_source_date"),
                         "missing_fields": missing_fields,
@@ -3383,8 +3431,9 @@ def build_extreme_conviction_backtest_rows(index, *, max_rows=12):
     return rows[:max_rows]
 
 
-def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
-    rows = build_extreme_conviction_backtest_rows(index, max_rows=max_rows)
+def render_extreme_conviction_backtest_lines(index, *, max_rows=12, final_action=None):
+    rows = build_extreme_conviction_backtest_rows(index, max_rows=max_rows, final_action=final_action)
+    final_target = _final_execution_target_from_action(final_action)
     lines = ["**重点观察历史回测表**（拆分选股样本、观察位质量、执行复盘）:"]
     if not rows:
         lines.append("- 暂无可复盘的重点观察历史样本。")
@@ -3403,7 +3452,11 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
                 mention_trade_date=_clean_markdown_cell(row.get("mention_trade_date")),
                 stock_name=_clean_markdown_cell(row.get("stock_name")),
                 stock_code=_clean_markdown_cell(row.get("stock_code")),
-                selection_quality=_clean_markdown_cell(row.get("selection_quality")),
+                selection_quality=_clean_markdown_cell(
+                    "明日执行对象"
+                    if row.get("is_final_execution_target")
+                    else row.get("selection_quality")
+                ),
                 selection_result_status=_clean_markdown_cell(row.get("selection_result_status")),
                 buy_window=_clean_markdown_cell(row.get("buy_window")),
                 risk_reward=_clean_markdown_cell(row.get("risk_reward")),
@@ -3415,7 +3468,11 @@ def render_extreme_conviction_backtest_lines(index, *, max_rows=12):
                 max_drawdown_5d_pct=_clean_markdown_cell(_format_performance_pct(row.get("max_drawdown_5d_pct"))),
                 price_source_date=_clean_markdown_cell(row.get("price_source_date") or (row.get("source_dates") or {}).get("price_source_date") or "待补事实"),
                 missing_fields=_clean_markdown_cell(_performance_missing_text(row.get("missing_fields"))),
-                standard_action=_clean_markdown_cell(_historical_standard_action_text(row.get("standard_action"))),
+                standard_action=_clean_markdown_cell(
+                    _final_execution_history_action(final_target)
+                    if row.get("is_final_execution_target")
+                    else _historical_standard_action_text(row.get("standard_action"))
+                ),
             )
         )
     lines.append("")

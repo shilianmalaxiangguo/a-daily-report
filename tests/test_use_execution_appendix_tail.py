@@ -387,6 +387,37 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertIn("### 附录A：龙回头观察池", rendered)
         self.assertIn("| 汇源通信 | 000586 | 通信设备 | 龙回头观察 | 龙回头样本；A杀未修复 | 重新站回短中线承接后再评估 | A杀未修复前不进正式名单 |", rendered)
 
+    def test_execution_appendix_marks_final_execution_target_in_visible_candidate_list(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["visible_candidate_lists"],
+                "final_execution_target": {"name": "长电科技", "code": "600584"},
+                "extreme_conviction_list": [
+                    {
+                        "name": "海南海药",
+                        "code": "000566",
+                        "sector": "化学制药",
+                        "sniper_role": "候选观察",
+                        "conviction_reason": "板块锚定龙",
+                        "conviction_rule": "最终0%时只作观察样本，不构成明日新增参与",
+                    },
+                    {
+                        "name": "长电科技",
+                        "code": "600584",
+                        "sector": "半导体",
+                        "sniper_role": "候选观察补充",
+                        "conviction_reason": "主线内核 / 板块锚定龙",
+                        "conviction_rule": "最终0%时只作观察样本，不构成明日新增参与",
+                    },
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 1 | 海南海药 | 000566 | 化学制药 | 候选观察 | 板块锚定龙 | 最终0%时只作观察样本，不构成明日新增参与 |", rendered)
+        self.assertIn("| 2 | 长电科技 | 600584 | 半导体 | 明日执行对象 | 主线内核 / 板块锚定龙 | 已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与 |", rendered)
+        self.assertNotIn("| 2 | 长电科技 | 600584 | 半导体 | 候选观察补充 |", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -384,7 +384,7 @@ def _final_action(position_decision=None, final_gate=None, final_target_resoluti
     if two_layer_target:
         return {
             "position_pct": 50,
-            "action": "条件满足才50%条件执行；不满足回到0%",
+            "action": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
             "reason": "双层决策已给出明日执行对象和50%条件执行条件",
         }
     pct = _position_pct(position_decision)
@@ -398,7 +398,7 @@ def _final_action(position_decision=None, final_gate=None, final_target_resoluti
         or (position_decision or {}).get("sizing_reason")
     )
     if not action:
-        action = "只观察，不新增参与" if pct <= 0 else "固定交易窗口条件成立才参与，不满足回到0%"
+        action = "只观察，不新增参与" if pct <= 0 else "按昨晚预案检查执行资格；不满足回到0%不参与"
     return {
         "position_pct": pct,
         "action": action,

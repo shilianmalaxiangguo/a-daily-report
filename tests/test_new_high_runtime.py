@@ -105,6 +105,43 @@ class NewHighRuntimeTest(unittest.TestCase):
         self.assertEqual(snapshot["trend_rows"][0]["trade_date"], "2026-04-01")
         self.assertEqual(snapshot["trend_rows"][-1]["trade_date"], "2026-05-20")
 
+    def test_build_new_high_feedback_snapshot_enriches_sector_and_amount_from_quote_rows(self):
+        from domains.market_activity.new_high_runtime import build_new_high_feedback_snapshot
+
+        snapshot = build_new_high_feedback_snapshot(
+            [
+                {
+                    "stock_code": "300706",
+                    "trade_date": "20260629",
+                    "name": "阿石创",
+                    "pct_chg": 19.06,
+                    "topdays": 250,
+                },
+                {
+                    "stock_code": "300346",
+                    "trade_date": "20260629",
+                    "name": "南大光电",
+                    "pct_chg": 15.21,
+                    "topdays": 250,
+                },
+            ],
+            stock_basic_map={
+                "300706": {"name": "阿石创", "list_date": "20200102"},
+                "300346": {"name": "南大光电", "list_date": "20200102"},
+            },
+            quote_rows=[
+                {"code": "300706", "sector": "半导体", "turnover": 36.8},
+                {"stock_code": "300346", "所属行业": "电子化学品", "amount_yi": 55.4},
+            ],
+            target_date="2026-06-29",
+        )
+
+        self.assertEqual(snapshot["leading_sectors"], "电子化学品、半导体")
+        self.assertNotEqual(snapshot["sector_distribution"][0]["sector"], "待补充板块")
+        by_code = {row["code"]: row for row in snapshot["top_stocks"]}
+        self.assertGreater(by_code["300706"]["amount_yi"], 0)
+        self.assertGreater(by_code["300346"]["amount_yi"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

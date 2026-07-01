@@ -1013,7 +1013,10 @@ def render_daily_judgment_review_panel_lines(panel):
         lines.append("**近5个已结算交易日复盘表现**")
     lines.append("| 判断项 | 已结算表现 | 最近结论 | 预期 | 实际 | 原因 |")
     lines.append("|--------|--------|----------|------|------|------|")
-    for row in list(panel.get("recent_rows") or []):
+    recent_rows = [row for row in list(panel.get("recent_rows") or []) if _has_settlement(row)]
+    if not recent_rows:
+        lines.append("| 暂无已结算项 | 未结算 | - | - | - |")
+    for row in recent_rows:
         lines.append(
             "| {label} | {accuracy_pct} | {latest_result} | {expected} | {actual} | {reason} |".format(
                 label=_clean_markdown_cell(row.get("label")),

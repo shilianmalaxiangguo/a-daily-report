@@ -124,7 +124,7 @@ def _build_prohibition_payload(
         headline = environment_headline or "先看特殊标的是否继续抗跌，只保留观察与固定交易窗口预案"
         payload["environment_line"] = f"**次日市场环境**: 0%不参与 / {display_operation_state} - {headline}"
         if final_gate.get("allow_attack_50_ready") and not final_gate.get("should_reduce"):
-            payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%不参与；{PARTICIPATION_WINDOW_LAYER_TEXT}，命中固定交易窗口条件才评估50%条件执行")
+            payload["prohibition_items"].append(f"- ⚠️ 不抢跑：确认前按0%不参与；{PARTICIPATION_WINDOW_LAYER_TEXT}只用于观察复核，盘中不生成新买入决定")
         else:
             payload["prohibition_items"].append("- ✅ 不新增参与：当前按0%不参与，固定交易窗口内条件未成立前只观察")
         if final_gate.get("should_reduce"):
@@ -154,12 +154,12 @@ def _build_prohibition_payload(
                 payload["allowed_items"].append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%条件执行")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，只按昨晚预案检查执行资格；不满足取消")
             else:
                 payload["allowed_items"].append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，条件成立才评估50%条件执行")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，只按昨晚预案检查执行资格；不满足取消")
     else:
         headline = environment_headline or "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"

@@ -248,6 +248,24 @@ def _market_breadth_counts_complete(market_stats):
     )
 
 
+def _market_stats_with_fallback_counts(primary, fallback, fallback_stats):
+    market_stats = dict(primary or {})
+    if not _market_breadth_counts_complete(fallback):
+        return market_stats
+    fallback = dict(fallback or {})
+    if not _market_breadth_counts_complete(market_stats):
+        market_stats.update(fallback)
+    market_stats.setdefault("zt_count", fallback_stats["zt_count"])
+    market_stats.setdefault("dt_count", fallback_stats["dt_count"])
+    return market_stats
+
+
+def _market_stats_fallback_source(market_stats, default_provider):
+    if not isinstance(market_stats, dict):
+        return default_provider
+    return market_stats.get("source") or market_stats.get("data_source") or default_provider
+
+
 def _load_market_breadth_from_fact_db(target_date, request_registry=None):
     service_cls = (request_registry or {}).get("database_service_cls")
     if service_cls is None:
@@ -286,6 +304,17 @@ def _normalize_sector_fund_flow_rows(rows):
     normalized = []
     for row in rows or []:
         item = dict(row or {})
+        name = item.get("name") or item.get("sector") or item.get("sector_name") or item.get("industry")
+        if name not in (None, ""):
+            item["name"] = str(name).strip()
+        if item.get("zljlr") in (None, ""):
+            net_amount = item.get("net_amount", item.get("net_inflow_yi", item.get("net_inflow")))
+            if net_amount not in (None, ""):
+                item["zljlr"] = round(_safe_float(net_amount), 2)
+        if item.get("zdf") in (None, ""):
+            change_pct = item.get("change_pct", item.get("pct_change"))
+            if change_pct not in (None, ""):
+                item["zdf"] = round(_safe_float(change_pct), 2)
         turnover_yi = item.get("turnover_yi")
         if turnover_yi in (None, "") and item.get("cje") not in (None, ""):
             turnover_yi = _safe_float(item.get("cje")) / 1e4
@@ -675,10 +704,48 @@ def collect_market_activity_pool_request_bundle(
                             market_stats["zt_count"] = numeric_value
                         elif item == "跌停":
                             market_stats["dt_count"] = numeric_value
+                    fallback_source = ""
+                    fallback_message = ""
+                    if not _market_breadth_counts_complete(market_stats):
+                        if _market_breadth_counts_complete(fact_db_market_stats):
+                            fallback_source = _market_stats_fallback_source(
+                                fact_db_market_stats,
+                                "storage.stock_daily_quotes_recent",
+                            )
+                            fallback_message = "大盘涨跌统计接口返回不完整，使用PostgreSQL行情快照回补"
+                            market_stats = _market_stats_with_fallback_counts(
+                                market_stats,
+                                fact_db_market_stats,
+                                fallback_stats,
+                            )
+                        elif _market_breadth_counts_complete(snapshot_market_stats):
+                            fallback_source = _market_stats_fallback_source(
+                                snapshot_market_stats,
+                                snapshot.get("provider", "akshare.stock_market_activity_legu"),
+                            )
+                            fallback_message = "大盘涨跌统计接口返回不完整，使用涨跌停池快照回补"
+                            market_stats = _market_stats_with_fallback_counts(
+                                market_stats,
+                                snapshot_market_stats,
+                                fallback_stats,
+                            )
                     results["market_stats"] = market_stats
                     data_status["大盘涨跌统计"] = _market_breadth_counts_complete(market_stats)
                     if data_status["大盘涨跌统计"]:
                         emit(f"   ✅ 大盘涨跌统计: 上涨{market_stats.get('up_count', 0)}家 vs 下跌{market_stats.get('down_count', 0)}家")
+                        if fallback_message:
+                            _append_log(
+                                module_logs,
+                                "request.market_stats",
+                                "success",
+                                fallback_message,
+                                provider=fallback_source,
+                                target_keys=["market_stats"],
+                                up_count=market_stats.get("up_count", 0),
+                                down_count=market_stats.get("down_count", 0),
+                                zt_count=market_stats.get("zt_count", fallback_stats["zt_count"]),
+                                dt_count=market_stats.get("dt_count", fallback_stats["dt_count"]),
+                            )
                     else:
                         emit("   ⚠️ 大盘涨跌统计缺少上涨/下跌家数")
                 else:

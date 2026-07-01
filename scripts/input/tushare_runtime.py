@@ -48,6 +48,7 @@ __all__ = [
     "get_total_turnover_from_tushare_first",
     "get_major_indices_from_tushare_first",
     "get_wind_a_from_tushare_first",
+    "get_star50_from_tushare_first",
     "get_csi500_from_tushare_first",
     "get_csi1000_from_tushare_first",
     "get_turnover_rank_from_tushare_first",
@@ -399,6 +400,25 @@ def _build_new_high_snapshot_from_fact_rows(rows, target_date, *, source=""):
         "trend_rows": trend_rows[-25:],
         "excluded_counts": {},
     }
+
+
+def _is_missing_new_high_sector(value):
+    text = _clean_text(value)
+    return not text or text in {"-", "未知", "未归类", "待补充板块", "待补事实", "暂无"}
+
+
+def _new_high_snapshot_needs_rebuild(snapshot):
+    if not isinstance(snapshot, dict) or not snapshot.get("available"):
+        return False
+    top_stocks = [row for row in (snapshot.get("top_stocks") or []) if isinstance(row, dict)]
+    if not top_stocks:
+        return False
+    all_amount_missing = all(_safe_float(row.get("amount_yi") or row.get("turnover") or row.get("成交额")) <= 0 for row in top_stocks)
+    stock_sectors_missing = all(_is_missing_new_high_sector(row.get("sector") or row.get("industry") or row.get("所属板块")) for row in top_stocks)
+    sector_rows = [row for row in (snapshot.get("sector_distribution") or []) if isinstance(row, dict)]
+    sector_distribution_missing = not sector_rows or all(_is_missing_new_high_sector(row.get("sector")) for row in sector_rows)
+    leading_missing = _is_missing_new_high_sector(snapshot.get("leading_sectors"))
+    return bool(all_amount_missing or (stock_sectors_missing and sector_distribution_missing and leading_missing))
 
 
 def _fetch_akshare_one_year_high_rows():
@@ -913,6 +933,48 @@ def get_new_high_feedback_from_tushare_first(
         except Exception:
             return 0
 
+    def _query_same_day_quote_rows(service, factor_rows):
+        if service is None:
+            return []
+        codes = [
+            _clean_code((row or {}).get("stock_code") or (row or {}).get("code") or (row or {}).get("ts_code"))
+            for row in factor_rows or []
+        ]
+        codes = [code for code in codes if code]
+        if not codes:
+            return []
+        rows = []
+        reader = getattr(service, "query_stock_daily_quotes_recent", None)
+        if callable(reader):
+            try:
+                rows = reader(target_date_text or factor_trade_date, stock_codes=sorted(set(codes))) or []
+            except TypeError:
+                rows = reader(target_date_text or factor_trade_date, sorted(set(codes))) or []
+            except Exception:
+                rows = []
+        found_codes = {
+            _clean_code((row or {}).get("stock_code") or (row or {}).get("code") or (row or {}).get("ts_code"))
+            for row in rows or []
+        }
+        missing_codes = sorted(set(codes) - {code for code in found_codes if code})
+        turnover_reader = getattr(service, "query_turnover_rank_rows", None)
+        if missing_codes and callable(turnover_reader):
+            try:
+                turnover_rows = turnover_reader(
+                    target_date_text or factor_trade_date,
+                    limit=max(len(codes), 100),
+                    rank_scope="all_a",
+                ) or []
+            except TypeError:
+                turnover_rows = turnover_reader(target_date_text or factor_trade_date, max(len(codes), 100)) or []
+            except Exception:
+                turnover_rows = []
+            rows.extend(
+                row for row in turnover_rows
+                if _clean_code((row or {}).get("stock_code") or (row or {}).get("code") or (row or {}).get("ts_code")) in missing_codes
+            )
+        return rows
+
     def _build_akshare_one_year_high_snapshot(history_rows=None, service=None):
         akshare_fetcher = fetch_akshare_one_year_high_rows_fn or _fetch_akshare_one_year_high_rows
         akshare_rows = akshare_fetcher() if callable(akshare_fetcher) else []
@@ -925,6 +987,7 @@ def get_new_high_feedback_from_tushare_first(
         akshare_snapshot = build_new_high_feedback_snapshot(
             akshare_factor_rows,
             stock_basic_map=stock_basic_map,
+            quote_rows=_query_same_day_quote_rows(service, akshare_factor_rows),
             stock_risk_map=stock_risk_map or {},
             target_date=target_date_text or factor_trade_date,
             topdays_threshold=250,
@@ -985,7 +1048,7 @@ def get_new_high_feedback_from_tushare_first(
                 raw_history_rows,
                 target_date_text or factor_trade_date,
             )
-            if fact_snapshot:
+            if fact_snapshot and not _new_high_snapshot_needs_rebuild(fact_snapshot):
                 if factor_error is not None:
                     fact_snapshot.setdefault("factor_error", str(factor_error))
                 fact_snapshot.setdefault("requested_trade_date", target_date_text)
@@ -1215,6 +1278,7 @@ def get_new_high_feedback_from_tushare_first(
     snapshot = build_new_high_feedback_snapshot(
         factor_rows,
         stock_basic_map=stock_basic_map,
+        quote_rows=_query_same_day_quote_rows(local_service, factor_rows),
         stock_risk_map=stock_risk_map or {},
         target_date=factor_trade_date,
         history_rows=history_rows,
@@ -4021,16 +4085,18 @@ def _get_single_index_from_tushare_first(
     fetcher = fetch_daily_price_bars_fn or fetch_daily_price_bars
     start_date, end_date = _index_query_window(target_date)
 
-    try:
-        payload = _latest_index_payload(
-            name,
-            code,
-            fetcher(code, start_date, end_date, is_index=True),
-        )
-        if payload and _safe_float(payload.get("price")) > 0:
-            return payload
-    except Exception:
-        pass
+    attempts = 3 if fetch_daily_price_bars_fn is None else 1
+    for _attempt in range(attempts):
+        try:
+            payload = _latest_index_payload(
+                name,
+                code,
+                fetcher(code, start_date, end_date, is_index=True),
+            )
+            if payload and _safe_float(payload.get("price")) > 0:
+                return payload
+        except Exception:
+            pass
 
     fallback = _fallback_call(legacy_get_index_fn, target_date)
     return fallback or {"price": 0, "change_pct": 0}
@@ -4048,6 +4114,21 @@ def get_wind_a_from_tushare_first(
         target_date,
         fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
         legacy_get_index_fn=legacy_get_wind_a_fn,
+    )
+
+
+def get_star50_from_tushare_first(
+    target_date=None,
+    *,
+    fetch_daily_price_bars_fn=None,
+    legacy_get_star50_fn=None,
+):
+    return _get_single_index_from_tushare_first(
+        "科创50",
+        "000688",
+        target_date,
+        fetch_daily_price_bars_fn=fetch_daily_price_bars_fn,
+        legacy_get_index_fn=legacy_get_star50_fn,
     )
 
 

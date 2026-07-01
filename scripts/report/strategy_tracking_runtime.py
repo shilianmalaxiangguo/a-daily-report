@@ -215,7 +215,7 @@ def _build_strategy_factor_snapshot_legacy_body(
         selected_snapshot_candidate['action_type'] = selection_action_type or selected_snapshot_candidate.get('action_type', '')
     selected_brief = _snapshot_candidate_brief(selected_snapshot_candidate) if selected_snapshot_candidate else {}
     if selection_target_position == 50 and best_stock:
-        selection_anchor_type = '明天唯一能买的那只'
+        selection_anchor_type = '明日执行对象'
     elif selection_target_position == 30 and selected_candidate:
         selection_anchor_type = '50%条件执行'
     else:
@@ -354,7 +354,7 @@ def _build_strategy_plan_context_legacy_body(
     if target_position_pct >= 50 and best_stock:
         action_type = 'execute'
         plan_stock = best_stock
-        anchor_type = '明天唯一能买的那只'
+        anchor_type = '明日执行对象'
     elif 0 < target_position_pct < 50 and (best_stock or watch_anchor):
         action_type = 'execute'
         plan_stock = best_stock or watch_anchor
@@ -433,9 +433,9 @@ def _build_strategy_plan_context_legacy_body(
         confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
         if 0 < target_position_pct < 50:
             if confirm_price:
-                trigger_text = f"50%条件执行：09:50-10:10窗口内站上{confirm_price:.2f}且条件成立后再执行"
+                trigger_text = f"50%条件执行：已决定执行对象，09:50-10:10窗口内站上{confirm_price:.2f}后只检查执行资格"
             else:
-                trigger_text = "50%条件执行：固定交易窗口内条件成立后再执行，普通结构只看09:50-10:10窗口"
+                trigger_text = "50%条件执行：已决定执行对象，固定交易窗口只检查执行资格，普通结构只看09:50-10:10窗口"
         elif confirm_price:
             trigger_text = f"09:50-10:10站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
         elif entry_low is not None and entry_high is not None:
@@ -444,9 +444,9 @@ def _build_strategy_plan_context_legacy_body(
         if final_gate.get('can_new_entry') and '候选' in anchor_type:
             confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
             if confirm_price:
-                trigger_text = f"{anchor_type}，先看09:50-10:10站上{confirm_price:.2f}，再判断能否走成明天唯一能买的那只"
+                trigger_text = f"{anchor_type}，先看09:50-10:10站上{confirm_price:.2f}，结果进入复盘和下一份日报判断"
             else:
-                trigger_text = f"{anchor_type}，先看盘中承接，再判断能否走成明天唯一能买的那只"
+                trigger_text = f"{anchor_type}，先看盘中承接，结果进入复盘和下一份日报判断"
         else:
             trigger_text = f"{anchor_type}，仅观察不下单"
 

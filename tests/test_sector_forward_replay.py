@@ -33,6 +33,23 @@ def _embedded_payload(rendered_html):
     return json.loads(match.group(1))
 
 
+def _embedded_window_chart_payload(rendered_html):
+    match = re.search(
+        r'<script type="application/json" id="sector-window-chart-payload">(.*?)</script>',
+        rendered_html,
+        re.S,
+    )
+    if not match:
+        return {}
+    return json.loads(match.group(1))
+
+
+def _visible_html(rendered_html):
+    text = re.sub(r'<script\b[^>]*>.*?</script>', "", rendered_html, flags=re.S)
+    text = re.sub(r'<style\b[^>]*>.*?</style>', "", text, flags=re.S)
+    return text
+
+
 class SectorForwardReplayTest(unittest.TestCase):
     def _data(self, date):
         if date == "2026-06-01":
@@ -302,8 +319,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(pair["decision_candidate_count"], 0)
         self.assertEqual(pair["evaluations"], [])
         self.assertIn('BDAY["T+1买入日 2026-06-02 复核 0 只决策日候选"]', pair["mermaid"])
-        self.assertIn('<tr><td colspan="5">无候选</td></tr>', rendered)
-        self.assertNotIn("无执行对象</td><td>", rendered)
+        self.assertIn("回测摘要", rendered)
+        self.assertNotIn('<section class="pair-section">', _visible_html(rendered))
+        self.assertNotIn("无执行对象</td><td>", _visible_html(rendered))
 
     def test_html_renders_static_flow_and_embedded_payload(self):
         payload = build_forward_replay_payload(
@@ -312,25 +330,34 @@ class SectorForwardReplayTest(unittest.TestCase):
         )
 
         rendered = render_forward_replay_html(payload)
+        visible = _visible_html(rendered)
 
-        self.assertIn('meta name="artifact" content="sector-forward-replay"', rendered)
-        self.assertIn("板块资金扩散前向回测", rendered)
-        self.assertIn("流程图", rendered)
-        self.assertIn("Mermaid 源码", rendered)
-        self.assertIn("决策日候选的T+1买入日逐股复核", rendered)
-        self.assertIn("验证范围", rendered)
-        self.assertIn("只看T0候选", rendered)
-        self.assertIn("T0推演T+2交易环境", rendered)
-        self.assertIn("预案与实际分开看", rendered)
-        self.assertNotIn("<dt>目标日动作</dt>", rendered)
-        self.assertNotIn("<dt>目标日候选</dt>", rendered)
-        self.assertIn("决策日淘汰赛明细", rendered)
-        self.assertIn("2026-06-07 无可用日报事实，改用上一可用交易日 2026-06-05", rendered)
+        self.assertIn('meta name="artifact" content="sector-forward-replay"', visible)
+        self.assertIn("板块资金扩散前向回测", visible)
+        self.assertIn("回测摘要", visible)
+        self.assertIn("买入 / 卖出时间矩阵", visible)
+        self.assertIn("样本收益分布", visible)
+        self.assertNotIn("流程图", visible)
+        self.assertNotIn("Mermaid 源码", visible)
+        self.assertNotIn("决策日候选的T+1买入日逐股复核", visible)
+        self.assertNotIn("验证范围", visible)
+        self.assertNotIn("只看T0候选", visible)
+        self.assertNotIn("T0推演T+2交易环境", visible)
+        self.assertNotIn("预案与实际分开看", visible)
+        self.assertNotIn("<dt>目标日动作</dt>", visible)
+        self.assertNotIn("<dt>目标日候选</dt>", visible)
+        self.assertNotIn("决策日淘汰赛明细", visible)
+        self.assertNotIn("2026-06-07 无可用日报事实，改用上一可用交易日 2026-06-05", visible)
         self.assertIn("data-mermaid-status', 'local-svg'", rendered)
         self.assertNotIn("cdn.jsdelivr", rendered)
         self.assertNotIn("mermaid.min.js", rendered)
         self.assertIn("sector-window-return-chart", rendered)
         self.assertIn("sector-window-excess-chart", rendered)
+        self.assertIn("sector-window-matrix-chart", rendered)
+        self.assertIn("sector-window-metrics-chart", rendered)
+        self.assertIn("sector-sample-distribution-chart", rendered)
+        self.assertIn("sector-window-equity-chart", rendered)
+        self.assertIn("sector-market-breadth-chart", rendered)
         self.assertIn("sector-window-chart-payload", rendered)
         self.assertIn("../../.generated/vendor/echarts/echarts.min.js", rendered)
         self.assertIn(".generated/vendor/echarts/echarts.min.js", rendered)
@@ -378,11 +405,17 @@ class SectorForwardReplayTest(unittest.TestCase):
             "T0不参与但T+1证据走强",
         )
         rendered = render_forward_replay_html(payload)
-        self.assertIn("全局诊断", rendered)
-        self.assertIn("原日报最终动作分布", rendered)
-        self.assertIn("旧链路动作分布", rendered)
-        self.assertIn("0% 归因分布", rendered)
-        self.assertIn("异常错配样本", rendered)
+        visible = _visible_html(rendered)
+        self.assertIn("回测摘要", visible)
+        self.assertNotIn("全局诊断", visible)
+        self.assertNotIn("逐日样本明细", visible)
+        self.assertNotIn('<details class="replay-appendix">', visible)
+        self.assertNotIn('<section class="pair-section">', visible)
+        self.assertNotRegex(visible, r"<details[^>]*\sopen(?:\s|>)")
+        self.assertNotIn("原日报最终动作分布", visible)
+        self.assertNotIn("旧链路动作分布", visible)
+        self.assertNotIn("0% 归因分布", visible)
+        self.assertNotIn("异常错配样本", visible)
         embedded = _embedded_payload(rendered)
         self.assertEqual(embedded["summary"]["action_distribution"], {"0%": 2})
         self.assertEqual(embedded["summary"]["legacy_action_distribution"], {"0%": 2})
@@ -398,8 +431,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIn("链路需要复核", verdict["conclusion"])
         self.assertIn("20/20 天最终都是 0%", verdict["conclusion"])
         rendered = render_forward_replay_html(payload)
-        self.assertIn("链路需要复核", rendered)
-        self.assertIn("停止把该回测当作策略有效证据", rendered)
+        visible = _visible_html(rendered)
+        self.assertNotIn("链路需要复核", visible)
+        self.assertNotIn("停止把该回测当作策略有效证据", visible)
 
     def test_paper_strategy_recovers_sector_first_carrier_without_target_lookahead(self):
         payload = build_forward_replay_payload(
@@ -416,7 +450,7 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(strategy["target_summary"]["primary_outcome_label"], "板块命中但个股未到执行级别")
         self.assertNotIn("华电能源", json.dumps(strategy, ensure_ascii=False))
 
-    def test_payload_and_html_compare_old_chain_with_new_paper_strategy(self):
+    def test_payload_keeps_old_chain_and_new_paper_strategy_for_embedded_audit(self):
         payload = build_forward_replay_payload(
             [("2026-06-05", "2026-06-08"), ("2026-06-08", "2026-06-09")],
             loader=self._data,
@@ -424,6 +458,7 @@ class SectorForwardReplayTest(unittest.TestCase):
 
         summary = payload["summary"]
         rendered = render_forward_replay_html(payload)
+        visible = _visible_html(rendered)
 
         self.assertIn("paper_action_distribution", summary)
         self.assertEqual(summary["action_distribution"], {"0%": 2})
@@ -432,10 +467,11 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(payload["pairs"][0]["paper_review_object"]["source"], "sector_capital_carrier_strategy")
         self.assertTrue(payload["pairs"][0]["paper_review_object"]["review_only"])
         self.assertGreater(summary["paper_candidate_count_max"], 0)
-        self.assertIn("旧链路 vs 板块优先链路", rendered)
-        self.assertIn("新版纸面策略：板块资金载体跟随", rendered)
-        self.assertIn("板块优先纸面动作分布", rendered)
-        self.assertIn("纸面候选 T+1 买入复核", rendered)
+        self.assertNotIn("旧链路 vs 板块优先链路", visible)
+        self.assertNotIn("板块优先纸面动作分布", visible)
+        embedded = _embedded_payload(rendered)
+        self.assertEqual(embedded["summary"]["paper_action_distribution"], summary["paper_action_distribution"])
+        self.assertEqual(embedded["pairs"][0]["paper_strategy"]["action_label"], "板块资金载体主样本")
 
     def test_sector_first_paper_review_object_keeps_legacy_action_as_comparison(self):
         def loader(date):
@@ -457,6 +493,7 @@ class SectorForwardReplayTest(unittest.TestCase):
 
         pair = payload["pairs"][0]
         rendered = render_forward_replay_html(payload)
+        visible = _visible_html(rendered)
 
         self.assertEqual(pair["paper_review_object"]["source"], "sector_capital_carrier_strategy")
         self.assertEqual(pair["paper_review_object"]["target"]["code"], "603986")
@@ -466,9 +503,10 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(payload["summary"]["action_distribution"], {"50%": 1})
         self.assertEqual(payload["summary"]["legacy_action_distribution"], {"50%": 1})
         self.assertEqual(payload["summary"]["paper_review_contrast_count"], 1)
-        self.assertIn("旧动作 vs 纸面复核对象", rendered)
-        self.assertIn("旧链路股(000001)", rendered)
-        self.assertIn("兆易创新(603986)", rendered)
+        self.assertNotIn("旧动作 vs 纸面复核对象", visible)
+        embedded = _embedded_payload(rendered)
+        self.assertEqual(embedded["pairs"][0]["legacy_final_action"]["target"]["code"], "000001")
+        self.assertEqual(embedded["pairs"][0]["paper_review_object"]["target"]["code"], "603986")
 
     def test_paper_strategy_shows_tplus2_sell_windows_and_return_basis(self):
         payload = build_forward_replay_payload(
@@ -478,23 +516,23 @@ class SectorForwardReplayTest(unittest.TestCase):
 
         pair = payload["pairs"][0]
         rendered = render_forward_replay_html(payload)
+        visible = _visible_html(rendered)
         row = pair["evaluations"][0]
 
-        self.assertIn("T+1涨幅", rendered)
-        self.assertIn("T+2三段卖出窗口复核", rendered)
-        self.assertIn("T+2卖出窗口统计", rendered)
-        self.assertIn("T+1买入 x T+2卖出窗口矩阵", rendered)
-        self.assertIn("买卖时间收益矩阵", rendered)
-        self.assertIn("代理收益曲线与最大回撤", rendered)
-        self.assertIn("窗口折算收益与指数对照", rendered)
-        self.assertIn("单笔代理收益前10", rendered)
-        self.assertIn("单笔代理亏损前10", rendered)
-        self.assertIn("T+1买入窗口", rendered)
-        self.assertIn("日线代理较高窗口", rendered)
-        self.assertIn("T0推演与T+2校准", rendered)
-        self.assertIn("09:30-09:35", rendered)
-        self.assertIn("09:50-10:10", rendered)
-        self.assertIn("14:30-14:55", rendered)
+        self.assertNotIn("T+1涨幅", visible)
+        self.assertNotIn("T+2三段卖出窗口复核", visible)
+        self.assertNotIn("T+2卖出窗口统计", visible)
+        self.assertNotIn("T+1买入 x T+2卖出窗口矩阵", visible)
+        self.assertNotIn("买卖时间收益矩阵", visible)
+        self.assertNotIn("代理收益曲线与最大回撤", visible)
+        self.assertNotIn("窗口折算收益与指数对照", visible)
+        self.assertNotIn("单笔代理收益前10", visible)
+        self.assertNotIn("单笔代理亏损前10", visible)
+        self.assertIn("买入 / 卖出时间矩阵", visible)
+        self.assertIn("较高组合净值曲线", visible)
+        self.assertIn("样本收益分布", visible)
+        self.assertIn("09:30-09:35", visible)
+        self.assertIn("14:30-14:55", visible)
         self.assertIsNotNone(row["target_change_pct"])
         self.assertEqual(row["tplus2_exit_review"]["sell_date"], "2026-06-10")
         self.assertEqual(len(row["tplus2_exit_review"]["window_matrix"]), 9)
@@ -510,7 +548,7 @@ class SectorForwardReplayTest(unittest.TestCase):
         )
         self.assertIn("trade_window_matrix_summary", payload["summary"])
         self.assertIn("target_action_summary", payload["summary"])
-        self.assertIn("缺少分时成交价，使用日线代理", rendered)
+        self.assertNotIn("缺少分时成交价，使用日线代理", visible)
         self.assertNotIn("按D收盘买入、D+1收盘卖出", rendered)
         self.assertNotIn("T+1卖出收益", rendered)
 
@@ -633,7 +671,8 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(curve["cumulative_return_pct"], -12.0)
         self.assertEqual(curve["max_drawdown_pct"], -20.0)
         self.assertEqual(curve["max_drawdown_sample"]["decision_date"], "2026-01-03")
-        self.assertIn("期末净值", render_forward_replay_html({"pairs": [], "notes": [], "summary": {"trade_window_matrix_summary": matrix_summary}}))
+        chart_payload = _embedded_window_chart_payload(render_forward_replay_html({"pairs": [], "notes": [], "summary": {"trade_window_matrix_summary": matrix_summary}}))
+        self.assertEqual(chart_payload["equity_curve"]["final_net_value"], 0.88)
         self.assertIn("-20.00%", rendered_rows)
         self.assertIn("0.88", recommended_rows)
 
@@ -645,9 +684,11 @@ class SectorForwardReplayTest(unittest.TestCase):
                 "sell_date": "2026-01-06",
                 "t0_market_context": {
                     "T0上证指数": f"{sh_index:.2f} / +0.00%",
-                    "T0全A指数": f"{sh_index:.2f} / +0.00%",
-                    "T0中证500": f"{sh_index:.2f} / +0.00%",
                     "T0创业板指": f"{sh_index:.2f} / +0.00%",
+                    "T0科创50": f"{sh_index:.2f} / +0.00%",
+                    "T0中证500": f"{sh_index:.2f} / +0.00%",
+                    "T0全A指数": f"{sh_index:.2f} / +0.00%",
+                    "T0中证1000": f"{sh_index:.2f} / +0.00%",
                 },
                 "paper_strategy": {
                     "target_summary": {"primary_stock": stock},
@@ -706,22 +747,208 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(target_row["sample_count"], 2)
         self.assertEqual(target_row["period_count"], 2)
         self.assertEqual(target_row["excess_上证指数"], -5.5)
+        self.assertEqual(target_row["excess_创业板指"], -5.5)
+        self.assertEqual(target_row["excess_科创50"], -5.5)
+        self.assertEqual(target_row["excess_中证1000"], -5.5)
         rendered = render_forward_replay_html({"pairs": [], "notes": [], "summary": {"window_performance_comparison": comparison, "index_benchmark_summary": benchmark_summary}})
-        chart_payload = sector_forward_replay._window_performance_chart_payload({"window_performance_comparison": comparison})
+        chart_payload = _embedded_window_chart_payload(rendered)
         chart_row = next(
             item for item in chart_payload["rows"]
             if item["label"] == "09:30-09:35买 / 14:30-14:55卖（原始）"
         )
-        self.assertIn("月化代理收益", rendered)
-        self.assertIn("折算周期", rendered)
-        self.assertIn("窗口折算收益与指数对照图", rendered)
+        self.assertIn("区间收益与月度折算参考", rendered)
+        self.assertIn("较高窗口与指数区间收益对比", rendered)
+        self.assertIn("每个指数一组两根横向柱", rendered)
+        self.assertIn("name: '策略区间收益'", rendered)
+        self.assertIn("name: '指数区间涨跌'", rendered)
+        self.assertIn("benchmarkBarData('index_return_pct')", rendered)
+        self.assertNotIn("name: '相对差'", rendered)
+        self.assertNotIn("benchmarkBarData('excess_pct')", rendered)
+        self.assertNotIn("年化收益", rendered)
         self.assertIn("sector-window-return-chart", rendered)
         self.assertIn("sector-window-excess-chart", rendered)
         self.assertEqual(chart_row["sample_text"], "2/2")
+        self.assertEqual(chart_row["excess_star50_pct"], -5.5)
         self.assertEqual(chart_row["excess_csi500_pct"], -5.5)
+        self.assertEqual(chart_row["excess_csi1000_pct"], -5.5)
+        self.assertEqual(
+            [item["label"] for item in chart_payload["benchmark_excess"]["items"]],
+            ["上证指数", "创业板指", "科创50", "中证500", "全A指数", "中证1000"],
+        )
+        self.assertEqual(chart_payload["benchmark_excess"]["items"][2]["excess_pct"], -5.5)
         self.assertIn(">2/2<", rows)
         self.assertIn("-5.50个百分点", rows)
+        self.assertIn("短样本不展示", rows)
         self.assertIn("+10.00%", benchmark_rows)
+        self.assertIn("科创50", benchmark_rows)
+        self.assertIn("中证1000", benchmark_rows)
+
+    def test_replay_summary_chart_payload_contains_matrix_returns_curve_and_market_breadth(self):
+        def pair(decision_date, stock, return_pct, sh_index, up_count, down_count, new_high_pct):
+            return {
+                "effective_decision_date": decision_date,
+                "buy_date": "2026-01-05",
+                "sell_date": "2026-01-06",
+                "t0_market_context": {
+                    "T0上证指数": f"{sh_index:.2f} / +0.20%",
+                    "T0全A指数": f"{sh_index:.2f} / +0.30%",
+                    "T0中证500": f"{sh_index:.2f} / +0.10%",
+                    "T0创业板指": f"{sh_index:.2f} / -0.20%",
+                    "T0涨跌家数": f"{up_count} / {down_count}",
+                    "T0创新高全A占比": f"120 / {new_high_pct:.2f}% / 趋势扩散偏热",
+                },
+                "paper_strategy": {
+                    "target_summary": {"primary_stock": stock},
+                    "target_evaluations": [
+                        {
+                            "stock_label": stock,
+                            "tplus2_exit_review": {
+                                "window_matrix": [
+                                    {
+                                        "buy_window_id": "open_0930_0935",
+                                        "buy_window": "09:30-09:35",
+                                        "buy_proxy_label": "T+1开盘价代理",
+                                        "sell_window_id": "late_1430_1455",
+                                        "sell_window": "14:30-14:55",
+                                        "sell_proxy_label": "T+2收盘价代理",
+                                        "entry_price": 10.0,
+                                        "exit_price": 10.0 * (1 + return_pct / 100),
+                                        "return_pct": return_pct,
+                                        "buy_window_entry_change_pct": 1.0,
+                                        "buy_close_near_limit": False,
+                                        "basis": "测试日线代理",
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                },
+            }
+
+        pair_payloads = [
+            pair("2026-01-02", "强样本(000001)", 10.0, 1000.0, 3200, 1800, 5.2),
+            pair("2026-01-03", "回撤样本(000002)", -5.0, 1100.0, 2100, 2900, 1.6),
+        ]
+        matrix_summary = sector_forward_replay._build_trade_window_matrix_summary(pair_payloads)
+        benchmark_summary = sector_forward_replay._build_index_benchmark_summary(pair_payloads)
+        comparison = sector_forward_replay._build_window_performance_comparison(
+            pair_payloads,
+            matrix_summary,
+            benchmark_summary,
+        )
+        payload = {
+            "pairs": pair_payloads,
+            "notes": [],
+            "summary": {
+                "trade_window_matrix_summary": matrix_summary,
+                "window_performance_comparison": comparison,
+                "index_benchmark_summary": benchmark_summary,
+            },
+        }
+
+        rendered_summary = sector_forward_replay._render_replay_summary(payload)
+        chart_payload = sector_forward_replay._replay_summary_chart_payload(payload)
+
+        self.assertIn("回测摘要", rendered_summary)
+        self.assertIn("买入 / 卖出时间矩阵", rendered_summary)
+        self.assertIn("较高窗口与指数区间收益对比", rendered_summary)
+        self.assertIn("指数对比", rendered_summary)
+        self.assertNotIn("年化收益", rendered_summary)
+        self.assertIn("正收益占比", rendered_summary)
+        self.assertEqual(len(chart_payload["matrix"]["cells"]), 1)
+        self.assertEqual(chart_payload["matrix"]["cells"][0]["positive_text"], "1/2")
+        self.assertEqual(chart_payload["equity_curve"]["points"][-1]["net_value"], 1.045)
+        self.assertEqual(chart_payload["market_breadth"]["rows"][0]["up_count"], 3200)
+        self.assertEqual(chart_payload["market_breadth"]["rows"][1]["new_high_pct"], 1.6)
+        self.assertTrue(chart_payload["rows"])
+        self.assertIn("benchmark_excess", chart_payload)
+
+    def test_replay_summary_uses_bear_reader_summary_single_chart_rows(self):
+        rendered = render_forward_replay_html(
+            {
+                "pairs": [],
+                "notes": [],
+                "summary": {
+                    "window_performance_comparison": {
+                        "rows": [
+                            {
+                                "label": "T+1 09:30-09:35 / T+2 14:30-14:55",
+                                "short_label": "开盘买/尾盘卖",
+                                "sample_count": 2,
+                                "all_sample_count": 2,
+                                "period_count": 2,
+                                "cumulative_return_pct": 7.57,
+                                "monthly_return_pct": 102.3,
+                                "annualized_return_pct": 1300.0,
+                                "max_drawdown_pct": -1.2,
+                            }
+                        ]
+                    },
+                    "trade_window_matrix_summary": {
+                        "best_combo": {
+                            "buy_window_id": "open_0930_0935",
+                            "buy_window": "09:30-09:35",
+                            "sell_window_id": "late_1430_1455",
+                            "sell_window": "14:30-14:55",
+                        },
+                        "matrix": [
+                            {
+                                "buy_window_id": "open_0930_0935",
+                                "buy_window": "09:30-09:35",
+                                "sell_window_id": "late_1430_1455",
+                                "sell_window": "14:30-14:55",
+                                "average_return_pct": 7.57,
+                                "sample_count": 2,
+                                "positive_count": 2,
+                                "exclusion": "未剔除接近涨停买点",
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+        self.assertIn("--reader-text: #444444", rendered)
+        self.assertIn("--reader-muted: #888888", rendered)
+        self.assertIn("--reader-line: #d9d9d9", rendered)
+        self.assertIn("--accent: #DD4C4F", rendered)
+        self.assertIn("--accent-red: #DD4C4F", rendered)
+        self.assertIn('class="bear-shell"', rendered)
+        self.assertIn('class="outline-sidebar"', rendered)
+        self.assertIn('class="reader-header"', rendered)
+        self.assertIn('class="reader-document"', rendered)
+        self.assertIn('class="markdown-body"', rendered)
+        self.assertIn('class="reader-table replay-metric-table"', rendered)
+        self.assertIn('class="bear-chart-card" id="replay-window-matrix"', rendered)
+        self.assertIn('class="bear-chart-frame is-tall"', rendered)
+        self.assertIn('class="bear-chart" id="sector-window-matrix-chart"', rendered)
+        self.assertIn('class="bear-chart-card" id="replay-window-excess"', rendered)
+        self.assertIn('class="bear-chart" id="sector-window-excess-chart"', rendered)
+        self.assertRegex(rendered, r"(?s)\.bear-chart-frame\.is-tall \{.*?height: 660px;")
+        self.assertIn("greenMist: '#EAF8EF'", rendered)
+        self.assertIn("redMist: '#F9E7E7'", rendered)
+        self.assertIn("redMatrix: '#F2B8BA'", rendered)
+        self.assertIn("visualMap: { show: false }", rendered)
+        self.assertIn("backgroundColor: 'rgba(255,255,255,0.78)'", rendered)
+        self.assertIn("matrixFillColor(cell.average_return_pct, cell.is_best)", rendered)
+        self.assertNotIn("inRange: { color: [chartTone.ink, chartTone.surface, chartTone.red] }", rendered)
+        self.assertNotIn("chartTone.ink, chartTone.surface, chartTone.redMist", rendered)
+        self.assertNotIn("#444444", rendered.split("const matrixFillColor", 1)[1].split("const matrixChart", 1)[0])
+        self.assertNotIn("backgroundColor: chartTone.paper", rendered)
+        self.assertNotIn("grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr)", rendered)
+        self.assertNotIn("grid-template-columns: repeat(2, minmax(0, 1fr))", rendered)
+        self.assertNotIn("grid-row: span 2", rendered)
+        self.assertNotIn("dashboard-", rendered)
+        self.assertNotIn("performance-chart", rendered)
+        self.assertNotIn('class="matrix-chart"', rendered)
+        self.assertNotIn("dashboard-main-chart", rendered)
+        self.assertNotIn("--swiss-accent", rendered)
+        self.assertNotIn("--paper: #fafaf8", rendered)
+        self.assertNotIn("#002FA7", rendered)
+        self.assertNotIn("Bear 日报样式", rendered)
+        self.assertNotIn("年化收益", rendered)
+        self.assertIn("const chartTone = {", rendered)
+        self.assertIn("chartTone.red", rendered)
 
     def test_index_benchmark_requires_sample_boundary_coverage(self):
         pair_payloads = [
@@ -787,8 +1014,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIsNone(csi500_row["cumulative_return_pct"])
         self.assertIsNone(target_row["excess_中证500"])
         self.assertIn("未覆盖样本首尾", benchmark_rows)
-        self.assertIn("日线代理跑赢指数对照", rendered)
-        self.assertIn("只在指数覆盖样本首尾时计算", rendered)
+        chart_payload = _embedded_window_chart_payload(rendered)
+        self.assertIsNone(chart_payload["rows"][0]["excess_csi500_pct"])
+        self.assertIn("sector-window-excess-chart", rendered)
 
     def test_window_performance_chart_payload_escapes_script_breakout(self):
         comparison = {
@@ -891,6 +1119,53 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIn("剔开盘接近涨停", chart_filtered_row["short_label"])
         self.assertIn(">0/1<", rows)
         self.assertIn("剔除T+1开盘买点已接近涨停的样本", rows)
+
+    def test_benchmark_excess_chart_keeps_pending_index_label(self):
+        comparison = {
+            "rows": [
+                {
+                    "label": "09:30-09:35买 / 14:30-14:55卖（原始）",
+                    "buy_window_id": "open_0930_0935",
+                    "sell_window_id": "late_1430_1455",
+                    "exclusion": "未剔除接近涨停买点",
+                    "sample_count": 2,
+                    "all_sample_count": 2,
+                    "period_count": 2,
+                    "cumulative_return_pct": 4.5,
+                    "monthly_return_pct": 58.0,
+                    "excess_上证指数": 1.0,
+                    "excess_创业板指": 2.0,
+                    "excess_科创50": None,
+                    "excess_中证500": 3.0,
+                    "excess_全A指数": 4.0,
+                    "excess_中证1000": 5.0,
+                }
+            ]
+        }
+        benchmark_summary = {
+            "rows": [
+                {"label": "上证指数", "cumulative_return_pct": 3.5, "coverage_note": "覆盖样本首尾"},
+                {"label": "创业板指", "cumulative_return_pct": 2.5, "coverage_note": "覆盖样本首尾"},
+                {"label": "科创50", "cumulative_return_pct": None, "coverage_note": "未覆盖样本首尾"},
+                {"label": "中证500", "cumulative_return_pct": 1.5, "coverage_note": "覆盖样本首尾"},
+                {"label": "全A指数", "cumulative_return_pct": 0.5, "coverage_note": "覆盖样本首尾"},
+                {"label": "中证1000", "cumulative_return_pct": -0.5, "coverage_note": "覆盖样本首尾"},
+            ]
+        }
+
+        chart_payload = sector_forward_replay._window_performance_chart_payload(
+            {
+                "window_performance_comparison": comparison,
+                "index_benchmark_summary": benchmark_summary,
+            }
+        )
+
+        self.assertEqual(
+            [item["label"] for item in chart_payload["benchmark_excess"]["items"]],
+            ["上证指数", "创业板指", "科创50", "中证500", "全A指数", "中证1000"],
+        )
+        self.assertIsNone(chart_payload["benchmark_excess"]["items"][2]["excess_pct"])
+        self.assertEqual(chart_payload["benchmark_excess"]["items"][2]["coverage_note"], "未覆盖样本首尾")
 
     def test_late_buy_window_exposes_close_near_limit_risk(self):
         window_matrix, _ = sector_forward_replay._build_window_matrix(
@@ -995,10 +1270,10 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(buyability["status"], "可能买不到")
         self.assertIn("09:35前已接近涨停", buyability["reason"])
         self.assertEqual(payload["summary"]["buyability_summary"]["distribution"], {"可能买不到": 1})
-        self.assertIn("真实可买性复核", rendered)
-        self.assertIn("真实可买性分布", rendered)
-        self.assertIn("T0/T+1/T+2价格路径", rendered)
-        self.assertIn("可能买不到", rendered)
+        visible = _visible_html(rendered)
+        self.assertNotIn("真实可买性复核", visible)
+        self.assertNotIn("真实可买性分布", visible)
+        self.assertIn("可能买不到", json.dumps(_embedded_payload(rendered), ensure_ascii=False))
 
     def test_buyability_uses_limit_pool_proxy_when_minute_missing(self):
         price_refill = build_tushare_daily_price_refill(
@@ -1051,7 +1326,7 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIn("不替代分时成交", buyability["minute_source"])
         self.assertEqual(buyability["proxy_source"], "涨停池")
         self.assertEqual(payload["summary"]["buyability_summary"]["distribution"], {"可能买不到": 1})
-        self.assertIn("涨停池/日线代理复核", rendered)
+        self.assertNotIn("涨停池/日线代理复核", _visible_html(rendered))
 
     def test_buyability_prefers_minute_over_limit_pool_proxy(self):
         price_refill = build_tushare_daily_price_refill(
@@ -1271,8 +1546,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(target_summary["skip_day_count"], 1)
         self.assertIn("2026-06-01", target_summary["execution_empty_dates"])
         self.assertIn("没有从已选板块中恢复出资金载体", target_summary["empty_reason_distribution"])
-        self.assertIn("纸面主样本/空仓判定", rendered)
-        self.assertIn("空仓判定", rendered)
+        visible = _visible_html(rendered)
+        self.assertNotIn("纸面主样本/空仓判定", visible)
+        self.assertNotIn("空仓判定", visible)
 
     def test_t0_projection_groups_tplus2_emotion_and_sell_window_stats(self):
         payload = build_forward_replay_payload(
@@ -1296,14 +1572,12 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertTrue(
             any(row["return_stats"]["best_window"] for row in rows)
         )
-        self.assertIn("T+2实际分布", rendered)
-        self.assertIn("后验校准", rendered)
-        self.assertIn("大体一致", rendered)
-        self.assertNotIn("正确率", rendered)
-        self.assertIn("偏离样本窗口", rendered)
-        self.assertIn("全部窗口表现", rendered)
-        self.assertIn("T0推演T+2交易环境", rendered)
-        self.assertNotIn("胜率", rendered)
+        visible = _visible_html(rendered)
+        self.assertNotIn("T+2实际分布", visible)
+        self.assertNotIn("后验校准", visible)
+        self.assertNotIn("正确率", visible)
+        self.assertNotIn("T0推演T+2交易环境", visible)
+        self.assertNotIn("胜率", visible)
 
     def test_tushare_daily_price_refill_takes_priority_for_tplus2_review(self):
         trade_date_calls = []
@@ -1353,8 +1627,9 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(trade_date_calls, ["2026-06-08", "2026-06-09", "2026-06-10"])
         self.assertEqual(single_stock_calls, [])
         self.assertEqual(payload["price_refill_summary"]["filled"], 4)
-        self.assertIn("TuShare事实源复核", rendered)
-        self.assertIn("价格来源", rendered)
+        visible = _visible_html(rendered)
+        self.assertNotIn("TuShare事实源复核", visible)
+        self.assertIn("TuShare优先提供T+1/T+2价格事实", visible)
         embedded = _embedded_payload(rendered)
         self.assertEqual(embedded["price_refill_summary"]["filled"], 4)
 
@@ -1434,9 +1709,46 @@ class SectorForwardReplayTest(unittest.TestCase):
 
         self.assertEqual(payload["pairs"][0]["sell_date"], "2026-06-11")
         self.assertEqual(payload["trade_calendar_refill_summary"]["filled"], 1)
-        self.assertIn("交易日期来源", rendered)
-        self.assertIn("2026-06-10-&gt;2026-06-11", rendered)
+        visible = _visible_html(rendered)
+        self.assertIn("TuShare交易日历优先提供T+2卖出日日期", visible)
+        embedded = _embedded_payload(rendered)
+        self.assertIn("2026-06-10->2026-06-11", str(embedded["trade_calendar_refill_summary"].get("filled_samples", [])))
         self.assertIn("缺少T+2日报事实", payload["pairs"][0]["emotion_review"]["tplus2_market"]["basis"])
+
+    def test_requested_end_date_stays_visible_when_last_tplus2_is_unsettled(self):
+        calendar = build_tushare_open_trade_date_refill(
+            fetch_open_trade_dates_fn=lambda start_date, end_date: [
+                "2026-06-05",
+                "2026-06-08",
+                "2026-06-09",
+                "2026-06-10",
+            ] if start_date == "2026-06-05" else ["2026-06-11"]
+        )
+        pairs, discovery = discover_forward_replay_pairs(
+            "2026-06-05",
+            "2026-06-10",
+            loader=self._data,
+            trade_calendar_refill=calendar,
+        )
+        payload = build_forward_replay_payload(
+            pairs[-1:],
+            loader=self._data,
+            discovery=discovery,
+            trade_calendar_refill=calendar,
+        )
+
+        rows = build_forward_replay_daily_rows(payload, loader=self._data)
+        markdown = render_forward_replay_markdown_summary(payload, rows)
+        rendered = render_forward_replay_html(payload)
+
+        self.assertEqual(payload["end_date"], "2026-06-11")
+        self.assertIn("<title>2026-06-05 至 2026-06-10 板块资金扩散前向回测</title>", rendered)
+        self.assertIn("<tr><td>请求结束</td><td>2026-06-10</td></tr>", rendered)
+        self.assertIn("<tr><td>事实链末端</td><td>2026-06-11</td></tr>", rendered)
+        self.assertIn("<tr><td>待结算日期链</td><td>2026-06-09 -&gt; 2026-06-10 -&gt; 2026-06-11</td></tr>", rendered)
+        self.assertTrue(rows[0]["状态"].endswith("（待结算）"))
+        self.assertIn("已结算收益样本：T0 覆盖 待补 至 待补，共 0 个", markdown)
+        self.assertIn("待结算日期链：2026-06-09 -> 2026-06-10 -> 2026-06-11。", markdown)
 
     def test_trade_calendar_limits_forward_pairs_to_open_trade_dates(self):
         calendar = build_tushare_open_trade_date_refill(
@@ -1497,7 +1809,7 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertEqual(account_row["account_fit"], "一手接近满仓")
         self.assertIn("50%不能精确落账", account_row["position_50pct_basis"])
         self.assertIn("龙空龙", account_row["small_account_action"])
-        self.assertIn("小账户一手换算", rendered)
+        self.assertNotIn("小账户一手换算", _visible_html(rendered))
 
     def test_small_account_review_keeps_unbuyable_action_when_buyability_is_tight(self):
         fit = sector_forward_replay._small_account_fit(
@@ -1519,9 +1831,11 @@ class SectorForwardReplayTest(unittest.TestCase):
             data["indices"] = {
                 "上证指数": {"price": 4010.03, "change_pct": 1.28},
                 "创业板指": {"price": 3961.75, "change_pct": 3.93},
+                "科创50": {"price": 987.65, "change_pct": -0.12},
             }
             data["wind_a_alternative"] = {"name": "中证全指", "code": "000985", "price": 6254.74, "change_pct": 2.21}
             data["csi500_index"] = {"name": "中证500", "code": "000905", "price": 6262.0, "change_pct": 0.9}
+            data["csi1000_index"] = {"name": "中证1000", "code": "000852", "price": 8456.78, "change_pct": -0.45}
             data["market_stats"] = {"up_count": 3322, "down_count": 2049}
             data["new_high_feedback"] = {"new_high_count": 82, "all_a_share_pct": 1.64}
             return data
@@ -1536,29 +1850,42 @@ class SectorForwardReplayTest(unittest.TestCase):
         rows = build_forward_replay_daily_rows(payload, loader=loader)
         markdown = render_forward_replay_markdown_summary(payload, rows)
 
+        self.assertEqual(rows[0]["T0科创50"], "987.65 / -0.12%")
         self.assertEqual(rows[0]["T0中证500"], "6262.00 / +0.90%")
+        self.assertEqual(rows[0]["T0中证1000"], "8456.78 / -0.45%")
         self.assertEqual(rows[0]["T0涨跌家数"], "3322 / 2049")
         self.assertEqual(rows[0]["T0创新高全A占比"], "82 / 1.64% / 趋势扩散偏冷")
         self.assertIn("账户可做性", rows[0])
         self.assertIn("50%仓位口径", rows[0])
+        self.assertIn("T0科创50", markdown)
         self.assertIn("T0中证500", markdown)
+        self.assertIn("T0中证1000", markdown)
         self.assertIn("小账户一手换算", markdown)
 
         html = render_forward_replay_html(payload)
         self.assertIn("T0市场底色", html)
+        self.assertIn("科创50", html)
         self.assertIn("中证500", html)
+        self.assertIn("中证1000", html)
+        self.assertIn("987.65", html)
         self.assertIn("6262.00", html)
+        self.assertIn("8456.78", html)
         self.assertIn("3322 / 2049", html)
 
-    def test_daily_rows_refill_csi500_by_target_date(self):
+    def test_daily_rows_refill_star50_and_csi500_by_target_date(self):
         calls = []
 
+        def fetch_star50(target_date):
+            calls.append(("star50", target_date))
+            return {"name": "科创50", "code": "000688", "price": 1663.22, "change_pct": 0.05}
+
         def fetch_csi500(target_date):
-            calls.append(target_date)
+            calls.append(("csi500", target_date))
             return {"name": "中证500", "code": "000905", "price": 6123.45, "change_pct": -0.67}
 
         def loader(date):
             data = json.loads(json.dumps(self._data(date), ensure_ascii=False))
+            data["star50_index"] = {"name": "科创50", "code": "000688", "price": 1.0, "change_pct": 8.88}
             data["csi500_index"] = {"name": "中证500", "code": "000905", "price": 1.0, "change_pct": 9.99}
             return data
 
@@ -1571,35 +1898,60 @@ class SectorForwardReplayTest(unittest.TestCase):
         rows = build_forward_replay_daily_rows(
             payload,
             loader=loader,
-            index_context_refill=build_tushare_index_context_refill(fetch_csi500_fn=fetch_csi500),
+            index_context_refill=build_tushare_index_context_refill(
+                fetch_star50_fn=fetch_star50,
+                fetch_csi500_fn=fetch_csi500,
+            ),
         )
 
-        self.assertEqual(calls, ["2026-06-09"])
+        self.assertEqual(calls, [("star50", "2026-06-09"), ("csi500", "2026-06-09")])
+        self.assertEqual(rows[0]["T0科创50"], "1663.22 / +0.05%")
         self.assertEqual(rows[0]["T0中证500"], "6123.45 / -0.67%")
 
     def test_payload_index_context_refill_updates_html_market_context(self):
         def loader(date):
-            data = json.loads(json.dumps(self._data(date), ensure_ascii=False))
+            try:
+                base = self._data(date)
+            except ReportCriticalDataMissingError:
+                base = self._data("2026-06-10")
+            data = json.loads(json.dumps(base, ensure_ascii=False))
+            data["star50_index"] = {"name": "科创50", "code": "000688", "price": 1.0, "change_pct": 8.88}
             data["csi500_index"] = {"name": "中证500", "code": "000905", "price": 1.0, "change_pct": 9.99}
             return data
 
+        def fetch_star50(target_date):
+            prices = {"2026-06-08": 1663.22, "2026-06-09": 1713.12}
+            return {"name": "科创50", "code": "000688", "price": prices[target_date], "change_pct": 0.05}
+
         def fetch_csi500(target_date):
-            return {"name": "中证500", "code": "000905", "price": 6123.45, "change_pct": -0.67}
+            prices = {"2026-06-08": 6123.45, "2026-06-09": 6184.68}
+            return {"name": "中证500", "code": "000905", "price": prices[target_date], "change_pct": -0.67}
 
         payload = build_forward_replay_payload(
-            [("2026-06-09", "2026-06-10", "2026-06-11")],
+            [
+                ("2026-06-08", "2026-06-09", "2026-06-10"),
+                ("2026-06-09", "2026-06-10", "2026-06-11"),
+            ],
             loader=loader,
             account_capital=10000,
             lot_size=100,
         )
         sector_forward_replay._apply_index_context_refill_to_payload(
             payload,
-            build_tushare_index_context_refill(fetch_csi500_fn=fetch_csi500),
+            build_tushare_index_context_refill(
+                fetch_star50_fn=fetch_star50,
+                fetch_csi500_fn=fetch_csi500,
+            ),
         )
         rendered = render_forward_replay_html(payload)
+        chart_payload = sector_forward_replay._window_performance_chart_payload(payload["summary"])
+        star50_item = next(item for item in chart_payload["benchmark_excess"]["items"] if item["label"] == "科创50")
 
-        self.assertIn("6123.45 / -0.67%", rendered)
+        self.assertIn("1663.22 / +0.05%", rendered)
+        self.assertIn("1713.12 / +0.05%", rendered)
         self.assertIn("T0市场底色", rendered)
+        self.assertEqual(star50_item["coverage_note"], "覆盖样本首尾")
+        self.assertIsNotNone(star50_item["excess_pct"])
 
     def test_forward_replay_loader_falls_back_to_snapshot_when_postgres_is_thin(self):
         calls = {"snapshot": 0, "postgres": 0}
