@@ -436,10 +436,24 @@ def _render_day_order_timeline_lines(candidates, data, positions, target_date, p
     second_day_label = _date_weekday_label(second_day)
     third_day_label = _date_weekday_label(third_day)
     fourth_day_label = _date_weekday_label(fourth_day)
-    ta_label = "、".join(holding_names) if holding_names else "空仓"
+    position_context_unknown = (
+        isinstance(data, dict)
+        and data.get("position_context_provided") is False
+        and not holding_names
+        and not has_previous_source
+    )
+    ta_label = "、".join(holding_names) if holding_names else ("待确认旧仓" if position_context_unknown else "空仓")
     tb_label = _target_label(target) if target else "空仓"
-    ta_first_text = "上一份日报目标，进入旧仓/旧路径复核" if has_previous_source and holding_names else ("Ta+0 旧仓占用" if holding_names else "Ta+0 空仓")
-    ta_second_text = ("Ta+1 继续处理旧仓或取消路径" if has_previous_source else "Ta+1 继续处理旧仓") if holding_names else "空仓"
+    if has_previous_source and holding_names:
+        ta_first_text = "上一份日报目标，进入旧仓/旧路径复核"
+    elif holding_names:
+        ta_first_text = "Ta+0 旧仓占用"
+    else:
+        ta_first_text = "先确认旧仓" if position_context_unknown else "Ta+0 空仓"
+    if holding_names:
+        ta_second_text = "Ta+1 继续处理旧仓或取消路径" if has_previous_source else "Ta+1 继续处理旧仓"
+    else:
+        ta_second_text = "确认后再处理" if position_context_unknown else "空仓"
     tb_second_text = "报告日确认明日目标" if has_previous_source and target else ("Tb+0 明日目标" if target else "没有Tb+0，空仓")
     tb_third_text = "Tb+0 条件买入，不是无条件买入" if has_previous_source and target else ("Tb+1 只按昨晚预案执行或取消" if target else "没有Tb+1，空仓")
     tb_fourth_text = "Tb+1 只按昨晚预案执行或取消" if has_previous_source and target else ("Tb+2 未执行则回到空仓" if target else "空仓")
@@ -451,6 +465,9 @@ def _render_day_order_timeline_lines(candidates, data, positions, target_date, p
     elif holding_names:
         ta_third_text = "Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓"
         ta_note = "- Ta 表示旧仓占用；没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，优先处理旧仓，让账户尽可能接近全天空仓；仍有承接的正常持仓按预案尾盘处理。"
+    elif position_context_unknown:
+        ta_third_text = "持仓确认后再决定"
+        ta_note = "- Ta 表示旧仓占用；持仓未输入时，Ta轨道只表示待确认，执行前先确认旧仓情况。"
     else:
         ta_third_text = "空仓"
         ta_note = "- Ta 表示旧仓占用；无旧仓时，Ta轨道保持空仓。"

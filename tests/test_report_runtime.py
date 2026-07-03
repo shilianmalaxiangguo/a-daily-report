@@ -325,6 +325,81 @@ def _build_runtime_execution_test_helpers(run_registered_execution_stages, **ove
 
 
 class ReportRuntimeTest(unittest.TestCase):
+    def test_runtime_stores_bayesian_diagnosis_in_all_contexts(self):
+        data = {"target_date": "2026-06-04", "source_date": "2026-06-04"}
+        execution_stage_context = {}
+        market_research_snapshot = {
+            "source_date": "2026-06-04",
+            "cycle_layer": {"cycle_mainline": "电力", "daily_attack_line": "电力", "source_date": "2026-06-04"},
+        }
+        final_target_resolution = {
+            "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力", "source_date": "2026-06-04"},
+            "new_entry_target": {"name": "豫能控股", "code": "001896", "sector": "电力", "source_date": "2026-06-04"},
+            "capital_priority_decision": {"capital_priority": "new_entry", "reason": "新开仓对象具备执行资格"},
+            "source_date": "2026-06-04",
+        }
+
+        packet = report_runtime._build_bayesian_diagnosis_packet(
+            target_date="2026-06-04",
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+            final_target_resolution=final_target_resolution,
+            position_decision={"target_position_pct": 50, "source_date": "2026-06-04"},
+        )
+        stored = report_runtime._store_runtime_bayesian_diagnosis(
+            packet,
+            data=data,
+            execution_stage_context=execution_stage_context,
+            market_research_snapshot=market_research_snapshot,
+        )
+
+        self.assertEqual(stored["schema_version"], "bayesian_diagnosis.v1")
+        self.assertIs(data["bayesian_diagnosis"], stored)
+        self.assertIs(execution_stage_context["bayesian_diagnosis"], stored)
+        self.assertIs(market_research_snapshot["bayesian_diagnosis"], stored)
+        self.assertEqual(stored["conclusion"]["path_conclusion"], "条件执行")
+
+    def test_runtime_sniper_derivation_keeps_selection_workflow_final_over_bayesian(self):
+        data = {
+            "target_date": "2026-06-04",
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "final": {
+                    "position_pct": 50,
+                    "execution_object": {"name": "上海石化", "code": "600688", "sector": "石化"},
+                    "action_text": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
+                },
+                "candidate_pool": [],
+            },
+        }
+        diagnosis = {
+            "schema_version": "bayesian_diagnosis.v1",
+            "conclusion": {
+                "path_conclusion": "条件执行",
+                "execution_object": {"name": "豫能控股", "code": "001896"},
+                "position_pct": 50,
+                "action_text": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
+                "final_action_alignment": "不一致",
+            },
+            "path": [],
+        }
+
+        packet = report_runtime._build_sniper_target_derivation_packet(
+            data=data,
+            execution_stage_context={},
+            market_research_snapshot={},
+            final_target_resolution={},
+            selected_position_candidate={},
+            position_decision={"target_position_pct": 50},
+            two_layer_decision_payload={},
+            bayesian_diagnosis=diagnosis,
+        )
+
+        self.assertEqual(packet["canonical_target"]["code"], "600688")
+        self.assertEqual(packet["canonical_source"], "selection_workflow.final.execution_object")
+        self.assertEqual(packet["bayesian_diagnosis"]["conclusion"]["execution_object"]["code"], "001896")
+
     def test_prefer_confirmed_attack_mainline_history_record_over_stale_execution_record(self):
         result = report_runtime._prefer_confirmed_attack_mainline_history_record(
             execution_record={

@@ -3235,5 +3235,130 @@ class NewStockReportVisibilityAuditTest(unittest.TestCase):
         self.assertFalse(result["passed"])
 
 
+class BayesianDiagnosisAuditTest(unittest.TestCase):
+    def _report_with_diagnosis(self, diagnosis_section, final_target="豫能控股(001896)"):
+        return f"""# 2026-06-04 a股市场分析
+
+## 七、最终结论
+| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |
+|----------|------------|----------|------------|--------------|--------------|--------------|------------|
+| 已决定50%条件执行 | 不确定时不值得主动参与 | 电力 | 电力 | 修复但分歧仍在 | {final_target} | 50%条件执行 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+
+{diagnosis_section}
+"""
+
+    def test_audit_rejects_bayesian_path_without_source_date(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 条件执行 |
+| 最终动作一致性 | 一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 来源日期缺失 |
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis))
+
+        self.assertIn("bayesian_path_source_date_missing", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_rejects_probability_band_in_bayesian_diagnosis(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 胜率70% |
+| 最终动作一致性 | 一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 2026-06-04 |
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis))
+
+        self.assertIn("bayesian_probability_band_forbidden", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_rejects_reversed_probability_wording_in_bayesian_diagnosis(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 70%胜率 |
+| 最终动作一致性 | 一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 2026-06-04 |
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis))
+
+        self.assertIn("bayesian_probability_band_forbidden", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_rejects_missing_source_date_marker_in_bayesian_appendix(self):
+        report = """# 2026-06-04 a股市场分析
+
+## 附录
+
+```text
+路径诊断复盘
+|-- 路径结论=条件执行 最终动作一致性=一致 仓位=50% 动作=已决定50%条件执行
+|-- 层级=市场层 日期=- 输入=市场信息待确认 判断=市场层信息待确认 传递=不能单独推出参与资格
+```
+"""
+
+        result = audit_report_markdown(report)
+
+        self.assertIn("bayesian_path_source_date_missing", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_rejects_path_consistent_with_counter_evidence(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 路径一致 |
+| 最终动作一致性 | 一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 2026-06-04 |
+
+#### 关键反证
+- 固定交易窗口未确认
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis))
+
+        self.assertIn(
+            "bayesian_path_conclusion_conflicts_with_counter_evidence",
+            {finding["code"] for finding in result["findings"]},
+        )
+
+    def test_audit_rejects_hidden_bayesian_object_conflict(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 条件执行 |
+| 最终动作一致性 | 一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 2026-06-04 |
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis, final_target="上海石化(600688)"))
+
+        self.assertIn("bayesian_final_object_conflict_hidden", {finding["code"] for finding in result["findings"]})
+
+    def test_audit_allows_visible_bayesian_object_conflict(self):
+        diagnosis = """### 路径诊断复盘
+| 项目 | 结论 |
+|------|------|
+| 路径结论 | 条件执行 |
+| 最终动作一致性 | 不一致 |
+| 执行对象 | 豫能控股(001896) |
+| 动作 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |
+| 来源日期 | 2026-06-04 |
+"""
+
+        result = audit_report_markdown(self._report_with_diagnosis(diagnosis, final_target="上海石化(600688)"))
+
+        self.assertNotIn("bayesian_final_object_conflict_hidden", {finding["code"] for finding in result["findings"]})
+
+
 if __name__ == "__main__":
     unittest.main()

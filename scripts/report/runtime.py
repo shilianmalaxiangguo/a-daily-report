@@ -76,6 +76,7 @@ from report.market_structure_judgement import (
 )
 from report.market_research_snapshot_nodes import derive_market_research_cycle_layer
 from report.surface_wording import sanitize_user_visible_text
+from report.bayesian_diagnosis import build_bayesian_diagnosis_packet
 from report.sniper_target_derivation import (
     build_sniper_target_derivation_packet,
     compact_section as _sniper_target_derivation_compact_section,
@@ -3140,6 +3141,7 @@ def _build_sniper_target_derivation_packet(
     position_decision=None,
     final_gate=None,
     two_layer_decision_payload=None,
+    bayesian_diagnosis=None,
 ):
     return build_sniper_target_derivation_packet(
         data=data,
@@ -3150,6 +3152,7 @@ def _build_sniper_target_derivation_packet(
         position_decision=position_decision,
         final_gate=final_gate,
         two_layer_decision_payload=two_layer_decision_payload,
+        bayesian_diagnosis=bayesian_diagnosis,
         target_date=(data or {}).get("target_date") if isinstance(data, dict) else "",
     )
 
@@ -3161,6 +3164,41 @@ def _store_runtime_sniper_target_derivation(packet, data=None, execution_stage_c
     for target in (data, execution_stage_context, market_research_snapshot):
         if isinstance(target, dict):
             target["sniper_target_derivation"] = stored
+    if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
+        data["market_research_snapshot"] = market_research_snapshot
+    if isinstance(data, dict) and isinstance(execution_stage_context, dict):
+        data["execution_stage_context"] = execution_stage_context
+    if isinstance(execution_stage_context, dict) and isinstance(market_research_snapshot, dict):
+        execution_stage_context["market_research_snapshot"] = market_research_snapshot
+    return stored
+
+
+def _build_bayesian_diagnosis_packet(
+    *,
+    target_date="",
+    data=None,
+    execution_stage_context=None,
+    market_research_snapshot=None,
+    final_target_resolution=None,
+    position_decision=None,
+):
+    return build_bayesian_diagnosis_packet(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+    )
+
+
+def _store_runtime_bayesian_diagnosis(packet, data=None, execution_stage_context=None, market_research_snapshot=None):
+    if not isinstance(packet, dict) or not packet:
+        return {}
+    stored = dict(packet)
+    for target in (data, execution_stage_context, market_research_snapshot):
+        if isinstance(target, dict):
+            target["bayesian_diagnosis"] = stored
     if isinstance(data, dict) and isinstance(market_research_snapshot, dict):
         data["market_research_snapshot"] = market_research_snapshot
     if isinstance(data, dict) and isinstance(execution_stage_context, dict):
@@ -9655,6 +9693,20 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    bayesian_diagnosis = _build_bayesian_diagnosis_packet(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+    )
+    _store_runtime_bayesian_diagnosis(
+        bayesian_diagnosis,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     sniper_target_derivation = _build_sniper_target_derivation_packet(
         data=data,
         execution_stage_context=execution_stage_context,
@@ -9664,6 +9716,7 @@ def _render_markdown_report_legacy_body(
         position_decision=position_decision,
         final_gate=final_gate,
         two_layer_decision_payload=two_layer_decision_payload,
+        bayesian_diagnosis=bayesian_diagnosis,
     )
     _store_runtime_sniper_target_derivation(
         sniper_target_derivation,
@@ -10066,6 +10119,20 @@ def _render_markdown_report_legacy_body(
         execution_stage_context=execution_stage_context,
         market_research_snapshot=market_research_snapshot,
     )
+    bayesian_diagnosis = _build_bayesian_diagnosis_packet(
+        target_date=target_date,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+        final_target_resolution=final_target_resolution,
+        position_decision=position_decision,
+    )
+    _store_runtime_bayesian_diagnosis(
+        bayesian_diagnosis,
+        data=data,
+        execution_stage_context=execution_stage_context,
+        market_research_snapshot=market_research_snapshot,
+    )
     sniper_target_derivation = _build_sniper_target_derivation_packet(
         data=data,
         execution_stage_context=execution_stage_context,
@@ -10075,6 +10142,7 @@ def _render_markdown_report_legacy_body(
         position_decision=position_decision,
         final_gate=final_gate,
         two_layer_decision_payload=two_layer_decision_payload,
+        bayesian_diagnosis=bayesian_diagnosis,
     )
     _store_runtime_sniper_target_derivation(
         sniper_target_derivation,

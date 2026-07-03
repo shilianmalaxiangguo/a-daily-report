@@ -3439,6 +3439,52 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertNotIn("| 只看唯一对象 | 600688 上海石化", execution_section)
         self.assertNotIn("观察" + "锚", rendered)
 
+    def test_front_page_renders_bayesian_path_after_final_summary(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-06-04",
+                market_research_snapshot={
+                    "mainline_turnover_summary": {"current_mainline": "电力"},
+                    "position_decision": {"signal_grade": "50", "target_position_pct": 50},
+                    "final_target_resolution": {
+                        "display_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                        "new_entry_target": {"name": "豫能控股", "code": "001896", "sector": "电力"},
+                        "capital_priority_decision": {"capital_priority": "new_entry"},
+                    },
+                    "bayesian_diagnosis": {
+                        "schema_version": "bayesian_diagnosis.v1",
+                        "conclusion": {
+                            "path_conclusion": "条件执行",
+                            "execution_object": {"name": "豫能控股", "code": "001896"},
+                            "position_pct": 50,
+                            "action_text": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
+                            "final_action_alignment": "一致",
+                        },
+                        "path": [
+                            {
+                                "source_date": "2026-06-04",
+                                "layer": "market",
+                                "judgement": "市场未否定继续诊断",
+                            }
+                        ],
+                        "counter_evidence": ["固定交易窗口未确认"],
+                    },
+                },
+            )
+        )
+
+        self.assertLess(rendered.index("## 七、最终结论"), rendered.index("### 路径诊断复盘"))
+        self.assertIn("| 路径结论 | 条件执行 |", rendered)
+        self.assertIn("| 最终动作一致性 | 一致 |", rendered)
+        self.assertIn("| 执行对象 | 豫能控股(001896) |", rendered)
+        self.assertIn("#### 关键路径", rendered)
+        self.assertIn("- 市场未否定继续诊断", rendered)
+        self.assertIn("#### 关键反证", rendered)
+        self.assertIn("- 固定交易窗口未确认", rendered)
+        self.assertNotIn("diagnosis_label", rendered)
+        self.assertNotIn("confidence", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
