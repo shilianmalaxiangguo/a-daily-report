@@ -29,6 +29,15 @@ SOURCE_LABELS = {
     "two_layer_decision_payload.front_decision.execution_object": "双层决策明日执行对象",
 }
 
+DIAGNOSIS_LAYER_LABELS = {
+    "market": "市场层",
+    "mainline": "主线层",
+    "capital": "资金层",
+    "stock": "个股层",
+    "counter_evidence": "反证层",
+}
+DIAGNOSIS_SOURCE_DATE_MISSING = "来源日期缺失"
+
 
 def clean_text(value, default=""):
     text = " ".join(str(value or "").replace("|", "｜").split()).strip()
@@ -457,7 +466,7 @@ def _workflow_controls_derivation(workflow):
     return bool(final)
 
 
-def _packet_from_selection_workflow(workflow, target_date=""):
+def _packet_from_selection_workflow(workflow, target_date="", bayesian_diagnosis=None):
     final = _workflow_final(workflow)
     position_pct = _workflow_position_pct(workflow)
     canonical = stock_payload(final.get("execution_object"))
@@ -499,6 +508,7 @@ def _packet_from_selection_workflow(workflow, target_date=""):
         },
         "steps": steps,
         "warnings": [],
+        "bayesian_diagnosis": dict(bayesian_diagnosis or {}) if isinstance(bayesian_diagnosis, dict) else {},
     }
     packet["compact_ascii"] = render_compact_ascii(packet)
     packet["full_ascii"] = render_full_ascii(packet)
@@ -521,6 +531,45 @@ def _render_step_line(step, *, include_source_rank=False):
     return "|-- " + " ".join(parts)
 
 
+def _render_bayesian_diagnosis_lines(packet):
+    packet = packet if isinstance(packet, dict) else {}
+    diagnosis = packet.get("bayesian_diagnosis") if isinstance(packet.get("bayesian_diagnosis"), dict) else {}
+    if diagnosis.get("schema_version") != "bayesian_diagnosis.v1":
+        return []
+    conclusion = diagnosis.get("conclusion") if isinstance(diagnosis.get("conclusion"), dict) else {}
+    path = diagnosis.get("path") if isinstance(diagnosis.get("path"), list) else []
+    path_conclusion = clean_text(conclusion.get("path_conclusion"), "路径结论待确认")
+    position_pct = clean_text(conclusion.get("position_pct"), "0")
+    action_text = clean_text(conclusion.get("action_text"), "0%不参与")
+    alignment = clean_text(conclusion.get("final_action_alignment"), "无法判断")
+    lines = [
+        "路径诊断复盘",
+        f"|-- 路径结论={path_conclusion} 最终动作一致性={alignment} 仓位={position_pct}% 动作={action_text}",
+    ]
+    for step in path:
+        if not isinstance(step, dict):
+            continue
+        layer = clean_text(step.get("layer"), "-")
+        layer_label = DIAGNOSIS_LAYER_LABELS.get(layer, layer)
+        source_date = clean_text(step.get("source_date"), DIAGNOSIS_SOURCE_DATE_MISSING)
+        if source_date == "-":
+            source_date = DIAGNOSIS_SOURCE_DATE_MISSING
+        input_summary = clean_text(step.get("input_summary"), "-")
+        judgement = clean_text(step.get("judgement"), "-")
+        passes_forward = clean_text(step.get("passes_forward"), "-")
+        cannot_conclude = [
+            clean_text(item)
+            for item in (step.get("cannot_conclude") if isinstance(step.get("cannot_conclude"), list) else [])
+            if clean_text(item)
+        ]
+        lines.append(
+            f"|-- 层级={layer_label} 日期={source_date} 输入={input_summary} 判断={judgement} 传递={passes_forward}"
+        )
+        if cannot_conclude:
+            lines.append(f"|   不能推出={'；'.join(cannot_conclude)}")
+    return lines
+
+
 def build_sniper_target_derivation_packet(
     *,
     data=None,
@@ -531,6 +580,7 @@ def build_sniper_target_derivation_packet(
     position_decision=None,
     final_gate=None,
     two_layer_decision_payload=None,
+    bayesian_diagnosis=None,
     target_date="",
 ):
     data = data if isinstance(data, dict) else {}
@@ -541,6 +591,7 @@ def build_sniper_target_derivation_packet(
         return _packet_from_selection_workflow(
             workflow,
             target_date=target_date or data.get("target_date") or market_research_snapshot.get("target_date"),
+            bayesian_diagnosis=bayesian_diagnosis,
         )
     selected = _selected_candidate(
         data=data,
@@ -617,6 +668,7 @@ def build_sniper_target_derivation_packet(
         "final_action": final_action,
         "steps": steps,
         "warnings": warnings,
+        "bayesian_diagnosis": dict(bayesian_diagnosis or {}) if isinstance(bayesian_diagnosis, dict) else {},
     }
     packet["compact_ascii"] = render_compact_ascii(packet)
     packet["full_ascii"] = render_full_ascii(packet)
@@ -650,9 +702,9 @@ def render_compact_ascii(packet):
 
 def render_full_ascii(packet):
     packet = packet if isinstance(packet, dict) else {}
+    lines = _render_bayesian_diagnosis_lines(packet)
     if not stock_key(packet.get("canonical_target")):
-        return []
-    lines = []
+        return lines
     current_step_id = ""
     final_target_steps = []
     for step in packet.get("steps") or []:
@@ -715,10 +767,13 @@ def compact_section(packet, *, heading="### 最终标的传导链"):
 
 
 def full_section(packet, *, heading="## 狙击手最终标的完整路径图（过程证据）"):
+    packet = packet if isinstance(packet, dict) else {}
     lines = full_ascii_from_packet(packet)
     if not lines:
         return []
     section = []
+    if heading and not stock_key(packet.get("canonical_target")):
+        heading = "## 路径诊断复盘（过程证据）"
     if heading:
         section.extend([heading, ""])
     section.extend(["```text", *lines, "```"])

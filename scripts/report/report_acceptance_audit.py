@@ -219,6 +219,13 @@ THEORY_NOISE_MARKERS = (
     "能量释放完成",
     "群体行为共振",
 )
+PROBABILITY_BAND_RE = re.compile(r"\b\d{1,3}%\s*[-~－—]\s*\d{1,3}%")
+COARSE_PROBABILITY_LABEL_RE = re.compile(
+    r"(?:胜率|后验)\s*\d{1,3}%|\d{1,3}%\s*(?:胜率|后验|概率)|概率(?:偏高|很高|较高)|(?:高概率|低概率)|(?:粗可信|可信标签)"
+)
+BAYESIAN_FRONT_HEADING = "### 路径诊断复盘"
+BAYESIAN_APPENDIX_MARKER = "路径诊断复盘"
+BAYESIAN_SOURCE_DATE_MISSING = "来源日期缺失"
 
 
 def _m(*parts):
@@ -3104,6 +3111,112 @@ def _audit_process_candidate_loss_reasons(lines):
     return findings
 
 
+def _extract_bayesian_front_section(lines):
+    section = []
+    found = False
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        stripped = text.strip()
+        if not found:
+            if stripped == BAYESIAN_FRONT_HEADING:
+                found = True
+            continue
+        if text.startswith("## ") or text.startswith("### "):
+            break
+        section.append((offset, text))
+    return found, section
+
+
+def _extract_bayesian_appendix_blocks(lines):
+    blocks = []
+    in_code = False
+    current = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        stripped = text.strip()
+        if stripped == "```text":
+            in_code = True
+            current = []
+            continue
+        if in_code and stripped == "```":
+            if any(BAYESIAN_APPENDIX_MARKER in item for _, item in current):
+                blocks.append(current)
+            in_code = False
+            current = []
+            continue
+        if in_code:
+            current.append((offset, text))
+    return blocks
+
+
+def _bayesian_table_values(section):
+    values = {}
+    offsets = {}
+    for offset, text in section:
+        cells = _split_md_row(text)
+        if len(cells) < 2 or _is_separator_cells(cells):
+            continue
+        values[cells[0]] = cells[1]
+        offsets[cells[0]] = offset
+    return values, offsets
+
+
+def _audit_bayesian_diagnosis_contract(lines):
+    found_front, front_section = _extract_bayesian_front_section(lines)
+    appendix_blocks = _extract_bayesian_appendix_blocks(lines)
+    if not found_front and not appendix_blocks:
+        return []
+    findings = []
+    scan_lines = list(front_section)
+    for block in appendix_blocks:
+        scan_lines.extend(block)
+    for offset, text in scan_lines:
+        if PROBABILITY_BAND_RE.search(text) or COARSE_PROBABILITY_LABEL_RE.search(text):
+            findings.append(
+                _finding(
+                    "bayesian_probability_band_forbidden",
+                    "路径诊断不能使用粗胜率、粗概率或粗可信标签；应使用路径结论和反证说明",
+                    line=offset,
+                )
+            )
+        if BAYESIAN_SOURCE_DATE_MISSING in text or "日期=-" in text:
+            findings.append(
+                _finding(
+                    "bayesian_path_source_date_missing",
+                    "路径诊断存在来源日期缺失，不能静默当作目标日期事实",
+                    line=offset,
+                )
+            )
+    front_values, front_offsets = _bayesian_table_values(front_section)
+    path_conclusion = front_values.get("路径结论", "")
+    final_alignment = front_values.get("最终动作一致性", "")
+    diagnosis_target = front_values.get("执行对象", "")
+    if path_conclusion == "路径一致":
+        has_counter_heading = any("#### 关键反证" in text for _, text in front_section)
+        has_counter_text = any("存在反证" in text and "暂无强反证" not in text for _, text in scan_lines)
+        if has_counter_heading or has_counter_text:
+            findings.append(
+                _finding(
+                    "bayesian_path_conclusion_conflicts_with_counter_evidence",
+                    "路径结论写成路径一致时，不能同时展示强反证",
+                    line=front_offsets.get("路径结论"),
+                )
+            )
+    front = _front_page_lines(lines)
+    final_target = _extract_final_unique_target(front)
+    final_identity = _target_identity(final_target)
+    diagnosis_identity = _target_identity(diagnosis_target)
+    if final_identity and diagnosis_identity and final_identity != diagnosis_identity and final_alignment != "不一致":
+        findings.append(
+            _finding(
+                "bayesian_final_object_conflict_hidden",
+                "路径诊断对象与最终对象不一致时，必须明确展示不一致，不能写成一致",
+                line=front_offsets.get("执行对象"),
+            )
+        )
+    return findings
+
+
 def _audit_sniper_target_derivation_consistency(lines):
     front = _front_page_lines(lines)
     appendix = _appendix_lines(lines)
@@ -3702,6 +3815,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_daily_judgment_settled_fact_visibility(lines))
     findings.extend(_audit_derivation_audit_rejection_consistency(lines))
     findings.extend(_audit_process_candidate_loss_reasons(lines))
+    findings.extend(_audit_bayesian_diagnosis_contract(lines))
     findings.extend(_audit_sniper_target_derivation_consistency(lines))
     findings.extend(_audit_selection_workflow_consistency(lines))
     findings.extend(_audit_positive_final_action_appendix_conflicts(lines))

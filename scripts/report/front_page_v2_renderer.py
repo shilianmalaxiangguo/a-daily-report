@@ -1701,6 +1701,63 @@ def _sniper_target_derivation(snapshot):
     return packet if isinstance(packet, dict) else {}
 
 
+def _bayesian_diagnosis(snapshot):
+    diagnosis = (snapshot or {}).get("bayesian_diagnosis") or {}
+    if not isinstance(diagnosis, dict):
+        return {}
+    return diagnosis if diagnosis.get("schema_version") == "bayesian_diagnosis.v1" else {}
+
+
+def _front_stock_label(stock):
+    stock = stock if isinstance(stock, dict) else {}
+    name = _text_value(stock.get("name"), stock.get("stock_name"))
+    code = _text_value(stock.get("code"), stock.get("stock_code"), stock.get("id"))
+    if name and code:
+        return f"{name}({code})"
+    return name or code or "暂无"
+
+
+def _bayesian_diagnosis_front_lines(snapshot):
+    diagnosis = _bayesian_diagnosis(snapshot)
+    if not diagnosis:
+        return []
+    conclusion = diagnosis.get("conclusion") if isinstance(diagnosis.get("conclusion"), dict) else {}
+    path = diagnosis.get("path") if isinstance(diagnosis.get("path"), list) else []
+    counter_evidence = diagnosis.get("counter_evidence") if isinstance(diagnosis.get("counter_evidence"), list) else []
+    path_conclusion = _text_value(conclusion.get("path_conclusion"), "路径待确认")
+    alignment = _text_value(conclusion.get("final_action_alignment"), "无法判断")
+    action_text = _text_value(conclusion.get("action_text"), "0%不参与")
+    source_dates = []
+    path_texts = []
+    for step in path:
+        if not isinstance(step, dict):
+            continue
+        date = _text_value(step.get("source_date"))
+        if date and date not in source_dates:
+            source_dates.append(date)
+        judgement = _text_value(step.get("judgement"))
+        if judgement:
+            path_texts.append(judgement)
+    counter_texts = [_text_value(item) for item in counter_evidence]
+    counter_texts = [text for text in counter_texts if text]
+    lines = [
+        "### 路径诊断复盘",
+        "| 项目 | 结论 |",
+        "|------|------|",
+        f"| 路径结论 | {path_conclusion} |",
+        f"| 最终动作一致性 | {alignment} |",
+        f"| 执行对象 | {_front_stock_label(conclusion.get('execution_object'))} |",
+        f"| 动作 | {action_text} |",
+        f"| 来源日期 | {'、'.join(source_dates) if source_dates else '来源日期缺失'} |",
+        "",
+    ]
+    if path_texts:
+        lines.extend(["#### 关键路径", *[f"- {text}" for text in path_texts[:5]], ""])
+    if counter_texts:
+        lines.extend(["#### 关键反证", *[f"- {text}" for text in counter_texts[:5]], ""])
+    return lines
+
+
 def _capital_priority_decision(snapshot):
     decision = _final_target_resolution(snapshot).get("capital_priority_decision") or {}
     return decision if isinstance(decision, dict) else {}
@@ -3069,6 +3126,7 @@ def render_front_page_v2(report_lines, *, target_date="", market_research_snapsh
             lines.append("")
     lines.extend(_execution_plan_lines(snapshot, final_gate=final_gate))
     lines.extend(_final_summary_lines(report_lines, snapshot, final_gate=final_gate))
+    _append_nonempty(lines, _bayesian_diagnosis_front_lines(snapshot))
     lines.extend(_next_day_action_checklist_lines(snapshot, final_gate=final_gate))
     if _position_state_contract(snapshot, final_gate=final_gate).get("grade") == "0":
         lines = _sanitize_zero_position_front_page_language(lines)
