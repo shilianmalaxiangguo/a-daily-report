@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>2026-07-03 日报重生成与 Bayesian 接入对比</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --line: #d9e0e7;
+      --panel: #ffffff;
+      --soft: #f5f7fa;
+      --good: #16815d;
+      --warn: #a86612;
+      --bad: #b33a3a;
+      --accent: #2468b2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: #eef2f6;
+      line-height: 1.65;
+    }
+    header {
+      padding: 34px 42px 26px;
+      background: linear-gradient(135deg, #102a43, #1f5f8b);
+      color: #fff;
+    }
+    header p { margin: 8px 0 0; color: rgba(255,255,255,.82); max-width: 980px; }
+    main { max-width: 1180px; margin: 0 auto; padding: 28px; }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: 0 8px 26px rgba(16, 42, 67, .06);
+    }
+    h1, h2, h3 { margin: 0 0 12px; line-height: 1.25; }
+    h1 { font-size: 28px; }
+    h2 { font-size: 20px; }
+    h3 { font-size: 16px; margin-top: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .metric {
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 118px;
+    }
+    .metric span { display: block; color: var(--muted); font-size: 13px; }
+    .metric strong { display: block; margin-top: 8px; font-size: 20px; }
+    .metric.good strong { color: var(--good); }
+    .metric.warn strong { color: var(--warn); }
+    .metric.bad strong { color: var(--bad); }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid var(--line); padding: 10px 12px; vertical-align: top; text-align: left; }
+    th { background: #edf3f8; }
+    code {
+      background: #eef3f7;
+      border: 1px solid #dbe4ec;
+      border-radius: 5px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(140px, 1fr));
+      gap: 10px;
+      align-items: stretch;
+      margin-top: 16px;
+    }
+    .node {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 13px;
+      min-height: 108px;
+    }
+    .node::after {
+      content: "→";
+      position: absolute;
+      right: -15px;
+      top: 40%;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .node:last-child::after { content: ""; }
+    .node b { display: block; margin-bottom: 6px; }
+    .node small { color: var(--muted); }
+    .node.good { border-color: rgba(22,129,93,.35); background: #effaf6; }
+    .node.warn { border-color: rgba(168,102,18,.35); background: #fff8ea; }
+    .node.bad { border-color: rgba(179,58,58,.35); background: #fff1f1; }
+    .compare {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    .before, .after {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .before h3, .after h3 {
+      margin: 0;
+      padding: 12px 14px;
+      background: #edf3f8;
+      border-bottom: 1px solid var(--line);
+    }
+    .before ul, .after ul { margin: 0; padding: 14px 18px 16px 32px; }
+    .callout {
+      border-left: 4px solid var(--warn);
+      background: #fff8ea;
+      padding: 12px 14px;
+      border-radius: 6px;
+      margin-top: 12px;
+    }
+    .ok {
+      border-left-color: var(--good);
+      background: #effaf6;
+    }
+    @media (max-width: 860px) {
+      main { padding: 18px; }
+      header { padding: 28px 24px 22px; }
+      .grid, .compare, .flow { grid-template-columns: 1fr; }
+      .node::after { content: "↓"; right: 16px; top: auto; bottom: -22px; }
+      .node:last-child::after { content: ""; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>2026-07-03 日报重生成与 Bayesian 接入对比</h1>
+    <p>位置：隔离分支 <code>codex/bayesian-diagnosis-integration</code>。本页说明这次实际生成了什么、为什么正式日报没有完整重跑成功，以及接入后和原结构的差异。</p>
+  </header>
+  <main>
+    <section>
+      <h2>一、执行结论</h2>
+      <div class="grid">
+        <div class="metric bad">
+          <span>正式日报重跑</span>
+          <strong>未生成</strong>
+          <p>入口在关键数据检查阶段停止，未写入新的完整 Markdown 日报。</p>
+        </div>
+        <div class="metric good">
+          <span>Bear HTML</span>
+          <strong>已生成</strong>
+          <p>用隔离分支的 Bear HTML 渲染器，把既有冻结 Markdown 渲染成 HTML。</p>
+        </div>
+        <div class="metric warn">
+          <span>对比说明 HTML</span>
+          <strong>本页</strong>
+          <p>记录实际结果、结构差异、风险和后续处理建议。</p>
+        </div>
+      </div>
+      <div class="callout">
+        这次没有绕过检查强行生成日报。缺少关键数据时停止生成是正确行为，否则会把不完整事实写成交易判断。
+      </div>
+    </section>
+
+    <section>
+      <h2>二、实际产物</h2>
+      <table>
+        <thead>
+          <tr><th>产物</th><th>路径</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Bear HTML（隔离分支渲染）</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/reports/2026-07-03_A股日报_完整版_bear_from_frozen_markdown.html">reports/2026-07-03_A股日报_完整版_bear_from_frozen_markdown.html</a></td>
+            <td>输入是主工作区已冻结 Markdown，渲染器是当前隔离分支代码；它证明 HTML 渲染链可用，但不代表日报内容已按新 runtime 完整重算。</td>
+          </tr>
+          <tr>
+            <td>旧版正式 Markdown</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/reports/2026-07-03_A股日报_完整版.md">主工作区 reports/2026-07-03_A股日报_完整版.md</a></td>
+            <td>接入前生成的正式日报，用作对照输入。</td>
+          </tr>
+          <tr>
+            <td>旧版正式 Bear HTML</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/reports/2026-07-03_A股日报_完整版.html">主工作区 reports/2026-07-03_A股日报_完整版.html</a></td>
+            <td>接入前生成的正式 HTML，对照用。</td>
+          </tr>
+          <tr>
+            <td>本次失败质量记录</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/.generated/report-quality/2026-07-03_default.json">.generated/report-quality/2026-07-03_default.json</a></td>
+            <td>记录本次正式重跑停止的原因和评分。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>三、为什么没有完整重跑成功</h2>
+      <table>
+        <thead>
+          <tr><th>检查项</th><th>本次状态</th><th>影响</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>中证全指</td><td>失败，数值为 0.0</td><td>市场底色和大盘环境不完整，不能继续写日报。</td></tr>
+          <tr><td>雪球A股24小时热榜</td><td>失败，登录态失效或缺失</td><td>热度侧证据缺失，不能把热榜理解写成确定事实。</td></tr>
+          <tr><td>雪球热榜AI解释</td><td>失败，登录态失效或缺失</td><td>热榜解释缺失，不能完整支撑候选解释。</td></tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        本次质量记录显示：<code>score=15/100</code>，<code>status=error</code>。这不是 Bayesian 接入导致的 Python 异常，而是数据完整性检查主动停止。
+      </div>
+    </section>
+
+    <section>
+      <h2>四、流程对比</h2>
+      <h3>实际执行流程</h3>
+      <div class="flow">
+        <div class="node good"><b>隔离分支</b><small>基于提交 a3b63349 执行，不碰 develop。</small></div>
+        <div class="node warn"><b>实时重跑</b><small>运行 2026-07-03 正式入口。</small></div>
+        <div class="node bad"><b>关键数据不完整</b><small>中证全指、雪球热榜、热榜解释缺失。</small></div>
+        <div class="node warn"><b>停止生成</b><small>没有写入新的完整 Markdown 日报。</small></div>
+        <div class="node good"><b>说明与对比</b><small>生成 Bear HTML 和本对比页。</small></div>
+      </div>
+
+      <h3>数据补齐后的预期流程</h3>
+      <div class="flow">
+        <div class="node"><b>数据完整</b><small>关键市场事实、热榜、解释均可用。</small></div>
+        <div class="node"><b>最终动作生成</b><small>仍由 selection_workflow.final 决定。</small></div>
+        <div class="node"><b>路径诊断复盘</b><small>读取最终动作，整理市场、主线、资金、个股、反证。</small></div>
+        <div class="node"><b>首页与附录展示</b><small>首页短解释，附录保留完整路径和来源日期。</small></div>
+        <div class="node"><b>检查与 HTML</b><small>接受检查通过后生成 Bear HTML。</small></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>五、接入前后结构差异</h2>
+      <div class="compare">
+        <div class="before">
+          <h3>接入前：2026-07-03 旧正式日报</h3>
+          <ul>
+            <li>“最终结论”之后直接进入“明日行动清单”。</li>
+            <li>附录有“狙击手最终标的完整路径图”，重点展示候选生命周期。</li>
+            <li>没有独立的“路径诊断复盘”小节。</li>
+            <li>最终对象是太极实业(600667)，动作是满仓条件执行。</li>
+          </ul>
+        </div>
+        <div class="after">
+          <h3>接入后：完整重跑成功时应出现</h3>
+          <ul>
+            <li>“最终结论”之后增加“路径诊断复盘”。</li>
+            <li>该小节展示路径结论、最终动作一致性、执行对象、动作、来源日期。</li>
+            <li>附录在过程证据中加入完整路径，不覆盖最终对象。</li>
+            <li>来源日期缺失时显示“来源日期缺失”，并被检查指出。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>六、本次改动带来的提升</h2>
+      <table>
+        <thead>
+          <tr><th>维度</th><th>原来</th><th>接入后</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>复盘可读性</td>
+            <td>最终动作和推导证据分散在多段里，需要人工自己串起来。</td>
+            <td>路径诊断把市场、主线、资金、个股、反证串成一条复盘链。</td>
+          </tr>
+          <tr>
+            <td>AI理解</td>
+            <td>AI 需要从大段日报里猜哪些是结论、哪些是证据。</td>
+            <td>结构化 `bayesian_diagnosis.v1` 提供明确字段，方便后续复用。</td>
+          </tr>
+          <tr>
+            <td>安全性</td>
+            <td>候选证据和最终对象冲突时，需要靠已有检查兜住。</td>
+            <td>新增对象不一致、来源日期缺失、粗糙概率表达等专项检查。</td>
+          </tr>
+          <tr>
+            <td>交易口径</td>
+            <td>容易把观察信号和参与资格混在阅读体验里。</td>
+            <td>路径诊断只解释，不改最终动作；0% 不参与时不会包装观察对象。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>七、下一步建议</h2>
+      <ol>
+        <li>先修复或恢复 2026-07-03 所需的中证全指、雪球热榜、雪球解释数据来源。</li>
+        <li>或者补一份正式 replay 快照，再用隔离分支重跑 replay。</li>
+        <li>重跑成功后，再比较新 Markdown 与旧 Markdown：重点看“路径诊断复盘”位置、篇幅和附录路径是否清晰。</li>
+        <li>确认效果稳定后，再决定是否把 <code>codex/bayesian-diagnosis-integration</code> 合回主线。</li>
+      </ol>
+      <div class="callout ok">
+        当前最重要的结论：代码接入已经有测试保护；2026-07-03 的实际样例还缺一次数据完整的生成，不能把这次失败当成内容效果失败。
+      </div>
+    </section>
+  </main>
+</body>
+</html>
