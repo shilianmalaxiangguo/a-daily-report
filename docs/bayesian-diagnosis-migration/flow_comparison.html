@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bayesian 路径诊断流程对比</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f3ed;
+      --paper: #fffdf8;
+      --soft: #eee9df;
+      --ink: #1f2528;
+      --muted: #657075;
+      --line: #d7d0c4;
+      --green: #1e7458;
+      --red: #a34236;
+      --amber: #98610f;
+      --blue: #2d6386;
+      --violet: #5a568a;
+      --shadow: rgba(37, 31, 22, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.7;
+    }
+
+    main {
+      width: min(1240px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 34px 0 60px;
+    }
+
+    header {
+      padding-bottom: 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 920px;
+      font-size: clamp(30px, 4vw, 52px);
+      font-weight: 760;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: 26px;
+    }
+
+    h3 {
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #ebe5da;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .meta,
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.55);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: 1.4fr 1fr 1fr;
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .card {
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    .card.good {
+      border-left: 5px solid var(--green);
+    }
+
+    .card.warn {
+      border-left: 5px solid var(--amber);
+    }
+
+    .card.risk {
+      border-left: 5px solid var(--red);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+      align-items: start;
+    }
+
+    .lane {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 253, 248, 0.7);
+      overflow: hidden;
+    }
+
+    .lane-title {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--soft);
+    }
+
+    .lane-title small {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .lane-body {
+      padding: 14px;
+    }
+
+    .node {
+      position: relative;
+      padding: 13px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+    }
+
+    .node strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .node small {
+      display: block;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .node.keep {
+      border-left: 5px solid var(--green);
+    }
+
+    .node.review {
+      border-left: 5px solid var(--blue);
+    }
+
+    .node.warn {
+      border-left: 5px solid var(--amber);
+    }
+
+    .node.risk {
+      border-left: 5px solid var(--red);
+    }
+
+    .node.drop {
+      border-left: 5px solid var(--violet);
+    }
+
+    .arrow {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 28px;
+      color: var(--muted);
+      font-size: 20px;
+    }
+
+    .matrix {
+      width: 100%;
+      margin-top: 16px;
+      border-collapse: collapse;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--paper);
+    }
+
+    .matrix th,
+    .matrix td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    .matrix th {
+      background: var(--soft);
+      font-size: 14px;
+    }
+
+    .matrix tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .swimlane {
+      margin-top: 18px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    .swim-row {
+      display: grid;
+      grid-template-columns: 150px repeat(5, 1fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+
+    .swim-row + .swim-row {
+      margin-top: 10px;
+    }
+
+    .actor {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      background: var(--soft);
+      font-weight: 700;
+    }
+
+    .swim-node {
+      min-height: 82px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfaf5;
+    }
+
+    .swim-node.empty {
+      background: transparent;
+      border-style: dashed;
+      color: var(--muted);
+    }
+
+    .swim-node strong {
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .swim-node small {
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    .callout {
+      margin-top: 16px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-left: 5px solid var(--green);
+      border-radius: 8px;
+      background: #eef8f2;
+    }
+
+    .footer-note {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 980px) {
+      main {
+        width: min(100vw - 24px, 780px);
+      }
+
+      .summary,
+      .flow-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .swim-row {
+        grid-template-columns: 1fr;
+      }
+
+      .actor {
+        min-height: 48px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Bayesian 路径诊断流程对比</h1>
+      <p class="muted">
+        这页把当前主线、直接合并风险、推荐接入方案放在一起对比。目标是看清：接入后提升在哪，哪些地方会和原逻辑冲突，哪些内容应该保留或舍弃。
+      </p>
+      <div class="meta">
+        <span class="pill">生成日期：2026-07-03</span>
+        <span class="pill">主线：<code>develop</code></span>
+        <span class="pill">分支：<code>codex/bayesian-diagnosis-module</code></span>
+        <span class="pill">PRD：<a href="./prd.md">prd.md</a></span>
+        <span class="pill">影响分析：<a href="./impact_analysis.html">impact_analysis.html</a></span>
+      </div>
+    </header>
+
+    <section>
+      <h2>一句话结论</h2>
+      <div class="summary">
+        <article class="card good">
+          <h3>推荐方案</h3>
+          <p>
+            接入 Bayesian 的路径诊断和检查能力，但让它只做解释和复核，不改变当前最终动作。
+          </p>
+        </article>
+        <article class="card warn">
+          <h3>主要提升</h3>
+          <p>
+            日报会更好复盘：每层证据、来源日期、反证和不一致点都能被看见。
+          </p>
+        </article>
+        <article class="card risk">
+          <h3>主要风险</h3>
+          <p>
+            如果整支合并，它可能把路径诊断变成第二个动作来源，让首页和附录重新出现对象不一致。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>三条流程对比</h2>
+      <div class="legend">
+        <span class="pill">绿色：保留</span>
+        <span class="pill">蓝色：需要接入</span>
+        <span class="pill">黄色：需要人工确认</span>
+        <span class="pill">红色：风险</span>
+        <span class="pill">紫色：舍弃</span>
+      </div>
+      <div class="flow-grid">
+        <article class="lane">
+          <div class="lane-title">
+            <h3>当前主线</h3>
+            <small>动作来源清楚，但路径解释分散。</small>
+          </div>
+          <div class="lane-body">
+            <div class="node keep">
+              <strong>快照与目标日期事实</strong>
+              <small>历史 replay 优先使用目标日期快照。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node keep">
+              <strong>板块、候选池、旧仓处理</strong>
+              <small>旧仓、新机会、观察对象各自有身份。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node keep">
+              <strong><code>selection_workflow.final</code></strong>
+              <small>最终动作来源。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node keep">
+              <strong>首页最终结论</strong>
+              <small>先给 0%不参与 / 50%条件执行 / 100%核心进攻。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node warn">
+              <strong>当前缺口</strong>
+              <small>为什么这样判断、哪些反证存在、证据属于哪天，还不够集中。</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="lane">
+          <div class="lane-title">
+            <h3>整支合并风险</h3>
+            <small>能力很多，但会混入不该要的方向。</small>
+          </div>
+          <div class="lane-body">
+            <div class="node review">
+              <strong>新增 Bayesian 诊断包</strong>
+              <small>能生成路径层级、反证和来源日期。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node risk">
+              <strong>诊断结论直接进入推导</strong>
+              <small>分支测试里存在“诊断对象替换旧对象”的预期。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node risk">
+              <strong>首页新增诊断结论</strong>
+              <small>如果位置过高，会抢最终动作的表达权。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node drop">
+              <strong>旧表达残留</strong>
+              <small>分支历史里有粗可信标签、粗胜率表达，需要舍弃。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node risk">
+              <strong>结果</strong>
+              <small>可能重新出现两个执行对象、两套动作解释、历史日期混用。</small>
+            </div>
+          </div>
+        </article>
+
+        <article class="lane">
+          <div class="lane-title">
+            <h3>推荐接入流程</h3>
+            <small>只取路径诊断，不改最终动作。</small>
+          </div>
+          <div class="lane-body">
+            <div class="node keep">
+              <strong>当前最终动作先确定</strong>
+              <small><code>selection_workflow.final</code> 继续给最终动作。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node review">
+              <strong>Bayesian 读取上下文</strong>
+              <small>读取市场、主线、资金、个股、反证和来源日期。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node review">
+              <strong>生成路径诊断</strong>
+              <small>输出 <code>path_conclusion</code>、路径层级和不能推出的内容。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node warn">
+              <strong>和最终动作做一致性复核</strong>
+              <small>一致就展示；不一致就标出，不作为执行依据。</small>
+            </div>
+            <div class="arrow">↓</div>
+            <div class="node keep">
+              <strong>首页短解释，附录全路径</strong>
+              <small>最终动作仍在首位，路径诊断负责解释。</small>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>推荐接入泳道图</h2>
+      <div class="swimlane">
+        <div class="swim-row">
+          <div class="actor">数据与事实</div>
+          <div class="swim-node">
+            <strong>目标日期快照</strong>
+            <small>历史 replay 的事实基础。</small>
+          </div>
+          <div class="swim-node">
+            <strong>市场与板块</strong>
+            <small>市场基底、周期主线、当天主攻线。</small>
+          </div>
+          <div class="swim-node">
+            <strong>候选与旧仓</strong>
+            <small>候选池、旧仓处理、新机会、替代对象。</small>
+          </div>
+          <div class="swim-node empty">传给诊断</div>
+          <div class="swim-node empty">接受检查读取</div>
+        </div>
+        <div class="swim-row">
+          <div class="actor">当前主链路</div>
+          <div class="swim-node empty">读取事实</div>
+          <div class="swim-node">
+            <strong>筛选与动作判断</strong>
+            <small>沿用当前主线逻辑。</small>
+          </div>
+          <div class="swim-node">
+            <strong>最终动作</strong>
+            <small>0%不参与 / 50%条件执行 / 100%核心进攻。</small>
+          </div>
+          <div class="swim-node">
+            <strong>最终对象身份</strong>
+            <small>执行对象、观察对象、旧仓处理对象分开。</small>
+          </div>
+          <div class="swim-node empty">结果不被诊断改写</div>
+        </div>
+        <div class="swim-row">
+          <div class="actor">Bayesian 诊断</div>
+          <div class="swim-node empty">只读</div>
+          <div class="swim-node">
+            <strong>分层诊断</strong>
+            <small>市场、主线、资金、个股、反证。</small>
+          </div>
+          <div class="swim-node">
+            <strong>路径结论</strong>
+            <small>路径一致、条件执行、存在反证、路径不完整、无执行对象。</small>
+          </div>
+          <div class="swim-node">
+            <strong>一致性复核</strong>
+            <small>只报告一致或不一致，不改最终动作。</small>
+          </div>
+          <div class="swim-node">
+            <strong>诊断包</strong>
+            <small><code>bayesian_diagnosis.v1</code></small>
+          </div>
+        </div>
+        <div class="swim-row">
+          <div class="actor">日报展示</div>
+          <div class="swim-node empty">不展示原始噪音</div>
+          <div class="swim-node empty">不抢首页首位</div>
+          <div class="swim-node">
+            <strong>首页短解释</strong>
+            <small>最终动作下方给路径摘要。</small>
+          </div>
+          <div class="swim-node">
+            <strong>附录全路径</strong>
+            <small>每层都有来源日期和不能推出的内容。</small>
+          </div>
+          <div class="swim-node">
+            <strong>问题可见</strong>
+            <small>对象不一致、来源日期缺失、反证冲突都能被看到。</small>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>提升在哪里</h2>
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>接入前</th>
+            <th>接入后</th>
+            <th>提升</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>复盘</td>
+            <td>结论有了，但路径分散在多个章节。</td>
+            <td>路径集中成一份诊断包和一段附录。</td>
+            <td>更容易看懂为什么参与或不参与。</td>
+          </tr>
+          <tr>
+            <td>冲突发现</td>
+            <td>对象不一致通常要靠人工翻前后文。</td>
+            <td>诊断对象和最终动作对象可以自动比对。</td>
+            <td>减少“前面说一个，后面又说一个”。</td>
+          </tr>
+          <tr>
+            <td>历史日期</td>
+            <td>部分证据来源日期不够集中。</td>
+            <td>每层诊断都要求来源日期。</td>
+            <td>降低把当前事实混入历史 replay 的风险。</td>
+          </tr>
+          <tr>
+            <td>交易纪律</td>
+            <td>观察对象有时需要更多上下文解释。</td>
+            <td>路径里明确写“不能推出什么”。</td>
+            <td>防止把观察信号误看成参与资格。</td>
+          </tr>
+          <tr>
+            <td>AI 续作</td>
+            <td>AI 需要从正文里猜推导链。</td>
+            <td>AI 可以读取结构化路径诊断。</td>
+            <td>后续修复和复盘更少跑偏。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>冲突点与处理</h2>
+      <table class="matrix">
+        <thead>
+          <tr>
+            <th>冲突点</th>
+            <th>如果直接合并</th>
+            <th>推荐处理</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>最终动作来源</td>
+            <td>Bayesian 可能成为另一个动作来源。</td>
+            <td>只读最终动作，只做解释和复核。</td>
+          </tr>
+          <tr>
+            <td>执行对象</td>
+            <td>诊断对象可能替换当前最终对象。</td>
+            <td>不一致时展示冲突，不作为执行依据。</td>
+          </tr>
+          <tr>
+            <td>首页层级</td>
+            <td>新增诊断结论可能抢首屏重点。</td>
+            <td>最终动作先出现，诊断只做短解释。</td>
+          </tr>
+          <tr>
+            <td>表达口径</td>
+            <td>粗可信标签和旧话术可能回流。</td>
+            <td>只使用路径结论和三种动作表达。</td>
+          </tr>
+          <tr>
+            <td>历史事实</td>
+            <td>来源日期缺失可能被默认成目标日期。</td>
+            <td>缺失就显示“来源日期缺失”，并由检查发现。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>接入后的页面结构建议</h2>
+      <div class="callout">
+        <p>
+          首页结构建议保持：最终动作 → 重点对象 → 路径解释 → 关键反证。附录再展开完整路径。这样读者先拿到行动结论，再看它为什么成立或为什么只允许观察。
+        </p>
+      </div>
+    </section>
+
+    <p class="footer-note">
+      备注：这份页面是方案对比，不参与日报生成。接入边界详见
+      <a href="./prd.md">PRD</a>，迁移取舍详见
+      <a href="./flow.md">flow.md</a>。
+    </p>
+  </main>
+</body>
+</html>

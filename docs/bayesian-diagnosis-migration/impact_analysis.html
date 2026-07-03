@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bayesian 诊断分支合并影响分析</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f4ee;
+      --ink: #1f2528;
+      --muted: #626a6f;
+      --line: #d8d2c8;
+      --panel: #fffdf8;
+      --panel-soft: #f0eee7;
+      --green: #1f7a5a;
+      --amber: #98620f;
+      --red: #a43d32;
+      --blue: #2e607f;
+      --shadow: rgba(43, 36, 26, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      line-height: 1.72;
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 36px 0 56px;
+    }
+
+    header {
+      padding: 28px 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.25;
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 900px;
+      font-size: clamp(30px, 4vw, 52px);
+      font-weight: 760;
+    }
+
+    h2 {
+      margin-top: 38px;
+      font-size: 26px;
+    }
+
+    h3 {
+      margin-top: 18px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 10px 0 0;
+    }
+
+    a {
+      color: var(--blue);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 3px;
+    }
+
+    code {
+      padding: 2px 5px;
+      border-radius: 5px;
+      background: #ebe6dc;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.45);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .card {
+      grid-column: span 4;
+      min-height: 100%;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    .card.wide {
+      grid-column: span 8;
+    }
+
+    .card.full {
+      grid-column: 1 / -1;
+    }
+
+    .label {
+      display: inline-flex;
+      align-items: center;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .verdict {
+      border-left: 5px solid var(--amber);
+      background: #fff8e8;
+    }
+
+    .good {
+      border-left: 5px solid var(--green);
+    }
+
+    .warn {
+      border-left: 5px solid var(--amber);
+    }
+
+    .risk {
+      border-left: 5px solid var(--red);
+    }
+
+    .neutral {
+      border-left: 5px solid var(--blue);
+    }
+
+    .number {
+      display: block;
+      margin-top: 4px;
+      font-size: 34px;
+      font-weight: 760;
+      line-height: 1;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    table {
+      width: 100%;
+      margin-top: 16px;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      text-align: left;
+    }
+
+    th {
+      background: var(--panel-soft);
+      font-size: 14px;
+      color: #343a3d;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    ul,
+    ol {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .step {
+      position: relative;
+      min-height: 116px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .step strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .step small {
+      color: var(--muted);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .decision-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .decision {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .status-line {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: #ebe6dc;
+      color: #42484b;
+      font-size: 13px;
+    }
+
+    .tag.keep {
+      background: #e3f2eb;
+      color: #165b42;
+    }
+
+    .tag.drop {
+      background: #f8e6e2;
+      color: #843226;
+    }
+
+    .tag.review {
+      background: #fff0cd;
+      color: #7a510e;
+    }
+
+    .footer-note {
+      margin-top: 34px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    @media (max-width: 900px) {
+      main {
+        width: min(100vw - 24px, 760px);
+        padding-top: 18px;
+      }
+
+      .grid,
+      .split,
+      .decision-list,
+      .flow {
+        grid-template-columns: 1fr;
+      }
+
+      .card,
+      .card.wide,
+      .card.full {
+        grid-column: 1 / -1;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Bayesian 诊断分支合并影响分析</h1>
+      <p class="muted">
+        这是一份人工确认用的审阅页：说明如果把
+        <code>codex/bayesian-diagnosis-module</code> 整合进当前主线，会改变什么；如果暂不整合，会留下什么代价。
+      </p>
+      <div class="meta">
+        <span class="pill">生成日期：2026-07-03</span>
+        <span class="pill">主线：<code>develop</code></span>
+        <span class="pill">对比分支：<code>codex/bayesian-diagnosis-module</code></span>
+        <span class="pill">配套说明：<a href="./flow.md">flow.md</a></span>
+      </div>
+    </header>
+
+    <section>
+      <h2>我的判断</h2>
+      <div class="grid">
+        <article class="card verdict wide">
+          <span class="label">结论</span>
+          <h3>不要直接整支合并，应该按小块迁移</h3>
+          <p>
+            这个分支不是一个单纯的展示补丁。它新增了 Bayesian 诊断包、运行期注入、首页展示、最终对象推导补充、接受检查和一组测试。
+            这些能力有价值，但如果直接把整支分支压进当前主线，会和现在已经存在的
+            <code>selection_workflow.final</code> 最终动作来源、日报结构优化、目标日期事实链路发生重叠。
+          </p>
+          <p>
+            更稳的做法是：保留它的“路径解释、来源日期、反证复核、测试样本”价值；不保留它覆盖最终动作的能力。
+          </p>
+        </article>
+        <article class="card risk">
+          <span class="label">当前风险</span>
+          <span class="number">高</span>
+          <p>
+            当前主工作树已经有大量未提交的日报主链路修改。此时直接合并分支，冲突不仅是代码冲突，更是结论来源和展示层级冲突。
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>核对到的事实</h2>
+      <div class="grid">
+        <article class="card neutral">
+          <span class="label">未进主线提交</span>
+          <span class="number">15</span>
+          <p>分支提交从新增诊断包开始，覆盖运行期、首页、推导、接受检查和测试。</p>
+        </article>
+        <article class="card warn">
+          <span class="label">分支未提交文件</span>
+          <span class="number">12</span>
+          <p>这些未提交改动里既有重要修正，也有不应迁移的回退点。</p>
+        </article>
+        <article class="card good">
+          <span class="label">已通过聚焦测试</span>
+          <span class="number">148</span>
+          <p>分支自身测试曾通过，但这不等于能直接适配当前主线。</p>
+        </article>
+        <article class="card full">
+          <span class="label">影响文件</span>
+          <div class="status-line">
+            <span class="tag keep">scripts/report/bayesian_diagnosis.py</span>
+            <span class="tag review">scripts/report/runtime.py</span>
+            <span class="tag review">scripts/report/front_page_v2_renderer.py</span>
+            <span class="tag review">scripts/report/sniper_target_derivation.py</span>
+            <span class="tag review">scripts/report/report_acceptance_audit.py</span>
+            <span class="tag drop">scripts/report/market_analysis_builder.py</span>
+            <span class="tag keep">tests/test_bayesian_diagnosis.py</span>
+            <span class="tag review">相关渲染、运行期、接受检查测试</span>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>如果整合，会发生什么</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>变化点</th>
+            <th>正向价值</th>
+            <th>需要防住的问题</th>
+            <th>我的处理建议</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>新增 Bayesian 诊断包</td>
+            <td>能把候选、证据、反证、来源日期整理成一份路径诊断。</td>
+            <td>如果它输出的对象和最终动作对象不一致，日报会重新出现“两条结论”。</td>
+            <td>可以迁移，但只作为解释和复核，不作为第二个最终动作来源。</td>
+          </tr>
+          <tr>
+            <td>运行期注入诊断结果</td>
+            <td>后续渲染和接受检查可以读取同一份诊断数据。</td>
+            <td>当前主线已有大量运行期结构调整，整文件覆盖会吃掉现有结构优化。</td>
+            <td>手工加入最小数据字段，保留当前主线结构。</td>
+          </tr>
+          <tr>
+            <td>首页展示路径结论</td>
+            <td>用户可以看到为什么是参与、条件参与或不参与。</td>
+            <td>如果展示得比最终动作更显眼，会稀释首屏重点。</td>
+            <td>放在最终动作下方，使用短句解释，不展示另一个执行对象。</td>
+          </tr>
+          <tr>
+            <td>最终对象推导补充</td>
+            <td>旧链路缺最终来源时，可以帮助解释对象是怎么来的。</td>
+            <td>如果允许它覆盖 <code>selection_workflow.final</code>，会破坏当前主线唯一最终来源。</td>
+            <td>只有旧链路缺最终来源时辅助收敛；已有最终动作时只能复核。</td>
+          </tr>
+          <tr>
+            <td>接受检查扩展</td>
+            <td>能检查路径摘要、层级、来源日期和不合适的粗标签。</td>
+            <td>检查项如果和当前结构检查重叠，可能出现误报或重复提示。</td>
+            <td>保留专项检查，但沿用当前中文交易口径。</td>
+          </tr>
+          <tr>
+            <td><code>market_analysis_builder.py</code> 改动</td>
+            <td>已提交部分曾补过目标日期传递。</td>
+            <td>分支未提交改动又删除了这处传递，会回退当前主线的历史日期能力。</td>
+            <td>不迁移这个文件的分支改动，保留当前主线版本。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>如果暂不整合，会怎样</h2>
+      <div class="split">
+        <article class="card good">
+          <span class="label">短期好处</span>
+          <h3>主线更稳，不引入新的结论来源</h3>
+          <ul>
+            <li>当前日报结构优化不会被旧分支覆盖。</li>
+            <li><code>selection_workflow.final</code> 继续保持最终动作来源。</li>
+            <li>不会立刻扩大冲突面，当前大量未提交改动更容易先收口。</li>
+          </ul>
+        </article>
+        <article class="card warn">
+          <span class="label">实际代价</span>
+          <h3>会继续缺少路径诊断能力</h3>
+          <ul>
+            <li>日报只能给最终动作，缺少一份结构化的路径解释。</li>
+            <li>来源日期、反证、路径层级这些专项检查不会进入主线。</li>
+            <li>这个分支会继续悬着，后续 AI 可能重复发现、重复实现，甚至误以为它已经进主线。</li>
+          </ul>
+        </article>
+      </div>
+      <p>
+        所以“不整合”不是错误，只是把风险延后；“直接整合”也不是进步，可能把已经收住的主线重新打散。
+        最合理的是确认边界后做小块迁移。
+      </p>
+    </section>
+
+    <section>
+      <h2>必须先确认的分歧</h2>
+      <div class="decision-list">
+        <div class="decision">
+          <strong>1. Bayesian 诊断的位置</strong>
+          <p>建议：它是路径解释和一致性复核，不是最终动作来源。</p>
+        </div>
+        <div class="decision">
+          <strong>2. 最终动作来源</strong>
+          <p>建议：<code>selection_workflow.final</code> 继续作为最终动作来源。</p>
+        </div>
+        <div class="decision">
+          <strong>3. 用户可见表达</strong>
+          <p>建议：使用 <code>path_conclusion</code>，不用粗可信标签或粗概率区间。</p>
+        </div>
+        <div class="decision">
+          <strong>4. 历史日期事实</strong>
+          <p>建议：来源日期缺失就保留缺失，不能把当前数据静默写成目标日期事实。</p>
+        </div>
+        <div class="decision">
+          <strong>5. 迁移方式</strong>
+          <p>建议：手工小块迁移，不做整支合并，不整文件覆盖当前主线。</p>
+        </div>
+        <div class="decision">
+          <strong>6. 首页展示层级</strong>
+          <p>建议：只在最终动作下方补简版解释，不新增另一个醒目的执行对象。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>建议执行流程</h2>
+      <div class="flow">
+        <div class="step">
+          <strong>第 0 步：确认边界</strong>
+          <small>先确认上面的 6 个分歧，尤其是最终动作来源。</small>
+        </div>
+        <div class="step">
+          <strong>第 1 步：迁移诊断包</strong>
+          <small>只迁移 <code>bayesian_diagnosis.py</code> 和对应测试，改成当前交易口径。</small>
+        </div>
+        <div class="step">
+          <strong>第 2 步：接入运行期</strong>
+          <small>写入诊断结果，但不覆盖 <code>selection_workflow.final</code>。</small>
+        </div>
+        <div class="step">
+          <strong>第 3 步：轻量展示</strong>
+          <small>首页只展示路径结论和关键反证，不抢最终动作位置。</small>
+        </div>
+        <div class="step">
+          <strong>第 4 步：补接受检查</strong>
+          <small>检查路径摘要、来源日期和不合适表达，再跑聚焦测试。</small>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>验证计划</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>阶段</th>
+            <th>命令或检查</th>
+            <th>通过标准</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>迁移诊断包后</td>
+            <td><code>.generated/venv-py314/bin/python3.14 -m unittest tests.test_bayesian_diagnosis</code></td>
+            <td>诊断包单测通过，且没有粗可信标签进入用户可见输出。</td>
+          </tr>
+          <tr>
+            <td>接入运行期后</td>
+            <td><code>.generated/venv-py314/bin/python3.14 -m unittest tests.test_report_runtime tests.test_selection_workflow</code></td>
+            <td>最终动作来源不变，诊断结果只作为解释数据存在。</td>
+          </tr>
+          <tr>
+            <td>接入首页后</td>
+            <td><code>.generated/venv-py314/bin/python3.14 -m unittest tests.test_front_page_v2_renderer</code></td>
+            <td>最终动作仍在首位，路径解释不展示不同执行对象。</td>
+          </tr>
+          <tr>
+            <td>接入接受检查后</td>
+            <td><code>.generated/venv-py314/bin/python3.14 -m unittest tests.test_report_acceptance_audit</code></td>
+            <td>来源日期、路径层级和表达检查有效，提示保持中文交易口径。</td>
+          </tr>
+          <tr>
+            <td>收口检查</td>
+            <td><code>git diff --check</code></td>
+            <td>没有空白问题；改动范围只包含确认过的迁移文件。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>当前建议</h2>
+      <div class="card full neutral">
+        <p>
+          我建议先不要执行整支合并。先让你确认
+          <strong>Bayesian 诊断只解释和复核、不覆盖最终动作</strong>
+          这一原则，然后按上面的 5 步迁移。
+        </p>
+        <p>
+          真正值得带进主线的是“路径诊断包、来源日期检查、反证复核和测试样本”；不值得带进主线的是“另起最终动作来源、整文件覆盖、删除目标日期传递、粗可信标签”。
+        </p>
+      </div>
+    </section>
+
+    <p class="footer-note">
+      备注：这份 HTML 是审阅说明，不参与日报生成。更细的功能分歧记录见同目录
+      <a href="./flow.md">flow.md</a>。
+    </p>
+  </main>
+</body>
+</html>
