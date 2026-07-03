@@ -2,9 +2,9 @@
 
 ## 目的
 
-这份文档记录 `codex/bayesian-diagnosis-module` 和当前 `develop` 工作树之间的功能分歧、逻辑分歧和迁移建议。
+这份文档记录 `codex/bayesian-diagnosis-module` 和当前 `develop` 工作树之间的功能分歧、逻辑分歧、迁移建议，以及当前隔离分支 `codex/bayesian-diagnosis-integration` 的落地结果。
 
-在这些选择确认前，不应该直接迁移代码。
+迁移采用小块适配，不整分支覆盖。
 
 ## 当前状态
 
@@ -15,6 +15,12 @@
   - 还有 12 个文件存在未提交改动。
   - 该 worktree 的聚焦测试已通过：148 个测试 OK。
 - 当前主工作树没有 `bayesian_diagnosis`、`path_conclusion` 或贝叶斯诊断展示入口。
+- 当前隔离分支已经完成小块接入：
+  - 新增 `bayesian_diagnosis.v1` 路径诊断包。
+  - 首页新增“路径诊断复盘”。
+  - 附录新增完整路径过程证据。
+  - 接受检查新增来源日期、对象一致性和粗糙概率表达检查。
+  - 2026-07-03 已通过 PostgreSQL-only replay 生成完整样例和 Bear HTML。
 
 ## 决策流程
 
@@ -120,19 +126,42 @@ flowchart TD
 3. 原始计划中的用户可见粗可信标签。
 4. 任何让贝叶斯诊断静默覆盖 `selection_workflow.final` 的行为。
 
-## 需要你确认
-
-开始写代码前，需要确认这 5 点：
+## 已按以下口径执行
 
 1. 保留 `selection_workflow.final` 作为最终动作来源。
-2. 贝叶斯诊断作为路径解释和一致性复核，不作为第二套最终动作来源。
+2. Bayesian 诊断作为路径解释和一致性复核，不作为第二套最终动作来源。
 3. 使用 `path_conclusion`，不用粗可信标签。
-4. 不迁移 bayesian 的 `market_analysis_builder.py`。
+4. 不迁移 bayesian 的 `market_analysis_builder.py` 回退改动。
 5. 采用手工小块迁移，不合并整个分支。
+
+## 2026-07-03 成功样例流程
+
+```mermaid
+flowchart TD
+    A["隔离分支 codex/bayesian-diagnosis-integration"] --> B["实时路径验证"]
+    B --> C["雪球热榜和热榜解释恢复"]
+    C --> D["实时中证全指仍有缺口"]
+    D --> E["切换 PostgreSQL-only 已冻结事实"]
+    E --> F["已有正式历史，自动写入 replay"]
+    F --> G["生成 Markdown 与 Bear HTML"]
+    G --> H["独立接受检查通过"]
+```
+
+样例产物：
+
+- `reports/replay/2026-07-03_A股日报_完整版_replay.md`
+- `reports/replay/2026-07-03_A股日报_完整版_replay.html`
+- `docs/bayesian-diagnosis-migration/2026-07-03_regeneration_comparison.html`
+
+本次发现并修正的流程分歧：
+
+- 生成流程内部检查的是正文主体，保存后的 replay Markdown 会再叠加 Ta/Tb/Tc 时间轴。
+- 独立接受检查会检查完整保存稿，因此会发现顶部时间轴与正文持仓口径冲突。
+- 修正后，未输入持仓时顶部 Ta 轨道显示“待确认旧仓”，和正文“先确认旧仓”一致。
 
 ## 迁移后的验证计划
 
-先跑聚焦测试：
+已跑聚焦测试：
 
 ```bash
 .generated/venv-py314/bin/python3.14 -m unittest \
@@ -140,13 +169,17 @@ flowchart TD
   tests.test_sniper_target_derivation \
   tests.test_front_page_v2_renderer \
   tests.test_report_acceptance_audit \
-  tests.test_report_runtime
+  tests.test_report_runtime \
+  tests.test_selection_workflow \
+  tests.test_position_strategy_report
 ```
 
-再跑当前日报结构优化相关验证子集。
+结果：559 个测试通过。
 
-最后检查空白问题：
+已检查空白问题：
 
 ```bash
 git diff --check
 ```
+
+结果：通过。

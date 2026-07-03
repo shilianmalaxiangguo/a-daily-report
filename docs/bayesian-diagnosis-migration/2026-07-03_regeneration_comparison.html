@@ -72,7 +72,7 @@
     a:hover { text-decoration: underline; }
     .flow {
       display: grid;
-      grid-template-columns: repeat(5, minmax(140px, 1fr));
+      grid-template-columns: repeat(6, minmax(130px, 1fr));
       gap: 10px;
       align-items: stretch;
       margin-top: 16px;
@@ -83,7 +83,7 @@
       border-radius: 8px;
       background: #fff;
       padding: 13px;
-      min-height: 108px;
+      min-height: 114px;
     }
     .node::after {
       content: "→";
@@ -124,11 +124,8 @@
       border-radius: 6px;
       margin-top: 12px;
     }
-    .ok {
-      border-left-color: var(--good);
-      background: #effaf6;
-    }
-    @media (max-width: 860px) {
+    .ok { border-left-color: var(--good); background: #effaf6; }
+    @media (max-width: 980px) {
       main { padding: 18px; }
       header { padding: 28px 24px 22px; }
       .grid, .compare, .flow { grid-template-columns: 1fr; }
@@ -140,30 +137,30 @@
 <body>
   <header>
     <h1>2026-07-03 日报重生成与 Bayesian 接入对比</h1>
-    <p>位置：隔离分支 <code>codex/bayesian-diagnosis-integration</code>。本页说明这次实际生成了什么、为什么正式日报没有完整重跑成功，以及接入后和原结构的差异。</p>
+    <p>位置：隔离分支 <code>codex/bayesian-diagnosis-integration</code>。本页记录这次使用雪球登录态和 PostgreSQL-only 已冻结事实后，重新生成 2026-07-03 replay 日报与 Bear HTML 的真实结果。</p>
   </header>
   <main>
     <section>
       <h2>一、执行结论</h2>
       <div class="grid">
-        <div class="metric bad">
-          <span>正式日报重跑</span>
-          <strong>未生成</strong>
-          <p>入口在关键数据检查阶段停止，未写入新的完整 Markdown 日报。</p>
+        <div class="metric good">
+          <span>完整日报</span>
+          <strong>已生成</strong>
+          <p>使用 PostgreSQL-only 已冻结事实生成 replay 样例，关键数据检查、日报一致性检查和独立接受检查均通过。</p>
         </div>
         <div class="metric good">
           <span>Bear HTML</span>
           <strong>已生成</strong>
-          <p>用隔离分支的 Bear HTML 渲染器，把既有冻结 Markdown 渲染成 HTML。</p>
+          <p>生成了新版完整日报 HTML，并保留候选淘汰赛、板块资金复核、缠论 HTML。</p>
         </div>
-        <div class="metric warn">
-          <span>对比说明 HTML</span>
-          <strong>本页</strong>
-          <p>记录实际结果、结构差异、风险和后续处理建议。</p>
+        <div class="metric good">
+          <span>Bayesian 展示</span>
+          <strong>已出现</strong>
+          <p>“路径诊断复盘”已出现在最终结论之后，附录也有完整路径证据。</p>
         </div>
       </div>
-      <div class="callout">
-        这次没有绕过检查强行生成日报。缺少关键数据时停止生成是正确行为，否则会把不完整事实写成交易判断。
+      <div class="callout ok">
+        雪球登录态已验证可用：实时路径里雪球A股24小时热榜返回 100 只，雪球热榜AI解释返回 28 条。实时路径后来只剩中证全指缺口；改用 PostgreSQL-only 已冻结事实后，中证全指读取成功。由于该日期已有正式历史，本次成功样例写入 replay 路径，没有覆盖正式历史。
       </div>
     </section>
 
@@ -175,64 +172,70 @@
         </thead>
         <tbody>
           <tr>
-            <td>Bear HTML（隔离分支渲染）</td>
-            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/reports/2026-07-03_A股日报_完整版_bear_from_frozen_markdown.html">reports/2026-07-03_A股日报_完整版_bear_from_frozen_markdown.html</a></td>
-            <td>输入是主工作区已冻结 Markdown，渲染器是当前隔离分支代码；它证明 HTML 渲染链可用，但不代表日报内容已按新 runtime 完整重算。</td>
+            <td>新版完整 Markdown</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/reports/replay/2026-07-03_A股日报_完整版_replay.md">reports/replay/2026-07-03_A股日报_完整版_replay.md</a></td>
+            <td>本次真正重新生成的完整 replay 日报，数据路径为 PostgreSQL-only。</td>
+          </tr>
+          <tr>
+            <td>新版 Bear HTML</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/reports/replay/2026-07-03_A股日报_完整版_replay.html">reports/replay/2026-07-03_A股日报_完整版_replay.html</a></td>
+            <td>由新版 Markdown 生成的 Bear 阅读样式 HTML。</td>
+          </tr>
+          <tr>
+            <td>运行日志</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/reports/replay/2026-07-03_A股日报_运行日志_replay.md">reports/replay/2026-07-03_A股日报_运行日志_replay.md</a></td>
+            <td>记录关键数据检查、生成路径和耗时。</td>
+          </tr>
+          <tr>
+            <td>质量记录</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/.generated/report-quality/2026-07-03_replay.json">.generated/report-quality/2026-07-03_replay.json</a></td>
+            <td>本次成功生成的质量记录。</td>
           </tr>
           <tr>
             <td>旧版正式 Markdown</td>
-            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/reports/2026-07-03_A股日报_完整版.md">主工作区 reports/2026-07-03_A股日报_完整版.md</a></td>
-            <td>接入前生成的正式日报，用作对照输入。</td>
-          </tr>
-          <tr>
-            <td>旧版正式 Bear HTML</td>
-            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/reports/2026-07-03_A股日报_完整版.html">主工作区 reports/2026-07-03_A股日报_完整版.html</a></td>
-            <td>接入前生成的正式 HTML，对照用。</td>
-          </tr>
-          <tr>
-            <td>本次失败质量记录</td>
-            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/.worktrees/bayesian-diagnosis-integration/.generated/report-quality/2026-07-03_default.json">.generated/report-quality/2026-07-03_default.json</a></td>
-            <td>记录本次正式重跑停止的原因和评分。</td>
+            <td><a href="file:///Users/chaixixi/.hermes/hermes-skills/personal/a-daily-report/reports/2026-07-03_A股日报_完整版.md">主工作区旧版完整日报</a></td>
+            <td>接入前生成的正式日报，用作对照；本次没有覆盖它。</td>
           </tr>
         </tbody>
       </table>
     </section>
 
     <section>
-      <h2>三、为什么没有完整重跑成功</h2>
+      <h2>三、关键数据处理过程</h2>
       <table>
         <thead>
-          <tr><th>检查项</th><th>本次状态</th><th>影响</th></tr>
+          <tr><th>检查项</th><th>实时路径</th><th>PostgreSQL-only 路径</th><th>结论</th></tr>
         </thead>
         <tbody>
-          <tr><td>中证全指</td><td>失败，数值为 0.0</td><td>市场底色和大盘环境不完整，不能继续写日报。</td></tr>
-          <tr><td>雪球A股24小时热榜</td><td>失败，登录态失效或缺失</td><td>热度侧证据缺失，不能把热榜理解写成确定事实。</td></tr>
-          <tr><td>雪球热榜AI解释</td><td>失败，登录态失效或缺失</td><td>热榜解释缺失，不能完整支撑候选解释。</td></tr>
+          <tr><td>雪球A股24小时热榜</td><td>使用登录态后成功，100 只</td><td>已冻结事实可用，100 只</td><td>已解决</td></tr>
+          <tr><td>雪球热榜AI解释</td><td>使用登录态后成功，28 条</td><td>已冻结事实可用，29 条</td><td>已解决</td></tr>
+          <tr><td>中证全指</td><td>实时 Tushare / AkShare 回补失败</td><td>读取成功，6404.4</td><td>用已冻结事实生成</td></tr>
+          <tr><td>日报一致性检查</td><td>未进入最终保存</td><td>通过</td><td>可生成隔离样例</td></tr>
+          <tr><td>保存稿独立接受检查</td><td>-</td><td>通过</td><td>顶部时间轴和正文持仓口径已一致</td></tr>
         </tbody>
       </table>
-      <div class="callout">
-        本次质量记录显示：<code>score=15/100</code>，<code>status=error</code>。这不是 Bayesian 接入导致的 Python 异常，而是数据完整性检查主动停止。
-      </div>
     </section>
 
     <section>
       <h2>四、流程对比</h2>
-      <h3>实际执行流程</h3>
+      <h3>本次实际执行流程</h3>
       <div class="flow">
-        <div class="node good"><b>隔离分支</b><small>基于提交 a3b63349 执行，不碰 develop。</small></div>
-        <div class="node warn"><b>实时重跑</b><small>运行 2026-07-03 正式入口。</small></div>
-        <div class="node bad"><b>关键数据不完整</b><small>中证全指、雪球热榜、热榜解释缺失。</small></div>
-        <div class="node warn"><b>停止生成</b><small>没有写入新的完整 Markdown 日报。</small></div>
-        <div class="node good"><b>说明与对比</b><small>生成 Bear HTML 和本对比页。</small></div>
+        <div class="node good"><b>隔离分支</b><small>基于 Bayesian 接入分支执行。</small></div>
+        <div class="node warn"><b>实时重跑</b><small>传入雪球登录态，先测实时路径。</small></div>
+        <div class="node good"><b>雪球成功</b><small>热榜和热榜解释恢复。</small></div>
+        <div class="node warn"><b>指数缺口</b><small>实时中证全指仍不可用。</small></div>
+        <div class="node good"><b>已冻结事实</b><small>用 PostgreSQL-only 读取完整事实。</small></div>
+        <div class="node good"><b>生成成功</b><small>replay Markdown、Bear HTML 和附属 HTML 全部落盘。</small></div>
       </div>
 
-      <h3>数据补齐后的预期流程</h3>
+      <h3>新版日报内部流程</h3>
       <div class="flow">
-        <div class="node"><b>数据完整</b><small>关键市场事实、热榜、解释均可用。</small></div>
-        <div class="node"><b>最终动作生成</b><small>仍由 selection_workflow.final 决定。</small></div>
-        <div class="node"><b>路径诊断复盘</b><small>读取最终动作，整理市场、主线、资金、个股、反证。</small></div>
-        <div class="node"><b>首页与附录展示</b><small>首页短解释，附录保留完整路径和来源日期。</small></div>
-        <div class="node"><b>检查与 HTML</b><small>接受检查通过后生成 Bear HTML。</small></div>
+        <div class="node"><b>读取事实</b><small>市场、热榜、候选、执行链。</small></div>
+        <div class="node"><b>最终动作</b><small>仍由 selection_workflow.final 决定。</small></div>
+        <div class="node"><b>路径诊断</b><small>读取最终动作，整理市场、主线、资金、个股、反证。</small></div>
+        <div class="node"><b>首页展示</b><small>最终结论之后出现短版复盘。</small></div>
+        <div class="node"><b>附录证据</b><small>完整路径进入过程证据。</small></div>
+        <div class="node"><b>检查输出</b><small>一致性检查通过后生成 HTML。</small></div>
       </div>
     </section>
 
@@ -240,7 +243,7 @@
       <h2>五、接入前后结构差异</h2>
       <div class="compare">
         <div class="before">
-          <h3>接入前：2026-07-03 旧正式日报</h3>
+          <h3>旧版 2026-07-03 日报</h3>
           <ul>
             <li>“最终结论”之后直接进入“明日行动清单”。</li>
             <li>附录有“狙击手最终标的完整路径图”，重点展示候选生命周期。</li>
@@ -249,58 +252,53 @@
           </ul>
         </div>
         <div class="after">
-          <h3>接入后：完整重跑成功时应出现</h3>
+          <h3>新版 2026-07-03 日报</h3>
           <ul>
-            <li>“最终结论”之后增加“路径诊断复盘”。</li>
-            <li>该小节展示路径结论、最终动作一致性、执行对象、动作、来源日期。</li>
-            <li>附录在过程证据中加入完整路径，不覆盖最终对象。</li>
-            <li>来源日期缺失时显示“来源日期缺失”，并被检查指出。</li>
+            <li>“最终结论”之后新增“路径诊断复盘”。</li>
+            <li>路径结论是“条件执行”，最终动作一致性是“一致”。</li>
+            <li>执行对象仍是太极实业(600667)，没有被 Bayesian 改写。</li>
+            <li>来源日期显示为 2026-07-03，附录每层路径也有同一来源日期。</li>
+            <li>顶部时间轴把未输入持仓写成“待确认旧仓”，不再直接写成无持仓结论。</li>
           </ul>
         </div>
       </div>
     </section>
 
     <section>
-      <h2>六、本次改动带来的提升</h2>
+      <h2>六、新版日报中的新增片段</h2>
       <table>
         <thead>
-          <tr><th>维度</th><th>原来</th><th>接入后</th></tr>
+          <tr><th>位置</th><th>新增内容</th><th>效果</th></tr>
         </thead>
         <tbody>
           <tr>
-            <td>复盘可读性</td>
-            <td>最终动作和推导证据分散在多段里，需要人工自己串起来。</td>
-            <td>路径诊断把市场、主线、资金、个股、反证串成一条复盘链。</td>
+            <td>首页最终结论之后</td>
+            <td>路径结论、最终动作一致性、执行对象、动作、来源日期。</td>
+            <td>读完最终动作后，马上能看到这个动作的路径复盘。</td>
           </tr>
           <tr>
-            <td>AI理解</td>
-            <td>AI 需要从大段日报里猜哪些是结论、哪些是证据。</td>
-            <td>结构化 `bayesian_diagnosis.v1` 提供明确字段，方便后续复用。</td>
+            <td>狙击手路径附录</td>
+            <td>市场层、主线层、资金层、个股层、反证层的完整路径。</td>
+            <td>候选生命周期前增加“为什么这个最终动作成立”的过程证据。</td>
           </tr>
           <tr>
-            <td>安全性</td>
-            <td>候选证据和最终对象冲突时，需要靠已有检查兜住。</td>
-            <td>新增对象不一致、来源日期缺失、粗糙概率表达等专项检查。</td>
-          </tr>
-          <tr>
-            <td>交易口径</td>
-            <td>容易把观察信号和参与资格混在阅读体验里。</td>
-            <td>路径诊断只解释，不改最终动作；0% 不参与时不会包装观察对象。</td>
+            <td>一致性检查</td>
+            <td>检查来源日期缺失、粗糙概率表达、对象不一致。</td>
+            <td>防止解释层变成第二套不受控结论。</td>
           </tr>
         </tbody>
       </table>
     </section>
 
     <section>
-      <h2>七、下一步建议</h2>
+      <h2>七、仍需人工看的点</h2>
       <ol>
-        <li>先修复或恢复 2026-07-03 所需的中证全指、雪球热榜、雪球解释数据来源。</li>
-        <li>或者补一份正式 replay 快照，再用隔离分支重跑 replay。</li>
-        <li>重跑成功后，再比较新 Markdown 与旧 Markdown：重点看“路径诊断复盘”位置、篇幅和附录路径是否清晰。</li>
-        <li>确认效果稳定后，再决定是否把 <code>codex/bayesian-diagnosis-integration</code> 合回主线。</li>
+        <li>“路径诊断复盘”目前能解释路径，但篇幅是否合适，需要你按阅读习惯确认。</li>
+        <li>本次路径结论写“条件执行”，但最终文案写“满仓条件执行”；这属于表达颗粒度差异，不改变最终动作，可以继续优化文案一致性。</li>
+        <li>实时路径仍受中证全指数据源影响；今天成功样例是 PostgreSQL-only 已冻结事实的 replay 路径。</li>
       </ol>
       <div class="callout ok">
-        当前最重要的结论：代码接入已经有测试保护；2026-07-03 的实际样例还缺一次数据完整的生成，不能把这次失败当成内容效果失败。
+        当前判断：雪球登录态问题已解决；Bayesian 接入后的 2026-07-03 replay 样例已成功生成；最终动作没有被改写，新增的是复盘解释和检查能力。
       </div>
     </section>
   </main>

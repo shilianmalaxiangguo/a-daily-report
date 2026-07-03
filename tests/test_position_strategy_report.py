@@ -357,6 +357,27 @@ class PositionStrategyReportTest(unittest.TestCase):
         self.assertIn("没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，优先处理旧仓", report)
         self.assertIn("Tb 表示明日目标；Tb+0 是条件买入，不是无条件买入；Tb+1 要继续按昨晚预案处理持有或取消路径；没有明日目标时，必须写明没有Tb+0 / 没有Tb+1。", report)
 
+    def test_render_unknown_position_context_keeps_ta_as_pending(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        report = render_position_strategy_report(
+            data={
+                "position_context_provided": False,
+                "selection_workflow": {
+                    "final": {
+                        "position_pct": 50,
+                        "execution_object": {"name": "太极实业", "code": "600667"},
+                    }
+                },
+            },
+            target_date="2026-07-03",
+            positions=[],
+        )
+
+        self.assertIn("| Ta旧仓 | 待确认旧仓 | 先确认旧仓 | 确认后再处理 | 持仓确认后再决定 | 空仓 |", report)
+        self.assertIn("持仓未输入时，Ta轨道只表示待确认", report)
+        self.assertNotIn("无旧仓时，Ta轨道保持空仓", report)
+
     def test_render_uses_previous_report_target_and_current_markdown_target_for_timeline(self):
         from portfolio.position_strategy_report import render_position_strategy_report
 

@@ -80,6 +80,23 @@ class BayesianDiagnosisTest(unittest.TestCase):
         self.assertIn(SOURCE_DATE_MISSING, {step["source_date"] for step in packet["path"]})
         self.assertEqual(packet["conclusion"]["path_conclusion"], "路径不完整，条件待确认")
 
+    def test_postgres_only_frozen_facts_use_target_date_when_source_date_missing(self):
+        inputs = self._base_inputs()
+        inputs["data"].pop("source_date")
+        inputs["data"]["postgres_only"] = True
+        inputs["market_research_snapshot"].pop("source_date")
+        inputs["market_research_snapshot"]["cycle_layer"].pop("source_date")
+        inputs["market_research_snapshot"]["capital_intent"].pop("source_date")
+        inputs["final_target_resolution"].pop("source_date")
+        inputs["final_target_resolution"]["display_target"].pop("source_date", None)
+        inputs["final_target_resolution"]["new_entry_target"].pop("source_date", None)
+        inputs["position_decision"].pop("source_date", None)
+
+        packet = build_bayesian_diagnosis_packet(**inputs)
+
+        self.assertEqual({step["source_date"] for step in packet["path"]}, {"2026-06-04"})
+        self.assertNotIn(SOURCE_DATE_MISSING, {step["source_date"] for step in packet["path"]})
+
     def test_zero_final_does_not_promote_observation_target(self):
         inputs = self._base_inputs()
         inputs["data"]["selection_workflow"] = {

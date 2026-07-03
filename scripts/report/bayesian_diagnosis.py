@@ -76,13 +76,20 @@ def _first_stock(*values):
     return {}
 
 
-def _source_date(*values):
+def _source_date(*values, default=SOURCE_DATE_MISSING):
     for value in values:
         if not isinstance(value, Mapping):
             continue
         text = _clean_text(value.get("source_date") or value.get("trade_date") or value.get("query_date") or value.get("date"))
         if text:
             return text
+    return _clean_text(default, SOURCE_DATE_MISSING)
+
+
+def _postgres_only_source_date(target_date, *values):
+    for value in values:
+        if _as_dict(value).get("postgres_only"):
+            return _clean_text(target_date, SOURCE_DATE_MISSING)
     return SOURCE_DATE_MISSING
 
 
@@ -175,7 +182,12 @@ def _market_step(target_date, data, market_research_snapshot):
         or data.get("market_branch"),
         "市场状态待确认",
     )
-    source_date = _source_date(market, market_research_snapshot, data)
+    source_date = _source_date(
+        market,
+        market_research_snapshot,
+        data,
+        default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+    )
     return _step(
         source_date=source_date,
         layer="market",
@@ -201,7 +213,12 @@ def _mainline_step(target_date, data, market_research_snapshot):
         or data.get("cycle_mainline"),
     )
     summary = "；".join(text for text in (cycle, daily) if text) or "主线信息待确认"
-    source_date = _source_date(mainline, market_research_snapshot, data)
+    source_date = _source_date(
+        mainline,
+        market_research_snapshot,
+        data,
+        default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+    )
     return _step(
         source_date=source_date,
         layer="mainline",
@@ -221,7 +238,13 @@ def _capital_step(target_date, data, market_research_snapshot, final_target_reso
         or _as_dict(final_target_resolution).get("capital_priority_decision", {}).get("reason"),
         "资金层信息待确认",
     )
-    source_date = _source_date(capital, final_action.get("execution_object"), market_research_snapshot, data)
+    source_date = _source_date(
+        capital,
+        final_action.get("execution_object"),
+        market_research_snapshot,
+        data,
+        default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+    )
     cannot_conclude = ["资金层不能替代固定交易窗口"]
     if priority in {"old_position_t", "old_position", "existing_position", "existing_position_t"}:
         cannot_conclude.append("旧仓优先时不能把新机会写成直接参与")
@@ -235,9 +258,9 @@ def _capital_step(target_date, data, market_research_snapshot, final_target_reso
     )
 
 
-def _stock_step(target_date, final_action, position_decision):
+def _stock_step(target_date, final_action, position_decision, *, source_date_default=SOURCE_DATE_MISSING):
     target = final_action.get("execution_object") if isinstance(final_action.get("execution_object"), dict) else {}
-    source_date = _source_date(target, position_decision or {})
+    source_date = _source_date(target, position_decision or {}, default=source_date_default)
     position_pct = _safe_int(final_action.get("position_pct"))
     if not target or position_pct <= 0:
         return _step(
@@ -273,7 +296,13 @@ def _counter_evidence(data, market_research_snapshot, final_target_resolution, p
 
 
 def _counter_step(target_date, data, market_research_snapshot, final_target_resolution, position_decision, counter_evidence):
-    source_date = _source_date(final_target_resolution, position_decision or {}, market_research_snapshot, data)
+    source_date = _source_date(
+        final_target_resolution,
+        position_decision or {},
+        market_research_snapshot,
+        data,
+        default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+    )
     if counter_evidence:
         summary = "；".join(counter_evidence[:3])
         judgement = "存在反证，不能放大动作"
@@ -351,7 +380,12 @@ def build_bayesian_diagnosis_packet(
         _market_step(target_date, data, market_research_snapshot),
         _mainline_step(target_date, data, market_research_snapshot),
         _capital_step(target_date, data, market_research_snapshot, final_target_resolution, final_action),
-        _stock_step(target_date, final_action, position_decision),
+        _stock_step(
+            target_date,
+            final_action,
+            position_decision,
+            source_date_default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+        ),
         _counter_step(target_date, data, market_research_snapshot, final_target_resolution, position_decision, counter_evidence),
     ]
     path_conclusion = _path_conclusion(final_action, path, counter_evidence)
