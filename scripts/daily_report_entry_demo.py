@@ -251,6 +251,7 @@ from market_data.daily_price_runtime import (
 from market_data.tushare_turnover_service import (
     fetch_stock_basic_map as run_fetch_stock_basic_map,
 )
+from market_data.tushare_client import check_tushare_runtime_ready
 from risk.a_kill_blacklist_store import (
     get_active_a_kill_records,
     is_stock_in_a_kill_cooldown,
@@ -883,7 +884,26 @@ def analyze_candlestick_pattern(open_price, close_price, high_price, low_price, 
     )
 
 
+def _run_tushare_provider_precheck(target_date=None):
+    print(f"🔎 Tushare跑前检查: {target_date or '未指定日期'}")
+    result = check_tushare_runtime_ready()
+    if not result.get("ok"):
+        message = (
+            result.get("error_message")
+            or result.get("error_type")
+            or "未知错误"
+        )
+        raise ReportCriticalDataMissingError(f"Tushare跑前检查失败，停止生成：{message}")
+    checks = result.get("checks") or []
+    row_count = 0
+    if checks and isinstance(checks[0], dict):
+        row_count = int(checks[0].get("row_count") or 0)
+    print(f"   ✅ Tushare跑前检查通过: {result.get('provider', 'tushare')} rows={row_count}")
+    return result
+
+
 def get_daily_data(target_date=None):
+    _run_tushare_provider_precheck(target_date)
     return run_input_runtime(
         target_date,
         helpers={
@@ -3672,6 +3692,7 @@ def generate_markdown_report(
             "persist_candidate_traces": persist_candidate_traces,
             "candidate_trace_root_dir": candidate_trace_root_dir or str(Path(__file__).resolve().parents[1]),
             "decision_ledger_postgres_only": postgres_only,
+            "ENABLE_SELECTION_WORKFLOW_QUOTE_BACKFILL": True,
             "ENABLE_REMOTE_CALENDAR_LLM": _resolve_remote_calendar_llm_enabled(),
         },
     )
@@ -4198,6 +4219,20 @@ def _audit_generated_report_with_chanlun_html(report_outputs, chanlun_html_path=
     raise ReportCriticalDataMissingError("日报一致性检查未通过，停止生成")
 
 
+def _audit_generated_report_with_companion_html_paths(report_outputs, companion_html_paths):
+    results = []
+    for path in companion_html_paths or []:
+        if not path:
+            continue
+        results.append(
+            _audit_generated_report_with_chanlun_html(
+                report_outputs,
+                chanlun_html_path=path,
+            )
+        )
+    return results
+
+
 def _audit_existing_official_report_or_raise(target_date, official_report_path, *, strict=True):
     path = Path(official_report_path)
     if not path.exists():
@@ -4295,17 +4330,56 @@ def _inject_previous_report_target_as_existing_position(data, target_date, repor
         label = f"{label}({code})" if label else code
     if not label:
         return {}
+    inferred_position = {
+        "name": previous_target.get("name") or "",
+        "code": code,
+        "position": 100.0,
+        "holding_note": "上一份日报明日标的默认1x旧仓",
+    }
+    inferred_context = build_personal_position_context(data, [inferred_position])
+    inferred_summary = (
+        (inferred_context.get("existing_position_summary") or {}).get("summary")
+        if isinstance(inferred_context, dict)
+        else ""
+    )
+    inferred_summary = str(inferred_summary or "").replace(
+        "；新开仓0手",
+        "；新仓是否叠加单独看Tb/Tc资格",
+    )
     summary = {
         "has_position": True,
-        "summary": f"上一份日报目标 {label}，本日报按旧仓路径复核；旧仓路径与明日目标分开记录，不因旧仓路径取消明日目标。",
+        "summary": inferred_summary
+        or f"上一份日报明日标的默认1x旧仓：持有{label}，100%仓位；本日报按旧仓路径复核；新仓是否叠加单独看Tb/Tc资格。",
+        "name": previous_target.get("name") or "",
+        "code": code,
+        "position": 100.0,
+        "default_position_pct": 100.0,
+        "position_source": "previous_report_target_default_1x",
         "source_report_date": previous_target.get("source_report_date"),
         "inferred_from_previous_report": True,
     }
-    context = dict(personal_position_context or {}) if isinstance(personal_position_context, dict) else {}
+    context = dict(inferred_context or {}) if isinstance(inferred_context, dict) else {}
+    if isinstance(personal_position_context, dict):
+        context.update(personal_position_context)
     context["existing_position_summary"] = summary
     data["personal_position_context"] = context
     data["position_context_provided"] = True
     return summary
+
+
+def _position_from_inferred_previous_target(summary):
+    if not isinstance(summary, dict) or not summary.get("inferred_from_previous_report"):
+        return {}
+    name = str(summary.get("name") or "").strip()
+    code = str(summary.get("code") or "").strip()
+    if not (name or code):
+        return {}
+    return {
+        "name": name,
+        "code": code,
+        "position": float(summary.get("default_position_pct") or summary.get("position") or 100.0),
+        "holding_note": "上一份日报明日标的默认1x旧仓",
+    }
 
 
 def _extract_position_timeline_markdown(position_strategy_report):
@@ -4321,10 +4395,16 @@ def _extract_position_timeline_markdown(position_strategy_report):
 
 
 def _markdown_has_position_timeline(markdown_text):
+    saw_content = False
     for line in str(markdown_text or "").splitlines():
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
-        return line.lstrip().startswith("| 轨道 | 标的 |")
+        if stripped == "## 账户日序表":
+            return True
+        if not saw_content and line.lstrip().startswith("| 轨道 | 标的 |"):
+            return True
+        saw_content = True
     return False
 
 
@@ -4332,7 +4412,27 @@ def _prepend_position_timeline_markdown(markdown_text, position_timeline_markdow
     timeline = str(position_timeline_markdown or "").strip()
     if not timeline or _markdown_has_position_timeline(markdown_text):
         return str(markdown_text or "")
-    return f"{timeline}\n\n{str(markdown_text or '').lstrip()}"
+    section = f"## 账户日序表\n{timeline}"
+    text = str(markdown_text or "").lstrip()
+    lines = text.splitlines()
+    if not lines:
+        return f"{section}\n"
+    insert_at = 0
+    if lines[0].startswith("# "):
+        insert_at = 1
+        while insert_at < len(lines) and not lines[insert_at].strip():
+            insert_at += 1
+        if insert_at < len(lines) and lines[insert_at].strip() == "## 阅读地图":
+            insert_at += 1
+            while insert_at < len(lines):
+                current = lines[insert_at]
+                if current.startswith("## "):
+                    break
+                insert_at += 1
+            while insert_at < len(lines) and not lines[insert_at].strip():
+                insert_at += 1
+    updated_lines = lines[:insert_at] + ["", section, ""] + lines[insert_at:]
+    return "\n".join(updated_lines).strip() + "\n"
 
 
 def _sync_position_timeline_into_saved_markdown(saved_report_paths=None, position_timeline_markdown=""):
@@ -4723,7 +4823,10 @@ def main():
                 data["position_context_provided"] = True
             else:
                 injected_existing = _inject_previous_report_target_as_existing_position(data, target_date)
-                if injected_existing and not injected_existing.get("inferred_from_previous_report"):
+                inferred_position = _position_from_inferred_previous_target(injected_existing)
+                if inferred_position:
+                    positions = [inferred_position]
+                if injected_existing:
                     has_personal_positions = True
 
             report_outputs = build_report_outputs(
@@ -4821,16 +4924,22 @@ def main():
                 input_payload={"target_date": target_date, "run_mode": run_mode},
                 output_payload={"output_variants": list(saved_report_paths.keys())},
             )
-            _try_save_elimination_tournament_html(
+            companion_html_paths = []
+            elimination_html_path = _try_save_elimination_tournament_html(
                 data,
                 target_date,
                 saved_report_paths=saved_report_paths,
             )
-            _try_save_sector_capital_preflight_html(
+            if elimination_html_path:
+                companion_html_paths.append(elimination_html_path)
+            sector_preflight_html_path = _try_save_sector_capital_preflight_html(
                 data,
                 target_date,
                 saved_report_paths=saved_report_paths,
             )
+            if sector_preflight_html_path:
+                companion_html_paths.append(sector_preflight_html_path)
+            _audit_generated_report_with_companion_html_paths(report_outputs, companion_html_paths)
             chanlun_html_path = save_sh_index_chanlun_html_report(
                 target_date,
                 root=Path(__file__).resolve().parents[1],

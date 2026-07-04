@@ -109,6 +109,42 @@ class DailyReportEntryPreflightTest(unittest.TestCase):
         self.assertIn("热度前50个股", preflight["failures"])
         self.assertEqual(checks["热度前50个股"]["status"], "failed")
 
+    def test_report_preflight_allows_optional_exchange_monitor_timeout(self):
+        from daily_report_render import build_report_preflight
+
+        data = _with_html_required_facts({
+            "data_status": {
+                "两市成交额": True,
+                "中证全指": True,
+                "中证1000": True,
+                "成交额排名": True,
+                "大盘涨跌统计": True,
+                "热度前50个股": True,
+            },
+            "step_status": {"异动检测数据获取": False},
+            "module_logs": [
+                {
+                    "step": "request.exchange_monitor",
+                    "status": "error",
+                    "details": {"provider": "quicktiny.exchange_monitor"},
+                }
+            ],
+            "total_turnover": 34739.26,
+            "wind_a_alternative": {"price": 6376.36, "data_source": "tushare.index_daily"},
+            "csi1000_index": {"price": 8625.33, "data_source": "tushare.index_daily"},
+            "turnover_rank": [{"code": "000001", "data_source": "tushare.daily"}],
+            "market_stats": {"up_count": 2219, "down_count": 3162},
+            "exchange_monitor_today": [],
+            "exchange_monitor_nextday": [],
+        })
+
+        preflight = build_report_preflight(data, "2026-07-02")
+        decision_checks = {item["label"]: item for item in preflight["decision_checks"]}
+
+        self.assertEqual(preflight["status"], "success")
+        self.assertNotIn("异动检测数据", preflight["failures"])
+        self.assertNotIn("异动检测数据", decision_checks)
+
     def test_sector_first_missing_inputs_stop_generation_and_list_missing_items(self):
         from daily_report_render import (
             ReportCriticalDataMissingError,

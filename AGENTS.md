@@ -60,6 +60,22 @@ venv/bin/python3.11
 7. 默认只写 `reports/replay/` 和 `snapshots/replay/`；除非用户明确要求覆盖正式历史并允许 `--overwrite-official`，否则不覆盖 `reports/` 下的正式日报。
 8. 验证优先级：相关单测；然后运行 `<date> --replay`；最后对 `reports/replay/<date>_A股日报_完整版_replay.md` 运行日报一致性检查。
 
+# 日报展示结构修改后对比
+
+当任务目标是优化日报阅读结构或 Bear HTML 展示时，默认只改渲染和文档，不改明日标的生成逻辑。
+
+| 项目 | 修改前 | 修改后 | 不变项 |
+|------|--------|--------|--------|
+| Markdown 首屏 | 板块资金证据可能出现在 `## 明日执行结论` 前，读者先看过程再找动作。 | `## 明日执行结论`、执行条件、不执行条件先出现，板块资金扩散淘汰赛和 T0 推演后置为依据。 | `selection_workflow`、`final_target_resolution`、候选池、评分和最终对象字段不因展示调整而改变。 |
+| Bear HTML | 普通标题渲染，动作段和证据段视觉权重接近。 | Bear HTML 跟随 Markdown 顺序，并用 `bear-section-action` / `bear-section-evidence` 区分动作和证据。 | HTML 只读 Markdown，不反推、不回写明日对象、仓位或执行性质。 |
+| 文档记录 | flow/testing/readme 只记录上一轮结构整理。 | flow/testing/readme/AGENTS 都要写清修改后对比和验证方式。 | 正式历史日报覆盖策略、replay 优先读取快照策略不变。 |
+
+验证要求：
+
+- 单测至少覆盖阅读地图、板块资金摘要插入顺序、Bear HTML 标题分类。
+- replay 对比必须确认 `明日执行对象`、`明日仓位`、`执行性质` 不因展示修改而变化。
+- 如果对比不一致，先按越界处理，停止声明完成并回查是否误改了决策生成路径。
+
 # 文件读取工具选择
 
 ## 规则

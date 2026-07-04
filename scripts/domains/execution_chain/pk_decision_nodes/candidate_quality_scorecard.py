@@ -512,12 +512,19 @@ def _build_panel_fields(
         backup_candidate = None
     existing_position_summary = existing_position_summary if isinstance(existing_position_summary, dict) else {}
     inferred_old_path = bool(existing_position_summary.get("has_position") and existing_position_summary.get("summary"))
-    if has_personal_positions:
+    default_old_position = bool(
+        existing_position_summary.get("position_source") == "previous_report_target_default_1x"
+        or existing_position_summary.get("inferred_from_previous_report") is True
+    )
+    if default_old_position:
+        account_attention_load = "默认1x旧仓需复核"
+        holding_priority_action = "旧仓按旧路径处理；新机会按自身资格判断"
+    elif has_personal_positions:
         account_attention_load = "有持仓需先处理"
         holding_priority_action = "先处理旧仓，再看新增"
     elif inferred_old_path:
-        account_attention_load = "旧路径需复核"
-        holding_priority_action = "旧路径与明日目标分开处理"
+        account_attention_load = "旧仓需复核"
+        holding_priority_action = "旧仓与新机会分开处理"
     elif position_context_provided:
         account_attention_load = "无持仓负担"
         holding_priority_action = "无旧仓时只等参与窗口"

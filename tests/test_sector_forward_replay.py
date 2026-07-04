@@ -1,8 +1,11 @@
 import json
 import re
 import sys
+import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +23,7 @@ from replay.sector_forward_replay import build_static_minute_price_refill
 from replay.sector_forward_replay import discover_forward_replay_pairs
 from replay.sector_forward_replay import render_forward_replay_markdown_summary
 from replay.sector_forward_replay import render_forward_replay_html
+from replay.sector_forward_replay_style_preview import generate_preview
 
 
 def _embedded_payload(rendered_html):
@@ -337,6 +341,11 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIn("回测摘要", visible)
         self.assertIn("买入 / 卖出时间矩阵", visible)
         self.assertIn("样本收益分布", visible)
+        self.assertIn("--reader-bg: #fff9ef", rendered)
+        self.assertIn("--outline-rail-width", rendered)
+        self.assertIn("linear-gradient(145deg, rgba(231, 57, 34, 0.92)", rendered)
+        self.assertIn('<h2 class="bear-section-map">区间说明</h2>', rendered)
+        self.assertIn('<h2 class="bear-section-action">回测摘要</h2>', rendered)
         self.assertNotIn("流程图", visible)
         self.assertNotIn("Mermaid 源码", visible)
         self.assertNotIn("决策日候选的T+1买入日逐股复核", visible)
@@ -761,6 +770,23 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertIn("每个指数一组两根横向柱", rendered)
         self.assertIn("name: '策略区间收益'", rendered)
         self.assertIn("name: '指数区间涨跌'", rendered)
+        self.assertIn("orange: cssVar('--accent-orange', '#ff8a1f')", rendered)
+        self.assertIn("color: [chartTone.orange, chartTone.red]", rendered)
+        self.assertIn("color: [chartTone.orange, chartTone.red, chartTone.green]", rendered)
+        self.assertIn("color: [chartTone.red, chartTone.green]", rendered)
+        self.assertNotIn("color: [chartTone.orange, chartTone.blue]", rendered)
+        self.assertIn("{ name: '负收益', itemStyle: { color: chartTone.green } }", rendered)
+        self.assertIn("seriesBarData(topRows, 'cumulative_return_pct', chartTone.orange)", rendered)
+        self.assertIn("seriesBarData(topRows, 'monthly_return_pct', chartTone.red)", rendered)
+        self.assertIn("const color = Number.isFinite(number) && number < 0 ? chartTone.green : positiveColor", rendered)
+        self.assertIn("signedBarColor(params.value)", rendered)
+        self.assertIn("return { value, itemStyle: { borderRadius: signedBarRadius(value), color } };", rendered)
+        self.assertIn("color: chartTone.orange", rendered)
+        self.assertIn("color: chartTone.red", rendered)
+        self.assertIn("const signedBarRadius = (value)", rendered)
+        self.assertIn("return [0, 0, 7, 7]", rendered)
+        self.assertIn("data: signedBarData('cumulative_return_pct')", rendered)
+        self.assertIn("data: signedBarData('monthly_return_pct')", rendered)
         self.assertIn("benchmarkBarData('index_return_pct')", rendered)
         self.assertNotIn("name: '相对差'", rendered)
         self.assertNotIn("benchmarkBarData('excess_pct')", rendered)
@@ -863,9 +889,123 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertTrue(chart_payload["rows"])
         self.assertIn("benchmark_excess", chart_payload)
 
-    def test_replay_summary_uses_bear_reader_summary_single_chart_rows(self):
+    def test_replay_html_promotes_pending_tplus1_actual_into_summary_payload(self):
+        settled_pair = {
+            "effective_decision_date": "2026-01-02",
+            "buy_date": "2026-01-05",
+            "sell_date": "2026-01-06",
+            "paper_strategy": {
+                "target_summary": {"primary_stock": "已结算样本(000001)"},
+                "target_evaluations": [
+                    {
+                        "stock_label": "已结算样本(000001)",
+                        "tplus2_exit_review": {
+                            "window_matrix": [
+                                {
+                                    "buy_window_id": "open_0930_0935",
+                                    "buy_window": "09:30-09:35",
+                                    "sell_window_id": "late_1430_1455",
+                                    "sell_window": "14:30-14:55",
+                                    "entry_price": 10.0,
+                                    "exit_price": 11.0,
+                                    "return_pct": 10.0,
+                                    "buy_window_entry_change_pct": 1.0,
+                                    "buy_close_near_limit": False,
+                                    "basis": "测试日线代理",
+                                }
+                            ]
+                        },
+                    }
+                ],
+            },
+        }
+        pending_pair = {
+            "effective_decision_date": "2026-01-03",
+            "buy_date": "2026-01-07",
+            "sell_date": "",
+            "paper_strategy": {
+                "target_summary": {"primary_stock": "T加一已发生(000002)"},
+                "target_evaluations": [
+                    {
+                        "stock_label": "T加一已发生(000002)",
+                        "tplus2_exit_review": {
+                            "price_path_review": {
+                                "tplus1": {
+                                    "trade_date": "2026-01-07",
+                                    "open": 20.0,
+                                    "high": 22.5,
+                                    "low": 19.8,
+                                    "close": 22.0,
+                                    "change_pct": 10.0,
+                                    "source": "测试日线",
+                                }
+                            },
+                            "window_matrix": [],
+                        },
+                    }
+                ],
+            },
+        }
+        pair_payloads = [settled_pair, pending_pair]
+        matrix_summary = sector_forward_replay._build_trade_window_matrix_summary(pair_payloads)
+        benchmark_summary = {
+            "rows": [
+                {"label": "上证指数", "cumulative_return_pct": 0.0, "coverage_note": "覆盖样本首尾"},
+                {"label": "创业板指", "cumulative_return_pct": 0.0, "coverage_note": "覆盖样本首尾"},
+                {"label": "科创50", "cumulative_return_pct": None, "coverage_note": "未覆盖样本首尾"},
+                {"label": "中证500", "cumulative_return_pct": None, "coverage_note": "未覆盖样本首尾"},
+                {"label": "全A指数", "cumulative_return_pct": 0.0, "coverage_note": "覆盖样本首尾"},
+                {"label": "中证1000", "cumulative_return_pct": 0.0, "coverage_note": "覆盖样本首尾"},
+            ]
+        }
+        comparison = sector_forward_replay._build_window_performance_comparison(
+            pair_payloads,
+            matrix_summary,
+            benchmark_summary,
+        )
+
         rendered = render_forward_replay_html(
             {
+                "pairs": pair_payloads,
+                "notes": [],
+                "sample_count": 2,
+                "summary": {
+                    "trade_window_matrix_summary": matrix_summary,
+                    "window_performance_comparison": comparison,
+                    "index_benchmark_summary": benchmark_summary,
+                },
+            }
+        )
+        chart_payload = _embedded_window_chart_payload(rendered)
+        forward_payload = _embedded_payload(rendered)
+        chart_row = next(
+            item for item in chart_payload["rows"]
+            if item["label"] == "09:30-09:35买 / 14:30-14:55卖（原始）"
+        )
+        payload_row = next(
+            item for item in forward_payload["summary"]["window_performance_comparison"]["rows"]
+            if item["label"] == "09:30-09:35买 / 14:30-14:55卖（原始）"
+        )
+        filtered_payload_row = next(
+            item for item in forward_payload["summary"]["window_performance_comparison"]["rows"]
+            if item["label"] == "09:30-09:35买 / 14:30-14:55卖（剔除开盘接近涨停）"
+        )
+
+        self.assertIn("2/2（含T+1已发生1条）", rendered)
+        self.assertIn("2/2（100.0%）", rendered)
+        self.assertEqual(chart_row["sample_text"], "2/2 含T+1")
+        self.assertEqual(chart_row["cumulative_return_pct"], 21.0)
+        self.assertEqual(chart_payload["sample_distribution"]["outcomes"][0]["count"], 2)
+        self.assertEqual(chart_payload["sample_distribution"]["pending_count"], 0)
+        self.assertEqual(chart_payload["benchmark_excess"]["items"][0]["excess_pct"], 21.0)
+        self.assertEqual(payload_row["sample_count"], 2)
+        self.assertEqual(payload_row["cumulative_return_pct"], 21.0)
+        self.assertEqual(payload_row["tplus2_settled_cumulative_return_pct"], 10.0)
+        self.assertEqual(filtered_payload_row["sample_count"], 2)
+        self.assertEqual(filtered_payload_row["cumulative_return_pct"], 21.0)
+
+    def test_replay_summary_uses_bear_reader_summary_single_chart_rows(self):
+        payload = {
                 "pairs": [],
                 "notes": [],
                 "summary": {
@@ -906,33 +1046,75 @@ class SectorForwardReplayTest(unittest.TestCase):
                     },
                 },
             }
-        )
+        expected_payload = deepcopy(payload)
+        rendered = render_forward_replay_html(payload)
 
-        self.assertIn("--reader-text: #444444", rendered)
-        self.assertIn("--reader-muted: #888888", rendered)
-        self.assertIn("--reader-line: #d9d9d9", rendered)
-        self.assertIn("--accent: #DD4C4F", rendered)
-        self.assertIn("--accent-red: #DD4C4F", rendered)
+        self.assertIn("--reader-text: #2d1712", rendered)
+        self.assertIn("--reader-muted: #6c4537", rendered)
+        self.assertIn("--reader-line: rgba(108, 69, 55, 0.14)", rendered)
+        self.assertIn("--accent: #e73922", rendered)
+        self.assertIn("--accent-red: #e73922", rendered)
+        self.assertIn("--accent-orange: #ff8a1f", rendered)
+        self.assertIn("--outline-rail-width", rendered)
         self.assertIn('class="bear-shell"', rendered)
         self.assertIn('class="outline-sidebar"', rendered)
         self.assertIn('class="reader-header"', rendered)
         self.assertIn('class="reader-document"', rendered)
         self.assertIn('class="markdown-body"', rendered)
         self.assertIn('class="reader-table replay-metric-table"', rendered)
+        self.assertIn('<h2 class="bear-section-map">区间说明</h2>', rendered)
+        self.assertIn('<h2 class="bear-section-action">回测摘要</h2>', rendered)
         self.assertIn('class="bear-chart-card" id="replay-window-matrix"', rendered)
         self.assertIn('class="bear-chart-frame is-tall"', rendered)
         self.assertIn('class="bear-chart" id="sector-window-matrix-chart"', rendered)
         self.assertIn('class="bear-chart-card" id="replay-window-excess"', rendered)
         self.assertIn('class="bear-chart" id="sector-window-excess-chart"', rendered)
         self.assertRegex(rendered, r"(?s)\.bear-chart-frame\.is-tall \{.*?height: 660px;")
-        self.assertIn("greenMist: '#EAF8EF'", rendered)
-        self.assertIn("redMist: '#F9E7E7'", rendered)
-        self.assertIn("redMatrix: '#F2B8BA'", rendered)
+        self.assertIn("const matrixPositiveRamp = ['#fff7ef', '#ffe6d1', '#ffcda2', '#f99a60', '#d95436'];", rendered)
+        self.assertIn("const matrixNegativeRamp = ['#f8fbf7', '#edf5ef', '#dbeadd', '#b9d4c0', '#84ad91'];", rendered)
+        self.assertIn("const matrixBucket = (strength) => {", rendered)
+        self.assertIn("green: '#07C160'", rendered)
+        self.assertIn("greenSoft: 'rgba(7, 193, 96, 0.16)'", rendered)
+        self.assertIn("const signedBarColor = (value) => {", rendered)
+        self.assertIn("return number < 0 ? chartTone.green : chartTone.red;", rendered)
+        self.assertIn("itemStyle: signedBarStyle", rendered)
+        metrics_card = rendered.split('id="replay-window-metrics"', 1)[1].split('id="replay-window-excess"', 1)[0]
+        self.assertIn('class="chart-tone-legend" aria-label="收益颜色说明"', metrics_card)
+        self.assertIn('class="chart-tone-swatch is-interval"', metrics_card)
+        self.assertIn('class="chart-tone-swatch is-monthly"', metrics_card)
+        self.assertIn('class="chart-tone-swatch is-negative"', metrics_card)
+        self.assertIn("区间收益</span>", metrics_card)
+        self.assertIn("月度折算参考</span>", metrics_card)
+        self.assertIn("负收益</span>", metrics_card)
+        self.assertIn(".chart-tone-swatch.is-interval", rendered)
+        self.assertIn("background: var(--accent-orange);", rendered)
+        self.assertIn(".chart-tone-swatch.is-monthly", rendered)
+        self.assertIn(".chart-tone-swatch.is-negative", rendered)
+        self.assertIn("background: #07C160;", rendered)
+        metrics_script = rendered.split("if (metricsNode && rows.length)", 1)[1].split("if (distributionNode", 1)[0]
+        self.assertIn("legend: {", metrics_script)
+        self.assertIn("{ name: '区间收益', itemStyle: { color: chartTone.orange } }", metrics_script)
+        self.assertIn("{ name: '月度折算参考', itemStyle: { color: chartTone.red } }", metrics_script)
+        self.assertIn("{ name: '负收益', itemStyle: { color: chartTone.green } }", metrics_script)
+        self.assertIn("seriesBarData(topRows, 'cumulative_return_pct', chartTone.orange)", metrics_script)
+        self.assertIn("seriesBarData(topRows, 'monthly_return_pct', chartTone.red)", metrics_script)
+        self.assertIn("topRows.map(() => null)", metrics_script)
+        self.assertNotIn("chartTone.blue", metrics_script)
+        self.assertIn("const color = Number.isFinite(number) && number < 0 ? chartTone.green : positiveColor", rendered)
+        self.assertIn("borderRadius: signedBarRadius(value), color", rendered)
         self.assertIn("visualMap: { show: false }", rendered)
         self.assertIn("backgroundColor: 'rgba(255,255,255,0.78)'", rendered)
-        self.assertIn("matrixFillColor(cell.average_return_pct, cell.is_best)", rendered)
+        self.assertIn("color: matrixFillColor(cell.average_return_pct)", rendered)
+        self.assertIn("borderColor: cell.is_best ? chartTone.red : 'rgba(255,255,255,0.92)'", rendered)
+        self.assertIn("borderWidth: cell.is_best ? 3 : 1.4", rendered)
         self.assertNotIn("inRange: { color: [chartTone.ink, chartTone.surface, chartTone.red] }", rendered)
         self.assertNotIn("chartTone.ink, chartTone.surface, chartTone.redMist", rendered)
+        self.assertNotIn("green: cssVar('--signal-green'", rendered)
+        self.assertNotIn("if (isBest) return chartTone.redMatrix", rendered)
+        self.assertNotIn("redMatrix", rendered)
+        matrix_script = rendered.split("const matrixPositiveRamp", 1)[1].split("const matrixChart", 1)[0]
+        self.assertNotIn("#45a878", matrix_script)
+        self.assertNotIn("#176e54", matrix_script)
         self.assertNotIn("#444444", rendered.split("const matrixFillColor", 1)[1].split("const matrixChart", 1)[0])
         self.assertNotIn("backgroundColor: chartTone.paper", rendered)
         self.assertNotIn("grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr)", rendered)
@@ -949,6 +1131,36 @@ class SectorForwardReplayTest(unittest.TestCase):
         self.assertNotIn("年化收益", rendered)
         self.assertIn("const chartTone = {", rendered)
         self.assertIn("chartTone.red", rendered)
+        self.assertEqual(payload, expected_payload)
+
+    def test_replay_html_stops_when_daily_reader_style_template_is_missing(self):
+        sector_forward_replay._daily_report_reader_style_text.cache_clear()
+        try:
+            with patch.object(Path, "read_text", side_effect=OSError("missing template")):
+                with self.assertRaisesRegex(RuntimeError, "回测HTML样式模板缺失，停止生成"):
+                    render_forward_replay_html({"pairs": [], "notes": [], "summary": {}})
+        finally:
+            sector_forward_replay._daily_report_reader_style_text.cache_clear()
+
+    def test_replay_style_anchor_preview_generator_renders_current_contract(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "sector_forward_replay_style_anchor.html"
+            generated_path = generate_preview(output_path)
+            rendered = generated_path.read_text(encoding="utf-8")
+
+        self.assertIn('class="bear-shell"', rendered)
+        self.assertIn('class="bear-chart-card" id="replay-window-metrics"', rendered)
+        self.assertIn('class="chart-tone-legend" aria-label="收益颜色说明"', rendered)
+        self.assertIn('class="chart-tone-swatch is-interval"', rendered)
+        self.assertIn('class="chart-tone-swatch is-monthly"', rendered)
+        self.assertIn('class="chart-tone-swatch is-negative"', rendered)
+        self.assertIn("background: #07C160;", rendered)
+        self.assertIn("{ name: '区间收益', itemStyle: { color: chartTone.orange } }", rendered)
+        self.assertIn("{ name: '月度折算参考', itemStyle: { color: chartTone.red } }", rendered)
+        self.assertIn("{ name: '负收益', itemStyle: { color: chartTone.green } }", rendered)
+        self.assertIn("color: (params) => signedBarColor(params.value)", rendered)
+        self.assertIn("const matrixPositiveRamp", rendered)
+        self.assertIn("const matrixNegativeRamp", rendered)
 
     def test_index_benchmark_requires_sample_boundary_coverage(self):
         pair_payloads = [

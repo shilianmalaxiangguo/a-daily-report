@@ -259,6 +259,60 @@ class EliminationTournamentPayloadTest(unittest.TestCase):
         self.assertIn("最终动作 1 只：", final_round)
         self.assertIn("50%条件执行", final_round)
 
+    def test_final_action_reason_includes_premarket_narrative_review_cancel(self):
+        workflow = self._workflow()
+        workflow["final"] = {
+            "execution_object": {},
+            "position_pct": 0,
+            "action_text": "50%条件执行",
+            "source_node": "N8_5",
+            "premarket_narrative_review": {
+                "status": "不参与",
+                "action_effect_label": "不参与",
+                "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+                "restore_conditions": ["同链板块不继续负反馈"],
+                "cancel_conditions": ["标的无法修复承接"],
+            },
+        }
+
+        payload = build_elimination_tournament_payload(
+            trade_date="2026-07-01",
+            variant="replay",
+            selection_workflow=workflow,
+            position_decision={"target_position_pct": 0},
+        )
+
+        self.assertEqual(payload["final_action"]["target"], {})
+        self.assertIn("盘前叙事反证复核", payload["final_action"]["reason"])
+        self.assertIn("Meta拟对外出售算力", payload["final_action"]["reason"])
+        self.assertIn("不参与", payload["final_action"]["reason"])
+        self.assertNotIn("50%条件执行", payload["final_action"]["reason"])
+
+    def test_final_action_reason_reads_top_level_premarket_narrative_review(self):
+        workflow = self._workflow()
+        workflow["premarket_narrative_review"] = {
+            "status": "不参与",
+            "action_effect_label": "不参与",
+            "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+        }
+        workflow["final"] = {
+            "execution_object": {},
+            "position_pct": 0,
+            "action_text": "50%条件执行",
+            "source_node": "N8_5",
+        }
+
+        payload = build_elimination_tournament_payload(
+            trade_date="2026-07-01",
+            variant="replay",
+            selection_workflow=workflow,
+            position_decision={"target_position_pct": 0},
+        )
+
+        self.assertIn("盘前叙事反证复核", payload["final_action"]["reason"])
+        self.assertIn("Meta拟对外出售算力", payload["final_action"]["reason"])
+        self.assertNotIn("50%条件执行", payload["final_action"]["reason"])
+
     def test_missing_evidence_is_explicit(self):
         workflow = self._workflow()
         workflow["candidate_pool"] = [workflow["candidate_pool"][0]]

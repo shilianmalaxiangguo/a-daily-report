@@ -188,6 +188,149 @@ class ReportAcceptanceAuditTest(unittest.TestCase):
         self.assertEqual(result["findings"], [])
         self.assertTrue(result["passed"])
 
+    def test_audit_flags_limit_down_execution_object_without_reversal_plan(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_ignores_limit_down_process_candidate_tail_reference_to_execution_object(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：狙击手最终标的完整路径图（过程证据）\n"
+            + "|-- 来源序号=34 来源=selection_workflow.candidate_pool 候选=多氟多(002407) 身份=过程候选 去向=被淘汰 "
+            + "原因=热榜第4+涨幅-10.0%，仅作热度观察；同日跌幅-10.00%，按跌停/接近跌停处理；"
+            + "如要参与必须写成跌停反包专项，并给出执行窗口、作废线和回到0%的条件"
+            + "（过程证据，不覆盖唯一明日动作：富瀚微(300613)）\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_ignores_market_limit_down_clause_after_execution_object_clause(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n**状态依据**：最终只看明日执行对象富瀚微(300613)的执行资格；"
+            + "收缩防守；跌停、涨跌比或仓位限制已经进入收缩区，市场先谈防守。\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_allows_limit_down_execution_object_with_explicit_reversal_plan(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 跌停反包专项：只看09:50-10:10窗口，站不回VWAP或跌破认错线就回到0%不参与 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_allows_explicit_limit_down_reversal_plan_with_tail_window(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 跌停反包专项：只看14:30-14:55窗口，站不回VWAP或跌破认错线就回到0%不参与 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertNotIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_flags_bare_anti_nuclear_without_special_reversal_contract(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 反核：只看09:50-10:10窗口，失败就不参与 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_flags_bare_reversal_special_without_limit_down_contract(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 反包专项：只看09:50-10:10窗口，跌破认错线回到0%不参与 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
+    def test_audit_flags_plain_reversal_text_combined_with_limit_down_fact(self):
+        markdown = (
+            GOOD_MARKDOWN.replace(
+                "| 明日动作 | 只看唯一对象，按昨晚预案检查执行资格；不满足取消 |",
+                "| 明日动作 | 普通反包观察：只看09:50-10:10窗口，跌破认错线回到0%不参与 |\n"
+                "| 明日执行对象 | 富瀚微(300613) |",
+            )
+            + "\n### 附录：热度核心结果\n"
+            + "| 排名 | 股票 | 代码 | 涨跌幅 | 连板标签 |\n"
+            + "|------|------|------|--------|----------|\n"
+            + "| 1 | 富瀚微 | 300613 | -10.00% | 跌停 |\n"
+        )
+
+        result = audit_report_markdown(markdown)
+        codes = {finding["code"] for finding in result["findings"]}
+
+        self.assertIn("front_execution_object_limit_down_without_reversal_plan", codes)
+
     def test_audit_accepts_derivation_chain_process_candidate_when_final_anchor_matches(self):
         markdown = GOOD_MARKDOWN.replace(
             "| 唯一对象 | 富瀚微(300613) |",

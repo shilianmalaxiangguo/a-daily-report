@@ -41,6 +41,72 @@ def _format_amount_yi(value):
         return str(value)
 
 
+def _safe_int(value, default=0):
+    try:
+        if value in (None, ""):
+            return int(default)
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _count_payload_items(payload, list_key, count_key):
+    if not isinstance(payload, dict):
+        return 0
+    rows = payload.get(list_key)
+    if isinstance(rows, list):
+        return len(rows)
+    return _safe_int(payload.get(count_key))
+
+
+def _xuangubao_count_breakdown(context):
+    payload = _context_value(context, "xuangubao_data", {}) or {}
+    counts = {
+        "news": _count_payload_items(payload, "xuangubao_news", "news_count"),
+        "plates": _count_payload_items(payload, "xuangubao_plates", "plate_count"),
+        "limit_up_reasons": _count_payload_items(
+            payload,
+            "xuangubao_limit_up_reasons",
+            "limit_up_reason_count",
+        ),
+    }
+    if any(counts.values()):
+        return counts
+    request_logs = ((_context_value(context, "request_diagnostics", {}) or {}).get("request_logs") or [])
+    for item in reversed(request_logs):
+        if not isinstance(item, dict) or item.get("step") != "request.xuangubao":
+            continue
+        details = item.get("details") if isinstance(item.get("details"), dict) else item
+        return {
+            "news": _safe_int(details.get("news_count")),
+            "plates": _safe_int(details.get("plate_count")),
+            "limit_up_reasons": _safe_int(details.get("limit_up_reason_count")),
+        }
+    return counts
+
+
+def _xuangubao_breakdown_text(counts):
+    counts = counts or {}
+    return "新闻{}条 / 盘面{}个 / 涨停解释{}条".format(
+        _safe_int(counts.get("news")),
+        _safe_int(counts.get("plates")),
+        _safe_int(counts.get("limit_up_reasons")),
+    )
+
+
+def _append_xuangubao_breakdown_rows(lines, counts):
+    for label, key, unit in (
+        ("选股通新闻", "news", "条"),
+        ("选股通盘面", "plates", "个"),
+        ("选股通涨停解释", "limit_up_reasons", "条"),
+    ):
+        count = _safe_int((counts or {}).get(key))
+        status_icon = "✅" if count > 0 else "❌"
+        status_text = "成功" if count > 0 else "失败"
+        note = f"{count}{unit}" if count > 0 else f"{count}{unit}，未返回明细"
+        lines.append(f"| {label} | {status_icon} {status_text} | {note} |")
+
+
 def _display_latest_first(rows):
     return list(reversed(list(rows or [])))
 
@@ -222,7 +288,13 @@ def _build_appendix_data_status_node(context, node_meta=None, node_lookup=None):
         for key, value in data_status.items():
             status_icon = "✅" if value else "❌"
             status_text = "成功" if value else "失败"
-            lines.append(f"| {key} | {status_icon} {status_text} | {'数据正常' if value else '数据缺失或获取失败'} |")
+            note = "数据正常" if value else "数据缺失或获取失败"
+            if key == "选股通盘中异动":
+                xuangubao_counts = _xuangubao_count_breakdown(context)
+                note = _xuangubao_breakdown_text(xuangubao_counts)
+            lines.append(f"| {key} | {status_icon} {status_text} | {note} |")
+            if key == "选股通盘中异动":
+                _append_xuangubao_breakdown_rows(lines, xuangubao_counts)
     else:
         lines.append("| 无状态数据 | ❌ 失败 | 状态跟踪未启用 |")
     lines.append("")

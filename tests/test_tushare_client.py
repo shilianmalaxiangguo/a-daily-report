@@ -62,6 +62,52 @@ class TushareClientTest(unittest.TestCase):
         self.assertEqual(calls, [{"token": "dotenv-token", "timeout": client.TUSHARE_TIMEOUT_SECONDS}])
         self.assertEqual(pro._DataApi__http_url, "http://dotenv-proxy.invalid")
 
+    def test_check_tushare_runtime_ready_returns_success_for_index_basic(self):
+        from market_data.tushare_client import check_tushare_runtime_ready
+
+        calls = []
+
+        class FakePro:
+            def index_basic(self, **kwargs):
+                calls.append(("index_basic", kwargs))
+                return [{"ts_code": "000001.SH"}]
+
+        class FakeTs:
+            def pro_api(self, token="", timeout=30):
+                calls.append(("pro_api", {"token": token, "timeout": timeout}))
+                return FakePro()
+
+        result = check_tushare_runtime_ready(
+            ts_module=FakeTs(),
+            token="token-x",
+            http_url="http://proxy.invalid/",
+            timeout_seconds=2,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["provider"], "tushare.pro.index_basic")
+        self.assertEqual(result["checks"][0]["row_count"], 1)
+        self.assertEqual(calls[0], ("pro_api", {"token": "token-x", "timeout": 2}))
+        self.assertEqual(calls[1], ("index_basic", {"limit": 1}))
+
+    def test_check_tushare_runtime_ready_redacts_token_on_failure(self):
+        from market_data.tushare_client import check_tushare_runtime_ready
+
+        class FakePro:
+            def index_basic(self, **kwargs):
+                raise RuntimeError("bad token dotenv-token")
+
+        class FakeTs:
+            def pro_api(self, token="", timeout=30):
+                return FakePro()
+
+        result = check_tushare_runtime_ready(ts_module=FakeTs(), token="dotenv-token")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_type"], "RuntimeError")
+        self.assertIn("***", result["error_message"])
+        self.assertNotIn("dotenv-token", result["error_message"])
+
     def test_tushare_risk_fetchers_call_expected_pro_endpoints(self):
         from market_data.tushare_market_activity_service import (
             fetch_tushare_announcement_rows,

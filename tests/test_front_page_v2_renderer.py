@@ -111,6 +111,23 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             "reason": "处于进攻准备期，先按50%条件执行，不开放100%核心进攻。",
                         },
                     },
+                    "two_layer_decision_payload": {
+                        "front_decision": {
+                            "execution_identity": "明日执行对象",
+                            "position_plan": "50%条件执行",
+                            "execution_object": {
+                                "name": "太极实业",
+                                "code": "600667",
+                                "sector": "AI算力基础设施",
+                            },
+                        },
+                        "b_level_conditions": {
+                            "active_attack": {
+                                "window": "09:30-09:35",
+                                "money_confirmation": "分时大单净流入达标",
+                            }
+                        },
+                    },
                 },
             )
         )
@@ -404,12 +421,76 @@ class FrontPageV2RendererTest(unittest.TestCase):
                         },
                     },
                 },
-                final_gate={"can_new_entry": True, "final_action": "50%条件执行"},
             )
         )
 
         self.assertIn("001896 豫能控股（电力）", rendered)
         self.assertNotIn("600688 上海石化", rendered)
+
+    def test_front_page_renders_premarket_narrative_review_cancel_from_selection_workflow(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-01",
+                market_research_snapshot={
+                    "position_decision": {"signal_grade": "100", "target_position_pct": 100},
+                    "selection_workflow": {
+                        "schema_version": "selection_workflow.v1",
+                        "premarket_narrative_review": {
+                            "status": "不参与",
+                            "action_effect": "no_participation",
+                            "action_effect_label": "不参与",
+                            "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+                            "reason_chain": [
+                                "AI算力和存储紧缺",
+                                "Meta拟对外出售算力",
+                                "韩国海力士和三星确认",
+                                "太极实业直接暴露",
+                                "满仓条件执行取消为不参与",
+                            ],
+                            "restore_conditions": ["同链板块不继续负反馈"],
+                            "cancel_conditions": ["标的无法修复承接"],
+                        },
+                        "final": {
+                            "execution_object": {},
+                            "position_pct": 0,
+                            "action_text": "0%不参与",
+                            "source_node": "N8_5",
+                            "premarket_narrative_review": {
+                                "status": "不参与",
+                                "action_effect": "no_participation",
+                                "action_effect_label": "不参与",
+                                "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+                                "reason_chain": [
+                                    "AI算力和存储紧缺",
+                                    "Meta拟对外出售算力",
+                                    "韩国海力士和三星确认",
+                                    "太极实业直接暴露",
+                                    "满仓条件执行取消为不参与",
+                                ],
+                                "restore_conditions": ["同链板块不继续负反馈"],
+                                "cancel_conditions": ["标的无法修复承接"],
+                            },
+                        },
+                    },
+                },
+            )
+        )
+
+        self.assertIn("| 盘前叙事反证复核 | 不参与", rendered)
+        self.assertIn("Meta拟对外出售算力", rendered)
+        self.assertIn("动作上限：不参与", rendered)
+        self.assertIn("同链板块不继续负反馈", rendered)
+        candidate_section = rendered[rendered.index("## 五、个股解读") : rendered.index("## 六、明日执行计划")]
+        final_section = rendered[rendered.index("## 七、最终结论") :]
+        self.assertIn("| 明日仓位 | 0%不参与 |", candidate_section)
+        self.assertIn("| 0%不参与", final_section)
+        self.assertIn("盘前叙事反证复核见个股解读", final_section)
+        self.assertNotIn("Meta拟对外出售算力", final_section)
+        self.assertNotIn("| 明日仓位 | 100%核心进攻 |", candidate_section)
+        self.assertNotIn("50%条件执行", candidate_section + final_section)
+        self.assertNotIn("| 执行目标 | 太极实业(600667) |", candidate_section)
+        self.assertNotIn("| 明日执行对象 | 太极实业(600667) |", candidate_section)
 
     def test_front_page_promotes_selected_candidate_to_50_when_zero_has_no_strong_reason(self):
         rendered = "\n".join(
@@ -482,6 +563,29 @@ class FrontPageV2RendererTest(unittest.TestCase):
             "| 不参与依据 | 空仓等待，禁止参与；若你有仓位，只做退出不做幻想；只处理旧仓，不新增参与。 |",
             rendered,
         )
+
+    def test_front_page_zero_participation_keeps_inferred_default_old_position(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-02",
+                market_research_snapshot={
+                    "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
+                        "inferred_from_previous_report": True,
+                        "position_source": "previous_report_target_default_1x",
+                    },
+                },
+                final_gate={"can_new_entry": False, "final_action": "空仓等待，禁止参与；若你有仓位，只做退出不做幻想"},
+            )
+        )
+
+        self.assertIn("| 明日仓位 | 0%新仓；旧仓处理 |", rendered)
+        self.assertIn("| 旧仓处理 | 持有太极实业(600667)，100%仓位", rendered)
+        self.assertIn("| 不参与依据 | 已有旧仓先按持仓预案处理；不新增参与。 |", rendered)
+        self.assertNotIn("| 明日仓位 | 0%不参与 |", rendered)
 
     def test_front_page_unique_action_prefers_structured_required_steps(self):
         rendered = "\n".join(
@@ -1687,6 +1791,70 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
         self.assertIn("| 当前持仓 | 持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理 |", account_section)
         self.assertIn("| 明日执行目标 | 太极实业(600667)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 新开仓上限 | 条件满足后1 |", account_section)
+        self.assertNotIn("先处理旧仓", account_section)
+
+    def test_front_page_t0_card_keeps_inferred_default_old_position_separate_from_new_target(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-02",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
+                        "inferred_from_previous_report": True,
+                        "position_source": "previous_report_target_default_1x",
+                        "default_position_pct": 100.0,
+                    },
+                    "selected_position_candidate": {
+                        "name": "工业富联",
+                        "code": "601138",
+                        "sector": "通信设备",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "工业富联",
+                            "code": "601138",
+                            "sector": "通信设备",
+                        },
+                        "account_exposure_plan": {
+                            "schema_version": "full_or_empty_exposure.v1",
+                            "old_position_1x": True,
+                            "new_entry_1x": True,
+                            "possible_intraday_overlap_2x": True,
+                            "max_runtime_exposure_x": 2,
+                            "old_position_label": "太极实业(600667)",
+                            "new_entry_label": "工业富联(601138)",
+                            "policy": "旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x",
+                        },
+                        "capital_priority_decision": {
+                            "capital_priority": "new_entry",
+                            "reason": "旧仓默认1x按旧路径处理；新开仓对象具备执行资格时，按固定交易窗口确认，可与旧仓分账判断",
+                        },
+                    },
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；已有持仓继续独立评估 |", account_section)
+        self.assertIn(
+            "| 明日动作 | 持仓独立评估；工业富联(601138)按昨晚预案检查执行资格；不满足回到0%不参与 |",
+            account_section,
+        )
+        self.assertIn(
+            "| 当前持仓 | 持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格 |",
+            account_section,
+        )
+        self.assertIn("| 账户风险暴露 | 旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x |", account_section)
+        self.assertIn("| 明日执行目标 | 工业富联(601138)：固定交易窗口条件 |", account_section)
         self.assertIn("| 新开仓上限 | 条件满足后1 |", account_section)
         self.assertNotIn("先处理旧仓", account_section)
 
@@ -3383,9 +3551,9 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 明日动作 | 先处理旧仓，不新增参与 |", account_section)
         self.assertIn("| 旧仓处理 | 华电辽能(600396)：已有仓先按MA5T处理 |", account_section)
         self.assertIn("| 观察对象 | 工业富联(601138)：观察对象，未出现执行资格前不新增参与 |", account_section)
-        self.assertIn("| 明日仓位 | 0%不参与 |", stock_section)
+        self.assertIn("| 明日仓位 | 0%新仓；旧仓处理 |", stock_section)
         self.assertIn("| 执行目标 | 无 |", stock_section)
-        self.assertIn("| 不参与依据 | 约1w账户先处理已有仓，工业富联只保留观察对象；只处理旧仓，不新增参与。 |", stock_section)
+        self.assertIn("| 不参与依据 | 已有旧仓先按持仓预案处理；不新增参与。 |", stock_section)
         self.assertIn("| 观察对象 | 601138 工业富联（通信设备） |", stock_section)
         self.assertIn("| 明日观察动作 | 标的 | 观察窗 | 条件 | 不满足怎么办 |", execution_section)
         self.assertIn("| 只看观察对象 | 601138 工业富联（通信设备） | 09:50-10:10 | 板块锚承接继续 | 不满足继续观察 |", execution_section)

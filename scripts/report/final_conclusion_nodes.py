@@ -246,6 +246,8 @@ def build_final_conclusion_full_stage_rows_node(context, node_meta=None, node_lo
             "selected_position_candidate": context.get("selected_position_candidate"),
             "position_decision": context.get("position_decision"),
             "final_target_resolution": context.get("final_target_resolution") or {},
+            "existing_position_summary": context.get("existing_position_summary") or {},
+            "personal_position_context": context.get("personal_position_context") or {},
             "position_level": context.get("position_level", ""),
             "trade_style": context.get("trade_style", ""),
             "abnormal_probe_parts": context.get("abnormal_probe_parts") or [],

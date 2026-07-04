@@ -87,9 +87,9 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("padding-left: 18px", html)
         self.assertIn("width: 3px", html)
         self.assertIn("linear-gradient(90deg, var(--timeline-grid-line) 1px, transparent 1px)", html)
-        self.assertIn("--timeline-row-accent: #007aff", html)
-        self.assertIn("--timeline-row-accent: #ff9500", html)
-        self.assertIn("--timeline-row-accent: #30b0c7", html)
+        self.assertIn("--timeline-row-accent: #e73922", html)
+        self.assertIn("--timeline-row-accent: #ff8a1f", html)
+        self.assertIn("--timeline-row-accent: #176e54", html)
         self.assertNotIn("mermaid.min.js", html)
         self.assertNotIn("bear-gantt-shell", html)
 
@@ -212,7 +212,13 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
 
         self.assertIn("当前日报", html)
         self.assertIn("outline-sticky", html)
-        self.assertIn("position: sticky", html)
+        self.assertIn("--outline-rail-width: calc(var(--outline-width) + 36px)", html)
+        self.assertIn("position: fixed", html)
+        self.assertIn("width: var(--outline-rail-width)", html)
+        self.assertIn("height: 100vh", html)
+        self.assertIn("margin-left: var(--outline-rail-width)", html)
+        self.assertIn("margin-left: 0", html)
+        self.assertNotIn("grid-template-columns: minmax(224px, var(--outline-width))", html)
         self.assertIn("is-active", html)
         self.assertIn('class="level-1 is-active" aria-current="true"', html)
         self.assertIn("scrollIntoView", html)
@@ -222,6 +228,9 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("replaceState", html)
         self.assertIn("forcedActiveId", html)
         self.assertIn("releaseForcedActive", html)
+        self.assertIn("linkByAnchor", html)
+        self.assertIn("headingOffsets", html)
+        self.assertIn("refreshHeadingOffsets", html)
         self.assertIn("scrollActiveIntoOutline", html)
         self.assertIn("outline.scrollTo", html)
         self.assertNotIn('behavior: "smooth"', html)
@@ -232,13 +241,12 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn("window.setTimeout", html)
         self.assertNotIn("activeLink.scrollIntoView", html)
         self.assertIn(".outline-nav a.is-active::before", html)
-        self.assertIn("background: var(--accent)", html)
+        self.assertIn("background: linear-gradient(145deg, rgba(231, 57, 34, 0.92), rgba(255, 138, 31, 0.82))", html)
         self.assertIn("transform: translateY(-50%)", html)
         self.assertIn("hashAnchor", html)
         self.assertNotIn('link.style.setProperty("color"', html)
         self.assertNotIn('link.style.setProperty("background-color"', html)
         self.assertNotIn('link.style.setProperty("border-left-color"', html)
-        self.assertNotIn(".outline-nav a.is-active {\n", html)
         self.assertIn('window.addEventListener("wheel"', html)
         self.assertIn('window.addEventListener("mousedown"', html)
         self.assertIn('window.addEventListener("hashchange"', html)
@@ -248,10 +256,30 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('data-outline-anchor="市场基底"', html)
         self.assertIn('class="level-3" href="#今日判断" data-outline-anchor="今日判断"', html)
         self.assertIn("--editor-width: 1120px", html)
-        self.assertIn("--reader-text: #444444", html)
-        self.assertIn("--accent: #DD4C4F", html)
-        self.assertIn("--accent-soft-text: #DD4C4F", html)
-        self.assertIn("--signal-green: #07C160", html)
+        self.assertIn("--reader-bg: #fff9ef", html)
+        self.assertIn("--reader-text: #2d1712", html)
+        self.assertIn("--reader-muted: #6c4537", html)
+        self.assertIn("--accent: #e73922", html)
+        self.assertIn("--accent-orange: #ff8a1f", html)
+        self.assertIn("--accent-soft-text: #7d231b", html)
+        self.assertIn("--signal-green: #176e54", html)
+        self.assertIn("background: var(--reader-bg)", html)
+        self.assertNotIn("linear-gradient(145deg, #fffaf2 0%, #ffe9d0 48%, #ffd0bd 100%)", html)
+        self.assertNotIn("radial-gradient(circle at 18% 0%", html)
+        self.assertIn("contain: paint", html)
+        self.assertNotIn("backdrop-filter", html)
+        self.assertNotIn("body::before", html)
+        self.assertNotIn("bear-shell::before", html)
+        self.assertNotIn("mix-blend-mode", html)
+        self.assertNotIn("animation: drift-dots", html)
+        self.assertNotIn("@keyframes drift-dots", html)
+        self.assertIn('text: cssValue("--reader-text", "#2d1712")', html)
+        self.assertIn('muted: cssValue("--reader-muted", "#6c4537")', html)
+        self.assertIn('line: cssValue("--reader-line", "rgba(108, 69, 55, 0.14)")', html)
+        self.assertIn('red: cssValue("--accent-red", "#e73922")', html)
+        self.assertIn('green: cssValue("--signal-green", "#176e54")', html)
+        self.assertIn('surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)")', html)
+        self.assertIn('color: ["rgba(231,57,34,0.58)", chartTone.red]', html)
         self.assertIn("font-size: 15px", html)
         self.assertIn("pre.fenced-code", html)
         self.assertIn('<pre class="fenced-code"><code class="fenced-code-content" lang="sql">', html)
@@ -316,6 +344,54 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("<code>华电辽能(600396)</code>", html)
         self.assertNotIn('<code class="stock-ref">华电辽能(600396)</code>', html)
         self.assertIn("普通说明(不是代码)不变", html)
+
+    def test_render_marks_action_and_evidence_sections_for_bear_reader(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 2026-07-03 A股日报",
+                    "",
+                    "## 阅读地图",
+                    "| 顺序 | 模块 |",
+                    "|---:|---|",
+                    "| 1 | 明日执行结论 |",
+                    "",
+                    "## 日报裁决总览",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 最终对象 | 明日执行对象：太极实业(600667) |",
+                    "",
+                    "## 明日执行结论",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 明日执行对象 | 太极实业(600667) |",
+                    "",
+                    "## 满仓条件执行条件",
+                    "| 触发类型 | 必须满足 |",
+                    "|----------|----------|",
+                    "| 低开承接型 | 回踩确认 |",
+                    "",
+                    "## 不执行条件",
+                    "- 市场继续走弱",
+                    "",
+                    "## 板块资金扩散淘汰赛",
+                    "| 层级 | 输入 |",
+                    "|---|---:|",
+                    "| 唯一明日动作 | 1 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-03",
+        )
+
+        self.assertIn('<h2 class="bear-section-map" id="阅读地图">阅读地图</h2>', html)
+        self.assertIn('<h2 class="bear-section-action" id="明日执行结论">明日执行结论</h2>', html)
+        self.assertIn('<h2 class="bear-section-action" id="满仓条件执行条件">满仓条件执行条件</h2>', html)
+        self.assertIn('<h2 class="bear-section-action" id="不执行条件">不执行条件</h2>', html)
+        self.assertIn('<h2 class="bear-section-evidence" id="板块资金扩散淘汰赛">板块资金扩散淘汰赛</h2>', html)
+        self.assertLess(html.index('id="明日执行结论"'), html.index('id="板块资金扩散淘汰赛"'))
+        self.assertIn(".markdown-body h2.bear-section-action", html)
+        self.assertIn(".markdown-body h2.bear-section-evidence", html)
 
     def test_render_cycle_calendar_keeps_sector_color_markup_safe(self):
         html = render_markdown_report_html(

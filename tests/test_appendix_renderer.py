@@ -64,6 +64,52 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertIn("**报告版本**: v2.5.0", rendered)
         self.assertIn("**数据日期**: 2026-04-22", rendered)
 
+    def test_render_execution_appendix_splits_xuangubao_counts(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["data_status"],
+                "data_status": {"选股通盘中异动": True},
+                "xuangubao_data": {
+                    "news_count": 46,
+                    "plate_count": 22,
+                    "limit_up_reason_count": 156,
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 选股通盘中异动 | ✅ 成功 | 新闻46条 / 盘面22个 / 涨停解释156条 |", rendered)
+        self.assertIn("| 选股通新闻 | ✅ 成功 | 46条 |", rendered)
+        self.assertIn("| 选股通盘面 | ✅ 成功 | 22个 |", rendered)
+        self.assertIn("| 选股通涨停解释 | ✅ 成功 | 156条 |", rendered)
+
+    def test_render_execution_appendix_splits_xuangubao_counts_from_request_log(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["data_status"],
+                "data_status": {"选股通盘中异动": True},
+                "request_diagnostics": {
+                    "request_logs": [
+                        {
+                            "step": "request.xuangubao",
+                            "status": "success",
+                            "details": {
+                                "news_count": 46,
+                                "plate_count": 22,
+                                "limit_up_reason_count": 156,
+                            },
+                        }
+                    ]
+                },
+            }
+        )
+
+        rendered = "\n".join(lines)
+
+        self.assertIn("| 选股通盘中异动 | ✅ 成功 | 新闻46条 / 盘面22个 / 涨停解释156条 |", rendered)
+        self.assertIn("| 选股通新闻 | ✅ 成功 | 46条 |", rendered)
+
     def test_render_execution_appendix_counts_request_degraded_rows_in_summary(self):
         lines = render_execution_appendix(
             {

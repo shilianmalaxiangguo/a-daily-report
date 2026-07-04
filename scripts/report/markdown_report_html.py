@@ -473,6 +473,37 @@ def _heading_anchor(title: str, used: dict[str, int]) -> str:
     return normalized
 
 
+_ACTION_H2_TITLES = {
+    "日报裁决总览",
+    "明日执行结论",
+    "满仓条件执行条件",
+    "50%条件执行条件",
+    "50%执行条件",
+    "满仓执行条件",
+    "不执行条件",
+}
+
+_EVIDENCE_H2_TITLES = {
+    "板块资金扩散淘汰赛",
+    "板块资金载体预案",
+    "板块资金载体差异复核",
+    "T0推演T+1/T+2交易环境",
+}
+
+
+def _heading_class(level: int, title: str) -> str:
+    if level != 2:
+        return ""
+    plain_title = _plain_cell_text(title)
+    if plain_title == "阅读地图":
+        return "bear-section-map"
+    if plain_title in _ACTION_H2_TITLES:
+        return "bear-section-action"
+    if plain_title in _EVIDENCE_H2_TITLES:
+        return "bear-section-evidence"
+    return ""
+
+
 def _parse_iso_date(value: str):
     import datetime as _dt
 
@@ -1982,9 +2013,11 @@ def render_markdown_report_html(
                 index += 1
                 continue
             anchor = _heading_anchor(heading_title, used_anchors)
+            heading_class = _heading_class(level, heading_title)
+            class_attr = f' class="{heading_class}"' if heading_class else ""
             headings.append(Heading(level=level, title=heading_title, anchor=anchor))
             fragments.append(
-                f'<h{level} id="{_html(anchor)}">'
+                f'<h{level}{class_attr} id="{_html(anchor)}">'
                 f'{_heading_inline(heading_match.group(2), stock_refs, section_title=heading_title)}</h{level}>'
             )
             sector_chart = bear_chart_payload.get("sector_turnover_share")

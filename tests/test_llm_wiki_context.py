@@ -45,6 +45,9 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("参与时机 -> open_core开盘核心 / ten_confirm 09:50-10:10窗口 / tail_exception尾盘14:30-14:55例外 / no_trade不交易", context["field_mappings"])
         self.assertIn("买卖窗口期 -> 只在09:30-09:35、09:50-10:10、14:30-14:55三段处理买卖；窗口外不新增买卖动作，只等待下一窗口或处理既定风险", context["field_mappings"])
         self.assertIn("Ta/Tb/Tc日序表 -> Ta旧仓按T+2优先退出，Tb只来自今晚明日目标，空仓必须写没有Tb+0/没有Tc+0", context["field_mappings"])
+        self.assertIn("上一日明日标的继承 -> 上一份日报写出的明日标的若次日按计划买入，本日报自动视为默认1x旧仓，除非用户输入真实持仓覆盖或上一份日报无目标", context["field_mappings"])
+        self.assertIn("1x/2x盘中交叉 -> 每个明日标的默认1x满仓信号；2x只来自旧仓1x未卖且新买1x成交的盘中重叠，不是单票开盘前自动加仓", context["field_mappings"])
+        self.assertIn("空仓日旧仓处理 -> 明日标的为空时没有新买对象，继承旧仓只按旧仓盈亏比和失效条件处理，越早回到空仓越符合空仓结论", context["field_mappings"])
         self.assertIn("统一来源 -> 日报写入decision-ledger planned_participation，报告和复盘只消费同一份结构化计划，不各自重算", context["field_mappings"])
         self.assertIn("极度看好复盘 -> 日报生成时用行情表回写participation_review，封死买不到不算收益命中", context["field_mappings"])
         self.assertIn("明日主买对象 -> 非0%且参与资格成立时给1只主买和1只补位；最终0%时统一降为候选观察", context["field_mappings"])
@@ -56,6 +59,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("隐藏买卖盘 -> 顶部锚点冲不过按隐藏卖盘和止盈观察，底部锚点必须站回VWAP并在09:50-10:10窗口承接稳定才允许试错", context["field_mappings"])
         self.assertIn("量化共同选择 -> 昨日持筹者、明日新买盘、主线资金、量化动量四方一致后才提高参与质量", context["field_mappings"])
         self.assertIn("高潮反包 -> 高潮后反包优先按先手兑现点，放量吃掉压力并回踩不破才恢复候选", context["field_mappings"])
+        self.assertIn("太极实业跌停N字样本 -> 入选不是因为跌停本身，而是上一日报明日标的继承、半导体/AI硬件关注、容量成交热度、关键价带和结构性外部事件共同触发次日验证", context["field_mappings"])
         self.assertIn("最终风险复核 -> 公告风险、连续长上影未修复、跌破对应卖点线收不回，取消主买和补位资格", context["field_mappings"])
         self.assertIn("趋势审美复核 -> 明日极度看好先看近120日日K，上升趋势/平台震荡/缩量回踩有承接才保留；A杀/放量下杀/反抽不过关键线/高低点下移只观察", context["field_mappings"])
         self.assertIn("选股形态审美 -> 先看120日日K的呼吸感、蛇形走位、重心上移、平台消化和缩量回踩；A杀、破位弱反抽、放量下杀不参与", context["field_mappings"])
@@ -218,7 +222,7 @@ class LlmWikiContextTest(unittest.TestCase):
         self.assertIn("用户可见输出不用旧工程口径，改用资格/条件/可做/参与/不参与", context["report_boundaries"])
         self.assertIn("fresh daily generation uses Tushare-first", context["data_source_policy"])
         self.assertIn("akshare/iwencai are fallback only", context["data_source_policy"])
-        self.assertIn("daily report runtime writes reports, snapshots, and PostgreSQL facts only", context["publish_policy"])
+        self.assertIn("daily report runtime writes reports, report companion docs, snapshots, and PostgreSQL facts only", context["publish_policy"])
         self.assertIn("retired frontend/static publish paths are not part of report generation", context["publish_policy"])
 
     def test_build_llm_wiki_context_exposes_selection_shape_ascii_flow(self):
@@ -1101,6 +1105,29 @@ class LlmWikiContextTest(unittest.TestCase):
             "证据不足处理 -> 没有价格接受或反证解除时，不取得新增参与资格，只观察恢复条件",
         ]:
             self.assertIn(required, field_mappings)
+
+    def test_change_companion_docs_contract_enters_llm_wiki_context(self):
+        context = build_llm_wiki_context()
+        wiki_text = (ROOT / "wiki/运行契约/LLM Wiki维护与路由契约.md").read_text(encoding="utf-8")
+        readme_text = (ROOT / "wiki/README.md").read_text(encoding="utf-8")
+
+        for required in [
+            "需求变更与日报伴随文档",
+            "AGENTS.md",
+            "flow.md",
+            "testing.md",
+            "readme.md",
+            "为什么选中它、为什么没选别人、在哪一步退出",
+            "reports/<日期>_A股日报_伴随文档/",
+            "reports/replay/<日期>_A股日报_伴随文档_replay/",
+        ]:
+            self.assertIn(required, wiki_text)
+
+        self.assertIn("AGENTS.md` / `flow.md` / `testing.md` / `readme.md", readme_text)
+        self.assertIn(
+            "变更伴随文档 -> 每次需求变更和每次生成日报时，同步生成AGENTS.md、flow.md、testing.md、readme.md四个伴随文件；日报伴随目录随reports/replay路径落盘，不写项目根目录；必须能复盘边界、流程、验证和入口",
+            context["field_mappings"],
+        )
 
 
 if __name__ == "__main__":

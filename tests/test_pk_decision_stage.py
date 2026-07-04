@@ -277,7 +277,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "position_context_provided": True,
                 "existing_position_summary": {
                     "has_position": True,
-                    "summary": "上一份日报目标 太极实业(600667)，本日报按旧仓路径复核。",
+                    "summary": "持有太极实业(600667)，100%仓位，上一份日报明日标的默认1x旧仓；新仓是否叠加单独看Tb/Tc资格",
+                    "default_position_pct": 100.0,
+                    "position_source": "previous_report_target_default_1x",
                     "inferred_from_previous_report": True,
                 },
                 "best_stock": None,
@@ -290,8 +292,8 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         panel_fields = result["exports"]["candidate_quality_panel_fields"]
-        self.assertEqual(panel_fields["account_attention_load"], "旧路径需复核")
-        self.assertEqual(panel_fields["holding_priority_action"], "旧路径与明日目标分开处理")
+        self.assertEqual(panel_fields["account_attention_load"], "默认1x旧仓需复核")
+        self.assertEqual(panel_fields["holding_priority_action"], "旧仓按旧路径处理；新机会按自身资格判断")
 
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(
@@ -749,6 +751,49 @@ class PkDecisionStageTest(unittest.TestCase):
         rendered = "\n".join(result["exports"]["position_section_lines"])
         self.assertIn("不新增参与", rendered)
         self.assertNotIn("禁止任何买入", rendered)
+
+    def test_action_plan_context_keeps_existing_position_when_no_new_target(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": False},
+                "has_personal_positions": True,
+                "position_context_provided": True,
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新开仓0手",
+                },
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+            }
+        )
+
+        exports = result["exports"]
+        rendered = "\n".join(
+            exports["position_section_lines"]
+            + [
+                f"{row.get('action')} {row.get('name')} {row.get('trigger')}"
+                for row in exports["action_rows"]
+            ]
+            + exports["pre_market_lines"]
+            + exports["opening_lines"]
+            + exports["first_hour_lines"]
+            + exports["intraday_lines"]
+            + exports["closing_lines"]
+        )
+
+        self.assertIn("已有旧仓：持有太极实业(600667)，100%仓位", rendered)
+        self.assertIn("0%新仓；只处理旧仓，不新增参与", rendered)
+        self.assertIn("🟠 只处理旧仓 旧仓", rendered)
+        self.assertIn("先看旧仓竞价表态", rendered)
+        self.assertNotIn("- **现在到底是什么状态**: 空仓", rendered)
+        self.assertNotIn("- **明天仓位放多少**: 0%（保持空仓）", rendered)
 
     def test_action_plan_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
         result = build_pk_decision_action_plan_context_node(

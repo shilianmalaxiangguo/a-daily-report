@@ -249,6 +249,29 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
         self.assertEqual(captured["render_context"]["request_diagnostics"], diagnostics)
         self.assertEqual(result["value"]["exports"]["request_diagnostics"], diagnostics)
 
+    def test_execution_appendix_tail_hook_passes_xuangubao_counts_to_renderer(self):
+        captured = {}
+
+        def fake_render(context):
+            captured["render_context"] = context
+            return ["xuangubao-counts"]
+
+        xuangubao_data = {
+            "news_count": 46,
+            "plate_count": 22,
+            "limit_up_reason_count": 156,
+        }
+
+        result = run(
+            {
+                "inputs": {"xuangubao_data": xuangubao_data},
+                "helpers": {"render_execution_appendix": fake_render},
+            }
+        )
+
+        self.assertEqual(captured["render_context"]["xuangubao_data"], xuangubao_data)
+        self.assertEqual(result["value"]["exports"]["xuangubao_data"], xuangubao_data)
+
     def test_execution_appendix_tail_hook_passes_margin_pressure_to_renderer(self):
         captured = {}
 

@@ -65,11 +65,14 @@ class TushareTurnoverServiceTest(unittest.TestCase):
             fake_pro.daily_calls,
             [
                 {
-                    "trade_date": "20260512",
+                    "start_date": "20260512",
+                    "end_date": "20260512",
                     "fields": (
                         "ts_code,trade_date,open,high,low,close,pre_close,"
                         "change,pct_chg,vol,amount"
                     ),
+                    "limit": 1000,
+                    "offset": 0,
                 }
             ],
         )
@@ -98,6 +101,48 @@ class TushareTurnoverServiceTest(unittest.TestCase):
                 )
 
         self.assertEqual(fetch_stock_daily_turnover_records("2026-05-12", pro=BadPro()), [])
+
+    def test_fetch_stock_daily_turnover_records_paginates_single_day_rows(self):
+        from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
+
+        class PagedPro:
+            def __init__(self):
+                self.calls = []
+
+            def daily(self, **kwargs):
+                self.calls.append(kwargs)
+                offset = kwargs.get("offset", 0)
+                if offset == 0:
+                    return _FakeFrame(
+                        [
+                            {
+                                "ts_code": "000001.SZ",
+                                "trade_date": "20260512",
+                                "amount": 250000,
+                            },
+                            {
+                                "ts_code": "000002.SZ",
+                                "trade_date": "20260512",
+                                "amount": 150000,
+                            },
+                        ]
+                    )
+                return _FakeFrame(
+                    [
+                        {
+                            "ts_code": "600000.SH",
+                            "trade_date": "20260512",
+                            "amount": 100000,
+                        }
+                    ]
+                )
+
+        fake_pro = PagedPro()
+        rows = fetch_stock_daily_turnover_records("2026-05-12", pro=fake_pro, page_limit=2)
+
+        self.assertEqual([call["offset"] for call in fake_pro.calls], [0, 2])
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(sum(row["amount_yi"] for row in rows), 5.0)
 
     def test_fetch_stock_daily_turnover_records_range_paginates_full_daily_rows(self):
         from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records_range

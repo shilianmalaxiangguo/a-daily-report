@@ -518,7 +518,7 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["label"], "🟠 只处理旧仓")
         self.assertIn("先处理异常对象", result["action"])
 
-    def test_build_follow_verdict_supports_conditional_defense_confirmation(self):
+    def test_build_follow_verdict_supports_conditional_defense_fixed_window_observation(self):
         support = self._load_module()
 
         result = support.build_follow_verdict(
@@ -535,7 +535,7 @@ assert follow == {"code": "follow"}
         self.assertEqual(result["label"], "🟡 条件防守观察")
         self.assertIn("指数结构未坏", result["reason"])
         self.assertIn("固定交易窗口", result["action"])
-        self.assertIn("50%条件执行", result["action"])
+        self.assertIn("结果进入复盘和下一份日报判断", result["action"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), result["action"])
 
     def test_build_mainline_competition_snapshot_support_builds_ranked_rows(self):

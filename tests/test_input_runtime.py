@@ -85,6 +85,50 @@ sys.modules.update(
 
 
 class InputRuntimeTest(unittest.TestCase):
+    def test_quicktiny_exchange_monitor_fetch_uses_token_from_env(self):
+        runtime = importlib.import_module("input.runtime")
+        calls = []
+
+        class Response:
+            status_code = 200
+
+            def json(self):
+                return {"data": [{"code": "000001"}]}
+
+        class RequestsStub:
+            @staticmethod
+            def get(url, **kwargs):
+                calls.append((url, kwargs))
+                return Response()
+
+        result = runtime._fetch_quicktiny_exchange_monitor_payload(
+            requests_module=RequestsStub,
+            env={"QUICKTINY_EXCHANGE_MONITOR_TOKEN": "Bearer token-x"},
+            timeout=3,
+        )
+
+        self.assertEqual(result["data"][0]["code"], "000001")
+        self.assertEqual(calls[0][0], runtime.QUICKTINY_EXCHANGE_MONITOR_URL)
+        self.assertEqual(calls[0][1]["timeout"], 3)
+        self.assertEqual(calls[0][1]["headers"]["authorization"], "Bearer token-x")
+        self.assertEqual(calls[0][1]["headers"]["cookie"], "token=token-x")
+
+    def test_quicktiny_exchange_monitor_reads_token_from_dotenv(self):
+        import os
+        import tempfile
+
+        runtime = importlib.import_module("input.runtime")
+        import market_data.tushare_client as client
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path = Path(tmpdir) / ".env"
+            env_path.write_text("QUICKTINY_TOKEN=dotenv-quicktiny-token\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True), patch.object(client.Path, "cwd", return_value=Path(tmpdir)):
+                headers = runtime._quicktiny_exchange_monitor_headers()
+
+        self.assertEqual(headers["authorization"], "Bearer dotenv-quicktiny-token")
+        self.assertEqual(headers["cookie"], "token=dotenv-quicktiny-token")
+
     def test_margin_pressure_retry_returns_first_available_payload(self):
         runtime = importlib.import_module("input.runtime")
         calls = []
@@ -290,11 +334,16 @@ import daily_report_entry_demo
 
 with patch.object(
     daily_report_entry_demo,
+    "check_tushare_runtime_ready",
+    return_value={"ok": True, "provider": "tushare.pro.index_basic", "checks": [{"row_count": 1}]},
+) as precheck_mock, patch.object(
+    daily_report_entry_demo,
     "run_input_runtime",
     return_value={"target_date": "2026-04-22", "module_logs": []},
 ) as runtime_mock:
     result = daily_report_entry_demo.get_daily_data("2026-04-22")
 
+assert precheck_mock.call_count == 1
 assert runtime_mock.call_args[0] == ("2026-04-22",)
 assert "helpers" in runtime_mock.call_args.kwargs
 assert "get_new_high_feedback_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
@@ -304,6 +353,30 @@ assert "get_price_band_style_series_from_tushare_first" in runtime_mock.call_arg
 assert "get_margin_pressure_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_csi1000_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert result["target_date"] == "2026-04-22"
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_get_daily_data_stops_before_runtime_when_tushare_precheck_fails(self):
+        result = _run_legacy_entry_probe(
+            """
+import daily_report_entry_demo
+from daily_report_render import ReportCriticalDataMissingError
+
+with patch.object(
+    daily_report_entry_demo,
+    "check_tushare_runtime_ready",
+    return_value={"ok": False, "error_message": "proxy down"},
+), patch.object(daily_report_entry_demo, "run_input_runtime") as runtime_mock:
+    try:
+        daily_report_entry_demo.get_daily_data("2026-04-22")
+    except ReportCriticalDataMissingError as exc:
+        assert "Tushare跑前检查失败，停止生成：proxy down" in str(exc)
+    else:
+        raise AssertionError("expected ReportCriticalDataMissingError")
+
+assert runtime_mock.call_count == 0
 """
         )
 

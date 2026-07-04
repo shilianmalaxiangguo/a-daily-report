@@ -25,6 +25,19 @@ def _embedded_json_payload(rendered_html, script_id):
 
 
 class DailyReportEntryHtmlOutputTest(unittest.TestCase):
+    def test_position_timeline_is_inserted_after_heading_and_reading_map(self):
+        markdown = "# 2026-07-02 a股市场分析\n\n## 阅读地图\n| 顺序 | 模块 | 用途 |\n|---:|---|---|\n| 1 | 日报裁决总览 | 先看动作 |\n\n## 日报裁决总览\n正文\n"
+        timeline = "| 轨道 | 标的 | 2026-07-02 |\n|------|------|------|\n| Ta旧仓 | 太极实业(600667) | 旧路径复核 |"
+
+        updated = daily_report_entry_demo._prepend_position_timeline_markdown(markdown, timeline)
+        updated_again = daily_report_entry_demo._prepend_position_timeline_markdown(updated, timeline)
+
+        self.assertTrue(updated.startswith("# 2026-07-02 a股市场分析\n"))
+        self.assertEqual(updated.count("## 账户日序表"), 1)
+        self.assertEqual(updated_again, updated)
+        self.assertLess(updated.index("## 阅读地图"), updated.index("## 账户日序表"))
+        self.assertLess(updated.index("## 账户日序表"), updated.index("## 日报裁决总览"))
+
     def _valid_data(self):
         return {
             "data_status": {
@@ -235,7 +248,10 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             text_again = full_path.read_text(encoding="utf-8")
 
         self.assertTrue(synced)
-        self.assertTrue(text.startswith("| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） |"))
+        self.assertTrue(text.startswith("# 2026-06-29 A股日报\n"))
+        self.assertIn("## 账户日序表", text)
+        self.assertLess(text.index("## 账户日序表"), text.index("正文"))
+        self.assertIn("| 轨道 | 标的 | 2026-06-28（周日） | 2026-06-29（周一） | 2026-06-30（周二） |", text)
         self.assertIn("太极实业(600667)", text)
         self.assertIn("深科技(000021)", text)
         self.assertEqual(text, text_again)
@@ -259,12 +275,16 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertTrue(summary["has_position"])
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
-        self.assertNotIn("先处理旧仓", summary["summary"])
+        self.assertIn("100%仓位", summary["summary"])
+        self.assertIn("新仓是否叠加单独看Tb/Tc资格", summary["summary"])
+        self.assertNotIn("新开仓0手", summary["summary"])
+        self.assertEqual(summary["default_position_pct"], 100.0)
+        self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
         self.assertEqual(summary["source_report_date"], "2026-06-26")
         self.assertTrue(data["position_context_provided"])
         self.assertEqual(data["personal_position_context"]["existing_position_summary"], summary)
 
-    def test_inferred_previous_report_target_does_not_mark_manual_position(self):
+    def test_inferred_previous_report_target_marks_default_old_position_without_manual_input(self):
         data = self._valid_data()
         report_output_calls = []
 
@@ -295,11 +315,12 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             daily_report_entry_demo.main()
 
         self.assertEqual(len(report_output_calls), 1)
-        self.assertFalse(report_output_calls[0]["has_personal_positions"])
+        self.assertTrue(report_output_calls[0]["has_personal_positions"])
         self.assertTrue(data["position_context_provided"])
         summary = data["personal_position_context"]["existing_position_summary"]
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
+        self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
 
     def test_normal_path_skips_snapshot_when_postgres_fact_sync_succeeds(self):
         order = []
@@ -400,6 +421,9 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
     def test_main_saves_sector_capital_preflight_after_markdown(self):
         order = []
+        tempdir = TemporaryDirectory()
+        self.addCleanup(tempdir.cleanup)
+        html_dir = Path(tempdir.name)
 
         def save_outputs(*args, **kwargs):
             order.append("markdown")
@@ -415,11 +439,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         def save_elimination(*args, **kwargs):
             order.append("elimination")
-            return Path("/tmp/elimination.html")
+            path = html_dir / "elimination.html"
+            path.write_text("<html>elimination</html>", encoding="utf-8")
+            return path
 
         def save_preflight(*args, **kwargs):
             order.append("preflight")
-            return Path("/tmp/preflight.html")
+            path = html_dir / "preflight.html"
+            path.write_text("<html>preflight</html>", encoding="utf-8")
+            return path
 
         def save_chanlun(*args, **kwargs):
             order.append("chanlun")

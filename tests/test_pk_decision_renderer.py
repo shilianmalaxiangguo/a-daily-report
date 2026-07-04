@@ -59,7 +59,7 @@ class PkDecisionRendererTest(unittest.TestCase):
         self.assertIn("> **只看什么**：环境、主线、触发、可交易性和历史复盘表现。", rendered)
         self.assertIn("**决策栈排序**（环境 -> 主线 -> EV）:", rendered)
         self.assertIn("| 军工一号 | 9 | 8 | 7 | 8 | 7 | 8 | 参与资格 |", rendered)
-        self.assertIn("**✅ 明天唯一能买的那只**: 军工一号(000001)", rendered)
+        self.assertIn("**✅ 明日执行对象**: 军工一号(000001)", rendered)
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("PK公式", rendered)
         self.assertNotIn("为什么这么选", rendered)

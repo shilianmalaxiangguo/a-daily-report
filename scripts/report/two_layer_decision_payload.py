@@ -1184,6 +1184,30 @@ def render_derivation_audit_layer(payload):
     return lines
 
 
+def _selection_workflow_passes_forward_text(node):
+    node = node if isinstance(node, dict) else {}
+    passes = node.get("passes_forward") if isinstance(node.get("passes_forward"), dict) else {}
+    review = passes.get("premarket_narrative_review") if isinstance(passes.get("premarket_narrative_review"), dict) else {}
+    if clean_text(node.get("node_id")) == "N8_5" and review:
+        summary = clean_text(review.get("summary"))
+        if not summary:
+            chain = [clean_text(item) for item in review.get("reason_chain", []) or [] if clean_text(item)]
+            summary = " -> ".join(chain) if chain else "盘前叙事复核未形成完整链条"
+        return (
+            f"复核状态：{clean_text(review.get('status'), '未触发')}；"
+            f"动作上限：{clean_text(review.get('action_effect_label'), '不调整')}；"
+            f"{summary}"
+        )
+    if review:
+        compact = dict(passes)
+        compact["premarket_narrative_review"] = (
+            f"{clean_text(review.get('status'), '未触发')} / "
+            f"{clean_text(review.get('action_effect_label'), '不调整')}"
+        )
+        return clean_text(compact, "{}")
+    return clean_text(passes, "{}")
+
+
 def render_selection_workflow_derivation_layer(workflow):
     workflow = workflow if isinstance(workflow, dict) else {}
     nodes = workflow.get("nodes", []) or []
@@ -1196,9 +1220,15 @@ def render_selection_workflow_derivation_layer(workflow):
             node_map[node_id] = node
     final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     final_stock = final.get("execution_object") if isinstance(final.get("execution_object"), dict) else {}
+    final_pct = _position_pct({"target_position_pct": final.get("position_pct", 0)})
+    if final_pct <= 0:
+        final_stock = {}
     final_label = _stock_label(final_stock) if final_stock else "无"
-    final_position_pct = clean_text(final.get("position_pct"), "0")
-    final_action_text = clean_text(final.get("action_text"), "0%不参与")
+    final_position_pct = clean_text(final_pct, "0")
+    final_action_text = _position_plan_from_pct(final_pct if final_stock else 0)
+    premarket_review = final.get("premarket_narrative_review") if isinstance(final.get("premarket_narrative_review"), dict) else {}
+    if not premarket_review:
+        premarket_review = workflow.get("premarket_narrative_review") if isinstance(workflow.get("premarket_narrative_review"), dict) else {}
     summary_rows = [
         ("市场", "N1", clean_text((node_map.get("N1") or {}).get("judgement"), "待确认")),
         (
@@ -1218,8 +1248,25 @@ def render_selection_workflow_derivation_layer(workflow):
         ("龙头", "N6", clean_text((node_map.get("N6") or {}).get("judgement"), final_label)),
         ("价格行为", "N7", clean_text((node_map.get("N7") or {}).get("judgement"), "待确认")),
         ("执行资格", "N8", clean_text((node_map.get("N8") or {}).get("judgement"), final_action_text)),
-        ("最终结果", "N9 / final", f"{final_label}；{final_action_text}；{final_position_pct}%"),
     ]
+    if premarket_review:
+        review_summary = clean_text(premarket_review.get("summary"))
+        if not review_summary:
+            reason_chain = [
+                clean_text(item)
+                for item in premarket_review.get("reason_chain", []) or []
+                if clean_text(item)
+            ]
+            review_summary = " -> ".join(reason_chain) if reason_chain else "盘前叙事复核未形成完整链条"
+        effect = clean_text(premarket_review.get("action_effect_label"), "不调整")
+        summary_rows.append(
+            (
+                "盘前叙事反证复核",
+                "N8_5",
+                f"{clean_text(premarket_review.get('status'), '未触发')}；{review_summary}；动作上限：{effect}",
+            )
+        )
+    summary_rows.append(("最终结果", "N9 / final", f"{final_label}；{final_action_text}；{final_position_pct}%"))
     lines = ["## 推导审计层", "", "### 市场 -> 板块 -> 龙头 -> 价格行为 -> 执行资格", "| 层级 | 节点 | 结论 |", "|---|---|---|"]
     for level, node_ref, conclusion in summary_rows:
         lines.append(f"| {clean_text(level)} | {clean_text(node_ref)} | {clean_text(conclusion, '待确认')} |")
@@ -1235,7 +1282,7 @@ def render_selection_workflow_derivation_layer(workflow):
                 "",
                 f"#### {node_id} {node_name}",
                 f"- 结论：{clean_text(node.get('judgement'), '待确认')}",
-                f"- 传给下一步：{clean_text(node.get('passes_forward'), '{}')}",
+                f"- 传给下一步：{_selection_workflow_passes_forward_text(node)}",
                 f"- 本节点不能推出：{cannot_conclude or '无'}",
             ]
         )

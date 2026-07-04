@@ -845,6 +845,55 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertNotIn("淘汰对象：上海石化(600688)、豫能控股(001896)", text)
         self.assertIn("不参与", text)
 
+    def test_selection_workflow_derivation_summarizes_premarket_review_without_internal_fields(self):
+        payload = {
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "nodes": [
+                    {"node_id": "N8", "node_name": "仓位与执行条件", "judgement": "100%核心进攻"},
+                    {
+                        "node_id": "N8_5",
+                        "node_name": "盘前叙事反证复核",
+                        "input_refs": ["N8"],
+                        "judgement": "不参与：动作上限不参与",
+                        "passes_forward": {
+                            "position_pct": 0,
+                            "premarket_narrative_review": {
+                                "status": "不参与",
+                                "complete_chain": True,
+                                "driver_hit": True,
+                                "action_effect": "no_participation",
+                                "action_effect_label": "不参与",
+                                "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+                            },
+                        },
+                    },
+                    {"node_id": "N9", "node_name": "输出一致性复核", "input_refs": ["N8_5"], "judgement": "同源输出"},
+                ],
+                "premarket_narrative_review": {
+                    "status": "不参与",
+                    "action_effect_label": "不参与",
+                    "summary": "Meta拟对外出售算力，击中AI算力和存储紧缺叙事",
+                },
+                "final": {
+                    "execution_object": {},
+                    "position_pct": 0,
+                    "action_text": "50%条件执行",
+                    "source_node": "N8_5",
+                },
+            }
+        }
+
+        text = "\n".join(render_derivation_audit_layer(payload))
+
+        self.assertIn("| 盘前叙事反证复核 | N8_5 | 不参与", text)
+        self.assertIn("复核状态：不参与；动作上限：不参与", text)
+        self.assertIn("Meta拟对外出售算力", text)
+        self.assertNotIn("driver_hit", text)
+        self.assertNotIn("complete_chain", text)
+        self.assertNotIn("action_effect", text)
+        self.assertNotIn("50%条件执行", text)
+
     def test_placeholder_target_names_do_not_create_execution_object(self):
         for placeholder in ("无", "暂无", "-"):
             with self.subTest(placeholder=placeholder):

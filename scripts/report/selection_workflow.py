@@ -11,6 +11,85 @@ LEGACY_SIGNAL_MARKERS = (
     "热榜",
     "旧龙头",
 )
+QUOTE_LIST_KEYS = (
+    "selection_workflow_quote_rows",
+    "same_day_quote_rows",
+    "stock_daily_quotes_recent",
+    "hot_rank_top50",
+    "hot_rank_top30",
+    "integrated_hot_list",
+    "turnover_rank",
+    "turnover_over_100b",
+    "zt_pool",
+    "dt_pool",
+    "lianban_data",
+    "sector_derived_candidates",
+    "market_emotion_candidates",
+    "sector_leader_candidates",
+    "extreme_conviction_list",
+    "crossline_observation_stocks",
+    "candidates",
+    "watchlist",
+    "core_stocks",
+    "secondary_stocks",
+)
+STRICT_QUOTE_DATE_KEYS = {
+    "selection_workflow_quote_rows",
+    "same_day_quote_rows",
+    "stock_daily_quotes_recent",
+}
+QUOTE_CONTAINER_KEYS = (
+    "execution_stage_context",
+    "market_research_snapshot",
+    "candidate_snapshot",
+    "step2_bundle",
+    "candidate_selection",
+    "results",
+)
+LIMIT_DOWN_THRESHOLD = -9.5
+REQUIRED_EXECUTION_WINDOWS = (
+    "09:30-09:35",
+    "09:50-10:10",
+    "14:30-14:55",
+)
+EXECUTION_WINDOW_MARKERS = REQUIRED_EXECUTION_WINDOWS + ("09:", "09：", "14:", "14：")
+EXPLICIT_LIMIT_DOWN_REVERSAL_MARKERS = (
+    "跌停反包",
+    "跌停后反包",
+    "跌停后修复",
+    "跌停打开",
+    "跌停开板",
+    "跌停修复",
+    "跌停反核",
+    "跌停后反核",
+    "跌停水下强势修复",
+    "跌停后水下强势修复",
+    "反核专项",
+    "撬板",
+    "翘板",
+    "地天",
+    "limit_down_reversal",
+)
+GENERATED_CONTRACT_NOISE_KEYS = {
+    "brooks_price_action_judge",
+    "common_selection_consistency",
+    "compared_against",
+    "current_reason",
+    "eliminated_at",
+    "eliminated_reason",
+    "entry_basis",
+    "first_seen_node",
+    "front_observation_qualified",
+    "front_observation_reason",
+    "leader_debate",
+    "new_entry_qualified",
+    "observation_layer",
+    "price_action_block_reason",
+    "reversal_decision",
+    "status",
+    "stock_label",
+    "workflow_path",
+}
 NODE_DEFS = [
     ("N0", "数据封装"),
     ("N1", "市场周期判断"),
@@ -88,6 +167,21 @@ def _as_list(value):
     return list(value) if isinstance(value, list) else []
 
 
+def _clean_list(value):
+    if isinstance(value, (list, tuple, set)):
+        source = value
+    elif value in (None, ""):
+        source = []
+    else:
+        source = [value]
+    rows = []
+    for item in source:
+        text = clean_visible_text(item)
+        if text and text not in rows:
+            rows.append(text)
+    return rows
+
+
 def _safe_float(value):
     try:
         if value in (None, ""):
@@ -97,6 +191,324 @@ def _safe_float(value):
         return None
 
 
+def _candidate_change_pct(candidate):
+    candidate = _as_dict(candidate)
+    for source in (_as_dict(candidate.get("same_day_quote")), candidate):
+        for key in ("change_pct", "pct_chg", "涨跌幅", "zdf", "change_rate"):
+            parsed = _safe_float(source.get(key))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _limit_status_text(candidate):
+    candidate = _as_dict(candidate)
+    parts = []
+    for source in (_as_dict(candidate.get("same_day_quote")), candidate):
+        for key in (
+            "limit_status",
+            "limit_state",
+            "zt_status",
+            "涨停状态",
+            "涨跌停状态",
+            "status",
+            "tag",
+            "pattern",
+            "连板标签",
+            "candlestick",
+        ):
+            value = clean_visible_text(source.get(key))
+            if value:
+                parts.append(value)
+    return " / ".join(parts)
+
+
+def _is_negated_limit_down_text(text):
+    return any(marker in text for marker in ("未跌停", "非跌停", "不跌停", "没有跌停", "并非跌停"))
+
+
+def _candidate_limit_down_block_reason(candidate):
+    candidate = _as_dict(candidate)
+    if not candidate:
+        return ""
+    for source in (candidate, _as_dict(candidate.get("same_day_quote"))):
+        if source.get("is_limit_down") is True:
+            return "同日状态为跌停"
+    change_pct = _candidate_change_pct(candidate)
+    if change_pct is not None and change_pct <= LIMIT_DOWN_THRESHOLD:
+        return f"同日跌幅{change_pct:.2f}%，按跌停/接近跌停处理"
+    status_text = _limit_status_text(candidate)
+    if "跌停" in status_text and not _is_negated_limit_down_text(status_text):
+        return "同日状态为跌停"
+    return ""
+
+
+def _candidate_contract_text(candidate, *, include_quote=True):
+    candidate = _as_dict(candidate)
+    nested = _as_dict(candidate.get("anchor_reversal"))
+    quote = _as_dict(candidate.get("same_day_quote"))
+    planned = _as_dict(candidate.get("planned_participation"))
+    script = _as_dict(candidate.get("participation_script"))
+    parts = []
+    sources = [candidate, nested, planned, script]
+    if include_quote:
+        sources.insert(2, quote)
+    for source in sources:
+        for key, value in source.items():
+            if key in GENERATED_CONTRACT_NOISE_KEYS:
+                continue
+            if isinstance(value, (dict, list)):
+                continue
+            text = clean_visible_text(value)
+            if text:
+                parts.append(text)
+    return " / ".join(parts)
+
+
+def _candidate_has_confirmation_window(candidate):
+    text = _candidate_contract_text(candidate, include_quote=False)
+    if any(marker in text for marker in EXECUTION_WINDOW_MARKERS):
+        return True
+    for source in (_as_dict(candidate), _as_dict(candidate.get("planned_participation")), _as_dict(candidate.get("participation_script"))):
+        for key in ("participation_window", "buy_window", "execution_window", "window"):
+            value = clean_visible_text(source.get(key))
+            if any(marker in value for marker in EXECUTION_WINDOW_MARKERS):
+                return True
+    return False
+
+
+def _candidate_has_invalid_condition(candidate):
+    text = _candidate_contract_text(candidate, include_quote=False)
+    if any(marker in text for marker in ("作废", "取消", "失效", "认错线", "跌破", "站不回", "封死", "打不开")):
+        return True
+    for source in (_as_dict(candidate), _as_dict(candidate.get("planned_participation")), _as_dict(candidate.get("participation_script"))):
+        for key in ("cancellation", "cancellation_conditions", "invalid_price", "stop_price"):
+            if source.get(key) not in (None, "", []):
+                return True
+    return False
+
+
+def _candidate_has_zero_fallback(candidate):
+    text = _candidate_contract_text(candidate, include_quote=False)
+    return "回到0%" in text or "0%不参与" in text or ("0%" in text and "不参与" in text)
+
+
+def _has_explicit_limit_down_reversal_text(text):
+    text = clean_visible_text(text)
+    return any(marker in text for marker in EXPLICIT_LIMIT_DOWN_REVERSAL_MARKERS)
+
+
+def _candidate_has_explicit_limit_down_reversal_plan(candidate):
+    text = _candidate_contract_text(candidate, include_quote=False)
+    has_reversal = _has_explicit_limit_down_reversal_text(text)
+    return bool(
+        has_reversal
+        and _candidate_has_confirmation_window(candidate)
+        and _candidate_has_invalid_condition(candidate)
+        and _candidate_has_zero_fallback(candidate)
+    )
+
+
+def _candidate_blocks_new_entry_by_price(candidate):
+    reason = _candidate_limit_down_block_reason(candidate)
+    if not reason:
+        return ""
+    if _candidate_has_explicit_limit_down_reversal_plan(candidate):
+        return ""
+    return reason
+
+
+def _quote_row_has_price_context(row):
+    row = _as_dict(row)
+    if not row:
+        return False
+    if _candidate_change_pct(row) is not None:
+        return True
+    return bool(_limit_status_text(row))
+
+
+def _quote_identity(row, *, code="", name=""):
+    row = _as_dict(row)
+    normalized_code = normalize_stock_code(
+        code
+        or row.get("code")
+        or row.get("stock_code")
+        or row.get("代码")
+        or row.get("symbol")
+        or row.get("ts_code")
+    )
+    normalized_name = clean_visible_text(name or row.get("name") or row.get("stock_name") or row.get("名称"))
+    return normalized_code, normalized_name
+
+
+def _quote_rank(row):
+    score = 0
+    if _candidate_limit_down_block_reason(row):
+        score += 10
+    if _candidate_change_pct(row) is not None:
+        score += 3
+    for key in ("open", "high", "low", "close"):
+        if _safe_float(_as_dict(row).get(key)) is not None:
+            score += 1
+    return score
+
+
+def _normalize_quote_date(value):
+    text = clean_text(value)
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text
+
+
+def _quote_row_matches_target_date(row, target_date="", *, require_date=False):
+    target_date = _normalize_quote_date(target_date)
+    if not target_date:
+        return True
+    row = _as_dict(row)
+    primary_dates = [
+        _normalize_quote_date(row.get(key))
+        for key in ("trade_date", "target_date", "date", "latest_trade_date")
+        if _normalize_quote_date(row.get(key))
+    ]
+    if primary_dates:
+        return target_date in primary_dates
+    secondary_dates = [
+        _normalize_quote_date(row.get(key))
+        for key in ("source_date", "query_date", "report_date")
+        if _normalize_quote_date(row.get(key))
+    ]
+    if secondary_dates:
+        return target_date in secondary_dates
+    return not require_date
+
+
+def _quote_source_matches_target_date(source, target_date=""):
+    if not _normalize_quote_date(target_date):
+        return True
+    return _quote_row_matches_target_date(source, target_date, require_date=True)
+
+
+def _register_quote(lookup, row, *, code="", name="", target_date="", require_date=False):
+    row = _as_dict(row)
+    if not row or not _quote_row_has_price_context(row):
+        return
+    if not _quote_row_matches_target_date(row, target_date, require_date=require_date):
+        return
+    normalized_code, normalized_name = _quote_identity(row, code=code, name=name)
+    payload = dict(row)
+    if normalized_code:
+        payload.setdefault("code", normalized_code)
+    if normalized_name:
+        payload.setdefault("name", normalized_name)
+    for kind, key in (("code", normalized_code), ("name", normalized_name)):
+        if not key:
+            continue
+        existing = lookup.get((kind, key))
+        if existing is None or _quote_rank(payload) > _quote_rank(existing):
+            lookup[(kind, key)] = payload
+
+
+def _iter_quote_rows(source, *, depth=0, visited=None, target_date="", trusted_undated=False):
+    if depth > 4 or not isinstance(source, dict):
+        return
+    if visited is None:
+        visited = set()
+    marker = id(source)
+    if marker in visited:
+        return
+    visited.add(marker)
+    source_trusted_undated = bool(trusted_undated or _quote_source_matches_target_date(source, target_date))
+
+    stock_full_info = source.get("stock_full_info") if isinstance(source.get("stock_full_info"), dict) else {}
+    for code, info in stock_full_info.items():
+        if isinstance(info, dict):
+            yield code, "", info, "stock_full_info", source_trusted_undated
+
+    for key in QUOTE_LIST_KEYS:
+        rows = source.get(key)
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict):
+                yield "", "", row, key, source_trusted_undated
+
+    for key in QUOTE_CONTAINER_KEYS:
+        nested = source.get(key)
+        if isinstance(nested, dict):
+            yield from _iter_quote_rows(
+                nested,
+                depth=depth + 1,
+                visited=visited,
+                target_date=target_date,
+                trusted_undated=source_trusted_undated,
+            )
+
+
+def _build_quote_lookup(*sources, target_date=""):
+    lookup = {}
+    for source in sources:
+        for code, name, row, source_key, source_trusted_undated in _iter_quote_rows(
+            _as_dict(source),
+            target_date=target_date,
+        ):
+            require_date = source_key in STRICT_QUOTE_DATE_KEYS or (
+                bool(_normalize_quote_date(target_date)) and not source_trusted_undated
+            )
+            _register_quote(
+                lookup,
+                row,
+                code=code,
+                name=name,
+                target_date=target_date,
+                require_date=require_date,
+            )
+    return lookup
+
+
+def _candidate_quote(candidate, quote_lookup):
+    candidate = _as_dict(candidate)
+    code, name = _quote_identity(candidate)
+    if code and (quote_lookup or {}).get(("code", code)):
+        return (quote_lookup or {}).get(("code", code)) or {}
+    if name and (quote_lookup or {}).get(("name", name)):
+        return (quote_lookup or {}).get(("name", name)) or {}
+    return {}
+
+
+def _first_quote_value(quote, *keys):
+    quote = _as_dict(quote)
+    for key in keys:
+        value = quote.get(key)
+        if value not in (None, ""):
+            return value
+    return None
+
+
+def _candidate_with_quote(candidate, quote_lookup):
+    candidate = _as_dict(candidate)
+    quote = _candidate_quote(candidate, quote_lookup)
+    if not quote:
+        return candidate
+    merged = dict(candidate)
+    merged["same_day_quote"] = dict(quote)
+    for target_key, source_keys in (
+        ("change_pct", ("change_pct", "pct_chg", "涨跌幅", "zdf", "change_rate")),
+        ("open", ("open", "开盘价", "开盘", "open_price")),
+        ("high", ("high", "最高价", "最高", "high_price")),
+        ("low", ("low", "最低价", "最低", "low_price")),
+        ("close", ("close", "收盘价", "最新价", "收盘", "price", "当前价", "close_price")),
+        ("limit_status", ("limit_status", "limit_state", "zt_status", "涨停状态", "涨跌停状态", "tag", "连板标签")),
+    ):
+        if merged.get(target_key) in (None, ""):
+            value = _first_quote_value(quote, *source_keys)
+            if value not in (None, ""):
+                merged[target_key] = value
+    return merged
+
+
 def _text_has_any(text, markers):
     return any(marker in text for marker in markers)
 
@@ -104,8 +516,9 @@ def _text_has_any(text, markers):
 def _candidate_price_text(candidate):
     candidate = _as_dict(candidate)
     nested = _as_dict(candidate.get("anchor_reversal"))
+    quote = _as_dict(candidate.get("same_day_quote"))
     parts = []
-    for source in (candidate, nested):
+    for source in (candidate, nested, quote):
         for key in (
             "pattern",
             "shape",
@@ -124,10 +537,20 @@ def _candidate_price_text(candidate):
             "why_not_anchor",
             "execution_eligibility",
             "limit_up_evidence_role",
+            "limit_status",
+            "limit_state",
+            "zt_status",
+            "涨停状态",
+            "涨跌停状态",
+            "tag",
+            "连板标签",
         ):
             value = clean_visible_text(source.get(key))
             if value:
                 parts.append(value)
+    change_pct = _candidate_change_pct(candidate)
+    if change_pct is not None:
+        parts.append(f"涨跌幅{change_pct:+.2f}%")
     return " / ".join(parts)
 
 
@@ -175,8 +598,17 @@ def _brooks_price_action_judge(candidate):
     rejection_markers = ("冲高回落", "长上影", "炸板", "上影线未修复", "供应", "分歧")
     attack_markers = ("强收盘", "收在高位", "涨停", "大阳", "突破", "回封", "分歧转一致")
     pullback_markers = ("缩量回踩", "缩量消化", "回踩不破", "趋势未破", "低点上移")
+    limit_down_reason = _candidate_limit_down_block_reason(candidate)
 
-    if _text_has_any(text, risk_markers):
+    if limit_down_reason and _candidate_has_explicit_limit_down_reversal_plan(candidate):
+        verdict = "跌停后反包修复待确认"
+        action = "只按反包专项执行条件复核，不满足回到0%不参与"
+        status = "needs_second_confirmation"
+    elif limit_down_reason:
+        verdict = "跌停风险优先"
+        action = "同日跌停/接近跌停，只能修复观察，不沿用正常强趋势模板"
+        status = "risk_first"
+    elif _text_has_any(text, risk_markers):
         verdict = "先处理风险"
         action = "价格否定优先，不能用成交量或便宜解释参与"
         status = "risk_first"
@@ -347,6 +779,48 @@ def _candidate_source_rows(execution_stage_context, selected_position_candidate=
     return [("selected_position_candidate", enriched)] + rows
 
 
+def _quote_backfill_enabled(*sources):
+    return any(_as_dict(source).get("enable_selection_workflow_quote_backfill") for source in sources)
+
+
+def _candidate_codes_for_quote_backfill(execution_stage_context, selected_position_candidate=None):
+    codes = []
+    seen = set()
+    for _, candidate in _candidate_source_rows(execution_stage_context, selected_position_candidate):
+        code = stock_payload(candidate).get("code")
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return codes
+
+
+def _query_quote_backfill_rows(target_date="", stock_codes=None):
+    target_date = clean_text(target_date)
+    stock_codes = [code for code in stock_codes or [] if code]
+    if not target_date or not stock_codes:
+        return []
+    try:
+        from storage.database_service import DatabaseService
+
+        service_factory = getattr(DatabaseService, "fact_store_from_environment", None)
+        service = service_factory() if callable(service_factory) else DatabaseService.from_environment()
+        reader = getattr(service, "query_stock_daily_quotes_recent", None)
+        if not callable(reader):
+            return []
+        rows = reader(target_date, stock_codes=stock_codes)
+    except Exception:
+        return []
+    return [dict(row) for row in rows or [] if isinstance(row, dict)]
+
+
+def _backfill_quote_lookup(quote_lookup, target_date="", execution_stage_context=None, selected_position_candidate=None):
+    codes = _candidate_codes_for_quote_backfill(execution_stage_context, selected_position_candidate)
+    for row in _query_quote_backfill_rows(target_date, codes):
+        _register_quote(quote_lookup, row, target_date=target_date, require_date=True)
+    return quote_lookup
+
+
 def _anchor_reversal_decision(candidate):
     candidate = _as_dict(candidate)
     return clean_visible_text(
@@ -402,6 +876,25 @@ def _candidate_text_blob(candidate):
             else:
                 values.append(clean_visible_text(value))
     return " / ".join(part for part in values if part)
+
+
+def _candidate_driver_tags(candidate):
+    candidate = _as_dict(candidate)
+    nested = _as_dict(candidate.get("anchor_reversal"))
+    tags = []
+    for source in (candidate, nested):
+        for key in (
+            "current_driver_tags",
+            "driver_tags",
+            "mainline_tags",
+            "trade_narrative_tags",
+            "concept_tags",
+            "concepts",
+        ):
+            for item in _clean_list(source.get(key)):
+                if item not in tags:
+                    tags.append(item)
+    return tags
 
 
 def _sector_anchor_keys(context):
@@ -477,15 +970,18 @@ def _candidate_entry_basis(source_key, candidate, context):
 
 
 def _candidate_new_entry_qualified(source_key, candidate, context):
+    if _candidate_blocks_new_entry_by_price(candidate):
+        return False
     return _candidate_origin(source_key, candidate, context) in {"sector_first", "market_emotion_line"}
 
 
-def _build_candidate_pool(execution_stage_context, final_stock, selected_position_candidate=None):
+def _build_candidate_pool(execution_stage_context, final_stock, selected_position_candidate=None, quote_lookup=None):
     context = _as_dict(execution_stage_context)
     final_key = stock_key(final_stock)
     pool = []
     seen = set()
-    for source_key, candidate in _candidate_source_rows(context, selected_position_candidate):
+    for source_key, raw_candidate in _candidate_source_rows(context, selected_position_candidate):
+        candidate = _candidate_with_quote(raw_candidate, quote_lookup)
         key = stock_key(candidate)
         if not key or key in seen:
             continue
@@ -495,9 +991,19 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
         status = _candidate_status(candidate, final_key)
         eliminated_at = "N6" if status in {"降级观察", "不参与"} else ""
         brooks = _brooks_price_action_judge(candidate)
+        price_block_reason = _candidate_blocks_new_entry_by_price(candidate)
+        if price_block_reason and status != "最终执行对象":
+            eliminated_at = "N7"
         if status == "最终执行对象":
             eliminated_at = ""
         eliminated_reason = "" if status == "最终执行对象" else clean_text(
+            (
+                price_block_reason
+                + "；如要参与必须写成跌停反包专项，并给出确认窗口、作废线和回到0%的条件"
+                if price_block_reason
+                else ""
+            )
+            or
             candidate.get("anchor_reversal_reason")
             or candidate.get("why_not_anchor")
             or candidate.get("conviction_rule")
@@ -530,12 +1036,14 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
                 "new_entry_qualified": new_entry_qualified,
                 "mainline": clean_visible_text(candidate.get("mainline") or context.get("mainline_name")),
                 "sector": clean_visible_text(candidate.get("sector") or candidate.get("sector_name")),
+                "current_driver_tags": _candidate_driver_tags(candidate),
                 "sector_role": clean_visible_text(candidate.get("candidate_role") or candidate.get("core_identity")),
                 "reversal_decision": _anchor_reversal_decision(candidate),
                 "leader_debate": _leader_debate(candidate),
                 "brooks_price_action_judge": brooks,
                 "common_selection_consistency": _common_selection_consistency(candidate),
                 "status": status,
+                "price_action_block_reason": price_block_reason,
                 "front_observation_qualified": front_observation_qualified,
                 "front_observation_reason": clean_visible_text(front_observation_reason),
                 "observation_layer": observation_layer,
@@ -575,6 +1083,8 @@ def _selected_candidate_has_execution_evidence(candidate):
 
 
 def _candidate_can_be_final_execution_object(candidate, *, source_key="", context=None):
+    if _candidate_blocks_new_entry_by_price(candidate):
+        return False
     return (
         _anchor_reversal_decision(candidate) == "可作为主对象"
         and _selected_candidate_has_execution_evidence(candidate)
@@ -636,7 +1146,7 @@ def _candidate_can_be_front_observation_object(candidate, *, explicit_selected=F
     return False, reason_text or "未取得前台观察资格"
 
 
-def _pick_final_candidate(execution_stage_context, selected_position_candidate=None, position_decision=None):
+def _pick_final_candidate(execution_stage_context, selected_position_candidate=None, position_decision=None, quote_lookup=None):
     if _position_pct(position_decision) <= 0:
         return {}
     context = _as_dict(execution_stage_context)
@@ -652,11 +1162,13 @@ def _pick_final_candidate(execution_stage_context, selected_position_candidate=N
                         if value not in (None, "")
                     }
                 )
+                merged = _candidate_with_quote(merged, quote_lookup)
                 if _candidate_can_be_final_execution_object(merged, source_key=source_key, context=context):
                     return stock_payload(merged)
                 return {}
         return {}
     for source_key, candidate in sources:
+        candidate = _candidate_with_quote(candidate, quote_lookup)
         if _candidate_can_be_final_execution_object(candidate, source_key=source_key, context=context):
             return stock_payload(candidate)
     return {}
@@ -690,6 +1202,345 @@ def _action_text(position_pct):
     return "0%不参与"
 
 
+PREMARKET_NARRATIVE_REVIEW_KEYS = (
+    "premarket_narrative_review",
+    "premarket_narrative_conflict_review",
+    "premarket_external_narrative_review",
+    "narrative_conflict_review",
+)
+
+STRUCTURAL_COUNTER_EVENT_MARKERS = (
+    "出售",
+    "削减",
+    "取消",
+    "限制",
+    "禁令",
+    "制裁",
+    "过剩",
+    "降价",
+    "涨价",
+    "订单",
+    "亏损",
+    "业绩",
+    "监管",
+    "政策",
+    "关税",
+    "库存",
+    "停产",
+    "事故",
+    "调查",
+    "破产",
+    "违约",
+    "油价",
+    "商品价格",
+    "价格战",
+    "需求",
+)
+
+BROAD_MARKET_COUNTER_EVENT_MARKERS = (
+    "美股",
+    "纳指",
+    "标普",
+    "道指",
+    "指数",
+    "期货",
+    "盘前",
+    "海外科技股",
+    "韩国指数",
+)
+
+
+def _first_premarket_narrative_payload(*sources):
+    for source in sources:
+        source = _as_dict(source)
+        for key in PREMARKET_NARRATIVE_REVIEW_KEYS:
+            value = source.get(key)
+            if isinstance(value, dict) and value:
+                return value
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict) and item:
+                        return item
+    return {}
+
+
+def _split_chain_text(value):
+    if isinstance(value, (list, tuple, set)):
+        return _clean_list(value)
+    text = clean_visible_text(value)
+    if not text:
+        return []
+    separators = ("->", "→", "=>", "；")
+    for separator in separators:
+        if separator in text:
+            return [part for part in (clean_visible_text(item) for item in text.split(separator)) if part]
+    return [text]
+
+
+def _review_source_list(raw, *keys):
+    rows = []
+    raw = _as_dict(raw)
+    for key in keys:
+        for item in _clean_list(raw.get(key)):
+            if item not in rows:
+                rows.append(item)
+    return rows
+
+
+def _normalize_counter_event(raw):
+    raw = _as_dict(raw)
+    event = raw.get("counter_event")
+    if not isinstance(event, dict):
+        event = raw.get("reverse_event") if isinstance(raw.get("reverse_event"), dict) else {}
+    payload = dict(event)
+    aliases = {
+        "title": ("title", "event_title", "news_title"),
+        "source": ("source", "provider", "news_source"),
+        "source_time": ("source_time", "event_time", "news_time", "time"),
+        "level": ("level", "importance", "news_level"),
+        "url": ("url", "source_url", "link"),
+        "event_type": ("event_type", "type", "kind"),
+    }
+    for target_key, source_keys in aliases.items():
+        if clean_visible_text(payload.get(target_key)):
+            continue
+        for source_key in source_keys:
+            text = clean_visible_text(raw.get(source_key))
+            if text:
+                payload[target_key] = text
+                break
+    normalized = {}
+    for key in ("title", "source", "source_time", "level", "url", "event_type"):
+        text = clean_visible_text(payload.get(key))
+        if text:
+            normalized[key] = text
+    return normalized
+
+
+def _counter_event_is_structural(counter_event):
+    counter_event = _as_dict(counter_event)
+    title = clean_visible_text(counter_event.get("title"))
+    if not title:
+        return False
+    event_type = clean_visible_text(counter_event.get("event_type")).lower()
+    if event_type in {"structural", "narrative_collapse", "driver_reversal", "counter_event", "反向事件", "叙事崩塌"}:
+        return True
+    if any(marker in title for marker in STRUCTURAL_COUNTER_EVENT_MARKERS):
+        return True
+    if any(marker in title for marker in BROAD_MARKET_COUNTER_EVENT_MARKERS):
+        return False
+    return True
+
+
+def _normalize_target_exposure(value):
+    text = clean_visible_text(value).lower()
+    if text in {"direct", "直接", "直接暴露"}:
+        return "direct"
+    if text in {"indirect", "间接", "间接暴露"}:
+        return "indirect"
+    if text in {"none", "无", "无暴露"}:
+        return "none"
+    return "unknown"
+
+
+def _action_effect_label(effect):
+    return {
+        "keep": "不调整",
+        "observe": "核心观察",
+        "no_participation": "不参与",
+    }.get(effect, "不调整")
+
+
+def _action_effect_position_cap(effect):
+    if effect in {"observe", "no_participation"}:
+        return 0
+    return None
+
+
+def _review_driver_tags(candidate_pool, final_stock):
+    final_key = stock_key(final_stock)
+    if not final_key:
+        return []
+    for item in candidate_pool or []:
+        if not isinstance(item, dict):
+            continue
+        if stock_key(item.get("stock")) == final_key:
+            return _clean_list(item.get("current_driver_tags"))
+    return []
+
+
+def _premarket_review_summary(review):
+    review = _as_dict(review)
+    summary = clean_visible_text(review.get("summary"))
+    if summary:
+        return summary
+    chain = _clean_list(review.get("reason_chain"))
+    if chain:
+        return " -> ".join(chain)
+    event = _as_dict(review.get("counter_event"))
+    event_title = clean_visible_text(event.get("title"))
+    if event_title:
+        return event_title
+    return "盘前叙事复核无完整触发链"
+
+
+def _build_premarket_narrative_review(
+    *,
+    data=None,
+    context=None,
+    snapshot=None,
+    selected_position_candidate=None,
+    position_decision=None,
+    final_target_resolution=None,
+    final_stock=None,
+    candidate_pool=None,
+    mainline="",
+    base_position_pct=0,
+):
+    raw = _first_premarket_narrative_payload(
+        data,
+        context,
+        snapshot,
+        selected_position_candidate,
+        position_decision,
+        final_target_resolution,
+    )
+    if not raw:
+        return {}
+    raw = _as_dict(raw)
+    counter_event = _normalize_counter_event(raw)
+    overseas_pricing = _review_source_list(raw, "overseas_pricing", "overseas_same_chain_pricing", "external_pricing")
+    asia_confirmation = _review_source_list(raw, "asia_confirmation", "asia_market_confirmation")
+    a_share_mapping = _review_source_list(raw, "a_share_mapping", "ashare_mapping", "a_stock_mapping", "mapping")
+    reason_chain = _split_chain_text(raw.get("reason_chain") or raw.get("chain") or raw.get("derivation_chain"))
+    driver_tags = _review_driver_tags(candidate_pool, final_stock)
+    original_driver = clean_visible_text(
+        raw.get("original_driver")
+        or raw.get("current_driver")
+        or raw.get("driver")
+        or "、".join(driver_tags)
+        or mainline
+    )
+    target_exposure = _normalize_target_exposure(raw.get("target_exposure") or raw.get("exposure"))
+    event_title = clean_visible_text(counter_event.get("title"))
+    has_counter_event = bool(event_title) and _counter_event_is_structural(counter_event)
+    has_overseas = bool(overseas_pricing)
+    has_asia = bool(asia_confirmation)
+    has_mapping = bool(a_share_mapping)
+    explicit_driver_hit = raw.get("driver_hit") or raw.get("current_driver_hit") or raw.get("hit_current_driver")
+    hype_driver_match = clean_visible_text(raw.get("hype_driver_match"))
+    if hype_driver_match == "current_driver_hit":
+        explicit_driver_hit = True
+    driver_hit = bool(explicit_driver_hit)
+    if not driver_hit and target_exposure in {"direct", "indirect"}:
+        evidence_text = " ".join(reason_chain + [event_title] + overseas_pricing + asia_confirmation + a_share_mapping)
+        driver_terms = _clean_list(driver_tags + ([original_driver] if original_driver else []))
+        driver_hit = any(term and term in evidence_text for term in driver_terms)
+
+    complete_chain = (
+        has_counter_event
+        and has_overseas
+        and has_asia
+        and has_mapping
+        and target_exposure in {"direct", "indirect"}
+        and driver_hit
+    )
+
+    if not has_counter_event:
+        status = "未触发"
+        action_effect = "keep"
+        summary = "只有外围风险偏好扰动，缺少反向事件和标的映射"
+    elif not complete_chain:
+        status = "观察信号"
+        action_effect = "keep"
+        summary = "叙事反证链条不完整，只记录观察，不降低执行资格"
+    else:
+        action_effect = "no_participation"
+        status = "不参与"
+        summary = "叙事反证链条完整，击中最终对象当前上涨发动机，取消明日新增参与"
+
+    explicit_status = clean_visible_text(raw.get("status"))
+    if explicit_status and not complete_chain:
+        status = explicit_status
+    position_cap_pct = _action_effect_position_cap(action_effect)
+    if position_cap_pct is not None and base_position_pct:
+        position_cap_pct = min(base_position_pct, position_cap_pct)
+
+    review = {
+        "status": status,
+        "review_window": clean_visible_text(raw.get("review_window")),
+        "original_driver": original_driver,
+        "counter_event": counter_event,
+        "overseas_pricing": overseas_pricing,
+        "asia_confirmation": asia_confirmation,
+        "a_share_mapping": a_share_mapping,
+        "target_exposure": target_exposure,
+        "driver_hit": driver_hit,
+        "complete_chain": complete_chain,
+        "action_effect": action_effect,
+        "action_effect_label": _action_effect_label(action_effect),
+        "position_cap_pct": position_cap_pct,
+        "restore_conditions": _review_source_list(raw, "restore_conditions", "recovery_conditions"),
+        "cancel_conditions": _review_source_list(raw, "cancel_conditions", "cancellation_conditions", "failure_conditions"),
+        "reason_chain": reason_chain,
+        "summary": clean_visible_text(raw.get("summary"), summary),
+    }
+    if not review["reason_chain"]:
+        for item in (
+            original_driver,
+            event_title,
+            "；".join(overseas_pricing),
+            "；".join(asia_confirmation),
+            "；".join(a_share_mapping),
+            target_exposure if target_exposure != "unknown" else "",
+            review["action_effect_label"],
+        ):
+            text = clean_visible_text(item)
+            if text:
+                review["reason_chain"].append(text)
+    return review
+
+
+def _apply_premarket_review_position(position_pct, review):
+    review = _as_dict(review)
+    cap = review.get("position_cap_pct")
+    if cap in (None, ""):
+        return position_pct
+    try:
+        cap_pct = int(float(str(cap).replace("%", "").strip() or 0))
+    except (TypeError, ValueError):
+        return position_pct
+    return min(position_pct, max(cap_pct, 0))
+
+
+def _premarket_review_judgement(review, action_text):
+    review = _as_dict(review)
+    if not review:
+        return ""
+    status = clean_visible_text(review.get("status"), "未触发")
+    summary = _premarket_review_summary(review)
+    effect = clean_visible_text(review.get("action_effect_label"), "不调整")
+    return f"{status}：{summary}；动作上限：{effect}；最终动作：{action_text}"
+
+
+def _premarket_review_final_reason(review):
+    review = _as_dict(review)
+    if not review:
+        return ""
+    parts = [
+        f"盘前叙事反证复核={clean_visible_text(review.get('status'), '未触发')}",
+        _premarket_review_summary(review),
+        f"动作上限={clean_visible_text(review.get('action_effect_label'), '不调整')}",
+    ]
+    restore = "、".join(_clean_list(review.get("restore_conditions")))
+    cancel = "、".join(_clean_list(review.get("cancel_conditions")))
+    if restore:
+        parts.append(f"恢复条件={restore}")
+    if cancel:
+        parts.append(f"不参与条件={cancel}")
+    return "；".join(part for part in parts if clean_visible_text(part))
+
+
 def build_selection_workflow(
     *,
     target_date="",
@@ -705,17 +1556,50 @@ def build_selection_workflow(
     snapshot = _as_dict(market_research_snapshot)
     target_date = clean_text(target_date or data.get("target_date") or snapshot.get("target_date"))
     source_date = clean_text(data.get("source_date") or snapshot.get("source_date") or target_date)
+    quote_lookup = _build_quote_lookup(data, context, snapshot, target_date=target_date)
+    if _quote_backfill_enabled(data, context, snapshot):
+        quote_lookup = _backfill_quote_lookup(
+            quote_lookup,
+            target_date=target_date,
+            execution_stage_context=context,
+            selected_position_candidate=selected_position_candidate,
+        )
     final_stock = _pick_final_candidate(
         context,
         selected_position_candidate=selected_position_candidate,
         position_decision=position_decision,
+        quote_lookup=quote_lookup,
     )
     missing_fields = _selection_workflow_missing_fields(data, context, snapshot)
     if missing_fields:
         final_stock = {}
-    position_pct = _position_pct(position_decision) if final_stock else 0
+    base_position_pct = _position_pct(position_decision) if final_stock else 0
+    base_execution_stock = final_stock if base_position_pct else {}
+    base_candidate_pool = _build_candidate_pool(context, base_execution_stock, selected_position_candidate)
+    premarket_narrative_review = _build_premarket_narrative_review(
+        data=data,
+        context=context,
+        snapshot=snapshot,
+        selected_position_candidate=selected_position_candidate,
+        position_decision=position_decision,
+        final_target_resolution=final_target_resolution,
+        final_stock=final_stock,
+        candidate_pool=base_candidate_pool,
+        mainline=clean_text(
+            context.get("mainline_name")
+            or _as_dict(context.get("mainline_turnover_summary")).get("current_mainline"),
+            "",
+        ),
+        base_position_pct=base_position_pct,
+    )
+    position_pct = _apply_premarket_review_position(base_position_pct, premarket_narrative_review)
     execution_stock = final_stock if position_pct else {}
-    candidate_pool = _build_candidate_pool(context, execution_stock, selected_position_candidate)
+    candidate_pool = _build_candidate_pool(context, execution_stock, selected_position_candidate, quote_lookup=quote_lookup)
+    if premarket_narrative_review:
+        final_key = stock_key(final_stock)
+        for item in candidate_pool:
+            if isinstance(item, dict) and final_key and stock_key(item.get("stock")) == final_key:
+                item["premarket_narrative_review"] = dict(premarket_narrative_review)
     conflicts = _selected_candidate_conflicts(context, selected_position_candidate)
     market_state = clean_text(_as_dict(context.get("market_state_snapshot")).get("market_state"), "市场状态待确认")
     mainline = clean_text(
@@ -763,6 +1647,13 @@ def build_selection_workflow(
         if _as_dict(item.get("common_selection_consistency")).get("status") == "待复核"
     )
 
+    n8_judgement = (
+        f"关键数据不完整，停止生成：{'、'.join(missing_fields)}"
+        if missing_fields
+        else _action_text(base_position_pct)
+    )
+    n8_source_node = "N8"
+    adjusted_action_text = _action_text(position_pct)
     nodes = [
         _node("N0", "数据封装", judgement=f"事实日期：{target_date or '待确认'}", passes_forward={"target_date": target_date}),
         _node("N1", "市场周期判断", input_refs=["N0"], judgement=market_state, passes_forward={"market_layer": market_layer}),
@@ -804,19 +1695,53 @@ def build_selection_workflow(
             "N8",
             "仓位与执行条件",
             input_refs=["N7"],
-            judgement=(
-                f"关键数据不完整，停止生成：{'、'.join(missing_fields)}"
-                if missing_fields
-                else _action_text(position_pct)
-            ),
+            judgement=n8_judgement,
             passes_forward={
                 "execution_object": execution_stock,
-                "position_pct": position_pct,
+                "base_position_pct": base_position_pct,
+                "position_pct": position_pct if not premarket_narrative_review else base_position_pct,
                 "data_completeness": data_completeness,
+                "premarket_narrative_review": premarket_narrative_review,
             },
         ),
-        _node("N9", "输出一致性复核", input_refs=["N8"], judgement="同源输出", passes_forward={"source_node": "N8"}, conflicts=conflicts),
     ]
+    if premarket_narrative_review:
+        n8_source_node = "N8_5" if position_pct != base_position_pct else "N8"
+        nodes.append(
+            _node(
+                "N8_5",
+                "盘前叙事反证复核",
+                input_refs=["N8"],
+                judgement=_premarket_review_judgement(premarket_narrative_review, adjusted_action_text),
+                passes_forward={
+                    "execution_object": execution_stock,
+                    "position_pct": position_pct,
+                    "premarket_narrative_review": premarket_narrative_review,
+                },
+                cannot_conclude=(
+                    ["普通外围波动不能单独降低执行资格"]
+                    if premarket_narrative_review.get("status") in {"未触发", "观察信号"}
+                    else []
+                ),
+            )
+        )
+    nodes.append(
+        _node(
+            "N9",
+            "输出一致性复核",
+            input_refs=[n8_source_node],
+            judgement="同源输出",
+            passes_forward={"source_node": n8_source_node},
+            conflicts=conflicts,
+        )
+    )
+    final_failure_conditions = list(missing_fields)
+    if premarket_narrative_review and position_pct <= 0 and base_position_pct > 0:
+        final_failure_conditions.extend(_clean_list(premarket_narrative_review.get("cancel_conditions")))
+        summary = _premarket_review_summary(premarket_narrative_review)
+        if summary and summary not in final_failure_conditions:
+            final_failure_conditions.append(summary)
+    final_reason = _premarket_review_final_reason(premarket_narrative_review)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -829,14 +1754,17 @@ def build_selection_workflow(
         "data_completeness": data_completeness,
         "nodes": nodes,
         "candidate_pool": candidate_pool,
+        "premarket_narrative_review": premarket_narrative_review,
         "final": {
             "execution_object": execution_stock,
             "position_pct": position_pct,
-            "action_text": _action_text(position_pct),
-            "source_node": "N8",
-            "trigger_paths": [],
-            "failure_conditions": missing_fields,
+            "action_text": adjusted_action_text,
+            "source_node": n8_source_node,
+            "trigger_paths": _clean_list(premarket_narrative_review.get("restore_conditions")) if premarket_narrative_review else [],
+            "failure_conditions": final_failure_conditions,
             "fail_action": "0%不参与",
+            "premarket_narrative_review": premarket_narrative_review,
+            "reason": final_reason,
         },
         "flowchart_payload": {
             "nodes": [{"id": node["node_id"], "label": node["node_name"], "judgement": node["judgement"]} for node in nodes],
@@ -863,23 +1791,36 @@ def render_selection_workflow_mermaid(workflow):
     workflow = workflow if isinstance(workflow, dict) else {}
     lines = ["flowchart TD"]
     previous = ""
+    known_ids = set()
+    edges = []
     for node in workflow.get("nodes", []) or []:
         if not isinstance(node, dict):
             continue
         node_id = clean_text(node.get("node_id"))
         if not node_id:
             continue
+        known_ids.add(node_id)
         label = _mermaid_escape(f"{node_id} {node.get('node_name')}\\n{node.get('judgement')}")
         lines.append(f'  {node_id}["{label}"]')
-        if previous:
-            lines.append(f"  {previous} --> {node_id}")
+        input_refs = [clean_text(item) for item in node.get("input_refs", []) or [] if clean_text(item)]
+        if input_refs:
+            for input_ref in input_refs:
+                edges.append((input_ref, node_id))
+        elif previous:
+            edges.append((previous, node_id))
         previous = node_id
+    for source, target_id in edges:
+        if source in known_ids and target_id in known_ids:
+            lines.append(f"  {source} --> {target_id}")
     final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
     target = stock_label(final.get("execution_object"))
     pct = final.get("position_pct", 0)
     final_label = _mermaid_escape(f"最终：{target}\\n仓位：{pct}%")
     lines.append(f'  FINAL["{final_label}"]')
-    if previous:
+    source_node = clean_text(final.get("source_node"))
+    if source_node in known_ids:
+        lines.append(f"  {source_node} --> FINAL")
+    elif previous:
         lines.append(f"  {previous} --> FINAL")
     return "\n".join(lines)
 

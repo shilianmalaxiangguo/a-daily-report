@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -250,6 +251,520 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(row["candidate_origin"], "sector_first")
         self.assertTrue(row["new_entry_qualified"])
         self.assertIn("板块成交扩散", row["entry_basis"])
+
+    def test_limit_down_anchor_without_reversal_plan_stays_repair_observation(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "date": "2026-07-02",
+                "hot_rank_top50": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "change_pct": -10.0,
+                        "open": 29.62,
+                        "high": 31.05,
+                        "low": 28.89,
+                        "close": 28.89,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertFalse(row["new_entry_qualified"])
+        self.assertEqual(row["eliminated_at"], "N7")
+        self.assertIn("跌停", row["price_action_block_reason"])
+        self.assertEqual(row["brooks_price_action_judge"]["verdict"], "跌停风险优先")
+        self.assertIn("反包专项", row["eliminated_reason"])
+
+    def test_limit_down_quote_backfill_blocks_sector_candidate(self):
+        class FakeService:
+            def query_stock_daily_quotes_recent(self, trade_date, stock_codes=None):
+                assert trade_date == "2026-07-02"
+                assert stock_codes == ["600667"]
+                return [
+                    {
+                        "trade_date": "2026-07-02",
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "open": 29.62,
+                        "high": 31.05,
+                        "low": 28.89,
+                        "close": 28.89,
+                        "pct_chg": -10.0,
+                    }
+                ]
+
+        with patch("storage.database_service.DatabaseService.fact_store_from_environment", return_value=FakeService()):
+            workflow = build_selection_workflow(
+                target_date="2026-07-02",
+                data={
+                    "target_date": "2026-07-02",
+                    "enable_selection_workflow_quote_backfill": True,
+                },
+                execution_stage_context={
+                    "market_state_snapshot": {"market_state": "收缩防守"},
+                    "mainline_name": "半导体",
+                    "sector_derived_candidates": [
+                        {
+                            "name": "太极实业",
+                            "code": "600667",
+                            "sector": "半导体",
+                            "anchor_reversal_decision": "可作为主对象",
+                            "candidate_role": "板块锚",
+                            "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                            "participation_window": "09:50-10:10",
+                            "fallback_state": "不满足回到0%",
+                        }
+                    ],
+                },
+                position_decision={"target_position_pct": 50},
+            )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("跌停", row["price_action_block_reason"])
+        self.assertIn("反包专项", row["eliminated_reason"])
+
+    def test_same_day_quote_overrides_stale_candidate_change_pct(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "trade_date": "2026-07-02",
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "open": 29.62,
+                        "high": 31.05,
+                        "low": 28.89,
+                        "close": 28.89,
+                        "pct_chg": -10.0,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "change_pct": 3.2,
+                        "limit_status": "强势修复",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertFalse(row["new_entry_qualified"])
+        self.assertIn("跌停", row["price_action_block_reason"])
+
+    def test_bare_reversal_special_text_does_not_override_limit_down_quote(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "trade_date": "2026-07-02",
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "pct_chg": -10.0,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "execution_eligibility": "反包专项",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "跌破认错线回到0%不参与",
+                        "cancellation": "站不回VWAP就取消",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("跌停", row["price_action_block_reason"])
+
+    def test_generated_elimination_reason_does_not_become_reversal_contract(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "trade_date": "2026-07-02",
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "pct_chg": -10.0,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                        "price_action_block_reason": "同日跌幅-10.00%，按跌停/接近跌停处理",
+                        "eliminated_reason": "如要参与必须写成跌停反包专项，并给出确认窗口、作废线和回到0%的条件",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertFalse(row["new_entry_qualified"])
+        self.assertIn("跌停", row["price_action_block_reason"])
+
+    def test_stale_quote_date_does_not_block_target_date_candidate(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "trade_date": "2026-07-01",
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "pct_chg": -10.0,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "修复"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "600667")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(row["price_action_block_reason"], "")
+
+    def test_undated_quote_does_not_block_target_date_candidate(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "pct_chg": -10.0,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "修复"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "600667")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(row["price_action_block_reason"], "")
+
+    def test_undated_hot_rank_without_container_date_does_not_block_target_date_candidate(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "hot_rank_top50": [
+                    {
+                        "stock_code": "600667",
+                        "code": "600667",
+                        "name": "太极实业",
+                        "pct_chg": -10.0,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "修复"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "600667")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertEqual(row["price_action_block_reason"], "")
+
+    def test_plain_reversal_text_does_not_combine_with_quote_limit_down(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "date": "2026-07-02",
+                "hot_rank_top50": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "change_pct": -10.0,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "pattern": "反包强收盘",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "跌破认错线回到0%不参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("跌停", row["price_action_block_reason"])
+
+    def test_bare_anti_nuclear_text_without_special_contract_stays_observation(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "date": "2026-07-02",
+                "hot_rank_top50": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "change_pct": -10.0,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "execution_eligibility": "反核",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足就不参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertIn("反包专项", row["eliminated_reason"])
+
+    def test_limit_down_reversal_plan_can_remain_final_when_explicit_and_cancelable(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "date": "2026-07-02",
+                "hot_rank_top50": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "change_pct": -10.0,
+                        "open": 29.62,
+                        "high": 31.05,
+                        "low": 28.89,
+                        "close": 28.89,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "execution_eligibility": "跌停反包专项",
+                        "participation_window": "09:50-10:10跌停反包确认",
+                        "fallback_state": "不满足回到0%不参与",
+                        "cancellation": "继续封死或站不回VWAP就不参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "600667")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertTrue(row["new_entry_qualified"])
+        self.assertEqual(row["status"], "最终执行对象")
+        self.assertEqual(row["price_action_block_reason"], "")
+        self.assertEqual(row["brooks_price_action_judge"]["verdict"], "跌停后反包修复待确认")
+
+    def test_limit_down_reversal_plan_accepts_tail_window_when_explicit(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-02",
+            data={
+                "date": "2026-07-02",
+                "hot_rank_top50": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "change_pct": -10.0,
+                        "zt_status": "跌停",
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "execution_eligibility": "跌停反包专项",
+                        "participation_window": "14:30-14:55跌停反包确认",
+                        "fallback_state": "不满足回到0%不参与",
+                        "cancellation": "继续封死或站不回VWAP就不参与",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+
+        self.assertEqual(workflow["final"]["execution_object"]["code"], "600667")
+        self.assertEqual(workflow["final"]["position_pct"], 50)
+        self.assertTrue(row["new_entry_qualified"])
+        self.assertEqual(row["price_action_block_reason"], "")
 
     def test_missing_critical_data_stops_workflow_final_output(self):
         workflow = build_selection_workflow(
@@ -531,6 +1046,298 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(empty_workflow["final"]["action_text"], "0%不参与")
         self.assertEqual(empty_workflow["final"]["execution_object"], {})
         self.assertEqual(empty_workflow["candidate_pool"][0]["status"], "过程候选")
+
+    def test_premarket_narrative_review_ignores_plain_external_weakness(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "review_window": "2026-07-01 18:00 -> 2026-07-02 09:25",
+                    "overseas_pricing": ["纳指科技股回落", "美股半导体下跌"],
+                    "asia_confirmation": ["韩国指数低开"],
+                    "reason_chain": ["外盘风险偏好走弱"],
+                }
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "进攻分歧"},
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散，PCB供应商承接",
+                        "volume_summary": "放量",
+                        "pattern": "突破后强收盘",
+                        "participation_window": "09:30-09:35",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        review = workflow["premarket_narrative_review"]
+        n8_5 = next(node for node in workflow["nodes"] if node["node_id"] == "N8_5")
+
+        self.assertEqual(review["status"], "未触发")
+        self.assertEqual(review["action_effect"], "keep")
+        self.assertEqual(workflow["final"]["position_pct"], 100)
+        self.assertEqual(workflow["final"]["source_node"], "N8")
+        self.assertIn("未触发", n8_5["judgement"])
+        mermaid = render_selection_workflow_mermaid(workflow)
+        self.assertIn("N8 --> N8_5", mermaid)
+        self.assertIn("N8 --> N9", mermaid)
+        self.assertIn("N8 --> FINAL", mermaid)
+        self.assertNotIn("N8_5 --> N9", mermaid)
+        self.assertNotIn("N8_5 --> FINAL", mermaid)
+
+    def test_premarket_narrative_review_keeps_broad_us_selloff_as_external_noise(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "review_window": "2026-07-01 18:00 -> 2026-07-02 09:25",
+                    "original_driver": "AI算力和存储紧缺",
+                    "counter_event": {"title": "美股半导体大跌", "source": "market"},
+                    "overseas_pricing": ["费城半导体指数下跌", "英伟达盘前回落"],
+                    "asia_confirmation": ["韩国指数低开"],
+                    "a_share_mapping": ["半导体", "AI算力基础设施"],
+                    "target_exposure": "direct",
+                    "reason_chain": ["美股半导体大跌", "外盘风险偏好走弱", "A股半导体承压"],
+                }
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "进攻分歧"},
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散，PCB供应商承接",
+                        "current_driver_tags": ["AI算力", "半导体"],
+                        "participation_window": "09:30-09:35",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        review = workflow["premarket_narrative_review"]
+
+        self.assertEqual(review["status"], "未触发")
+        self.assertEqual(review["action_effect"], "keep")
+        self.assertFalse(review["complete_chain"])
+        self.assertEqual(workflow["final"]["position_pct"], 100)
+        self.assertEqual(workflow["final"]["source_node"], "N8")
+
+    def test_premarket_narrative_review_cancels_complete_meta_compute_chain(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "review_window": "2026-07-01 18:00 -> 2026-07-02 09:25",
+                    "original_driver": "AI算力和存储紧缺",
+                    "counter_event": {
+                        "title": "Meta据悉布局AI云业务，拟对外出售算力",
+                        "source": "CLS",
+                        "source_time": "2026-07-01 20:35:04",
+                        "level": "B",
+                        "url": "https://www.cls.cn/detail/2414547",
+                    },
+                    "overseas_pricing": [
+                        "CoreWeave/Nebius盘前跌超9%",
+                        "美光/闪迪带动存储链下跌",
+                    ],
+                    "asia_confirmation": ["KOSPI跌超5%，SK海力士跌8%，三星电子跌7%"],
+                    "a_share_mapping": ["半导体", "PCB", "AI算力基础设施"],
+                    "target_exposure": "direct",
+                    "restore_conditions": ["同链板块不继续负反馈", "太极实业开盘承接独立"],
+                    "cancel_conditions": ["同链板块继续负反馈", "标的无法修复承接"],
+                    "reason_chain": [
+                        "AI算力和存储紧缺",
+                        "Meta拟对外出售算力",
+                        "海外算力租赁和存储链下跌",
+                        "韩国海力士和三星确认",
+                        "A股半导体/PCB/AI算力基础设施承压",
+                        "太极实业直接暴露",
+                        "满仓条件执行取消为不参与",
+                    ],
+                }
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "进攻分歧"},
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散，PCB供应商承接",
+                        "current_driver_tags": ["AI算力", "PCB", "半导体"],
+                        "volume_summary": "放量",
+                        "pattern": "突破后强收盘",
+                        "participation_window": "09:30-09:35",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        review = workflow["premarket_narrative_review"]
+        n8_5 = next(node for node in workflow["nodes"] if node["node_id"] == "N8_5")
+        mermaid = render_selection_workflow_mermaid(workflow)
+
+        self.assertEqual(review["status"], "不参与")
+        self.assertEqual(review["action_effect"], "no_participation")
+        self.assertEqual(review["position_cap_pct"], 0)
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["source_node"], "N8_5")
+        self.assertEqual(workflow["final"]["premarket_narrative_review"]["target_exposure"], "direct")
+        self.assertIn("0%不参与", n8_5["judgement"])
+        self.assertIn("N8_5", mermaid)
+
+    def test_premarket_narrative_review_complete_chain_ignores_keep_effect(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "original_driver": "AI算力和存储紧缺",
+                    "counter_event": {"title": "Meta拟对外出售算力", "source": "CLS", "level": "B"},
+                    "overseas_pricing": ["算力租赁商盘前下跌"],
+                    "asia_confirmation": ["韩国存储核心低开"],
+                    "a_share_mapping": ["半导体", "PCB", "AI算力基础设施"],
+                    "target_exposure": "direct",
+                    "action_effect": "keep",
+                    "status": "保持原计划",
+                    "reason_chain": [
+                        "AI算力和存储紧缺",
+                        "Meta拟对外出售算力",
+                        "海外同链下跌",
+                        "韩国存储核心确认",
+                        "A股AI算力基础设施承压",
+                        "太极实业直接暴露",
+                    ],
+                }
+            },
+            execution_stage_context={
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散",
+                        "current_driver_tags": ["AI算力", "PCB", "半导体"],
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        review = workflow["premarket_narrative_review"]
+
+        self.assertEqual(review["status"], "不参与")
+        self.assertEqual(review["action_effect"], "no_participation")
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertEqual(workflow["final"]["action_text"], "0%不参与")
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["source_node"], "N8_5")
+
+    def test_premarket_narrative_review_requires_driver_hit_before_downgrade(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "original_driver": "AI算力和存储紧缺",
+                    "counter_event": {"title": "国际油价下跌拖累能源链", "source": "CLS", "level": "B"},
+                    "overseas_pricing": ["海外能源股走弱"],
+                    "asia_confirmation": ["日本航运和能源链低开"],
+                    "a_share_mapping": ["航运", "能源"],
+                    "target_exposure": "direct",
+                    "reason_chain": [
+                        "国际油价下跌",
+                        "海外能源股走弱",
+                        "日本航运和能源链低开",
+                        "A股航运能源承压",
+                    ],
+                }
+            },
+            execution_stage_context={
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散",
+                        "current_driver_tags": ["AI算力", "PCB", "半导体"],
+                        "participation_window": "09:30-09:35",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        review = workflow["premarket_narrative_review"]
+
+        self.assertEqual(review["status"], "观察信号")
+        self.assertFalse(review["driver_hit"])
+        self.assertEqual(review["action_effect"], "keep")
+        self.assertEqual(workflow["final"]["position_pct"], 100)
+        self.assertEqual(workflow["final"]["source_node"], "N8")
+
+    def test_premarket_narrative_review_keeps_incomplete_chain_observational(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-01",
+            data={
+                "premarket_narrative_review": {
+                    "original_driver": "AI算力和存储紧缺",
+                    "counter_event": {"title": "Meta拟对外出售算力", "source": "CLS", "level": "B"},
+                    "overseas_pricing": ["算力租赁商盘前下跌"],
+                    "target_exposure": "unknown",
+                    "reason_chain": ["Meta拟对外出售算力", "海外算力租赁商下跌"],
+                }
+            },
+            execution_stage_context={
+                "mainline_name": "AI算力基础设施",
+                "sector_derived_candidates": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "AI算力基础设施",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "AI算力链成交扩散",
+                        "participation_window": "09:30-09:35",
+                        "fallback_state": "不满足回到0%",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 100},
+        )
+
+        review = workflow["premarket_narrative_review"]
+
+        self.assertEqual(review["status"], "观察信号")
+        self.assertEqual(review["action_effect"], "keep")
+        self.assertEqual(workflow["final"]["position_pct"], 100)
+        self.assertEqual(workflow["final"]["source_node"], "N8")
 
     def test_render_mermaid_from_workflow_nodes(self):
         workflow = {

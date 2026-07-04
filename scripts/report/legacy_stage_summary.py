@@ -6,6 +6,8 @@ from report.conclusion_support import (
     build_market_outlook_text,
     build_risk_trade_note,
     derive_trade_style,
+    existing_position_should_lead,
+    existing_position_summary_text,
     get_watch_anchor_note,
     resolve_best_stock,
     resolve_selected_position_candidate,
@@ -86,7 +88,11 @@ def _build_candidate_row(context, stage_meta=None):
     core_count = int(context.get("core_count", 0) or 0)
     secondary_count = int(context.get("secondary_count", 0) or 0)
     crossline_count = int(context.get("crossline_count", 0) or 0)
-    prefer_data_driven_rows = bool(context.get("prefer_data_driven_stage_rows")) or not bool(context.get("report_stages"))
+    prefer_data_driven_rows = (
+        bool(context.get("prefer_data_driven_stage_rows"))
+        or bool(existing_position_summary_text(context))
+        or not bool(context.get("report_stages"))
+    )
     guidance = f"{core_count}+{secondary_count} / {crossline_count}只"
     if prefer_data_driven_rows:
         guidance = build_candidate_trade_directive(context)
@@ -99,7 +105,11 @@ def _build_candidate_row(context, stage_meta=None):
 
 def _build_risk_row(context, stage_meta=None):
     risk_summary = str(context.get("risk_summary", "") or "").strip()
-    prefer_data_driven_rows = bool(context.get("prefer_data_driven_stage_rows")) or not bool(context.get("report_stages"))
+    prefer_data_driven_rows = (
+        bool(context.get("prefer_data_driven_stage_rows"))
+        or bool(existing_position_summary_text(context))
+        or not bool(context.get("report_stages"))
+    )
     if prefer_data_driven_rows:
         risk_note = build_risk_trade_note(context)
         if resolve_selected_position_candidate(context) and selected_target_is_attack_ready(context):
@@ -116,18 +126,25 @@ def _build_execution_row(context, stage_meta=None):
     selected = resolve_selected_position_candidate(context)
     best_stock = resolve_best_stock(context)
     watch_anchor = resolve_watch_anchor(context)
-    if selected and selected_target_is_attack_ready(context):
+    existing_position = existing_position_summary_text(context)
+    if existing_position and existing_position_should_lead(context):
+        guidance = "0%新仓；旧仓按持仓预案处理"
+    elif selected and selected_target_is_attack_ready(context):
         guidance = "只等明日目标标的在固定交易窗口内满足条件"
     elif trade_gate_open:
         if best_stock:
-	            guidance = "只等当晚已决定的明日执行对象满足执行资格"
+            guidance = "只等明天唯一能买的那只自己走出来"
         elif watch_anchor:
             guidance = "先确认重点盯盘股，再看能否缩到一只可买股"
         else:
             guidance = "当前仍未形成候选对象，先继续等待"
     else:
         guidance = "不开新仓，只保留重点观察谁"
-    prefer_data_driven_rows = bool(context.get("prefer_data_driven_stage_rows")) or not bool(context.get("report_stages"))
+    prefer_data_driven_rows = (
+        bool(context.get("prefer_data_driven_stage_rows"))
+        or bool(existing_position and existing_position_should_lead(context))
+        or not bool(context.get("report_stages"))
+    )
     trade_style = derive_trade_style(context)
     if prefer_data_driven_rows and trade_style:
         guidance = f"{trade_style}；{guidance}"
@@ -141,7 +158,10 @@ def _build_decisive_row(context, stage_meta=None):
     watch_anchor_type = str(context.get("watch_anchor_type", "") or "").strip()
     trade_gate_open = bool(context.get("trade_gate_open"))
     watch_anchor_note = get_watch_anchor_note(watch_anchor)
+    existing_position = existing_position_summary_text(context)
 
+    if existing_position and existing_position_should_lead(context):
+        return _row("decisive_choice", _resolve_stage_title(stage_meta, "唯一动作"), f"旧仓处理：{existing_position}")
     if selected:
         stock_label = f"{selected.get('name')}({selected.get('code') or selected.get('stock_code')})"
         if selected_target_is_attack_ready(context):

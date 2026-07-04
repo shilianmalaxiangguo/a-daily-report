@@ -129,20 +129,57 @@ def _normalize_daily_row(row):
     }
 
 
-def fetch_stock_daily_turnover_records(trade_date, *, pro=None, ts_module=None):
+def fetch_stock_daily_turnover_records(
+    trade_date,
+    *,
+    pro=None,
+    ts_module=None,
+    page_limit=1000,
+    page_retry_count=5,
+):
     compact = _compact_date(trade_date)
     if not compact:
         return []
-    pro = pro or create_tushare_pro_api(ts_module=ts_module)
-    frame = pro.daily(
-        trade_date=compact,
-        fields="ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount",
-    )
+    pro = pro or create_tushare_pro_api(ts_module=ts_module, timeout_seconds=30)
+    fields = "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
     records = []
-    for row in _frame_to_records(frame):
-        normalized = _normalize_daily_row(row)
-        if normalized:
-            records.append(normalized)
+    offset = 0
+    limit = int(page_limit or 1000)
+    while True:
+        last_error = None
+        page_rows = []
+        for attempt in range(max(int(page_retry_count or 0), 0) + 1):
+            try:
+                frame = pro.daily(
+                    start_date=compact,
+                    end_date=compact,
+                    fields=fields,
+                    limit=limit,
+                    offset=offset,
+                )
+                page_rows = _frame_to_records(frame)
+                if offset > 0 and not page_rows:
+                    raise RuntimeError(f"empty tushare daily page at offset {offset}")
+                break
+            except Exception as error:
+                last_error = error
+                if attempt >= max(int(page_retry_count or 0), 0):
+                    raise
+                try:
+                    import time
+
+                    time.sleep(1)
+                except Exception:
+                    pass
+        else:  # pragma: no cover - defensive; loop either breaks or raises
+            raise last_error
+        for row in page_rows:
+            normalized = _normalize_daily_row(row)
+            if normalized:
+                records.append(normalized)
+        if len(page_rows) < limit:
+            break
+        offset += limit
     return records
 
 

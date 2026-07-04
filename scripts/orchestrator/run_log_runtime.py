@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import traceback
 from datetime import datetime
@@ -89,11 +90,102 @@ def _write_error_summary(error_log_path, *, started_at, failed_at, argv, run_log
     error_log_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+_IMPORTANT_LINE_MARKERS = (
+    "关键数据不完整",
+    "停止生成",
+    "日报一致性检查",
+    "数据获取失败",
+    "失败",
+    "Traceback",
+    "Error",
+    "error",
+    "Tushare",
+    "tushare",
+    "quicktiny",
+    "QuickTiny",
+    "异动检测",
+    "未生成",
+)
+
+
+def _redact_sensitive_text(text):
+    value = str(text or "")
+    value = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer ***", value)
+    value = re.sub(r"(token=)[^;\\s\"']+", r"\1***", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"((?:QUICKTINY|TUSHARE)[A-Z0-9_]*TOKEN[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;]+",
+        r"\1***",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return value
+
+
+def _recent_important_lines(run_log_path, *, limit=40):
+    try:
+        lines = Path(run_log_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    matched = [
+        _redact_sensitive_text(line)
+        for line in lines
+        if any(marker in line for marker in _IMPORTANT_LINE_MARKERS)
+    ]
+    return matched[-limit:]
+
+
+def _write_latest_run_summary(root, summary, *, failed=False):
+    root = Path(root)
+    payload = dict(summary)
+    payload["recent_important_lines"] = _recent_important_lines(payload.get("run_log_path", ""))
+    (root / "latest_run.json").write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    if failed:
+        (root / "latest_failure.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
+def _build_latest_summary(
+    *,
+    started_at,
+    finished_at,
+    argv,
+    run_key,
+    target_label,
+    run_log_path,
+    status,
+    exit_code,
+    error_log_path=None,
+    error=None,
+):
+    payload = {
+        "run_key": run_key,
+        "target_label": target_label,
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "argv": list(argv or []),
+        "status": status,
+        "exit_code": int(exit_code),
+        "run_log_path": str(run_log_path),
+    }
+    if error_log_path is not None:
+        payload["error_log_path"] = str(error_log_path)
+    if error is not None:
+        payload["error_type"] = error.__class__.__name__
+        payload["error_message"] = _redact_sensitive_text(str(error))
+    return payload
+
+
 def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
     argv = list(argv or sys.argv)
     started_dt = now or datetime.now()
     started_at = started_dt.strftime("%Y-%m-%d %H:%M:%S")
-    run_key = f"{started_dt.strftime('%Y%m%d-%H%M%S')}__{_normalize_target_label(argv)}"
+    target_label = _normalize_target_label(argv)
+    run_key = f"{started_dt.strftime('%Y%m%d-%H%M%S')}__{target_label}"
 
     root = Path(logs_root) if logs_root else _default_logs_root()
     runs_dir = root / "runs"
@@ -113,11 +205,27 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
         _write_run_banner(log_handle, started_at=started_at, argv=argv, run_log_path=run_log_path)
         try:
             exit_code = _normalize_exit_code(main_fn())
+            finished_at = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
+            status = "success" if exit_code == 0 else "nonzero_exit"
             _write_run_footer(
                 log_handle,
-                finished_at=(now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S"),
-                status="success" if exit_code == 0 else "nonzero_exit",
+                finished_at=finished_at,
+                status=status,
                 exit_code=exit_code,
+            )
+            _write_latest_run_summary(
+                root,
+                _build_latest_summary(
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    argv=argv,
+                    run_key=run_key,
+                    target_label=target_label,
+                    run_log_path=run_log_path,
+                    status=status,
+                    exit_code=exit_code,
+                ),
+                failed=exit_code != 0,
             )
             return exit_code
         except SystemExit as exc:
@@ -142,6 +250,22 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
                 status="success" if exit_code == 0 else "system_exit",
                 exit_code=exit_code,
             )
+            _write_latest_run_summary(
+                root,
+                _build_latest_summary(
+                    started_at=started_at,
+                    finished_at=failed_at,
+                    argv=argv,
+                    run_key=run_key,
+                    target_label=target_label,
+                    run_log_path=run_log_path,
+                    error_log_path=error_log_path if exit_code != 0 else None,
+                    status="success" if exit_code == 0 else "system_exit",
+                    exit_code=exit_code,
+                    error=exc if exit_code != 0 else None,
+                ),
+                failed=exit_code != 0,
+            )
             raise
         except Exception as error:
             failed_at = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
@@ -161,6 +285,22 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
                 finished_at=failed_at,
                 status="error",
                 exit_code=1,
+            )
+            _write_latest_run_summary(
+                root,
+                _build_latest_summary(
+                    started_at=started_at,
+                    finished_at=failed_at,
+                    argv=argv,
+                    run_key=run_key,
+                    target_label=target_label,
+                    run_log_path=run_log_path,
+                    error_log_path=error_log_path,
+                    status="error",
+                    exit_code=1,
+                    error=error,
+                ),
+                failed=True,
             )
             raise
         finally:

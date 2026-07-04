@@ -23,6 +23,18 @@ def _format_position_display(position_level):
     return text or "0%不参与"
 
 
+def _existing_position_summary_text(context):
+    context = context or {}
+    summary = context.get("existing_position_summary")
+    if not isinstance(summary, dict):
+        personal_position_context = context.get("personal_position_context")
+        if isinstance(personal_position_context, dict):
+            summary = personal_position_context.get("existing_position_summary")
+    if not isinstance(summary, dict) or not summary.get("has_position"):
+        return ""
+    return str(summary.get("summary") or "").strip()
+
+
 def _is_ten_confirm_upgrade_candidate(candidate):
     candidate = candidate or {}
     if _candidate_has_incomplete_action_trace(candidate):
@@ -328,6 +340,8 @@ def build_action_plan_context_payload(context):
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
     has_personal_positions = bool(context.get("has_personal_positions", False))
+    existing_position_text = _existing_position_summary_text(context)
+    has_existing_position_context = bool(existing_position_text)
     final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
     if final_empty_without_current_observation:
         best_stock = None
@@ -474,6 +488,32 @@ def build_action_plan_context_payload(context):
             }
         )
     else:
+        if has_existing_position_context:
+            action_rows.append(
+                {
+                    "action": "🟠 只处理旧仓",
+                    "name": "旧仓",
+                    "code": "-",
+                    "trigger": (
+                        f"{existing_position_text}；按持仓预案处理，不新增参与"
+                        if existing_position_text
+                        else "按持仓预案处理旧仓，不新增参与"
+                    ),
+                    "risk_window": "失效价或09:50-10:10不能修复",
+                }
+            )
+        else:
+            action_rows.append(
+                {
+                    "action": "❌ 明天没有可买对象",
+                    "name": "-",
+                    "code": "-",
+                    "trigger": _format_closed_gate_buy_limit_text(position_level, final_gate) if not trade_gate_open else "无符合条件标的",
+                    "risk_window": "-",
+                }
+            )
+
+    if not action_rows:
         action_rows.append(
             {
                 "action": "❌ 明天没有可买对象",
@@ -532,7 +572,15 @@ def build_action_plan_context_payload(context):
     ]
     position_display = _format_position_display(position_level)
     if position_display == "0%不参与":
-        if final_empty_without_current_observation:
+        if has_existing_position_context:
+            position_section_lines.extend(
+                [
+                    f"- **现在到底是什么状态**: 已有旧仓：{existing_position_text or '按持仓预案处理'}",
+                    "- **明天仓位放多少**: 0%新仓；只处理旧仓，不新增参与",
+                    "- **明天具体怎么做**: 先按持仓预案处理旧仓；不因外部消息脉冲临时加仓",
+                ]
+            )
+        elif final_empty_without_current_observation:
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 0%不参与，不抢跑，候选只保留过程回看",
@@ -634,6 +682,8 @@ def build_action_plan_context_payload(context):
         )
         append_watch_anchor_note(pre_market_lines, observation_anchor)
         append_observation_price_focus_note(pre_market_lines, price_focus)
+    elif has_existing_position_context:
+        pre_market_lines.append(f"- **旧仓准备**: {existing_position_text or '按持仓预案处理'}")
     else:
         pre_market_lines.append("- **空仓准备**: 无操作标的，准备观望")
     pre_market_lines.extend(["- 查看隔夜消息、外围市场、期货走势", "- 确认A杀冷却池无变化"])
@@ -642,7 +692,14 @@ def build_action_plan_context_payload(context):
         "- 观察涨跌比、昨日涨停溢价率",
         "- 重新评估Step 0裁决是否仍然成立",
     ]
-    if final_empty_without_current_observation:
+    if has_existing_position_context and position_display == "0%不参与":
+        opening_lines.extend(
+            [
+                "- 先看旧仓竞价表态、开盘承接和板块同步，不把外部消息脉冲直接转成加仓",
+                "- 09:50-10:10仍不能修复到持仓预案要求，优先降风险",
+            ]
+        )
+    elif final_empty_without_current_observation:
         opening_lines.extend(
             [
                 "- 只观察主攻线承接和过程样本反馈，不把竞价强弱转成新增参与",
@@ -699,19 +756,32 @@ def build_action_plan_context_payload(context):
                     "- 若观察标的全天未形成更强确认 → 继续等待",
                 ]
         else:
-            first_hour_lines = [
-                "- 当前条件不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
-                "- 重点观察优先对象是否继续走强；若你有旧仓，只处理旧仓，不做新增",
-            ]
-            intraday_lines = [
-                "- 以观察和处理持仓为主，不做新开仓",
-                "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
-                "- 若观察标的全天未形成更强确认 → 继续等待",
-            ]
+            if has_existing_position_context:
+                first_hour_lines = [
+                    "- 当前条件不允许新增参与，本时段只确认旧仓是否仍有持仓资格",
+                    "- 旧仓若不能强于板块锚点和分时均价，优先按预案降风险",
+                ]
+                intraday_lines = [
+                    "- 以处理旧仓为主，不做新增参与",
+                    "- 失效价失守或日内明显转弱，执行减仓/止损",
+                    "- 观察标的全天未形成更强确认，继续等待，不替换旧仓处理计划",
+                ]
+            else:
+                first_hour_lines = [
+                    "- 当前条件不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
+                    "- 重点观察优先对象是否继续走强；若你有旧仓，只处理旧仓，不做新增",
+                ]
+                intraday_lines = [
+                    "- 以观察和处理持仓为主，不做新开仓",
+                    "- 若你有仓位，失效价失守或日内明显转弱 → 执行减仓/止损",
+                    "- 若观察标的全天未形成更强确认 → 继续等待",
+                ]
 
-    closing_lines = ["- 未买入的保持观望"]
+    closing_lines = ["- 未新增参与的保持观望"]
     if trade_gate_open and best_stock:
         closing_lines.append("- 已买入的确认风险线是否需要上移")
+    elif has_existing_position_context:
+        closing_lines.append("- 旧仓按持仓预案确认是否继续留到下一交易日")
     else:
         closing_lines.append("- 若你有旧仓，确认风险线是否需要上移")
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as _dt
+import os
 
+from market_data.tushare_client import load_local_env_file as _load_runtime_env_file
 from domains.calendar_events.request import collect_calendar_events_request_bundle
 from domains.market_activity.infer import (
     build_market_activity_quant_signal_bundle,
@@ -38,6 +40,53 @@ from selection.new_stock_narrative_runtime import build_new_stock_research_pool
 __all__ = ["run_input_runtime"]
 
 _MISSING = object()
+QUICKTINY_EXCHANGE_MONITOR_URL = "https://stock.quicktiny.cn/api/ladder/exchange-monitor/prediction"
+QUICKTINY_EXCHANGE_MONITOR_TOKEN_ENVS = (
+    "QUICKTINY_EXCHANGE_MONITOR_TOKEN",
+    "QUICKTINY_TOKEN",
+)
+
+
+def _quicktiny_exchange_monitor_token(env=None):
+    if env is None:
+        _load_runtime_env_file()
+    source = os.environ if env is None else env
+    for key in QUICKTINY_EXCHANGE_MONITOR_TOKEN_ENVS:
+        token = str(source.get(key) or "").strip()
+        if not token:
+            continue
+        if token.lower().startswith("bearer "):
+            token = token.split(None, 1)[1].strip()
+        if token:
+            return token
+    return ""
+
+
+def _quicktiny_exchange_monitor_headers(env=None):
+    token = _quicktiny_exchange_monitor_token(env)
+    if not token:
+        return {}
+    return {
+        "accept": "application/json, text/plain, */*",
+        "authorization": f"Bearer {token}",
+        "cookie": f"token={token}",
+        "referer": "https://stock.quicktiny.cn/anomaly-center?tab=prediction",
+    }
+
+
+def _fetch_quicktiny_exchange_monitor_payload(*, requests_module=None, env=None, timeout=10):
+    if requests_module is None:
+        import requests as requests_module
+
+    headers = _quicktiny_exchange_monitor_headers(env)
+    response = requests_module.get(
+        QUICKTINY_EXCHANGE_MONITOR_URL,
+        headers=headers or None,
+        timeout=timeout,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"exchange monitor status {response.status_code}")
+    return response.json()
 
 
 def _margin_pressure_payload_available(payload):
@@ -643,20 +692,11 @@ def _run_input_runtime_legacy_body(target_date=None):
                 }
             )
 
-        def _fetch_exchange_monitor_payload():
-            import requests
-
-            url = "https://stock.quicktiny.cn/api/ladder/exchange-monitor/prediction"
-            response = requests.get(url, timeout=10)
-            if response.status_code != 200:
-                raise RuntimeError(f"exchange monitor status {response.status_code}")
-            return response.json()
-
         monitoring_result = collect_monitoring_request_bundle(
             target_date,
             analyzer_factory=XuangubaoIntradayAnalyzer,
             fetch_wanzhu_top10=collector.get_wanzhu_top10,
-            fetch_exchange_monitor_payload=_fetch_exchange_monitor_payload,
+            fetch_exchange_monitor_payload=_fetch_quicktiny_exchange_monitor_payload,
             fetch_stock_batch_info=lambda codes: TencentFinanceData().get_stock_batch_info(codes),
             fetch_tushare_stock_batch_info=lambda codes: fetch_stock_batch_quote_info(codes, target_date),
             timer=timer,

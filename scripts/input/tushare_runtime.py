@@ -1378,6 +1378,32 @@ def _extract_sina_etf_universe_symbol(row):
     return ""
 
 
+def _sina_etf_current_list_amount_snapshot(universe_rows, symbols):
+    symbol_set = set(symbols or [])
+    total_amount_yi = 0.0
+    positive_count = 0
+    matched_count = 0
+    for row in universe_rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = _extract_sina_etf_universe_symbol(row)
+        if symbol_set and symbol not in symbol_set:
+            continue
+        matched_count += 1
+        amount_yi = _sina_etf_amount_yi(_pick(row, "成交额", "amount", "成交金额", default=0))
+        if amount_yi <= 0:
+            continue
+        total_amount_yi += amount_yi
+        positive_count += 1
+    total_count = len(symbol_set) if symbol_set else matched_count
+    return {
+        "amount_yi": total_amount_yi,
+        "positive_count": positive_count,
+        "total_count": total_count,
+        "coverage_ratio": round(positive_count / total_count, 4) if total_count > 0 else 0.0,
+    }
+
+
 def _fetch_sina_etf_hist_encoded(symbol, *, timeout=10):
     import requests
 
@@ -1445,12 +1471,28 @@ def _annotate_etf_turnover_coverage_quality(rows, target_date_text, total_symbol
     overall_coverage_ratio = round(current_count / total_count, 4) if total_count > 0 else 1.0
     relative_anomaly = len(prior_counts) >= 3 and reference_count > 0 and current_count > 0 and coverage_ratio < 0.7
     overall_anomaly = total_count >= 10 and current_count > 0 and overall_coverage_ratio < 0.95
-    is_anomaly = relative_anomaly or overall_anomaly
+    sequence_low_rows = []
+    if total_count >= 10:
+        for index, row in enumerate(rows):
+            if index == target_index:
+                continue
+            row_count = int(_safe_float((row or {}).get("covered_etf_count"), default=0))
+            if row_count <= 0:
+                continue
+            row_coverage_ratio = round(row_count / total_count, 4)
+            if row_coverage_ratio < 0.95:
+                sequence_low_rows.append((index, row_count, row_coverage_ratio))
+    sequence_anomaly = bool(sequence_low_rows)
+    min_sequence_count = min((item[1] for item in sequence_low_rows), default=0)
+    min_sequence_coverage_ratio = min((item[2] for item in sequence_low_rows), default=1.0)
+    is_anomaly = relative_anomaly or overall_anomaly or sequence_anomaly
     quality = {
         "coverage_status": "partial" if is_anomaly else "normal",
         "coverage_anomaly": bool(is_anomaly),
         "coverage_ratio": coverage_ratio,
         "overall_coverage_ratio": overall_coverage_ratio,
+        "sequence_min_coverage_ratio": min_sequence_coverage_ratio,
+        "sequence_min_covered_etf_count": min_sequence_count,
         "coverage_reference_count": reference_count,
         "latest_covered_etf_count": current_count,
         "total_etf_universe_count": total_count,
@@ -1465,13 +1507,22 @@ def _annotate_etf_turnover_coverage_quality(rows, target_date_text, total_symbol
             )
         if overall_anomaly:
             reasons.append(f"目标日有成交ETF数{current_count}只，仅覆盖ETF样本池{total_count}只的95%以下")
+        if sequence_anomaly:
+            reasons.append(f"历史序列最低有成交ETF数{min_sequence_count}只，仅覆盖ETF样本池{total_count}只的95%以下")
         reason = "；".join(reasons) + "，样本覆盖不足"
         current["coverage_anomaly"] = True
         current["coverage_ratio"] = coverage_ratio
         current["overall_coverage_ratio"] = overall_coverage_ratio
+        current["sequence_min_coverage_ratio"] = min_sequence_coverage_ratio
+        current["sequence_min_covered_etf_count"] = min_sequence_count
         current["coverage_reference_count"] = reference_count
         current["total_etf_universe_count"] = total_count
         current["coverage_anomaly_reason"] = reason
+        for row_index, row_count, row_coverage_ratio in sequence_low_rows:
+            rows[row_index]["coverage_anomaly"] = True
+            rows[row_index]["overall_coverage_ratio"] = row_coverage_ratio
+            rows[row_index]["total_etf_universe_count"] = total_count
+            rows[row_index]["coverage_anomaly_reason"] = reason
         quality["coverage_anomaly_reason"] = reason
     rows[target_index] = current
     return rows, quality
@@ -1634,6 +1685,77 @@ def _build_etf_turnover_series_payload(
         **coverage_quality,
         "rows": rows,
     }
+
+
+def _append_sina_current_list_target_etf_turnover(
+    payload,
+    *,
+    amount_by_date,
+    count_by_date,
+    universe_rows,
+    symbols,
+    target_date_text="",
+    window_days=25,
+    usable_etf_count=0,
+    empty_etf_count=0,
+):
+    payload = dict(payload or {})
+    if not target_date_text:
+        return payload
+    today_text = datetime.date.today().strftime("%Y-%m-%d")
+    if target_date_text != today_text:
+        return payload
+    rows = payload.get("rows") or []
+    if any(str((row or {}).get("trade_date") or "").strip() == target_date_text for row in rows):
+        return payload
+    last_trade_date = str((rows[-1] or {}).get("trade_date") or "").strip() if rows else ""
+    if last_trade_date and last_trade_date >= target_date_text:
+        return payload
+
+    snapshot = _sina_etf_current_list_amount_snapshot(universe_rows, symbols)
+    current_count = int(snapshot.get("positive_count") or 0)
+    total_count = int(snapshot.get("total_count") or 0)
+    current_amount_yi = _safe_float(snapshot.get("amount_yi"))
+    current_coverage_ratio = _safe_float(snapshot.get("coverage_ratio"))
+    if current_amount_yi <= 0 or total_count <= 0 or current_count <= 0 or current_coverage_ratio < 0.95:
+        reason = (
+            f"新浪ETF当日列表有成交ETF数{current_count}只，仅覆盖ETF样本池{total_count}只的95%以下，"
+            "不使用当日列表补齐目标日"
+        )
+        payload["coverage_status"] = "partial"
+        payload["coverage_anomaly"] = True
+        payload["coverage_anomaly_reason"] = reason
+        payload["sina_current_list_coverage_ratio"] = current_coverage_ratio
+        if rows:
+            rows[-1]["coverage_anomaly"] = True
+            rows[-1]["coverage_anomaly_reason"] = reason
+            payload["rows"] = rows
+        return payload
+
+    patched_amount_by_date = dict(amount_by_date or {})
+    patched_count_by_date = dict(count_by_date or {})
+    patched_amount_by_date[target_date_text] = current_amount_yi
+    patched_count_by_date[target_date_text] = current_count
+    patched_payload = _build_etf_turnover_series_payload(
+        patched_amount_by_date,
+        patched_count_by_date,
+        target_date_text=target_date_text,
+        window_days=window_days,
+        source="sina.etf.daily_amount+sina.etf.category_current_amount",
+        usable_etf_count=max(int(_safe_float(usable_etf_count, default=0)), current_count),
+        empty_etf_count=max(total_count - current_count, 0),
+        total_symbol_count=total_count,
+    )
+    patched_payload["fallback_from"] = payload.get("source") or "sina.etf.daily_amount"
+    patched_payload["fallback_reason"] = "Sina ETF历史日线尚未包含目标日，使用新浪ETF当日列表成交额补齐目标日"
+    patched_payload["target_date_fallback_from"] = "sina.etf.category_current_amount"
+    patched_payload["target_date_fallback_reason"] = "Sina ETF历史日线最新日期早于目标日"
+    patched_payload["target_date_fallback_source_date"] = today_text
+    patched_payload["sina_current_list_amount_yi"] = round(current_amount_yi, 2)
+    patched_payload["sina_current_list_positive_count"] = current_count
+    patched_payload["sina_current_list_total_count"] = total_count
+    patched_payload["sina_current_list_coverage_ratio"] = current_coverage_ratio
+    return patched_payload
 
 
 def _etf_turnover_series_from_tushare_fund_daily(
@@ -1969,6 +2091,17 @@ def get_etf_turnover_series_from_sina_first(
             usable_etf_count=usable_count,
             empty_etf_count=empty_count,
             total_symbol_count=len(symbols),
+        )
+        payload = _append_sina_current_list_target_etf_turnover(
+            payload,
+            amount_by_date=amount_by_date,
+            count_by_date=count_by_date,
+            universe_rows=universe_rows,
+            symbols=symbols,
+            target_date_text=target_date_text,
+            window_days=window_days,
+            usable_etf_count=usable_count,
+            empty_etf_count=empty_count,
         )
         should_try_tushare = bool(
             (payload.get("coverage_anomaly") or not payload.get("available"))
@@ -3899,6 +4032,41 @@ def _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows):
     return fallback
 
 
+def _market_stats_from_storage_breadth(
+    target_date,
+    *,
+    zt_count=0,
+    dt_count=0,
+    database_service_cls=None,
+    db_path=None,
+):
+    if database_service_cls is None and not db_path:
+        return {}
+    try:
+        service = _create_fact_database_service(database_service_cls, db_path)
+        reader = getattr(service, "query_market_breadth_counts", None) if service is not None else None
+        if not callable(reader):
+            return {}
+        stats = reader(target_date) or {}
+    except Exception:
+        return {}
+    up_count = _safe_int((stats or {}).get("up_count"), 0)
+    down_count = _safe_int((stats or {}).get("down_count"), 0)
+    if up_count <= 0 or down_count <= 0:
+        return {}
+    return {
+        "up_count": up_count,
+        "down_count": down_count,
+        "zt_count": _safe_int((stats or {}).get("zt_count"), int(zt_count or 0)),
+        "dt_count": _safe_int((stats or {}).get("dt_count"), int(dt_count or 0)),
+    }
+
+
+def _market_stats_complete(market_stats):
+    market_stats = market_stats or {}
+    return _safe_int(market_stats.get("up_count"), 0) > 0 and _safe_int(market_stats.get("down_count"), 0) > 0
+
+
 def get_limit_pool_snapshot_from_tushare_first(
     target_date=None,
     *,
@@ -3907,6 +4075,8 @@ def get_limit_pool_snapshot_from_tushare_first(
     fetch_stock_industry_map_fn=None,
     legacy_get_limit_pool_snapshot_fn=None,
     retry_sleep_fn=None,
+    database_service_cls=None,
+    db_path=None,
 ):
     limit_fetcher = fetch_tushare_limit_rows_fn or fetch_tushare_limit_rows
     daily_fetcher = fetch_stock_daily_turnover_records_fn or fetch_stock_daily_turnover_records
@@ -3939,6 +4109,16 @@ def get_limit_pool_snapshot_from_tushare_first(
             except Exception:
                 industry_map = {}
             snapshot = _build_limit_pool_snapshot(rows, daily_rows, industry_map=industry_map)
+            if not _market_stats_complete(snapshot.get("market_stats")):
+                storage_stats = _market_stats_from_storage_breadth(
+                    target_date,
+                    zt_count=len(snapshot.get("zt_pool") or []),
+                    dt_count=len(snapshot.get("dt_pool") or []),
+                    database_service_cls=database_service_cls,
+                    db_path=db_path,
+                )
+                if storage_stats:
+                    snapshot["market_stats"] = storage_stats
             if snapshot["zt_pool"] or snapshot["dt_pool"]:
                 return snapshot
     except Exception:
@@ -3952,6 +4132,16 @@ def get_limit_pool_snapshot_from_tushare_first(
             except Exception:
                 daily_rows = []
         fallback = _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows)
+        if not _market_stats_complete((fallback or {}).get("market_stats")):
+            storage_stats = _market_stats_from_storage_breadth(
+                target_date,
+                zt_count=len((fallback or {}).get("zt_pool") or []),
+                dt_count=len((fallback or {}).get("dt_pool") or []),
+                database_service_cls=database_service_cls,
+                db_path=db_path,
+            )
+            if storage_stats:
+                fallback["market_stats"] = storage_stats
         return {
             **fallback,
             "provider": "legacy.limit_pool_snapshot",
@@ -3965,6 +4155,12 @@ def get_limit_pool_snapshot_from_tushare_first(
         except Exception:
             daily_rows = []
     daily_stats = _market_stats_from_daily_rows(daily_rows or [], 0, 0)
+    if not _market_stats_complete(daily_stats):
+        daily_stats = _market_stats_from_storage_breadth(
+            target_date,
+            database_service_cls=database_service_cls,
+            db_path=db_path,
+        )
     if daily_stats.get("up_count") > 0 and daily_stats.get("down_count") > 0:
         return {
             "zt_pool": [],
@@ -3972,7 +4168,7 @@ def get_limit_pool_snapshot_from_tushare_first(
             "limit_up_codes": set(),
             "limit_down_codes": set(),
             "market_stats": daily_stats,
-            "provider": "tushare.daily",
+            "provider": "tushare.daily" if daily_rows else "storage.stock_daily_quotes_recent",
             "fallback_used": True,
             "source_status": "daily_breadth_only",
             "source_error": "limit_pool_empty",

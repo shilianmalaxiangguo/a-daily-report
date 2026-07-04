@@ -605,11 +605,48 @@ def _risk_is_caution(risk_row):
     return "观察" in dest
 
 
+def _clean_text_list(value):
+    if isinstance(value, list):
+        source = value
+    elif value in (None, ""):
+        source = []
+    else:
+        source = [value]
+    rows = []
+    for item in source:
+        text = clean_text(item)
+        if text and text not in rows:
+            rows.append(text)
+    return rows
+
+
+def _premarket_narrative_review_reason(review):
+    review = _as_dict(review)
+    if not review:
+        return ""
+    status = clean_text(review.get("status"), "未触发")
+    summary = clean_text(review.get("summary"))
+    if not summary:
+        chain = _clean_text_list(review.get("reason_chain"))
+        summary = " -> ".join(chain) if chain else "盘前叙事复核未形成完整链条"
+    effect = clean_text(review.get("action_effect_label"), "不调整")
+    parts = [f"盘前叙事反证复核={status}", summary, f"动作上限={effect}"]
+    restore = "、".join(_clean_text_list(review.get("restore_conditions")))
+    cancel = "、".join(_clean_text_list(review.get("cancel_conditions")))
+    if restore:
+        parts.append(f"恢复条件={restore}")
+    if cancel:
+        parts.append(f"不参与条件={cancel}")
+    return "；".join(part for part in parts if clean_text(part))
+
+
 def _workflow_final(selection_workflow):
-    final = _as_dict(_as_dict(selection_workflow).get("final"))
+    workflow = _as_dict(selection_workflow)
+    final = _as_dict(workflow.get("final"))
     target = stock_payload(final.get("execution_object"))
     pct = _safe_int(final.get("position_pct"), default=0)
-    action_label = clean_text(final.get("action_text")) or _position_label(pct if target else 0)
+    effective_pct = pct if target and pct > 0 else 0
+    action_label = _position_label(effective_pct)
     failure_conditions = [
         clean_text(item)
         for item in _as_list(final.get("failure_conditions"))
@@ -623,6 +660,12 @@ def _workflow_final(selection_workflow):
             reason = f"最终没有新增参与对象，动作={action_label}"
     if failure_conditions:
         reason = f"{reason}；条件未满足：" + "、".join(failure_conditions)
+    review = final.get("premarket_narrative_review")
+    if not isinstance(review, dict) or not review:
+        review = workflow.get("premarket_narrative_review")
+    review_reason = _premarket_narrative_review_reason(review)
+    if review_reason and review_reason not in reason:
+        reason = f"{reason}；{review_reason}"
     return {
         "target": target if pct > 0 else {},
         "raw_target": target,

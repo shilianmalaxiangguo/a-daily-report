@@ -207,7 +207,7 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(pulse["pulse_stage"], "加速")
         self.assertEqual(pulse["execution_bias"], "allow_execute")
 
-    def test_derive_mainline_pulse_snapshot_maps_conditional_defense_to_zero_or_50_model(self):
+    def test_derive_mainline_pulse_snapshot_maps_conditional_defense_to_fixed_window_observation(self):
         support = self._load_module()
 
         pulse = support.derive_mainline_pulse_snapshot(
@@ -223,7 +223,7 @@ assert leader["name"] == "军工龙头"
 
         self.assertEqual(pulse["execution_bias"], "conditional_defense")
         self.assertIn("固定交易窗口", pulse["pulse_action_reason"])
-        self.assertIn("50%条件执行", pulse["pulse_action_reason"])
+        self.assertIn("结果进入复盘和下一份日报判断", pulse["pulse_action_reason"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), pulse["pulse_action_reason"])
         self.assertNotIn("只允许处理旧仓", pulse["pulse_action_reason"])
 

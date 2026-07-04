@@ -11,7 +11,9 @@ import re
 import sys
 from collections import Counter
 from collections import defaultdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
@@ -263,25 +265,46 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
         ink: cssVar('--reader-text', '#444444'),
         text: cssVar('--reader-text', '#444444'),
         muted: cssVar('--reader-muted', '#888888'),
-        line: cssVar('--reader-line', '#d9d9d9'),
-        surface: cssVar('--reader-surface', '#F3F5F7'),
-        red: cssVar('--accent-red', '#DD4C4F'),
-        green: cssVar('--signal-green', '#07C160'),
-        greenSoft: cssVar('--signal-green-soft', '#CDF7BD'),
-        greenMist: '#EAF8EF',
-        redSoft: cssVar('--accent-soft', '#FFD5D5'),
-        redMist: '#F9E7E7',
-        redMatrix: '#F2B8BA',
-        blue: '#2F7FB8',
-        gold: '#A88400'
-      };
+	        line: cssVar('--reader-line', '#d9d9d9'),
+	        surface: cssVar('--reader-surface', '#F3F5F7'),
+	        red: cssVar('--accent-red', '#DD4C4F'),
+	        green: '#07C160',
+	        greenSoft: 'rgba(7, 193, 96, 0.16)',
+	        greenMist: '#EAF8EF',
+		        redSoft: cssVar('--accent-soft', '#FFD5D5'),
+		        redMist: '#F9E7E7',
+		        orange: cssVar('--accent-orange', '#ff8a1f'),
+		        blue: '#2F7FB8',
+		        gold: '#A88400'
+		      };
       const readerFont = '"AvenirNext-Regular", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif';
       const commonGrid = { left: 54, right: 32, top: 62, bottom: 86, containLabel: true };
       const axisLabel = { interval: 0, lineHeight: 16, color: chartTone.muted, fontSize: 11 };
       const baseTextStyle = { color: chartTone.ink, fontFamily: readerFont };
-      const splitLine = { lineStyle: { color: chartTone.line, type: 'dashed' } };
-      const axisLine = { lineStyle: { color: chartTone.line } };
-      const baseTooltip = {
+	      const splitLine = { lineStyle: { color: chartTone.line, type: 'dashed' } };
+	      const axisLine = { lineStyle: { color: chartTone.line } };
+		      const signedBarColor = (value) => {
+		        const number = Number(value);
+		        if (!Number.isFinite(number) || number === 0) return chartTone.line;
+		        return number < 0 ? chartTone.green : chartTone.red;
+		      };
+		      const signedBarRadius = (value) => {
+		        const number = Number(value);
+		        if (!Number.isFinite(number) || number >= 0) return [7, 7, 0, 0];
+		        return [0, 0, 7, 7];
+		      };
+		      const signedBarData = (key) => rows.map((row) => {
+		        const value = numberOrNull(row, key);
+		        return { value, itemStyle: { borderRadius: signedBarRadius(value) } };
+		      });
+			      const seriesBarData = (sourceRows, key, positiveColor) => sourceRows.map((row) => {
+			        const value = numberOrNull(row, key);
+			        const number = Number(value);
+			        const color = Number.isFinite(number) && number < 0 ? chartTone.green : positiveColor;
+			        return { value, itemStyle: { borderRadius: signedBarRadius(value), color } };
+			      });
+		      const signedBarStyle = { color: (params) => signedBarColor(params.value) };
+	      const baseTooltip = {
         confine: true,
         appendToBody: false,
         backgroundColor: 'rgba(255,255,255,0.96)',
@@ -300,31 +323,31 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
 
       if (matrixNode && payload.matrix && Array.isArray(payload.matrix.cells) && payload.matrix.cells.length) {
         const matrix = payload.matrix;
-        const matrixValues = matrix.cells
-          .map((cell) => Number(cell.average_return_pct))
-          .filter((value) => Number.isFinite(value));
-        const matrixMax = matrixValues.length ? Math.max(...matrixValues) : 0;
-        const matrixMin = matrixValues.length ? Math.min(...matrixValues) : 0;
-        const matrixPositiveMax = Math.max(0.01, matrixMax);
-        const matrixNegativeMin = Math.min(-0.01, matrixMin);
-        const matrixFillColor = (value, isBest) => {
-          const number = Number(value);
-          if (!Number.isFinite(number)) return chartTone.surface;
-          if (isBest) return chartTone.redMatrix;
-          if (number > 0) {
-            const strength = Math.min(1, number / matrixPositiveMax);
-            if (strength >= 0.72) return chartTone.redSoft;
-            if (strength >= 0.36) return chartTone.redMist;
-            return '#F8EEEE';
-          }
-          if (number < 0) {
-            const strength = Math.min(1, Math.abs(number / matrixNegativeMin));
-            if (strength >= 0.72) return '#D8F1E1';
-            if (strength >= 0.36) return chartTone.greenMist;
-            return '#F0FAF3';
-          }
-          return chartTone.surface;
-        };
+	        const matrixValues = matrix.cells
+	          .map((cell) => Number(cell.average_return_pct))
+	          .filter((value) => Number.isFinite(value));
+	        const matrixPositiveMax = Math.max(0.01, ...matrixValues.filter((value) => value > 0));
+	        const matrixNegativeMax = Math.max(0.01, ...matrixValues.filter((value) => value < 0).map((value) => Math.abs(value)));
+	        const matrixPositiveRamp = ['#fff7ef', '#ffe6d1', '#ffcda2', '#f99a60', '#d95436'];
+	        const matrixNegativeRamp = ['#f8fbf7', '#edf5ef', '#dbeadd', '#b9d4c0', '#84ad91'];
+	        const matrixBucket = (strength) => {
+	          if (strength >= 0.84) return 4;
+	          if (strength >= 0.62) return 3;
+	          if (strength >= 0.38) return 2;
+	          if (strength >= 0.16) return 1;
+	          return 0;
+	        };
+	        const matrixFillColor = (value) => {
+	          const number = Number(value);
+	          if (!Number.isFinite(number)) return chartTone.surface;
+	          if (number > 0) {
+	            return matrixPositiveRamp[matrixBucket(Math.min(1, number / matrixPositiveMax))];
+	          }
+	          if (number < 0) {
+	            return matrixNegativeRamp[matrixBucket(Math.min(1, Math.abs(number) / matrixNegativeMax))];
+	          }
+	          return chartTone.surface;
+	        };
         const matrixChart = window.echarts.init(matrixNode, null, { renderer: 'canvas' });
         chartInstances.push(matrixChart);
         matrixChart.setOption({
@@ -359,18 +382,21 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
             axisLine
           },
           visualMap: { show: false },
-          series: [{
-            name: '买卖时间矩阵',
-            type: 'heatmap',
-            data: matrix.cells.map((cell) => [cell.sell_index, cell.buy_index, cell.average_return_pct]),
-            itemStyle: {
-              color: function(params) {
-                const cell = matrix.cells[params.dataIndex] || {};
-                return matrixFillColor(cell.average_return_pct, cell.is_best);
-              },
-              borderColor: 'rgba(255,255,255,0.92)',
-              borderWidth: 2
-            },
+	          series: [{
+	            name: '买卖时间矩阵',
+	            type: 'heatmap',
+	            data: matrix.cells.map((cell) => ({
+	              value: [cell.sell_index, cell.buy_index, cell.average_return_pct],
+	              itemStyle: {
+	                color: matrixFillColor(cell.average_return_pct),
+	                borderColor: cell.is_best ? chartTone.red : 'rgba(255,255,255,0.92)',
+	                borderWidth: cell.is_best ? 3 : 1.4
+	              }
+	            })),
+	            itemStyle: {
+	              borderColor: 'rgba(255,255,255,0.92)',
+	              borderWidth: 1.4
+	            },
             label: {
               show: true,
               formatter: function(params) {
@@ -397,7 +423,7 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
         metricsChart.setOption({
           backgroundColor: 'transparent',
           textStyle: baseTextStyle,
-          color: [chartTone.red, chartTone.blue],
+		          color: [chartTone.orange, chartTone.red, chartTone.green],
           tooltip: {
             ...baseTooltip,
             trigger: 'axis',
@@ -409,14 +435,26 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
               params.forEach((item) => lines.push(`${item.marker}${item.seriesName}：${pct(item.value)}`));
               return lines.join('<br>');
             }
-          },
-          legend: { top: 6, textStyle: { color: chartTone.muted } },
-          grid: { left: 54, right: 28, top: 58, bottom: 86, containLabel: true },
+	          },
+			          legend: {
+			            top: 6,
+			            selectedMode: false,
+			            itemWidth: 20,
+			            itemHeight: 8,
+			            textStyle: { color: chartTone.muted },
+			            data: [
+			              { name: '区间收益', itemStyle: { color: chartTone.orange } },
+			              { name: '月度折算参考', itemStyle: { color: chartTone.red } },
+			              { name: '负收益', itemStyle: { color: chartTone.green } }
+			            ]
+			          },
+			          grid: { left: 54, right: 28, top: 62, bottom: 86, containLabel: true },
           xAxis: { type: 'category', data: topRows.map((row) => row.short_label || row.label || ''), axisLabel, axisTick: { show: false }, axisLine },
           yAxis: { type: 'value', axisLabel: { color: chartTone.muted, formatter: '{value}%' }, splitLine, axisLine },
           series: [
-            { name: '区间收益', type: 'bar', barMaxWidth: 20, itemStyle: { borderRadius: [7, 7, 0, 0] }, data: topRows.map((row) => numberOrNull(row, 'cumulative_return_pct')) },
-            { name: '月度折算参考', type: 'bar', barMaxWidth: 20, itemStyle: { borderRadius: [7, 7, 0, 0] }, data: topRows.map((row) => numberOrNull(row, 'monthly_return_pct')) }
+			            { name: '区间收益', type: 'bar', barMaxWidth: 20, data: seriesBarData(topRows, 'cumulative_return_pct', chartTone.orange) },
+			            { name: '月度折算参考', type: 'bar', barMaxWidth: 20, data: seriesBarData(topRows, 'monthly_return_pct', chartTone.red) },
+			            { name: '负收益', type: 'bar', silent: true, tooltip: { show: false }, itemStyle: { color: chartTone.green }, data: topRows.map(() => null) }
           ]
         });
       }
@@ -570,15 +608,15 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
               name: '累计代理收益',
               type: 'bar',
               barMaxWidth: 24,
-              itemStyle: { borderRadius: [7, 7, 0, 0] },
-              data: rows.map((row) => numberOrNull(row, 'cumulative_return_pct'))
+	              itemStyle: signedBarStyle,
+	              data: signedBarData('cumulative_return_pct')
             },
             {
               name: '月化代理收益',
               type: 'bar',
               barMaxWidth: 24,
-              itemStyle: { borderRadius: [7, 7, 0, 0] },
-              data: rows.map((row) => numberOrNull(row, 'monthly_return_pct'))
+	              itemStyle: signedBarStyle,
+	              data: signedBarData('monthly_return_pct')
             },
             {
               name: '最大回撤',
@@ -607,7 +645,7 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
         excessChart.setOption({
           backgroundColor: 'transparent',
           textStyle: baseTextStyle,
-          color: [chartTone.red, chartTone.blue],
+	          color: [chartTone.orange, chartTone.red],
           tooltip: {
             ...baseTooltip,
             trigger: 'axis',
@@ -649,14 +687,10 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
               barGap: '18%',
               barCategoryGap: '36%',
               data: benchmarkExcess.map((item) => ({ value: strategyReturnValue, item })),
-              itemStyle: {
-                borderRadius: [0, 6, 6, 0],
-                color: (params) => {
-                  const value = Number(params.value);
-                  if (!Number.isFinite(value)) return chartTone.line;
-                  return value >= 0 ? chartTone.red : chartTone.green;
-                }
-              },
+	              itemStyle: {
+	                borderRadius: [0, 6, 6, 0],
+	                color: chartTone.orange
+	              },
               label: { show: true, position: 'right', color: chartTone.muted, formatter: (params) => pct(params.value) },
               emphasis: { focus: 'series' }
             },
@@ -665,7 +699,7 @@ WINDOW_PERFORMANCE_ECHARTS_SCRIPT = """
               type: 'bar',
               barWidth: 7,
               data: benchmarkBarData('index_return_pct'),
-              itemStyle: { borderRadius: [0, 6, 6, 0], color: chartTone.blue },
+	              itemStyle: { borderRadius: [0, 6, 6, 0], color: chartTone.red },
               label: { show: true, position: 'right', color: chartTone.muted, formatter: (params) => pct(params.value) },
               emphasis: { focus: 'series' }
             }
@@ -2319,6 +2353,7 @@ def _build_tplus2_exit_review(
             "data_basis": "缺少T+2交易日，不能计算卖出窗口收益",
             "missing_fields": ["tplus2_sell_date"],
             "price_path_review": price_path,
+            "tplus1_actual_review": _build_tplus1_actual_review(code, buy_date, buy_bar),
             "buyability_review": buyability,
             "small_account_fit_review": _build_account_fit_review(
                 {"price_path_review": price_path, "window_matrix": []},
@@ -3154,6 +3189,34 @@ def _build_equity_curve(samples):
         "max_drawdown_sample": max_drawdown_sample,
         "curve_points": curve_points,
         "basis": "按T0日期顺序把每笔日线代理收益复利累乘；未计手续费、滑点和空仓收益，不等于真实成交曲线",
+    }
+
+
+def _build_tplus1_actual_review(code, buy_date, buy_bar):
+    buy_bar = buy_bar if isinstance(buy_bar, dict) else {}
+    open_price = _window_price(buy_bar, "open")
+    high_price = _window_price(buy_bar, "high")
+    low_price = _window_price(buy_bar, "low")
+    close_price = _window_price(buy_bar, "close")
+    open_to_close = _pct_change_from_prices(close_price, open_price)
+    open_to_high = _pct_change_from_prices(high_price, open_price)
+    open_to_low = _pct_change_from_prices(low_price, open_price)
+    return {
+        "schema_version": "tplus1_actual_review.v1",
+        "trade_date": buy_date,
+        "open": round(open_price, 4) if open_price is not None else None,
+        "high": round(high_price, 4) if high_price is not None else None,
+        "low": round(low_price, 4) if low_price is not None else None,
+        "close": round(close_price, 4) if close_price is not None else None,
+        "day_change_pct": round(_bar_change_pct(buy_bar), 2) if _bar_change_pct(buy_bar) is not None else None,
+        "open_to_close_return_pct": round(open_to_close, 2) if open_to_close is not None else None,
+        "open_to_high_return_pct": round(open_to_high, 2) if open_to_high is not None else None,
+        "open_to_low_return_pct": round(open_to_low, 2) if open_to_low is not None else None,
+        "source": _clean(buy_bar.get("source"), "待补"),
+        "basis": (
+            "T+1买入日已发生日线事实；09:30-09:35按开盘代理，14:30-14:55按收盘代理；"
+            "这里只说明买入日浮动表现，不替代完整T+2卖出窗口收益。"
+        ),
     }
 
 
@@ -5062,35 +5125,241 @@ def _short_window_performance_label(label):
     return text
 
 
-def _window_performance_chart_payload(summary):
+def _adjust_metric_row_with_tplus1_actual(metric_row, payload):
+    metric_row = dict(metric_row) if isinstance(metric_row, dict) else {}
+    if not metric_row:
+        return {}
+    if _safe_int(metric_row.get("tplus1_actual_count"), 0) > 0:
+        return metric_row
+    items = _pending_tplus1_actual_items(payload)
+    net_value = _safe_float(metric_row.get("final_net_value"), None)
+    period_count = _safe_int(metric_row.get("period_count"), 0)
+    if net_value is None or net_value <= 0 or period_count <= 0 or not items:
+        return metric_row
+    adjusted_net_value = net_value
+    actual_return_sum = 0.0
+    valid_count = 0
+    for item in items:
+        value = _safe_float(item.get("open_to_close_return_pct"), None)
+        if value is None:
+            continue
+        adjusted_net_value *= 1 + value / 100
+        actual_return_sum += value
+        valid_count += 1
+    if not valid_count:
+        return metric_row
+    adjusted = dict(metric_row)
+    original_sample_count = _safe_int(metric_row.get("sample_count"), 0)
+    original_average = _safe_float(metric_row.get("average_return_pct"), None)
+    adjusted["sample_count"] = original_sample_count + valid_count
+    adjusted["all_sample_count"] = _safe_int(metric_row.get("all_sample_count"), metric_row.get("sample_count", 0)) + valid_count
+    adjusted["tplus2_settled_sample_count"] = original_sample_count
+    adjusted["tplus2_settled_final_net_value"] = metric_row.get("final_net_value")
+    adjusted["tplus2_settled_cumulative_return_pct"] = metric_row.get("cumulative_return_pct")
+    if original_average is not None and adjusted["sample_count"]:
+        adjusted["average_return_pct"] = round(
+            (original_average * original_sample_count + actual_return_sum) / adjusted["sample_count"],
+            2,
+        )
+    adjusted["final_net_value"] = round(adjusted_net_value, 4)
+    adjusted["cumulative_return_pct"] = round((adjusted_net_value - 1) * 100, 2)
+    adjusted["monthly_return_pct"] = round(_annualized_pct_from_net_value(adjusted_net_value, period_count, 21), 2)
+    adjusted["annualized_return_pct"] = round(_annualized_pct_from_net_value(adjusted_net_value, period_count, 252), 2)
+    adjusted["tplus1_actual_count"] = valid_count
+    adjusted["basis"] = (
+        "完整T+2已结算样本加上T+1已发生日线表现；"
+        "T+1部分只代表买入日浮动表现，不替代完整T+2卖出窗口收益。"
+    )
+    return adjusted
+
+
+def _refresh_metric_row_index_excess(metric_row, summary):
+    metric_row = dict(metric_row) if isinstance(metric_row, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    benchmark_summary = (
+        summary.get("index_benchmark_summary")
+        if isinstance(summary.get("index_benchmark_summary"), dict)
+        else {}
+    )
+    benchmark_rows = benchmark_summary.get("rows") if isinstance(benchmark_summary.get("rows"), list) else []
+    benchmark_returns = {
+        item.get("label"): _safe_float(item.get("cumulative_return_pct"), None)
+        for item in benchmark_rows
+        if isinstance(item, dict)
+    }
+    cumulative_return = _safe_float(metric_row.get("cumulative_return_pct"), None)
+    for spec in INDEX_BENCHMARK_SPECS:
+        label = spec["label"]
+        benchmark_return = benchmark_returns.get(label)
+        metric_row[f"excess_{label}"] = (
+            round(cumulative_return - benchmark_return, 2)
+            if cumulative_return is not None and benchmark_return is not None
+            else None
+        )
+    return metric_row
+
+
+def _same_window(row, metric_row):
+    return (
+        isinstance(row, dict)
+        and isinstance(metric_row, dict)
+        and row.get("buy_window_id") == metric_row.get("buy_window_id")
+        and row.get("sell_window_id") == metric_row.get("sell_window_id")
+    )
+
+
+def _adjust_equity_curve_with_tplus1_actual(curve, payload):
+    curve = dict(curve) if isinstance(curve, dict) else {}
+    if not curve or _safe_int(curve.get("tplus1_actual_count"), 0) > 0:
+        return curve
+    items = _pending_tplus1_actual_items(payload)
+    if not items:
+        return curve
+    points = [dict(point) for point in curve.get("curve_points") or [] if isinstance(point, dict)]
+    if not points:
+        return curve
+    equity = _safe_float(curve.get("final_net_value"), None)
+    if equity is None or equity <= 0:
+        equity = _safe_float(points[-1].get("net_value"), None)
+    if equity is None or equity <= 0:
+        return curve
+    point_net_values = [
+        _safe_float(point.get("net_value"), None)
+        for point in points
+        if _safe_float(point.get("net_value"), None) is not None
+    ]
+    peak = max(point_net_values + [equity]) if point_net_values else equity
+    max_drawdown_pct = _safe_float(curve.get("max_drawdown_pct"), 0.0) or 0.0
+    max_drawdown_sample = curve.get("max_drawdown_sample") if isinstance(curve.get("max_drawdown_sample"), dict) else {}
+    valid_count = 0
+    for item in items:
+        value = _safe_float(item.get("open_to_close_return_pct"), None)
+        if value is None:
+            continue
+        equity *= 1 + value / 100
+        if equity > peak:
+            peak = equity
+        drawdown_pct = ((equity / peak) - 1) * 100 if peak else 0.0
+        point = {
+            "decision_date": item.get("decision_date"),
+            "buy_date": item.get("buy_date"),
+            "sell_date": item.get("trade_date") or item.get("buy_date"),
+            "stock": item.get("stock"),
+            "buy_window": "09:30-09:35",
+            "sell_window": "14:30-14:55",
+            "return_pct": round(value, 2),
+            "net_value": round(equity, 4),
+            "cumulative_return_pct": round((equity - 1) * 100, 2),
+            "drawdown_pct": round(drawdown_pct, 2),
+            "tplus1_actual": True,
+        }
+        points.append(point)
+        if drawdown_pct < max_drawdown_pct:
+            max_drawdown_pct = drawdown_pct
+            max_drawdown_sample = point
+        valid_count += 1
+    if not valid_count:
+        return curve
+    adjusted = dict(curve)
+    adjusted["sample_count"] = _safe_int(curve.get("sample_count"), len(points) - valid_count) + valid_count
+    adjusted["final_net_value"] = round(equity, 4)
+    adjusted["cumulative_return_pct"] = round((equity - 1) * 100, 2)
+    adjusted["max_drawdown_pct"] = round(max_drawdown_pct, 2)
+    adjusted["max_drawdown_sample"] = max_drawdown_sample
+    adjusted["curve_points"] = points
+    adjusted["tplus1_actual_count"] = valid_count
+    adjusted["basis"] = (
+        f"{_clean(curve.get('basis'))}；末端并入T+1已发生日线表现，未把未来T+2当作已发生事实"
+    )
+    return adjusted
+
+
+def _apply_tplus1_actual_to_replay_payload(payload):
+    payload = _ensure_tplus1_actual_reviews(payload)
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    if not summary:
+        return payload
+    comparison = (
+        summary.get("window_performance_comparison")
+        if isinstance(summary.get("window_performance_comparison"), dict)
+        else {}
+    )
+    rows = comparison.get("rows") if isinstance(comparison.get("rows"), list) else []
+    metric_row = _replay_metric_row(summary)
+    if metric_row and rows:
+        adjusted_rows = []
+        for row in rows:
+            if _same_window(row, metric_row):
+                row = _refresh_metric_row_index_excess(
+                    _adjust_metric_row_with_tplus1_actual(row, payload),
+                    summary,
+                )
+            adjusted_rows.append(row)
+        comparison["rows"] = adjusted_rows
+    matrix_summary = (
+        summary.get("trade_window_matrix_summary")
+        if isinstance(summary.get("trade_window_matrix_summary"), dict)
+        else {}
+    )
+    best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
+    if best_combo:
+        for item in matrix_summary.get("rows") or []:
+            if (
+                isinstance(item, dict)
+                and item.get("buy_window_id") == best_combo.get("buy_window_id")
+                and item.get("sell_window_id") == best_combo.get("sell_window_id")
+            ):
+                item["equity_curve"] = _adjust_equity_curve_with_tplus1_actual(item.get("equity_curve"), payload)
+        if isinstance(matrix_summary.get("recommended_equity_curve"), dict):
+            matrix_summary["recommended_equity_curve"] = _adjust_equity_curve_with_tplus1_actual(
+                matrix_summary.get("recommended_equity_curve"),
+                payload,
+            )
+    return payload
+
+
+def _window_performance_chart_payload(summary, payload=None):
+    payload = payload if isinstance(payload, dict) else {}
     comparison = summary.get("window_performance_comparison") if isinstance(summary.get("window_performance_comparison"), dict) else {}
+    metric_row = _refresh_metric_row_index_excess(
+        _adjust_metric_row_with_tplus1_actual(_replay_metric_row(summary), payload),
+        summary,
+    )
     rows = []
     for item in comparison.get("rows") or []:
         if not isinstance(item, dict):
             continue
+        item_for_chart = item
+        if metric_row and _same_window(item, metric_row):
+            item_for_chart = _refresh_metric_row_index_excess(
+                _adjust_metric_row_with_tplus1_actual(item, payload),
+                summary,
+            )
         label = _clean(item.get("label"))
         if not label:
             continue
-        sample_count = item.get("sample_count", 0)
-        all_sample_count = item.get("all_sample_count", sample_count)
+        sample_count = item_for_chart.get("sample_count", 0)
+        all_sample_count = item_for_chart.get("all_sample_count", item.get("all_sample_count", sample_count))
+        sample_text = f"{sample_count}/{all_sample_count}"
+        if item_for_chart.get("tplus1_actual_count"):
+            sample_text = f"{sample_text} 含T+1"
         rows.append(
             {
                 "label": label,
                 "short_label": _short_window_performance_label(label),
-                "sample_text": f"{sample_count}/{all_sample_count}",
-                "period_count": item.get("period_count"),
-                "average_return_pct": _chart_number(item.get("average_return_pct")),
-                "monthly_return_pct": _chart_number(item.get("monthly_return_pct")),
-                "cumulative_return_pct": _chart_number(item.get("cumulative_return_pct")),
-                "max_drawdown_pct": _chart_number(item.get("max_drawdown_pct")),
+                "sample_text": sample_text,
+                "period_count": item_for_chart.get("period_count"),
+                "average_return_pct": _chart_number(item_for_chart.get("average_return_pct")),
+                "monthly_return_pct": _chart_number(item_for_chart.get("monthly_return_pct")),
+                "cumulative_return_pct": _chart_number(item_for_chart.get("cumulative_return_pct")),
+                "max_drawdown_pct": _chart_number(item_for_chart.get("max_drawdown_pct")),
                 **{
-                    spec["chart_key"]: _chart_number(item.get(f"excess_{spec['label']}"))
+                    spec["chart_key"]: _chart_number(item_for_chart.get(f"excess_{spec['label']}"))
                     for spec in INDEX_BENCHMARK_SPECS
                 },
-                "exclusion": _clean(item.get("exclusion")),
+                "exclusion": _clean(item_for_chart.get("exclusion")),
             }
         )
-    metric_row = _replay_metric_row(summary)
     benchmark_rows = {}
     benchmark_summary = summary.get("index_benchmark_summary") if isinstance(summary.get("index_benchmark_summary"), dict) else {}
     for item in benchmark_summary.get("rows") or []:
@@ -5309,8 +5578,9 @@ def _sample_distribution_chart_payload(payload):
 
 
 def _replay_summary_chart_payload(payload):
+    payload = _apply_tplus1_actual_to_replay_payload(payload)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    chart_payload = _window_performance_chart_payload(summary)
+    chart_payload = _window_performance_chart_payload(summary, payload)
     chart_payload["matrix"] = _matrix_chart_payload(summary)
     chart_payload["sample_distribution"] = _sample_distribution_chart_payload(payload)
     chart_payload["equity_curve"] = _equity_curve_chart_payload(summary)
@@ -5382,12 +5652,149 @@ def _replay_market_signal_text(payload):
     return f"上涨占优{up_dominant}/{len(breadth_rows)}天；全A收红{all_a_positive}/{len(rows)}天；创新高偏热{new_high_hot}/{len(rows)}天"
 
 
+def _latest_replay_pair_marker_text(payload):
+    pairs = payload.get("pairs") if isinstance(payload, dict) and isinstance(payload.get("pairs"), list) else []
+    if not pairs:
+        return ""
+    pair = pairs[-1] if isinstance(pairs[-1], dict) else {}
+    decision_date = _clean(pair.get("effective_decision_date") or pair.get("decision_date"))
+    if not decision_date:
+        return ""
+    buy_date = _clean(pair.get("buy_date"), "待补")
+    sell_date = _clean(pair.get("sell_date"), "待补")
+    final_action = pair.get("final_action") if isinstance(pair.get("final_action"), dict) else {}
+    target_label = _action_stock_label(final_action)
+    strategy = pair.get("paper_strategy") if isinstance(pair.get("paper_strategy"), dict) else {}
+    if target_label == "无执行对象":
+        marker = _paper_status_label(strategy) if strategy else _clean(final_action.get("label"), "明确不参与")
+    else:
+        marker = target_label
+    return f"{decision_date} → {buy_date} → {sell_date}：{marker}"
+
+
+def _replay_variant_scope_text(payload):
+    variant = payload.get("variant") if isinstance(payload, dict) and isinstance(payload.get("variant"), dict) else {}
+    parts = []
+    label = _clean(variant.get("label"))
+    basis = _clean(variant.get("basis"))
+    latest_pair = _latest_replay_pair_marker_text(payload)
+    if label:
+        parts.append(label)
+    if basis:
+        parts.append(basis)
+    if latest_pair:
+        parts.append(f"末端样本 {latest_pair}")
+    return "；".join(parts)
+
+
+def _tplus1_actual_from_review(review):
+    review = review if isinstance(review, dict) else {}
+    actual = review.get("tplus1_actual_review")
+    if isinstance(actual, dict) and actual.get("open_to_close_return_pct") is not None:
+        return actual
+    price_path = review.get("price_path_review") if isinstance(review.get("price_path_review"), dict) else {}
+    tplus1 = price_path.get("tplus1") if isinstance(price_path.get("tplus1"), dict) else {}
+    if not tplus1:
+        return {}
+    return _build_tplus1_actual_review(
+        _clean((review.get("stock") or {}).get("code")) if isinstance(review.get("stock"), dict) else "",
+        _clean(tplus1.get("trade_date") or review.get("buy_date")),
+        tplus1,
+    )
+
+
+def _pending_tplus1_actual_items(payload):
+    items = []
+    pairs = payload.get("pairs") if isinstance(payload, dict) and isinstance(payload.get("pairs"), list) else []
+    for pair in pairs:
+        if not isinstance(pair, dict) or pair.get("sell_date"):
+            continue
+        primary = _primary_paper_evaluation(pair)
+        if not primary:
+            continue
+        review = primary.get("tplus2_exit_review") if isinstance(primary.get("tplus2_exit_review"), dict) else {}
+        actual = _tplus1_actual_from_review(review)
+        if actual.get("open_to_close_return_pct") is None:
+            continue
+        items.append(
+            {
+                "decision_date": _clean(pair.get("effective_decision_date")),
+                "buy_date": _clean(pair.get("buy_date") or actual.get("trade_date")),
+                "stock": _clean(primary.get("stock_label") or review.get("stock_label")),
+                **actual,
+            }
+        )
+    return items
+
+
+def _ensure_tplus1_actual_reviews(payload):
+    pairs = payload.get("pairs") if isinstance(payload, dict) and isinstance(payload.get("pairs"), list) else []
+    for pair in pairs:
+        strategy = pair.get("paper_strategy") if isinstance(pair, dict) and isinstance(pair.get("paper_strategy"), dict) else {}
+        evaluations = strategy.get("target_evaluations") if isinstance(strategy.get("target_evaluations"), list) else []
+        for evaluation in evaluations:
+            if not isinstance(evaluation, dict):
+                continue
+            review = evaluation.get("tplus2_exit_review") if isinstance(evaluation.get("tplus2_exit_review"), dict) else {}
+            if not review:
+                continue
+            actual = _tplus1_actual_from_review(review)
+            if actual.get("open_to_close_return_pct") is not None:
+                review["tplus1_actual_review"] = actual
+    return payload
+
+
+def _pending_tplus1_actual_text(payload):
+    items = _pending_tplus1_actual_items(payload)
+    if not items:
+        return ""
+    parts = []
+    for item in items[:3]:
+        parts.append(
+            f"{item.get('decision_date')} → {item.get('buy_date')}："
+            f"{item.get('stock')} 开盘{item.get('open')} / 收盘{item.get('close')}，"
+            f"开盘至收盘 {_fmt_signed_pct(item.get('open_to_close_return_pct'))}，"
+            f"当日涨跌 {_fmt_signed_pct(item.get('day_change_pct'))}"
+        )
+    if len(items) > 3:
+        parts.append(f"另有{len(items) - 3}条待补T+2但已有T+1事实")
+    return "；".join(parts)
+
+
+def _pending_tplus1_equity_reference_text(metric_row, payload):
+    items = _pending_tplus1_actual_items(payload)
+    if not items:
+        return ""
+    net_value = _safe_float(metric_row.get("final_net_value"), None)
+    period_count = _safe_int(metric_row.get("period_count"), 0)
+    if net_value is None or net_value <= 0 or period_count <= 0:
+        return ""
+    adjusted_net_value = net_value
+    valid_count = 0
+    for item in items:
+        value = _safe_float(item.get("open_to_close_return_pct"), None)
+        if value is None:
+            continue
+        adjusted_net_value *= 1 + value / 100
+        valid_count += 1
+    if not valid_count:
+        return ""
+    cumulative = (adjusted_net_value - 1) * 100
+    monthly = _annualized_pct_from_net_value(adjusted_net_value, period_count, 21)
+    return (
+        f"并入{valid_count}条T+1已发生浮动表现后：区间参考 {_fmt_signed_pct(cumulative)}；"
+        f"月度折算参考 {_fmt_signed_pct(monthly)}"
+    )
+
+
 def _render_replay_summary(payload):
+    payload = _apply_tplus1_actual_to_replay_payload(payload)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
     best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
     best_matrix = _best_matrix_row(summary)
-    metric_row = _replay_metric_row(summary)
+    settled_metric_row = _replay_metric_row(summary)
+    metric_row = _adjust_metric_row_with_tplus1_actual(settled_metric_row, payload)
     chart_payload = _replay_summary_chart_payload(payload)
     has_chart = (
         bool(chart_payload.get("rows"))
@@ -5398,27 +5805,60 @@ def _render_replay_summary(payload):
     )
     if not has_chart:
         return ""
-    positive_count = _safe_int(best_matrix.get("positive_count"), 0)
-    sample_count = _safe_int(best_matrix.get("sample_count"), best_combo.get("sample_count", 0))
+    curve_points = [
+        point for point in (chart_payload.get("equity_curve") or {}).get("points") or []
+        if isinstance(point, dict) and _safe_float(point.get("return_pct"), None) is not None
+    ]
+    positive_count = sum(1 for point in curve_points if _safe_float(point.get("return_pct"), 0) > 0)
+    sample_count = len(curve_points)
+    if not sample_count:
+        positive_count = _safe_int(best_matrix.get("positive_count"), 0)
+        sample_count = _safe_int(best_matrix.get("sample_count"), best_combo.get("sample_count", 0))
     positive_ratio_text = "待补"
     if sample_count:
         positive_ratio_text = f"{positive_count}/{sample_count}（{positive_count / sample_count * 100:.1f}%）"
+    metric_sample_count = _safe_int(metric_row.get("sample_count"), sample_count)
+    metric_sample_text = f"{metric_sample_count}/{payload.get('sample_count', 0)}"
+    if metric_row.get("tplus1_actual_count"):
+        metric_sample_text += f"（含T+1已发生{metric_row.get('tplus1_actual_count')}条）"
     best_window_text = "待补"
     if best_combo.get("buy_window") or best_combo.get("sell_window"):
         best_window_text = f"T+1 {best_combo.get('buy_window') or '待补'} 买 / T+2 {best_combo.get('sell_window') or '待补'} 卖"
     metric_source = _clean(metric_row.get("label"), "较高窗口原始口径")
+    variant_scope_text = _replay_variant_scope_text(payload)
+    variant_summary_row = (
+        f"<tr><td>版本口径</td><td>{_html(variant_scope_text)}</td><td>用于区分末端未结算样本；已结算收益样本按同一口径比较。</td></tr>"
+        if variant_scope_text
+        else ""
+    )
+    tplus1_actual_text = _pending_tplus1_actual_text(payload)
+    tplus1_actual_row = (
+        f"<tr><td>T+1已发生表现</td><td>{_html(tplus1_actual_text)}</td><td>这是买入日已经发生的真实日线表现；不替代完整T+2卖出窗口收益。</td></tr>"
+        if tplus1_actual_text
+        else ""
+    )
+    settled_reference_row = (
+        f"<tr><td>完整T+2已结算参考</td><td>{_html(_fmt_signed_pct(metric_row.get('tplus2_settled_cumulative_return_pct')) if metric_row.get('tplus2_settled_cumulative_return_pct') is not None else '待补')}</td><td>仅统计完整T+2窗口样本；当前主口径已并入T+1已发生表现。</td></tr>"
+        if metric_row.get("tplus1_actual_count")
+        else ""
+    )
     return f"""
       <section class="replay-summary" id="replay-summary" aria-label="回测摘要">
-        <h2>回测摘要</h2>
+        <h2 class="bear-section-action">回测摘要</h2>
         <p>只保留可比较的日线代理结论，页面不展开逐日操作明细。</p>
         <div class="reader-table replay-metric-table">
           <table>
             <thead><tr><th>指标</th><th>数值</th><th>说明</th></tr></thead>
             <tbody>
               <tr><td>较高买卖窗口</td><td>{_html(best_window_text)}</td><td>{_html(metric_source)}；未计手续费、滑点和真实分时成交。</td></tr>
+              {variant_summary_row}
+              <tr><td>收益曲线样本</td><td>{_html(metric_sample_text)}</td><td>完整T+2样本加上已经发生的T+1日线表现；仍未把未来T+2当作已发生事实。</td></tr>
+              {tplus1_actual_row}
               <tr><td>正收益占比</td><td>{_html(positive_ratio_text)}</td><td>按较高窗口的已结算日线代理样本统计。</td></tr>
-              <tr><td>区间收益</td><td>{_html(_fmt_signed_pct(metric_row.get("cumulative_return_pct")) if metric_row.get("cumulative_return_pct") is not None else "待补")}</td><td>同一批T0样本累计折算。</td></tr>
-              <tr><td>月度收益</td><td>{_html(_fmt_signed_pct(metric_row.get("monthly_return_pct")) if metric_row.get("monthly_return_pct") is not None else "待补")}</td><td>按21个交易日折算，只作口径对照。</td></tr>
+              <tr><td>区间收益</td><td>{_html(_fmt_signed_pct(metric_row.get("cumulative_return_pct")) if metric_row.get("cumulative_return_pct") is not None else "待补")}</td><td>已并入T+1已发生表现；完整T+2仍等后续事实补齐。</td></tr>
+              <tr><td>月度折算参考</td><td>{_html(_fmt_signed_pct(metric_row.get("monthly_return_pct")) if metric_row.get("monthly_return_pct") is not None else "待补")}</td><td>按21个交易日折算；当前主口径含T+1已发生表现，不是最终月收益。</td></tr>
+              <tr><td>252日折算参考</td><td>{_html(_fmt_signed_pct(metric_row.get("annualized_return_pct")) if metric_row.get("annualized_return_pct") is not None else "待补")}</td><td>短样本复利机械放大，只保留为数学参考，不作为收益结论。</td></tr>
+              {settled_reference_row}
               <tr><td>指数对比</td><td>{_html(_benchmark_excess_summary_text(metric_row))}</td><td>策略区间收益减同区间指数涨跌；正数表示高于指数，缺首尾点位则待补。</td></tr>
               <tr><td>最大回撤</td><td>{_html(_fmt_signed_pct(metric_row.get("max_drawdown_pct")) if metric_row.get("max_drawdown_pct") is not None else "待补")}</td><td>按样本顺序复利累乘后的回撤。</td></tr>
               <tr><td>市场迹象</td><td>{_html(_replay_market_signal_text(payload))}</td><td>涨跌家数、全A涨跌幅和创新高占比只解释T0市场底色。</td></tr>
@@ -5440,6 +5880,11 @@ def _render_replay_summary(payload):
             <span class="bear-chart-eyebrow">图表 2</span>
             <h4>区间收益与月度折算参考</h4>
             <p>同一批T0样本折算，先看区间收益；252日折算不作为短样本判断依据。</p>
+            <div class="chart-tone-legend" aria-label="收益颜色说明">
+              <span><i class="chart-tone-swatch is-interval" aria-hidden="true"></i>区间收益</span>
+              <span><i class="chart-tone-swatch is-monthly" aria-hidden="true"></i>月度折算参考</span>
+              <span><i class="chart-tone-swatch is-negative" aria-hidden="true"></i>负收益</span>
+            </div>
           </div>
           <div class="bear-chart-frame">
             <div class="bear-chart" id="sector-window-metrics-chart" role="img" aria-label="区间收益与月度折算参考柱状图"></div>
@@ -5901,6 +6346,7 @@ def _settlement_status_suffix(pair, matrix_row):
 
 
 def build_forward_replay_daily_rows(payload, *, loader=load_daily_report_data_for_forward_replay, index_context_refill=None):
+    payload = _ensure_tplus1_actual_reviews(payload)
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     matrix_summary = summary.get("trade_window_matrix_summary") if isinstance(summary.get("trade_window_matrix_summary"), dict) else {}
     best_combo = matrix_summary.get("best_combo") if isinstance(matrix_summary.get("best_combo"), dict) else {}
@@ -5925,6 +6371,7 @@ def build_forward_replay_daily_rows(payload, *, loader=load_daily_report_data_fo
         best_daily = _best_pair_matrix_row(primary)
         buyability = review.get("buyability_review") if isinstance(review.get("buyability_review"), dict) else {}
         account_fit = _small_account_fit_for_window(primary, buy_window_id)
+        tplus1_actual = _tplus1_actual_from_review(review)
         row = {
             "T0日期": pair.get("effective_decision_date"),
             "T+1买入日": pair.get("buy_date"),
@@ -5939,6 +6386,18 @@ def build_forward_replay_daily_rows(payload, *, loader=load_daily_report_data_fo
                 if best_daily else ""
             ),
             "当日样本内最高代理收益": _fmt_signed_pct(best_daily.get("return_pct")) if best_daily.get("return_pct") is not None else "",
+            "T+1开盘至收盘已发生表现": (
+                _fmt_signed_pct(tplus1_actual.get("open_to_close_return_pct"))
+                if tplus1_actual.get("open_to_close_return_pct") is not None else ""
+            ),
+            "T+1当日涨跌幅": (
+                _fmt_signed_pct(tplus1_actual.get("day_change_pct"))
+                if tplus1_actual.get("day_change_pct") is not None else ""
+            ),
+            "T+1真实日线": (
+                f"开{tplus1_actual.get('open')} / 高{tplus1_actual.get('high')} / 低{tplus1_actual.get('low')} / 收{tplus1_actual.get('close')}"
+                if tplus1_actual.get("close") is not None else ""
+            ),
             "T+1买点复核": _clean(buyability.get("status")) if primary else "",
             "复核结论": _clean(target_summary.get("primary_outcome_label"), "没有纸面主样本"),
             "说明": _clean(strategy.get("action_reason")),
@@ -6072,13 +6531,13 @@ def render_forward_replay_markdown_summary(payload, rows, *, title="板块资金
             "- 结论：小资金账户里，50%不总是可精确执行；高价股一手若超过60%账户，就按“一手就是上限”处理，超过80%时只有唯一核心、固定窗口和贴近认错线同时满足才考虑，否则空仓。",
             "",
             "## 每日标的与窗口",
-            "| T0日期 | T+1 | T+2 | 状态 | 纸面主样本 | T0上证 | T0创业板 | T0科创50 | T0中证500 | T0全A | T0中证1000 | T0涨跌家数 | T0创新高占比 | T+1窗口 | T+2窗口 | 全样本最佳组合收益 | 一手金额 | 一手占账户 | 账户可做性 | 小账户动作 | 买点复核 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |",
+            "| T0日期 | T+1 | T+2 | 状态 | 纸面主样本 | T0上证 | T0创业板 | T0科创50 | T0中证500 | T0全A | T0中证1000 | T0涨跌家数 | T0创新高占比 | T+1窗口 | T+2窗口 | 全样本最佳组合收益 | T+1开盘至收盘已发生表现 | T+1当日涨跌幅 | T+1真实日线 | 一手金额 | 一手占账户 | 账户可做性 | 小账户动作 | 买点复核 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | --- | --- | --- |",
         ]
     )
     for row in rows:
         lines.append(
-            "| {T0日期} | {T+1买入日} | {T+2卖出日} | {状态} | {纸面主样本} | {T0上证指数} | {T0创业板指} | {T0科创50} | {T0中证500} | {T0全A指数} | {T0中证1000} | {T0涨跌家数} | {T0创新高全A占比} | {建议T+1买入窗口} | {建议T+2卖出窗口} | {全样本最佳组合代理收益} | {一手金额} | {一手占账户比例} | {账户可做性} | {小账户动作建议} | {T+1买点复核} |".format(**row)
+            "| {T0日期} | {T+1买入日} | {T+2卖出日} | {状态} | {纸面主样本} | {T0上证指数} | {T0创业板指} | {T0科创50} | {T0中证500} | {T0全A指数} | {T0中证1000} | {T0涨跌家数} | {T0创新高全A占比} | {建议T+1买入窗口} | {建议T+2卖出窗口} | {全样本最佳组合代理收益} | {T+1开盘至收盘已发生表现} | {T+1当日涨跌幅} | {T+1真实日线} | {一手金额} | {一手占账户比例} | {账户可做性} | {小账户动作建议} | {T+1买点复核} |".format(**row)
         )
     return "\n".join(lines) + "\n"
 
@@ -6123,6 +6582,7 @@ def save_forward_replay_csv_and_summary(
     scope_note="",
     index_context_refill=None,
 ):
+    payload = _ensure_tplus1_actual_reviews(payload)
     rows = build_forward_replay_daily_rows(payload, loader=loader, index_context_refill=index_context_refill)
     csv_path = _write_csv_rows(rows, f"{output_prefix}_每日标的窗口回测_含T0市场底色_含小账户.csv")
     summary_path = Path(f"{output_prefix}_窗口回测摘要_含小账户.md")
@@ -6465,11 +6925,112 @@ def _render_global_summary(payload):
     """
 
 
+@lru_cache(maxsize=1)
+def _daily_report_reader_style_text():
+    template_path = SCRIPT_ROOT / "templates" / "daily_report_markdown_reader.html"
+    try:
+        template_text = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"回测HTML样式模板缺失，停止生成：{template_path}") from exc
+    match = re.search(r"<style>\s*(.*?)\s*</style>", template_text, flags=re.DOTALL)
+    if not match:
+        raise RuntimeError(f"回测HTML样式模板不完整，停止生成：{template_path}")
+    return match.group(1).strip()
+
+
+_FORWARD_REPLAY_STYLE_OVERRIDES = """
+.top {
+  margin-bottom: 26px;
+}
+
+.subtitle,
+.top li {
+  color: var(--reader-muted);
+  font-size: 14px;
+}
+
+.top ul {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  color: var(--reader-muted);
+}
+
+.replay-summary {
+  margin: 26px 0 26px;
+}
+
+.replay-metric-table {
+  margin: 14px 0 18px;
+}
+
+.chart-tone-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: center;
+  margin-top: 3px;
+  color: var(--reader-muted);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.4;
+}
+
+.chart-tone-legend span {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chart-tone-swatch {
+  width: 16px;
+  height: 8px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+}
+
+.chart-tone-swatch.is-interval {
+  background: var(--accent-orange);
+}
+
+.chart-tone-swatch.is-monthly {
+  background: var(--accent-red);
+}
+
+.chart-tone-swatch.is-negative {
+  background: #07C160;
+}
+
+.bear-chart.is-empty,
+.chart-empty {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  margin: 0;
+  color: var(--reader-muted);
+  font-size: 13px;
+  background: var(--reader-surface);
+}
+""".strip()
+
+
+def _forward_replay_reader_style():
+    base_style = _daily_report_reader_style_text()
+    return f"{base_style}\n\n{_FORWARD_REPLAY_STYLE_OVERRIDES}"
+
+
 def render_forward_replay_html(payload):
+    payload = deepcopy(payload) if isinstance(payload, dict) else payload
+    payload = _apply_tplus1_actual_to_replay_payload(payload)
     notes = "".join(f"<li>{_html(note)}</li>" for note in payload.get("notes", []))
     scope_remark = ""
     if payload.get("start_date") == "2026-04-01" and payload.get("summary", {}).get("coverage", {}).get("requested_end_date") == "2026-06-12":
         scope_remark = "<p class=\"subtitle\">扩展观察区间，不与主区间同权重；只用于加看 2026-06-08 至 2026-06-12 的新增样本。</p>"
+    variant_scope_text = _replay_variant_scope_text(payload)
+    variant_scope_row = (
+        f"<tr><td>版本口径</td><td>{_html(variant_scope_text)}</td></tr>"
+        if variant_scope_text
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -6478,347 +7039,7 @@ def render_forward_replay_html(payload):
   <meta name="artifact" content="sector-forward-replay">
   <title>{_html(_requested_start_date(payload))} 至 {_html(_requested_end_date(payload))} 板块资金扩散前向回测</title>
   <style>
-	    :root {{
-	      color-scheme: light;
-	      --reader-bg: #ffffff;
-	      --reader-chrome: #ffffff;
-	      --reader-sidebar: #f7f7f7;
-	      --reader-surface: #F3F5F7;
-	      --reader-surface-strong: #E4E5E6;
-	      --reader-line: #d9d9d9;
-	      --reader-text: #444444;
-	      --reader-heading: #444444;
-	      --reader-muted: #888888;
-	      --reader-muted-soft: #aaa6a6;
-	      --accent: #DD4C4F;
-	      --accent-red: #DD4C4F;
-	      --accent-soft: #FFD5D5;
-	      --accent-soft-text: #DD4C4F;
-	      --signal-green: #07C160;
-	      --signal-green-soft: #CDF7BD;
-	      --editor-width: 1120px;
-	      --outline-width: 264px;
-	      font-family: "AvenirNext-Regular", "Avenir Next", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-	      letter-spacing: 0;
-	    }}
-	    * {{ box-sizing: border-box; }}
-	    body {{
-	      margin: 0;
-	      background: var(--reader-chrome);
-	      color: var(--reader-text);
-	      font-size: 15px;
-	      line-height: 1.755;
-	      -webkit-font-smoothing: antialiased;
-	      text-rendering: optimizeLegibility;
-	    }}
-	    a {{
-	      color: inherit;
-	      text-decoration: none;
-	    }}
-	    .bear-shell {{
-	      display: grid;
-	      grid-template-columns: minmax(224px, var(--outline-width)) minmax(0, 1fr);
-	      min-height: 100vh;
-	      width: 100%;
-	      margin: 0;
-	      background: var(--reader-bg);
-	    }}
-	    .outline-sidebar {{
-	      border-right: 1px solid var(--reader-line);
-	      background: var(--reader-sidebar);
-	    }}
-	    .outline-sticky {{
-	      position: sticky;
-	      top: 0;
-	      height: 100vh;
-	      overflow-y: auto;
-	      padding: 18px 14px 24px;
-	    }}
-	    .window-controls {{
-	      display: flex;
-	      gap: 8px;
-	      margin-bottom: 22px;
-	    }}
-	    .window-controls span {{
-	      width: 12px;
-	      height: 12px;
-	      border-radius: 50%;
-	      background: #d6d2cd;
-	    }}
-	    .outline-kicker {{
-	      margin: 0 0 6px;
-	      color: var(--reader-muted);
-	      font-size: 12px;
-	      font-weight: 600;
-	      line-height: 1.35;
-	    }}
-	    .outline-title {{
-	      margin: 0 0 18px;
-	      color: var(--reader-heading);
-	      font-size: 14px;
-	      font-weight: 700;
-	      line-height: 1.45;
-	    }}
-	    .outline-nav,
-	    .mobile-nav {{
-	      display: grid;
-	      gap: 4px;
-	    }}
-	    .outline-nav a {{
-	      position: relative;
-	      display: block;
-	      padding: 7px 10px 7px 18px;
-	      color: var(--reader-muted);
-	      font-size: 13px;
-	      line-height: 1.35;
-	      transition: color 140ms ease;
-	    }}
-	    .outline-nav a.level-3 {{
-	      padding-left: 30px;
-	      font-size: 12px;
-	      color: var(--reader-muted-soft);
-	    }}
-	    .outline-nav a:hover {{
-	      color: var(--reader-heading);
-	    }}
-	    .outline-nav a.is-active::before {{
-	      content: "";
-	      position: absolute;
-	      top: 50%;
-	      left: 5px;
-	      width: 3px;
-	      height: 1.15em;
-	      border-radius: 3px;
-	      background: var(--accent);
-	      transform: translateY(-50%);
-	    }}
-	    .editor-pane {{
-	      min-width: 0;
-	      background: var(--reader-bg);
-	    }}
-	    .reader-document {{
-	      width: 100%;
-	      max-width: var(--editor-width);
-	      margin: 0 auto;
-	      padding: 38px 2em 88px;
-	    }}
-	    .reader-header {{
-	      margin-bottom: 30px;
-	      padding-bottom: 20px;
-	    }}
-	    .reader-header h1 {{
-	      margin: 0 0 10px;
-	      color: var(--reader-heading);
-	      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-	      font-size: 2em;
-	      font-weight: 600;
-	      line-height: 1.52;
-	    }}
-	    .meta {{
-	      color: var(--reader-muted);
-	      font-size: 14px;
-	    }}
-	    .mobile-nav {{
-	      display: flex;
-	      flex-wrap: wrap;
-	      gap: 8px;
-	      margin-top: 18px;
-	    }}
-	    .mobile-nav a {{
-	      padding: 5px 8px;
-	      border: 1px solid var(--reader-line);
-	      border-radius: 6px;
-	      color: var(--reader-muted);
-	      font-size: 14px;
-	    }}
-	    .mobile-nav a.level-3 {{
-	      display: none;
-	    }}
-	    .mobile-nav a:hover {{
-	      border-color: var(--accent-red);
-	      color: var(--accent);
-	    }}
-	    .markdown-body {{
-	      color: var(--reader-text);
-	      font-size: 15px;
-	      font-weight: 400;
-	      line-height: 1.755;
-	    }}
-	    h1, h2, h3, h4, p {{ margin-top: 0; letter-spacing: 0; }}
-	    h1, h2, h3, h4 {{
-	      color: var(--reader-heading);
-	      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-	    }}
-	    .top {{
-	      margin-bottom: 26px;
-	      padding-bottom: 20px;
-	      border-bottom: 1px solid var(--reader-line);
-	    }}
-	    .subtitle, .top li {{
-	      color: var(--reader-muted);
-	      font-size: 14px;
-	    }}
-	    .top ul {{
-	      margin: 12px 0 0;
-	      padding-left: 20px;
-	      color: var(--reader-muted);
-	    }}
-	    .reader-table {{
-	      display: block;
-	      overflow-x: auto;
-	      background: var(--reader-bg);
-	      -webkit-overflow-scrolling: touch;
-	    }}
-	    .reader-table table {{
-	      border-collapse: separate;
-	      border-spacing: 0;
-	      width: max-content;
-	      min-width: min(100%, 36rem);
-	      border: 1px solid var(--reader-line);
-	      border-radius: 0.33em;
-	      font-size: 1em;
-	      line-height: 1.5;
-	      table-layout: auto;
-	    }}
-	    th,
-	    td {{
-	      min-width: 5em;
-	      border-right: 1px solid var(--reader-line);
-	      padding: 0.37em 0.75em;
-	      text-align: left;
-	      vertical-align: top;
-	      overflow-wrap: anywhere;
-	    }}
-	    th {{
-	      background: var(--reader-surface);
-	      color: var(--reader-muted);
-	      font-family: "AvenirNext-Bold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-	      font-size: 1em;
-	      font-weight: 700;
-	    }}
-	    tbody tr:nth-child(odd) {{
-	      background: var(--reader-surface);
-	    }}
-	    td:last-of-type,
-	    th:last-of-type {{
-	      border-right: 0;
-	    }}
-	    .replay-summary {{
-	      margin: 26px 0 26px;
-	    }}
-	    .replay-metric-table {{
-	      margin: 14px 0 18px;
-	    }}
-	    .bear-chart-card {{
-	      position: relative;
-	      margin: 18px 0 22px;
-	      padding: 18px 18px 16px;
-	      overflow: hidden;
-	      border: 1px solid color-mix(in srgb, var(--reader-line) 82%, #ffffff);
-	      border-radius: 14px;
-	      background:
-	        radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--accent-red) 8%, transparent), transparent 30%),
-	        linear-gradient(180deg, #ffffff 0%, color-mix(in srgb, var(--reader-surface) 44%, #ffffff) 100%);
-	      box-shadow: inset 0 1px 0 rgba(255,255,255,0.82), 0 14px 34px rgba(32, 24, 18, 0.06);
-	    }}
-	    .bear-chart-card::before {{
-	      content: "";
-	      position: absolute;
-	      inset: 0;
-	      pointer-events: none;
-	      background-image: radial-gradient(rgba(68,68,68,0.055) 0.7px, transparent 0.7px);
-	      background-size: 11px 11px;
-	      opacity: 0.45;
-	      mask-image: linear-gradient(180deg, rgba(0,0,0,0.88), transparent 72%);
-	    }}
-	    .bear-chart-copy,
-	    .bear-chart-frame,
-	    .bear-chart-footnote {{
-	      position: relative;
-	      z-index: 1;
-	    }}
-	    .bear-chart-copy {{
-	      display: grid;
-	      gap: 5px;
-	      margin-bottom: 12px;
-	    }}
-	    .bear-chart-eyebrow {{
-	      width: fit-content;
-	      padding: 2px 8px;
-	      border: 1px solid color-mix(in srgb, var(--accent-red) 28%, var(--reader-line));
-	      border-radius: 999px;
-	      background: color-mix(in srgb, var(--accent-soft) 42%, #ffffff);
-	      color: var(--accent-soft-text);
-	      font-family: "AvenirNext-DemiBold", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-	      font-size: 12px;
-	      font-weight: 600;
-	      line-height: 1.45;
-	    }}
-	    .bear-chart-copy h4 {{
-	      margin: 0;
-	      color: var(--reader-heading);
-	      font-family: "AvenirNext-Medium", "Avenir Next", -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif;
-	      font-size: 1.12em;
-	      font-weight: 600;
-	      line-height: 1.45;
-	    }}
-	    .bear-chart-copy p,
-	    .bear-chart-footnote {{
-	      margin: 0;
-	      color: var(--reader-muted);
-	      font-size: 0.92em;
-	      line-height: 1.55;
-	    }}
-	    .bear-chart-frame {{
-	      height: 440px;
-	      padding: 8px 0 0;
-	      border-top: 1px solid color-mix(in srgb, var(--reader-line) 72%, transparent);
-	    }}
-	    .bear-chart-frame.is-tall {{
-	      height: 660px;
-	    }}
-	    .bear-chart {{
-	      width: 100%;
-	      height: 100%;
-	      min-height: 320px;
-	    }}
-	    .bear-chart.is-empty, .chart-empty {{
-	      display: grid;
-	      place-items: center;
-	      min-height: 180px;
-	      margin: 0;
-	      color: var(--reader-muted);
-	      font-size: 13px;
-	      background: var(--reader-surface);
-	    }}
-	    @media (max-width: 860px) {{
-	      body {{ background: var(--reader-bg); }}
-	      .bear-shell {{
-	        display: block;
-	        width: 100%;
-	        min-height: 100vh;
-	        margin: 0;
-	      }}
-	      .outline-sidebar {{ display: none; }}
-	      .reader-document {{
-	        max-width: none;
-	        padding: 28px 16px 52px;
-	      }}
-	      .bear-chart-card {{
-	        margin: 16px -2px 20px;
-	        padding: 16px 12px 14px;
-	        border-radius: 12px;
-	      }}
-	      .bear-chart-frame {{
-	        height: 340px;
-	      }}
-	      .bear-chart-frame.is-tall {{
-	        height: 620px;
-	      }}
-	      .reader-header h1 {{
-	        font-size: 1.8em;
-	      }}
-	    }}
+{_forward_replay_reader_style()}
   </style>
 </head>
 	<body>
@@ -6854,7 +7075,7 @@ def render_forward_replay_html(payload):
 	        </header>
 	        <div class="markdown-body">
 	          <section class="top" id="report-scope">
-	            <h2>区间说明</h2>
+	            <h2 class="bear-section-map">区间说明</h2>
 	            <p class="subtitle">用T0事实生成候选与淘汰链，用T+1事实复核买入日表现，再用T+2事实复核三段卖出窗口。T+1和T+2不参与T0候选生成、淘汰链生成或最终动作生成。</p>
 	            {scope_remark}
 	            <div class="reader-table">
@@ -6866,6 +7087,7 @@ def render_forward_replay_html(payload):
 	                  <tr><td>请求结束</td><td>{_html(_requested_end_date(payload))}</td></tr>
 	                  <tr><td>事实链末端</td><td>{_html(payload.get("end_date"))}</td></tr>
 	                  <tr><td>待结算日期链</td><td>{_html(_pending_settlement_pairs_text(payload))}</td></tr>
+	                  {variant_scope_row}
 	                  <tr><td>输出类型</td><td>前向回测</td></tr>
 	                </tbody>
 	              </table>

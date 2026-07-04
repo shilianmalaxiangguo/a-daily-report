@@ -140,7 +140,7 @@ class GemBreathingRuntimeTest(unittest.TestCase):
         self.assertEqual(contract["reset_breakout_price"], 12.98)
         self.assertIn("12.36", contract["upgrade_condition_text"])
         self.assertIn("11.22", contract["upgrade_condition_text"])
-        self.assertIn("50%条件执行", contract["upgrade_condition_text"])
+        self.assertIn("只进入复盘和下一份日报判断", contract["upgrade_condition_text"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), contract["upgrade_condition_text"])
 
     def test_build_gem_breathing_watch_anchor_assembles_waiting_plan_and_contract(self):

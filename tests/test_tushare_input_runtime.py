@@ -1,6 +1,7 @@
 import sys
 import time
 import unittest
+import datetime
 from unittest.mock import patch
 from pathlib import Path
 
@@ -44,6 +45,12 @@ class _FakeFrame:
         if orient != "records":
             raise AssertionError(f"unexpected orient: {orient}")
         return list(self._rows)
+
+
+class _FixedTodayDate(datetime.date):
+    @classmethod
+    def today(cls):
+        return cls(2026, 7, 1)
 
 
 class TushareInputRuntimeTest(unittest.TestCase):
@@ -321,6 +328,101 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["total_etf_universe_count"], 20)
         self.assertEqual(result["overall_coverage_ratio"], 0.85)
         self.assertIn("ETF样本池20只的95%以下", result["coverage_anomaly_reason"])
+
+    def test_etf_turnover_series_appends_today_from_sina_current_list_when_hist_is_stale(self):
+        etf_universe_rows = [
+            {"代码": "510300", "名称": "沪深300ETF", "成交额": 12_000_000_000},
+            {"symbol": "sz159915", "name": "创业板ETF", "成交额": 8_000_000_000},
+        ]
+        hist_rows_by_symbol = {
+            "sh510300": [
+                {"date": "2026-06-29", "amount": 10_000_000_000},
+                {"date": "2026-06-30", "amount": 11_000_000_000},
+            ],
+            "sz159915": [
+                {"date": "2026-06-29", "amount": 5_000_000_000},
+                {"date": "2026-06-30", "amount": 7_000_000_000},
+            ],
+        }
+
+        with patch.object(tushare_runtime.datetime, "date", _FixedTodayDate):
+            result = get_etf_turnover_series_from_sina_first(
+                "2026-07-01",
+                window_days=2,
+                fetch_etf_universe_fn=lambda: etf_universe_rows,
+                fetch_etf_hist_fn=lambda symbol: hist_rows_by_symbol[symbol],
+            )
+
+        self.assertEqual(result["source"], "sina.etf.daily_amount+sina.etf.category_current_amount")
+        self.assertFalse(result["coverage_anomaly"])
+        self.assertEqual(result["target_date_fallback_from"], "sina.etf.category_current_amount")
+        self.assertEqual(result["target_date_fallback_source_date"], "2026-07-01")
+        self.assertEqual(result["latest_covered_etf_count"], 2)
+        self.assertEqual(result["total_etf_universe_count"], 2)
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-07-01")
+        self.assertEqual(result["rows"][-1]["covered_etf_count"], 2)
+        self.assertAlmostEqual(result["rows"][-1]["etf_turnover_yi"], 200.0)
+        self.assertAlmostEqual(result["rows"][-1]["change_pct"], 11.11)
+
+    def test_etf_turnover_series_flags_partial_history_when_today_current_list_is_complete(self):
+        symbols = [f"sh58{index:04d}" for index in range(20)]
+        etf_universe_rows = [
+            {"symbol": symbol, "成交额": 10_000_000_000}
+            for symbol in symbols
+        ]
+        hist_rows_by_symbol = {
+            symbol: [
+                {"date": "2026-06-29", "amount": 10_000_000_000},
+                {"date": "2026-06-30", "amount": 10_000_000_000},
+            ]
+            for symbol in symbols[:12]
+        }
+        for symbol in symbols[12:]:
+            hist_rows_by_symbol[symbol] = []
+
+        with patch.object(tushare_runtime.datetime, "date", _FixedTodayDate):
+            result = get_etf_turnover_series_from_sina_first(
+                "2026-07-01",
+                window_days=3,
+                fetch_etf_universe_fn=lambda: etf_universe_rows,
+                fetch_etf_hist_fn=lambda symbol: hist_rows_by_symbol[symbol],
+            )
+
+        self.assertEqual(result["source"], "sina.etf.daily_amount+sina.etf.category_current_amount")
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["coverage_status"], "partial")
+        self.assertEqual(result["latest_covered_etf_count"], 20)
+        self.assertEqual(result["sequence_min_covered_etf_count"], 12)
+        self.assertEqual(result["sequence_min_coverage_ratio"], 0.6)
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-07-01")
+        self.assertEqual(result["rows"][-1]["covered_etf_count"], 20)
+        self.assertTrue(result["rows"][0]["coverage_anomaly"])
+        self.assertIn("历史序列最低有成交ETF数12只", result["coverage_anomaly_reason"])
+
+    def test_etf_turnover_series_rejects_today_current_list_when_coverage_is_low(self):
+        symbols = [f"sh58{index:04d}" for index in range(20)]
+        etf_universe_rows = [
+            {"symbol": symbol, "成交额": 10_000_000_000 if index < 18 else 0}
+            for index, symbol in enumerate(symbols)
+        ]
+        hist_rows_by_symbol = {
+            symbol: [{"date": "2026-06-30", "amount": 10_000_000_000}]
+            for symbol in symbols
+        }
+
+        with patch.object(tushare_runtime.datetime, "date", _FixedTodayDate):
+            result = get_etf_turnover_series_from_sina_first(
+                "2026-07-01",
+                window_days=2,
+                fetch_etf_universe_fn=lambda: etf_universe_rows,
+                fetch_etf_hist_fn=lambda symbol: hist_rows_by_symbol[symbol],
+            )
+
+        self.assertEqual(result["source"], "sina.etf.daily_amount")
+        self.assertTrue(result["coverage_anomaly"])
+        self.assertEqual(result["coverage_status"], "partial")
+        self.assertEqual(result["rows"][-1]["trade_date"], "2026-06-30")
+        self.assertIn("不使用当日列表补齐目标日", result["coverage_anomaly_reason"])
 
     def test_etf_turnover_series_falls_back_to_tushare_fund_daily_when_sina_coverage_anomaly(self):
         symbols = ["sh510300", "sz159915", "sh588000", "sz159995"]
@@ -3364,6 +3466,31 @@ class TushareInputRuntimeTest(unittest.TestCase):
         )
 
         self.assertEqual(result["market_stats"], {"up_count": 1, "down_count": 1, "zt_count": 0, "dt_count": 0})
+        self.assertEqual(result["source_status"], "daily_breadth_only")
+
+    def test_limit_pool_snapshot_uses_storage_breadth_when_daily_fetch_fails(self):
+        class FakeService:
+            repository = object()
+
+            def query_market_breadth_counts(self, trade_date):
+                self.trade_date = trade_date
+                return {"up_count": 899, "down_count": 4591, "zt_count": 93, "dt_count": 40}
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                return FakeService()
+
+        result = get_limit_pool_snapshot_from_tushare_first(
+            "2026-07-02",
+            fetch_tushare_limit_rows_fn=lambda trade_date: [],
+            fetch_stock_daily_turnover_records_fn=lambda trade_date: [],
+            database_service_cls=FakeDatabaseService,
+            retry_sleep_fn=lambda seconds: None,
+        )
+
+        self.assertEqual(result["market_stats"], {"up_count": 899, "down_count": 4591, "zt_count": 93, "dt_count": 40})
+        self.assertEqual(result["provider"], "storage.stock_daily_quotes_recent")
         self.assertEqual(result["source_status"], "daily_breadth_only")
 
     def test_limit_pool_snapshot_retries_once_when_tushare_rows_are_empty(self):

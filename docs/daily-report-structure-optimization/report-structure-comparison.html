@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>日报展示结构修改对比</title>
+  <style>
+    :root {
+      --bg: #f7f4ee;
+      --surface: #ffffff;
+      --surface-soft: #fbfaf6;
+      --line: #ded8cc;
+      --text: #25211c;
+      --muted: #6e665d;
+      --red: #cc3b2f;
+      --orange: #d38327;
+      --green: #23715d;
+      --blue: #2f6597;
+      --shadow: rgba(49, 42, 35, 0.08);
+      color-scheme: light;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+      letter-spacing: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.72;
+    }
+
+    .page {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 36px 0 56px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 22px;
+      margin-bottom: 26px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 48px);
+      line-height: 1.16;
+      font-weight: 900;
+    }
+
+    .subtitle {
+      max-width: 880px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    h2 {
+      margin: 34px 0 14px;
+      font-size: 22px;
+      line-height: 1.35;
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      font-size: 17px;
+      line-height: 1.4;
+    }
+
+    .summary-grid,
+    .change-grid,
+    .evidence-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .summary-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .change-grid,
+    .evidence-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    .panel-pad {
+      padding: 18px;
+    }
+
+    .metric {
+      display: grid;
+      gap: 7px;
+      min-height: 132px;
+    }
+
+    .metric strong {
+      font-size: 16px;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .tag {
+      display: inline-flex;
+      width: fit-content;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: #f3eee5;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .tag.action {
+      background: #fae7e3;
+      color: var(--red);
+    }
+
+    .tag.evidence {
+      background: #e8f0f7;
+      color: var(--blue);
+    }
+
+    .tag.keep {
+      background: #e6f2ed;
+      color: var(--green);
+    }
+
+    .flow {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+    }
+
+    .flow-item {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: start;
+      min-height: 46px;
+    }
+
+    .flow-item:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      left: 16px;
+      top: 34px;
+      bottom: -11px;
+      width: 2px;
+      background: var(--line);
+    }
+
+    .step {
+      position: relative;
+      z-index: 1;
+      display: inline-flex;
+      width: 34px;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: var(--surface);
+      color: var(--muted);
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .flow-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: var(--surface-soft);
+    }
+
+    .flow-card.action {
+      border-color: rgba(204, 59, 47, 0.35);
+      background: #fff4f1;
+    }
+
+    .flow-card.evidence {
+      border-color: rgba(47, 101, 151, 0.3);
+      background: #f0f6fb;
+    }
+
+    .flow-card strong {
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .flow-card span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 12px 28px var(--shadow);
+    }
+
+    th,
+    td {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      background: #efe8dd;
+      font-weight: 900;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    code {
+      border: 1px solid #e2d8c9;
+      border-radius: 6px;
+      padding: 1px 5px;
+      background: #fffaf2;
+      color: #3a2d22;
+      font-family: Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    .file-list {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .file-list li {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 11px 12px;
+      background: var(--surface);
+    }
+
+    .note {
+      border-left: 4px solid var(--orange);
+      padding: 12px 14px;
+      background: #fff7e9;
+      color: #5f4423;
+    }
+
+    .ok {
+      border-left-color: var(--green);
+      background: #eef8f3;
+      color: #254c3e;
+    }
+
+    .warn {
+      border-left-color: var(--red);
+      background: #fff0ed;
+      color: #65312c;
+    }
+
+    @media (max-width: 860px) {
+      .summary-grid,
+      .change-grid,
+      .evidence-grid {
+        grid-template-columns: 1fr;
+      }
+
+      th,
+      td {
+        padding: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <h1>日报展示结构修改对比</h1>
+      <p class="subtitle">这页只解释本轮展示结构变化：Markdown 先看明日动作，再看证据；Bear HTML 跟随同一顺序。明日对象、仓位、执行性质仍来自原结构化结果。</p>
+    </header>
+
+    <section>
+      <h2>一屏结论</h2>
+      <div class="summary-grid">
+        <article class="panel panel-pad metric">
+          <span class="tag action">Markdown</span>
+          <strong>动作前置</strong>
+          <span><code>## 明日执行结论</code>、执行条件、不执行条件先出现，板块资金证据后置。</span>
+        </article>
+        <article class="panel panel-pad metric">
+          <span class="tag evidence">Bear HTML</span>
+          <strong>同序展示</strong>
+          <span>动作段使用 <code>bear-section-action</code>，证据段使用 <code>bear-section-evidence</code>。</span>
+        </article>
+        <article class="panel panel-pad metric">
+          <span class="tag keep">不变项</span>
+          <strong>不改明日标的</strong>
+          <span>不改候选池、评分、淘汰、数据源、最终对象解析和决策字段。</span>
+        </article>
+        <article class="panel panel-pad metric">
+          <span class="tag">验证</span>
+          <strong>576 条相关测试通过</strong>
+          <span>真实 replay 已尝试，当前因路径诊断来源日期缺失停止生成，非本轮展示改动导致。</span>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>结构顺序对比</h2>
+      <div class="change-grid">
+        <article class="panel">
+          <div class="panel-pad">
+            <h3>修改前：先证据，后动作</h3>
+            <p>读者会先看到板块资金证据，再往后找最终动作。</p>
+          </div>
+          <div class="flow">
+            <div class="flow-item"><span class="step">1</span><div class="flow-card"><strong>阅读地图</strong><span>首屏导航。</span></div></div>
+            <div class="flow-item"><span class="step">2</span><div class="flow-card"><strong>账户日序表 / 日报裁决总览</strong><span>账户和裁决摘要。</span></div></div>
+            <div class="flow-item"><span class="step">3</span><div class="flow-card evidence"><strong>板块资金扩散淘汰赛</strong><span>板块路径、资金载体、淘汰理由先出现。</span></div></div>
+            <div class="flow-item"><span class="step">4</span><div class="flow-card evidence"><strong>板块资金载体复核 / T0推演</strong><span>继续读证据和推演。</span></div></div>
+            <div class="flow-item"><span class="step">5</span><div class="flow-card action"><strong>明日执行结论</strong><span>最终动作较晚出现。</span></div></div>
+            <div class="flow-item"><span class="step">6</span><div class="flow-card action"><strong>执行条件 / 不执行条件</strong><span>条件在证据之后。</span></div></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-pad">
+            <h3>修改后：先动作，后证据</h3>
+            <p>先确定明天做不做、做什么、什么条件不做，再看证据。</p>
+          </div>
+          <div class="flow">
+            <div class="flow-item"><span class="step">1</span><div class="flow-card"><strong>阅读地图</strong><span>第一行直接指向明日执行结论和条件。</span></div></div>
+            <div class="flow-item"><span class="step">2</span><div class="flow-card"><strong>账户日序表 / 日报裁决总览</strong><span>账户位置和前台摘要。</span></div></div>
+            <div class="flow-item"><span class="step">3</span><div class="flow-card action"><strong>明日执行结论</strong><span>明日仓位、执行对象、执行性质先出现。</span></div></div>
+            <div class="flow-item"><span class="step">4</span><div class="flow-card action"><strong>执行条件 / 不执行条件</strong><span>先看什么条件可做，什么条件不做。</span></div></div>
+            <div class="flow-item"><span class="step">5</span><div class="flow-card evidence"><strong>板块资金扩散淘汰赛</strong><span>解释动作依据，不新增明日对象。</span></div></div>
+            <div class="flow-item"><span class="step">6</span><div class="flow-card evidence"><strong>板块资金载体复核 / T0推演</strong><span>作为后续证据入口。</span></div></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>文件级变化</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>变化</th>
+            <th>影响范围</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>scripts/report/runtime.py</code></td>
+            <td>新增动作段边界识别；板块资金摘要插到明日执行结论和执行/不执行条件之后；阅读地图改成动作优先。</td>
+            <td>只影响 Markdown 展示顺序和阅读地图文案。</td>
+          </tr>
+          <tr>
+            <td><code>scripts/report/markdown_report_html.py</code></td>
+            <td>给 H2 标题按阅读地图、动作段、证据段分类，输出稳定 class。</td>
+            <td>只影响 Bear HTML 的标题样式标记。</td>
+          </tr>
+          <tr>
+            <td><code>scripts/templates/daily_report_markdown_reader.html</code></td>
+            <td>新增动作段和证据段的 CSS 样式。</td>
+            <td>只影响视觉表现，不参与 Markdown 内容生成。</td>
+          </tr>
+          <tr>
+            <td><code>tests/test_report_runtime.py</code></td>
+            <td>补顺序断言、旧证据段替换断言、三项结论不变断言。</td>
+            <td>防止后续把证据段插回动作前，或误改明日结论表。</td>
+          </tr>
+          <tr>
+            <td><code>tests/test_daily_report_markdown_html.py</code></td>
+            <td>补 Bear HTML 动作段和证据段 class 断言，并检查动作标题早于证据标题。</td>
+            <td>防止 HTML 展示和 Markdown 顺序脱节。</td>
+          </tr>
+          <tr>
+            <td><code>flow.md / testing.md / readme.md / AGENTS.md</code></td>
+            <td>补修改后对比、验证结果、真实 replay 停止生成原因和后续约束。</td>
+            <td>让后续维护者知道这是展示层改动，不是明日标的生成改动。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>不变项核对</h2>
+      <div class="evidence-grid">
+        <article class="note ok">
+          <h3>决策来源不变</h3>
+          <p>明日对象、仓位、执行性质仍由结构化决策结果提供。HTML 不读取或回写这些字段，Markdown 插入函数只移动证据摘要的位置。</p>
+        </article>
+        <article class="note ok">
+          <h3>三项结论不变测试</h3>
+          <p><code>test_insert_sector_capital_preflight_front_summary_keeps_zero_execution_rows_unchanged</code> 覆盖 <code>明日仓位=0%不参与</code>、<code>明日执行对象=无</code>、<code>执行性质=无明日执行对象</code> 不因证据摘要插入而改变。</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>验证证据</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>验证项</th>
+            <th>结果</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>新增窄路径测试</td>
+            <td>7 条通过</td>
+            <td>覆盖阅读地图、动作先于证据、旧证据段替换、三项结论不变、Bear HTML class。</td>
+          </tr>
+          <tr>
+            <td>相关文件级测试</td>
+            <td>576 条通过</td>
+            <td><code>tests.test_report_runtime</code>、<code>tests.test_daily_report_markdown_html</code>、<code>tests.test_daily_report_render</code>、<code>tests.test_daily_report_entry_html_output</code>、<code>tests.test_report_acceptance_audit</code>。</td>
+          </tr>
+          <tr>
+            <td>格式检查</td>
+            <td>通过</td>
+            <td><code>git diff --check</code> 无输出。</td>
+          </tr>
+          <tr>
+            <td>真实 replay</td>
+            <td>停止生成</td>
+            <td><code>2026-06-05 --replay</code> 在正文生成后因路径诊断来源日期缺失停止生成。该问题来自当前工作树已有一致性检查，不是展示结构改动导致。</td>
+          </tr>
+          <tr>
+            <td>只读审计</td>
+            <td>无 P0/P1</td>
+            <td>决策影响审计提出顺序断言和三项结论不变断言，均已补测试并通过。</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>怎么读这次变化</h2>
+      <div class="note">
+        <p>这次不是让日报重新选股，而是调整“你先看到什么”。修改后，人工和 AI 都会先拿到明日动作，再进入板块资金、资金载体和 T0 推演证据。证据仍然重要，但它的角色是解释和复盘，不是新增一个明日对象。</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

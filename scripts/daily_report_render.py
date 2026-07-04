@@ -37,6 +37,7 @@ REPORT_VARIANT_SUMMARY = "summary"
 REPORT_VARIANT_LIGHTWEIGHT = "lightweight"
 REPORT_VARIANT_EVIDENCE_APPENDIX = "evidence_appendix"
 REPORT_VARIANT_RUN_LOG = "run_log"
+REPORT_COMPANION_DOCS = "companion_docs"
 CRITICAL_REPORT_DATA_FIELDS = (
     ("两市成交额", "total_turnover"),
     ("中证全指", "wind_a_alternative"),
@@ -88,6 +89,7 @@ ALLOW_EMPTY_DATA_STATUS_LABELS = {
     "跌停池",
     "跌停股板块分布",
     "中证500",
+    "异动检测数据",
 }
 
 
@@ -100,6 +102,7 @@ __all__ = [
     "REPORT_VARIANT_LIGHTWEIGHT",
     "REPORT_VARIANT_EVIDENCE_APPENDIX",
     "REPORT_VARIANT_RUN_LOG",
+    "REPORT_COMPANION_DOCS",
     "ReportCriticalDataMissingError",
     "_get_report_output_path",
     "_get_stock_diagnostic_output_path",
@@ -113,6 +116,7 @@ __all__ = [
     "assert_report_required_facts_complete",
     "persist_report_runtime_artifacts",
     "save_report_output",
+    "save_report_companion_docs",
     "save_report_outputs",
     "save_stock_diagnostic_output",
 ]
@@ -143,8 +147,94 @@ def _report_variant_label(variant: str) -> str:
         REPORT_VARIANT_LIGHTWEIGHT: "轻量版",
         REPORT_VARIANT_EVIDENCE_APPENDIX: "证据附录",
         REPORT_VARIANT_RUN_LOG: "运行日志",
+        REPORT_COMPANION_DOCS: "伴随文档",
     }
     return labels.get(variant, str(variant or "报告"))
+
+
+def _companion_docs_dir(saved_paths, target_date: str, mode: str = LEDGER_MODE_FROZEN) -> Path:
+    path_values = [
+        Path(path)
+        for path in (saved_paths or {}).values()
+        if isinstance(path, (str, Path)) and str(path)
+    ]
+    replay_paths = [path for path in path_values if path.name.endswith("_replay.md")]
+    replay_suffix = mode == LEDGER_MODE_REPLAY or bool(replay_paths)
+    if replay_paths:
+        base_dir = replay_paths[0].parent
+    elif path_values:
+        base_dir = path_values[0].parent
+    else:
+        base_dir = Path(_get_report_output_path(target_date, mode=mode)).parent
+    suffix = "_replay" if replay_suffix else ""
+    return base_dir / f"{target_date}_A股日报_伴随文档{suffix}"
+
+
+def _format_saved_report_paths(saved_paths) -> str:
+    rows = []
+    for variant, path in (saved_paths or {}).items():
+        if variant == REPORT_COMPANION_DOCS:
+            continue
+        rows.append(f"- {_report_variant_label(variant)}: `{path}`")
+    return "\n".join(rows) if rows else "- 暂无已保存报告路径"
+
+
+def save_report_companion_docs(saved_paths, target_date: str, mode: str = LEDGER_MODE_FROZEN) -> str:
+    companion_dir = _companion_docs_dir(saved_paths, target_date, mode=mode)
+    companion_dir.mkdir(parents=True, exist_ok=True)
+    mode_label = "replay" if mode == LEDGER_MODE_REPLAY or companion_dir.name.endswith("_replay") else "official"
+    report_paths = _format_saved_report_paths(saved_paths)
+    docs = {
+        "AGENTS.md": "\n".join(
+            [
+                f"# {target_date} 日报协作说明",
+                "",
+                "- 目标：本次日报生成必须保留可复盘的边界、流程、验证和入口说明。",
+                "- 协作边界：不覆盖项目根目录协作说明；本文件只记录本次产物的执行纪律。",
+                "- 数据纪律：历史 replay 不混入当前盘面；关键数据不完整时停止生成。",
+                "- 交易口径：旧仓、新机会和最终动作分开表达，避免把观察信号写成买入资格。",
+            ]
+        ),
+        "flow.md": "\n".join(
+            [
+                f"# {target_date} 日报流程",
+                "",
+                f"- 运行模式：`{mode_label}`。",
+                "- 输入：行情、板块、候选、旧仓和运行时补充事实。",
+                "- 处理：先做数据检查，再做旧仓风险复核，然后比较新机会，最后输出唯一明日动作。",
+                "- 输出：Markdown/HTML 报告、运行日志和本目录四个伴随文件。",
+                "",
+                "## 已保存报告",
+                "",
+                report_paths,
+            ]
+        ),
+        "testing.md": "\n".join(
+            [
+                f"# {target_date} 日报验证",
+                "",
+                "- 最小验证：日报生成命令完成，运行日志可追到报告路径和伴随文档目录。",
+                "- 规则覆盖：边界、流程、验证和入口四类说明均已落盘。",
+                "- 人工复核：若日报暴露新规则、新 bug 或新口径，需要把具体证据补进本目录对应文件。",
+                "- 剩余风险：本文件不替代单元测试、数据源核验或盘后人工复盘。",
+            ]
+        ),
+        "readme.md": "\n".join(
+            [
+                f"# {target_date} 日报伴随文档",
+                "",
+                "本目录随日报生成，用来记录本次产物的协作边界、流程、验证和复用入口。",
+                "",
+                "- `AGENTS.md`：本次协作边界和执行纪律。",
+                "- `flow.md`：本次日报从输入到输出的流程。",
+                "- `testing.md`：本次最小验证和未覆盖风险。",
+                "- `readme.md`：下次使用者的入口说明。",
+            ]
+        ),
+    }
+    for filename, text in docs.items():
+        (companion_dir / filename).write_text(f"{text.rstrip()}\n", encoding="utf-8")
+    return str(companion_dir)
 
 
 def _get_report_output_path(target_date: str, mode: str = LEDGER_MODE_FROZEN, variant: str = REPORT_VARIANT_FULL) -> str:
@@ -294,6 +384,38 @@ def _xuangubao_summary_count(payload):
         int(_safe_float(payload.get("news_count"), 0))
         + int(_safe_float(payload.get("plate_count"), 0))
         + int(_safe_float(payload.get("limit_up_reason_count"), 0))
+    )
+
+
+def _xuangubao_item_count(payload, list_key, count_key):
+    if not isinstance(payload, dict):
+        return 0
+    rows = payload.get(list_key)
+    if isinstance(rows, list):
+        return len(rows)
+    return int(_safe_float(payload.get(count_key), 0))
+
+
+def _xuangubao_count_breakdown(payload):
+    return {
+        "news_count": _xuangubao_item_count(payload, "xuangubao_news", "news_count"),
+        "plate_count": _xuangubao_item_count(payload, "xuangubao_plates", "plate_count"),
+        "limit_up_reason_count": _xuangubao_item_count(
+            payload,
+            "xuangubao_limit_up_reasons",
+            "limit_up_reason_count",
+        ),
+    }
+
+
+def _xuangubao_breakdown_note(payload):
+    counts = _xuangubao_count_breakdown(payload)
+    if not any(counts.values()):
+        return ""
+    return "新闻{}条 / 盘面{}个 / 涨停解释{}条".format(
+        counts["news_count"],
+        counts["plate_count"],
+        counts["limit_up_reason_count"],
     )
 
 
@@ -476,6 +598,7 @@ def _build_decision_critical_checks(data):
                 "provider": _provider_for_steps(data, steps) or "unknown",
                 "row_count": _row_count_for_steps(data, steps, payload_key),
                 "echo_lines": _new_high_recent_trend_echo(data) if payload_key == "new_high_feedback" else [],
+                "note": _xuangubao_breakdown_note(data.get(payload_key)) if payload_key == "xuangubao_data" else "",
                 "data_status": data_status.get(label),
                 "step_status": step_status.get(step_label),
             }
@@ -534,6 +657,39 @@ def _dedupe_labels(labels):
 
 def _as_mapping(value):
     return value if isinstance(value, dict) else {}
+
+
+QUOTE_SENSITIVE_DERIVED_KEYS = (
+    "selection_workflow",
+    "final_target_resolution",
+    "final_target_resolution_audit",
+    "two_layer_decision_payload",
+    "sniper_target_derivation",
+    "candidate_traces",
+)
+
+
+def _clear_quote_sensitive_derived_outputs(data):
+    if not isinstance(data, dict):
+        return
+    targets = [data]
+    context = data.get("execution_stage_context")
+    snapshot = data.get("market_research_snapshot")
+    if isinstance(context, dict):
+        targets.append(context)
+        nested_snapshot = context.get("market_research_snapshot")
+        if isinstance(nested_snapshot, dict):
+            targets.append(nested_snapshot)
+    if isinstance(snapshot, dict):
+        targets.append(snapshot)
+    seen = set()
+    for target in targets:
+        marker = id(target)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        for key in QUOTE_SENSITIVE_DERIVED_KEYS:
+            target.pop(key, None)
 
 
 def _has_meaningful_payload(value):
@@ -803,15 +959,16 @@ def render_report_preflight_lines(preflight):
     if preflight.get("decision_checks"):
         lines.append("决策数据检查:")
         for check in preflight.get("decision_checks") or []:
-            lines.append(
-                "- {label}: {status} | 来源={provider} | 记录数={row_count} | 采集结果={step_status}".format(
-                    label=check.get("label", ""),
-                    status=_run_log_status(check.get("status", "")),
-                    provider=check.get("provider", "unknown"),
-                    row_count=check.get("row_count", ""),
-                    step_status=_run_log_status(check.get("step_status", "")),
-                )
+            line = "- {label}: {status} | 来源={provider} | 记录数={row_count} | 采集结果={step_status}".format(
+                label=check.get("label", ""),
+                status=_run_log_status(check.get("status", "")),
+                provider=check.get("provider", "unknown"),
+                row_count=check.get("row_count", ""),
+                step_status=_run_log_status(check.get("step_status", "")),
             )
+            if check.get("note"):
+                line = f"{line} | 备注={check.get('note')}"
+            lines.append(line)
             lines.extend(check.get("echo_lines") or [])
     if preflight.get("failures"):
         failures = "、".join(preflight.get("failures") or [])
@@ -936,9 +1093,64 @@ def _build_lightweight_market_section(full_report: str) -> str:
     return f"## 今日市场底色\n{body.strip()}"
 
 
+def _build_lightweight_reading_map() -> str:
+    return "\n".join(
+        [
+            "## 阅读地图",
+            "| 顺序 | 先看什么 | 用途 |",
+            "|---:|---|---|",
+            "| 1 | 日报裁决总览、明日账户建议、最终结论 | 先确认仓位、旧仓和明日动作 |",
+            "| 2 | 今日市场底色、周期与主线摘要 | 再判断市场和板块条件 |",
+            "| 3 | 个股和持仓处理、明日三窗口 | 最后看观察对象、确认条件和取消条件 |",
+            "| 4 | 证据附录、运行日志 | 只作复盘证据，不新增明日对象 |",
+        ]
+    )
+
+
+def _remove_lightweight_reading_maps(text: str) -> str:
+    lines = str(text or "").splitlines()
+    cleaned = []
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != "## 阅读地图":
+            cleaned.append(lines[index])
+            index += 1
+            continue
+        index += 1
+        while index < len(lines):
+            candidate = lines[index]
+            if candidate.startswith("# ") or candidate.startswith("## "):
+                break
+            index += 1
+    return "\n".join(cleaned).strip()
+
+
+def _insert_lightweight_reading_map(text: str) -> str:
+    base = _remove_lightweight_reading_maps(text).strip()
+    reading_map_lines = _build_lightweight_reading_map().splitlines()
+    if not base:
+        return _build_lightweight_reading_map().strip() + "\n"
+    lines = base.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            tail_start = index + 1
+            while tail_start < len(lines) and not lines[tail_start].strip():
+                tail_start += 1
+            merged = (
+                lines[: index + 1]
+                + [""]
+                + reading_map_lines
+                + [""]
+                + lines[tail_start:]
+            )
+            return "\n".join(merged).strip() + "\n"
+    return "\n\n".join((_build_lightweight_reading_map().strip(), base)).strip() + "\n"
+
+
 def build_lightweight_report_text(full_report: str, summary_report: str = "") -> str:
     full_report = str(full_report or "")
     intro = _section_before(full_report, "## 明日账户建议").strip() if "## 明日账户建议" in full_report else ""
+    intro = _remove_lightweight_reading_maps(intro)
     account_section = _extract_markdown_section(full_report, "## 明日账户建议")
     market_section = _build_lightweight_market_section(full_report)
     stock_section = _rename_markdown_section(
@@ -973,13 +1185,15 @@ def build_lightweight_report_text(full_report: str, summary_report: str = "") ->
         base = _section_before(full_report, "## 八、详细附录")
         if not base.strip():
             base = str(summary_report or full_report or "").strip()
-        parts = [base.rstrip(), sniper_section]
+        parts = [_remove_lightweight_reading_maps(base.rstrip()), sniper_section]
     parts.append(
         "## 证据与运行文件\n"
         "- 证据附录：同目录下 `A股日报_证据附录` 文件。\n"
         "- 运行日志：同目录下 `A股日报_运行日志` 文件。"
     )
-    return "\n\n".join(part.strip() for part in parts if str(part).strip()).strip() + "\n"
+    return _insert_lightweight_reading_map(
+        "\n\n".join(part.strip() for part in parts if str(part).strip())
+    )
 
 
 def build_evidence_appendix_text(full_report: str, target_date: str = "") -> str:
@@ -1065,6 +1279,9 @@ def _render_run_log_key_data_table(preflight):
 
 
 def _decision_check_note(check):
+    note = str((check or {}).get("note") or "").strip()
+    if note:
+        return note
     echo_lines = check.get("echo_lines") or []
     if not echo_lines:
         return "-"
@@ -1389,6 +1606,10 @@ def build_report_outputs(
     persist_runtime_artifacts: bool = True,
     persist_decision_ledger: bool | None = None,
 ):
+    if isinstance(data, dict):
+        data["enable_selection_workflow_quote_backfill"] = True
+        if data.get("enable_selection_workflow_quote_backfill"):
+            _clear_quote_sensitive_derived_outputs(data)
     preflight = build_report_preflight(data, target_date)
     if emit_preflight:
         for line in render_report_preflight_lines(preflight):
@@ -1644,6 +1865,7 @@ def save_report_outputs(
                 variant=variant,
                 overwrite_existing=overwrite_existing,
             )
+    saved_paths[REPORT_COMPANION_DOCS] = save_report_companion_docs(saved_paths, target_date, mode=mode)
     _backfill_run_log_saved_paths(saved_paths)
     if mode == LEDGER_MODE_REPLAY and sync_replay_decision_ledger:
         _sync_replay_decision_ledger_from_full_report(

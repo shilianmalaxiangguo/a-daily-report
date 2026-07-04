@@ -865,6 +865,20 @@ def _selection_workflow_zero_without_object(snapshot):
     return position_pct <= 0 and not target
 
 
+def _selection_workflow_final_zero(snapshot):
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return False
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if not final:
+        return False
+    try:
+        position_pct = int(float(str(final.get("position_pct") or 0).replace("%", "").strip() or 0))
+    except (TypeError, ValueError):
+        position_pct = 0
+    return position_pct <= 0
+
+
 def _selection_workflow_final_target(snapshot):
     workflow = (snapshot or {}).get("selection_workflow") or {}
     if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
@@ -888,6 +902,63 @@ def _selection_workflow_final_target(snapshot):
     target["action_text"] = _text_value(final.get("action_text"))
     target["source_node"] = _text_value(final.get("source_node"), "N8")
     return target
+
+
+def _selection_workflow_final_grade(snapshot):
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return ""
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    if not final:
+        return ""
+    return _grade_from_position_pct(final.get("position_pct"))
+
+
+def _selection_workflow_premarket_review(snapshot):
+    workflow = (snapshot or {}).get("selection_workflow") or {}
+    if not isinstance(workflow, dict) or workflow.get("schema_version") != "selection_workflow.v1":
+        return {}
+    final = workflow.get("final") if isinstance(workflow.get("final"), dict) else {}
+    for source in (final, workflow):
+        review = source.get("premarket_narrative_review") if isinstance(source, dict) else {}
+        if isinstance(review, dict) and review:
+            return review
+    return {}
+
+
+def _review_text_list(value):
+    if isinstance(value, list):
+        source = value
+    elif value in (None, ""):
+        source = []
+    else:
+        source = [value]
+    rows = []
+    for item in source:
+        text = _text_value(item)
+        if text and text not in rows:
+            rows.append(text)
+    return rows
+
+
+def _premarket_narrative_review_front_text(review):
+    review = review if isinstance(review, dict) else {}
+    if not review:
+        return ""
+    status = _text_value(review.get("status"), "未触发")
+    summary = _text_value(review.get("summary"))
+    if not summary:
+        chain = _review_text_list(review.get("reason_chain"))
+        summary = " -> ".join(chain) if chain else "盘前叙事复核未形成完整链条"
+    effect = _text_value(review.get("action_effect_label"), "不调整")
+    parts = [f"{status}：{summary}", f"动作上限：{effect}"]
+    restore = "、".join(_review_text_list(review.get("restore_conditions")))
+    cancel = "、".join(_review_text_list(review.get("cancel_conditions")))
+    if restore:
+        parts.append(f"恢复条件：{restore}")
+    if cancel:
+        parts.append(f"不参与条件：{cancel}")
+    return "；".join(parts)
 
 
 def _selected_position_candidate(snapshot):
@@ -1212,34 +1283,37 @@ def _promote_selected_candidate_to_standard_attack(snapshot):
 def _position_state_contract(snapshot=None, final_gate=None):
     snapshot = snapshot or {}
     final_gate = final_gate or {}
+    workflow_grade = _selection_workflow_final_grade(snapshot)
     position_decision = _position_decision(snapshot)
 
     countertrend_defense = _countertrend_defense_active(snapshot)
-    grade = _normalize_signal_grade(position_decision.get("signal_grade"))
-    if not grade and "target_position_pct" in position_decision:
+    grade = workflow_grade or _normalize_signal_grade(position_decision.get("signal_grade"))
+    if not workflow_grade and not grade and "target_position_pct" in position_decision:
         grade = _grade_from_position_pct(position_decision.get("target_position_pct"))
-    if _final_action_forces_zero_position(final_gate):
+    if not workflow_grade and _final_action_forces_zero_position(final_gate):
         grade = "0"
     reasoning_decision = snapshot.get("reasoning_decision") or {}
     if (
-        not grade
+        not workflow_grade
+        and not grade
         and isinstance(reasoning_decision, dict)
         and reasoning_decision.get("action") == "conditional_entry"
         and reasoning_decision.get("handoff_buying_evidence") == "clear"
     ):
         grade = "50"
-    if not grade and final_gate.get("can_new_entry"):
+    if not workflow_grade and not grade and final_gate.get("can_new_entry"):
         grade = "50"
-    if not grade and _conditional_defense_active(final_gate) and _has_unique_action_target(snapshot):
+    if not workflow_grade and not grade and _conditional_defense_active(final_gate) and _has_unique_action_target(snapshot):
         target_pct = int(_safe_float(position_decision.get("target_position_pct"), 0))
         grade = "100" if target_pct >= 100 else "50"
-    if not grade and _has_unique_action_target(snapshot) and not _has_strong_zero_position_exception(snapshot, final_gate=final_gate):
+    if not workflow_grade and not grade and _has_unique_action_target(snapshot) and not _has_strong_zero_position_exception(snapshot, final_gate=final_gate):
         target_pct = int(_safe_float(position_decision.get("target_position_pct"), 0))
         grade = "100" if target_pct >= 100 else "50"
     if not grade:
         grade = "0"
     if (
-        grade == "0"
+        not workflow_grade
+        and grade == "0"
         and _has_selected_position_candidate(snapshot)
         and _selected_candidate_has_execution_basis(snapshot)
         and not _has_strong_zero_position_exception(snapshot, final_gate=final_gate)
@@ -1253,14 +1327,15 @@ def _position_state_contract(snapshot=None, final_gate=None):
         _tradable_proxy_action_active(snapshot)
         and _resolution_display_target(snapshot)
         and not _final_action_forces_zero_position(final_gate)
+        and not workflow_grade
     ):
         proxy_pct = int(_safe_float(_resolution_display_target(snapshot).get("target_position_pct"), 50))
         grade = "100" if proxy_pct >= 100 else "50"
     if grade in ("50", "100") and not _has_unique_action_target(snapshot):
         grade = "0"
-    if grade in ("50", "100") and countertrend_defense:
+    if not workflow_grade and grade in ("50", "100") and countertrend_defense:
         grade = "0"
-    if grade in ("50", "100") and _account_unbuyable_core_active(snapshot) and not _tradable_proxy_action_active(snapshot):
+    if not workflow_grade and grade in ("50", "100") and _account_unbuyable_core_active(snapshot) and not _tradable_proxy_action_active(snapshot):
         grade = "0"
 
     contract = {
@@ -1767,6 +1842,24 @@ def _capital_priority(snapshot):
     return _text_value(_capital_priority_decision(snapshot).get("capital_priority"))
 
 
+def _account_exposure_plan(snapshot):
+    plan = _final_target_resolution(snapshot).get("account_exposure_plan") or {}
+    return plan if isinstance(plan, dict) else {}
+
+
+def _account_exposure_text(snapshot):
+    plan = _account_exposure_plan(snapshot)
+    text = str(plan.get("policy") or "").strip()
+    if text:
+        return text
+    if plan.get("possible_intraday_overlap_2x"):
+        return "旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x"
+    max_exposure = plan.get("max_runtime_exposure_x")
+    if max_exposure in (None, ""):
+        return ""
+    return f"最高{max_exposure}x"
+
+
 def _old_position_priority_active(snapshot):
     return _capital_priority(snapshot) in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
 
@@ -2177,9 +2270,11 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
     snapshot = snapshot or {}
     position_state = position_state or {}
     grade = position_state.get("grade")
+    premarket_review_text = _premarket_narrative_review_front_text(_selection_workflow_premarket_review(snapshot))
+    premarket_review_row = f"| 盘前叙事反证复核 | {premarket_review_text} |" if premarket_review_text else ""
     if _two_layer_execution_active(snapshot):
         condition, _ = _two_layer_execution_condition_text(snapshot)
-        return [
+        rows = [
             f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT} |",
             f"| 执行目标 | {_two_layer_execution_target_label(snapshot)} |",
             "| 执行性质 | 条件执行对象 |",
@@ -2187,10 +2282,32 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
             "| 不满足条件 | 不参与 |",
             "| 责任归因 | 市场与个股条件需盘中确认 |",
         ]
+        if premarket_review_row:
+            rows.insert(1, premarket_review_row)
+        return rows
     rows = [
         f"| 明日仓位 | {position_state.get('discipline') or '0%不参与'} |",
     ]
+    if premarket_review_row:
+        rows.append(premarket_review_row)
     if grade == "0":
+        holding = _existing_position_summary(snapshot)
+        if holding:
+            rows.extend(
+                [
+                    "| 执行目标 | 无 |",
+                    f"| 旧仓处理 | {holding.get('summary') or '已有昨日持仓，先按持仓预案处理'} |",
+                    "| 不参与依据 | 已有旧仓先按持仓预案处理；不新增参与。 |",
+                    "| 无执行目标原因 | 新开仓没有执行对象；旧仓按持仓预案处理 |",
+                    "| 责任归因 | 账户问题 |",
+                    *_observation_anchor_lifecycle_rows(
+                        observation_target,
+                        has_observation_target=has_observation_target,
+                    ),
+                ]
+            )
+            rows[0] = "| 明日仓位 | 0%新仓；旧仓处理 |"
+            return rows
         context = _zero_position_no_execution_context(
             snapshot,
             final_gate=final_gate,
@@ -2229,13 +2346,38 @@ def _existing_position_summary(snapshot):
     text = str(summary.get("summary") or "").strip()
     if not summary.get("has_position") and not text:
         return {}
-    return {
+    result = {
         "has_position": True,
         "summary": text or "已有昨日持仓，先按持仓预案处理",
     }
+    for key in (
+        "source_report_date",
+        "inferred_from_previous_report",
+        "position_source",
+        "default_position_pct",
+        "name",
+        "code",
+        "position",
+    ):
+        if summary.get(key) not in (None, ""):
+            result[key] = summary.get(key)
+    return result
+
+
+def _holding_is_inferred_default_old_position(holding):
+    holding = holding if isinstance(holding, dict) else {}
+    return bool(
+        holding.get("inferred_from_previous_report") is True
+        and (
+            holding.get("position_source") == "previous_report_target_default_1x"
+            or holding.get("default_position_pct") in (100, 100.0, "100", "100.0")
+        )
+    )
 
 
 def _existing_position_requires_action(holding):
+    if _holding_is_inferred_default_old_position(holding):
+        return False
     text = str((holding or {}).get("summary") or "").strip()
     if not text:
         return False
@@ -2308,6 +2450,8 @@ def _t0_target_label(target):
 
 
 def _two_layer_execution_object(snapshot):
+    if _selection_workflow_final_zero(snapshot):
+        return {}
     payload = (snapshot or {}).get("two_layer_decision_payload") or {}
     if not isinstance(payload, dict):
         return {}
@@ -2511,6 +2655,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
         and one_lot_amount
         and one_lot_amount > cash_available
     )
+    holding_requires_action = _existing_position_requires_action(holding)
 
     position_context_provided = _position_context_provided(snapshot)
     two_layer_execution_label = _two_layer_execution_target_label(snapshot)
@@ -2521,6 +2666,8 @@ def _account_status_lines(snapshot=None, final_gate=None):
     if actual_unbuyable_core and proxy_priority and proxy_target and position_state.get("grade") != "0":
         account_constraint = (
             f"{capital_text}；先处理旧仓，目标标的买不了一手，改用ETF替代表达"
+            if holding and holding_requires_action
+            else f"{capital_text}；旧仓默认1x按旧路径处理；目标标的买不了一手，改用ETF替代表达"
             if holding
             else f"{capital_text}；目标标的买不了一手，改用ETF替代表达"
         )
@@ -2529,6 +2676,8 @@ def _account_status_lines(snapshot=None, final_gate=None):
         proxy_label = _t0_target_label(proxy_target)
         tomorrow_action = (
             f"先处理旧仓，买{proxy_label}"
+            if holding and holding_requires_action
+            else f"持仓独立评估；买{proxy_label}"
             if holding
             else (
                 str(_capital_priority_decision(snapshot).get("reason") or "").strip()
@@ -2538,7 +2687,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
         position_label = position_state.get("discipline") or "50%条件执行"
         identity_text = main_identity or "市场核心"
         if holding:
-            primary_row_label = "旧仓处理"
+            primary_row_label = "旧仓处理" if holding_requires_action else "当前持仓"
             main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
             secondary_row_label = "明日执行目标"
             backup_label = f"{proxy_label}：{proxy_effect}替代表达"
@@ -2548,7 +2697,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             main_label = f"{proxy_label}：{proxy_effect}替代表达"
             secondary_row_label = "观察对象"
             backup_label = f"{original_label}：{identity_text}保留观察"
-        new_entry_limit = "资金释放后1" if holding else "1"
+        new_entry_limit = "资金释放后1" if holding and holding_requires_action else ("条件满足后1" if holding else "1")
         price_condition = _account_price_condition_text(snapshot, proxy_target, position_state)
     elif actual_unbuyable_core:
         account_constraint = f"{capital_text}；当前账户买不了一手"
@@ -2584,8 +2733,10 @@ def _account_status_lines(snapshot=None, final_gate=None):
             secondary_row_label = "持仓确认"
             backup_label = "持仓未输入，执行前先确认旧仓情况"
     elif holding:
-        holding_requires_action = _existing_position_requires_action(holding)
-        if has_main_target and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
+        if position_state.get("grade") == "0":
+            position_label = "0%新仓；旧仓处理"
+            zero_position_reason = ""
+        if has_main_target and holding_requires_action and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
             target_label = _t0_target_label(main_target)
             account_constraint = f"{capital_text}；先处理旧仓腾出资金"
             tomorrow_action = f"先处理旧仓，买{target_label}"
@@ -2666,6 +2817,9 @@ def _account_status_lines(snapshot=None, final_gate=None):
         f"| 账户约束 | {account_constraint} |",
         f"| 明日仓位 | {position_label} |",
     ]
+    exposure_text = _account_exposure_text(snapshot)
+    if exposure_text:
+        lines.append(f"| 账户风险暴露 | {exposure_text} |")
     if zero_position_reason:
         lines.append(f"| 0%原因 | {zero_position_reason} |")
     lines.extend(
@@ -3075,6 +3229,9 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     action_reason_text = str(structure_judgement.get("action_reason_text") or "").strip()
     if action_reason_text and action_reason_text not in one_line_action:
         one_line_action = f"{one_line_action}；{action_reason_text}"
+    premarket_review_text = _premarket_narrative_review_front_text(_selection_workflow_premarket_review(snapshot))
+    if premarket_review_text and "盘前叙事反证复核" not in one_line_action:
+        one_line_action = f"{one_line_action}；盘前叙事反证复核见个股解读"
     return [
         "## 七、最终结论",
         "| 明日结论 | 当前盈亏比 | 周期主线 | 当天主攻线 | 当前市场底色 | 重点对象 | 明日执行风格 | 一句话动作 |",

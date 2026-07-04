@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from daily_report_render import (
+    REPORT_COMPANION_DOCS,
     REPORT_VARIANT_EVIDENCE_APPENDIX,
     REPORT_VARIANT_FULL,
     REPORT_VARIANT_LIGHTWEIGHT,
@@ -209,6 +210,91 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertTrue(render_mock.call_args_list[0].kwargs["postgres_only"])
         self.assertTrue(render_mock.call_args_list[1].kwargs["postgres_only"])
 
+    def test_build_report_outputs_refreshes_quote_sensitive_derived_outputs(self):
+        data = _complete_report_facts(
+            {
+                "postgres_only": True,
+                "selection_workflow": {"schema_version": "selection_workflow.v1", "final": {"position_pct": 50}},
+                "final_target_resolution": {"new_entry_target": {"code": "600667"}},
+                "two_layer_decision_payload": {"final_object": {"stock": {"code": "600667"}}},
+                "current_sector_turnover_snapshot": {"sector": "半导体", "turnover": 100},
+                "market_state_snapshot": {"market_state": "修复"},
+                "mainline_turnover_summary": {"current_mainline": "半导体"},
+                "selected_position_candidate": {"code": "600667", "name": "太极实业"},
+                "position_decision": {"target_position_pct": 0},
+                "front_page_final_gate": {"final_action": "0%不参与"},
+                "execution_stage_context": {
+                    "selection_workflow": {"schema_version": "selection_workflow.v1", "final": {"position_pct": 50}},
+                    "final_target_resolution": {"new_entry_target": {"code": "600667"}},
+                    "candidate_traces": [{"stock_code": "600667"}],
+                },
+                "market_research_snapshot": {
+                    "selection_workflow": {"schema_version": "selection_workflow.v1", "final": {"position_pct": 50}},
+                    "sniper_target_derivation": {"canonical_target": {"code": "600667"}},
+                },
+            }
+        )
+        seen = []
+        preflight_seen = []
+        original_build_report_preflight = build_report_preflight
+
+        def capture_preflight(payload, date):
+            context = payload.get("execution_stage_context") or {}
+            snapshot = payload.get("market_research_snapshot") or {}
+            preflight_seen.append(
+                {
+                    "data_selection_workflow": "selection_workflow" in payload,
+                    "data_final_target_resolution": "final_target_resolution" in payload,
+                    "context_selection_workflow": "selection_workflow" in context,
+                    "context_candidate_traces": "candidate_traces" in context,
+                    "snapshot_selection_workflow": "selection_workflow" in snapshot,
+                    "snapshot_sniper_target_derivation": "sniper_target_derivation" in snapshot,
+                }
+            )
+            return original_build_report_preflight(payload, date)
+
+        def fake_render(_display_mode, payload, *_args, **_kwargs):
+            context = payload.get("execution_stage_context") or {}
+            snapshot = payload.get("market_research_snapshot") or {}
+            seen.append(
+                {
+                    "data_selection_workflow": "selection_workflow" in payload,
+                    "data_final_target_resolution": "final_target_resolution" in payload,
+                    "context_selection_workflow": "selection_workflow" in context,
+                    "context_candidate_traces": "candidate_traces" in context,
+                    "snapshot_selection_workflow": "selection_workflow" in snapshot,
+                    "snapshot_sniper_target_derivation": "sniper_target_derivation" in snapshot,
+                }
+            )
+            return "# full" if len(seen) == 1 else "# summary"
+
+        with patch("daily_report_render.build_report_preflight", side_effect=capture_preflight), \
+             patch("daily_report_render._render_report_with_display_mode", side_effect=fake_render):
+            build_report_outputs(data, "2026-07-02", emit_preflight=False)
+
+        self.assertEqual(
+            preflight_seen[0],
+            {
+                "data_selection_workflow": False,
+                "data_final_target_resolution": False,
+                "context_selection_workflow": False,
+                "context_candidate_traces": False,
+                "snapshot_selection_workflow": False,
+                "snapshot_sniper_target_derivation": False,
+            },
+        )
+        self.assertEqual(
+            seen[0],
+            {
+                "data_selection_workflow": False,
+                "data_final_target_resolution": False,
+                "context_selection_workflow": False,
+                "context_candidate_traces": False,
+                "snapshot_selection_workflow": False,
+                "snapshot_sniper_target_derivation": False,
+            },
+        )
+
     def test_build_report_outputs_sanitizes_final_markdown_variants(self):
         data = _complete_report_facts({"postgres_only": True})
         stale_full_report = "\n".join(
@@ -359,6 +445,12 @@ Top50长趋势表不该进入轻量版
 
         text = build_lightweight_report_text(full_report, "")
 
+        self.assertIn("## 阅读地图", text)
+        self.assertEqual(text.count("## 阅读地图"), 1)
+        self.assertLess(text.index("# 2026-05-29 a股市场分析"), text.index("## 阅读地图"))
+        self.assertLess(text.index("## 阅读地图"), text.index("## 明日账户建议"))
+        self.assertIn("| 1 | 日报裁决总览、明日账户建议、最终结论 |", text)
+        self.assertIn("| 4 | 证据附录、运行日志 | 只作复盘证据，不新增明日对象 |", text)
         self.assertIn("## 明日账户建议", text)
         self.assertIn("## 狙击手执行图", text)
         self.assertIn("## 今日市场底色", text)
@@ -378,6 +470,42 @@ Top50长趋势表不该进入轻量版
         self.assertNotIn("价格带长表不该进入轻量版", text)
         self.assertNotIn("周期长表不该进入轻量版", text)
         self.assertNotIn("资金长表不该进入轻量版", text)
+
+    def test_build_lightweight_report_text_deduplicates_existing_reading_map_after_title(self):
+        full_report = """# 2026-05-29 a股市场分析
+
+## 阅读地图
+| 顺序 | 模块 |
+|---:|---|
+| 1 | 旧地图 |
+
+## 日报裁决总览
+| 项目 | 结论 |
+|------|------|
+| 仓位姿态 | 0%不参与 |
+
+## 明日账户建议
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+
+## 五、个股解读
+### 1. 个股裁决
+无
+
+## 六、明日执行计划
+无
+
+## 七、最终结论
+无
+"""
+
+        text = build_lightweight_report_text(full_report, "")
+
+        self.assertEqual(text.count("## 阅读地图"), 1)
+        self.assertLess(text.index("# 2026-05-29 a股市场分析"), text.index("## 阅读地图"))
+        self.assertLess(text.index("## 阅读地图"), text.index("## 日报裁决总览"))
+        self.assertNotIn("旧地图", text)
 
     def test_build_lightweight_report_text_drops_top50_section_with_psql_table_label(self):
         full_report = """# 2026-05-29 a股市场分析
@@ -428,6 +556,26 @@ Top50长趋势表不该进入轻量版
             self.assertTrue((root / "2026-05-31_A股日报_证据附录_replay.md").exists())
             self.assertTrue((root / "2026-05-31_A股日报_运行日志_replay.md").exists())
             self.assertEqual(saved[REPORT_VARIANT_LIGHTWEIGHT], str(root / "2026-05-31_A股日报_轻量版_replay.md"))
+            companion_dir = root / "2026-05-31_A股日报_伴随文档_replay"
+            self.assertEqual(saved[REPORT_COMPANION_DOCS], str(companion_dir))
+            for filename in ["AGENTS.md", "flow.md", "testing.md", "readme.md"]:
+                self.assertTrue((companion_dir / filename).exists())
+
+    def test_save_report_outputs_places_companion_docs_with_replay_when_any_variant_is_frozen(self):
+        with TemporaryDirectory() as tempdir, patch("daily_report_render._reports_root", return_value=Path(tempdir)):
+            root = Path(tempdir)
+            frozen_summary = root / "2026-05-31_A股日报_执行摘要.md"
+            frozen_summary.write_text("# frozen summary", encoding="utf-8")
+            outputs = {
+                REPORT_VARIANT_FULL: "# full",
+                REPORT_VARIANT_SUMMARY: "# summary",
+            }
+
+            saved = save_report_outputs(outputs, "2026-05-31", mode=LEDGER_MODE_FROZEN)
+
+            self.assertEqual(saved[REPORT_VARIANT_FULL], str(root / "2026-05-31_A股日报_完整版.md"))
+            self.assertEqual(saved[REPORT_VARIANT_SUMMARY], str(root / "replay" / "2026-05-31_A股日报_执行摘要_replay.md"))
+            self.assertEqual(saved[REPORT_COMPANION_DOCS], str(root / "replay" / "2026-05-31_A股日报_伴随文档_replay"))
 
     def test_save_report_outputs_backfills_run_log_paths(self):
         with TemporaryDirectory() as tempdir:
@@ -446,6 +594,8 @@ Top50长趋势表不该进入轻量版
             self.assertIn("| 轻量版 |", run_log)
             self.assertIn("2026-05-31_A股日报_轻量版_replay.md", run_log)
             self.assertIn("| 证据附录 |", run_log)
+            self.assertIn("| 伴随文档 |", run_log)
+            self.assertIn("2026-05-31_A股日报_伴随文档_replay", run_log)
             self.assertNotIn("保存路径将在写入后由主流程打印", run_log)
 
     def test_build_report_outputs_persists_decision_ledger_before_replay_full_render(self):
@@ -1920,6 +2070,28 @@ Top50长趋势表不该进入轻量版
         self.assertEqual(xgb_check["row_count"], 1)
         self.assertNotIn("选股通盘中异动", preflight["failures"])
 
+    def test_decision_preflight_shows_xuangubao_breakdown_for_postgres_counts(self):
+        data = {
+            "data_status": {"选股通盘中异动": True},
+            "step_status": {"选股通盘中异动获取": True},
+            "postgres_only": True,
+            "xuangubao_data": {
+                "news_count": 46,
+                "plate_count": 22,
+                "limit_up_reason_count": 156,
+            },
+        }
+
+        preflight = build_report_preflight(data, "2026-07-03")
+        lines = render_report_preflight_lines(preflight)
+        run_log = build_run_log_text(preflight, "2026-07-03")
+
+        xgb_check = next(check for check in preflight["decision_checks"] if check["label"] == "选股通盘中异动")
+        self.assertEqual(xgb_check["row_count"], 224)
+        self.assertEqual(xgb_check["note"], "新闻46条 / 盘面22个 / 涨停解释156条")
+        self.assertTrue(any("选股通盘中异动" in line and "备注=新闻46条 / 盘面22个 / 涨停解释156条" in line for line in lines))
+        self.assertIn("| 选股通盘中异动 | 成功 | unknown | 224 | 是 | 新闻46条 / 盘面22个 / 涨停解释156条 |", run_log)
+
     def test_generate_markdown_report_from_sections_deduplicates_no_trade_and_filters_draft_explanations(self):
         rendered = generate_markdown_report_from_sections(
             {
@@ -1947,7 +2119,13 @@ Top50长趋势表不该进入轻量版
 
         self.assertEqual(
             rendered,
-            "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n### 交易原则\n- 去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。\n\n## Summary",
+            "# Preamble\n\n## Observation\n\n## Execution\n\n## Review\n\n### 交易原则\n"
+            "- 去弱留强是短线执行表达：卖旧仓看旧仓资格，买新仓看新仓资格；不能用FOMO把两笔判断合成一次满仓替换。\n"
+            "- FOMO 是外部价格刺激被自己接住后的情绪，不是执行资格；卖出后第一天因反包、后悔或怕踏空想买回，默认不执行，只能收盘后重新进入 T0 评估。\n"
+            "- 反包先批改情绪反应，不直接批改前一日信息集；正确动作出现亏损结果，仍按可控小亏和纪律成本复盘。\n"
+            "- 必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；价格只决定卖得舒服还是狼狈，不重新决定卖不卖。\n"
+            "- Ta/Tb/Tc日序表必须区分换仓日和空仓日：有Tb明日目标时，Ta+2默认按昨晚预案尾盘卖出；没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，才优先处理旧仓，让账户尽可能接近全天空仓。\n\n"
+            "## Summary",
         )
         self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)
 

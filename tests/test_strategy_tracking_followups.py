@@ -278,7 +278,8 @@ def _recent_target_followups_probe(records, as_of_date, limit=3):
 
         self.assertEqual(cards[0]["reference_sample_label"], "参考样本")
         self.assertIn("价格上先证明自己", cards[0]["same_point"])
-        self.assertIn("50%条件执行", cards[0]["system_translation"])
+        self.assertIn("固定交易窗口", cards[0]["system_translation"])
+        self.assertIn("复盘和下一份日报判断", cards[0]["system_translation"])
         self.assertIn("0%不参与", cards[0]["system_translation"])
         self.assertNotIn(_m("3", "0%", "条件", "试错"), cards[0]["system_translation"])
 

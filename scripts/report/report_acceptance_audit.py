@@ -38,10 +38,10 @@ LEGACY_TRADING_TIME_WORDING_MARKERS = (
     "30" + "分钟定止损",
     "30" + "分钟结构失守",
     "30" + "分钟结构止损线",
-    "09:35-10:30",
-    "10:30-14:30",
-    "结构确认窗口",
-    "盘中执行（10:30-14:30）",
+    "09:35-" + "10:30",
+    "10:30-" + "14:30",
+    "结构" + "确认窗口",
+    "盘中执行（" + "10:30-" + "14:30）",
     "分钟" + "确认",
     "参与窗口" + "分层确认",
     "参与窗口" + "确认",
@@ -151,6 +151,23 @@ DEGRADED_MARKERS = (
 )
 
 NO_TRADE_MARKERS = ("不做", "不开新仓", "空仓等待")
+
+LIMIT_DOWN_REVERSAL_PLAN_MARKERS = (
+    "跌停反包",
+    "跌停后反包",
+    "跌停后修复",
+    "跌停打开",
+    "跌停开板",
+    "跌停修复",
+    "跌停反核",
+    "跌停后反核",
+    "跌停水下强势修复",
+    "跌停后水下强势修复",
+    "反核专项",
+    "撬板",
+    "翘板",
+    "地天",
+)
 
 UNIQUE_FOCUS_EVIDENCE_FAMILIES = [
     ("主线一致性", ("主线", "周期主线", "当天主攻线")),
@@ -273,7 +290,7 @@ ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS = (
     "50%条件执行",
     "才评估50%条件执行",
     "条件满足才50%条件执行",
-    "参与窗口命中后才评估50%条件执行",
+    "参与窗口" + "命中后才评估50%条件执行",
     "固定交易窗口条件成立才参与",
     "固定交易窗口条件成立才50%条件执行",
     "观察对象重新成立",
@@ -564,7 +581,7 @@ def _audit_companion_final_action_consistency(lines, payload, *, artifact_label,
         return [
             _finding(
                 missing_code,
-                f"{artifact_label} companion HTML is missing readable payload",
+                f"{artifact_label}缺少可读取内容",
             )
         ]
     front = _front_page_lines(lines)
@@ -582,7 +599,7 @@ def _audit_companion_final_action_consistency(lines, payload, *, artifact_label,
         return [
             _finding(
                 conflict_code,
-                f"final summary is 0%不参与, but {artifact_label} companion HTML contains a positive final action",
+                f"前台结论为0%不参与，但{artifact_label}仍包含新增参与动作",
             )
         ]
     front_target = _extract_final_unique_target(front)
@@ -592,21 +609,21 @@ def _audit_companion_final_action_consistency(lines, payload, *, artifact_label,
         return [
             _finding(
                 conflict_code,
-                f"front-page final position {front_pct}% conflicts with {artifact_label} companion HTML final position {final_pct}%",
+                f"前台最终仓位{front_pct}%与{artifact_label}最终仓位{final_pct}%不一致",
             )
         ]
     if front_identity and not final_identity and (front_pct or 0) > 0:
         return [
             _finding(
                 conflict_code,
-                f"front-page final target {front_target} is missing from {artifact_label} companion HTML final action",
+                f"前台最终对象{front_target}没有出现在{artifact_label}最终动作中",
             )
         ]
     if front_identity and final_identity and front_identity != final_identity:
         return [
             _finding(
                 conflict_code,
-                f"front-page final target {front_target} conflicts with {artifact_label} companion HTML final target {final_identity}",
+                f"前台最终对象{front_target}与{artifact_label}最终对象{final_identity}不一致",
             )
         ]
     return []
@@ -616,7 +633,7 @@ def _audit_elimination_tournament_consistency(lines, companion_html):
     return _audit_companion_final_action_consistency(
         lines,
         _extract_elimination_tournament_payload(companion_html),
-        artifact_label="elimination",
+        artifact_label="淘汰赛伴随HTML",
         missing_code="elimination_tournament_payload_missing",
         conflict_code="elimination_tournament_final_conflict",
     )
@@ -661,7 +678,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
         findings.append(
             _finding(
                 "sector_capital_preflight_contract_missing",
-                "sector capital preflight payload is missing sector-capital-first derivation contract",
+                "板块资金复核数据包缺少板块资金优先推导口径",
             )
         )
     mermaid = str(payload.get("mermaid") or "")
@@ -670,7 +687,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
             findings.append(
                 _finding(
                     "sector_capital_preflight_mermaid_incomplete",
-                    f"sector capital preflight Mermaid is missing: {text}",
+                    f"板块资金复核流程图缺少：{text}",
                 )
             )
     layers = payload.get("layers") if isinstance(payload.get("layers"), list) else []
@@ -680,7 +697,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
         findings.append(
             _finding(
                 "sector_capital_preflight_layers_missing",
-                "sector capital preflight payload is missing layers: " + ", ".join(missing_layers),
+                "板块资金复核数据包缺少层级：" + ", ".join(missing_layers),
             )
         )
     previous_survivor_keys = None
@@ -724,7 +741,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
             findings.append(
                 _finding(
                     "sector_capital_preflight_layer_sequence_mismatch",
-                    f"sector capital preflight layer {layer.get('id')} introduces stocks outside previous survivors from {previous_layer_id}",
+                    f"板块资金复核层级 {layer.get('id')} 引入了不在上一层剩余名单中的股票；上一层={previous_layer_id}",
                 )
             )
         previous_survivor_keys = survivor_keys
@@ -733,21 +750,21 @@ def _audit_sector_capital_preflight_payload_contract(payload):
             findings.append(
                 _finding(
                     "sector_capital_preflight_layer_count_mismatch",
-                    f"sector capital preflight layer {layer.get('id')} input_count does not match entries",
+                    f"板块资金复核层级 {layer.get('id')} 输入数量与明细不一致",
                 )
             )
         if int(layer.get("eliminated_count") or 0) != len(eliminated):
             findings.append(
                 _finding(
                     "sector_capital_preflight_layer_count_mismatch",
-                    f"sector capital preflight layer {layer.get('id')} eliminated_count does not match entries",
+                    f"板块资金复核层级 {layer.get('id')} 排除数量与明细不一致",
                 )
             )
         if int(layer.get("survivor_count") or 0) != len(survivors):
             findings.append(
                 _finding(
                     "sector_capital_preflight_layer_count_mismatch",
-                    f"sector capital preflight layer {layer.get('id')} survivor_count does not match entries",
+                    f"板块资金复核层级 {layer.get('id')} 剩余数量与明细不一致",
                 )
             )
         for entry in entries:
@@ -764,7 +781,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
                 findings.append(
                     _finding(
                         "sector_capital_preflight_entry_fields_missing",
-                        f"sector capital preflight layer {layer.get('id')} entry is missing fields: "
+                        f"板块资金复核层级 {layer.get('id')} 明细缺少字段："
                         + ", ".join(missing_entry_fields),
                     )
                 )
@@ -775,7 +792,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
         findings.append(
             _finding(
                 "sector_capital_preflight_decision_list_missing",
-                "sector capital preflight decision list is missing: " + ", ".join(missing_decisions),
+                "板块资金复核决策清单缺少：" + ", ".join(missing_decisions),
             )
         )
     idiot_rows = payload.get("idiot_index_review") if isinstance(payload.get("idiot_index_review"), list) else []
@@ -783,7 +800,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
         findings.append(
             _finding(
                 "sector_capital_preflight_idiot_index_missing",
-                "sector capital preflight payload is missing idiot-index review rows",
+                "板块资金复核数据包缺少白痴指数复核行",
             )
         )
     tplus_rehearsal = payload.get("tplus_rehearsal") if isinstance(payload.get("tplus_rehearsal"), dict) else {}
@@ -791,7 +808,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
         findings.append(
             _finding(
                 "sector_capital_preflight_tplus_rehearsal_missing",
-                "sector capital preflight payload is missing T+1/T+2 rehearsal",
+                "板块资金复核数据包缺少T+1/T+2推演",
             )
         )
     else:
@@ -799,7 +816,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
             findings.append(
                 _finding(
                     "sector_capital_preflight_tplus_rehearsal_missing",
-                    "sector capital preflight T+1/T+2 rehearsal has an invalid schema version",
+                    "板块资金复核T+1/T+2推演版本不匹配",
                 )
             )
         for section_key in ("tplus1", "tplus2"):
@@ -813,7 +830,7 @@ def _audit_sector_capital_preflight_payload_contract(payload):
                 findings.append(
                     _finding(
                         "sector_capital_preflight_tplus_rehearsal_missing",
-                        f"sector capital preflight {section_key} rehearsal is missing: "
+                        f"板块资金复核 {section_key} 推演缺少："
                         + ", ".join(missing_fields),
                     )
                 )
@@ -825,7 +842,7 @@ def _audit_sector_capital_preflight_consistency(lines, companion_html):
     findings = _audit_companion_final_action_consistency(
         lines,
         payload,
-        artifact_label="sector capital preflight",
+        artifact_label="板块资金复核伴随HTML",
         missing_code="sector_capital_preflight_payload_missing",
         conflict_code="sector_capital_preflight_final_conflict",
     )
@@ -843,12 +860,12 @@ def _audit_front_page_headings(lines):
         findings.append(
             _finding(
                 "front_page_heading_order",
-                "front page headings must appear exactly once in canonical order before appendices",
+                "首页标题必须在附录前按固定顺序各出现一次",
             )
         )
     for heading in FRONT_PAGE_HEADINGS:
         if headings.count(heading) > 1:
-            findings.append(_finding("duplicate_front_page_heading", f"duplicated front-page heading: {heading}"))
+            findings.append(_finding("duplicate_front_page_heading", f"首页标题重复：{heading}"))
     return findings
 
 
@@ -884,7 +901,7 @@ def _audit_execution_windows(lines):
             findings.append(
                 _finding(
                     "execution_window_missing",
-                    f"front-page execution plan is missing required window: {window}",
+                    f"首页执行计划缺少必要时间窗口：{window}",
                 )
             )
     return findings
@@ -909,7 +926,7 @@ def _audit_execution_conditions(lines):
         findings.append(
             _finding(
                 "execution_condition_missing",
-                f"front-page execution plan has time windows but is missing required actionable condition: {label}",
+                f"首页执行计划已有时间窗口，但缺少必要执行条件：{label}",
             )
         )
     return findings
@@ -932,7 +949,7 @@ def _audit_unique_action_target_contract(lines):
             findings.append(
                 _finding(
                     "fast_window_polluted_by_structure_condition",
-                    "fast execution windows must render auction/opening/reseal steps instead of structure-only condition",
+                    "快速执行窗口必须展示竞价、开盘或回封步骤，不能只写结构条件",
                     line=offset,
                 )
             )
@@ -940,7 +957,7 @@ def _audit_unique_action_target_contract(lines):
             findings.append(
                 _finding(
                     "fast_window_fallback_not_zero",
-                    "fast participation windows must fall back to 0% when the preplanned path does not trigger",
+                    "快速参与窗口未触发预案时必须回到0%",
                     line=offset,
                 )
             )
@@ -956,7 +973,7 @@ def _audit_monthly_rhythm_section(lines):
             findings.append(
                 _finding(
                     "legacy_signal_grade_label",
-                    "front page must use 进攻仓位三态 instead of 今日信号等级",
+                    "首页必须使用进攻仓位三态，不再使用今日信号等级",
                     line=offset,
                 )
             )
@@ -964,7 +981,7 @@ def _audit_monthly_rhythm_section(lines):
             findings.append(
                 _finding(
                     "legacy_position_grade_label",
-                    "front page must use 进攻仓位三态 instead of 仓位攻击等级",
+                    "首页必须使用进攻仓位三态，不再使用仓位攻击等级",
                     line=offset,
                 )
             )
@@ -972,7 +989,7 @@ def _audit_monthly_rhythm_section(lines):
         findings.append(
             _finding(
                 "monthly_rhythm_missing",
-                "front page must render monthly attack/defense rhythm before stock selection",
+                "首页必须在选股前展示月度攻防节奏",
             )
         )
         return findings
@@ -986,18 +1003,18 @@ def _audit_monthly_rhythm_section(lines):
     for label in MONTHLY_RHYTHM_REQUIRED_LABELS:
         if f"| {label} |" not in section_text:
             findings.append(
-                _finding(
-                    "monthly_rhythm_field_missing",
-                    f"monthly rhythm section is missing required field: {label}",
-                )
+                    _finding(
+                        "monthly_rhythm_field_missing",
+                        f"月度攻防节奏缺少必要字段：{label}",
+                    )
             )
     attack_grade = section_values.get("进攻仓位三态")
     if attack_grade is not None and attack_grade not in POSITION_ATTACK_GRADE_LABELS:
         findings.append(
-            _finding(
-                "position_attack_grade_invalid",
-                "进攻仓位三态 must be one of: 0%, 50%, 100%",
-            )
+                _finding(
+                    "position_attack_grade_invalid",
+                    "进攻仓位三态只能是0%、50%或100%",
+                )
         )
     max_position_text = section_values.get("明日最大仓位")
     if max_position_text == "满仓或0%不参与":
@@ -1007,10 +1024,10 @@ def _audit_monthly_rhythm_section(lines):
     min_position = POSITION_ATTACK_GRADE_MIN_POSITION.get(attack_grade)
     if max_position is not None and min_position is not None and min_position > max_position:
         findings.append(
-            _finding(
-                "position_attack_grade_exceeds_max_position",
-                "进攻仓位三态 cannot require more position than 明日最大仓位 allows",
-            )
+                _finding(
+                    "position_attack_grade_exceeds_max_position",
+                    "进攻仓位三态不能超过明日最大仓位允许范围",
+                )
         )
     return findings
 
@@ -1023,7 +1040,7 @@ def _audit_candidate_section_contract(lines):
             findings.append(
                 _finding(
                     "legacy_candidate_section_title",
-                    f"front-page candidate section must use 个股裁决 / 备用观察 instead of legacy title: {line}",
+                    f"首页个股部分必须使用个股裁决 / 备用观察，不再使用旧标题：{line}",
                     line=index,
                 )
             )
@@ -1031,16 +1048,16 @@ def _audit_candidate_section_contract(lines):
         findings.append(
             _finding(
                 "candidate_verdict_missing",
-                "front-page stock section must render 个股裁决 with 当前状态",
+                "首页个股部分必须展示带当前状态的个股裁决",
             )
         )
     stock_section = "\n".join(_section_after(front, "### 1. 个股裁决"))
     if stock_section and "| 当前状态 |" not in stock_section:
         findings.append(
-            _finding(
-                "candidate_state_missing",
-                "front-page 个股裁决 must include 当前状态",
-            )
+                _finding(
+                    "candidate_state_missing",
+                    "首页个股裁决必须包含当前状态",
+                )
         )
     return findings
 
@@ -1121,7 +1138,7 @@ def _audit_mainline_capacity_regime_contract(lines):
             findings.append(
                 _finding(
                     "legacy_double_mainline_table",
-                    "front-page mainline section must use 主线容量与格局判断 instead of legacy double-mainline table",
+                    "首页主线部分必须使用主线容量与格局判断，不再使用旧版双主线表",
                     line=index,
                 )
             )
@@ -1129,14 +1146,14 @@ def _audit_mainline_capacity_regime_contract(lines):
         findings.append(
             _finding(
                 "mainline_capacity_regime_missing",
-                "front-page cycle section must render 主线容量与格局判断",
+                "首页周期部分必须展示主线容量与格局判断",
             )
         )
     if MAINLINE_ATTACK_EVIDENCE_HEADING not in front or MAINLINE_ATTACK_EVIDENCE_HEADER not in front:
         findings.append(
             _finding(
                 "mainline_attack_evidence_missing",
-                "front-page cycle section must render 主线攻击证据",
+                "首页周期部分必须展示主线攻击证据",
             )
         )
     return findings
@@ -1152,7 +1169,7 @@ def _audit_legacy_surface_wording(lines):
             findings.append(
                 _finding(
                     "legacy_surface_wording",
-                    f"report must use 资格/条件/可做 wording instead of legacy marker: {marker}",
+                    f"报告必须使用资格/条件/可做表述，不再使用旧口径：{marker}",
                     line=offset,
                 )
             )
@@ -1169,7 +1186,7 @@ def _audit_legacy_trading_time_wording(lines):
         findings.append(
             _finding(
                 "legacy_trading_time_wording",
-                f"report uses old timing language instead of fixed trading windows: {marker}",
+                f"报告必须使用固定交易窗口，不再使用旧时间表述：{marker}",
             )
         )
     return findings
@@ -1192,7 +1209,7 @@ def _audit_appendix_duplicate_front_page_sections(lines):
             findings.append(
                 _finding(
                     "appendix_duplicate_front_page_section",
-                    f"appendix mirrors front-page section heading: {heading}",
+                    f"附录重复首页章节标题：{heading}",
                     line=appendix_start_line + index,
                 )
             )
@@ -1240,7 +1257,7 @@ def _audit_degraded_fake_zero(lines):
             findings.append(
                 _finding(
                     "degraded_fake_zero_percent",
-                    "degraded or missing data must not render as a real 0.00%",
+                    "数据缺失或降级时不能渲染成真实0.00%",
                     line=index,
                 )
             )
@@ -1684,14 +1701,14 @@ def _audit_market_base_freshness(lines):
             findings.append(
                 _finding(
                     "top50_target_date_missing",
-                    f"Top50成交额占比趋势 must include report date {target_date}, got {row_dates[0]} to {row_dates[-1]}",
+                    f"Top50成交额占比趋势必须包含报告日{target_date}，当前范围为{row_dates[0]}到{row_dates[-1]}",
                 )
             )
         if len(row_dates) < 25:
             findings.append(
                 _finding(
                     "top50_recent_window_incomplete",
-                    f"Top50成交额占比趋势 must render recent 25 trading rows, got {len(row_dates)}",
+                    f"Top50成交额占比趋势必须展示近25个交易日，当前只有{len(row_dates)}行",
                 )
             )
 
@@ -1744,7 +1761,7 @@ def _audit_market_base_freshness(lines):
             findings.append(
                 _finding(
                     "new_high_previous_factor_date_substitute",
-                    "创新高趋势反馈 must not substitute a previous factor date for the report date",
+                    "创新高趋势反馈不能用旧因子日替代报告日",
                 )
             )
         has_target_row = any(str(line).startswith(f"| {target_date} |") for line in new_high_section)
@@ -1752,7 +1769,7 @@ def _audit_market_base_freshness(lines):
             findings.append(
                 _finding(
                     "new_high_target_date_missing",
-                    f"创新高趋势反馈 must include report date row: {target_date}",
+                    f"创新高趋势反馈必须包含报告日行：{target_date}",
                 )
             )
 
@@ -1848,7 +1865,7 @@ def _audit_extreme_conviction_tracking(lines):
         return [
             _finding(
                 "extreme_conviction_tracking_missing",
-                "report must render historical 明日极度看好近25日跟踪表 from structured ledger data",
+                "报告必须用结构化台账展示历史明日极度看好近25日跟踪表",
             )
         ]
     findings = []
@@ -1857,7 +1874,7 @@ def _audit_extreme_conviction_tracking(lines):
         findings.append(
             _finding(
                 "extreme_conviction_tracking_empty",
-                "明日极度看好近25日跟踪表 must include at least one structured sample row",
+                "明日极度看好近25日跟踪表必须至少包含一条结构化样本",
             )
         )
         return findings
@@ -1896,7 +1913,7 @@ def _audit_reasoning_surface(lines):
             findings.append(
                 _finding(
                     "reasoning_chain_leakage",
-                    f"front page must not expose reasoning chain marker: {marker}",
+                    f"首页不能暴露推导链标记：{marker}",
                 )
             )
     if REASONING_SURFACE_HEADING not in front:
@@ -1907,7 +1924,7 @@ def _audit_reasoning_surface(lines):
         findings.append(
             _finding(
                 "reasoning_surface_incomplete",
-                "reasoning surface is missing required rows: " + ", ".join(missing),
+                "推导展示缺少必要行：" + ", ".join(missing),
             )
         )
     return findings
@@ -1937,7 +1954,7 @@ def _audit_anti_noise_language(lines):
         for marker in SIMULATION_NOISE_MARKERS:
             if marker in text:
                 append_simulation_finding(
-                    f"front page must not use simulation/noise phrase: {marker}",
+                    f"首页不能使用模拟或噪声表述：{marker}",
                 )
         theory_action_found = False
         for marker in THEORY_ACTION_MARKERS:
@@ -1945,24 +1962,24 @@ def _audit_anti_noise_language(lines):
                 theory_action_found = True
                 append_theory_finding(
                     "theory_driven_action_language",
-                    f"front page must not use theory language as an action reason: {marker}",
+                    f"首页不能用理论概念直接解释动作原因：{marker}",
                 )
         if not theory_action_found and _has_theory_action_context(text):
             append_theory_finding(
                 "theory_driven_action_language",
-                "front page must not use theory concept language to justify action, qualification, or position changes",
+                "首页不能用理论概念直接解释动作、资格或仓位变化",
             )
         for marker in THEORY_NOISE_MARKERS:
             if marker in text:
                 append_theory_finding(
                     "theory_noise_language",
-                    f"front page must not use theory/noise phrase: {marker}",
+                    f"首页不能使用理论或噪声表述：{marker}",
                 )
         for term in THEORY_CONCEPT_TERMS:
             if term in text:
                 append_theory_finding(
                     "theory_noise_language",
-                    f"front page must not use unfieldized theory concept: {term}",
+                    f"首页不能使用未落到字段里的理论概念：{term}",
                 )
     return findings
 
@@ -1985,7 +2002,7 @@ def _audit_legacy_daily_report_terms(lines):
             findings.append(
                 _finding(
                     "legacy_daily_report_term",
-                    "report uses retired daily-report wording",
+                    "报告仍使用已停用的日报表述",
                     line=offset,
                 )
             )
@@ -2147,7 +2164,7 @@ def _final_summary_has_conditional_zero_plan(lines):
 
 
 PREMARKET_FIXED_DECISION_LEGACY_MARKERS = (
-    "盘前0%；参与窗口命中后才评估50%条件执行",
+    "盘前0%；参与窗口" + "命中后才评估50%条件执行",
     "盘前0%；观察窗口命中后才评估50%条件执行",
     "盘前0%；固定交易窗口内条件成立后才评估50%条件执行",
     "盘前0%；固定交易窗口条件满足后才评估50%条件执行",
@@ -2468,7 +2485,7 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
         findings.append(
             _finding(
                 "zero_position_tomorrow_action_conflict",
-                "final summary is 0%不参与, but a front-page tomorrow action still names a concrete participation target",
+                "最终结论为0%不参与，但首页明日动作仍写了具体参与对象",
                 line=offset,
             )
         )
@@ -2482,12 +2499,12 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
             if _is_empty_target(cells[1]):
                 continue
             findings.append(
-                _finding(
-                    "zero_position_tomorrow_action_conflict",
-                    "final summary is 0%不参与, but a current decision panel still names a main or backup participation object",
-                    line=offset,
+                    _finding(
+                        "zero_position_tomorrow_action_conflict",
+                        "最终结论为0%不参与，但当前决策面板仍写了主参与对象或补位参与对象",
+                        line=offset,
+                    )
                 )
-            )
         for offset, line in enumerate(lines, 1):
             text = str(line or "")
             if not any(marker in text for marker in ZERO_POSITION_LEGACY_TOMORROW_WORDING_MARKERS):
@@ -2495,7 +2512,7 @@ def _audit_zero_position_tomorrow_action_consistency(lines):
             findings.append(
                 _finding(
                     "zero_position_legacy_tomorrow_wording",
-                    "final summary is 0%不参与, but report still contains old tomorrow-action wording",
+                    "最终结论为0%不参与，但报告仍保留旧版明日动作表述",
                     line=offset,
                 )
             )
@@ -2519,7 +2536,7 @@ def _audit_chanlun_tomorrow_decision_consistency(lines, companion_html):
         return [
             _finding(
                 "chanlun_tomorrow_decision_missing",
-                "final summary is 0%不参与, but companion HTML is missing 明日抉择",
+                "最终结论为0%不参与，但伴随HTML缺少明日抉择",
             )
         ]
     max_position = _parse_percent_int(values.get("明日最大仓位"))
@@ -2534,7 +2551,7 @@ def _audit_chanlun_tomorrow_decision_consistency(lines, companion_html):
     return [
         _finding(
             "chanlun_tomorrow_decision_conflict",
-            "final summary is 0%不参与, but companion HTML 明日抉择 does not match 0%不参与",
+            "最终结论为0%不参与，但伴随HTML明日抉择未同步为0%不参与",
         )
     ]
 
@@ -2548,14 +2565,14 @@ def _audit_position_state_rendering(lines):
         return [
             _finding(
                 "legacy_position_style",
-                "final summary must render 0/50/100 position state instead of legacy empty/short/30% style",
+                "最终摘要必须展示0/50/100仓位状态，不再使用旧版空仓/短线/30%样式",
             )
         ]
     if not any(marker in style for marker in POSITION_STYLE_GRADE_MARKERS):
         return [
             _finding(
                 "position_style_missing_grade",
-                "final summary execution style must include 0/50/100 position state",
+                "最终摘要执行风格必须包含0/50/100仓位状态",
             )
         ]
     return []
@@ -2796,7 +2813,7 @@ def _audit_two_layer_execution_object_consistency(lines):
         return [
             _finding(
                 "two_layer_execution_object_mismatch",
-                f"front execution object {front_object} conflicts with audit-layer object {audit_object}",
+                f"首页执行对象 {front_object} 与审计层对象 {audit_object} 不一致",
             )
         ]
     return []
@@ -2819,7 +2836,7 @@ def _audit_b_level_conditions(lines):
     return [
         _finding(
             "b_level_conditions_missing",
-            "front page mentions 50%条件执行 but does not render both 50%执行 trigger conditions",
+            "首页提到50%条件执行，但没有同时展示50%执行触发条件",
         )
     ]
 
@@ -2837,7 +2854,7 @@ def _audit_front_execution_object_negation(lines):
         findings.append(
             _finding(
                 "front_execution_object_negated",
-                "front page declares 明日执行对象 but later negates that execution object",
+                "前台已经给出明日执行对象，但后文又否定同一对象",
                 line=offset,
             )
         )
@@ -2875,11 +2892,110 @@ def _audit_front_execution_object_downgrade(lines):
         findings.append(
             _finding(
                 "front_execution_object_downgraded",
-                "front page declares 明日执行对象 but the report later downgrades the same object to observation-only",
+                "前台已经给出明日执行对象，但后文又把同一对象降为只观察",
                 line=offset,
             )
         )
     return findings
+
+
+def _limit_down_text_is_negated(text):
+    return any(marker in text for marker in ("未跌停", "非跌停", "不跌停", "没有跌停", "并非跌停"))
+
+
+def _line_has_limit_down_fact(line):
+    text = str(line or "")
+    if "跌停" in text and not _limit_down_text_is_negated(text):
+        return True
+    for match in re.finditer(r"([+-]?\d+(?:\.\d+)?)%", text):
+        try:
+            if float(match.group(1)) <= -9.5:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _has_explicit_limit_down_reversal_text(text):
+    text = str(text or "")
+    return any(marker in text for marker in LIMIT_DOWN_REVERSAL_PLAN_MARKERS)
+
+
+def _line_text_before_process_evidence_final_action_tail(text):
+    text = str(text or "")
+    tail_markers = (
+        "（过程证据，不覆盖唯一明日动作",
+        "(过程证据，不覆盖唯一明日动作",
+        "过程证据，不覆盖唯一明日动作",
+    )
+    indexes = [text.find(marker) for marker in tail_markers if marker in text]
+    if not indexes:
+        return text
+    return text[: min(indexes)]
+
+
+def _line_target_fact_segments(text, front_identity="", target_name=""):
+    text = str(text or "")
+    if "|" in text:
+        return [text]
+    segments = re.split(r"[；;。.!！?？\n]", text)
+    return [
+        segment
+        for segment in segments
+        if (front_identity and front_identity in segment) or (target_name and target_name in segment)
+    ]
+
+
+def _front_has_explicit_limit_down_reversal_plan(front_lines, front_identity="", target_name=""):
+    target_lines = []
+    action_lines = []
+    for line in front_lines or []:
+        text = str(line or "")
+        if (front_identity and front_identity in text) or (target_name and target_name in text):
+            target_lines.append(text)
+            continue
+        if any(marker in text for marker in ("明日动作", "仓位姿态", "执行性质", "执行条件", "不参与条件")):
+            action_lines.append(text)
+    text = "\n".join(target_lines + action_lines)
+    has_reversal = _has_explicit_limit_down_reversal_text(text)
+    if not has_reversal:
+        return False
+    has_window = any(window in text for window in REQUIRED_EXECUTION_WINDOWS) or "09:" in text or "09：" in text
+    has_invalid = any(marker in text for marker in ("作废", "取消", "失效", "认错线", "跌破", "站不回", "封死", "打不开"))
+    has_zero_fallback = "回到0%" in text or "0%不参与" in text or ("0%" in text and "不参与" in text)
+    return bool(has_window and has_invalid and has_zero_fallback)
+
+
+def _audit_front_execution_object_limit_down_without_reversal_plan(lines):
+    front = _front_page_lines(lines)
+    front_object = _extract_front_execution_object(lines)
+    front_identity = _target_identity(front_object)
+    if not front_identity or _is_empty_target(front_object):
+        return []
+    target_text = _target_text_without_role(front_object)
+    target_name = re.sub(r"[\(（]?\d{6}[\)）]?", "", target_text).strip()
+    if _front_has_explicit_limit_down_reversal_plan(front, front_identity=front_identity, target_name=target_name):
+        return []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        subject_text = _line_text_before_process_evidence_final_action_tail(text)
+        if front_identity not in subject_text and not (target_name and target_name in subject_text):
+            continue
+        fact_segments = _line_target_fact_segments(
+            subject_text,
+            front_identity=front_identity,
+            target_name=target_name,
+        )
+        if not any(_line_has_limit_down_fact(segment) for segment in fact_segments):
+            continue
+        return [
+            _finding(
+                "front_execution_object_limit_down_without_reversal_plan",
+                "前台已经给出明日执行对象，但同一报告又写成跌停/接近跌停，且没有明确跌停反包专项计划",
+                line=offset,
+            )
+        ]
+    return []
 
 
 def _extract_observation_anchor_identity(lines):
@@ -2999,7 +3115,7 @@ def _audit_daily_judgment_core_candidate_consistency(lines):
         findings.append(
             _finding(
                 "daily_judgment_core_candidate_mismatch",
-                f"T-006 current core candidate {candidate} conflicts with final object {detail}",
+                f"T-006当前核心候选 {candidate} 与最终对象 {detail} 不一致",
                 line=offset,
             )
         )
@@ -3008,7 +3124,7 @@ def _audit_daily_judgment_core_candidate_consistency(lines):
         findings.append(
             _finding(
                 "daily_judgment_core_candidate_without_execution",
-                f"T-006 current core candidate {candidate} is concrete while final result has no execution object",
+                f"T-006当前核心候选 {candidate} 是具体股票，但最终结果没有执行对象",
                 line=offset,
             )
         )
@@ -3104,7 +3220,7 @@ def _audit_process_candidate_loss_reasons(lines):
         findings.append(
             _finding(
                 "process_candidate_loss_reason_circular",
-                "process candidate replacement reason must cite same-pool dimensions, not restate that it was not selected",
+                "过程候选替换原因必须说明同池对比维度，不能只重复未入选",
                 line=offset,
             )
         )
@@ -3235,14 +3351,14 @@ def _audit_sniper_target_derivation_consistency(lines):
             findings.append(
                 _finding(
                     "sniper_target_derivation_mismatch",
-                    f"front-page final observation target {final_target} conflicts with derivation chain final target {mismatched[0]}",
+                    f"首页最终观察对象 {final_target} 与推导链最终对象 {mismatched[0]} 不一致",
                 )
             )
     elif len(chain_identities) > 1:
         findings.append(
             _finding(
                 "sniper_target_derivation_mismatch",
-                f"derivation chains contain conflicting final targets {', '.join(chain_identities)}",
+                f"推导链里出现多个不一致的最终对象：{', '.join(chain_identities)}",
             )
         )
     return findings
@@ -3334,7 +3450,7 @@ def _audit_selection_workflow_consistency(lines):
             return [
                 _finding(
                     "selection_workflow_mismatch",
-                    f"selection_workflow final object is empty, but front page still names {front_identities[0]}",
+                    f"选股流程最终对象为空，但首页仍写了 {front_identities[0]}",
                 )
             ]
         return []
@@ -3342,7 +3458,7 @@ def _audit_selection_workflow_consistency(lines):
         return [
             _finding(
                 "selection_workflow_mismatch",
-                f"front-page execution object is empty but selection_workflow final object is {workflow_identity}",
+                f"首页执行对象为空，但选股流程最终对象为 {workflow_identity}",
             )
         ]
     if not front_identities:
@@ -3352,7 +3468,7 @@ def _audit_selection_workflow_consistency(lines):
     return [
         _finding(
             "selection_workflow_mismatch",
-            f"front-page object {front_identities[0]} conflicts with selection_workflow final object {workflow_identity}",
+            f"首页对象 {front_identities[0]} 与选股流程最终对象 {workflow_identity} 不一致",
         )
     ]
 
@@ -3372,7 +3488,7 @@ def _audit_observation_anchor_consistency(lines):
         findings.append(
             _finding(
                 "observation_anchor_mismatch",
-                f"front-page observation target {final_target} conflicts with appendix observation object {anchor_identity}",
+                f"首页观察对象 {final_target} 与附录观察对象 {anchor_identity} 不一致",
             )
         )
     first_watch_identity = _extract_first_watch_order_identity(appendix)
@@ -3380,7 +3496,7 @@ def _audit_observation_anchor_consistency(lines):
         findings.append(
             _finding(
                 "observation_anchor_mismatch",
-                f"front-page observation target {final_target} conflicts with appendix first watch order {first_watch_identity}",
+                f"首页观察对象 {final_target} 与附录首个观察顺序对象 {first_watch_identity} 不一致",
             )
         )
     return findings
@@ -3665,7 +3781,7 @@ def _audit_unique_focus(lines):
         findings.append(
             _finding(
                 "unique_focus_mismatch",
-                f"execution target {execution_target} conflicts with final summary target {final_target}",
+                f"执行对象 {execution_target} 与最终摘要对象 {final_target} 不一致",
             )
         )
         return findings
@@ -3676,7 +3792,7 @@ def _audit_unique_focus(lines):
         findings.append(
             _finding(
                 "unique_focus_mismatch",
-                f"execution target {execution_target} conflicts with final summary target {final_target}",
+                f"执行对象 {execution_target} 与最终摘要对象 {final_target} 不一致",
             )
         )
         return findings
@@ -3703,7 +3819,7 @@ def _audit_concrete_unique_focus_evidence(front_lines, target, *, zero_position=
     return [
         _finding(
             "unique_focus_evidence_missing",
-            f"concrete unique target {target} is missing front-page decision evidence: {', '.join(missing)}",
+            f"具体唯一对象 {target} 缺少首页决策证据：{', '.join(missing)}",
         )
     ]
 
@@ -3758,7 +3874,7 @@ def _audit_empty_unique_focus_contradictions(front_lines):
         findings.append(
             _finding(
                 "unique_focus_contradiction",
-                "unique target is empty, but the front page labels a concrete stock as buyable or executable",
+                "唯一对象为空，但首页仍把具体股票写成可参与或可执行",
                 line=offset + 1,
             )
         )
@@ -3790,6 +3906,7 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_two_layer_execution_object_consistency(lines))
     findings.extend(_audit_front_execution_object_negation(lines))
     findings.extend(_audit_front_execution_object_downgrade(lines))
+    findings.extend(_audit_front_execution_object_limit_down_without_reversal_plan(lines))
     findings.extend(_audit_appendix_duplicate_front_page_sections(lines))
     findings.extend(_audit_duplicate_no_trade(lines))
     findings.extend(_audit_front_page_duplicate_long_cells(lines))

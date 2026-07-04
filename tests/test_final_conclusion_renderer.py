@@ -68,6 +68,88 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertNotIn("stage_key", rendered)
         self.assertNotIn("Step 4.5", rendered)
 
+    def test_full_mode_keeps_inferred_default_old_position(self):
+        lines = build_legacy_final_conclusion_lines(
+            {
+                "display_mvp_mode": False,
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "step0_action": "不新增参与",
+                "final_gate": {"can_new_entry": False, "should_reduce": True},
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
+                    "inferred_from_previous_report": True,
+                    "position_source": "previous_report_target_default_1x",
+                },
+                "watchlist_count": 0,
+                "core_count": 0,
+                "secondary_count": 0,
+                "crossline_count": 0,
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("| 今日关注标的 | 旧仓处理：持有太极实业(600667)，100%仓位", rendered)
+        self.assertIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertIn("不新增参与，先处理旧仓：持有太极实业(600667)", rendered)
+        self.assertNotIn("| 操作风格 | 空仓 |", rendered)
+
+    def test_full_mode_keeps_new_target_actionable_with_inferred_default_old_position(self):
+        context = {
+            "display_mvp_mode": False,
+            "step0_prediction": "NEUTRAL",
+            "step0_prediction_cn": "🟡 条件进攻",
+            "step0_action": "固定交易窗口确认",
+            "final_gate": {
+                "can_new_entry": False,
+                "allow_attack_50_ready": True,
+                "final_action": "明日目标标的已决定50%条件执行：只看601138 工业富联",
+            },
+            "trade_gate_open": False,
+            "selected_position_candidate": {
+                "name": "工业富联",
+                "code": "601138",
+                "sector": "通信设备",
+            },
+            "position_decision": {
+                "target_position_pct": 50,
+                "participation_mode": "attack_50_preview",
+            },
+            "existing_position_summary": {
+                "has_position": True,
+                "summary": "持有太极实业(600667)，100%仓位；上一份日报明日标的默认1x旧仓；新仓是否叠加单独看Tb/Tc资格",
+                "inferred_from_previous_report": True,
+                "position_source": "previous_report_target_default_1x",
+                "default_position_pct": 100.0,
+            },
+            "final_target_resolution": {
+                "new_entry_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
+                "existing_position_target": {
+                    "name": "太极实业",
+                    "code": "600667",
+                    "inferred_from_previous_report": True,
+                    "position_source": "previous_report_target_default_1x",
+                    "default_position_pct": 100.0,
+                },
+                "display_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
+                "capital_priority_decision": {
+                    "capital_priority": "new_entry",
+                    "reason": "旧仓默认1x按旧路径处理；新开仓对象具备执行资格时，按固定交易窗口确认，可与旧仓分账判断",
+                },
+            },
+        }
+
+        rendered = "\n".join(build_legacy_final_conclusion_lines(context))
+
+        self.assertIn("| 今日关注标的 | 工业富联(601138)：明日目标标的，固定交易窗口内条件成立才执行 |", rendered)
+        self.assertIn("| 操作风格 | 条件进攻 |", rendered)
+        self.assertIn("| 唯一动作 | 工业富联(601138)；按固定交易窗口条件确认，不满足回到0% |", rendered)
+        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的在固定交易窗口内满足条件 |", rendered)
+        self.assertNotIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertNotIn("| 唯一动作 | 旧仓处理：持有太极实业", rendered)
+        self.assertNotIn("先处理旧仓风险", rendered)
+
     def test_mvp_mode_renders_buy_target_and_single_action(self):
         lines = build_legacy_final_conclusion_lines(
             {

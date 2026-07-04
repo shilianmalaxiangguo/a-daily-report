@@ -21,6 +21,27 @@ def format_stock_label(stock):
     return name or code or "-"
 
 
+def existing_position_summary_text(context):
+    context = context or {}
+    summary = context.get("existing_position_summary")
+    if not isinstance(summary, dict):
+        personal_position_context = context.get("personal_position_context")
+        if isinstance(personal_position_context, dict):
+            summary = personal_position_context.get("existing_position_summary")
+    if not isinstance(summary, dict) or not summary.get("has_position"):
+        return ""
+    return str(summary.get("summary") or "").strip()
+
+
+def existing_position_should_lead(context):
+    if not existing_position_summary_text(context):
+        return False
+    if _old_position_priority_active(context):
+        return True
+    selected = resolve_selected_position_candidate(context)
+    return not (selected and selected_target_is_attack_ready(context))
+
+
 def _final_target_resolution(context):
     context = context or {}
     resolution = context.get("final_target_resolution")
@@ -253,6 +274,10 @@ def build_focus_recap_text(context):
             recap_text = f"{recap_text}；{note_text}"
         return recap_text
 
+    existing_position = existing_position_summary_text(context)
+    if existing_position:
+        return f"旧仓处理：{existing_position}"
+
     today_focus_items = resolve_today_focus_items(context)
     if today_focus_items:
         parts = []
@@ -281,6 +306,7 @@ def build_candidate_trade_directive(context):
     selected = resolve_selected_position_candidate(context)
     best_stock = resolve_best_stock(context)
     watch_anchor = resolve_watch_anchor(context)
+    existing_position = existing_position_summary_text(context)
     if selected:
         if _old_position_priority_active(context):
             return f"板块锚反推已收敛到观察对象{format_stock_label(selected)}，但账户先处理旧仓，不新增参与"
@@ -295,6 +321,8 @@ def build_candidate_trade_directive(context):
         directive = "先只在主线核心里做减法，不把跨线对象直接当观察位"
     elif watch_anchor:
         directive = f"主线核心还不够，只把{format_stock_label(watch_anchor)}当观察对象"
+    elif existing_position and existing_position_should_lead(context):
+        directive = f"不新增参与，先处理旧仓：{existing_position}"
     else:
         directive = "当前还没缩出具备参与资格的对象，先继续观察"
     return f"{summary}；{directive}"
@@ -307,6 +335,8 @@ def derive_trade_style(context):
     position_level = str(context.get("position_level", "") or "").strip()
     final_gate = context.get("final_gate") or {}
     selected = resolve_selected_position_candidate(context)
+    if existing_position_should_lead(context):
+        return "旧仓处理"
     if selected and selected_target_is_attack_ready(context):
         return "条件进攻"
     if "空仓" in position_level:
@@ -332,6 +362,8 @@ def derive_trade_style(context):
 
 
 def build_risk_trade_note(context):
+    if existing_position_should_lead(context):
+        return "先处理旧仓风险，不用新故事修复旧仓情绪"
     selected = resolve_selected_position_candidate(context)
     if selected and selected_target_is_attack_ready(context):
         return "固定交易窗口内条件不成立就回到0%，只接受小亏试错，不接受大亏硬扛"
@@ -347,6 +379,8 @@ def build_risk_trade_note(context):
 
 
 def derive_risk_guard_text(context):
+    if existing_position_should_lead(context):
+        return "已有旧仓先按持仓预案处理，不为不确定性扩大风险"
     selected = resolve_selected_position_candidate(context)
     if selected and selected_target_is_attack_ready(context):
         return "明日目标标的只看固定交易窗口内条件；不满足回到0%，不为抢跑承担大亏"
