@@ -1,0 +1,492 @@
+{
+  "schema_version": "quant_pressure_replay.v1",
+  "case_id": "sh603986_20260710",
+  "origin": "observed",
+  "instrument": {
+    "code": "603986.SH",
+    "name": "兆易创新",
+    "type": "stock"
+  },
+  "trade_date": "2026-07-10",
+  "bar_period_minutes": 5,
+  "previous_close": 663.49,
+  "price_limit_state": "none",
+  "source": {
+    "provider": "Sina CN_MarketData.getKLineData",
+    "query_date": "2026-07-11",
+    "source_date": "2026-07-10",
+    "timezone": "Asia/Shanghai",
+    "bar_time_semantics": "interval_end",
+    "volume_unit": "shares",
+    "amount_unit": "CNY",
+    "volume_semantics": "interval",
+    "amount_semantics": "interval",
+    "source_url": "https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketData.getKLineData?symbol=sh603986&scale=5&ma=no&datalen=1970",
+    "returned_bar_count": 1970
+  },
+  "validation_summary": {
+    "bar_count": 48,
+    "first_bar": "2026-07-10 09:35:00",
+    "last_bar": "2026-07-10 15:00:00",
+    "day_open": 688.0,
+    "day_high": 707.97,
+    "day_low": 607.18,
+    "day_close": 612.0,
+    "total_volume": 88745662.0,
+    "total_amount": 59381239195.3918,
+    "selected_source_rows_sha256": "83b4c27a3cd2a079cdc84008bfff0b3627683484cb0118f6fb9d725493d4bb70",
+    "normalized_minute_bars_sha256": "1a38bdb0c9f9d92b6798b3fb8d48dd47c86a30fd5c1c7ea997121389620d3c95",
+    "interval_semantics_check": "passed_non_cumulative_bars",
+    "stock_amount_volume_price_check": "passed",
+    "expected_session_grid_status": "complete",
+    "daily_reference_provider": "Tencent fqkline day + day query 15:00",
+    "daily_reference_source_url": "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh603986,day,2026-07-10,2026-07-10,1,qfq",
+    "daily_reference_ohlc": [688.0, 707.97, 607.18, 612.0],
+    "daily_reference_ohlc_tolerance": 0.01,
+    "daily_reference_volume_shares": 88745700.0,
+    "daily_reference_amount": 59381264627.45,
+    "daily_volume_coverage_ratio": 0.9999995718,
+    "daily_amount_coverage_ratio": 0.9999995717,
+    "daily_aggregation_coverage_status": "high"
+  },
+  "minute_bars": [
+    {
+      "datetime": "2026-07-10 09:35:00",
+      "open": 688.0,
+      "high": 707.97,
+      "low": 680.01,
+      "close": 699.98,
+      "volume": 14285660.0,
+      "amount": 9944801791.1824
+    },
+    {
+      "datetime": "2026-07-10 09:40:00",
+      "open": 699.98,
+      "high": 706.1,
+      "low": 692.11,
+      "close": 705.0,
+      "volume": 4904790.0,
+      "amount": 3436687067.6858
+    },
+    {
+      "datetime": "2026-07-10 09:45:00",
+      "open": 705.0,
+      "high": 706.53,
+      "low": 698.0,
+      "close": 701.5,
+      "volume": 3176054.0,
+      "amount": 2231633811.1607
+    },
+    {
+      "datetime": "2026-07-10 09:50:00",
+      "open": 700.01,
+      "high": 704.74,
+      "low": 692.0,
+      "close": 701.52,
+      "volume": 2672797.0,
+      "amount": 1866873835.1984
+    },
+    {
+      "datetime": "2026-07-10 09:55:00",
+      "open": 701.52,
+      "high": 705.2,
+      "low": 700.5,
+      "close": 704.33,
+      "volume": 1554658.0,
+      "amount": 1094409106.3772
+    },
+    {
+      "datetime": "2026-07-10 10:00:00",
+      "open": 704.33,
+      "high": 704.33,
+      "low": 693.0,
+      "close": 693.4,
+      "volume": 2245797.0,
+      "amount": 1569395585.854
+    },
+    {
+      "datetime": "2026-07-10 10:05:00",
+      "open": 693.4,
+      "high": 696.0,
+      "low": 684.01,
+      "close": 684.01,
+      "volume": 3900800.0,
+      "amount": 2691288817.3005
+    },
+    {
+      "datetime": "2026-07-10 10:10:00",
+      "open": 684.02,
+      "high": 692.0,
+      "low": 683.0,
+      "close": 685.0,
+      "volume": 2516967.0,
+      "amount": 1728616476.6597
+    },
+    {
+      "datetime": "2026-07-10 10:15:00",
+      "open": 685.0,
+      "high": 685.57,
+      "low": 675.83,
+      "close": 680.98,
+      "volume": 3207817.0,
+      "amount": 2179437441.8867
+    },
+    {
+      "datetime": "2026-07-10 10:20:00",
+      "open": 680.98,
+      "high": 687.02,
+      "low": 679.01,
+      "close": 683.51,
+      "volume": 1863853.0,
+      "amount": 1274656868.1641
+    },
+    {
+      "datetime": "2026-07-10 10:25:00",
+      "open": 683.48,
+      "high": 683.59,
+      "low": 677.0,
+      "close": 679.9,
+      "volume": 1260015.0,
+      "amount": 856766505.8936
+    },
+    {
+      "datetime": "2026-07-10 10:30:00",
+      "open": 679.88,
+      "high": 684.69,
+      "low": 679.1,
+      "close": 680.0,
+      "volume": 1080000.0,
+      "amount": 735913207.7822
+    },
+    {
+      "datetime": "2026-07-10 10:35:00",
+      "open": 679.97,
+      "high": 680.0,
+      "low": 669.0,
+      "close": 673.41,
+      "volume": 2322911.0,
+      "amount": 1563717835.55
+    },
+    {
+      "datetime": "2026-07-10 10:40:00",
+      "open": 673.2,
+      "high": 674.0,
+      "low": 666.0,
+      "close": 670.08,
+      "volume": 1797659.0,
+      "amount": 1202335069.772
+    },
+    {
+      "datetime": "2026-07-10 10:45:00",
+      "open": 670.08,
+      "high": 673.39,
+      "low": 668.05,
+      "close": 669.8,
+      "volume": 1152787.0,
+      "amount": 773748313.1484
+    },
+    {
+      "datetime": "2026-07-10 10:50:00",
+      "open": 669.16,
+      "high": 669.85,
+      "low": 663.85,
+      "close": 664.8,
+      "volume": 1489163.0,
+      "amount": 992188941.1887
+    },
+    {
+      "datetime": "2026-07-10 10:55:00",
+      "open": 664.8,
+      "high": 669.57,
+      "low": 664.01,
+      "close": 665.0,
+      "volume": 966100.0,
+      "amount": 644382464.7305
+    },
+    {
+      "datetime": "2026-07-10 11:00:00",
+      "open": 665.0,
+      "high": 674.88,
+      "low": 662.79,
+      "close": 671.6,
+      "volume": 1375387.0,
+      "amount": 919027014.5371
+    },
+    {
+      "datetime": "2026-07-10 11:05:00",
+      "open": 671.6,
+      "high": 672.01,
+      "low": 663.66,
+      "close": 663.9,
+      "volume": 794922.0,
+      "amount": 529787771.5928
+    },
+    {
+      "datetime": "2026-07-10 11:10:00",
+      "open": 663.9,
+      "high": 667.98,
+      "low": 663.58,
+      "close": 666.0,
+      "volume": 709100.0,
+      "amount": 471473252.8586
+    },
+    {
+      "datetime": "2026-07-10 11:15:00",
+      "open": 666.0,
+      "high": 669.5,
+      "low": 664.5,
+      "close": 664.89,
+      "volume": 661000.0,
+      "amount": 440744544.7656
+    },
+    {
+      "datetime": "2026-07-10 11:20:00",
+      "open": 664.89,
+      "high": 667.09,
+      "low": 664.32,
+      "close": 666.8,
+      "volume": 513900.0,
+      "amount": 342253768.9063
+    },
+    {
+      "datetime": "2026-07-10 11:25:00",
+      "open": 666.8,
+      "high": 666.8,
+      "low": 656.36,
+      "close": 656.5,
+      "volume": 1371128.0,
+      "amount": 907501209.3535
+    },
+    {
+      "datetime": "2026-07-10 11:30:00",
+      "open": 656.51,
+      "high": 663.56,
+      "low": 655.88,
+      "close": 663.38,
+      "volume": 1608279.0,
+      "amount": 1058283186.3411
+    },
+    {
+      "datetime": "2026-07-10 13:05:00",
+      "open": 663.37,
+      "high": 666.58,
+      "low": 657.5,
+      "close": 661.11,
+      "volume": 1237113.0,
+      "amount": 818785091.6504
+    },
+    {
+      "datetime": "2026-07-10 13:10:00",
+      "open": 661.11,
+      "high": 669.89,
+      "low": 657.91,
+      "close": 669.47,
+      "volume": 1080178.0,
+      "amount": 718608549.8516
+    },
+    {
+      "datetime": "2026-07-10 13:15:00",
+      "open": 669.29,
+      "high": 672.0,
+      "low": 667.3,
+      "close": 668.95,
+      "volume": 1018173.0,
+      "amount": 682233378.2503
+    },
+    {
+      "datetime": "2026-07-10 13:20:00",
+      "open": 668.95,
+      "high": 670.7,
+      "low": 661.03,
+      "close": 662.0,
+      "volume": 624465.0,
+      "amount": 416004610.3457
+    },
+    {
+      "datetime": "2026-07-10 13:25:00",
+      "open": 662.0,
+      "high": 662.0,
+      "low": 656.88,
+      "close": 657.12,
+      "volume": 849854.0,
+      "amount": 560266356.2681
+    },
+    {
+      "datetime": "2026-07-10 13:30:00",
+      "open": 657.12,
+      "high": 657.79,
+      "low": 651.66,
+      "close": 653.29,
+      "volume": 1315147.0,
+      "amount": 860908427.1924
+    },
+    {
+      "datetime": "2026-07-10 13:35:00",
+      "open": 653.29,
+      "high": 653.88,
+      "low": 646.0,
+      "close": 646.22,
+      "volume": 1532496.0,
+      "amount": 996905598.7119
+    },
+    {
+      "datetime": "2026-07-10 13:40:00",
+      "open": 646.1,
+      "high": 649.23,
+      "low": 643.2,
+      "close": 643.2,
+      "volume": 1254044.0,
+      "amount": 810225146.7344
+    },
+    {
+      "datetime": "2026-07-10 13:45:00",
+      "open": 643.25,
+      "high": 651.0,
+      "low": 643.1,
+      "close": 645.16,
+      "volume": 1005242.0,
+      "amount": 650567569.1394
+    },
+    {
+      "datetime": "2026-07-10 13:50:00",
+      "open": 645.17,
+      "high": 648.6,
+      "low": 642.08,
+      "close": 645.45,
+      "volume": 957579.0,
+      "amount": 616760300.8135
+    },
+    {
+      "datetime": "2026-07-10 13:55:00",
+      "open": 645.45,
+      "high": 648.04,
+      "low": 643.45,
+      "close": 646.05,
+      "volume": 669236.0,
+      "amount": 432278105.4766
+    },
+    {
+      "datetime": "2026-07-10 14:00:00",
+      "open": 646.04,
+      "high": 646.11,
+      "low": 640.0,
+      "close": 640.1,
+      "volume": 1170338.0,
+      "amount": 751492177.1338
+    },
+    {
+      "datetime": "2026-07-10 14:05:00",
+      "open": 640.12,
+      "high": 643.0,
+      "low": 637.0,
+      "close": 643.0,
+      "volume": 1119110.0,
+      "amount": 715756677.9268
+    },
+    {
+      "datetime": "2026-07-10 14:10:00",
+      "open": 643.0,
+      "high": 643.06,
+      "low": 636.14,
+      "close": 637.19,
+      "volume": 815614.0,
+      "amount": 520872179.2997
+    },
+    {
+      "datetime": "2026-07-10 14:15:00",
+      "open": 637.14,
+      "high": 641.0,
+      "low": 635.0,
+      "close": 635.09,
+      "volume": 875100.0,
+      "amount": 557418614.5078
+    },
+    {
+      "datetime": "2026-07-10 14:20:00",
+      "open": 635.1,
+      "high": 645.0,
+      "low": 635.04,
+      "close": 645.0,
+      "volume": 817050.0,
+      "amount": 523030434.2686
+    },
+    {
+      "datetime": "2026-07-10 14:25:00",
+      "open": 645.0,
+      "high": 645.19,
+      "low": 631.0,
+      "close": 631.0,
+      "volume": 1522565.0,
+      "amount": 969310012.8022
+    },
+    {
+      "datetime": "2026-07-10 14:30:00",
+      "open": 631.0,
+      "high": 631.93,
+      "low": 624.4,
+      "close": 624.4,
+      "volume": 1415705.0,
+      "amount": 891914084.2227
+    },
+    {
+      "datetime": "2026-07-10 14:35:00",
+      "open": 624.88,
+      "high": 627.5,
+      "low": 620.52,
+      "close": 626.02,
+      "volume": 1845324.0,
+      "amount": 1149859373.163
+    },
+    {
+      "datetime": "2026-07-10 14:40:00",
+      "open": 626.49,
+      "high": 626.54,
+      "low": 617.63,
+      "close": 618.6,
+      "volume": 1916316.0,
+      "amount": 1189220172.8633
+    },
+    {
+      "datetime": "2026-07-10 14:45:00",
+      "open": 618.66,
+      "high": 621.03,
+      "low": 615.0,
+      "close": 617.3,
+      "volume": 1647077.0,
+      "amount": 1016987035.9347
+    },
+    {
+      "datetime": "2026-07-10 14:50:00",
+      "open": 617.5,
+      "high": 621.31,
+      "low": 616.0,
+      "close": 616.2,
+      "volume": 1844330.0,
+      "amount": 1140774297.29
+    },
+    {
+      "datetime": "2026-07-10 14:55:00",
+      "open": 616.2,
+      "high": 617.7,
+      "low": 615.5,
+      "close": 616.39,
+      "volume": 1996089.0,
+      "amount": 1230757794.627
+    },
+    {
+      "datetime": "2026-07-10 15:00:00",
+      "open": 616.4,
+      "high": 616.5,
+      "low": 607.18,
+      "close": 612.0,
+      "volume": 2785973.0,
+      "amount": 1704379319.028
+    }
+  ],
+  "annotations": {
+    "facts_only": [
+      "48个预期五分钟结束时刻齐全；分钟量额与独立日线差异低于0.00005%。",
+      "腾讯盘后序列存在15:30行，成交额交叉核对固定使用15:00累计值。"
+    ]
+  }
+}

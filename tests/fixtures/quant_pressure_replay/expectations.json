@@ -1,0 +1,115 @@
+{
+  "schema_version": "quant_pressure_replay_expectations.v1",
+  "purpose": "人工允许与禁止结论；不参与研究参数反调。",
+  "cases": {
+    "sh000001_20260521": {
+      "role": "pressure_path_positive",
+      "must": [
+        {
+          "assertion": "current_dynamics_any_after",
+          "after": "2026-05-21 13:35:00",
+          "allowed": ["accelerating", "steady_down"]
+        },
+        {
+          "assertion": "point_field_not_in",
+          "as_of_bar": "2026-05-21 14:40:00",
+          "field": "current_dynamics",
+          "forbidden": ["repairing"]
+        },
+        {
+          "assertion": "point_field_not_in",
+          "as_of_bar": "2026-05-21 14:55:00",
+          "field": "current_dynamics",
+          "forbidden": ["repairing"]
+        }
+      ],
+      "must_not": ["confirm_quant_identity", "use_full_path_model_in_prefix"]
+    },
+    "sh603986_20260710": {
+      "role": "pressure_path_positive",
+      "must": [
+        {
+          "assertion": "event_order",
+          "before": "first_burst_cooling_confirmed_at",
+          "after": "second_wave_detected_at"
+        },
+        {
+          "assertion": "final_field_in",
+          "field": "episode_structure",
+          "allowed": ["second_wave", "nonrepair_tail"]
+        },
+        {
+          "assertion": "final_field_not_in",
+          "field": "current_dynamics",
+          "forbidden": ["repairing"]
+        }
+      ],
+      "must_not": ["infer_quant_turnover_share", "confirm_slow_fund_handoff"]
+    },
+    "sh000001_20260709": {
+      "role": "rapid_repair_protection",
+      "must": [
+        {
+          "assertion": "final_field_in",
+          "field": "current_dynamics",
+          "allowed": ["repairing"]
+        },
+        {
+          "assertion": "final_field_equals",
+          "field": "handoff_risk_candidate",
+          "value": false
+        }
+      ],
+      "must_not": ["retain_accelerating_after_sustained_repair", "confirm_slow_fund_handoff"]
+    },
+    "sh000001_20260604": {
+      "role": "overnight_gap_protection",
+      "must": [
+        {
+          "assertion": "opening_gap_separate_from_intraday_slope"
+        },
+        {
+          "assertion": "final_field_not_in",
+          "field": "episode_structure",
+          "forbidden": ["second_wave"]
+        },
+        {
+          "assertion": "final_field_not_equals",
+          "field": "handoff_risk_candidate",
+          "value": true
+        }
+      ],
+      "must_not": [
+        "count_overnight_gap_as_intraday_acceleration",
+        "join_new_episode_to_repaired_prior_episode"
+      ]
+    },
+    "sz002297_20260527": {
+      "role": "price_limit_protection",
+      "must": [
+        {
+          "assertion": "all_prefix_field_equals",
+          "field": "evidence_status",
+          "value": "insufficient"
+        },
+        {
+          "assertion": "full_path_not_applicable",
+          "reason": "price_limit_path_not_identifiable"
+        }
+      ],
+      "must_not": ["confirm_programmatic_cascade", "rank_curve_identity"]
+    }
+  },
+  "global_forbidden_inferences": [
+    "quant_account_identity",
+    "quant_turnover_share",
+    "true_q_over_l",
+    "order_flow_imbalance",
+    "order_book_depth",
+    "order_cancellation",
+    "remaining_inventory",
+    "hawkes_self_excitation",
+    "slow_fund_identity",
+    "position_or_trade_action"
+  ]
+}
