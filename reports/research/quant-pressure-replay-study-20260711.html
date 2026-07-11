@@ -1,0 +1,1702 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>量化压力阶段离线回放研究报告</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --canvas: #edf0ed;
+      --paper: #ffffff;
+      --ink: #202623;
+      --muted: #626c67;
+      --faint: #f4f6f4;
+      --line: #cfd5d1;
+      --line-dark: #929b96;
+      --red: #b13a31;
+      --red-soft: #f7e9e7;
+      --green: #1f6b58;
+      --green-soft: #e7f1ed;
+      --amber: #9a650f;
+      --amber-soft: #f6eedc;
+      --blue: #2d6475;
+      --blue-soft: #e7f0f3;
+      --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
+      --font-body: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--canvas);
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--canvas);
+      font-family: var(--font-body);
+      font-size: 16px;
+      line-height: 1.72;
+      letter-spacing: 0;
+      text-rendering: optimizeLegibility;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button,
+    a {
+      font: inherit;
+    }
+
+    button:focus-visible,
+    a:focus-visible {
+      outline: 3px solid var(--blue);
+      outline-offset: 3px;
+    }
+
+    .report-shell {
+      width: min(1240px, calc(100% - 32px));
+      margin: 24px auto 48px;
+      background: var(--paper);
+      border-top: 6px solid var(--ink);
+    }
+
+    .masthead {
+      padding: 32px 48px 28px;
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .masthead-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .journal-mark {
+      margin: 0;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .print-button {
+      min-height: 44px;
+      padding: 8px 16px;
+      border: 1px solid var(--ink);
+      border-radius: 4px;
+      color: var(--paper);
+      background: var(--ink);
+      cursor: pointer;
+    }
+
+    .print-button:active {
+      transform: scale(0.97);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1,
+    h2,
+    h3 {
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 980px;
+      margin-bottom: 16px;
+      font-family: var(--font-display);
+      font-size: 48px;
+      font-weight: 500;
+      line-height: 1.18;
+    }
+
+    .subtitle {
+      max-width: 860px;
+      margin-bottom: 24px;
+      color: var(--muted);
+      font-family: var(--font-display);
+      font-size: 21px;
+      line-height: 1.55;
+    }
+
+    .meta-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      margin: 0;
+      padding: 0;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      list-style: none;
+    }
+
+    .headline-findings {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      border-bottom: 1px solid var(--line-dark);
+    }
+
+    .headline-finding {
+      min-height: 152px;
+      padding: 24px;
+      border-right: 1px solid var(--line);
+    }
+
+    .headline-finding:last-child {
+      border-right: 0;
+    }
+
+    .finding-index {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--red);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .headline-finding strong {
+      display: block;
+      margin-bottom: 8px;
+      font-family: var(--font-display);
+      font-size: 18px;
+      font-weight: 500;
+      line-height: 1.42;
+    }
+
+    .headline-finding p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.58;
+    }
+
+    .report-grid {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 48px;
+      padding: 40px 48px 64px;
+    }
+
+    .toc {
+      align-self: start;
+      position: sticky;
+      top: 24px;
+      padding-top: 4px;
+    }
+
+    .toc h2 {
+      margin-bottom: 14px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 500;
+      text-transform: uppercase;
+    }
+
+    .toc ol {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: toc;
+    }
+
+    .toc li {
+      counter-increment: toc;
+      border-top: 1px solid var(--line);
+    }
+
+    .toc a {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      min-height: 44px;
+      align-items: center;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .toc a::before {
+      content: counter(toc, decimal-leading-zero);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .toc a:hover {
+      color: var(--red);
+    }
+
+    .paper-content {
+      min-width: 0;
+    }
+
+    .paper-section {
+      scroll-margin-top: 24px;
+      padding-bottom: 48px;
+      border-bottom: 1px solid var(--line-dark);
+      margin-bottom: 48px;
+    }
+
+    .paper-section:last-child {
+      margin-bottom: 0;
+      border-bottom: 0;
+    }
+
+    .section-kicker {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--red);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    h2 {
+      margin-bottom: 20px;
+      font-family: var(--font-display);
+      font-size: 31px;
+      font-weight: 500;
+      line-height: 1.28;
+    }
+
+    h3 {
+      margin-bottom: 10px;
+      font-size: 18px;
+      font-weight: 500;
+      line-height: 1.45;
+    }
+
+    p {
+      margin-bottom: 16px;
+    }
+
+    .lead-paragraph {
+      color: #303936;
+      font-family: var(--font-display);
+      font-size: 20px;
+      line-height: 1.78;
+    }
+
+    .key-sentence {
+      margin: 24px 0;
+      padding: 18px 20px;
+      border-left: 4px solid var(--red);
+      background: var(--red-soft);
+      font-family: var(--font-display);
+      font-size: 19px;
+      line-height: 1.7;
+    }
+
+    .method-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      margin: 28px 0 8px;
+      border: 1px solid var(--line-dark);
+    }
+
+    .method-step {
+      position: relative;
+      min-height: 150px;
+      padding: 20px;
+      border-right: 1px solid var(--line);
+    }
+
+    .method-step:last-child {
+      border-right: 0;
+    }
+
+    .method-step:not(:last-child)::after {
+      content: "→";
+      position: absolute;
+      top: 50%;
+      right: -12px;
+      z-index: 1;
+      width: 24px;
+      color: var(--red);
+      background: var(--paper);
+      text-align: center;
+      transform: translateY(-50%);
+    }
+
+    .method-step span {
+      display: block;
+      margin-bottom: 12px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .method-step strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .method-step p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .axis-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .axis-card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .axis-card:nth-child(1) {
+      border-top: 4px solid var(--red);
+    }
+
+    .axis-card:nth-child(2) {
+      border-top: 4px solid var(--amber);
+    }
+
+    .axis-card:nth-child(3) {
+      border-top: 4px solid var(--green);
+    }
+
+    .axis-card code,
+    code {
+      color: var(--blue);
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+    }
+
+    .axis-card ul,
+    .plain-list {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+
+    .axis-card li,
+    .plain-list li {
+      margin-bottom: 8px;
+    }
+
+    .figure {
+      margin: 28px 0 0;
+    }
+
+    .figure-header {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .figure-header h3 {
+      margin-bottom: 0;
+    }
+
+    .figure-header p {
+      max-width: 520px;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: right;
+    }
+
+    .case-plots {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .case-plot {
+      min-width: 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--paper);
+    }
+
+    .case-plot.protection {
+      background: var(--faint);
+    }
+
+    .case-plot:last-child {
+      grid-column: 1 / -1;
+    }
+
+    .plot-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+
+    .plot-title strong {
+      font-size: 15px;
+      font-weight: 500;
+    }
+
+    .plot-title span {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .plot-slot {
+      width: 100%;
+      height: 220px;
+    }
+
+    .plot-slot svg,
+    .model-chart svg,
+    .timeline-figure svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    .chart-grid {
+      stroke: var(--line);
+      stroke-width: 1;
+    }
+
+    .chart-zero {
+      stroke: var(--line-dark);
+      stroke-width: 1.5;
+    }
+
+    .chart-line-risk {
+      fill: none;
+      stroke: var(--red);
+      stroke-width: 2.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-line-repair {
+      fill: none;
+      stroke: var(--green);
+      stroke-width: 2.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-line-protection {
+      fill: none;
+      stroke: var(--blue);
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .chart-label {
+      fill: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+
+    .event-line {
+      stroke-width: 1.5;
+      vector-effect: non-scaling-stroke;
+    }
+
+    .event-label {
+      font-family: var(--font-body);
+      font-size: 10px;
+      font-weight: 500;
+    }
+
+    .figure-caption {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .table-wrap {
+      margin-top: 24px;
+      overflow-x: auto;
+      border-top: 2px solid var(--ink);
+      border-bottom: 1px solid var(--ink);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th,
+    td {
+      padding: 14px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .status-risk,
+    .status-clear,
+    .status-unknown {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 2px;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .status-risk {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .status-clear {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .status-unknown {
+      color: var(--amber);
+      background: var(--amber-soft);
+    }
+
+    .model-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .model-chart {
+      min-width: 0;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+    }
+
+    .model-chart h3 {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      font-size: 15px;
+    }
+
+    .model-chart h3 span {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 400;
+    }
+
+    .model-svg-slot {
+      width: 100%;
+      height: 300px;
+    }
+
+    .formula-bar {
+      fill: var(--blue-soft);
+      stroke: var(--blue);
+      stroke-width: 1;
+    }
+
+    .formula-bar.best {
+      fill: var(--green-soft);
+      stroke: var(--green);
+    }
+
+    .formula-bar.ellipse {
+      fill: var(--amber-soft);
+      stroke: var(--amber);
+    }
+
+    .formula-label,
+    .formula-value {
+      fill: var(--ink);
+      font-family: var(--font-body);
+      font-size: 10px;
+    }
+
+    .formula-value {
+      fill: var(--muted);
+      font-family: var(--font-mono);
+    }
+
+    .timeline-figure {
+      margin-top: 24px;
+      padding: 20px;
+      border: 1px solid var(--line-dark);
+      border-radius: 4px;
+      background: var(--faint);
+    }
+
+    .timeline-slot {
+      width: 100%;
+      height: 210px;
+    }
+
+    .timeline-base {
+      stroke: var(--line-dark);
+      stroke-width: 2;
+    }
+
+    .timeline-node {
+      stroke: var(--paper);
+      stroke-width: 3;
+    }
+
+    .timeline-text {
+      fill: var(--ink);
+      font-family: var(--font-body);
+      font-size: 11px;
+    }
+
+    .timeline-time {
+      fill: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 10px;
+    }
+
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 24px;
+    }
+
+    .decision-column {
+      padding: 20px;
+      border-top: 4px solid var(--line-dark);
+      background: var(--faint);
+    }
+
+    .decision-column:nth-child(1) {
+      border-top-color: var(--green);
+    }
+
+    .decision-column:nth-child(2) {
+      border-top-color: var(--amber);
+    }
+
+    .decision-column:nth-child(3) {
+      border-top-color: var(--red);
+    }
+
+    .decision-column ul {
+      margin: 12px 0 0;
+      padding-left: 20px;
+    }
+
+    .decision-column li {
+      margin-bottom: 8px;
+    }
+
+    .formula-list {
+      display: grid;
+      gap: 0;
+      margin-top: 24px;
+      border-top: 2px solid var(--ink);
+    }
+
+    .formula-row {
+      display: grid;
+      grid-template-columns: 180px minmax(0, 1fr);
+      gap: 24px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .formula-row h3 {
+      margin-bottom: 4px;
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+
+    .formula-expression {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .formula-row p {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .limitation-list {
+      display: grid;
+      gap: 12px;
+      margin: 24px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .limitation-list li {
+      display: grid;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: 12px;
+      padding: 14px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .limitation-list span {
+      color: var(--red);
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .conclusion {
+      padding: 24px;
+      border: 1px solid var(--green);
+      border-radius: 4px;
+      background: var(--green-soft);
+    }
+
+    .conclusion p:last-child {
+      margin-bottom: 0;
+    }
+
+    .provenance {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+    }
+
+    .report-footer {
+      padding: 24px 48px 32px;
+      border-top: 1px solid var(--line-dark);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    noscript {
+      display: block;
+      margin: 16px 0;
+      padding: 16px;
+      border: 1px solid var(--amber);
+      background: var(--amber-soft);
+    }
+
+    @media (max-width: 980px) {
+      .masthead {
+        padding-inline: 32px;
+      }
+
+      .headline-findings {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .headline-finding:nth-child(2) {
+        border-right: 0;
+      }
+
+      .headline-finding:nth-child(-n + 2) {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .report-grid {
+        grid-template-columns: 1fr;
+        gap: 32px;
+        padding-inline: 32px;
+      }
+
+      .toc {
+        position: static;
+      }
+
+      .toc ol {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .toc li:nth-child(odd) {
+        border-right: 1px solid var(--line);
+      }
+
+      .toc a {
+        padding-inline: 8px;
+      }
+
+      .method-flow,
+      .axis-grid,
+      .decision-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .method-step:nth-child(2) {
+        border-right: 0;
+      }
+
+      .method-step:nth-child(-n + 2) {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .method-step:nth-child(2)::after {
+        display: none;
+      }
+
+      .axis-card:last-child,
+      .decision-column:last-child {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .report-shell {
+        width: 100%;
+        margin: 0;
+      }
+
+      .masthead,
+      .report-grid,
+      .report-footer {
+        padding-inline: 20px;
+      }
+
+      .masthead-top {
+        align-items: flex-start;
+        flex-direction: column;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        font-size: 36px;
+      }
+
+      .subtitle,
+      .lead-paragraph {
+        font-size: 18px;
+      }
+
+      .headline-findings,
+      .case-plots,
+      .model-grid,
+      .method-flow,
+      .axis-grid,
+      .decision-grid,
+      .toc ol {
+        grid-template-columns: 1fr;
+      }
+
+      .headline-finding,
+      .headline-finding:nth-child(2),
+      .toc li:nth-child(odd),
+      .method-step,
+      .method-step:nth-child(2) {
+        border-right: 0;
+      }
+
+      .headline-finding,
+      .headline-finding:nth-child(-n + 2),
+      .method-step,
+      .method-step:nth-child(-n + 2) {
+        border-bottom: 1px solid var(--line);
+      }
+
+      .headline-finding:last-child,
+      .method-step:last-child {
+        border-bottom: 0;
+      }
+
+      .method-step::after {
+        display: none;
+      }
+
+      .axis-card:last-child,
+      .decision-column:last-child,
+      .case-plot:last-child {
+        grid-column: auto;
+      }
+
+      .figure-header,
+      .plot-title {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .figure-header p,
+      .plot-title span {
+        text-align: left;
+      }
+
+      .plot-slot,
+      .timeline-slot {
+        height: 240px;
+      }
+
+      .model-svg-slot {
+        height: 320px;
+      }
+
+      .formula-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+    }
+
+    @media print {
+      @page {
+        size: A4 portrait;
+        margin: 14mm;
+      }
+
+      html,
+      body,
+      .report-shell {
+        width: auto;
+        margin: 0;
+        background: #ffffff;
+      }
+
+      .report-shell {
+        border-top: 0;
+      }
+
+      .print-button,
+      .toc {
+        display: none;
+      }
+
+      .masthead,
+      .report-grid,
+      .report-footer {
+        padding-inline: 0;
+      }
+
+      .report-grid {
+        display: block;
+      }
+
+      .paper-section,
+      .case-plot,
+      .model-chart,
+      .timeline-figure,
+      .formula-row {
+        break-inside: avoid;
+      }
+
+      .paper-section {
+        break-before: page;
+      }
+
+      .paper-section:first-child {
+        break-before: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="report-shell">
+    <header class="masthead">
+      <div class="masthead-top">
+        <p class="journal-mark">Independent Market Microstructure Note · Research v1.1</p>
+        <button class="print-button" id="print-report" type="button">打印 / 导出 PDF</button>
+      </div>
+      <h1>量化压力阶段离线回放研究报告</h1>
+      <p class="subtitle">从“鸭蛋弧”的生活直觉，走向能够被历史前缀检验、被保护样本否定、并且不冒充量化身份识别的研究框架。</p>
+      <ul class="meta-row" aria-label="报告元信息">
+        <li>研究日期 2026-07-11</li>
+        <li>样本 5 个交易日</li>
+        <li>粒度 5 分钟 / 48 bars</li>
+        <li>代码提交 43911824</li>
+        <li>正式日报接入 否</li>
+      </ul>
+    </header>
+
+    <section class="headline-findings" aria-label="核心研究结论">
+      <article class="headline-finding">
+        <span class="finding-index">FINDING 01</span>
+        <strong>弧形是现象，不是身份</strong>
+        <p>五分钟价格路径能描述压力生命周期，不能证明卖方账户属于量化，更不能推出量化成交占比。</p>
+      </article>
+      <article class="headline-finding">
+        <span class="finding-index">FINDING 02</span>
+        <strong>两个案例不是同一条公式</strong>
+        <p>5·21 上证指数由指数模型略胜，兆易创新由分段模型明显胜出；椭圆不是统一答案。</p>
+      </article>
+      <article class="headline-finding">
+        <span class="finding-index">FINDING 03</span>
+        <strong>阶段字段比曲线冠军更有用</strong>
+        <p>滚动斜率、首轮降温、弱修复和第二轮压力，才是能在路径尚未走完时逐步观察的变量。</p>
+      </article>
+      <article class="headline-finding">
+        <span class="finding-index">FINDING 04</span>
+        <strong>早识别仍未被证明</strong>
+        <p>兆易变化候选到 13:20 才确认，晚于 10:40 的第二轮压力；当前结果不能宣称已能提前退出。</p>
+      </article>
+    </section>
+
+    <div class="report-grid">
+      <nav class="toc" aria-label="报告目录">
+        <h2>Contents</h2>
+        <ol>
+          <li><a href="#abstract">摘要</a></li>
+          <li><a href="#question">研究问题</a></li>
+          <li><a href="#method">数据与方法</a></li>
+          <li><a href="#paths">五案例路径</a></li>
+          <li><a href="#models">公式比较</a></li>
+          <li><a href="#timing">识别时序</a></li>
+          <li><a href="#daily-report">日报作用</a></li>
+          <li><a href="#limits">局限与结论</a></li>
+          <li><a href="#appendix">公式附录</a></li>
+        </ol>
+      </nav>
+
+      <article class="paper-content">
+        <section class="paper-section" id="abstract">
+          <span class="section-kicker">ABSTRACT</span>
+          <h2>摘要</h2>
+          <p class="lead-paragraph">“像一个横长竖短的鸭蛋弧”是有价值的观察语言。它捕捉到的不是某条神秘公式，而是卖压、流动性和触发条件在时间上连续传播后留下的几何外观。</p>
+          <p>本研究把这种生活经验拆成两层。盘中层只使用当时已经结束的五分钟 bar，逐点输出当前动力、事件结构和证据完整度；收盘后层才比较线性、分段、幂律、椭圆代理、指数、Gompertz 与对数模型。两个层级严格隔离，避免用全天最优曲线倒推早盘“本来就应该知道”。</p>
+          <p class="key-sentence">结果支持“多轮压力与弱修复可以形成级联式流畅下跌”的机制假说，但不支持“看见鸭蛋弧就确认量化踩踏”，也不支持从龙虎榜席位或大单流向反推出市场量化占比约 40%。</p>
+          <p>五个样本中，两个压力正例都形成第二轮结构；快速修复样本最终清除风险；普通下跌样本没有被升级为多轮交接；价格限制样本停止曲线排名。保护样本的作用不是装饰，而是专门阻止模型把任何顺滑下跌都解释成量化互踩。</p>
+        </section>
+
+        <section class="paper-section" id="question">
+          <span class="section-kicker">01 · RESEARCH QUESTION</span>
+          <h2>研究问题：从“像”推进到“何时可知”</h2>
+          <p>这项研究不再追问“哪条曲线最像鸭蛋”，而是改问三个更严格的问题：</p>
+          <ol class="plain-list">
+            <li>在完整弧形走完之前，历史前缀能否识别压力加速、第一轮降温、第二轮压力和持续修复？</li>
+            <li>普通下跌、隔夜缺口、快速修复和价格限制路径，能否阻止模型把特殊样本泛化成普遍规律？</li>
+            <li>公式比较究竟能回答“形状”，还是能进一步回答“量化身份、资金类型与成交占比”？</li>
+          </ol>
+          <p>答案是：前两个问题得到有限支持；第三个问题必须明确回答“不能”。这也是本轮研究最重要的边界。</p>
+        </section>
+
+        <section class="paper-section" id="method">
+          <span class="section-kicker">02 · DATA & METHOD</span>
+          <h2>数据与方法：把未来信息从盘中判断里拿掉</h2>
+          <div class="method-flow" aria-label="回放数据流程">
+            <div class="method-step">
+              <span>STEP 01</span>
+              <strong>冻结原始样本</strong>
+              <p>保存来源、查询日、单位、单段语义、48 个固定交易时点和本地可重算哈希。</p>
+            </div>
+            <div class="method-step">
+              <span>STEP 02</span>
+              <strong>逐前缀独立重算</strong>
+              <p>每个时点只读此前数据；午休不计时，盘中缺 bar 不压缩。</p>
+            </div>
+            <div class="method-step">
+              <span>STEP 03</span>
+              <strong>三条判断轴</strong>
+              <p>动力、结构、证据分开，避免一个标签同时冒充速度、阶段和可信度。</p>
+            </div>
+            <div class="method-step">
+              <span>STEP 04</span>
+              <strong>全天事后诊断</strong>
+              <p>七类公式只比较完整路径形状，标记为 hindsight only，不返回历史前缀。</p>
+            </div>
+          </div>
+
+          <div class="axis-grid">
+            <section class="axis-card">
+              <h3><code>current_dynamics</code></h3>
+              <p>回答“此刻的速度怎样”。</p>
+              <ul>
+                <li>压力加速</li>
+                <li>稳定下压</li>
+                <li>边际降温</li>
+                <li>持续修复</li>
+              </ul>
+            </section>
+            <section class="axis-card">
+              <h3><code>episode_structure</code></h3>
+              <p>回答“事件走到哪一段”。</p>
+              <ul>
+                <li>第一轮压力</li>
+                <li>第一轮已降温</li>
+                <li>峰后未修复长尾</li>
+                <li>第二轮压力</li>
+              </ul>
+            </section>
+            <section class="axis-card">
+              <h3><code>evidence_status</code></h3>
+              <p>回答“这句话有多少证据”。</p>
+              <ul>
+                <li>证据充分</li>
+                <li>部分完整</li>
+                <li>证据不足</li>
+                <li>空值必须附原因</li>
+              </ul>
+            </section>
+          </div>
+        </section>
+
+        <section class="paper-section" id="paths">
+          <span class="section-kicker">03 · CASE REPLAY</span>
+          <h2>五案例路径：两个正例必须同时面对三个反例</h2>
+          <p>图中纵轴是相对首根收盘价的对数基点，横轴是固定 A 股五分钟交易序号。负值表示相对首根价格下跌。事件竖线来自历史前缀首次形成的结构字段，不是收盘后人工描线。</p>
+
+          <figure class="figure" aria-labelledby="path-figure-title">
+            <div class="figure-header">
+              <h3 id="path-figure-title">图 1 · 五分钟归一化价格路径与事件标记</h3>
+              <p>红线为压力路径正例，绿线为持续修复保护样本，蓝线为其他保护样本。</p>
+            </div>
+            <div class="case-plots" id="case-plots"></div>
+            <figcaption class="figure-caption">5·21 上证与兆易创新都形成第二轮，但曲线形状和识别时序并不相同。博云新材因价格限制呈常数路径，公式排名停止。</figcaption>
+          </figure>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>案例</th>
+                  <th>样本角色</th>
+                  <th>最终动力 / 结构</th>
+                  <th>交接风险候选</th>
+                  <th>研究解释</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>2026-05-21 上证指数</td>
+                  <td>压力路径正例</td>
+                  <td><code>steady_down / second_wave</code></td>
+                  <td><span class="status-risk">保留</span></td>
+                  <td>午后第二轮持续，14:40 单次反弹不足以确认修复，14:55 再创新低。</td>
+                </tr>
+                <tr>
+                  <td>2026-07-10 兆易创新</td>
+                  <td>压力路径正例</td>
+                  <td><code>decelerating / second_wave</code></td>
+                  <td><span class="status-risk">保留</span></td>
+                  <td>10:25 首轮降温，10:40 第二轮出现；全天弱修复，尾盘仍贴近低位。</td>
+                </tr>
+                <tr>
+                  <td>2026-07-09 上证指数</td>
+                  <td>快速修复保护</td>
+                  <td><code>repairing / first_burst_completed</code></td>
+                  <td><span class="status-clear">清除</span></td>
+                  <td>午后修复持续，旧压力事件结束，不再保留负向交接风险。</td>
+                </tr>
+                <tr>
+                  <td>2026-06-04 上证指数</td>
+                  <td>隔夜缺口保护</td>
+                  <td><code>unclear / nonrepair_tail</code></td>
+                  <td><span class="status-clear">不确认</span></td>
+                  <td>普通回落没有足够材料强度，不把隔夜缺口或后续回落拼成量化踩踏。</td>
+                </tr>
+                <tr>
+                  <td>2026-05-27 博云新材</td>
+                  <td>价格限制保护</td>
+                  <td><code>unclear / unclear</code></td>
+                  <td><span class="status-unknown">不可识别</span></td>
+                  <td>常数价格路径缺少有效形状，不运行公式排名，也不确认程序化级联。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="paper-section" id="models">
+          <span class="section-kicker">04 · MODEL COMPARISON</span>
+          <h2>公式比较：保留竞争假说，不选一条万能曲线</h2>
+          <p>图 2 使用 AICc 比较同一完整日对数价格响应。每个小图中的 0 是该案例样本内最佳模型，数值越大表示相对支持越弱。AICc 只回答“这一整天哪种形状拟合得更省参数”，不回答卖方是谁。</p>
+
+          <div class="model-grid" id="model-grid"></div>
+
+          <p class="key-sentence">5·21 上证指数中，指数模型第一，椭圆代理只差约 2.14，区分强度较弱；兆易创新中，分段模型第一，椭圆代理落后约 39.25。视觉上都像弧，不代表数学上由同一公式支配。</p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>公式家族</th>
+                  <th>它描述什么</th>
+                  <th>本轮角色</th>
+                  <th>不能得出什么</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>滚动线性斜率</td>
+                  <td>最近窗口的即时方向和速度</td>
+                  <td>盘中前缀主变量</td>
+                  <td>不能单独确认第二轮或账户身份</td>
+                </tr>
+                <tr>
+                  <td>连续分段</td>
+                  <td>前后斜率发生阶段性变化</td>
+                  <td>变化点与全天形状对照</td>
+                  <td>保护样本也可能第一，不能识别量化</td>
+                </tr>
+                <tr>
+                  <td>幂律 / 椭圆代理</td>
+                  <td>有限时间内曲率逐步增强</td>
+                  <td>检验“鸭蛋弧”直觉</td>
+                  <td>不能因为看起来像就认定真实生成机制</td>
+                </tr>
+                <tr>
+                  <td>指数</td>
+                  <td>变化速度按比例放大</td>
+                  <td>5·21 上证样本内第一</td>
+                  <td>不能证明模型同步卖出或自激踩踏</td>
+                </tr>
+                <tr>
+                  <td>Gompertz</td>
+                  <td>招募、扩散与耗尽的单轮 S 形过程</td>
+                  <td>机制稳健性对照</td>
+                  <td>不能估计真实剩余库存或触发账户数</td>
+                </tr>
+                <tr>
+                  <td>对数</td>
+                  <td>前快后慢的衰减型路径</td>
+                  <td>稳健性对照</td>
+                  <td>不能替代事件生命周期字段</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="paper-section" id="timing">
+          <span class="section-kicker">05 · DETECTION TIMING</span>
+          <h2>识别时序：最早可见的不是“最佳公式”</h2>
+          <p>兆易创新是检验提前识别能力的关键样本。滚动动力在 10:00 已显示压力加速，10:25 确认第一轮降温，10:40 形成第二轮结构；但变化点算法对 10:50 候选直到 13:20 才完成连续确认。</p>
+
+          <figure class="timeline-figure" aria-labelledby="timing-title">
+            <h3 id="timing-title">图 3 · 兆易创新结构字段与变化点确认时序</h3>
+            <div class="timeline-slot" id="timing-chart"></div>
+            <figcaption class="figure-caption">变化点从候选到确认相隔 12 根五分钟 bar，即 60 个交易分钟。因此它目前适合复盘“发生了变化”，不适合充当最早退出信号。</figcaption>
+          </figure>
+
+          <p>这也带来一个更实际的结论：日报若将来接入研究段，应优先观察多变量的事件顺序，而不是等待单一变化点算法确认。早盘能用的是“压力加速 → 首轮降温但修复弱 → 第二轮再压”的组合；全天最佳曲线只能在事后说明形状。</p>
+        </section>
+
+        <section class="paper-section" id="daily-report">
+          <span class="section-kicker">06 · DAILY REPORT USE</span>
+          <h2>它如何服务量化跟踪日报</h2>
+          <p>本轮没有接入正式日报，也没有生成评分、仓位或买卖动作。研究对日报的价值，是先确定未来可以接入哪一层信息，以及哪些信息永远不该被伪装成已知事实。</p>
+
+          <div class="decision-grid">
+            <section class="decision-column">
+              <h3>盘中可观察</h3>
+              <ul>
+                <li>四根窗口对数斜率</li>
+                <li>压力是否边际加速</li>
+                <li>第一轮速度峰值是否降温确认</li>
+                <li>固定首轮低点后的修复比例</li>
+                <li>第二轮压力与峰后未修复驻留</li>
+              </ul>
+            </section>
+            <section class="decision-column">
+              <h3>收盘后复盘</h3>
+              <ul>
+                <li>完整路径的七类公式比较</li>
+                <li>AICc、ΔAICc 与区分强度</li>
+                <li>参数是否撞到搜索边界</li>
+                <li>正例与保护样本的差异</li>
+                <li>识别延迟和撤销时刻</li>
+              </ul>
+            </section>
+            <section class="decision-column">
+              <h3>仍然禁止推断</h3>
+              <ul>
+                <li>量化账户身份</li>
+                <li>量化成交占比约 40%</li>
+                <li>主动卖出额与真实订单失衡</li>
+                <li>盘口深度、撤单和剩余库存</li>
+                <li>慢资金已经接棒</li>
+              </ul>
+            </section>
+          </div>
+
+          <p class="key-sentence">对个人交易者真正有帮助的不是“反过来收割量化”的口号，而是把追涨杀跌冲动改造成有撤销条件的观察：看到压力加速不急着抄底；看到一根反弹不急着宣布修复；看到第二轮结构时，承认风险仍在。</p>
+
+          <h3>建议的后续接入条件</h3>
+          <ol class="plain-list">
+            <li>先扩大到跨指数、跨波动个股和更多普通下跌日，估计误报与识别延迟分布。</li>
+            <li>把固定 80bp 材料强度改成按目标自身历史波动标准化的相对阈值。</li>
+            <li>只有保护样本误报可控、并且风险字段稳定早于完整曲线出现，才进入日报研究段。</li>
+            <li>即使接入，仍只输出三轴观察和缺失原因，不直接生成仓位或买卖动作。</li>
+          </ol>
+        </section>
+
+        <section class="paper-section" id="limits">
+          <span class="section-kicker">07 · LIMITATIONS & CONCLUSION</span>
+          <h2>局限与结论</h2>
+          <ul class="limitation-list">
+            <li><span>L01</span><div><strong>样本太小。</strong> 两个压力正例和三个保护样本只能验证计算契约与事件顺序，不能估计命中率。</div></li>
+            <li><span>L02</span><div><strong>80bp 未按波动标准化。</strong> 指数与高波动个股使用同一绝对材料强度，不代表相同经济含义。</div></li>
+            <li><span>L03</span><div><strong>变化点确认偏慢。</strong> 兆易样本直到 13:20 才确认候选，尚未证明具有足够早的退潮预警价值。</div></li>
+            <li><span>L04</span><div><strong>公式误差并非独立。</strong> 五分钟残差自相关、网格择优和参数边界都会让 AICc 的解释比教科书条件更弱。</div></li>
+            <li><span>L05</span><div><strong>订单层证据缺失。</strong> OHLCV 与成交额无法恢复账户类别、主动买卖方向、盘口深度或真实触发链。</div></li>
+            <li><span>L06</span><div><strong>来源核验仍有边界。</strong> 原始源行 SHA 依赖采集时声明，两份指数样本缺少独立日成交额参考。</div></li>
+          </ul>
+
+          <div class="conclusion">
+            <h3>最终结论</h3>
+            <p>“鸭蛋弧”不是错觉，但它应被重新定义为<strong>压力生命周期的视觉外观</strong>，而不是量化身份的指纹。当前最有研究价值的不是选出椭圆、根号或指数中的唯一赢家，而是维护一套有因果时间、有保护样本、有空值原因、可以撤销的阶段识别框架。</p>
+            <p>因此，本轮只保留一个盘中主框架：三条判断轴加事件生命周期；同时保留全部公式作为收盘后竞争假说。前者回答“现在发生到哪一步”，后者只回答“整天看起来更像什么”。</p>
+          </div>
+        </section>
+
+        <section class="paper-section" id="appendix">
+          <span class="section-kicker">APPENDIX · FORMULA TOOLBOX</span>
+          <h2>公式附录：每个变量究竟代表什么</h2>
+          <div class="formula-list">
+            <div class="formula-row">
+              <div>
+                <h3>滚动对数斜率</h3>
+                <span class="formula-expression">β = Cov(i, ln Cᵢ) / Var(i)</span>
+              </div>
+              <p><code>Cᵢ</code> 是第 i 根五分钟收盘价。输出乘以 10,000，单位是 bp / 5分钟。它描述最近窗口的速度，不直接描述事件结构。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>变化点 BIC</h3>
+                <span class="formula-expression">ΔBIC = BIC(linear) − BIC(segmented)</span>
+              </div>
+              <p>比较无变化直线与连续折线，并要求同一候选连续三次出现。候选时间与实际发现时间分开保存，避免未来回填。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>成交冲击代理</h3>
+                <span class="formula-expression">I = 10⁴[−Δln C]₊ / Amount(亿元)</span>
+              </div>
+              <p>表示每亿元无方向总成交对应的净下跌基点。它不是主动卖出额、订单流失衡或真实 q/L。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>修复比例</h3>
+                <span class="formula-expression">Rₜ = (Cₜ − L₁) / (A₁ − L₁)</span>
+              </div>
+              <p><code>A₁</code> 是第一轮锚点，<code>L₁</code> 是固定的第一轮低点。创新低时 R 可以为负，不截成 0；完全修复可以超过 1。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>椭圆 / 根号代理</h3>
+                <span class="formula-expression">y(t) = a + b[1 − √(1 − (t/tc)²)]</span>
+              </div>
+              <p>描述有限区间中曲率逐步增强的外观。它能检验“鸭蛋弧”直觉，但 tc 和 b 的拟合不等于真实触发阈值或卖压库存。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>指数形状</h3>
+                <span class="formula-expression">y(t) = a + b[exp(kt) − 1]</span>
+              </div>
+              <p>描述变化速度按比例放大。5·21 上证样本内第一，但与椭圆代理区分较弱，不能因此确认指数式自激机制。</p>
+            </div>
+            <div class="formula-row">
+              <div>
+                <h3>AICc</h3>
+                <span class="formula-expression">AICc = n ln(SSE/n) + 2k + 2k(k+1)/(n−k−1)</span>
+              </div>
+              <p><code>n</code> 是观测数，<code>k</code> 包含残差方差。排名使用未舍入值；若存在零残差模型，则停止整组排名。</p>
+            </div>
+          </div>
+
+          <h3>数据与复现信息</h3>
+          <p class="provenance">输入格式 quant_pressure_replay.v1 · 输出格式 quant_pressure_replay_result.v1 · 配置 research.v1.1 · 五分钟源：新浪接口冻结行 · 独立日线交叉核对：腾讯日线 · 博云新材量额覆盖约 99.7859%，标记为 partial · runtime SHA256 31604e989a6e7a79398ad139a247c1982a6d5b5d9481000c77ed872e393d333b · tests SHA256 db0419f59f5e7ac4018ac1a4d3b285dbbbc83c63ebd29d24f98f9ba2051671b8</p>
+        </section>
+      </article>
+    </div>
+
+    <footer class="report-footer">
+      本报告是离线研究汇报，不构成量化身份确认、量化成交占比估计或交易建议。正式日报、评分、仓位和买卖动作均未接入。
+    </footer>
+  </main>
+
+  <noscript>图表需要浏览器启用本地 JavaScript；正文、表格和结论仍可直接阅读。</noscript>
+
+  <script>
+    "use strict";
+
+    const CASES = {
+      "sh000001_20260521": {
+        name: "上证指数",
+        date: "2026-05-21",
+        role: "pressure",
+        price: [0,-3.2,-4.9,15.2,14.8,33.8,32.9,35,33.8,38.2,30.6,33,21.1,7.2,0.3,-0.3,-12.2,-7.2,3.9,0.1,-13.5,-24.5,-15.8,-42.9,-30.2,-50.2,-48.7,-33.9,-35.9,-40.2,-62.4,-58.4,-51.7,-77,-78.4,-91.4,-104.9,-113.3,-122,-137.6,-160.8,-185.9,-218.9,-190.5,-217.7,-232.6,-253.4,-249.5],
+        events: {burst: 11, cooling: 18, second: 31},
+        final: "稳定下压 · 第二轮压力 · 风险保留"
+      },
+      "sh603986_20260710": {
+        name: "兆易创新",
+        date: "2026-07-10",
+        role: "pressure",
+        price: [0,71.5,21.7,22,62,-94.4,-230.8,-216.3,-275.2,-238.1,-291.1,-289.6,-387,-436.5,-440.7,-515.7,-512.6,-413.9,-529.2,-497.6,-514.3,-485.6,-641.3,-537,-571.3,-445.7,-453.4,-557.9,-631.9,-690.3,-799.1,-846,-815.5,-811,-801.7,-894.3,-849.1,-939.8,-972.9,-818,-1037.5,-1142.6,-1116.7,-1235.9,-1257,-1274.8,-1271.7,-1343.2],
+        events: {burst: 3, cooling: 10, second: 13},
+        final: "边际降温 · 第二轮压力 · 风险保留"
+      },
+      "sh000001_20260709": {
+        name: "上证指数",
+        date: "2026-07-09",
+        role: "repair",
+        price: [0,19.5,18.9,9.2,5.6,-11.5,-15.9,5.2,4.6,9.5,-1.1,-17.3,-34.4,-35.2,-37.1,-57.9,-42.5,-64.5,-64.4,-60.2,-71.9,-81.2,-63.4,-52.9,-46.5,-12.4,3.9,-23.1,-27.9,-0.6,-10.6,16.5,28.7,50.8,60.4,80.7,83.7,88.7,102.2,83.5,97.3,113.1,119.8,132.6,152.1,167.1,151.9,157.7],
+        events: {burst: 3, cooling: 8, repair: 32},
+        final: "持续修复 · 第一轮结束 · 风险清除"
+      },
+      "sh000001_20260604": {
+        name: "上证指数",
+        date: "2026-06-04",
+        role: "protection",
+        price: [0,0.2,10.5,13.2,11.2,26.4,17.3,27.6,14.5,11.2,-3.1,8.8,-4.3,-4.3,3.3,8.8,5.3,5.5,19.3,7.4,-0.6,-1.2,-7,-2.4,-9,-20.6,-6.4,-6.6,-11.5,-11,-30,-24.9,-13.6,-24.5,-18.2,-13.3,-5.1,-1.8,-15.1,-22.3,-57.6,-41.4,-21.7,-32.7,-29.4,-22.9,-19.7,-24],
+        events: {burst: 8, cooling: 12, repair: 16},
+        final: "动力不明 · 普通回落 · 不确认交接"
+      },
+      "sz002297_20260527": {
+        name: "博云新材",
+        date: "2026-05-27",
+        role: "protection",
+        price: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+        events: {},
+        final: "证据不足 · 价格限制 · 停止排名"
+      }
+    };
+
+    const MODEL_DATA = {
+      "2026-05-21 上证指数": {strength: "弱区分", values: {exponential:0,sqrt_ellipse_proxy:2.14,segmented:7.67,gompertz:13.65,finite_time_power:31.48,linear:84.38,logarithmic:92.07}},
+      "2026-07-10 兆易创新": {strength: "中等区分", values: {segmented:0,finite_time_power:6.44,exponential:6.97,linear:7.48,logarithmic:12.83,gompertz:13.51,sqrt_ellipse_proxy:39.25}},
+      "2026-07-09 上证指数": {strength: "强区分", values: {segmented:0,gompertz:63.81,exponential:85.87,sqrt_ellipse_proxy:92.18,finite_time_power:108.20,linear:125.08,logarithmic:129.96}},
+      "2026-06-04 上证指数": {strength: "弱区分", values: {segmented:0,linear:2.88,gompertz:3.40,exponential:4.80,logarithmic:5.82,finite_time_power:7.51,sqrt_ellipse_proxy:9.27}}
+    };
+
+    const MODEL_LABELS = {
+      linear: "线性",
+      segmented: "分段",
+      finite_time_power: "幂律",
+      sqrt_ellipse_proxy: "椭圆代理",
+      exponential: "指数",
+      gompertz: "Gompertz",
+      logarithmic: "对数"
+    };
+
+    const TIMES = ["09:35","09:40","09:45","09:50","09:55","10:00","10:05","10:10","10:15","10:20","10:25","10:30","10:35","10:40","10:45","10:50","10:55","11:00","11:05","11:10","11:15","11:20","11:25","11:30","13:05","13:10","13:15","13:20","13:25","13:30","13:35","13:40","13:45","13:50","13:55","14:00","14:05","14:10","14:15","14:20","14:25","14:30","14:35","14:40","14:45","14:50","14:55","15:00"];
+
+    const SVG_NS = "http://www.w3.org/2000/svg";
+
+    function svgEl(name, attrs = {}, text = null) {
+      const element = document.createElementNS(SVG_NS, name);
+      Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, String(value)));
+      if (text !== null) element.textContent = text;
+      return element;
+    }
+
+    function addSvgText(svg, x, y, text, className, anchor = "start") {
+      svg.appendChild(svgEl("text", {x, y, class: className, "text-anchor": anchor}, text));
+    }
+
+    function renderPathPlot(target, item) {
+      const width = 640;
+      const height = 240;
+      const margin = {top: 34, right: 18, bottom: 30, left: 52};
+      const chartW = width - margin.left - margin.right;
+      const chartH = height - margin.top - margin.bottom;
+      const minRaw = Math.min(...item.price, 0);
+      const maxRaw = Math.max(...item.price, 0);
+      const padding = Math.max(18, (maxRaw - minRaw) * 0.1);
+      const minY = minRaw - padding;
+      const maxY = maxRaw + padding;
+      const x = index => margin.left + (index / (item.price.length - 1)) * chartW;
+      const y = value => margin.top + ((maxY - value) / (maxY - minY || 1)) * chartH;
+      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${item.date}${item.name}五分钟归一化价格路径`});
+      svg.appendChild(svgEl("title", {}, `${item.date} ${item.name} 五分钟归一化价格路径`));
+      svg.appendChild(svgEl("desc", {}, `收盘路径从 ${item.price[0]} 基点变化到 ${item.price[item.price.length - 1]} 基点。${item.final}`));
+
+      for (let i = 0; i < 5; i += 1) {
+        const value = maxY - ((maxY - minY) * i / 4);
+        const yy = y(value);
+        svg.appendChild(svgEl("line", {x1: margin.left, y1: yy, x2: width - margin.right, y2: yy, class: Math.abs(value) < (maxY - minY) / 16 ? "chart-zero" : "chart-grid"}));
+        addSvgText(svg, margin.left - 8, yy + 3, `${Math.round(value)}`, "chart-label", "end");
+      }
+
+      [0, 23, 24, 47].forEach(index => {
+        const xx = x(index);
+        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: height - margin.bottom, class: "chart-grid"}));
+        const labelX = xx + (index === 23 ? -4 : index === 24 ? 4 : 0);
+        const anchor = index === 0 || index === 24 ? "start" : index === 47 || index === 23 ? "end" : "middle";
+        addSvgText(svg, labelX, height - 8, TIMES[index], "chart-label", anchor);
+      });
+
+      const pathData = item.price.map((value, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(" ");
+      const pathClass = item.role === "pressure" ? "chart-line-risk" : item.role === "repair" ? "chart-line-repair" : "chart-line-protection";
+      svg.appendChild(svgEl("path", {d: pathData, class: pathClass}));
+
+      const eventStyles = {
+        burst: {label: "首轮", color: "var(--amber)"},
+        cooling: {label: "降温", color: "var(--blue)"},
+        second: {label: "第二轮", color: "var(--red)"},
+        repair: {label: "修复确认", color: "var(--green)"}
+      };
+
+      Object.entries(item.events).forEach(([eventName, index], order) => {
+        const style = eventStyles[eventName];
+        const xx = x(index);
+        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: height - margin.bottom, class: "event-line", stroke: style.color}));
+        svg.appendChild(svgEl("circle", {cx: xx, cy: y(item.price[index]), r: 4, fill: style.color}));
+        addSvgText(svg, xx + 4, 14 + order * 11, `${style.label} ${TIMES[index]}`, "event-label");
+      });
+
+      item.price.forEach((value, index) => {
+        const point = svgEl("circle", {cx: x(index), cy: y(value), r: 7, fill: "transparent"});
+        point.appendChild(svgEl("title", {}, `${TIMES[index]} · ${value.toFixed(1)} bp`));
+        svg.appendChild(point);
+      });
+
+      target.appendChild(svg);
+    }
+
+    function buildCasePlots() {
+      const container = document.getElementById("case-plots");
+      Object.values(CASES).forEach(item => {
+        const article = document.createElement("article");
+        article.className = `case-plot ${item.role === "pressure" ? "" : "protection"}`.trim();
+        const titleRow = document.createElement("div");
+        titleRow.className = "plot-title";
+        const title = document.createElement("strong");
+        title.textContent = `${item.date} ${item.name}`;
+        const status = document.createElement("span");
+        status.textContent = item.final;
+        titleRow.append(title, status);
+        const slot = document.createElement("div");
+        slot.className = "plot-slot";
+        article.append(titleRow, slot);
+        container.appendChild(article);
+        renderPathPlot(slot, item);
+      });
+    }
+
+    function renderModelChart(target, title, item) {
+      const entries = Object.entries(item.values).sort((a, b) => a[1] - b[1]);
+      const width = 520;
+      const height = 330;
+      const margin = {top: 18, right: 58, bottom: 22, left: 100};
+      const chartW = width - margin.left - margin.right;
+      const rowH = 38;
+      const cap = 40;
+      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${title}模型ΔAICc比较`});
+      svg.appendChild(svgEl("title", {}, `${title} 模型 ΔAICc 比较`));
+      svg.appendChild(svgEl("desc", {}, `最佳模型为${MODEL_LABELS[entries[0][0]]}。数值越低越好，图形宽度在40处截断。`));
+
+      [0, 10, 20, 30, 40].forEach(value => {
+        const xx = margin.left + (value / cap) * chartW;
+        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: margin.top + rowH * entries.length, class: "chart-grid"}));
+        addSvgText(svg, xx, height - 5, `${value}`, "chart-label", "middle");
+      });
+
+      entries.forEach(([name, value], index) => {
+        const yy = margin.top + index * rowH + 6;
+        const barWidth = value === 0 ? 4 : Math.max(6, Math.min(value, cap) / cap * chartW);
+        const className = `formula-bar${index === 0 ? " best" : name === "sqrt_ellipse_proxy" ? " ellipse" : ""}`;
+        svg.appendChild(svgEl("rect", {x: margin.left, y: yy, width: barWidth, height: 22, rx: 2, class: className}));
+        addSvgText(svg, margin.left - 8, yy + 15, MODEL_LABELS[name], "formula-label", "end");
+        addSvgText(svg, margin.left + Math.min(barWidth + 6, chartW + 8), yy + 15, value.toFixed(2), "formula-value");
+      });
+      target.appendChild(svg);
+    }
+
+    function buildModelCharts() {
+      const container = document.getElementById("model-grid");
+      Object.entries(MODEL_DATA).forEach(([title, item]) => {
+        const article = document.createElement("article");
+        article.className = "model-chart";
+        const heading = document.createElement("h3");
+        const label = document.createElement("span");
+        heading.textContent = title;
+        label.textContent = item.strength;
+        heading.appendChild(label);
+        const slot = document.createElement("div");
+        slot.className = "model-svg-slot";
+        article.append(heading, slot);
+        container.appendChild(article);
+        renderModelChart(slot, title, item);
+      });
+    }
+
+    function buildTimingChart() {
+      const target = document.getElementById("timing-chart");
+      const width = 760;
+      const height = 190;
+      const margin = {left: 40, right: 40};
+      const axisY = 100;
+      const x = index => margin.left + (index / 47) * (width - margin.left - margin.right);
+      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "兆易创新压力结构与变化点确认时序"});
+      svg.appendChild(svgEl("title", {}, "兆易创新压力结构与变化点确认时序"));
+      svg.appendChild(svgEl("desc", {}, "10点出现压力加速，10点25首轮降温，10点40第二轮压力，10点50形成变化候选，13点20才确认。"));
+      svg.appendChild(svgEl("line", {x1: margin.left, y1: axisY, x2: width - margin.right, y2: axisY, class: "timeline-base"}));
+
+      const events = [
+        {index: 5, time: "10:00", label: "压力加速", color: "var(--amber)", upper: true},
+        {index: 10, time: "10:25", label: "首轮降温", color: "var(--blue)", upper: false},
+        {index: 13, time: "10:40", label: "第二轮压力", color: "var(--red)", upper: true},
+        {index: 15, time: "10:50", label: "变化候选", color: "var(--amber)", upper: false},
+        {index: 27, time: "13:20", label: "候选确认", color: "var(--green)", upper: true}
+      ];
+
+      events.forEach(event => {
+        const xx = x(event.index);
+        const labelY = event.upper ? 42 : 150;
+        svg.appendChild(svgEl("line", {x1: xx, y1: axisY, x2: xx, y2: event.upper ? 58 : 132, stroke: event.color, "stroke-width": 1.5}));
+        svg.appendChild(svgEl("circle", {cx: xx, cy: axisY, r: 7, fill: event.color, class: "timeline-node"}));
+        addSvgText(svg, xx, labelY, event.label, "timeline-text", "middle");
+        addSvgText(svg, xx, labelY + 15, event.time, "timeline-time", "middle");
+      });
+
+      const lagStart = x(15);
+      const lagEnd = x(27);
+      svg.appendChild(svgEl("line", {x1: lagStart, y1: 176, x2: lagEnd, y2: 176, stroke: "var(--red)", "stroke-width": 2}));
+      svg.appendChild(svgEl("line", {x1: lagStart, y1: 171, x2: lagStart, y2: 181, stroke: "var(--red)", "stroke-width": 2}));
+      svg.appendChild(svgEl("line", {x1: lagEnd, y1: 171, x2: lagEnd, y2: 181, stroke: "var(--red)", "stroke-width": 2}));
+      addSvgText(svg, (lagStart + lagEnd) / 2, 172, "确认延迟 12 bars / 60交易分钟", "timeline-time", "middle");
+      target.appendChild(svg);
+    }
+
+    document.getElementById("print-report").addEventListener("click", () => window.print());
+    buildCasePlots();
+    buildModelCharts();
+    buildTimingChart();
+  </script>
+</body>
+</html>

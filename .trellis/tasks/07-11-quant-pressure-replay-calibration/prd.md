@@ -1,6 +1,6 @@
 # 量化压力阶段离线回放校准
 
-状态：✅ 实现与提交前审计完成（待用户确认提交）
+状态：✅ 已提交；HTML 研究汇报已生成
 
 ## Goal
 
@@ -93,7 +93,7 @@
 - [x] 新增测试和限定回归测试通过。
 - [x] `git diff --check` 通过。
 - [x] PRD 状态改为 `✅ 实现与提交前审计完成`。
-- [ ] 用户确认提交后，补充落地 commit。
+- [x] 用户确认提交后，补充落地 commit。
 
 ## Out Of Scope
 
@@ -126,6 +126,7 @@
 - `.generated/venv-py314/bin/python3.14 -m unittest tests.test_quant_pressure_replay_runtime`
 - `.generated/venv-py314/bin/python3.14 scripts/research/quant_pressure_replay_runtime.py --fixtures tests/fixtures/quant_pressure_replay`
 - `git diff --check -- scripts/research/quant_pressure_replay_runtime.py tests/test_quant_pressure_replay_runtime.py tests/fixtures/quant_pressure_replay .trellis/tasks/07-11-quant-pressure-replay-calibration`
+- `reports/research/quant-pressure-replay-study-20260711.html` 使用 HTML parser、浏览器桌面/移动视口和横向溢出检查验证。
 
 ### 2026-07-11 Fresh Evidence
 
@@ -140,4 +141,4 @@
 
 ## 落地 commit
 
-待用户提交后回填。
+`43911824e56afed53d5f8b307f905becf085ab65` (`feat(research): add quant pressure replay calibration`)
