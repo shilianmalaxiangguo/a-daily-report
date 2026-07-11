@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
-- **Last Active**: 2026-06-23
+- **Total Sessions**: 6
+- **Last Active**: 2026-07-11
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~185 | Active |
+| `journal-1.md` | ~219 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 6 | 2026-07-11 | 量化压力回放校准与HTML研究汇报 | `43911824`, `0568e125` | `develop` |
 | 5 | 2026-06-23 | 日报HTML盘面反馈复盘模块 | `026d0a6d` | `develop` |
 | 4 | 2026-06-13 | 板块资金扩散生成前审计 Spec | `68fd9304` | `codex/sector-capital-flow-preflight-spec` |
 | 3 | 2026-06-13 | 日报淘汰赛证据链与反伪精确收口 | `44e62da0` | `develop` |

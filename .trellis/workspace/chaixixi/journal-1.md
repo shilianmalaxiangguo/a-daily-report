@@ -183,3 +183,37 @@ Bear/readable 日报 HTML 新增盘面反馈复盘图卡：从标准 Markdown �
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 量化压力回放校准与HTML研究汇报
+
+**Date**: 2026-07-11
+**Task**: 量化压力回放校准与HTML研究汇报
+**Branch**: `develop`
+
+### Summary
+
+完成五案例五分钟因果前缀回放、三轴压力阶段判断、事后公式比较与提交前独立审计；生成并验证论文式HTML研究汇报。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `43911824` | (see git log) |
+| `0568e125` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
