@@ -14,6 +14,7 @@ from domains.execution_chain.entry_plan_nodes.conclusion import build_entry_plan
 from domains.execution_chain.entry_plan_nodes.stop_anchor import build_entry_plan_stop_anchor_node
 from domains.execution_chain.entry_plan_nodes.trigger_summary import build_entry_plan_trigger_summary_node
 from execution.entry_cycle_stop_runtime import build_entry_cycle_stop_policy
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class EntryPlanNodeRuntimeTest(unittest.TestCase):
@@ -129,6 +130,40 @@ class EntryPlanNodeRuntimeTest(unittest.TestCase):
         self.assertIn("重点过程候选", rendered)
         self.assertNotIn("**明日继续观察**", rendered)
         self.assertNotIn("等观察位出现", rendered)
+
+    def test_trigger_summary_positive_output_uses_two_b_wording(self):
+        context = {
+            "position_level": "50%条件执行",
+            "final_gate": {"can_new_entry": True},
+            "executable_stocks": [
+                {
+                    "name": "太极实业",
+                    "code": "600667",
+                    "permission_label": "执行资格",
+                    "trigger": "承接确认",
+                    "minute_plan": {"confirm_price_60m": 29.96},
+                    "stop_plan": {"effective_stop": 28.9},
+                    "position_pct": 50,
+                }
+            ],
+            "waiting_stocks": [],
+            "untradable_stocks": [],
+            "rejected_stocks": [],
+            "build_stop_execution_plan": lambda *args, **kwargs: {},
+            "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                "compact_text": "盯29.96与28.90",
+            },
+            "build_observation_price_focus_text": lambda price_focus: price_focus.get("compact_text", "-"),
+            "append_price_focus_note": lambda report_lines, price_focus: None,
+            "append_observation_price_focus_note": lambda report_lines, price_focus: None,
+            "compose_observation_focus_text": lambda confirm_text, focus_text: f"09:50-10:10观察价{confirm_text}；{focus_text}",
+        }
+
+        rendered = "\n".join(build_entry_plan_trigger_summary_node(context)["lines"])
+
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, rendered)
+        self.assertNotIn("满足条件即可买入", rendered)
+        self.assertNotIn("按承接确认执行", rendered)
 
     def test_entry_conclusion_names_layered_participation_windows_not_universal_wait(self):
         context = {

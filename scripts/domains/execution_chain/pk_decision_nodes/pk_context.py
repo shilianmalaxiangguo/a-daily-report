@@ -1,4 +1,5 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     blocked_current_observation_keys,
     candidate_can_be_current_observation_target,
@@ -329,10 +330,10 @@ def build_pk_decision_pk_context_node(context, node_meta=None, node_lookup=None)
             if should_surface_price_note(price_focus):
                 conclusion_lines.append(f"- **价格怎么看**: {price_focus.get('note_text', '-')}")
             conclusion_lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-            conclusion_lines.append("- **出手时怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口分层参与，买后用失效价和单笔-5%底线处理风险；其他标的无论多诱人都**禁止操作**")
+            conclusion_lines.append(f"- **出手时怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；买后用失效价和单笔-5%底线处理风险；其他标的无论多诱人都**禁止操作**")
         else:
             conclusion_lines.append(f"- **如果要买只买谁**: {best_stock.get('name')}({best_stock.get('code')})")
-            conclusion_lines.append("- **出手时怎么做**: 明日按固定交易窗口条件触发，买后用失效价和单笔-5%底线处理风险，其他标的禁止操作")
+            conclusion_lines.append(f"- **出手时怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后用失效价和单笔-5%底线处理风险，其他标的禁止操作")
     else:
         if ten_confirm_upgrade_candidate:
             conclusion_lines.append(

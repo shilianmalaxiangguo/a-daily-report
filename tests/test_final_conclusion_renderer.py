@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 ACTION_TEXT = "只买军工一号，固定交易窗口条件满足后执行"
 
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
 from report.final_conclusion_renderer import build_legacy_final_conclusion_lines
 from report.conclusion_support import (
     build_candidate_trade_directive,
@@ -63,12 +64,12 @@ class FinalConclusionRendererTest(unittest.TestCase):
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 环境与跟随裁决 |", rendered)
         self.assertIn("| 明天观察池 | 军工一号(000001)：已缩成明天唯一执行候选 |", rendered)
-        self.assertIn("| 唯一动作 | 军工一号(000001)；按固定交易窗口条件触发 |", rendered)
+        self.assertIn(f"| 唯一动作 | 军工一号(000001)；{PREMARKET_50_TRIGGER_TEXT} |", rendered)
         self.assertIn("| 明日策略 | 唯一标的条件触发：只操作军工一号", rendered)
         self.assertNotIn("stage_key", rendered)
         self.assertNotIn("Step 4.5", rendered)
 
-    def test_full_mode_keeps_inferred_default_old_position(self):
+    def test_full_mode_does_not_render_inferred_plan_as_confirmed_old_position(self):
         lines = build_legacy_final_conclusion_lines(
             {
                 "display_mvp_mode": False,
@@ -78,7 +79,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
                 "final_gate": {"can_new_entry": False, "should_reduce": True},
                 "existing_position_summary": {
                     "has_position": True,
-                    "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
+                    "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Te执行资格",
                     "inferred_from_previous_report": True,
                     "position_source": "previous_report_target_default_1x",
                 },
@@ -90,10 +91,10 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 今日关注标的 | 旧仓处理：持有太极实业(600667)，100%仓位", rendered)
-        self.assertIn("| 操作风格 | 旧仓处理 |", rendered)
-        self.assertIn("不新增参与，先处理旧仓：持有太极实业(600667)", rendered)
-        self.assertNotIn("| 操作风格 | 空仓 |", rendered)
+        self.assertNotIn("旧仓处理：持有太极实业(600667)", rendered)
+        self.assertNotIn("| 操作风格 | 旧仓处理 |", rendered)
+        self.assertNotIn("先处理旧仓：持有太极实业(600667)", rendered)
+        self.assertIn("| 操作风格 | 空仓 |", rendered)
 
     def test_full_mode_keeps_new_target_actionable_with_inferred_default_old_position(self):
         context = {
@@ -118,7 +119,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
             },
             "existing_position_summary": {
                 "has_position": True,
-                "summary": "持有太极实业(600667)，100%仓位；上一份日报明日标的默认1x旧仓；新仓是否叠加单独看Tb/Tc资格",
+                "summary": "持有太极实业(600667)，100%仓位；上一份日报明日标的默认1x旧仓；新仓是否叠加单独看Te执行资格",
                 "inferred_from_previous_report": True,
                 "position_source": "previous_report_target_default_1x",
                 "default_position_pct": 100.0,
@@ -142,10 +143,10 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(build_legacy_final_conclusion_lines(context))
 
-        self.assertIn("| 今日关注标的 | 工业富联(601138)：明日目标标的，固定交易窗口内条件成立才执行 |", rendered)
+        self.assertIn(f"| 今日关注标的 | 工业富联(601138)：明日目标标的，{PREMARKET_50_TRIGGER_TEXT} |", rendered)
         self.assertIn("| 操作风格 | 条件进攻 |", rendered)
-        self.assertIn("| 唯一动作 | 工业富联(601138)；按固定交易窗口条件确认，不满足回到0% |", rendered)
-        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的在固定交易窗口内满足条件 |", rendered)
+        self.assertIn(f"| 唯一动作 | 工业富联(601138)；{PREMARKET_50_TRIGGER_TEXT} |", rendered)
+        self.assertIn(f"| 明日买点预计算 | 条件进攻；只等明日目标标的{PREMARKET_50_TRIGGER_TEXT} |", rendered)
         self.assertNotIn("| 操作风格 | 旧仓处理 |", rendered)
         self.assertNotIn("| 唯一动作 | 旧仓处理：持有太极实业", rendered)
         self.assertNotIn("先处理旧仓风险", rendered)
@@ -179,7 +180,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("| 项目 | 明日指引 |", rendered)
         self.assertIn("| 主看方向 | 军工 / 高端装备 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发 |", rendered)
+        self.assertIn(f"| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发；{TWO_B_CONFIRMATION_CLAUSE} |", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertIn("| 操作风格 | 短线 |", rendered)
         self.assertIn("| 盈亏比约束 | 预估赚赔比 1:2.4", rendered)
@@ -261,7 +262,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         )
 
         rendered = "\n".join(lines)
-        self.assertIn("| 今日关注标的 | 汇源通信(000586)：明日目标标的，固定交易窗口内条件成立才执行 |", rendered)
+        self.assertIn(f"| 今日关注标的 | 汇源通信(000586)：明日目标标的，{PREMARKET_50_TRIGGER_TEXT} |", rendered)
         self.assertNotIn("景兴纸业(002067)：主线核心候选", rendered)
 
     def test_selected_target_stays_observation_when_position_decision_is_zero(self):
@@ -463,7 +464,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("明日目标标的保留50%条件执行：只看000586 汇源通信", rendered)
         self.assertIn("| 明日风险预判 | 固定交易窗口内条件不成立就回到0%，只接受小亏试错，不接受大亏硬扛 |", rendered)
-        self.assertIn("| 明日买点预计算 | 条件进攻；只等明日目标标的在固定交易窗口内满足条件 |", rendered)
+        self.assertIn(f"| 明日买点预计算 | 条件进攻；只等明日目标标的{PREMARKET_50_TRIGGER_TEXT} |", rendered)
         self.assertNotIn("旧结论：空仓等待", rendered)
         self.assertNotIn("旧风险：0%", rendered)
         self.assertNotIn("旧买点：不开新仓", rendered)
@@ -575,7 +576,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 最终结论", rendered)
         self.assertIn("| 项目 | 明日指引 |", rendered)
-        self.assertIn("| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发 |", rendered)
+        self.assertIn(f"| 如果要买只买谁 | 军工一号(000001)，按09:30-09:35竞价/开盘前几分钟/回封，或09:50-10:10窗口触发；{TWO_B_CONFIRMATION_CLAUSE} |", rendered)
         self.assertIn(f"| 明日唯一动作 | {ACTION_TEXT} |", rendered)
         self.assertNotIn("| 主看方向 |", rendered)
         self.assertNotIn("| 执行纪律 |", rendered)
@@ -593,7 +594,7 @@ class FinalConclusionRendererTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口", rendered)
-        self.assertIn("不满足固定交易窗口条件就回到0%", rendered)
+        self.assertIn("不满足执行资格就回到0%", rendered)
         self.assertNotIn("明日前30分钟先确认环境", rendered)
         self.assertNotIn("买点一律" + "等60" + "分钟确认", rendered)
 

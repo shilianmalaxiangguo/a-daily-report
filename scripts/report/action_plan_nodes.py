@@ -1,4 +1,5 @@
 from report.candidate_quality_renderer import COMPACT_CANDIDATE_TABLE_FIELDS, render_candidate_quality_section
+from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 from report.sniper_target_derivation import (
     build_sniper_target_derivation_packet,
     compact_section as _sniper_target_derivation_compact_section,
@@ -312,12 +313,23 @@ def build_action_plan_overview_node(context, node_meta=None, node_lookup=None):
         "lines": [
             f"#### {section_title}",
             "> **先看结论**：明天只执行唯一动作，或者只观察。",
-            "> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序，不临场改单。",
+            f"> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序；{TWO_B_CONFIRMATION_CLAUSE}；不临场改单。",
             "",
         ],
         "exports": {},
         "module_logs": [],
     }
+
+
+def _action_text_with_two_b_clause(value):
+    text = str(value or "-").strip() or "-"
+    if "B1" in text or "B2" in text:
+        return text
+    if any(marker in text for marker in ("暂无", "没有", "不新增", "只观察", "不参与", "空仓", "退出")):
+        return text
+    if any(marker in text for marker in ("执行", "参与", "买", "操作")):
+        return f"{text}；{TWO_B_CONFIRMATION_CLAUSE}"
+    return text
 
 
 def build_action_plan_candidate_quality_node(context, node_meta=None, node_lookup=None):
@@ -422,7 +434,7 @@ def build_action_plan_table_node(context, node_meta=None, node_lookup=None):
     if action_rows:
         for row in action_rows:
             lines.append(
-                f"| {row.get('action', '-')} | {row.get('name', '-')} | {row.get('code', '-')} | "
+                f"| {_action_text_with_two_b_clause(row.get('action', '-'))} | {row.get('name', '-')} | {row.get('code', '-')} | "
                 f"{row.get('trigger', '-')} | {row.get('risk_window', '-')} |"
             )
     else:

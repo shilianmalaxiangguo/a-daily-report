@@ -7,11 +7,26 @@ from pathlib import Path
 from typing import Any, Callable
 
 from daily_report_entry_demo import replay_from_snapshot
-from daily_report_render import assert_report_required_facts_complete, build_report_outputs, save_report_outputs
+from daily_report_render import (
+    assert_report_required_facts_complete,
+    build_report_outputs,
+    read_verified_saved_report_markdown,
+    save_report_outputs,
+)
 from observability.opik_runtime import build_report_run_observer
 from observability.report_quality import build_report_quality_score, persist_report_quality_score
 from report.decision_ledger import write_decision_ledger_artifacts_from_markdown_report
+from report.position_context import (
+    existing_position_summary_from_context,
+    extract_position_timeline_markdown,
+    normalize_inferred_previous_target_records,
+    prepend_position_timeline_markdown,
+)
 from report.report_run_audit import audit_daily_report_run
+from report.market_language_translation_artifacts import (
+    prepare_market_language_translation,
+    write_replay_market_language_translation,
+)
 
 
 @dataclass(frozen=True)
@@ -26,11 +41,18 @@ class DailyReportAgentRequest:
 @dataclass(frozen=True)
 class DailyReportAgentDependencies:
     load_data: Callable[[DailyReportAgentRequest], dict[str, Any]] | None = None
+    prepare_market_language_translation: Callable[..., dict[str, Any]] = (
+        prepare_market_language_translation
+    )
     build_report_outputs: Callable[..., dict[str, str]] = build_report_outputs
     save_report_outputs: Callable[..., dict[str, str]] = save_report_outputs
+    write_replay_market_language_translation: Callable[..., dict[str, Any]] = (
+        write_replay_market_language_translation
+    )
     write_decision_ledger_from_markdown: Callable[..., dict[str, Any]] = (
         write_decision_ledger_artifacts_from_markdown_report
     )
+    render_position_strategy_report: Callable[..., str] | None = None
     audit_run: Callable[..., dict[str, Any]] = audit_daily_report_run
     build_observer: Callable[..., Any] = build_report_run_observer
     now: Callable[[], datetime] = datetime.now
@@ -57,6 +79,19 @@ class UnsupportedRunModeError(RunnerFailure):
     code = "unsupported_run_mode"
 
 
+class ReportAcceptanceError(RunnerFailure):
+    code = "report_acceptance_failed"
+
+    def __init__(self, audit_result: dict[str, Any]):
+        self.audit_result = audit_result
+        details = []
+        for finding in audit_result.get("findings") or []:
+            code = str(finding.get("code") or self.code).strip()
+            message = str(finding.get("message") or "").strip()
+            details.append(f"{code}: {message}" if message else code)
+        super().__init__("；".join(details) or "日报检查未通过，停止生成")
+
+
 class DailyReportAgentRunner:
     def __init__(
         self,
@@ -79,6 +114,8 @@ class DailyReportAgentRunner:
         output_paths: dict[str, str] = {}
         decision_ledger_result: dict[str, Any] | None = None
         audit_result: dict[str, Any] | None = None
+        market_language_translation: dict[str, Any] = {}
+        market_language_storage: dict[str, Any] = {}
         observer = self.dependencies.build_observer(
             run_name=f"daily-report.agent.{request.target_date}",
             trace_input={
@@ -91,6 +128,8 @@ class DailyReportAgentRunner:
         )
 
         try:
+            if request.mode != "replay":
+                raise UnsupportedRunModeError("当前 runner 仅支持 replay 模式")
             load_data = self.dependencies.load_data or _default_load_data
             data = load_data(request) or {}
             observer.record_step(
@@ -101,13 +140,43 @@ class DailyReportAgentRunner:
             )
             if request.mode == "replay" and not data:
                 raise ReplayDataMissingError(f"回放数据不存在，停止生成：{request.target_date}")
+            normalize_inferred_previous_target_records(data)
+            market_language_translation = self.dependencies.prepare_market_language_translation(
+                data,
+                target_date=request.target_date,
+                analysis_mode=request.mode,
+                root_dir=self.root_dir,
+            )
             report_outputs = self.dependencies.build_report_outputs(
                 data,
                 request.target_date,
                 run_mode=request.mode,
                 emit_preflight=False,
                 persist_runtime_artifacts=False,
+                market_language_translation=market_language_translation,
             )
+            if existing_position_summary_from_context(data):
+                render_position_strategy = self.dependencies.render_position_strategy_report
+                if render_position_strategy is None:
+                    from portfolio.position_strategy_report import render_position_strategy_report
+
+                    render_position_strategy = render_position_strategy_report
+                position_report_text = render_position_strategy(
+                    data,
+                    request.target_date,
+                    [],
+                    source_report_markdown=_select_full_report_markdown(report_outputs, ""),
+                    output_root=run_dir,
+                    prefer_postgres_history=True,
+                )
+                position_timeline = extract_position_timeline_markdown(position_report_text)
+                if position_timeline:
+                    report_outputs = dict(report_outputs)
+                    full_key = "full" if "full" in report_outputs else next(iter(report_outputs), "full")
+                    report_outputs[full_key] = prepend_position_timeline_markdown(
+                        report_outputs.get(full_key, ""),
+                        position_timeline,
+                    )
             observer.record_step(
                 "build_report_outputs",
                 status="success",
@@ -121,6 +190,24 @@ class DailyReportAgentRunner:
                 input_payload={"target_date": request.target_date, "mode": request.mode},
                 output_payload={"result": "facts_complete"},
             )
+            full_markdown = _select_full_report_markdown(report_outputs, "")
+            pre_save_audit = self.dependencies.audit_run(
+                target_date=request.target_date,
+                data=data,
+                report_markdown=full_markdown,
+                source_path=_planned_full_report_path(run_dir, request.target_date, request.mode),
+                prefer_postgres_history=True,
+                decision_ledger_result=None,
+                decision_ledger_required=False,
+            )
+            observer.record_step(
+                "pre_save_audit",
+                status="success" if pre_save_audit.get("passed") else "error",
+                input_payload={"target_date": request.target_date},
+                output_payload=_compact_audit(pre_save_audit),
+            )
+            if not pre_save_audit.get("passed"):
+                raise ReportAcceptanceError(pre_save_audit)
             output_paths = self.dependencies.save_report_outputs(
                 report_outputs,
                 request.target_date,
@@ -134,7 +221,10 @@ class DailyReportAgentRunner:
                 output_payload={"output_variants": list(output_paths.keys())},
             )
             full_report_path = _select_full_report_path(output_paths)
-            full_markdown = _select_full_report_markdown(report_outputs, full_report_path)
+            saved_full_markdown = read_verified_saved_report_markdown(
+                full_report_path,
+                full_markdown,
+            )
 
             if request.update_decision_ledger and full_report_path:
                 decision_ledger_result = self.dependencies.write_decision_ledger_from_markdown(
@@ -155,7 +245,9 @@ class DailyReportAgentRunner:
             audit_result = self.dependencies.audit_run(
                 target_date=request.target_date,
                 data=data,
-                report_markdown=full_markdown,
+                report_markdown=saved_full_markdown,
+                source_path=full_report_path,
+                prefer_postgres_history=True,
                 decision_ledger_result=decision_ledger_result,
                 decision_ledger_required=request.update_decision_ledger,
             )
@@ -167,6 +259,14 @@ class DailyReportAgentRunner:
             )
             if not audit_result.get("passed"):
                 status = "needs_review"
+            elif request.mode == "replay":
+                market_language_storage = (
+                    self.dependencies.write_replay_market_language_translation(
+                        market_language_translation,
+                        root_dir=self.root_dir,
+                    )
+                    or {}
+                )
         except Exception as exc:
             status = "error"
             error = {"type": type(exc).__name__, "message": str(exc)}
@@ -177,20 +277,23 @@ class DailyReportAgentRunner:
                 output_payload={},
                 error=exc,
             )
-            finding_code = exc.code if isinstance(exc, RunnerFailure) else "runner_error"
-            audit_result = {
-                "target_date": request.target_date,
-                "passed": False,
-                "usable": False,
-                "findings": [
-                    {
-                        "source": "runner",
-                        "code": finding_code,
-                        "message": str(exc),
-                    }
-                ],
-                "finding_count": 1,
-            }
+            if isinstance(exc, ReportAcceptanceError):
+                audit_result = exc.audit_result
+            else:
+                finding_code = exc.code if isinstance(exc, RunnerFailure) else "runner_error"
+                audit_result = {
+                    "target_date": request.target_date,
+                    "passed": False,
+                    "usable": False,
+                    "findings": [
+                        {
+                            "source": "runner",
+                            "code": finding_code,
+                            "message": str(exc),
+                        }
+                    ],
+                    "finding_count": 1,
+                }
 
         finished_at = self.dependencies.now().isoformat(timespec="seconds")
         payload = {
@@ -203,6 +306,7 @@ class DailyReportAgentRunner:
             "outputs": output_paths,
             "audit": audit_result,
             "decision_ledger": _compact_decision_ledger(decision_ledger_result),
+            "market_language_translation": market_language_storage,
             "error": error,
         }
         report_quality_score = build_report_quality_score(
@@ -261,6 +365,11 @@ def _select_full_report_path(output_paths: dict[str, str]) -> str:
     if output_paths:
         return next(iter(output_paths.values()))
     return ""
+
+
+def _planned_full_report_path(run_dir: Path, target_date: str, mode: str) -> str:
+    suffix = "_replay" if mode == "replay" else ""
+    return str(run_dir / f"{target_date}_A股日报_完整版{suffix}.md")
 
 
 def _select_full_report_markdown(report_outputs: dict[str, str], full_report_path: str) -> str:

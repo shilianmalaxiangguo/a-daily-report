@@ -344,6 +344,7 @@ with patch.object(
     result = daily_report_entry_demo.get_daily_data("2026-04-22")
 
 assert precheck_mock.call_count == 1
+assert precheck_mock.call_args.kwargs == {"timeout_seconds": daily_report_entry_demo.TUSHARE_PROVIDER_PRECHECK_TIMEOUT_SECONDS}
 assert runtime_mock.call_args[0] == ("2026-04-22",)
 assert "helpers" in runtime_mock.call_args.kwargs
 assert "get_new_high_feedback_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
@@ -352,6 +353,30 @@ assert "get_etf_turnover_series_from_sina_first" in runtime_mock.call_args.kwarg
 assert "get_price_band_style_series_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_margin_pressure_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
 assert "get_csi1000_from_tushare_first" in runtime_mock.call_args.kwargs["helpers"]
+assert result["target_date"] == "2026-04-22"
+"""
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_get_daily_data_can_reuse_passed_tushare_source_health(self):
+        result = _run_legacy_entry_probe(
+            """
+import daily_report_entry_demo
+
+with patch.object(
+    daily_report_entry_demo,
+    "check_tushare_runtime_ready",
+    side_effect=AssertionError("duplicate Tushare precheck"),
+) as precheck_mock, patch.object(
+    daily_report_entry_demo,
+    "run_input_runtime",
+    return_value={"target_date": "2026-04-22", "module_logs": []},
+) as runtime_mock:
+    result = daily_report_entry_demo.get_daily_data("2026-04-22", skip_tushare_precheck=True)
+
+assert precheck_mock.call_count == 0
+assert runtime_mock.call_args[0] == ("2026-04-22",)
 assert result["target_date"] == "2026-04-22"
 """
         )

@@ -10,6 +10,7 @@ switching, report variants, and persistence.
 
 from __future__ import annotations
 
+import copy
 import os
 import re
 from pathlib import Path
@@ -24,7 +25,13 @@ from knowledge.topic_lifecycle import (
 )
 from hooks.report.use_report_sections import build_daily_discipline_note
 from report.html_report_view import build_daily_report_view, missing_required_fact_labels
+from report.position_context import (
+    extract_position_timeline_markdown,
+    normalize_inferred_previous_target_records,
+    prepend_position_timeline_markdown,
+)
 from report.surface_wording import sanitize_user_visible_text
+from domains.market_state.market_language_translation import canonical_market_language_hash
 try:
     import daily_report_analysis_utils as analysis_utils
 except ImportError:  # pragma: no cover - local compatibility shim for this repo snapshot
@@ -37,6 +44,30 @@ REPORT_VARIANT_SUMMARY = "summary"
 REPORT_VARIANT_LIGHTWEIGHT = "lightweight"
 REPORT_VARIANT_EVIDENCE_APPENDIX = "evidence_appendix"
 REPORT_VARIANT_RUN_LOG = "run_log"
+
+
+class SavedReportVerificationError(RuntimeError):
+    """Raised when a saved report cannot be verified against its accepted text."""
+
+
+def read_verified_saved_report_markdown(report_path, expected_markdown):
+    path_text = str(report_path or "").strip()
+    if not path_text:
+        raise SavedReportVerificationError("保存后的完整版日报路径缺失，研究证据不写入")
+    path = Path(path_text)
+    try:
+        saved_markdown = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise SavedReportVerificationError(
+            "保存后的完整版日报无法读取，研究证据不写入"
+        ) from exc
+    if saved_markdown != str(expected_markdown or ""):
+        raise SavedReportVerificationError(
+            "保存后的完整版日报与检查通过的正文不一致，研究证据不写入"
+        )
+    return saved_markdown
+
+
 REPORT_COMPANION_DOCS = "companion_docs"
 CRITICAL_REPORT_DATA_FIELDS = (
     ("两市成交额", "total_turnover"),
@@ -1442,6 +1473,7 @@ def _render_report_with_display_mode(
     emit_helper_diagnostics: bool = True,
     shared_runtime_cache: dict | None = None,
     postgres_only: bool = False,
+    market_language_translation: dict | None = None,
 ) -> str:
     import daily_report_entry_demo as _demo
 
@@ -1469,6 +1501,7 @@ def _render_report_with_display_mode(
             persist_candidate_traces=persist_candidate_traces,
             candidate_trace_root_dir=candidate_trace_root_dir,
             postgres_only=postgres_only,
+            market_language_translation=market_language_translation,
         )
     finally:
         _demo.DISPLAY_MVP_MODE = original_display_mode
@@ -1565,6 +1598,7 @@ def generate_markdown_report(
     persist_candidate_traces: bool = False,
     candidate_trace_root_dir: str | None = None,
     postgres_only: bool = False,
+    market_language_translation: dict | None = None,
 ) -> str:
     """Render the default report text.
 
@@ -1592,6 +1626,7 @@ def generate_markdown_report(
         persist_candidate_traces=persist_candidate_traces,
         candidate_trace_root_dir=candidate_trace_root_dir,
         postgres_only=postgres_only,
+        market_language_translation=market_language_translation,
     )
 
 
@@ -1605,19 +1640,27 @@ def build_report_outputs(
     emit_preflight: bool = True,
     persist_runtime_artifacts: bool = True,
     persist_decision_ledger: bool | None = None,
+    market_language_translation: dict | None = None,
 ):
     if isinstance(data, dict):
-        data["enable_selection_workflow_quote_backfill"] = True
-        if data.get("enable_selection_workflow_quote_backfill"):
-            _clear_quote_sensitive_derived_outputs(data)
+        normalize_inferred_previous_target_records(data)
     preflight = build_report_preflight(data, target_date)
     if emit_preflight:
         for line in render_report_preflight_lines(preflight):
             print(line)
     _raise_if_critical_data_missing(data, target_date, preflight=preflight)
+    if isinstance(data, dict):
+        data["enable_selection_workflow_quote_backfill"] = True
+        if data.get("enable_selection_workflow_quote_backfill"):
+            _clear_quote_sensitive_derived_outputs(data)
     shared_runtime_cache = {}
     postgres_only = bool((data or {}).get("postgres_only"))
     persist_decision_ledger = bool(persist_runtime_artifacts) if persist_decision_ledger is None else bool(persist_decision_ledger)
+    market_language_hash = (
+        canonical_market_language_hash(market_language_translation)
+        if isinstance(market_language_translation, dict)
+        else ""
+    )
     full_report = _render_report_with_display_mode(
         False,
         data,
@@ -1633,7 +1676,14 @@ def build_report_outputs(
         emit_helper_diagnostics=True,
         shared_runtime_cache=shared_runtime_cache,
         postgres_only=postgres_only,
+        market_language_translation=(
+            copy.deepcopy(market_language_translation)
+            if isinstance(market_language_translation, dict)
+            else None
+        ),
     )
+    if market_language_hash and canonical_market_language_hash(market_language_translation) != market_language_hash:
+        raise RuntimeError("市场语言研究证据在完整版渲染期间被改写，停止生成")
     summary_report = _render_report_with_display_mode(
         True,
         data,
@@ -1649,9 +1699,19 @@ def build_report_outputs(
         emit_helper_diagnostics=False,
         shared_runtime_cache=shared_runtime_cache,
         postgres_only=postgres_only,
+        market_language_translation=(
+            copy.deepcopy(market_language_translation)
+            if isinstance(market_language_translation, dict)
+            else None
+        ),
     )
+    if market_language_hash and canonical_market_language_hash(market_language_translation) != market_language_hash:
+        raise RuntimeError("市场语言研究证据在摘要版渲染期间被改写，停止生成")
     full_report = _sanitize_final_report_text(full_report, postgres_only=postgres_only)
     summary_report = _sanitize_final_report_text(summary_report, postgres_only=postgres_only)
+    position_timeline = extract_position_timeline_markdown(position_report_text)
+    if position_timeline:
+        full_report = prepend_position_timeline_markdown(full_report, position_timeline)
 
     return {
         REPORT_VARIANT_FULL: _inject_report_variant_banner(full_report, REPORT_VARIANT_FULL),

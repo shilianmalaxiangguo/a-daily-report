@@ -43,13 +43,48 @@ class TeeStream:
                 reconfigure(**kwargs)
 
 
+class RedactingLineStream:
+    def __init__(self, stream):
+        self._stream = stream
+        self._buffer = ""
+        self.encoding = getattr(stream, "encoding", "utf-8")
+        self.errors = getattr(stream, "errors", "replace")
+
+    def write(self, data):
+        text = str(data or "")
+        if not text:
+            return 0
+        self._buffer += text
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._stream.write(_redact_sensitive_text(line) + "\n")
+        return len(text)
+
+    def flush(self):
+        if self._buffer:
+            self._stream.write(_redact_sensitive_text(self._buffer))
+            self._buffer = ""
+        self._stream.flush()
+
+    def isatty(self):
+        return getattr(self._stream, "isatty", lambda: False)()
+
+    def fileno(self):
+        return self._stream.fileno()
+
+    def reconfigure(self, **kwargs):
+        reconfigure = getattr(self._stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(**kwargs)
+
+
 def _default_logs_root() -> Path:
     return Path(__file__).resolve().parents[2] / "logs"
 
 
 def _normalize_target_label(argv):
     for item in list(argv or [])[1:]:
-        text = str(item or "").strip()
+        text = _redact_sensitive_text(str(item or "").strip())
         if text and not text.startswith("-"):
             return text.replace("/", "_")
     return "adhoc"
@@ -63,9 +98,13 @@ def _normalize_exit_code(code):
     return 1
 
 
+def _redact_argv(argv):
+    return [_redact_sensitive_text(item) for item in list(argv or [])]
+
+
 def _write_run_banner(handle, *, started_at, argv, run_log_path):
     handle.write(f"[run-log] started_at={started_at}\n")
-    handle.write(f"[run-log] argv={json.dumps(list(argv or []), ensure_ascii=False)}\n")
+    handle.write(f"[run-log] argv={json.dumps(_redact_argv(argv), ensure_ascii=False)}\n")
     handle.write(f"[run-log] file={run_log_path}\n\n")
     handle.flush()
 
@@ -81,11 +120,11 @@ def _write_error_summary(error_log_path, *, started_at, failed_at, argv, run_log
     payload = {
         "started_at": started_at,
         "failed_at": failed_at,
-        "argv": list(argv or []),
+        "argv": _redact_argv(argv),
         "run_log_path": str(run_log_path),
         "error_type": error.__class__.__name__,
-        "error_message": str(error),
-        "traceback": tb_text,
+        "error_message": _redact_sensitive_text(str(error)),
+        "traceback": _redact_sensitive_text(tb_text),
     }
     error_log_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -111,9 +150,16 @@ _IMPORTANT_LINE_MARKERS = (
 def _redact_sensitive_text(text):
     value = str(text or "")
     value = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer ***", value)
-    value = re.sub(r"(token=)[^;\\s\"']+", r"\1***", value, flags=re.IGNORECASE)
+    value = re.sub(r"(token=)[^;\s\"']+", r"\1***", value, flags=re.IGNORECASE)
+    value = re.sub(r"(cookie\s*[:=]\s*)[^\n\r]+", r"\1***", value, flags=re.IGNORECASE)
+    value = re.sub(r"postgres(?:ql)?://[^\s\"']+", "postgresql://***", value, flags=re.IGNORECASE)
     value = re.sub(
-        r"((?:QUICKTINY|TUSHARE)[A-Z0-9_]*TOKEN[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;]+",
+        r"((?:[A-Z0-9_]*(?:TOKEN|COOKIE|API_KEY|DATABASE_URL|PASSWORD|SECRET))[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;]+",
+        r"\1***",
+        value,
+    )
+    value = re.sub(
+        r"((?:[A-Za-z0-9_]*(?:_token|_cookie)|api_key|database_url|password|secret)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;]+",
         r"\1***",
         value,
         flags=re.IGNORECASE,
@@ -167,7 +213,7 @@ def _build_latest_summary(
         "target_label": target_label,
         "started_at": started_at,
         "finished_at": finished_at,
-        "argv": list(argv or []),
+        "argv": _redact_argv(argv),
         "status": status,
         "exit_code": int(exit_code),
         "run_log_path": str(run_log_path),
@@ -200,15 +246,18 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
     original_stderr = sys.stderr
 
     with run_log_path.open("w", encoding="utf-8") as log_handle:
-        sys.stdout = TeeStream(original_stdout, log_handle)
-        sys.stderr = TeeStream(original_stderr, log_handle)
-        _write_run_banner(log_handle, started_at=started_at, argv=argv, run_log_path=run_log_path)
+        redacted_log_handle = RedactingLineStream(log_handle)
+        redacted_stdout = RedactingLineStream(original_stdout)
+        redacted_stderr = RedactingLineStream(original_stderr)
+        sys.stdout = TeeStream(redacted_stdout, redacted_log_handle)
+        sys.stderr = TeeStream(redacted_stderr, redacted_log_handle)
+        _write_run_banner(redacted_log_handle, started_at=started_at, argv=argv, run_log_path=run_log_path)
         try:
             exit_code = _normalize_exit_code(main_fn())
             finished_at = (now or datetime.now()).strftime("%Y-%m-%d %H:%M:%S")
             status = "success" if exit_code == 0 else "nonzero_exit"
             _write_run_footer(
-                log_handle,
+                redacted_log_handle,
                 finished_at=finished_at,
                 status=status,
                 exit_code=exit_code,
@@ -245,7 +294,7 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
                     tb_text=tb_text,
                 )
             _write_run_footer(
-                log_handle,
+                redacted_log_handle,
                 finished_at=failed_at,
                 status="success" if exit_code == 0 else "system_exit",
                 exit_code=exit_code,
@@ -281,7 +330,7 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
                 tb_text=tb_text,
             )
             _write_run_footer(
-                log_handle,
+                redacted_log_handle,
                 finished_at=failed_at,
                 status="error",
                 exit_code=1,
@@ -304,5 +353,7 @@ def run_with_log_capture(main_fn, *, argv=None, logs_root=None, now=None):
             )
             raise
         finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
             sys.stdout = original_stdout
             sys.stderr = original_stderr

@@ -115,6 +115,60 @@ class ReportRunAuditTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertIs(result["report_acceptance"], success_result)
 
+    def test_forwards_position_summary_and_source_path_to_markdown_audit(self):
+        source_path = ROOT / "reports" / "replay" / "2026-07-10_A股日报_完整版_replay.md"
+        for data in (
+            {
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "name": "长电科技",
+                        "code": "600584",
+                        "position_source": "previous_report_target_default_1x",
+                    }
+                }
+            },
+            {
+                "existing_position_summary": {
+                    "name": "长电科技",
+                    "code": "600584",
+                    "position_source": "previous_report_target_default_1x",
+                }
+            },
+        ):
+            captured = {}
+
+            def audit_markdown(
+                markdown,
+                *,
+                expected_position_summary=None,
+                source_path=None,
+                prefer_postgres_history=False,
+            ):
+                captured["summary"] = expected_position_summary
+                captured["source_path"] = source_path
+                captured["prefer_postgres_history"] = prefer_postgres_history
+                return {"passed": True, "findings": [], "finding_count": 0}
+
+            result = audit_daily_report_run(
+                target_date="2026-07-10",
+                data=data,
+                report_markdown="# report",
+                source_path=source_path,
+                prefer_postgres_history=True,
+                build_preflight=lambda data, target_date: {
+                    "status": "success",
+                    "failures": [],
+                    "checks": [],
+                },
+                audit_markdown=audit_markdown,
+                decision_ledger_result={"case_count": 1},
+            )
+
+            self.assertTrue(result["passed"])
+            self.assertEqual(captured["summary"]["code"], "600584")
+            self.assertEqual(captured["source_path"], source_path)
+            self.assertTrue(captured["prefer_postgres_history"])
+
     def test_failed_decision_ledger_fact_db_sync_fails_run_without_top_level_passed(self):
         result = audit_daily_report_run(
             target_date="2026-05-24",

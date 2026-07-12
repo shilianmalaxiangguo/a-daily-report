@@ -11,6 +11,7 @@ from report.action_plan_nodes import (
     build_action_plan_observation_blocks_node,
     build_action_plan_table_node,
 )
+from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 from domains.execution_chain.pk_decision_nodes.action_plan_context import build_action_plan_context_payload
 from selection.candidate_quality_contracts import (
     build_daily_quality_decision_panel,
@@ -71,7 +72,7 @@ class ActionPlanRendererTest(unittest.TestCase):
         rendered = "\n".join(lines)
         self.assertIn("#### 明日操作计划", rendered)
         self.assertIn("> **先看结论**：明天只执行唯一动作，或者只观察。", rendered)
-        self.assertIn("> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序，不临场改单。", rendered)
+        self.assertIn(f"> **怎么执行**：按盘前、09:30-09:35、09:50-10:10、盘中观察、14:30-14:55顺序；{TWO_B_CONFIRMATION_CLAUSE}；不临场改单。", rendered)
         self.assertIn("- **怎么执行**: 日线定环境，09:50-10:10窗口，按失效价和单笔-5%底线处理风险", rendered)
         self.assertIn("- 若你有旧仓，确认风险线是否需要上移", rendered)
         self.assertIn("| 👀 明天先盯哪只 | 军工观察 | 000002 |", rendered)
@@ -945,6 +946,79 @@ class ActionPlanRendererTest(unittest.TestCase):
         self.assertEqual([], payload.get("backup_observation_lines"))
         self.assertNotIn("确认后执行预案", rendered_rows)
         self.assertNotIn("和远气体", rendered_rows)
+
+    def test_reused_action_plan_payload_rebuilds_inferred_pending_position_wording(self):
+        payload = build_action_plan_context_payload(
+            {
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "0%不参与",
+                    },
+                    "candidate_pool": [],
+                },
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+                "has_personal_positions": True,
+                "existing_position_summary": {
+                    "has_position": False,
+                    "has_pending_position": True,
+                    "name": "长电科技",
+                    "code": "600584",
+                    "summary": "前日报计划推定，待成交确认：长电科技(600584)",
+                    "position_source": "previous_report_target_default_1x",
+                    "inferred_from_previous_report": True,
+                },
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "最终0%时只观察",
+                "action_plan_context_payload": {
+                    "action_rows": [
+                        {
+                            "action": "旧仓准备",
+                            "name": "长电科技",
+                            "code": "600584",
+                            "trigger": "已有1x，明日只处理旧仓",
+                            "risk_window": "-",
+                        }
+                    ],
+                    "observation_priority_lines": [],
+                    "backup_observation_lines": [],
+                    "position_section_lines": ["- **明日裁决**: 🟠 只处理旧仓", "- **旧仓准备**: 长电科技已有1x"],
+                    "pre_market_lines": ["- 盘前按旧仓准备"],
+                    "opening_lines": [],
+                    "first_hour_lines": [],
+                    "intraday_lines": [],
+                    "closing_lines": [],
+                    "alert_rows": [],
+                    "action_plan_context_diagnostics": {},
+                },
+            }
+        )
+
+        rendered = "\n".join(
+            payload.get("position_section_lines", [])
+            + [
+                f"{row.get('action')} {row.get('name')} {row.get('trigger')}"
+                for row in payload.get("action_rows", [])
+            ]
+            + payload.get("pre_market_lines", [])
+            + payload.get("opening_lines", [])
+            + payload.get("first_hour_lines", [])
+            + payload.get("intraday_lines", [])
+            + payload.get("closing_lines", [])
+        )
+
+        self.assertIn("0%不参与；先确认成交事实", rendered)
+        self.assertNotIn("只处理旧仓", rendered)
+        self.assertNotIn("旧仓准备", rendered)
+        self.assertNotIn("已有1x", rendered)
 
     def test_zero_final_context_time_table_keeps_process_candidates_observation_only(self):
         payload = build_action_plan_context_payload(

@@ -1,4 +1,9 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.execution_wording import PREMARKET_50_EXECUTION_TEXT, PREMARKET_50_TRIGGER_TEXT
+from report.position_context import (
+    existing_position_summary_from_context,
+    is_inferred_previous_report_position,
+)
 from domains.execution_chain.pk_decision_nodes.candidate_quality_scorecard import build_candidate_quality_scorecard_payload
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import blocked_current_observation_keys
@@ -24,13 +29,8 @@ def _format_position_display(position_level):
 
 
 def _existing_position_summary_text(context):
-    context = context or {}
-    summary = context.get("existing_position_summary")
-    if not isinstance(summary, dict):
-        personal_position_context = context.get("personal_position_context")
-        if isinstance(personal_position_context, dict):
-            summary = personal_position_context.get("existing_position_summary")
-    if not isinstance(summary, dict) or not summary.get("has_position"):
+    summary = existing_position_summary_from_context(context)
+    if is_inferred_previous_report_position(summary) or not summary.get("has_position"):
         return ""
     return str(summary.get("summary") or "").strip()
 
@@ -327,8 +327,11 @@ def _sanitize_action_plan_context_payload(payload, context=None):
 
 def build_action_plan_context_payload(context):
     context = context or {}
+    inferred_previous_plan = is_inferred_previous_report_position(
+        existing_position_summary_from_context(context)
+    )
     existing_payload = context.get("action_plan_context_payload")
-    if existing_payload is not None:
+    if existing_payload is not None and not inferred_previous_plan:
         return _sanitize_action_plan_context_payload(existing_payload, context=context)
 
     trade_gate_open = context.get("trade_gate_open", False)
@@ -339,7 +342,9 @@ def build_action_plan_context_payload(context):
     step0_prediction = str(context.get("step0_prediction", "") or "").strip()
     step0_prediction_cn = str(context.get("step0_prediction_cn", "") or "").strip()
     final_gate = context.get("final_gate", {}) or {}
-    has_personal_positions = bool(context.get("has_personal_positions", False))
+    if inferred_previous_plan and "只处理旧仓" in step0_prediction_cn:
+        step0_prediction_cn = "🟠 0%不参与；先确认成交事实"
+    has_personal_positions = bool(context.get("has_personal_positions", False)) and not inferred_previous_plan
     existing_position_text = _existing_position_summary_text(context)
     has_existing_position_context = bool(existing_position_text)
     final_empty_without_current_observation = _final_target_empty_without_current_observation(context)
@@ -483,7 +488,7 @@ def build_action_plan_context_payload(context):
                 "action": "⏳ 确认后执行预案",
                 "name": candidate.get("name"),
                 "code": candidate.get("code"),
-                "trigger": f"{confirm_text}，且板块承接不塌，只按昨晚预案检查执行资格；不满足取消",
+                "trigger": f"{confirm_text}，且板块承接不塌，{PREMARKET_50_TRIGGER_TEXT}",
                 "risk_window": (price_focus or {}).get("key_zone_display", "-"),
             }
         )
@@ -633,17 +638,17 @@ def build_action_plan_context_payload(context):
         elif step0_prediction == "NEUTRAL":
             position_section_lines.extend(
 	                [
-	                    "- **现在到底是什么状态**: 已经缩到一只可买股",
-	                    "- **明天仓位放多少**: 已决定50%条件执行；盘中不满足取消，回到0%不参与",
-	                    "- **明天具体怎么做**: 严格按昨晚预案检查执行资格，不追涨；不满足就转为0%",
+                    "- **现在到底是什么状态**: 已经缩到一只可买股",
+                    f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
+                    f"- **明天具体怎么做**: {PREMARKET_50_TRIGGER_TEXT}；不追涨",
 	                ]
             )
         else:
             position_section_lines.extend(
                 [
                     "- **现在到底是什么状态**: 已经缩到一只可买股",
-                    "- **明天仓位放多少**: 最多50%（正常参与）",
-                    "- **明天具体怎么做**: 积极执行买点计划",
+                    f"- **明天仓位放多少**: {PREMARKET_50_EXECUTION_TEXT}",
+                    f"- **明天具体怎么做**: {PREMARKET_50_TRIGGER_TEXT}",
                 ]
             )
 
@@ -719,7 +724,7 @@ def build_action_plan_context_payload(context):
             "- 直接高开离计划过远且没有回封/承接方案 → 放弃，等新的买点",
         ]
         intraday_lines = [
-            "- 竞价表态、开盘承接、打板/回封或09:50-10:10窗口任一路径命中，且大盘不崩 → 按预设仓位执行",
+            f"- 竞价表态、开盘承接、打板/回封或09:50-10:10窗口任一路径命中，且大盘不崩 → {PREMARKET_50_TRIGGER_TEXT}",
             "- 买入后按失效价和单笔-5%底线处理风险；若失效价过深，则直接用单笔-5%底线",
             "- 跌破执行止损线 → 无条件止损",
         ]
@@ -766,6 +771,16 @@ def build_action_plan_context_payload(context):
                     "- 失效价失守或日内明显转弱，执行减仓/止损",
                     "- 观察标的全天未形成更强确认，继续等待，不替换旧仓处理计划",
                 ]
+            elif inferred_previous_plan:
+                first_hour_lines = [
+                    "- 当前保持0%不参与，本时段只核实前日报计划是否成交",
+                    "- 未确认成交继续空仓，不把待确认对象写成B1",
+                ]
+                intraday_lines = [
+                    "- 只核实成交记录，不新增参与",
+                    "- 确认已成交才视为B1；未确认不新增B2",
+                    "- 成交事实不清时继续等待，不做仓位推定",
+                ]
             else:
                 first_hour_lines = [
                     "- 当前条件不允许新开仓，本时段只确认环境是否继续支持持仓/观察",
@@ -782,6 +797,8 @@ def build_action_plan_context_payload(context):
         closing_lines.append("- 已买入的确认风险线是否需要上移")
     elif has_existing_position_context:
         closing_lines.append("- 旧仓按持仓预案确认是否继续留到下一交易日")
+    elif inferred_previous_plan:
+        closing_lines.append("- 收盘后只核实前日报计划成交事实，未确认仍按0x记录")
     else:
         closing_lines.append("- 若你有旧仓，确认风险线是否需要上移")
 

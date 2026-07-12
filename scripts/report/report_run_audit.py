@@ -4,6 +4,7 @@ import inspect
 from typing import Any, Callable
 
 from daily_report_render import build_report_preflight
+from report.position_context import existing_position_summary_from_context
 from report.report_acceptance_audit import audit_report_markdown
 
 
@@ -81,23 +82,30 @@ def _audit_markdown(
     audit_markdown: Callable[..., dict[str, Any]],
     report_markdown: str,
     companion_html: str | None,
+    *,
+    expected_position_summary: dict[str, Any] | None = None,
+    source_path: str | None = None,
+    prefer_postgres_history: bool = False,
 ) -> dict[str, Any]:
-    if companion_html is None:
-        return audit_markdown(report_markdown)
-
     try:
         parameters = inspect.signature(audit_markdown).parameters
     except (TypeError, ValueError):
         return audit_markdown(report_markdown)
 
-    accepts_companion_html = "companion_html" in parameters or any(
+    accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD
         for parameter in parameters.values()
     )
-    if not accepts_companion_html:
-        return audit_markdown(report_markdown)
-
-    return audit_markdown(report_markdown, companion_html=companion_html)
+    kwargs: dict[str, Any] = {}
+    if companion_html is not None and ("companion_html" in parameters or accepts_kwargs):
+        kwargs["companion_html"] = companion_html
+    if expected_position_summary and ("expected_position_summary" in parameters or accepts_kwargs):
+        kwargs["expected_position_summary"] = expected_position_summary
+    if source_path is not None and ("source_path" in parameters or accepts_kwargs):
+        kwargs["source_path"] = source_path
+    if "prefer_postgres_history" in parameters or accepts_kwargs:
+        kwargs["prefer_postgres_history"] = bool(prefer_postgres_history)
+    return audit_markdown(report_markdown, **kwargs)
 
 
 def audit_daily_report_run(
@@ -106,13 +114,22 @@ def audit_daily_report_run(
     data: dict[str, Any],
     report_markdown: str,
     companion_html: str | None = None,
+    source_path: str | None = None,
+    prefer_postgres_history: bool = False,
     decision_ledger_result: dict[str, Any] | None = None,
     decision_ledger_required: bool = False,
     build_preflight: Callable[[dict[str, Any], str], dict[str, Any]] = build_report_preflight,
     audit_markdown: Callable[..., dict[str, Any]] = audit_report_markdown,
 ) -> dict[str, Any]:
     preflight = build_preflight(data, target_date)
-    report_acceptance = _audit_markdown(audit_markdown, report_markdown, companion_html)
+    report_acceptance = _audit_markdown(
+        audit_markdown,
+        report_markdown,
+        companion_html,
+        expected_position_summary=existing_position_summary_from_context(data),
+        source_path=source_path,
+        prefer_postgres_history=prefer_postgres_history,
+    )
     decision_ledger = _normalize_decision_ledger_result(
         decision_ledger_result,
         required=decision_ledger_required,

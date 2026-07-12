@@ -1,4 +1,5 @@
 from knowledge.trading_philosophy import PARTICIPATION_WINDOW_LAYER_TEXT
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 def _new_entry_intraday_turnover_line(has_personal_positions, prefix="不做新仓日内回转"):
@@ -154,12 +155,12 @@ def _build_prohibition_payload(
                 payload["allowed_items"].append("- ✅ 持有：你的现有强仓在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：你的持仓在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，只按昨晚预案检查执行资格；不满足取消")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，{PREMARKET_50_TRIGGER_TEXT}")
             else:
                 payload["allowed_items"].append("- ✅ 持有：若你有强仓，在主线未走坏前可继续持有")
                 payload["allowed_items"].append("- ✅ 卖出：若你有仓位，在大阳线或触及止损线时卖出")
                 if final_gate.get("allow_attack_50_ready"):
-                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，只按昨晚预案检查执行资格；不满足取消")
+                    payload["allowed_items"].append(f"- 🟡 固定交易窗口：{PARTICIPATION_WINDOW_LAYER_TEXT}，{PREMARKET_50_TRIGGER_TEXT}")
     else:
         headline = environment_headline or "环境条件满足不等于立刻下单，先看特殊标的，再等市场缩到唯一对象"
         payload["environment_line"] = f"**次日市场环境**: {display_position_level} / {display_operation_state} - {headline}"

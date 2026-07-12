@@ -8,7 +8,20 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from replay.report_replay import build_replay_snapshot_contract, _ensure_replay_price_band_style_series, _ensure_replay_stock_quotes
+
+def _replay_market_language_artifact(target_date):
+    return {
+        "schema_version": "market_language_translation.v1",
+        "target_date": target_date,
+        "analysis_mode": "replay",
+    }
+
+from replay.report_replay import (
+    _ensure_replay_market_breadth,
+    _ensure_replay_price_band_style_series,
+    _ensure_replay_stock_quotes,
+    build_replay_snapshot_contract,
+)
 from daily_report_render import REPORT_VARIANT_FULL, REPORT_VARIANT_SUMMARY, build_report_preflight, save_report_outputs
 
 
@@ -1083,6 +1096,7 @@ def _replay_probe(target_date, refresh_sources=None):
             get_major_indices_from_iwencai=lambda target_date="": [],
             safe_float=lambda value: float(value or 0),
             print_fn=lambda *args, **kwargs: None,
+            helpers={"get_limit_pool_snapshot": lambda target_date: {}},
         )
 
         research = result["data"]["market_research_snapshot"]
@@ -2431,6 +2445,37 @@ def _replay_probe(target_date, refresh_sources=None):
         preflight = build_report_preflight(data, "2026-05-28")
         self.assertNotIn("大盘涨跌统计", preflight["failures"])
 
+    def test_replay_market_breadth_refetches_undated_counts_and_preserves_source_dates(self):
+        calls = []
+        snapshot = {
+            "market_stats": {"up_count": 2600, "down_count": 2100},
+            "data_status": {"大盘涨跌统计": True},
+        }
+
+        result = _ensure_replay_market_breadth(
+            snapshot,
+            "2026-05-28",
+            lambda value: float(value or 0),
+            helpers={
+                "get_market_breadth_from_fact_db": lambda target_date: calls.append(target_date)
+                or {
+                    "trade_date": target_date,
+                    "source_date": target_date,
+                    "query_date": "2026-07-13",
+                    "stock_count": 5506,
+                    "up_count": 3018,
+                    "down_count": 2365,
+                    "flat_count": 123,
+                }
+            },
+        )
+
+        self.assertEqual(calls, ["2026-05-28"])
+        self.assertEqual(result["market_stats"]["up_count"], 3018)
+        self.assertEqual(result["market_stats"]["trade_date"], "2026-05-28")
+        self.assertEqual(result["market_stats"]["source_date"], "2026-05-28")
+        self.assertEqual(result["market_stats"]["query_date"], "2026-07-13")
+
     def test_build_replay_snapshot_contract_refills_short_hot_rank_to_top50(self):
         snapshot = {
             "indices": [{"code": "sh000001"}],
@@ -3249,10 +3294,37 @@ def _replay_probe(target_date, refresh_sources=None):
             get_major_indices_from_iwencai=lambda target_date="": [],
             safe_float=lambda value: float(value or 0),
             print_fn=lambda *args, **kwargs: None,
-            helpers={},
+            helpers={
+                "get_limit_pool_snapshot": lambda target_date: {
+                    "provider": "tushare.limit_list_ths",
+                    "zt_pool": [
+                        {
+                            "代码": "000006",
+                            "名称": "深振业A",
+                            "所属行业": "房地产",
+                            "连板数": 2,
+                        }
+                    ],
+                    "dt_pool": [{"代码": "000007", "名称": "全新好", "所属行业": "房地产"}],
+                    "limit_up_codes": ["000006"],
+                    "market_stats": {
+                        "up_count": 2375,
+                        "down_count": 3003,
+                        "zt_count": 99,
+                        "dt_count": 88,
+                    },
+                }
+            },
         )
 
         data = result["data"]
+        self.assertEqual(data["zt_pool"][0]["代码"], "000988")
+        self.assertEqual(data["limit_up_codes"], ["000988"])
+        self.assertEqual(data["dt_pool"][0]["代码"], "000007")
+        self.assertEqual(data["market_stats"]["up_count"], 2375)
+        self.assertEqual(data["market_stats"]["down_count"], 3003)
+        self.assertEqual(data["market_stats"]["zt_count"], 1)
+        self.assertEqual(data["market_stats"]["dt_count"], 1)
         self.assertEqual(data["lianban_data"][0]["code"], "000988")
         self.assertEqual(data["lianban_data"][0]["lianban_days"], 1)
         self.assertEqual(data["lianban_data"][0]["first_limit_time"], "09:25:00")
@@ -3264,6 +3336,48 @@ def _replay_probe(target_date, refresh_sources=None):
         }
         self.assertEqual(by_step["request.lianban_snapshot"]["details"]["lianban_count"], 1)
         self.assertEqual(by_step["request.lianban_snapshot"]["details"]["provider"], "replay.zt_pool.derived")
+        pool_log = next(item for item in data["module_logs"] if item.get("step") == "request.pool_snapshot")
+        self.assertNotIn("zt_pool", pool_log["details"]["target_keys"])
+        self.assertIn("zt_pool", pool_log["details"]["preserved_keys"])
+        self.assertIn("dt_pool", pool_log["details"]["target_keys"])
+        self.assertIn("market_stats", pool_log["details"]["target_keys"])
+
+    def test_replay_limit_pool_backfill_preserves_confirmed_empty_pool(self):
+        replay_runtime = self._load_module()
+        snapshot = {
+            "zt_pool": [{"代码": "000988", "名称": "华工科技", "所属行业": "光通信"}],
+            "dt_pool": [],
+            "market_stats": {"up_count": 0, "down_count": 0, "zt_count": 1, "dt_count": 0},
+            "data_status": {"涨停池": True, "跌停池": True, "大盘涨跌统计": False},
+            "step_status": {"涨停跌停数据获取": True},
+            "module_logs": [],
+        }
+
+        changed = replay_runtime._apply_replay_limit_pool_snapshot(
+            snapshot,
+            {
+                "provider": "tushare.limit_list_ths",
+                "zt_pool": [{"代码": "000006", "名称": "深振业A", "所属行业": "房地产"}],
+                "dt_pool": [{"代码": "000007", "名称": "全新好", "所属行业": "房地产"}],
+                "market_stats": {
+                    "up_count": 2375,
+                    "down_count": 3003,
+                    "zt_count": 99,
+                    "dt_count": 88,
+                },
+            },
+            lambda value: float(value or 0),
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual([row["代码"] for row in snapshot["zt_pool"]], ["000988"])
+        self.assertEqual(snapshot["dt_pool"], [])
+        self.assertEqual(snapshot["market_stats"]["zt_count"], 1)
+        self.assertEqual(snapshot["market_stats"]["dt_count"], 0)
+        pool_log = next(item for item in snapshot["module_logs"] if item.get("step") == "request.pool_snapshot")
+        self.assertEqual(pool_log["details"]["target_keys"], ["market_stats"])
+        self.assertIn("zt_pool", pool_log["details"]["preserved_keys"])
+        self.assertIn("dt_pool", pool_log["details"]["preserved_keys"])
 
     def test_build_replay_snapshot_contract_derives_lianban_sector_from_limit_reason(self):
         snapshot = {
@@ -3583,10 +3697,12 @@ def _replay_probe(target_date, refresh_sources=None):
             run_mode="frozen",
             position_report_text="",
             persist_runtime_artifacts=True,
+            market_language_translation=None,
         ):
             captured["target_date"] = target_date
             captured["run_mode"] = run_mode
             captured["persist_runtime_artifacts"] = persist_runtime_artifacts
+            captured["market_language_translation"] = market_language_translation
             captured["mainline"] = data["current_mainline_history_record"]["primary_mainline"]
             captured["share_pct"] = data["current_sector_turnover_snapshot"]["turnover_share_pct"]
             mainline_line = (
@@ -3598,6 +3714,14 @@ def _replay_probe(target_date, refresh_sources=None):
                 REPORT_VARIANT_SUMMARY: "# 执行摘要\n" + mainline_line,
             }
 
+        def prepare_market_language(data, **kwargs):
+            captured["prepare_market_language_root"] = Path(kwargs["root_dir"])
+            return _replay_market_language_artifact(kwargs["target_date"])
+
+        def write_market_language(artifact, **kwargs):
+            captured["write_market_language_root"] = Path(kwargs["root_dir"])
+            return {"artifact_path": "/tmp/market-language.json"}
+
         with TemporaryDirectory() as output_dir, patch("daily_report_render.assert_report_required_facts_complete", return_value={}):
             result = replay_runtime.build_replay_report_outputs_contract(
                 "2026-04-23",
@@ -3608,8 +3732,15 @@ def _replay_probe(target_date, refresh_sources=None):
                 safe_float=lambda value: float(value or 0),
                 build_report_outputs=_build_report_outputs,
                 save_report_outputs=save_report_outputs,
+                audit_report=lambda markdown, **kwargs: {
+                    "passed": True,
+                    "findings": [],
+                    "finding_count": 0,
+                },
                 output_dir=output_dir,
                 print_fn=lambda *args, **kwargs: None,
+                prepare_market_language_translation_fn=prepare_market_language,
+                write_replay_market_language_translation_fn=write_market_language,
                 helpers={
                     "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
                     "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
@@ -3629,10 +3760,140 @@ def _replay_probe(target_date, refresh_sources=None):
         self.assertEqual(captured["target_date"], "2026-04-23")
         self.assertEqual(captured["run_mode"], "replay")
         self.assertFalse(captured["persist_runtime_artifacts"])
+        self.assertEqual(captured["market_language_translation"]["analysis_mode"], "replay")
+        self.assertEqual(captured["prepare_market_language_root"], ROOT)
+        self.assertEqual(captured["write_market_language_root"], ROOT)
+        self.assertNotEqual(captured["prepare_market_language_root"], Path(output_dir))
         self.assertEqual(captured["mainline"], "电力")
         self.assertEqual(captured["share_pct"], 2.7)
         self.assertTrue(any(log["step"] == "render.report_outputs" for log in result["module_logs"]))
+        self.assertTrue(any(log["step"] == "audit.report_outputs" for log in result["module_logs"]))
         self.assertTrue(any(log["step"] == "save.report_outputs" for log in result["module_logs"]))
+
+    def test_replay_report_outputs_contract_normalizes_position_and_prepends_timeline(self):
+        replay_runtime = self._load_module()
+        calls = []
+        snapshot = {
+            "personal_position_context": {
+                "existing_position_summary": {
+                    "has_position": True,
+                    "name": "长电科技",
+                    "code": "600584",
+                    "summary": "持有长电科技(600584)，100%仓位",
+                    "position_source": "previous_report_target_default_1x",
+                }
+            },
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+        position_report_text = (
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |\n\n"
+            "# 持仓策略"
+        )
+
+        def build_outputs(data, target_date, **kwargs):
+            calls.append("build")
+            summary = data["personal_position_context"]["existing_position_summary"]
+            self.assertFalse(summary["has_position"])
+            self.assertTrue(summary["has_pending_position"])
+            self.assertEqual(summary["position"], 0.0)
+            self.assertEqual(summary["position_pct"], 0.0)
+            return {REPORT_VARIANT_FULL: "# 完整版"}
+
+        def audit_report(markdown, **kwargs):
+            calls.append("audit")
+            self.assertIn("## 账户日序表", markdown)
+            self.assertIn("长电科技(600584)", markdown)
+            self.assertEqual(kwargs["expected_position_summary"]["code"], "600584")
+            return {"passed": True, "findings": [], "finding_count": 0}
+
+        def save_outputs(outputs, *args, **kwargs):
+            calls.append("save")
+            self.assertIn("## 账户日序表", outputs[REPORT_VARIANT_FULL])
+            path = Path(kwargs["output_dir"]) / "replay.md"
+            path.write_text(outputs[REPORT_VARIANT_FULL], encoding="utf-8")
+            return {REPORT_VARIANT_FULL: str(path)}
+
+        def write_market_language(artifact, **kwargs):
+            calls.append("write_market_language")
+            return {"artifact_path": "/tmp/market-language.json"}
+
+        with TemporaryDirectory() as output_dir, patch("daily_report_render.assert_report_required_facts_complete", return_value={}):
+            result = replay_runtime.build_replay_report_outputs_contract(
+                "2026-07-10",
+                refresh_sources=["noop"],
+                load_data_snapshot=lambda target_date: (snapshot, ""),
+                tencent_factory=lambda: _FakeTencentFinanceData([]),
+                get_major_indices_from_iwencai=lambda target_date="": [],
+                safe_float=lambda value: float(value or 0),
+                build_report_outputs=build_outputs,
+                save_report_outputs=save_outputs,
+                audit_report=audit_report,
+                output_dir=output_dir,
+                position_report_text=position_report_text,
+                print_fn=lambda *args, **kwargs: None,
+                prepare_market_language_translation_fn=lambda data, **kwargs: _replay_market_language_artifact(kwargs["target_date"]),
+                write_replay_market_language_translation_fn=write_market_language,
+                helpers={
+                    "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                    "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                    "has_resolved_mainline_turnover_summary": lambda summary: True,
+                },
+            )
+
+        self.assertTrue(result["found"])
+        self.assertEqual(calls, ["build", "audit", "save", "audit", "write_market_language"])
+
+    def test_replay_report_outputs_contract_stops_before_save_when_acceptance_fails(self):
+        replay_runtime = self._load_module()
+        calls = []
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        def save_outputs(*args, **kwargs):
+            calls.append("save")
+            raise AssertionError("invalid replay report must not be saved")
+
+        with TemporaryDirectory() as output_dir, patch("daily_report_render.assert_report_required_facts_complete", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "position_inferred_rendered_as_confirmed_holding"):
+                replay_runtime.build_replay_report_outputs_contract(
+                    "2026-07-10",
+                    refresh_sources=["noop"],
+                    load_data_snapshot=lambda target_date: (snapshot, ""),
+                    tencent_factory=lambda: _FakeTencentFinanceData([]),
+                    get_major_indices_from_iwencai=lambda target_date="": [],
+                    safe_float=lambda value: float(value or 0),
+                    build_report_outputs=lambda *args, **kwargs: {REPORT_VARIANT_FULL: "# 错误日报"},
+                    save_report_outputs=save_outputs,
+                    audit_report=lambda markdown, **kwargs: {
+                        "passed": False,
+                        "findings": [
+                            {
+                                "code": "position_inferred_rendered_as_confirmed_holding",
+                                "message": "前日报计划对象被正文写成确认持仓，停止生成",
+                            }
+                        ],
+                        "finding_count": 1,
+                    },
+                    output_dir=output_dir,
+                    print_fn=lambda *args, **kwargs: None,
+                    prepare_market_language_translation_fn=lambda data, **kwargs: _replay_market_language_artifact(kwargs["target_date"]),
+                    write_replay_market_language_translation_fn=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("market language must not be written")),
+                    helpers={
+                        "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                        "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                        "has_resolved_mainline_turnover_summary": lambda summary: True,
+                    },
+                )
+
+        self.assertEqual(calls, [])
 
     def test_replay_report_outputs_contract_stops_before_save_when_required_facts_missing(self):
         replay_runtime = self._load_module()
@@ -3674,6 +3935,8 @@ def _replay_probe(target_date, refresh_sources=None):
                     save_report_outputs=_save_report_outputs,
                     output_dir=output_dir,
                     print_fn=lambda *args, **kwargs: None,
+                    prepare_market_language_translation_fn=lambda data, **kwargs: _replay_market_language_artifact(kwargs["target_date"]),
+                    write_replay_market_language_translation_fn=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("market language must not be written")),
                     helpers={
                         "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
                         "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
@@ -3682,6 +3945,123 @@ def _replay_probe(target_date, refresh_sources=None):
                 )
 
         self.assertEqual(calls, ["build"])
+
+    def test_replay_report_outputs_contract_does_not_write_market_language_after_final_check_failure(self):
+        replay_runtime = self._load_module()
+        audit_count = 0
+        write_count = 0
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        def audit_report(markdown, **kwargs):
+            nonlocal audit_count
+            audit_count += 1
+            passed = audit_count == 1
+            return {
+                "passed": passed,
+                "findings": [] if passed else [{"code": "saved_report_failed", "message": "保存后检查未通过"}],
+                "finding_count": 0 if passed else 1,
+            }
+
+        def save_outputs(outputs, target_date, mode, output_dir=None):
+            path = Path(output_dir) / "full.md"
+            path.write_text(outputs[REPORT_VARIANT_FULL], encoding="utf-8")
+            return {REPORT_VARIANT_FULL: str(path)}
+
+        def write_market_language(*args, **kwargs):
+            nonlocal write_count
+            write_count += 1
+            return {}
+
+        with TemporaryDirectory() as output_dir, patch(
+            "daily_report_render.assert_report_required_facts_complete",
+            return_value={},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "saved_report_failed"):
+                replay_runtime.build_replay_report_outputs_contract(
+                    "2026-07-10",
+                    refresh_sources=["noop"],
+                    load_data_snapshot=lambda target_date: (snapshot, ""),
+                    tencent_factory=lambda: _FakeTencentFinanceData([]),
+                    get_major_indices_from_iwencai=lambda target_date="": [],
+                    safe_float=lambda value: float(value or 0),
+                    build_report_outputs=lambda *args, **kwargs: {REPORT_VARIANT_FULL: "# replay"},
+                    save_report_outputs=save_outputs,
+                    audit_report=audit_report,
+                    output_dir=output_dir,
+                    print_fn=lambda *args, **kwargs: None,
+                    prepare_market_language_translation_fn=lambda data, **kwargs: _replay_market_language_artifact(kwargs["target_date"]),
+                    write_replay_market_language_translation_fn=write_market_language,
+                    helpers={
+                        "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                        "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                        "has_resolved_mainline_turnover_summary": lambda summary: True,
+                    },
+                )
+
+        self.assertEqual(audit_count, 2)
+        self.assertEqual(write_count, 0)
+
+    def test_replay_report_outputs_contract_rejects_corrupted_saved_markdown(self):
+        replay_runtime = self._load_module()
+        write_count = 0
+        snapshot = {
+            "indices": [{"code": "sh000001"}],
+            "data_status": {"主要指数": True},
+            "step_status": {"主要指数获取": True},
+        }
+
+        def save_outputs(_outputs, _target_date, mode=None, output_dir=None):
+            path = Path(output_dir) / "full.md"
+            path.write_text("# corrupted", encoding="utf-8")
+            return {REPORT_VARIANT_FULL: str(path)}
+
+        def write_market_language(*args, **kwargs):
+            nonlocal write_count
+            write_count += 1
+            return {}
+
+        with TemporaryDirectory() as output_dir, patch(
+            "daily_report_render.assert_report_required_facts_complete",
+            return_value={},
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "保存后的完整版日报与检查通过的正文不一致",
+            ):
+                replay_runtime.build_replay_report_outputs_contract(
+                    "2026-07-10",
+                    refresh_sources=["noop"],
+                    load_data_snapshot=lambda target_date: (snapshot, ""),
+                    tencent_factory=lambda: _FakeTencentFinanceData([]),
+                    get_major_indices_from_iwencai=lambda target_date="": [],
+                    safe_float=lambda value: float(value or 0),
+                    build_report_outputs=lambda *args, **kwargs: {
+                        REPORT_VARIANT_FULL: "# replay"
+                    },
+                    save_report_outputs=save_outputs,
+                    audit_report=lambda markdown, **kwargs: {
+                        "passed": True,
+                        "findings": [],
+                        "finding_count": 0,
+                    },
+                    output_dir=output_dir,
+                    print_fn=lambda *args, **kwargs: None,
+                    prepare_market_language_translation_fn=lambda data, **kwargs: (
+                        _replay_market_language_artifact(kwargs["target_date"])
+                    ),
+                    write_replay_market_language_translation_fn=write_market_language,
+                    helpers={
+                        "load_recent_mainline_history": lambda target_date, lookback_days=25, max_scan_days=60: [],
+                        "load_recent_sector_turnover_history": lambda target_date, sector_name, lookback_days=25: [],
+                        "has_resolved_mainline_turnover_summary": lambda summary: True,
+                    },
+                )
+
+        self.assertEqual(write_count, 0)
 
 
 if __name__ == "__main__":

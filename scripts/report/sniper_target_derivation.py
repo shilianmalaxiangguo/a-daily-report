@@ -3,6 +3,11 @@ from __future__ import annotations
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     candidate_blocks_current_observation_target,
 )
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    SAME_STOCK_T_CONFIRMATION_CLAUSE,
+)
 
 
 SCHEMA_VERSION = "sniper_target_derivation.v1"
@@ -393,21 +398,27 @@ def _final_action(position_decision=None, final_gate=None, final_target_resoluti
     if two_layer_target:
         return {
             "position_pct": 50,
-            "action": "已决定50%条件执行；盘中不满足取消，回到0%不参与",
+            "action": PREMARKET_50_EXECUTION_TEXT,
             "reason": "双层决策已给出明日执行对象和50%条件执行条件",
         }
     pct = _position_pct(position_decision)
     gate = final_gate if isinstance(final_gate, dict) else {}
     resolution = final_target_resolution if isinstance(final_target_resolution, dict) else {}
     priority = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
+    priority_value = clean_text(priority.get("capital_priority"))
     action = clean_text(
         gate.get("final_action")
         or priority.get("reason")
         or (position_decision or {}).get("final_action")
         or (position_decision or {}).get("sizing_reason")
     )
-    if not action:
-        action = "只观察，不新增参与" if pct <= 0 else "按昨晚预案检查执行资格；不满足回到0%不参与"
+    if priority_value == "same_stock_t":
+        if pct <= 0:
+            action = "只观察，不新增参与"
+        elif "B1" not in action:
+            action = SAME_STOCK_T_CONFIRMATION_CLAUSE
+    elif not action:
+        action = "只观察，不新增参与" if pct <= 0 else PREMARKET_50_TRIGGER_TEXT
     return {
         "position_pct": pct,
         "action": action,
@@ -541,10 +552,11 @@ def _render_bayesian_diagnosis_lines(packet):
     path_conclusion = clean_text(conclusion.get("path_conclusion"), "路径结论待确认")
     position_pct = clean_text(conclusion.get("position_pct"), "0")
     action_text = clean_text(conclusion.get("action_text"), "0%不参与")
+    position_text = _position_display_text(position_pct, action_text)
     alignment = clean_text(conclusion.get("final_action_alignment"), "无法判断")
     lines = [
         "路径诊断复盘",
-        f"|-- 路径结论={path_conclusion} 最终动作一致性={alignment} 仓位={position_pct}% 动作={action_text}",
+        f"|-- 路径结论={path_conclusion} 最终动作一致性={alignment} 仓位={position_text} 动作={action_text}",
     ]
     for step in path:
         if not isinstance(step, dict):
@@ -568,6 +580,16 @@ def _render_bayesian_diagnosis_lines(packet):
         if cannot_conclude:
             lines.append(f"|   不能推出={'；'.join(cannot_conclude)}")
     return lines
+
+
+def _position_display_text(position_pct, action_text=""):
+    action = clean_text(action_text, "")
+    if "满仓" in action:
+        return "满仓"
+    pct = clean_text(position_pct, "0").replace("％", "%")
+    if pct.endswith("%"):
+        return pct
+    return f"{pct}%"
 
 
 def build_sniper_target_derivation_packet(
@@ -725,8 +747,11 @@ def render_full_ascii(packet):
     lines.append("|")
     lines.append(full_step_heading("T2"))
     lines.append(
-        "|-- 仓位={position_pct}% 动作={action} 原因={reason}".format(
-            position_pct=final_action.get("position_pct", 0),
+        "|-- 仓位={position_text} 动作={action} 原因={reason}".format(
+            position_text=_position_display_text(
+                final_action.get("position_pct", 0),
+                final_action.get("action"),
+            ),
             action=clean_text(final_action.get("action"), "只观察，不新增参与"),
             reason=clean_text(final_action.get("reason"), "-"),
         )
@@ -751,8 +776,19 @@ def full_ascii_from_packet(packet):
     packet = packet if isinstance(packet, dict) else {}
     lines = packet.get("full_ascii")
     if isinstance(lines, list) and lines:
-        return [str(line) for line in lines]
+        return _normalize_cached_full_ascii_lines(lines)
     return render_full_ascii(packet)
+
+
+def _normalize_cached_full_ascii_lines(lines):
+    normalized = []
+    for line in lines or []:
+        text = str(line)
+        if "动作=满仓条件执行" in text:
+            text = text.replace("仓位=50% 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
+            text = text.replace("仓位=50 动作=满仓条件执行", "仓位=满仓 动作=满仓条件执行")
+        normalized.append(text)
+    return normalized
 
 
 def compact_section(packet, *, heading="### 最终标的传导链"):

@@ -210,6 +210,135 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("不降低市场核心", hit["impact"])
         self.assertEqual(hit["report_slot"], "账户约束")
 
+    def test_builds_fact_tags_from_zero_position_response_script(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "final": {
+                        "position_pct": 0,
+                        "action_text": "只观察承接，不新增参与；第一动作不直接给买入资格",
+                        "failure_conditions": ["B1参与权失败，取消B2确认权", "避免踏空焦虑补足"],
+                    }
+                }
+            }
+        )
+
+        tags = facts["decision"]["response_script"]
+        self.assertIn("0%不参与", tags)
+        self.assertIn("无执行目标", tags)
+        self.assertIn("只观察", tags)
+        self.assertIn("第一动作", tags)
+        self.assertIn("B1", tags)
+        self.assertIn("B2", tags)
+        self.assertIn("买入资格", tags)
+        self.assertIn("踏空焦虑", tags)
+
+    def test_builds_fact_tags_from_participation_script(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "工业富联", "code": "601138"},
+                    "tomorrow_action": "第一动作只给B1参与权",
+                    "participation_script": {
+                        "confirm_conditions": ["板块扩散和个股强度确认后再看B2确认权"],
+                        "cancellation_conditions": ["没有买入资格就只观察，避免踏空焦虑补足"],
+                        "position_plan": "B1保持连接感，B2等待确认",
+                    },
+                }
+            }
+        )
+
+        tags = facts["decision"]["response_script"]
+        self.assertIn("第一动作", tags)
+        self.assertIn("B1", tags)
+        self.assertIn("B2", tags)
+        self.assertIn("只观察", tags)
+        self.assertIn("买入资格", tags)
+        self.assertIn("踏空焦虑", tags)
+        decision = facts["decision"]
+        self.assertEqual(decision["action_layer"], "只观察")
+        self.assertEqual(decision["participation_rhythm"], "第一动作")
+        self.assertEqual(decision["b1_role"], "参与权")
+        self.assertEqual(decision["b2_role"], "确认权")
+        self.assertEqual(decision["qualification"], "买入资格")
+        self.assertIn("踏空焦虑", decision["behavior_traps"])
+
+    def test_routes_anti_prediction_response_script_to_daily_action_slot(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "我是不是陷入预测崇拜，想每天一个个股踩准节拍；今天只有第一动作，要不要写成应对剧本，B1保持连接感，B2等确认，避免踏空焦虑",
+                "decision": {"response_script": ["0%不参与", "只观察", "无执行目标"]},
+            },
+            scenario="daily_report",
+            limit=5,
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("decision.anti-prediction-response-script", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "decision.anti-prediction-response-script")
+        self.assertEqual(hit["prior"], "decision-sample-prior")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/判断样本与市场演变.md")
+        for required in [
+            "预测崇拜",
+            "每天一个个股",
+            "踩准节拍",
+            "应对剧本",
+            "第一动作",
+            "B1",
+            "B2",
+            "连接感",
+            "踏空焦虑",
+            "0%不参与",
+            "只观察",
+            "无执行目标",
+        ]:
+            self.assertIn(required, hit["triggered_by"])
+        self.assertEqual(hit["report_slot"], "明日执行结论")
+        self.assertIn("日报不是预测节拍", hit["impact"])
+        self.assertIn("没有买入资格时0%不参与", hit["impact"])
+        self.assertIn("第一动作只给B1参与权", hit["impact"])
+        self.assertIn("B2必须等待后续承接", hit["impact"])
+
+    def test_routes_anti_prediction_from_structured_conditions_without_trigger_terms(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "decision": {
+                    "position_plan": "零仓位",
+                    "action_layer": "观察层",
+                    "b1_role": "参与角色",
+                    "b2_role": "确认角色",
+                    "qualification": "资格不足",
+                    "response_mode": "应对",
+                }
+            },
+            scenario="daily_report",
+            limit=1,
+        )
+
+        self.assertEqual(hits[0]["knowledge_id"], "decision.anti-prediction-response-script")
+        self.assertEqual(
+            hits[0]["matched_conditions"],
+            ["0%不参与", "只观察", "B1参与权", "B2确认权", "买入资格", "应对剧本"],
+        )
+        self.assertEqual(hits[0]["triggered_by"], hits[0]["matched_conditions"])
+
+    def test_prefer_only_structured_conditions_do_not_route_anti_prediction(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "decision": {
+                    "b1_role": "参与角色",
+                    "b2_role": "确认角色",
+                    "qualification": "资格不足",
+                    "response_mode": "应对",
+                }
+            },
+            scenario="daily_report",
+            limit=5,
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertNotIn("decision.anti-prediction-response-script", ids)
+
     def test_routes_capital_priority_for_old_position_and_new_opportunity(self):
         hits = route_llm_wiki_knowledge(
             {
@@ -272,21 +401,91 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("反包先批改情绪反应", hit["impact"])
         self.assertIn("旧仓退出流动性", hit["impact"])
 
-    def test_routes_ta_tb_tc_timeline_to_slot_timeline_knowledge(self):
+    def test_routes_rhythm_reset_margin_review_from_reasonable_empty_and_external_storage(self):
         hits = route_llm_wiki_knowledge(
             {
-                "question": "Ta+2 旧仓要先卖，明日标的无，没有Tb+0，没有Tc+0，空仓时间尽可能接近全天",
+                "question": "我觉得这次合理空仓可能是节奏踏错和同手同脚，外盘拉升、外盘存储和存储大涨都提示边际主线，旧目标强弩之末时太极实业和宜宾纸业应该怎么反推；如果周一空仓，周五信号源和周五策略也要批改，周二再强不能替旧结论正名",
+                "position": {"state": "旧仓", "name": "太极实业"},
+            },
+            scenario="review",
+            limit=5,
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("selection.rhythm-reset-margin-review", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "selection.rhythm-reset-margin-review")
+        self.assertEqual(hit["prior"], "selection-review-prior")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/价格行为与能量框架.md")
+        for required in [
+            "节奏踏错",
+            "同手同脚",
+            "合理空仓",
+            "边际主线",
+            "外盘拉升",
+            "外盘存储",
+            "存储大涨",
+            "旧目标强弩之末",
+            "周五信号源",
+            "周五策略",
+            "周一空仓",
+            "周二再强",
+            "太极实业",
+            "宜宾纸业",
+        ]:
+            self.assertIn(required, hit["triggered_by"])
+        self.assertEqual(hit["report_slot"], "超短边际节奏复核")
+        self.assertIn("最终0%不是思考终点", hit["impact"])
+        self.assertIn("追溯周五选股、买点、持仓预期和退出纪律", hit["impact"])
+        self.assertIn("不替周五或周一正名", hit["impact"])
+        self.assertIn("T+1复核", hit["impact"])
+        self.assertIn("过程候选不覆盖最终动作", hit["impact"])
+
+    def test_routes_performance_rotation_main_attack_from_haaland_analogy(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "业绩线逻辑开始后，科技线是不是应该像哈兰德一样先做牵制点，主攻点切到轮动线和非科技；这种风格变换是不是不合理的超额收益",
+            },
+            scenario="review",
+            limit=5,
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("market.performance-rotation-main-attack", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "market.performance-rotation-main-attack")
+        self.assertEqual(hit["source_path"], "wiki/板块补充/板块中枢与主线延续.md")
+        for required in [
+            "业绩线",
+            "科技线",
+            "哈兰德",
+            "牵制点",
+            "主攻点",
+            "轮动线",
+            "非科技",
+            "风格变换",
+            "不合理的超额收益",
+        ]:
+            self.assertIn(required, hit["triggered_by"])
+        self.assertEqual(hit["report_slot"], "市场结构判断")
+        self.assertIn("主线不是信仰位", hit["impact"])
+        self.assertIn("可降为牵制点", hit["impact"])
+        self.assertIn("同权比较", hit["impact"])
+        self.assertIn("风格切换载体", hit["impact"])
+
+    def test_routes_ta_te_timeline_to_slot_timeline_knowledge(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "账户日序是不是应该迁移成Ta-Te五日表，Td是今日，Te是明日执行日，明日标的为空就只处理旧仓风险",
                 "position": {"state": "旧仓", "name": "太极实业"},
             },
             scenario="daily_report",
         )
 
         hit = next(item for item in hits if item["knowledge_id"] == "discipline.tplus-slot-timeline")
-        self.assertIn("Ta+2", hit["triggered_by"])
-        self.assertIn("没有Tb", hit["triggered_by"])
-        self.assertIn("没有Tc", hit["triggered_by"])
-        self.assertIn("Ta 是旧仓", hit["impact"])
-        self.assertIn("没有目标就写没有 Tb+0", hit["impact"])
+        self.assertIn("Ta", hit["triggered_by"])
+        self.assertIn("Td", hit["triggered_by"])
+        self.assertIn("Te", hit["triggered_by"])
+        self.assertIn("Ta是最远复盘日", hit["impact"])
+        self.assertIn("Te是明日执行日", hit["impact"])
 
     def test_routes_daily_report_final_resolution_to_cull_weak_keep_strong(self):
         facts = build_llm_wiki_fact_tags(
@@ -345,6 +544,92 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("做T", hit["triggered_by"])
         self.assertIn("买回确认", hit["impact"])
         self.assertIn("不把更便宜当作更正确", hit["impact"])
+
+    def test_routes_same_stock_t_failure_control(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "太极实业已有1x，今日目标还是同一只票，早盘强表态后跌破VWAP和跌破MA7，2x是不是尾盘再卖底仓",
+                "position": {"state": "旧仓", "capital_priority": "old_position_t"},
+            },
+            scenario="intraday_question",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("intraday.same-stock-t-failure-control", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "intraday.same-stock-t-failure-control")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/做T与风险控制.md")
+        self.assertIn("太极实业", hit["triggered_by"])
+        self.assertIn("1x", hit["triggered_by"])
+        self.assertIn("同一只票", hit["triggered_by"])
+        self.assertIn("强表态", hit["triggered_by"])
+        self.assertIn("跌破VWAP", hit["triggered_by"])
+        self.assertIn("跌破MA7", hit["triggered_by"])
+        self.assertIn("同股T候选", hit["impact"])
+        self.assertIn("卖出可卖旧仓", hit["impact"])
+        self.assertIn("尾盘卖出只适用于正常样本", hit["impact"])
+        self.assertEqual(hit["report_slot"], "同股T处理")
+        self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_same_stock_t_from_structured_exposure_plan(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "final_target_resolution": {
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "new_entry_target": {"name": "太极实业", "code": "600667"},
+                    "account_exposure_plan": {"same_stock_t": True},
+                    "capital_priority_decision": {
+                        "capital_priority": "same_stock_t",
+                        "reason": "已有1x旧仓且今日目标仍是同一只票，只按同股T候选处理",
+                    },
+                }
+            }
+        )
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report")
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("intraday.same-stock-t-failure-control", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "intraday.same-stock-t-failure-control")
+        self.assertIn("same_stock_t", hit["triggered_by"])
+        self.assertIn("同股T", hit["triggered_by"])
+        self.assertIn("临时2x", hit["triggered_by"])
+
+    def test_does_not_route_same_stock_t_for_different_old_and_new_target(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "太极实业旧仓1x，深科技是新的明日机会，是否需要分账处理",
+                "position": {"state": "旧仓", "capital_priority": "new_entry"},
+                "candidate": {"quality": ["新机会"]},
+            },
+            scenario="daily_report",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertNotIn("intraday.same-stock-t-failure-control", ids)
+
+    def test_routes_two_b_confirmation_positioning(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "2B法里B1买0.5B以后，B2是不是当天必须买够？我怕只小赚没有大赚，也怕集合竞价不买满错过初始仓位收益",
+                "position": {"state": "短线", "concern": "态度和仓位"},
+            },
+            scenario="intraday_question",
+            limit=5,
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertIn("intraday.two-b-confirmation-positioning", ids)
+        hit = next(item for item in hits if item["knowledge_id"] == "intraday.two-b-confirmation-positioning")
+        self.assertEqual(hit["source_path"], "wiki/交易思想/做T与风险控制.md")
+        self.assertIn("2B法", hit["triggered_by"])
+        self.assertIn("B1", hit["triggered_by"])
+        self.assertIn("B2", hit["triggered_by"])
+        self.assertIn("必须买够", hit["triggered_by"])
+        self.assertIn("小赚", hit["triggered_by"])
+        self.assertIn("B1只买参与权", hit["impact"])
+        self.assertIn("B2不是任务仓", hit["impact"])
+        self.assertIn("坏样本只亏B1", hit["impact"])
+        self.assertEqual(hit["report_slot"], "2B仓位处理")
+        self.assertEqual(hit["confidence"], "reviewed")
 
     def test_routes_profit_after_win_discipline(self):
         hits = route_llm_wiki_knowledge(
@@ -523,6 +808,127 @@ class LlmWikiRouterTest(unittest.TestCase):
         self.assertIn("不直接生成买入资格", hit["impact"])
         self.assertEqual(hit["report_slot"], "研究线索")
         self.assertEqual(hit["confidence"], "reviewed")
+
+    def test_routes_early_belief_fish_body_cycle_framework(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "这篇早信和鱼身的启发是不是说，龙头二次发力时先看无人问津的同线标的，但人声鼎沸时要主动卖飞",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "market.early-belief-fish-body-cycle")
+        self.assertIn("早信", hit["triggered_by"])
+        self.assertIn("鱼身", hit["triggered_by"])
+        self.assertIn("无人问津", hit["triggered_by"])
+        self.assertIn("龙头二次发力", hit["triggered_by"])
+        self.assertIn("人声鼎沸", hit["triggered_by"])
+        self.assertIn("主动卖飞", hit["triggered_by"])
+        self.assertIn("不替代买入资格", hit["impact"])
+        self.assertIn("主动降风险", hit["impact"])
+
+    def test_routes_rebound_quality_active_passive_framework(self):
+        hits = route_llm_wiki_knowledge(
+            {
+                "question": "反弹的时候要看板块指数，主动带动反弹可以看参与，跟随指数反弹是减亏离场；指数深V但国产链先于指数上涨，节奏不匹配时先写共振待确认，熟悉资产修复要看持续承接",
+            },
+            scenario="review",
+        )
+
+        hit = next(item for item in hits if item["knowledge_id"] == "market.rebound-quality-active-passive")
+        self.assertIn("反弹质量", hit["matched_topics"])
+        self.assertIn("主动带动反弹", hit["matched_topics"])
+        self.assertIn("熟悉资产修复", hit["matched_topics"])
+        self.assertIn("板块指数", hit["triggered_by"])
+        self.assertIn("主动带动", hit["triggered_by"])
+        self.assertIn("跟随指数", hit["triggered_by"])
+        self.assertIn("减亏离场", hit["triggered_by"])
+        self.assertIn("熟悉资产修复", hit["triggered_by"])
+        self.assertIn("深V", hit["triggered_by"])
+        self.assertIn("国产链", hit["triggered_by"])
+        self.assertIn("先于指数", hit["triggered_by"])
+        self.assertIn("节奏不匹配", hit["triggered_by"])
+        self.assertIn("主动带动反弹按进攻线观察", hit["impact"])
+        self.assertIn("跟随指数反弹优先按减亏离场", hit["impact"])
+        self.assertIn("熟悉资产修复看持续承接", hit["impact"])
+        self.assertIn("只写共振待确认", hit["impact"])
+
+    def test_builds_rebound_quality_facts_from_market_structure_judgement(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "market_structure_judgement": {
+                    "summary_text": "指数深V，国产链先于指数四天上涨，板块高潮碰上指数修复，节奏不匹配，先写共振待确认",
+                    "fact_basis": [
+                        "主动带动反弹方向可给B1参与权",
+                        "跟随指数反弹只作为减亏离场和减风险窗口",
+                        "熟悉资产修复来自调研充分且未来预期良好方向，继续看持续承接",
+                    ],
+                }
+            }
+        )
+
+        market = facts["market"]
+        self.assertIn("主动带动反弹", market["rebound_roles"])
+        self.assertIn("跟随指数反弹", market["rebound_roles"])
+        self.assertIn("熟悉资产修复", market["rebound_roles"])
+        self.assertIn("指数深V", market["rebound_state"])
+        self.assertIn("先于指数", market["rebound_state"])
+        self.assertIn("板块高潮", market["rebound_state"])
+        self.assertIn("节奏共振待确认", market["rebound_state"])
+        self.assertIn("B1参与权", market["rebound_action"])
+        self.assertIn("减亏离场", market["rebound_action"])
+        self.assertIn("持续承接确认", market["rebound_action"])
+
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report")
+        hit = next(item for item in hits if item["knowledge_id"] == "market.rebound-quality-active-passive")
+        self.assertIn("主动带动反弹", hit["matched_conditions"])
+        self.assertIn("跟随指数反弹", hit["matched_conditions"])
+        self.assertIn("熟悉资产修复", hit["matched_conditions"])
+        self.assertIn("节奏共振待确认", hit["matched_conditions"])
+        self.assertIn("反弹动作分类", hit["matched_conditions"])
+
+    def test_builds_rebound_quality_facts_from_candidate_and_position_text(self):
+        facts = build_llm_wiki_fact_tags(
+            {
+                "selected_position_candidate": {
+                    "name": "主动核心",
+                    "reason": "主动带动反弹，先于指数修复，按B1参与权观察",
+                    "strength_evidence": ["带动市场", "领涨"],
+                },
+                "final_target_resolution": {
+                    "existing_position_target": {
+                        "name": "跟随旧仓",
+                        "risk_note": "跟随指数反弹，只作为减亏离场和减风险窗口",
+                    },
+                    "capital_priority_decision": {
+                        "capital_priority": "old_position_t",
+                        "reason": "旧仓跟随反弹，不按新主线处理",
+                    },
+                },
+            }
+        )
+
+        self.assertIn("主动带动反弹", facts["candidate"]["rebound_roles"])
+        self.assertIn("先于指数", facts["candidate"]["rebound_state"])
+        self.assertIn("B1参与权", facts["candidate"]["rebound_action"])
+        self.assertIn("跟随指数反弹", facts["position"]["rebound_roles"])
+        self.assertIn("减亏离场", facts["position"]["rebound_action"])
+
+        hits = route_llm_wiki_knowledge(facts, scenario="daily_report")
+        hit = next(item for item in hits if item["knowledge_id"] == "market.rebound-quality-active-passive")
+        self.assertIn("主动带动反弹", hit["matched_conditions"])
+        self.assertIn("反弹动作分类", hit["matched_conditions"])
+        self.assertIn("持仓反弹分类", hit["matched_conditions"])
+        self.assertIn("持仓动作分类", hit["matched_conditions"])
+
+    def test_stock_shape_weakening_does_not_route_to_rebound_quality_framework(self):
+        hits = route_llm_wiki_knowledge(
+            {"question": "个股图形走坏了，反弹要不要先降低风险"},
+            scenario="review",
+        )
+
+        ids = [hit["knowledge_id"] for hit in hits]
+        self.assertNotIn("market.rebound-quality-active-passive", ids)
 
     def test_plain_industry_chain_question_does_not_force_bottleneck_framework(self):
         hits = route_llm_wiki_knowledge(

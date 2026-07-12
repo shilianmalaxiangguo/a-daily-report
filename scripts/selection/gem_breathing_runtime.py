@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 
 import daily_report_analysis_utils as analysis_utils
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
 
 __all__ = [
     "build_gem_elasticity_context",
@@ -975,9 +976,9 @@ def _classify_20cm_branch_legacy_body(candidate=None, mainline_name="", confirm_
     allow_conditional = allow_watch_pool and allow_attack_50_ready and ((right_side_ok and feedback_ready) or (textbook_ready and feedback_ready))
     if allow_conditional:
         if textbook_ready and not right_side_ok:
-            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%条件执行；固定交易窗口内条件不满足则0%不参与。"
+            reason = f"{textbook_summary or textbook_label}；属于反复验证过的20cm教材样本，当前边界清楚且反馈就绪，可先进入50%条件执行；{TWO_B_CONFIRMATION_CLAUSE}；固定交易窗口内条件不满足则0%不参与。"
         else:
-            reason = "20cm 只作为右侧补充分支；主线、确认链、固定交易窗口条件和风险边界都清楚时，按昨晚预案检查执行资格；不满足则0%不参与。"
+            reason = f"20cm 只作为右侧补充分支；主线、确认链、固定交易窗口条件和风险边界都清楚时，{PREMARKET_50_TRIGGER_TEXT}。"
     elif breathing_prep.get("active") and elasticity_context.get("active"):
         reason = f"{breathing_prep.get('note') or '创业板20cm呼吸感预启动。'}；{elasticity_context.get('reason', '')}"
     elif breathing_prep.get("active"):

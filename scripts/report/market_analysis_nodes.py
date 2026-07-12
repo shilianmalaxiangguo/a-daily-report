@@ -5,6 +5,7 @@ from domains.market_state.two_market_turnover.nodes import build_turnover_compar
 from report.mainline_turnover_summary_support import (
     resolve_display_mainline_name,
     resolve_mainline_attack_evidence_summary,
+    resolve_mainline_capacity_regime_summary,
 )
 
 
@@ -69,6 +70,7 @@ def build_market_analysis_market_state_node(context, node_meta=None, node_lookup
 def build_market_analysis_mainline_node(context, node_meta=None, node_lookup=None):
     data = _data(context)
     attack_summary = resolve_mainline_attack_evidence_summary(data)
+    capacity_summary = resolve_mainline_capacity_regime_summary(data)
     exit_analysis = _exit_analysis(context)
     main_sectors_info = _main_sectors_info(context)
     mainline_name = resolve_display_mainline_name(
@@ -76,9 +78,23 @@ def build_market_analysis_mainline_node(context, node_meta=None, node_lookup=Non
         fallback=exit_analysis.get("sector_name", "") if exit_analysis else "",
     )
     lines = ["### 2. 主线板块分析"]
-    if attack_summary and attack_summary.get("attack_state") != "confirmed_attack":
+    unconfirmed_mainline = (
+        bool(attack_summary and attack_summary.get("attack_state") != "confirmed_attack")
+        or capacity_summary.get("mainline_regime") in {"无主线", "混沌轮动", "混沌接力"}
+    )
+    if unconfirmed_mainline:
         lines.append("**当前主线**: 暂无确认主线")
-        lines.append(f"> {attack_summary.get('confirmation_evidence') or '板块攻击证据不足'}")
+        lines.append(
+            f"> {attack_summary.get('confirmation_evidence') or capacity_summary.get('confirmation_evidence') or '板块攻击证据不足'}"
+        )
+        if main_sectors_info:
+            lines.append("")
+            lines.append("**主线候选证据**（统一强度前排，只作主线竞争观察）：")
+            for idx, sector in enumerate(main_sectors_info[:5], 1):
+                zt_count = sector.get("zt_count", 0)
+                change = sector.get("change", 0)
+                net_inflow_text = _format_sector_net_inflow(sector)
+                lines.append(f"{idx}. **{sector['name']}**: 涨停{zt_count}只，涨幅{change:+.2f}%，{net_inflow_text}")
     elif mainline_name and mainline_name != "暂无明确主线":
         lines.append(f"**当前主线**: {mainline_name}")
         lines.append("> 来源：统一执行链综合分析")

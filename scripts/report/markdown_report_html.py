@@ -144,6 +144,7 @@ _CYCLE_SECTOR_COLOR_BY_NAME = {
 
 
 def _strip_inline_markdown(text: str) -> str:
+    text = re.sub(r"\[([^\]\n]+)\]\(([^)\s]+)\)", r"\1", text)
     text = re.sub(r"`([^`]*)`", r"\1", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"__([^_]+)__", r"\1", text)
@@ -297,14 +298,55 @@ def _stock_refs(escaped_text: str, stock_refs: tuple[str, ...]) -> str:
     return pattern.sub(lambda match: f'<code class="stock-ref">{match.group(0)}</code>', escaped_text)
 
 
+_INLINE_MARKUP_RE = re.compile(
+    r"(?P<link>\[(?P<link_label>[^\]\n]+)\]\((?P<link_href>[^)\s]+)\))"
+    r"|(?P<strong_marker>\*\*|__)(?P<strong_text>.+?)(?P=strong_marker)"
+)
+
+
+def _plain_inline_html(text: str, stock_refs: tuple[str, ...]) -> str:
+    return _stock_refs(_html(text), stock_refs)
+
+
+def _is_safe_markdown_href(href: str) -> bool:
+    value = str(href or "").strip()
+    if not value or value.startswith("//"):
+        return False
+    if any(ord(char) < 32 for char in value):
+        return False
+    scheme_match = re.match(r"^([A-Za-z][A-Za-z0-9+.-]*):", value)
+    if scheme_match:
+        return scheme_match.group(1).lower() in {"http", "https"}
+    return True
+
+
+def _markdown_link_html(label: str, href: str, stock_refs: tuple[str, ...]) -> str:
+    href = str(href or "").strip()
+    if not _is_safe_markdown_href(href):
+        return _plain_inline_html(f"[{label}]({href})", stock_refs)
+    external_attrs = ""
+    if re.match(r"^https?://", href, flags=re.IGNORECASE):
+        external_attrs = ' target="_blank" rel="noopener noreferrer"'
+    return f'<a href="{_html(href)}"{external_attrs}>{_plain_inline_html(label, stock_refs)}</a>'
+
+
 def _inline_without_code(text: str, stock_refs: tuple[str, ...]) -> str:
     parts: list[str] = []
     index = 0
-    for match in re.finditer(r"(\*\*|__)(.+?)\1", text):
-        parts.append(_stock_refs(_html(text[index : match.start()]), stock_refs))
-        parts.append(f"<strong>{_stock_refs(_html(match.group(2)), stock_refs)}</strong>")
+    for match in _INLINE_MARKUP_RE.finditer(text):
+        parts.append(_plain_inline_html(text[index : match.start()], stock_refs))
+        if match.group("link"):
+            parts.append(
+                _markdown_link_html(
+                    match.group("link_label"),
+                    match.group("link_href"),
+                    stock_refs,
+                )
+            )
+        else:
+            parts.append(f"<strong>{_plain_inline_html(match.group('strong_text'), stock_refs)}</strong>")
         index = match.end()
-    parts.append(_stock_refs(_html(text[index:]), stock_refs))
+    parts.append(_plain_inline_html(text[index:], stock_refs))
     return "".join(parts)
 
 
@@ -314,12 +356,15 @@ def _table_cell_inline(
     cell_index: int,
     stock_refs: tuple[str, ...],
     *,
+    section_title: str = "",
     in_cycle_sector_surface: bool = False,
 ) -> str:
     header = headers[cell_index] if cell_index < len(headers) else ""
     cell = row[cell_index] if cell_index < len(row) else ""
     if in_cycle_sector_surface and "cycle-sector-" in cell:
         return _cycle_calendar_cell_inline(cell, stock_refs)
+    if _is_front_position_conclusion_cell(headers, row, cell_index, section_title):
+        return _front_position_conclusion_cell_inline(cell, stock_refs)
     if _is_stock_code_header(header):
         code_html = _stock_code_cell(cell)
         if code_html:
@@ -329,6 +374,27 @@ def _table_cell_inline(
         if name_html:
             return name_html
     return _inline(cell, stock_refs)
+
+
+def _is_front_position_conclusion_cell(
+    headers: list[str],
+    row: list[str],
+    cell_index: int,
+    section_title: str,
+) -> bool:
+    if _plain_cell_text(section_title) not in {"日报裁决总览", "明日执行结论"}:
+        return False
+    if cell_index >= len(headers) or _table_header_text(headers[cell_index]) != "结论":
+        return False
+    label = _plain_cell_text(row[0]) if row else ""
+    return label in {"仓位姿态", "明日仓位"}
+
+
+def _front_position_conclusion_cell_inline(text: str, stock_refs: tuple[str, ...]) -> str:
+    parts = [part.strip() for part in str(text or "").split("；") if part.strip()]
+    if len(parts) <= 1:
+        return _inline(text, stock_refs)
+    return "<br>".join(_inline(part, stock_refs) for part in parts)
 
 
 def _cycle_calendar_cell_inline(text: str, stock_refs: tuple[str, ...]) -> str:
@@ -484,6 +550,7 @@ _ACTION_H2_TITLES = {
 }
 
 _EVIDENCE_H2_TITLES = {
+    "市场语言翻译（研究证据）",
     "板块资金扩散淘汰赛",
     "板块资金载体预案",
     "板块资金载体差异复核",
@@ -588,11 +655,53 @@ def _is_position_timeline_table(headers: list[str], rows: list[list[str]]) -> bo
     return {"Ta旧仓", "Tb明日目标", "Tc复核位"}.issubset(lane_names)
 
 
+def _is_position_day_order_table(headers: list[str], rows: list[list[str]]) -> bool:
+    header_texts = [_table_header_text(header) for header in headers]
+    required = ["日序", "日期", "账户位置", "执行目标", "B1/B2执行层", "动作"]
+    if header_texts[: len(required)] != required:
+        return False
+    day_codes = {_plain_cell_text(row[0]) for row in rows if row}
+    return {"Ta", "Tb", "Tc", "Td", "Te"}.issubset(day_codes)
+
+
+def _is_board_tag_rank_table_headers(headers: list[str]) -> bool:
+    header_texts = {_table_header_text(header) for header in headers}
+    return (
+        {"排名", "标签", "出现次数"}.issubset(header_texts)
+        and ("全标签占比" in header_texts or "面积占比" in header_texts)
+    )
+
+
+def _is_board_tag_rank_heading(heading: str) -> bool:
+    return any(marker in heading for marker in ("标签热度排行榜", "标签面积占比图"))
+
+
+def _is_t100_marker_before_table(lines: list[str], table_index: int) -> bool:
+    previous_index = table_index - 1
+    while previous_index >= 0:
+        previous = lines[previous_index].strip()
+        if previous:
+            text = _plain_cell_text(previous)
+            return re.match(r"^T-?100(?:$|[（(])", text) is not None
+        previous_index -= 1
+    return False
+
+
+def _is_board_tag_rank_table_context(current_heading: str, lines: list[str], table_index: int) -> bool:
+    return _is_board_tag_rank_heading(current_heading) or _is_t100_marker_before_table(lines, table_index)
+
+
 def _markdown_starts_with_position_timeline(markdown_text: str) -> bool:
     for line in str(markdown_text or "").splitlines():
-        if not line.strip():
+        stripped = line.strip()
+        if not stripped:
             continue
-        return line.lstrip().startswith("| 轨道 | 标的 |")
+        if (
+            stripped == "## 账户日序表"
+            or line.lstrip().startswith("| 轨道 | 标的 |")
+            or line.lstrip().startswith("| 日序 | 日期 |")
+        ):
+            return True
     return False
 
 
@@ -617,6 +726,10 @@ def _position_timeline_lane_class(value: str) -> str:
         return "timeline-row-tb"
     if text.startswith("Tc"):
         return "timeline-row-tc"
+    if text.startswith("Td"):
+        return "timeline-row-td"
+    if text.startswith("Te"):
+        return "timeline-row-te"
     return "timeline-row-neutral"
 
 
@@ -633,6 +746,16 @@ def _position_timeline_asset_html(value: str) -> str:
     )
 
 
+def _position_timeline_axis_state_label(value: str) -> str:
+    text = _plain_cell_text(value)
+    if text in {"", "-", "无", "空仓"}:
+        return "空仓"
+    match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9·*STst]+)\((\d{6})\)", text)
+    if match:
+        return match.group(1)
+    return text
+
+
 def _position_timeline_date_html(value: str) -> str:
     text = _plain_cell_text(value)
     match = re.match(r"^(.+?)（(.+?)）$", text)
@@ -644,17 +767,49 @@ def _position_timeline_date_html(value: str) -> str:
     )
 
 
-def _position_timeline_action_badge(value: str) -> str:
+def _position_timeline_action_badges(value: str) -> list[tuple[str, str]]:
     text = _plain_cell_text(value)
+    if ("0%不参与" in text or "只核实成交记录" in text) and (
+        "待成交确认" in text or "确认已成交才视为B1" in text
+    ):
+        return [("只核实", "is-check")]
+    if any(marker in text for marker in ("没有B1/B2", "不生成B1/B2", "无B1占用", "没有B1", "没有B2")):
+        return [("空仓", "is-empty")]
+    if any(
+        marker in text
+        for marker in (
+            "待成交确认",
+            "未确认成交，不视为B1",
+            "确认已成交才视为B1",
+            "B1事实待确认",
+        )
+    ):
+        return [("待确认", "is-check")]
+    b2_cancelled = "取消B2" in text or "B2取消" in text
+    if any(marker in text for marker in ("B1不成立", "不参与", "不新增参与")):
+        if b2_cancelled:
+            return [("取消B2", "is-cancel")]
+        return [("空仓", "is-empty")]
+    badges: list[tuple[str, str]] = []
+    if "B1" in text or "参与权" in text:
+        badges.append(("参与权", "is-participate"))
+    if "临时加B2" in text or "B2确认权" in text or "确认权" in text:
+        badges.append(("确认权", "is-confirm"))
+    if b2_cancelled:
+        badges.append(("取消B2", "is-cancel"))
+    if "检查B1" in text or "检查 B1" in text:
+        badges.append(("检查B1", "is-check"))
+    if badges:
+        return badges
     if "Ta+2" in text or "尽早卖出" in text:
-        return "必执行"
+        return [("必执行", "is-sell")]
     if text.startswith("Tb+0"):
-        return "条件买入"
+        return [("条件买入", "is-buy")]
     if text.startswith("Tb+1"):
-        return "持仓处理"
+        return [("持仓处理", "is-hold")]
     if text.startswith("没有Tb+0"):
-        return "空仓"
-    return ""
+        return [("空仓", "is-empty")]
+    return []
 
 
 def _position_timeline_segment_is_selected(value: str) -> bool:
@@ -709,6 +864,20 @@ def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_cou
     has_tb_buy = any(text.startswith("Tb+0") for text in day_texts)
     has_no_tb = tb_text.startswith("没有Tb")
     has_empty_ta = ta_text in {"空仓", "Ta+0 空仓"}
+    pending_verification_only = any(
+        ("0%不参与" in text or "只核实成交记录" in text)
+        and ("待成交确认" in text or "确认已成交才视为B1" in text)
+        for text in day_texts
+    )
+    if pending_verification_only:
+        return "空仓执行"
+    if any("取消B2" in text or "B2取消" in text for text in day_texts):
+        return "取消B2"
+    if any(
+        any(marker in text for marker in ("B1不成立", "不参与", "不新增参与"))
+        for text in day_texts
+    ):
+        return "空仓执行"
     if has_ta_exit and has_no_tb and not has_tb_hold and not has_tb_buy:
         return "空仓执行"
     if has_tb_hold:
@@ -721,12 +890,26 @@ def _position_timeline_execution_tag(rows: list[list[str]], index: int, date_cou
         return "条件买入"
     if has_no_tb and has_empty_ta and not has_tb_hold and not has_tb_buy:
         return "空仓执行"
+    if any("确认权" in text for text in day_texts):
+        return "确认权"
+    if any("参与权" in text or "B1" in text for text in day_texts):
+        return "参与权"
+    if any("只处理旧仓" in text or "旧仓" in text for text in day_texts):
+        return "持仓处理"
+    if any("不新增参与" in text or "没有B2" in text for text in day_texts):
+        return "空仓执行"
     return ""
 
 
 def _position_timeline_execution_tag_class(tag: str) -> str:
     if "空仓" in tag:
         return "is-empty"
+    if "确认权" in tag:
+        return "is-confirm"
+    if "参与权" in tag:
+        return "is-buy"
+    if "取消B2" in tag:
+        return "is-sell"
     if "买入" in tag:
         return "is-buy"
     if "卖出" in tag:
@@ -736,13 +919,60 @@ def _position_timeline_execution_tag_class(tag: str) -> str:
     return "is-neutral"
 
 
+def _position_timeline_axis_state_class(
+    label: str,
+    index: int,
+    report_index: int,
+    selected_indexes: set[int],
+) -> str:
+    if not label:
+        return ""
+    if label == "空仓":
+        return "is-empty"
+    if label == "持仓未输入":
+        return "is-unknown"
+    if index in selected_indexes:
+        return "is-buy"
+    if index == report_index:
+        return "is-report"
+    if index < report_index:
+        return "is-history"
+    return "is-neutral"
+
+
+def _position_timeline_axis_state_tags(rows: list[list[str]], date_count: int) -> dict[int, str]:
+    tags: dict[int, str] = {}
+    for index in range(date_count):
+        empty_label = ""
+        for row in rows:
+            cells = row[2 : 2 + date_count]
+            if index >= len(cells) or not _plain_cell_text(cells[index]):
+                continue
+            label = _position_timeline_axis_state_label(row[1] if len(row) > 1 else "")
+            if label and label != "空仓":
+                tags[index] = label
+                break
+            if label:
+                empty_label = label
+        if index not in tags and empty_label:
+            tags[index] = empty_label
+    return tags
+
+
 def _position_timeline_date_markers_html(
     index: int,
     report_index: int,
     selected_indexes: set[int],
     execution_tags: dict[int, str],
+    state_tags: dict[int, str] | None = None,
 ) -> str:
     parts: list[str] = []
+    state_label = (state_tags or {}).get(index, "")
+    if state_label:
+        state_class = _position_timeline_axis_state_class(state_label, index, report_index, selected_indexes)
+        parts.append(
+            f'<span class="timeline-date-state {state_class}">{_html(state_label)}</span>'
+        )
     if index == report_index:
         parts.append('<span class="timeline-date-context">报告日</span>')
     elif index < report_index:
@@ -760,10 +990,10 @@ def _position_timeline_date_markers_html(
 
 def _position_timeline_state_parts(value: str) -> tuple[str, str]:
     text = _plain_cell_text(value)
-    missing_match = re.match(r"^(没有(?:Ta|Tb|Tc)\+\d+)[，,、\s]*(.*)$", text)
+    missing_match = re.match(r"^(没有(?:Ta|Tb|Tc|Td|Te)\+\d+)[，,、\s]*(.*)$", text)
     if missing_match:
         return missing_match.group(1), missing_match.group(2).strip()
-    state_match = re.match(r"^((?:Ta|Tb|Tc)\+\d+)\s*(.*)$", text)
+    state_match = re.match(r"^((?:Ta|Tb|Tc|Td|Te)(?:\+\d+)?)\s*(.*)$", text)
     if state_match:
         return state_match.group(1), state_match.group(2).strip()
     return text, ""
@@ -783,22 +1013,38 @@ def _position_timeline_state_class(value: str) -> str:
         return "is-tb"
     if text.startswith("Tc+"):
         return "is-tc"
+    if text.startswith("Td"):
+        return "is-td"
+    if text.startswith("Te"):
+        return "is-te"
     return "is-neutral"
 
 
 def _position_timeline_segment_html(value: str) -> str:
     code, description = _position_timeline_state_parts(value)
     class_name = _position_timeline_state_class(value)
-    action_badge = _position_timeline_action_badge(value)
+    action_badges = _position_timeline_action_badges(value)
     selected_class = " is-selected" if _position_timeline_segment_is_selected(value) else ""
     description_html = (
         f'<span class="timeline-state-text">{_html(description)}</span>' if description else ""
     )
     badge_html = (
-        f'<span class="timeline-action-badge">{_html(action_badge)}</span>' if action_badge else ""
+        (
+            '<span class="timeline-action-badges">'
+            + "".join(
+                f'<span class="timeline-action-badge {badge_class}">{_html(action_badge)}</span>'
+                for action_badge, badge_class in action_badges
+            )
+            + "</span>"
+            if action_badges
+            else ""
+        )
     )
+    title = _plain_cell_text(value)
+    tooltip = _html(title)
     return (
-        f'<span class="timeline-bar-segment {class_name}{selected_class}">'
+        f'<span class="timeline-bar-segment {class_name}{selected_class}" tabindex="0" '
+        f'data-el-tooltip="{tooltip}" aria-label="{tooltip}">'
         f'<span class="timeline-state-code">{_html(code)}</span>'
         f"{description_html}"
         f"{badge_html}"
@@ -856,14 +1102,21 @@ def _render_position_timeline_table(
     headers: list[str],
     rows: list[list[str]],
     stock_refs: tuple[str, ...],
+    *,
+    report_index: int | None = None,
+    selected_indexes: set[int] | None = None,
+    aria_label: str = "Ta Tb Tc 持仓时间轴",
 ) -> str:
     date_headers = headers[2:]
-    report_index = _position_timeline_report_index(rows, len(date_headers))
-    selected_indexes = _position_timeline_selected_indexes(rows, len(date_headers))
+    if report_index is None:
+        report_index = _position_timeline_report_index(rows, len(date_headers))
+    if selected_indexes is None:
+        selected_indexes = _position_timeline_selected_indexes(rows, len(date_headers))
     execution_tags = {
         index: _position_timeline_execution_tag(rows, index, len(date_headers))
         for index in selected_indexes
     }
+    state_tags = _position_timeline_axis_state_tags(rows, len(date_headers))
     colgroup = (
         '<colgroup><col class="timeline-col-lane"><col class="timeline-col-asset">'
         '<col class="timeline-col-track">'
@@ -880,7 +1133,7 @@ def _render_position_timeline_table(
                     f'<span class="timeline-axis-date{" is-report-day" if index == report_index else ""}'
                     f'{" is-selected" if index in selected_indexes else ""}">'
                     f'{_position_timeline_date_html(header)}'
-                    f'{_position_timeline_date_markers_html(index, report_index, selected_indexes, execution_tags)}'
+                    f'{_position_timeline_date_markers_html(index, report_index, selected_indexes, execution_tags, state_tags)}'
                     "</span>"
                 )
                 for index, header in enumerate(date_headers)
@@ -904,11 +1157,100 @@ def _render_position_timeline_table(
         )
     body = "\n".join(body_rows)
     return (
-        '<div class="position-timeline-shell" role="region" aria-label="Ta Tb Tc 持仓时间轴">'
+        f'<div class="position-timeline-shell{" is-day-order" if "账户日序" in aria_label else ""}" '
+        f'role="region" aria-label="{_html(aria_label)}">'
         '<div class="position-timeline-scroll">'
         '<table class="position-timeline-table">'
         f"{colgroup}<thead><tr>{''.join(header_cells)}</tr></thead><tbody>{body}</tbody>"
         "</table></div></div>"
+    )
+
+
+def _position_day_order_lane_label(code: str, account: str) -> str:
+    text = _plain_cell_text(code)
+    if text == "Td":
+        return "Td今日"
+    if text == "Te":
+        return "Te明日"
+    if text == "Tc":
+        return "Tc上一日"
+    if text == "Tb":
+        return "Tb历史"
+    if text == "Ta":
+        return "Ta最远"
+    account_text = _plain_cell_text(account)
+    return f"{text}{account_text}" if account_text else text
+
+
+def _position_day_order_asset(code: str, account: str, target: str) -> str:
+    target_text = _plain_cell_text(target)
+    if target_text not in {"", "-", "无"}:
+        return target_text
+    if _plain_cell_text(code) == "Te":
+        return "无"
+    account_text = _plain_cell_text(account)
+    if "持仓未输入" in account_text:
+        return "持仓未输入"
+    stock_match = re.search(r"([\u4e00-\u9fa5A-Za-z0-9·]+)\((\d{6})\)", account_text)
+    if stock_match:
+        return f"{stock_match.group(1)}({stock_match.group(2)})"
+    path_match = re.search(r"路径[：:]\s*([^；，,|]+)", account_text)
+    if path_match:
+        path_text = path_match.group(1).strip()
+        if path_text and path_text not in {"-", "无", "空仓"}:
+            return path_text
+    return "无"
+
+
+def _position_day_order_cell_text(code: str, account: str, b12: str, action: str) -> str:
+    code_text = _plain_cell_text(code)
+    details = [
+        _plain_cell_text(account),
+        _plain_cell_text(b12),
+        _plain_cell_text(action),
+    ]
+    detail_text = "；".join(part for part in details if part)
+    return f"{code_text} {detail_text}".strip()
+
+
+def _render_position_day_order_table(
+    headers: list[str],
+    rows: list[list[str]],
+    stock_refs: tuple[str, ...],
+) -> str:
+    date_headers: list[str] = []
+    timeline_rows: list[list[str]] = []
+    report_index = 0
+    selected_indexes: set[int] = set()
+    padded_rows: list[list[str]] = []
+    for row in rows:
+        padded = row + [""] * max(0, len(headers) - len(row))
+        padded_rows.append(padded)
+        date_headers.append(padded[1])
+    for index, padded in enumerate(padded_rows):
+        code, _date, account, target, b12, action = padded[:6]
+        code_text = _plain_cell_text(code)
+        if code_text == "Td":
+            report_index = index
+        if code_text == "Te":
+            selected_indexes.add(index)
+        cells = [""] * len(date_headers)
+        cells[index] = _position_day_order_cell_text(code, account, b12, action)
+        timeline_rows.append(
+            [
+                _position_day_order_lane_label(code, account),
+                _position_day_order_asset(code, account, target),
+                *cells,
+            ]
+        )
+    timeline_headers = ["轨道", "标的", *date_headers]
+    return _render_position_timeline_table(
+        timeline_headers,
+        timeline_rows,
+        stock_refs,
+        report_index=report_index,
+        selected_indexes=selected_indexes,
+        aria_label="Ta Te 账户日序",
     )
 
 
@@ -1240,11 +1582,17 @@ def _collect_board_tag_rank_items(lines: list[str]) -> list[dict[str, object]]:
             current_heading = _plain_cell_text(heading_match.group(2))
             index += 1
             continue
-        if not any(marker in current_heading for marker in ("标签热度排行榜", "标签面积占比图")) or not _is_table_start(lines, index):
+        if not _is_table_start(lines, index):
             index += 1
             continue
 
         headers, rows, _next_index = _collect_table(lines, index)
+        if not _is_board_tag_rank_table_headers(headers) or not _is_board_tag_rank_table_context(
+            current_heading, lines, index
+        ):
+            index = _next_index
+            continue
+
         rank_index = _header_index(headers, "排名")
         tag_index = _header_index(headers, "标签")
         count_index = _header_index(headers, "出现次数")
@@ -1304,6 +1652,26 @@ def _collect_market_turnover_top50_items(lines: list[str], limit: int = 25) -> l
     return []
 
 
+def _collect_new_high_share_by_date(lines: list[str], limit: int = 25) -> dict[str, float]:
+    index = 0
+    while index < len(lines):
+        if not _table_has_headers(lines, index, "日期", "新高数", "全A占比"):
+            index += 1
+            continue
+
+        headers, rows, _next_index = _collect_table(lines, index)
+        date_index = _header_index(headers, "日期")
+        share_index = _header_index(headers, "全A占比")
+        share_by_date: dict[str, float] = {}
+        for row in rows[:limit]:
+            date = _plain_cell_text(_cell_at(row, date_index))
+            share_pct = _numeric_percent(_cell_at(row, share_index))
+            if date and share_pct is not None:
+                share_by_date[date] = share_pct
+        return share_by_date
+    return {}
+
+
 def _is_lhb_side_heading(heading: str, side: str) -> bool:
     text = _plain_cell_text(heading)
     if side == "buy":
@@ -1350,6 +1718,8 @@ def _collect_lhb_flow_items(lines: list[str], limit_per_side: int = 10) -> list[
         for row in rows[:limit_per_side]:
             amount = _numeric_amount_yi(_cell_at(row, amount_index))
             if amount is None:
+                continue
+            if amount == 0:
                 continue
             signed_amount = abs(amount) if side == "buy" else -abs(amount)
             change_pct = _numeric_percent(_cell_at(row, change_index))
@@ -1563,6 +1933,12 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
     lines = markdown_text.splitlines()
     sector_items = _collect_sector_turnover_chart_items(lines, trade_date)
     market_turnover_items = _collect_market_turnover_top50_items(lines)
+    new_high_share_by_date = _collect_new_high_share_by_date(lines)
+    if market_turnover_items and new_high_share_by_date:
+        for item in market_turnover_items:
+            share_pct = new_high_share_by_date.get(str(item.get("date") or ""))
+            if share_pct is not None:
+                item["new_high_share_pct"] = share_pct
     turnover_items = _collect_turnover_top_items(lines, limit=30)
     turnover_sector_items = _collect_turnover_sector_share_items(turnover_items)
     board_tag_items = _collect_board_tag_rank_items(lines)
@@ -1578,8 +1954,8 @@ def _collect_bear_chart_payload(markdown_text: str, trade_date: str) -> dict[str
     if market_turnover_items:
         payload["market_turnover_top50_trend"] = {
             "items": market_turnover_items,
-            "title": "两市成交额与Top50占比",
-            "subtitle": "柱看两市成交额，线看头部成交集中度",
+            "title": "两市成交额、Top50占比与创新高全A占比",
+            "subtitle": "柱看两市成交额，线看头部成交集中度和趋势扩散",
         }
     if sector_items:
         payload["sector_turnover_share"] = {
@@ -1638,6 +2014,105 @@ def _bear_chart_card_html(
         f'<div class="bear-chart" data-bear-chart="{_html(chart_id)}" role="img" aria-label="{_html(title)}"></div>'
         "</div>"
         f'<p class="bear-chart-footnote">{_html(footnote)} · 当前样本 {item_count} 条</p>'
+        "</section>"
+    )
+
+
+_MARKET_STRUCTURE_CHART_RE = re.compile(r'^::market-structure-chart\{(?P<attrs>.*)\}$')
+_DIRECTIVE_ATTR_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"')
+
+
+def _parse_directive_attrs(attr_text: str) -> dict[str, str]:
+    return {match.group(1): match.group(2) for match in _DIRECTIVE_ATTR_RE.finditer(str(attr_text or ""))}
+
+
+def _resolve_local_report_asset(src: str, output_path: str | Path | None) -> Path | None:
+    value = str(src or "").strip()
+    if not value or value.startswith("//") or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", value):
+        return None
+    base_dir = Path(output_path).resolve().parent if output_path is not None else _repo_root() / "reports"
+    candidate = (base_dir / value).resolve()
+    try:
+        candidate.relative_to(base_dir.resolve())
+    except ValueError:
+        return None
+    return candidate
+
+
+def _load_market_structure_chart_data(src: str, output_path: str | Path | None) -> dict[str, object]:
+    path = _resolve_local_report_asset(src, output_path)
+    if path is None or not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    match = re.search(
+        r'<script[^>]*\bid=["\']chanlun-chart-data["\'][^>]*>(.*?)</script>',
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return {}
+    try:
+        payload = json.loads(unescape(match.group(1)))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _market_structure_summary_text(chart_data: dict[str, object]) -> str:
+    current = chart_data.get("currentSegment") if isinstance(chart_data.get("currentSegment"), dict) else {}
+    latest_date = str(chart_data.get("latestDate") or "").strip()
+    latest_price = chart_data.get("latestPrice")
+    parts = []
+    if latest_date:
+        parts.append(f"最新K线 {latest_date}")
+    try:
+        parts.append(f"收盘 {float(latest_price):.2f}")
+    except (TypeError, ValueError):
+        pass
+    if current:
+        start = str(current.get("startDate") or "").strip()
+        end = str(current.get("endDate") or "").strip()
+        if start or end:
+            parts.append(f"当前中枢 {start}~{end}".strip("~"))
+        try:
+            parts.append(f"ZD {float(current.get('zd')):.2f} / ZG {float(current.get('zg')):.2f}")
+        except (TypeError, ValueError):
+            pass
+    return "；".join(parts)
+
+
+def _render_market_structure_chart(line: str, output_path: str | Path | None) -> str:
+    match = _MARKET_STRUCTURE_CHART_RE.match(line.strip())
+    if not match:
+        return ""
+    attrs = _parse_directive_attrs(match.group("attrs"))
+    title = attrs.get("title") or "上证指数日线中枢"
+    chart_data = _load_market_structure_chart_data(attrs.get("src", ""), output_path)
+    if not chart_data:
+        return (
+            '<section class="market-structure-chart-card is-missing">'
+            '<div class="market-structure-chart-copy">'
+            '<span class="market-structure-chart-eyebrow">指数结构</span>'
+            f"<h4>{_html(title)}</h4>"
+            "<p>上证结构图数据未生成，停止展示图表。</p>"
+            "</div>"
+            "</section>"
+        )
+    summary = _market_structure_summary_text(chart_data)
+    summary_html = f"<p>{_html(summary)}</p>" if summary else ""
+    return (
+        '<section class="market-structure-chart-card" data-market-structure-card="true">'
+        '<div class="market-structure-chart-copy">'
+        '<span class="market-structure-chart-eyebrow">指数结构</span>'
+        f"<h4>{_html(title)}</h4>"
+        f"{summary_html}"
+        "</div>"
+        '<div class="market-structure-chart-frame">'
+        f'<div class="market-structure-chart" data-market-structure-chart role="img" aria-label="{_html(title)}"></div>'
+        "</div>"
+        '<script type="application/json" class="market-structure-chart-data">'
+        f"{_json_for_html_script(chart_data)}"
+        "</script>"
         "</section>"
     )
 
@@ -1810,6 +2285,8 @@ def _signal_class(
 
     if "Top50" in context and "占比" in context:
         pct = _numeric_percent(text)
+        if pct is not None and pct > 25:
+            return "signal-extreme"
         if pct is not None and pct > 20:
             return "signal-hot"
         if pct is not None and pct < 18:
@@ -1873,6 +2350,7 @@ def _render_table(
     *,
     section_title: str = "",
     limit_pools: LimitPools | None = None,
+    hide_board_tag_heatbar: bool = False,
 ) -> tuple[str, int]:
     headers = _split_table_row(lines[index])
     index += 2
@@ -1882,17 +2360,26 @@ def _render_table(
             rows.append(_split_table_row(lines[index]))
         index += 1
 
+    if _is_position_day_order_table(headers, rows):
+        return _render_position_day_order_table(headers, rows, stock_refs), index
+
     if _is_position_timeline_table(headers, rows):
         return _render_position_timeline_table(headers, rows, stock_refs), index
 
-    header_html = "".join(f"<th>{_inline(header, stock_refs)}</th>" for header in headers)
+    hidden_columns: set[int] = set()
+    if hide_board_tag_heatbar and _is_board_tag_rank_table_headers(headers):
+        hidden_columns = {
+            index for index, header in enumerate(headers) if _table_header_text(header) == "热度条"
+        }
+    visible_headers = [(index, header) for index, header in enumerate(headers) if index not in hidden_columns]
+    header_html = "".join(f"<th>{_inline(header, stock_refs)}</th>" for _index, header in visible_headers)
     is_cycle_calendar = _is_cycle_calendar_section(section_title)
     is_cycle_sector_surface = _is_cycle_sector_surface(section_title)
     body_rows = []
     for row in rows:
         padded = row + [""] * max(0, len(headers) - len(row))
         cells = []
-        for cell_index, cell in enumerate(padded[: len(headers)]):
+        for cell_index, cell in ((index, padded[index]) for index, _header in visible_headers):
             class_name = _signal_class(
                 headers,
                 padded,
@@ -1905,6 +2392,7 @@ def _render_table(
                 padded,
                 cell_index,
                 stock_refs,
+                section_title=section_title,
                 in_cycle_sector_surface=is_cycle_sector_surface,
             )
             if class_name:
@@ -1912,7 +2400,7 @@ def _render_table(
             else:
                 cells.append(f"<td>{cell_html}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
-    body = "\n".join(body_rows) or f'<tr><td colspan="{len(headers)}">暂无数据</td></tr>'
+    body = "\n".join(body_rows) or f'<tr><td colspan="{len(visible_headers)}">暂无数据</td></tr>'
     legend_html = _cycle_calendar_legend_html(rows) if is_cycle_calendar else ""
     return (
         legend_html
@@ -1937,6 +2425,7 @@ def _collect_paragraph(lines: list[str], index: int) -> tuple[str, int]:
             or stripped.startswith(">")
             or stripped.startswith("- ")
             or stripped == "---"
+            or _MARKET_STRUCTURE_CHART_RE.match(stripped)
             or _is_fenced_code_start(stripped)
             or _is_table_start(lines, index)
         ):
@@ -1998,6 +2487,12 @@ def render_markdown_report_html(
         line = lines[index]
         stripped = line.strip()
         if not stripped:
+            index += 1
+            continue
+
+        market_structure_chart = _render_market_structure_chart(stripped, output_path)
+        if market_structure_chart:
+            fragments.append(market_structure_chart)
             index += 1
             continue
 
@@ -2122,7 +2617,7 @@ def render_markdown_report_html(
                         "market_turnover_top50_trend",
                         eyebrow="容量温度",
                         title="两市成交额 + Top50占比",
-                        subtitle="柱形看总水位，折线看头部成交集中度；同一时间序列，不换比较基准。",
+                        subtitle="柱形看总水位，红线看头部成交集中度，青线辅助看趋势扩散。",
                         footnote="图表来自Top50成交额占比趋势表",
                         item_count=len(items),
                     )
@@ -2165,12 +2660,35 @@ def render_markdown_report_html(
                     )
                 )
                 inserted_charts.add("turnover_top30")
+            board_tag_chart = bear_chart_payload.get("board_tag_rank_bar")
+            is_board_tag_rank_table = _is_board_tag_rank_table_headers(
+                _split_table_row(lines[index])
+            ) and _is_board_tag_rank_table_context(current_section_title, lines, index)
+            if (
+                isinstance(board_tag_chart, dict)
+                and "board_tag_rank_bar" not in inserted_charts
+                and is_board_tag_rank_table
+            ):
+                items = board_tag_chart.get("items") if isinstance(board_tag_chart.get("items"), list) else []
+                fragments.append(
+                    _bear_chart_card_html(
+                        "board_tag_rank_bar",
+                        eyebrow="标签排行",
+                        title="板块标签热度排行榜",
+                        subtitle="按出现次数横向比较，直接看热榜标签前排强弱。",
+                        footnote="图表来自下方标签热度排行榜",
+                        item_count=len(items),
+                        tall=True,
+                    )
+                )
+                inserted_charts.add("board_tag_rank_bar")
             table_html, index = _render_table(
                 lines,
                 index,
                 stock_refs,
                 section_title=current_section_title,
                 limit_pools=limit_pools,
+                hide_board_tag_heatbar=is_board_tag_rank_table,
             )
             fragments.append(table_html)
             continue

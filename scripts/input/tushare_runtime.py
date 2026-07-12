@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import datetime
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
+from pathlib import Path
 
 from domains.market_activity.new_high_runtime import build_new_high_feedback_snapshot
 from domains.market_state.margin_pressure_runtime import build_margin_pressure_snapshot
@@ -136,6 +138,148 @@ def _safe_int(value, default=0):
         return int(float(value))
     except (TypeError, ValueError):
         return int(default)
+
+
+def _markdown_table_cells(line):
+    text = str(line or "").strip()
+    if not text.startswith("|") or "|" not in text[1:]:
+        return []
+    return [cell.strip() for cell in text.strip("|").split("|")]
+
+
+def _new_high_record_from_report_markdown(markdown_text, trade_date):
+    date_text = normalize_kline_date_str(trade_date)
+    if not date_text:
+        return {}
+    lines = str(markdown_text or "").splitlines()
+    in_new_high_section = False
+    headers = []
+    header_indexes = {}
+    for line in lines:
+        stripped = line.strip()
+        heading_match = re.match(r"^(#{1,6})\s+(.+?)\s*$", stripped)
+        if heading_match:
+            heading_text = heading_match.group(2)
+            in_new_high_section = "创新高趋势反馈" in heading_text
+            headers = []
+            header_indexes = {}
+            continue
+        if not in_new_high_section:
+            continue
+        cells = _markdown_table_cells(line)
+        if not cells:
+            continue
+        if all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells):
+            continue
+        if {"日期", "新高数", "全A占比"}.issubset(set(cells)):
+            headers = cells
+            header_indexes = {header: index for index, header in enumerate(headers)}
+            continue
+        if not headers:
+            continue
+        date_index = header_indexes.get("日期", -1)
+        count_index = header_indexes.get("新高数", -1)
+        share_index = header_indexes.get("全A占比", -1)
+        sector_index = header_indexes.get("主导板块", -1)
+        if min(date_index, count_index, share_index, sector_index) < 0:
+            continue
+        if len(cells) <= max(date_index, count_index, share_index, sector_index):
+            continue
+        row_date = normalize_kline_date_str(cells[date_index])
+        if row_date != date_text:
+            continue
+        return {
+            "trade_date": date_text,
+            "new_high_count": _safe_int(cells[count_index]),
+            "all_a_share_pct": _safe_float(str(cells[share_index]).rstrip("%")),
+            "leading_sectors": cells[sector_index].strip(),
+            "source_policy": "report_markdown.new_high_feedback",
+        }
+    return {}
+
+
+def _new_high_record_from_report_file(trade_date):
+    date_text = normalize_kline_date_str(trade_date)
+    if not date_text:
+        return {}
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        repo_root / "reports" / f"{date_text}_A股日报_完整版.md",
+        repo_root / "reports" / f"{date_text}_A股日报_轻量版.md",
+        repo_root / "reports" / "replay" / f"{date_text}_A股日报_完整版_replay.md",
+        repo_root / "reports" / "replay" / f"{date_text}_A股日报_轻量版_replay.md",
+    ]
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        record = _new_high_record_from_report_markdown(text, date_text)
+        if record:
+            return record
+    return {}
+
+
+def _fill_new_high_history_from_report_files(history_rows, expected_dates):
+    by_date = {}
+    for row in history_rows or []:
+        date_text = normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+        if not date_text:
+            continue
+        normalized = dict(row or {})
+        normalized["trade_date"] = date_text
+        by_date[date_text] = normalized
+    for date_text in expected_dates or []:
+        normalized_date = normalize_kline_date_str(date_text)
+        if not normalized_date or normalized_date in by_date:
+            continue
+        record = _new_high_record_from_report_file(normalized_date)
+        if record:
+            by_date[normalized_date] = record
+    return [by_date[date_text] for date_text in sorted(by_date)]
+
+
+def _new_high_report_history_dates_before(target_date, limit=24):
+    target_text = normalize_kline_date_str(target_date)
+    if not target_text:
+        return []
+    repo_root = Path(__file__).resolve().parents[2]
+    dates = set()
+    for directory in (repo_root / "reports", repo_root / "reports" / "replay"):
+        if not directory.exists():
+            continue
+        for path in directory.glob("*_A股日报_*.md"):
+            match = re.match(r"^(\d{4}-\d{2}-\d{2})_A股日报_", path.name)
+            if not match:
+                continue
+            date_text = normalize_kline_date_str(match.group(1))
+            if date_text and date_text < target_text:
+                dates.add(date_text)
+    return sorted(dates)[-int(limit or 24):]
+
+
+def _new_high_history_has_large_gap(history_rows, target_date):
+    target_text = normalize_kline_date_str(target_date)
+    if not target_text:
+        return False
+    dates = sorted(
+        {
+            normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+            for row in history_rows or []
+            if normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date"))
+            and normalize_kline_date_str((row or {}).get("trade_date") or (row or {}).get("date")) < target_text
+        }
+    )
+    if not dates:
+        return True
+    try:
+        target_day = datetime.datetime.strptime(target_text, "%Y-%m-%d").date()
+        latest_day = datetime.datetime.strptime(dates[-1], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    return (target_day - latest_day).days > 7
 
 
 def _clean_code(value):
@@ -884,6 +1028,7 @@ def get_new_high_feedback_from_tushare_first(
     factor_fetcher = fetch_stock_factor_pro_rows_fn or fetch_stock_factor_pro_rows
     basic_fetcher = fetch_stock_basic_map_fn or fetch_stock_basic_map
     target_date_text = normalize_kline_date_str(target_date)
+    history_rows_was_provided = history_rows is not None
 
     def _fetch_factor_rows(trade_date):
         if pro is not None:
@@ -1273,8 +1418,18 @@ def get_new_high_feedback_from_tushare_first(
                             for row in history_rows
                             if str((row or {}).get("trade_date") or (row or {}).get("date") or "").strip() in expected_set
                         ] or history_rows[-24:]
+            if expected_previous_dates:
+                history_rows = _fill_new_high_history_from_report_files(history_rows, expected_previous_dates)
         except Exception:
             history_rows = None
+    if (
+        not history_rows_was_provided
+        and factor_rows
+        and _new_high_history_has_large_gap(history_rows, target_date_text or factor_trade_date)
+    ):
+        report_previous_dates = _new_high_report_history_dates_before(target_date_text or factor_trade_date, limit=24)
+        if report_previous_dates:
+            history_rows = _fill_new_high_history_from_report_files(history_rows, report_previous_dates)
     snapshot = build_new_high_feedback_snapshot(
         factor_rows,
         stock_basic_map=stock_basic_map,
@@ -3144,6 +3299,26 @@ def _concept_fund_flow_pending_hot_plate_payload(concept_plates, target_date, *,
     }
 
 
+def _pending_hot_plate_candidates(hot_plates, *, limit=20):
+    candidates = []
+    seen = set()
+    for plate in hot_plates or []:
+        if not isinstance(plate, dict):
+            continue
+        code = str(plate.get("code") or plate.get("ts_code") or "").strip().upper()
+        name = _clean_text(plate.get("name"))
+        if not code or not name:
+            continue
+        key = code or name
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(dict(plate))
+        if len(candidates) >= max(int(limit or 20), 1):
+            break
+    return candidates
+
+
 def get_hot_concept_fund_flow_from_tushare_first(
     target_date=None,
     *,
@@ -3172,7 +3347,15 @@ def get_hot_concept_fund_flow_from_tushare_first(
             break
 
     if not concept_plates:
-        return _empty_concept_fund_flow_payload(fallback_used=False)
+        fallback = _concept_fund_flow_snapshot_payload(snapshot_fallback_fn, target_date, limit=limit)
+        if fallback:
+            return fallback
+        pending = _concept_fund_flow_pending_hot_plate_payload(
+            _pending_hot_plate_candidates(hot_plates, limit=limit),
+            target_date,
+            limit=limit,
+        )
+        return pending or _empty_concept_fund_flow_payload(fallback_used=False)
 
     member_fetcher = fetch_tushare_ths_member_fn or fetch_tushare_ths_member
     moneyflow_fetcher = fetch_stock_moneyflow_map_fn or fetch_stock_moneyflow_map
@@ -3584,6 +3767,32 @@ def _normalize_sector_flow_row(row):
     }
 
 
+def _optional_lhb_amount(value):
+    if value in (None, ""):
+        return None
+    text = _clean_text(value)
+    if not text:
+        return None
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError):
+        return None
+    if numeric != numeric:
+        return None
+    return numeric
+
+
+def _tushare_lhb_net_amount(row):
+    net_amount = _optional_lhb_amount((row or {}).get("net_amount"))
+    if net_amount is not None:
+        return net_amount
+    buy = _optional_lhb_amount((row or {}).get("l_buy"))
+    sell = _optional_lhb_amount((row or {}).get("l_sell"))
+    if buy is not None and sell is not None:
+        return buy - sell
+    return None
+
+
 def get_sector_fund_flow_from_tushare_first(
     target_date=None,
     *,
@@ -3665,6 +3874,7 @@ def _normalize_tushare_lhb_group(rows):
         code = _clean_code(_pick(row, "ts_code", "code", default=""))
         if not code:
             continue
+        net_amount = _tushare_lhb_net_amount(row)
         bucket = grouped.setdefault(
             code,
             {
@@ -3672,13 +3882,16 @@ def _normalize_tushare_lhb_group(rows):
                 "fs_code": str(_pick(row, "ts_code", default="")).strip().upper(),
                 "name": _clean_text(_pick(row, "name", default="")),
                 "net_buy_amount": 0.0,
+                "net_amount_available": False,
                 "close_price": 0.0,
                 "change_rate": 0.0,
                 "reasons": [],
                 "data_source": "tushare.top_list",
             },
         )
-        bucket["net_buy_amount"] += _safe_float(_pick(row, "net_amount", default=0.0))
+        if net_amount is not None:
+            bucket["net_buy_amount"] += net_amount
+            bucket["net_amount_available"] = True
         bucket["close_price"] = bucket.get("close_price") or _safe_float(_pick(row, "close", default=0.0))
         bucket["change_rate"] = bucket.get("change_rate") or _safe_float(_pick(row, "pct_change", "change_rate", default=0.0))
         reason = _clean_text(_pick(row, "reason", default=""))
@@ -3749,7 +3962,11 @@ def get_lhb_snapshot_from_tushare_first(
 ):
     fetcher = fetch_tushare_top_list_fn or fetch_tushare_top_list
     try:
-        grouped_rows = _normalize_tushare_lhb_group(fetcher(target_date) or [])
+        grouped_rows = [
+            row
+            for row in _normalize_tushare_lhb_group(fetcher(target_date) or [])
+            if row.get("net_amount_available")
+        ]
         if grouped_rows:
             inst_detail = []
             inst_status = "empty"
@@ -3767,6 +3984,10 @@ def get_lhb_snapshot_from_tushare_first(
                 industry_map = {}
             buy_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0), reverse=True)[:10]
             sell_rows = sorted(grouped_rows, key=lambda item: item.get("net_buy_amount", 0))[:10]
+            analysis_rows = [
+                {key: value for key, value in row.items() if key != "net_amount_available"}
+                for row in grouped_rows
+            ]
             net_buy_top10 = []
             for rank, row in enumerate(buy_rows, start=1):
                 sector = _lookup_by_code(industry_map, {"stock_code": row["代码"], "ts_code": row.get("fs_code", "")}, "未知")
@@ -3800,7 +4021,7 @@ def get_lhb_snapshot_from_tushare_first(
             return {
                 "lhb_net_buy_top10": net_buy_top10,
                 "lhb_net_sell_top10": net_sell_top10,
-                "lhb_analysis": grouped_rows,
+                "lhb_analysis": analysis_rows,
                 "lhb_inst_detail": inst_detail,
                 "lhb_inst_detail_status": inst_status,
                 "provider": "tushare.top_list+top_inst" if inst_detail else "tushare.top_list",
@@ -3971,7 +4192,7 @@ def _normalize_limit_row(row, *, direction, industry_map=None):
     }
 
 
-def _market_stats_from_daily_rows(rows, zt_count, dt_count):
+def _market_stats_from_daily_rows(rows, zt_count, dt_count, *, target_date=None):
     up_count = 0
     down_count = 0
     for row in rows or []:
@@ -3980,15 +4201,20 @@ def _market_stats_from_daily_rows(rows, zt_count, dt_count):
             up_count += 1
         elif pct_chg < 0:
             down_count += 1
-    return {
+    result = {
         "up_count": up_count,
         "down_count": down_count,
         "zt_count": int(zt_count or 0),
         "dt_count": int(dt_count or 0),
     }
+    target_day = _parse_date(target_date)
+    if target_day is not None:
+        result["trade_date"] = target_day.isoformat()
+        result["source_date"] = target_day.isoformat()
+    return result
 
 
-def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None):
+def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None, *, target_date=None):
     zt_pool = []
     dt_pool = []
     for row in rows or []:
@@ -4007,7 +4233,12 @@ def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None):
         "dt_pool": dt_pool,
         "limit_up_codes": {item["代码"] for item in zt_pool if item.get("代码")},
         "limit_down_codes": {item["代码"] for item in dt_pool if item.get("代码")},
-        "market_stats": _market_stats_from_daily_rows(daily_rows or [], len(zt_pool), len(dt_pool)),
+        "market_stats": _market_stats_from_daily_rows(
+            daily_rows or [],
+            len(zt_pool),
+            len(dt_pool),
+            target_date=target_date,
+        ),
         "provider": "tushare.limit_list_ths",
         "fallback_used": False,
         "source_status": "success",
@@ -4015,19 +4246,23 @@ def _build_limit_pool_snapshot(rows, daily_rows, industry_map=None):
     }
 
 
-def _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows):
+def _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows, *, target_date=None):
     fallback = dict(fallback or {})
     fallback_stats = dict(fallback.get("market_stats") or {})
     daily_stats = _market_stats_from_daily_rows(
         daily_rows or [],
         fallback_stats.get("zt_count", len(fallback.get("zt_pool") or [])),
         fallback_stats.get("dt_count", len(fallback.get("dt_pool") or [])),
+        target_date=target_date,
     )
     if daily_stats.get("up_count") > 0 and daily_stats.get("down_count") > 0:
         fallback_stats["up_count"] = daily_stats["up_count"]
         fallback_stats["down_count"] = daily_stats["down_count"]
         fallback_stats.setdefault("zt_count", daily_stats["zt_count"])
         fallback_stats.setdefault("dt_count", daily_stats["dt_count"])
+        if daily_stats.get("trade_date"):
+            fallback_stats["trade_date"] = daily_stats["trade_date"]
+            fallback_stats["source_date"] = daily_stats["source_date"]
     fallback["market_stats"] = fallback_stats
     return fallback
 
@@ -4054,12 +4289,22 @@ def _market_stats_from_storage_breadth(
     down_count = _safe_int((stats or {}).get("down_count"), 0)
     if up_count <= 0 or down_count <= 0:
         return {}
-    return {
+    target_date_text = normalize_kline_date_str(target_date)
+    source_date_text = normalize_kline_date_str(
+        (stats or {}).get("source_date") or (stats or {}).get("trade_date")
+    )
+    if source_date_text and source_date_text != target_date_text:
+        return {}
+    result = {
         "up_count": up_count,
         "down_count": down_count,
         "zt_count": _safe_int((stats or {}).get("zt_count"), int(zt_count or 0)),
         "dt_count": _safe_int((stats or {}).get("dt_count"), int(dt_count or 0)),
     }
+    if target_date_text:
+        result["trade_date"] = target_date_text
+        result["source_date"] = target_date_text
+    return result
 
 
 def _market_stats_complete(market_stats):
@@ -4108,7 +4353,12 @@ def get_limit_pool_snapshot_from_tushare_first(
                 industry_map = industry_map_loader() if callable(industry_map_loader) else {}
             except Exception:
                 industry_map = {}
-            snapshot = _build_limit_pool_snapshot(rows, daily_rows, industry_map=industry_map)
+            snapshot = _build_limit_pool_snapshot(
+                rows,
+                daily_rows,
+                industry_map=industry_map,
+                target_date=target_date,
+            )
             if not _market_stats_complete(snapshot.get("market_stats")):
                 storage_stats = _market_stats_from_storage_breadth(
                     target_date,
@@ -4131,7 +4381,11 @@ def get_limit_pool_snapshot_from_tushare_first(
                 daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
             except Exception:
                 daily_rows = []
-        fallback = _merge_fallback_market_stats_with_daily_breadth(fallback, daily_rows)
+        fallback = _merge_fallback_market_stats_with_daily_breadth(
+            fallback,
+            daily_rows,
+            target_date=target_date,
+        )
         if not _market_stats_complete((fallback or {}).get("market_stats")):
             storage_stats = _market_stats_from_storage_breadth(
                 target_date,
@@ -4154,7 +4408,12 @@ def get_limit_pool_snapshot_from_tushare_first(
             daily_rows = daily_fetcher(target_date) if callable(daily_fetcher) else []
         except Exception:
             daily_rows = []
-    daily_stats = _market_stats_from_daily_rows(daily_rows or [], 0, 0)
+    daily_stats = _market_stats_from_daily_rows(
+        daily_rows or [],
+        0,
+        0,
+        target_date=target_date,
+    )
     if not _market_stats_complete(daily_stats):
         daily_stats = _market_stats_from_storage_breadth(
             target_date,

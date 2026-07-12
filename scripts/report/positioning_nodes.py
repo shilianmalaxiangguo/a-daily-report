@@ -1,6 +1,7 @@
 from report.positioning_node_registry import build_positioning_node_specs
 from report.positioning_node_runtime import run_positioning_nodes
 from report.trading_time_window_contract import normalize_trading_time_text
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 def _compact(context):
@@ -48,6 +49,23 @@ def _daily_candidate_range_text(daily_structure):
     zd = daily_structure.get("zd_candidate")
     zg = daily_structure.get("zg_candidate")
     return f"[{_format_price(zd)}, {_format_price(zg)}]"
+
+
+def _market_structure_trade_date(context):
+    market_zhongshu = (context or {}).get("market_zhongshu") or {}
+    for container in (market_zhongshu, context or {}):
+        for key in ("today_date", "trade_date", "target_date", "report_date", "date", "latest_trade_date"):
+            value = str((container or {}).get(key) or "").strip()
+            if value:
+                return value[:10]
+    return ""
+
+
+def _chanlun_html_link(context):
+    trade_date = _market_structure_trade_date(context)
+    if not trade_date:
+        return ""
+    return f"chanlun-html/{trade_date}_上证指数缠论.html"
 
 
 def _chanlun_confirmation_text(confirmation):
@@ -102,7 +120,7 @@ def _capital_priority(context):
 def _has_zero_participation_result(context):
     context = context or {}
     capital_priority = _capital_priority(context)
-    if capital_priority in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
+    if capital_priority in {"new_entry", "new_entry_after_old_exit", "tradable_proxy", "same_stock_t"}:
         return False
     if capital_priority in {"old_position_t", "old_position", "existing_position", "existing_position_t", "wait"}:
         return True
@@ -148,7 +166,7 @@ def _has_explicit_empty_unique_object(context):
 def _intraday_note_text(context):
     if _has_zero_participation_result(context) or _has_explicit_empty_unique_object(context):
         return "> **真到盘中怎么做**：日报这里只做盘前预案。明日不新增参与，只观察指数图形、主攻线承接；结果进入复盘和下一份日报判断，继续0%不参与。"
-    return "> **真到盘中怎么做**：日报这里只做盘前预案。明日只按09:30-09:35、09:50-10:10、14:30-14:55三段窗口处理；不满足固定交易窗口条件就回到0%。"
+    return f"> **真到盘中怎么做**：日报这里只做盘前预案。{PREMARKET_50_TRIGGER_TEXT}。"
 
 
 def build_positioning_header_node(context, node_meta=None, node_lookup=None):
@@ -235,10 +253,16 @@ def build_positioning_structure_range_node(context, node_meta=None, node_lookup=
 
 
 def build_positioning_ascii_diagram_node(context, node_meta=None, node_lookup=None):
-    if _compact(context) or not context.get("ascii_diagram"):
+    if _compact(context) or not _success(context) or not _has_current_signal(context):
         return {"lines": [], "exports": {}, "module_logs": []}
+    lines = ["**大盘结构图**："]
+    chanlun_link = _chanlun_html_link(context)
+    if chanlun_link:
+        trade_date = _market_structure_trade_date(context)
+        lines.append(f'::market-structure-chart{{src="{chanlun_link}" title="{trade_date} 上证指数日线中枢"}}')
+    lines.append("")
     return {
-        "lines": ["**ASCII结构图**：", "```text", str(context.get("ascii_diagram", "")), "```", ""],
+        "lines": lines,
         "exports": {},
         "module_logs": [],
     }

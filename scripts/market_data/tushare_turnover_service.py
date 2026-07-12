@@ -129,6 +129,11 @@ def _normalize_daily_row(row):
     }
 
 
+def _uses_sdk_post_endpoint(pro):
+    http_url = str(getattr(pro, "_DataApi__http_url", "") or "").strip().rstrip("/").lower()
+    return bool(http_url) and not http_url.endswith("/tushare/pro")
+
+
 def fetch_stock_daily_turnover_records(
     trade_date,
     *,
@@ -142,6 +147,31 @@ def fetch_stock_daily_turnover_records(
         return []
     pro = pro or create_tushare_pro_api(ts_module=ts_module, timeout_seconds=30)
     fields = "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+    if _uses_sdk_post_endpoint(pro):
+        last_error = None
+        for attempt in range(max(int(page_retry_count or 0), 0) + 1):
+            try:
+                frame = pro.daily(trade_date=compact, fields=fields)
+                normalized_rows = [
+                    normalized
+                    for row in _frame_to_records(frame)
+                    if (normalized := _normalize_daily_row(row))
+                ]
+                if not normalized_rows:
+                    raise RuntimeError(f"empty tushare daily result for {compact}")
+                return normalized_rows
+            except Exception as error:
+                last_error = error
+                if attempt >= max(int(page_retry_count or 0), 0):
+                    raise
+                try:
+                    import time
+
+                    time.sleep(1)
+                except Exception:
+                    pass
+        raise last_error  # pragma: no cover - retry loop returns or raises
+
     records = []
     offset = 0
     limit = int(page_limit or 1000)

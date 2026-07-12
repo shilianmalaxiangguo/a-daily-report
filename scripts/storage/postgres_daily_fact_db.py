@@ -6,6 +6,11 @@ import json
 import os
 from contextlib import contextmanager
 
+from domains.market_state.market_language_translation import (
+    MARKET_LANGUAGE_SOURCE_POLICY,
+    normalize_market_language_translation,
+)
+
 POSTGRES_SCHEMA_STATEMENTS = [
     """
     CREATE TABLE IF NOT EXISTS market_cycle_days (
@@ -5591,7 +5596,14 @@ class PostgresDailyFactDb:
             )
         with self._connect() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM daily_report_fact_fields WHERE trade_date = %s", (trade_date,))
+                cursor.execute(
+                    """
+                    DELETE FROM daily_report_fact_fields
+                    WHERE trade_date = %s
+                      AND source_policy <> %s
+                    """,
+                    (trade_date, MARKET_LANGUAGE_SOURCE_POLICY),
+                )
                 if rows:
                     cursor.executemany(
                         """
@@ -5615,6 +5627,91 @@ class PostgresDailyFactDb:
             "source": f"postgresql://daily-report-facts/{trade_date}",
             "field_count": len(rows),
         }
+
+    def replace_market_language_translation_artifact(self, artifact):
+        normalized = normalize_market_language_translation(artifact)
+        trade_date = _date_or_none(normalized.get("target_date"))
+        if not trade_date:
+            raise ValueError("market language artifact target_date is required")
+        rows = []
+        wrapped = {"market_language_translation": normalized}
+        for field_path, value in _iter_safe_fact_fields(wrapped, max_depth=20):
+            if not field_path:
+                continue
+            value_text, value_number, value_bool, value_kind = _typed_value(value)
+            rows.append(
+                (
+                    trade_date,
+                    _text(field_path),
+                    value_text,
+                    value_number,
+                    value_bool,
+                    value_kind,
+                    MARKET_LANGUAGE_SOURCE_POLICY,
+                )
+            )
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    DELETE FROM daily_report_fact_fields
+                    WHERE trade_date = %s
+                      AND source_policy = %s
+                    """,
+                    (trade_date, MARKET_LANGUAGE_SOURCE_POLICY),
+                )
+                if rows:
+                    cursor.executemany(
+                        """
+                        INSERT INTO daily_report_fact_fields(
+                            trade_date, field_path, value_text, value_number,
+                            value_bool, value_kind, source_policy
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (trade_date, field_path) DO UPDATE SET
+                            value_text=EXCLUDED.value_text,
+                            value_number=EXCLUDED.value_number,
+                            value_bool=EXCLUDED.value_bool,
+                            value_kind=EXCLUDED.value_kind,
+                            source_policy=EXCLUDED.source_policy,
+                            updated_at=now()
+                        """,
+                        rows,
+                    )
+            conn.commit()
+        return {
+            "source": f"postgresql://market-language/{trade_date}",
+            "source_policy": MARKET_LANGUAGE_SOURCE_POLICY,
+            "field_count": len(rows),
+        }
+
+    def load_market_language_translation_artifact(self, trade_date):
+        trade_date = _date_or_none(trade_date)
+        if not trade_date:
+            return {}
+        columns = ("field_path", "value_text", "value_number", "value_bool", "value_kind")
+        with self._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT field_path, value_text, value_number, value_bool, value_kind
+                    FROM daily_report_fact_fields
+                    WHERE trade_date = %s
+                      AND source_policy = %s
+                    ORDER BY field_path ASC
+                    """,
+                    (trade_date, MARKET_LANGUAGE_SOURCE_POLICY),
+                )
+                rows = cursor.fetchall()
+        restored = {}
+        for row in rows or []:
+            item = _row_dict(row, columns)
+            _set_nested_fact_value(restored, item.get("field_path"), _restore_typed_value(item))
+        artifact = restored.get("market_language_translation")
+        if not isinstance(artifact, dict):
+            return {}
+        normalized = normalize_market_language_translation(artifact)
+        return normalized if normalized.get("target_date") == trade_date else {}
 
     def save_daily_report_facts(self, trade_date, data):
         return self.save_daily_report_snapshot(trade_date, data)
@@ -5749,9 +5846,10 @@ class PostgresDailyFactDb:
                     SELECT field_path, value_text, value_number, value_bool, value_kind
                     FROM daily_report_fact_fields
                     WHERE trade_date = %s
+                      AND source_policy <> %s
                     ORDER BY field_path ASC
                     """,
-                    (trade_date,),
+                    (trade_date, MARKET_LANGUAGE_SOURCE_POLICY),
                 )
                 rows = cursor.fetchall()
         data = {}
@@ -5863,13 +5961,18 @@ class PostgresDailyFactDb:
         return data.get(key) if isinstance(data, dict) else None
 
     def query_market_breadth_counts(self, trade_date):
+        trade_date = _date_or_none(trade_date)
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 structured = self._load_structured_market_stats_from_quotes(cursor, trade_date)
         if structured:
             return structured
         value = self._load_daily_report_fact_value(trade_date, "market_stats")
-        return dict(value or {}) if isinstance(value, dict) else {}
+        result = dict(value or {}) if isinstance(value, dict) else {}
+        if result and trade_date:
+            result.setdefault("trade_date", trade_date)
+            result.setdefault("source_date", trade_date)
+        return result
 
     def query_turnover_rank_rows(self, trade_date, *, limit=50, rank_scope="all_a"):
         structured = self._query_structured_turnover_rank_rows(
@@ -6033,6 +6136,8 @@ class PostgresDailyFactDb:
             "stock_count": total_count,
             "zt_count": _safe_int(item.get("zt_count")),
             "dt_count": _safe_int(item.get("dt_count")),
+            "trade_date": trade_date,
+            "source_date": trade_date,
             "data_source": "storage.stock_daily_quotes_recent",
             "source": "storage.stock_daily_quotes_recent",
         }
@@ -6873,7 +6978,11 @@ class PostgresDailyFactDb:
                 data["total_turnover"] = _safe_float(market_daily_total.get("total_amount_yi"))
         structured_counts["market_daily_total"] = 1 if market_daily_total else 0
         market_stats = self._load_structured_market_stats_from_quotes(cursor, trade_date)
-        if market_stats and not data.get("market_stats"):
+        existing_market_stats = data.get("market_stats")
+        if isinstance(existing_market_stats, dict) and existing_market_stats:
+            existing_market_stats.setdefault("trade_date", trade_date)
+            existing_market_stats.setdefault("source_date", trade_date)
+        elif market_stats:
             data["market_stats"] = market_stats
         structured_counts["market_stats_from_quotes"] = 1 if market_stats else 0
         turnover_rank_rows = self._load_structured_turnover_rank_rows_with_cursor(
@@ -6935,15 +7044,27 @@ class PostgresDailyFactDb:
         with self._connect() as conn:
             with conn.cursor() as cursor:
                 for table_name in _DAILY_REPORT_FACT_COVERAGE_TABLES:
-                    cursor.execute(
-                        f"""
-                        SELECT count(*) FILTER (WHERE trade_date = %s) AS target_count,
-                               min(trade_date) AS min_trade_date,
-                               max(trade_date) AS max_trade_date
-                        FROM {table_name}
-                        """,
-                        (trade_date,),
-                    )
+                    if table_name == "daily_report_fact_fields":
+                        cursor.execute(
+                            f"""
+                            SELECT count(*) FILTER (WHERE trade_date = %s) AS target_count,
+                                   min(trade_date) AS min_trade_date,
+                                   max(trade_date) AS max_trade_date
+                            FROM {table_name}
+                            WHERE source_policy <> %s
+                            """,
+                            (trade_date, MARKET_LANGUAGE_SOURCE_POLICY),
+                        )
+                    else:
+                        cursor.execute(
+                            f"""
+                            SELECT count(*) FILTER (WHERE trade_date = %s) AS target_count,
+                                   min(trade_date) AS min_trade_date,
+                                   max(trade_date) AS max_trade_date
+                            FROM {table_name}
+                            """,
+                            (trade_date,),
+                        )
                     row = cursor.fetchone()
                     item = _row_dict(row, ("target_count", "min_trade_date", "max_trade_date"))
                     tables[table_name] = {

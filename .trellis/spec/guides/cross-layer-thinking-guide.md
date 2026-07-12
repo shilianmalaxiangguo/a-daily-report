@@ -12,6 +12,9 @@ Common cross-layer bugs:
 - API returns format A, frontend expects format B
 - Database stores X, service transforms to Y, but loses data
 - Multiple layers implement the same logic differently
+- A report fact is rendered in Markdown/HTML, but the acceptance audit checks
+  only local formatting and never compares it with the historical source that
+  owns the fact.
 
 ---
 
@@ -82,6 +85,8 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] For generated reports, checked that source facts survive across generator
+  output, Markdown rendering, companion HTML, and acceptance audit.
 
 ---
 
@@ -150,6 +155,86 @@ When a CLI auto-detects a mode by probing a remote resource (e.g., checking if `
 **Real-world example**: Custom registry flow had 8 bugs across 3 review rounds: (1) probe only ran in interactive mode, (2) transient errors fell through to wrong mode, (3) giget URI had `#ref` in wrong position, (4) prefetched templates leaked across source switches, (5) `--template` shortcut bypassed probe but `downloadTemplateById` internally used catch-all `fetchTemplateIndex`, turning timeouts into "Template not found".
 
 **Real-world example**: Agent-session update hints fetched npm `latest` metadata with `response.read(4096)` and then parsed it as complete JSON. The `@mindfoldhq/trellis` package metadata exceeded 4 KB, so the JSON was truncated, parse failed silently, and the first session injection showed no update hint. Fix: read the complete response before parsing, and add a regression where `version` is followed by an 8 KB metadata tail.
+
+---
+
+## Generated Report Historical Fact Consistency
+
+Daily-report tables often display the same account fact in several artifacts:
+the strategy report, the main Markdown report, companion HTML, and the
+acceptance audit. Treat those as one cross-layer path, not separate display
+surfaces.
+
+### Checklist: After Modifying A Historical Report Table
+
+- [ ] Identify the owning historical artifact, not just the current report row
+- [ ] Prefer the durable PostgreSQL account fact; use Markdown only as an
+  explicit compatibility fallback outside PostgreSQL-only runtime
+- [ ] If PostgreSQL history is unavailable in PostgreSQL-only runtime, stop and
+  record the failure; do not silently read an old Markdown tomorrow plan
+- [ ] Treat an empty PostgreSQL envelope (`data={}`) as unavailable and cover
+  that production shape in tests; mocking only `None` can leave the real path
+  unprotected
+- [ ] If the renderer receives `positions=[]`, verify whether PostgreSQL already
+  restored `personal_position_context.existing_position_summary`
+- [ ] Distinguish a confirmed position from a previous-report plan: inferred
+  records keep identity but use `has_position=false`, pending status,
+  `position=0`, `position_pct=0`, and 0x exposure until成交 confirmation;
+  preserve any nonzero scenario only in `default_position_pct`
+- [ ] Check semantic fields as well as booleans: an inferred plan uses role
+  `前日报计划待成交确认`, and its two-layer next-day action says
+  `只核实成交记录；未确认成交前按0x`, never old-position handling
+- [ ] Trace every duplicated inferred record under personal context, market
+  snapshot, execution context, and final resolution; normalize all copies
+- [ ] If a restore or compatibility path creates an inferred record after bulk
+  normalization already ran, set the pending role/flags and 0x fields on
+  construction or run normalization again before rendering or persistence
+- [ ] Repair cached candidate panels, conclusions, action plans, and strategy
+  rows that were derived before normalization; confirm the pending plan is 0x
+- [ ] Verify the generator reads that artifact when reconstructing older days
+- [ ] Verify Ta/Tb/Tc keep an unconfirmed historical plan pending instead of
+  silently promoting it to a historical B1 position
+- [ ] Keep an unknown Ta/Tb/Tc account fact as `持仓未输入`; never backfill it
+  from the current report's confirmed holding or pending plan, and reject any
+  definite stock identity on that row
+- [ ] Insert the table into the in-memory report before acceptance checking and
+  before any report artifact is saved
+- [ ] Verify command entry, standalone replay, and AgentRunner all check before
+  writing the judgment ledger or report files
+- [ ] Verify Markdown and companion HTML render the same day/object identity
+- [ ] Verify negative/pending wording is parsed before bare B1/B2 badge tokens,
+  so a 0% verification row cannot look like participation
+- [ ] For inferred plans, verify identity and provenance wording together; the
+  correct code with confirmed-holding wording is still a failure
+- [ ] Keep Chanlun HTML and Bear HTML as separate acceptance inputs so one
+  companion does not accidentally satisfy or invalidate the other's checks
+- [ ] Add an acceptance-audit regression that compares the rendered row with
+  the same-directory historical artifact
+- [ ] Ensure a mismatch raises a stable finding code and reaches `logs/errors`
+- [ ] Include an empty-current-day case so today's no-position result does not
+  erase a known prior-day path
+
+**Real-world example**: The Ta/Tb/Tc/Td/Te account day-order table was treated
+as local display text. When the previous day had no new target but still carried
+an old 华天科技 path, the next report rendered Tc as empty because only the
+current position and the previous tomorrow target were considered. Fix: read
+historical day-order paths from prior report/strategy artifacts and make the
+acceptance audit fail when a known Ta/Tb/Tc path disappears.
+
+**Real-world example**: PostgreSQL stored the 2026-07-10 current path as
+长电科技(600584), but `render_position_strategy_report()` received an empty
+`positions` list and rendered Td/Te without the stock identity. The first
+acceptance check ran before the day-order table was inserted, so the bad report
+still passed. Fix: unwrap the PostgreSQL snapshot envelope, restore the position
+summary for rendering, insert the table before acceptance, compare Td and Bear
+HTML with the same source fact, and preserve the finding code in the run error.
+
+**Real-world example**: The same 2026-07-10 PostgreSQL record carried
+`inferred_from_previous_report=true`, yet final resolution promoted it to an
+old-position 1x and the report simultaneously said `待成交确认` and `持有100%`.
+Fix: keep the pending identity, set confirmed position false, calculate 0x until
+成交 confirmation, preserve that pending status across Ta/Tb/Tc, and make
+acceptance reject code-correct but provenance-wrong output.
 
 ---
 

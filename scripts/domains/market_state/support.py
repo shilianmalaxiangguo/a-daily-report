@@ -6,6 +6,7 @@ import daily_report_analysis_utils as analysis_utils
 from daily_report_snapshot_io import load_data_snapshot
 from domains.market_state.two_market_turnover.nodes import build_turnover_comparison
 from market_data.kline_dates import normalize_kline_date_str as _default_normalize_kline_date_str
+from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 
 _DEFAULT_LOAD_DATA_SNAPSHOT = load_data_snapshot
 
@@ -82,7 +83,10 @@ def _funding_activity_from_top50(data):
         }
 
     share_pct = round(top50_amount / total_turnover * 100, 2)
-    if share_pct > 20:
+    if share_pct > 25:
+        regime = "极致"
+        meaning = "Top50成交额占比超过25%，头部成交集中度进入极致区。"
+    elif share_pct > 20:
         regime = "资金活跃期"
         meaning = "Top50成交额占比超过20%，说明雨量变大，资金处于活跃期。"
     elif share_pct >= 18:
@@ -1818,7 +1822,7 @@ def _build_market_state_machine_snapshot_legacy_body(
         state_code = "expand"
         flow_direction = f"能量继续向{leading_line}集中"
         state_reason = "涨停、涨跌比和有势板块数量同步走强，主线具备继续承接能力。"
-        reflection_focus = "只盯主线内异常后跌不下去的对象，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口分层参与，不做支线分流。"
+        reflection_focus = f"只盯主线内异常后跌不下去的对象，按09:30-09:35、09:50-10:10或14:30-14:55三段窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；不做支线分流。"
         transition_signal = ""
         transition_reason = ""
         transition_action = ""

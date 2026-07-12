@@ -54,10 +54,30 @@ the compounded month series without defaulting missing returns to zero.
 
 - `--postgres-only` must load from PostgreSQL via
   `load_daily_report_data_from_postgres()`.
+- `DatabaseService.load_daily_report_snapshot()` may return a metadata envelope
+  whose report payload is under `data`. Account-history consumers must unwrap
+  that payload before reading `personal_position_context`; treating the envelope
+  itself as report data silently drops existing positions.
+- `personal_position_context.existing_position_summary` is the durable current
+  account source for the day-order renderer. Explicit CLI position input wins;
+  otherwise an empty transient `positions` list must be restored from this
+  PostgreSQL summary.
+- Historical Ta/Tb/Tc account rows are PostgreSQL-first. Rendered Markdown is a
+  compatibility fallback only when PostgreSQL has no usable fact and the run is
+  not PostgreSQL-only.
+- A PostgreSQL metadata envelope with `data={}`, or a raw empty mapping, means
+  that the requested report-day fact is unavailable. PostgreSQL-only runtime
+  must stop before reading Markdown; non-PostgreSQL runtime may use the explicit
+  compatibility fallback.
 - `--postgres-only` must finish by calling
   `import_daily_report_data_to_postgres()`, not only
   `save_daily_report_data_to_postgres()`, so dedicated structured tables are
   refreshed after the report runtime computes new facts.
+- Production daily-report PostgreSQL writes must use
+  `save_daily_report_data_to_postgres()` or
+  `import_daily_report_data_to_postgres()`. These wrappers normalize inferred
+  previous-report plans before delegating to storage; callers must not bypass
+  them with a direct repository write.
 - PostgreSQL-only runtime must not read historical snapshot archives for
   backfill. Both `daily_report_snapshot_io.load_data_snapshot()` and direct
   replay snapshot readers must reject `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1`.
@@ -107,6 +127,32 @@ the compounded month series without defaulting missing returns to zero.
   caller to read PostgreSQL or degrade to missing history.
 - PostgreSQL-only history helper has fewer rows than requested -> return those
   rows; do not backfill by scanning archive JSON.
+- PostgreSQL stores a current position but Td omits its stock identity -> stop
+  generation with `position_day_order_current_position_missing` and preserve
+  the finding in the run error record.
+- Bear HTML omits the PostgreSQL current position while Markdown contains it ->
+  stop generation with `position_day_order_html_current_position_missing`.
+- PostgreSQL summary is marked as inferred from the previous report -> normalize
+  every structured copy to `has_position=false`, `has_pending_position=true`,
+  set actual `position` / `position_pct` to `0`, keep stock/source identity, and
+  calculate exposure as 0x until成交 confirmation. A nonzero
+  `default_position_pct` may remain only as the post-confirmation scenario.
+- PostgreSQL load, snapshot save, or fact import sees a legacy inferred summary
+  with nonzero actual position fields -> migrate the nonzero value to
+  `default_position_pct`, zero the actual fields, then continue with the
+  normalized payload.
+- PostgreSQL inferred summary appears in a later Ta/Tb/Tc lookup -> return an
+  inferred account state, not a confirmed target state; render the historical
+  plan as waiting for成交 confirmation.
+- A pending previous-report plan is created after an earlier recursive
+  normalization pass -> set `role=前日报计划待成交确认`,
+  `has_position=false`, and `has_pending_position=true` on the new summary and
+  every new position copy immediately, or normalize again before any consumer.
+- Markdown or Bear contains the correct inferred stock code but drops the
+  pending-confirmation wording -> stop with
+  `position_day_order_inferred_confirmation_missing`,
+  `position_inferred_rendered_as_confirmed_holding`, or
+  `position_day_order_html_inferred_confirmation_missing` as applicable.
 - Existing official snapshot is hundreds of MB and `_save_data_snapshot()` needs
   only `supplementary_perspective` -> read tail metadata only; do not parse the
   full archive.
@@ -156,6 +202,15 @@ the compounded month series without defaulting missing returns to zero.
 - Integration verification for a real replay date must include SQL counts for
   dedicated structured tables and a precise low-value-field query that returns
   zero.
+- Unit test PostgreSQL load/save/import boundaries normalize an inferred
+  previous-report plan to `position=0`, `position_pct=0`, while preserving its
+  nonzero `default_position_pct` scenario value.
+- Unit test the same normalization leaves an explicit confirmed position
+  byte-for-byte unchanged.
+- Unit test the real empty-load shape (`{"data": {}}`), not only a mocked
+  `None`, and verify PostgreSQL-only entry stops before database sync or report
+  artifact writes while an explicit `position_context_provided=true` empty
+  account fact remains valid.
 
 ### 7. Wrong vs Correct
 

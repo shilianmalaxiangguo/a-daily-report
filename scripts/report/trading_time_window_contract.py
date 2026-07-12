@@ -1,3 +1,5 @@
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
+
 FIXED_TRADING_WINDOWS = ("09:30-09:35", "09:50-10:10", "14:30-14:55")
 OPENING_WINDOW = "09:30-09:35"
 SECOND_CONFIRM_WINDOW = "09:50-10:10"
@@ -22,7 +24,7 @@ def normalize_trading_time_text(value):
     replacements = (
         ("形成参与窗口后", f"{SECOND_CONFIRM_WINDOW}窗口内条件成立后"),
         ("参与窗口确认后", "固定交易窗口条件满足后"),
-        ("参与窗口确认才执行", "固定交易窗口内条件成立才执行"),
+        ("参与窗口确认才执行", PREMARKET_50_TRIGGER_TEXT),
         ("参与窗口失败回到0%", "固定交易窗口内条件不成立就回到0%"),
         ("参与窗口是否成立", "固定交易窗口内条件是否成立"),
         ("参与窗口分层确认", "固定交易窗口条件"),

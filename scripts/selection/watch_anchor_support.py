@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 from selection.candidate_execution_contracts import (
     DEFENSIVE_EXIT_RULE_TEXT,
     PROFIT_EXIT_RULE_TEXT,
@@ -589,7 +590,7 @@ def _build_cycle_triplet_texts_legacy_body(position_decision=None, candidate=Non
     second_shot_ready = bool(position_decision.get("second_shot_ready"))
     second_shot_breakout_price = _round_or_none(position_decision.get("second_shot_breakout_price"))
     if target_position_pct == 50:
-        intervention_cycle = f"{trigger_after_text}按50%执行，才算被市场正式指派接货，不做模糊试单"
+        intervention_cycle = f"{trigger_after_text}{PREMARKET_50_TRIGGER_TEXT}，才算被市场正式指派接货，不做模糊试单"
     elif 0 < target_position_pct < 50:
         if second_shot_ready and second_shot_breakout_price is not None:
             intervention_cycle = f"已完成{second_shot_breakout_price:.2f}二次突破，{trigger_after_text}只记录承接，结果进入复盘和下一份日报判断"

@@ -249,6 +249,93 @@ new-entry result is 0%.
   conditions on T+1 may execute, cancel, reduce risk, or record observation
   evidence only. They must not create a new buy decision or upgrade a process
   candidate / observation target into a same-day execution object.
+- The Ta/Tb/Tc/Td/Te account day-order table is a five-trading-day account path,
+  not a local display shortcut. Ta, Tb, and Tc must preserve known historical
+  path targets from prior same-directory report or position-strategy artifacts.
+  A current no-position report may set Td to no holding, but it must not erase a
+  known Ta/Tb/Tc path.
+- Td is the report-day account fact, and Te is the next-day execution plan.
+  Te may contain the newly resolved target; Ta/Tb/Tc must not be backfilled from
+  that Te target when the historical artifact is empty or unrelated.
+- If a Ta/Tb/Tc PostgreSQL account fact is unknown, keep it as `持仓未输入` with
+  no stock identity and `B1事实待确认`. A current confirmed holding or pending
+  previous-report plan does not prove a prior day's holding. Acceptance must
+  reject any definite stock identity rendered against an unknown history fact.
+- A same-date report's "tomorrow target" row describes the next trading day's
+  plan, not that report day's account fact. To reconstruct account day `D`, read
+  the row/date cell that explicitly describes `D`, or a same-date old-position
+  fact such as `旧仓处理 | 持有...`; do not scan the row label's stock name and
+  treat it as `D`'s holding.
+- A previous report's tomorrow target may be rendered as a source note for the
+  next report, but it is still not a holding fact by itself. The current report
+  may write old-position handling only when explicit position input, same-date
+  old-position text, or a date-specific account row confirms the holding.
+- Explicit position input has the highest priority for Td. When it is absent,
+  the renderer must restore the current account identity from PostgreSQL
+  `personal_position_context.existing_position_summary`; it must not discard
+  that identity merely because the transient `positions` argument is empty.
+- A PostgreSQL position summary marked `inferred_from_previous_report=true` is
+  a pending account path, not confirmed execution. Td must keep the stock
+  identity, and Te may keep it only in the account-description text as a record
+  to verify. Te's execution-target cell must come exclusively from the current
+  report's final execution object: use `无` when that object is empty, or the
+  distinct resolved stock when one exists. Do not promote the pending account
+  path into a confirmed holding or a next-day execution target.
+- A pending account path must store `has_position=false` and
+  `has_pending_position=true`, with actual `position=0` and `position_pct=0`.
+  Its internal `default_position_pct` may remain nonzero only as a scenario
+  parameter, but account exposure is 0x until a成交 fact confirms B1. It must
+  not trigger old-position priority, same-stock T, or 1x/2x exposure.
+- A pending account path's semantic role must be `前日报计划待成交确认`, never
+  `旧仓处理`. In `two_layer_decision_payload.next_day_action`, the corresponding
+  handling text must be `只核实成交记录；未确认成交前按0x`; confirmed holdings keep
+  the normal old-position handling text.
+- Every structured copy marked `inferred_from_previous_report=true` or
+  `position_source=previous_report_target_default_1x` must be normalized before
+  rendering. This includes the personal position summary and the copies under
+  `final_target_resolution`, `market_research_snapshot`, and
+  `execution_stage_context`.
+- Normalization must also invalidate or repair cached derived fields that were
+  computed while the inferred plan still looked confirmed. Candidate quality
+  panels, conclusion support, action-plan context, and strategy-report rows must
+  not retain old-position, same-stock T, B1, or 1x wording after the source
+  record becomes pending. The position-strategy report renders that row as 0x.
+- When an unconfirmed plan moves into Ta/Tb/Tc history, keep it as
+  `计划待成交确认`; do not convert it to `历史持仓`, `可能形成B1旧仓`, or a confirmed
+  historical target. Only a date-specific成交/持仓 fact may promote it.
+- Ta/Tb/Tc reconstruction is PostgreSQL-first. Markdown report artifacts are a
+  compatibility fallback only when PostgreSQL has no usable account fact and
+  the runtime is not PostgreSQL-only. PostgreSQL-only runs must not use rendered
+  Markdown as their historical source.
+- If the PostgreSQL historical account reader is unavailable during a
+  PostgreSQL-only run, stop generation and preserve the failure in
+  `logs/errors/`. Never turn a transient database probe failure into a Markdown
+  fallback, because an old report's tomorrow plan is not the next day's account
+  fact.
+- The account day-order table must be inserted into the in-memory full report
+  before acceptance checking and persistence. Acceptance compares Td with the
+  source position summary and compares Bear HTML with the same identity. A
+  mismatch stops generation with a stable finding code that reaches the run
+  error record.
+- This order applies to the command entry, standalone replay, and AgentRunner:
+  normalize and build, insert the account day-order table, run acceptance,
+  complete the required PostgreSQL synchronization, then write runtime artifacts
+  and report files. Rendering must not write the judgment ledger early as a
+  side effect of report construction.
+- For inferred plans, acceptance checks provenance as well as stock identity.
+  Markdown Td/Te, account rows, and Bear Td/Te must retain `计划推定` and
+  `待成交确认`; code-correct output that claims a confirmed holding must stop.
+- Bear renders the Te asset from the Markdown execution-target cell only. When
+  that cell is `无`, empty, or `-`, it must render `无`; it must not infer a
+  stock from the Te account-description text. Acceptance compares Markdown and
+  Bear Te with the same final execution object and stops on either mismatch.
+- In a 0% pending-confirmation Te row, negative wording wins over bare `B1` / `B2`
+  substrings. Bear renders a `只核实` badge and `空仓执行` day intent; it must not
+  render `参与权` or `确认权` merely because the explanation says a confirmed
+  trade would later count as B1.
+- The independent Markdown/CLI acceptance path must derive pending-plan identity
+  from Td/Te wording when no external position summary is supplied. It must
+  still compare Markdown Te, Bear Te, and the final execution object.
 - A 50% or 100% report is a pre-decided plan with an execution target,
   position size, execution window, and cancellation conditions. Wording such
   as "conditions become true, then evaluate 50%" is invalid because it turns
@@ -304,6 +391,13 @@ new-entry result is 0%.
 | Previous trading day has only partial settlement facts | Render resolved rows in the settlement table and missing rows in a separate unresolved section |
 | Current trading day judgment has no next-day facts yet | Render the judgment and verification point, but do not count it in accuracy |
 | Cancellation trigger is confirmed but 3-day/5-day return facts are missing | Settle the cancellation condition from the next-day invalidation facts and keep later performance fields out of this accuracy denominator |
+| Ta/Tb/Tc has a known historical path in a prior report or position-strategy artifact, but the current day-order table renders it as empty | Treat the report as invalid until the historical path is restored in the day-order row |
+| Td is no holding while Te has a new target | Keep Td as the report-day account fact and Te as the next-day plan; do not copy Te backward into Td or Ta/Tb/Tc |
+| Pending previous-report plan exists while the current final object is empty | Keep the pending stock in Td and the Te account-description text, set the Te execution target to `无`, and render Bear Te as `无` |
+| Pending previous-report plan exists while the current final object is another stock | Keep the pending stock as account context and set Markdown/Bear Te execution target to the distinct final stock |
+| Markdown or Bear Te execution target differs from the final execution object | Stop generation with the stable day-order target-conflict finding |
+| Pending summary has `has_position=false` but `position=100` | Preserve 100 only as `default_position_pct`; persist actual position fields as 0 |
+| Bear sees `确认已成交才视为B1` inside a 0% pending-verification Te row | Render `只核实` / `空仓执行`, not `参与权` / `确认权` |
 
 ### 5. Good / Base / Bad Cases
 
@@ -352,6 +446,12 @@ When implementation changes this contract, add or update tests that assert:
 - `tests.test_daily_report_render` covers final Markdown sanitation for old frozen text where a 0% report still contains stale process-candidate participation wording,
 - `tests.test_next_day_attribution` covers process-candidate hits staying out of execution hit counts,
 - 60/120-day wording is not rendered until coverage supports it.
+- inferred previous-report plans stay in Td/Te account context but do not become
+  the Te execution target when the final object is empty,
+- Markdown and Bear reject the old inferred-target output and accept a distinct
+  current final target in Te.
+- PostgreSQL read/write round trips keep pending actual exposure at 0x while
+  retaining the scenario position separately.
 
 For a report behavior change, also run a replay sample and the report acceptance audit against the generated replay markdown.
 
@@ -975,6 +1075,10 @@ The comparison output keeps the report-level contract:
 - `tests.test_report_runtime.ReportRuntimeTest.test_runtime_opportunity_table_keeps_huatian_calibration_candidate`
 - `tests.test_candidate_execution_contracts` for risk price comfort and risk-reward boundaries
 - `tests.test_report_acceptance_audit` for positive 50% / 100% wording with missing comparison or incomplete risk/reward
+- `tests.test_position_strategy_report` for Ta/Tb/Tc preserving historical
+  day-order paths while Td stays no holding and Te carries the next-day plan.
+- `tests.test_report_acceptance_audit` for detecting a rendered Ta/Tb/Tc row
+  that drops a known historical path from same-directory artifacts.
 - A generated replay report plus `scripts/report/report_acceptance_audit.py` when the rendered table changes
 
 ### 7. Wrong vs Correct

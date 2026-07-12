@@ -9,18 +9,21 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.markdown_report_html import render_markdown_report_file, render_markdown_report_html
+from report.market_overview_builder import build_market_trend_sections_contract
 
 
 class DailyReportMarkdownHtmlTest(unittest.TestCase):
-    def test_render_ta_tb_tc_timeline_table_as_first_bear_html_block(self):
+    def test_render_ta_te_day_order_table_as_first_bear_html_block(self):
         html = render_markdown_report_html(
             "\n".join(
                 [
-                    "| 轨道 | 标的 | 2026-06-26（周五） | 2026-06-29（周一） | 2026-06-30（周二） | 2026-07-01（周三） |",
-                    "|------|------|------|------|------|------|",
-                    "| Ta旧仓 | 华电辽能 | Ta+0 旧仓占用 | Ta+1 继续处理旧仓 | Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓 | 空仓 |",
-                    "| Tb明日目标 | 汇源通信(000586) | 空仓 | Tb+0 明日目标 | Tb+1 只按昨晚预案执行或取消 | Tb+2 未执行则回到空仓 |",
-                    "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 空仓 |",
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-06-23（周二） | 最远复盘日 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-06-24（周三） | 历史复盘日 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-06-25（周四） | 上一交易日路径：华电辽能 | - | 可能形成B1旧仓 | 进入Td复核，不临场补B2 |",
+                    "| Td | 2026-06-26（周五） | 报告日：旧仓进入复核 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |",
+                    "| Te | 2026-06-29（周一） | 新目标单独看B1，不用旧仓亏损补仓 | 汇源通信(000586) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |",
                     "",
                     "# 2026-06-26 持仓策略",
                     "",
@@ -32,66 +35,191 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         )
 
         body_index = html.index('<div class="markdown-body">')
-        timeline_index = html.index('class="position-timeline-shell"', body_index)
+        timeline_index = html.index("position-timeline-shell", body_index)
         h1_index = html.index("<h1", body_index)
         self.assertLess(timeline_index, h1_index)
-        self.assertIn('role="region" aria-label="Ta Tb Tc 持仓时间轴"', html)
+        self.assertIn('role="region" aria-label="Ta Te 账户日序"', html)
         self.assertIn('<table class="position-timeline-table">', html)
-        self.assertIn('<span class="timeline-date-main">2026-06-26</span><span class="timeline-date-weekday">（周五）</span>', html)
-        self.assertIn('<span class="timeline-date-main">2026-07-01</span><span class="timeline-date-weekday">（周三）</span>', html)
-        self.assertIn('<span class="timeline-axis-date is-report-day"><span class="timeline-date-main">2026-06-26</span>', html)
-        self.assertIn('<span class="timeline-date-context">报告日</span>', html)
-        self.assertIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-29</span>', html)
-        self.assertNotIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-30</span>', html)
-        self.assertIn('<span class="timeline-date-action">执行日</span>', html)
-        self.assertEqual(html.count('<span class="timeline-date-action">执行日</span>'), 1)
-        self.assertIn('<span class="timeline-date-intent is-hold">持仓处理</span>', html)
-        self.assertNotIn('<span class="timeline-date-action">需执行</span>', html)
-        self.assertIn('<span class="timeline-lane-code">Ta</span><span class="timeline-lane-label">旧仓</span>', html)
-        self.assertIn('<span class="timeline-lane-code">Tb</span><span class="timeline-lane-label">明日目标</span>', html)
-        self.assertIn('<span class="timeline-lane-code">Tc</span><span class="timeline-lane-label">复核位</span>', html)
-        self.assertIn('<tr class="timeline-row timeline-row-ta">', html)
-        self.assertIn('<tr class="timeline-row timeline-row-tb">', html)
-        self.assertIn('<tr class="timeline-row timeline-row-tc">', html)
-        self.assertIn('<span class="timeline-asset-name">汇源通信</span><span class="timeline-asset-code">000586</span>', html)
-        self.assertIn('<span class="timeline-asset-empty">无</span>', html)
-        self.assertIn('<th class="timeline-axis-track" scope="col"><div class="timeline-axis-grid" style="--timeline-days: 4">', html)
-        self.assertIn('<td class="timeline-track-cell" style="--timeline-days: 4"><div class="timeline-track" style="--timeline-days: 4">', html)
-        self.assertIn('<div class="timeline-bar is-active" style="--bar-start: 1; --bar-span: 3; --bar-segments: 3">', html)
-        self.assertIn('<div class="timeline-bar is-active" style="--bar-start: 2; --bar-span: 3; --bar-segments: 3">', html)
-        self.assertIn('<div class="timeline-bar is-missing" style="--bar-start: 3; --bar-span: 1; --bar-segments: 1">', html)
-        self.assertIn('<span class="timeline-bar-segment is-exit is-selected"><span class="timeline-state-code">Ta+2</span>', html)
-        self.assertIn('<span class="timeline-action-badge">必执行</span>', html)
-        self.assertIn('<span class="timeline-bar-segment is-tb"><span class="timeline-state-code">Tb+0</span>', html)
-        self.assertIn('<span class="timeline-action-badge">条件买入</span>', html)
-        self.assertIn('<span class="timeline-bar-segment is-tb is-selected"><span class="timeline-state-code">Tb+1</span>', html)
-        self.assertIn('<span class="timeline-action-badge">持仓处理</span>', html)
-        self.assertIn('<span class="timeline-bar-segment is-missing"><span class="timeline-state-code">没有Tc+0</span>', html)
-        self.assertNotIn('<code class="stock-ref">汇源通信(000586)</code>', html)
+        self.assertIn('<tr class="timeline-row timeline-row-td">', html)
+        self.assertIn('<tr class="timeline-row timeline-row-te">', html)
+        self.assertIn('<span class="timeline-lane-code">Td</span>', html)
+        self.assertIn('<span class="timeline-lane-code">Te</span>', html)
+        self.assertIn('B2不存在直到Te确认', html)
+        self.assertIn('B1未变强则取消B2', html)
+        self.assertIn(
+            'data-el-tooltip="Te 新目标单独看B1，不用旧仓亏损补仓；B1参与权；B2确认权；B1未变强则取消B2；只检查B1"',
+            html,
+        )
+        self.assertIn('class="position-timeline-shell is-day-order"', html)
+        self.assertIn('tabindex="0" data-el-tooltip=', html)
+        self.assertIn('class="timeline-action-badges"', html)
+        self.assertIn("setupTimelineTooltips", html)
+        self.assertIn("tooltip.textContent = text", html)
+        self.assertIn(".el-tooltip-popover", html)
+        self.assertIn('<span class="timeline-action-badge is-participate">参与权</span>', html)
+        self.assertIn('<span class="timeline-action-badge is-confirm">确认权</span>', html)
+        self.assertIn('<span class="timeline-action-badge is-check">检查B1</span>', html)
+        self.assertIn('<span class="timeline-action-badge is-empty">空仓</span>', html)
+        self.assertEqual(html.count('class="timeline-date-state '), 5)
+        self.assertIn('<span class="timeline-date-state is-history">华电辽能</span>', html)
+        self.assertIn('<span class="timeline-date-state is-buy">汇源通信</span>', html)
+        self.assertNotIn('<span class="timeline-action-badge is-participate">参与权</span></span><span class="timeline-bar-segment is-tb">', html)
+        self.assertIn('<span class="timeline-asset-name">汇源通信</span>', html)
+        self.assertIn('<span class="timeline-asset-code">000586</span>', html)
         self.assertNotIn('class="timeline-day-cell"', html)
-        self.assertNotIn('timeline-bar-segment is-empty', html)
+        self.assertNotIn('class="position-day-order-shell"', html)
+        self.assertNotIn("position-day-order", html)
+        self.assertNotIn("day-order-card", html)
+        self.assertNotIn(".position-day-order-shell", html)
+        self.assertIn(".timeline-row-td", html)
+        self.assertIn(".timeline-row-te", html)
+        self.assertIn(".timeline-action-badge.is-confirm", html)
+        self.assertIn(".timeline-action-badge.is-cancel", html)
         self.assertIn(".position-timeline-table", html)
-        self.assertIn("min-width: 1040px", html)
-        self.assertIn("--timeline-lane-width: 76px", html)
-        self.assertIn("--timeline-asset-width: 116px", html)
-        self.assertIn("--timeline-grid-line", html)
-        self.assertIn("--timeline-minor-line", html)
-        self.assertIn(".position-timeline-table thead th", html)
-        self.assertIn("white-space: normal", html)
-        self.assertIn(".timeline-axis-date.is-selected", html)
-        self.assertIn(".timeline-action-badge", html)
-        self.assertIn(".timeline-date-intent.is-empty", html)
-        self.assertIn(".timeline-date-intent.is-hold", html)
-        self.assertIn(".timeline-bar-segment.is-selected .timeline-action-badge", html)
-        self.assertIn(".timeline-bar-segment.is-selected::before", html)
-        self.assertIn("padding-left: 18px", html)
-        self.assertIn("width: 3px", html)
-        self.assertIn("linear-gradient(90deg, var(--timeline-grid-line) 1px, transparent 1px)", html)
-        self.assertIn("--timeline-row-accent: #e73922", html)
-        self.assertIn("--timeline-row-accent: #ff8a1f", html)
-        self.assertIn("--timeline-row-accent: #176e54", html)
+        self.assertIn("min-width: 1824px", html)
+        self.assertIn("min-height: 106px", html)
+        self.assertIn("height: 72px", html)
+        self.assertIn("padding: 12px 0", html)
+        self.assertIn("width: auto", html)
+        self.assertIn("margin: 0 6px", html)
+        self.assertIn("grid-template-areas:", html)
+        self.assertIn('"code badges"', html)
+        self.assertIn('"text text"', html)
+        self.assertIn("grid-area: text", html)
+        self.assertIn("-webkit-line-clamp: 3", html)
+        self.assertNotIn("width: 332px", html)
+        self.assertNotIn("min-width: 960px", html)
+        self.assertNotIn(".position-timeline-shell.is-day-order .timeline-row-te .timeline-bar", html)
+        self.assertNotIn("justify-self: end", html)
         self.assertNotIn("mermaid.min.js", html)
         self.assertNotIn("bear-gantt-shell", html)
+        day_order_html = html[
+            timeline_index : html.index("</tbody></table></div></div>", timeline_index)
+        ]
+        self.assertEqual(["1", "2", "3", "4", "5"], re.findall(r"--bar-start: (\d+);", day_order_html))
+        self.assertEqual(["1", "1", "1", "1", "1"], re.findall(r"--bar-span: (\d+);", day_order_html))
+
+    def test_render_day_order_axis_state_tags_show_each_account_day(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-06（周一） | 最远复盘日：太极实业(600667) | 太极实业(600667) | 历史路径校对 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-07（周二） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-08（周三） | 上一交易日路径：华天科技(002185) | 华天科技(002185) | 可能形成B1旧仓 | 进入Td复核，不临场补B2 |",
+                    "| Td | 2026-07-09（周四） | 报告日：空仓 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |",
+                    "| Te | 2026-07-10（周五） | 新目标单独看B1，不用旧仓亏损补仓 | 长电科技(600584) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-09",
+        )
+
+        self.assertEqual(html.count('class="timeline-date-state '), 5)
+        self.assertIn('<span class="timeline-date-state is-history">太极实业</span>', html)
+        self.assertEqual(html.count('<span class="timeline-date-state is-history">华天科技</span>'), 1)
+        self.assertEqual(html.count('<span class="timeline-date-state is-empty">空仓</span>'), 2)
+        self.assertIn('<span class="timeline-date-state is-buy">长电科技</span>', html)
+
+    def test_render_day_order_axis_keeps_unknown_account_fact_unknown(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：持仓未输入 | - | B1事实待确认 | 只作路径校对 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日计划待成交确认：华天科技(002185) | 华天科技(002185) | 未确认成交，不视为B1 | 只作路径校对 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日持仓未输入 | - | B1事实待确认 | 先确认账户事实 |",
+                    "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与 | 只观察 |",
+                    "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1 | 0%不参与；只核实成交记录 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-10",
+        )
+
+        self.assertEqual(
+            html.count('<span class="timeline-date-state is-unknown">持仓未输入</span>'),
+            2,
+        )
+        self.assertEqual(html.count('<span class="timeline-asset-name">持仓未输入</span>'), 2)
+
+    def test_render_day_order_keeps_pending_asset_in_td_and_te_execution_target_empty(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
+                    "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-10",
+        )
+
+        td_row = re.search(r'<tr class="timeline-row timeline-row-td">(.*?)</tr>', html, re.S).group(1)
+        te_row = re.search(r'<tr class="timeline-row timeline-row-te">(.*?)</tr>', html, re.S).group(1)
+        self.assertIn('<span class="timeline-asset-name">长电科技</span>', td_row)
+        self.assertIn('<span class="timeline-asset-code">600584</span>', td_row)
+        self.assertIn('<span class="timeline-asset-empty">无</span>', te_row)
+        self.assertNotIn('<span class="timeline-asset-code">600584</span>', te_row)
+        self.assertNotIn('<span class="timeline-action-badge is-participate">参与权</span>', te_row)
+        self.assertIn('<span class="timeline-action-badge is-check">只核实</span>', te_row)
+        self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
+
+    def test_render_day_order_negative_b1_wording_never_shows_participation_badge(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日计划待成交确认：华天科技(002185) | 华天科技(002185) | 未确认成交，不视为B1 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
+                    "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-10",
+        )
+
+        tb_row = re.search(r'<tr class="timeline-row timeline-row-tb">(.*?)</tr>', html, re.S).group(1)
+        tc_row = re.search(r'<tr class="timeline-row timeline-row-tc">(.*?)</tr>', html, re.S).group(1)
+        te_row = re.search(r'<tr class="timeline-row timeline-row-te">(.*?)</tr>', html, re.S).group(1)
+        self.assertNotIn('is-participate">参与权', tb_row)
+        self.assertIn('is-check">待确认', tb_row)
+        self.assertNotIn('is-participate">参与权', tc_row)
+        self.assertIn('is-empty">空仓', tc_row)
+        self.assertNotIn('is-participate">参与权', te_row)
+        self.assertIn('is-check">只核实', te_row)
+
+    def test_render_day_order_b1_not_established_is_empty_execution(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-07（周二） | 最远复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-08（周三） | 历史复盘日：空仓 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-09（周四） | 前一交易日空仓 | - | 无B1占用 | 等待Td报告确认 |",
+                    "| Td | 2026-07-10（周五） | 报告日：空仓 | 无 | 只定Te预案，不下单 | 写清执行资格和取消条件 |",
+                    "| Te | 2026-07-13（周一） | 空仓等待 | 无 | B1不成立；不参与 | 不参与 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-10",
+        )
+
+        te_row = re.search(r'<tr class="timeline-row timeline-row-te">(.*?)</tr>', html, re.S).group(1)
+        self.assertNotIn('is-participate">参与权', te_row)
+        self.assertIn('is-empty">空仓', te_row)
+        self.assertIn('<span class="timeline-date-intent is-empty">空仓执行</span>', html)
 
     def test_render_empty_execution_day_intent_when_no_tb_path(self):
         html = render_markdown_report_html(
@@ -112,8 +240,144 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('<span class="timeline-axis-date is-selected"><span class="timeline-date-main">2026-06-30</span>', html)
         self.assertIn('<span class="timeline-date-action">执行日</span>', html)
         self.assertIn('<span class="timeline-date-intent is-hold">持仓处理</span>', html)
-        self.assertIn('<span class="timeline-bar-segment is-exit is-selected"><span class="timeline-state-code">Ta+2</span>', html)
-        self.assertNotIn('<span class="timeline-bar-segment is-tb is-selected"><span class="timeline-state-code">Tb+1</span>', html)
+        self.assertIn('<span class="timeline-bar-segment is-exit is-selected" tabindex="0" data-el-tooltip="Ta+2', html)
+        self.assertNotIn('<span class="timeline-bar-segment is-tb is-selected" tabindex="0" data-el-tooltip="Tb+1', html)
+
+    def test_render_market_structure_chart_directive_as_inline_echarts(self):
+        chart_payload = {
+            "dates": ["2026-07-03", "2026-07-06"],
+            "candles": [[4090.0, 4043.0, 4030.0, 4100.0], [4059.0, 4041.0, 4005.0, 4060.0]],
+            "volumes": [600000000, 590000000],
+            "segments": [
+                {
+                    "kind": "zhongshu",
+                    "startDate": "2026-07-03",
+                    "endDate": "2026-07-06",
+                    "zg": 4103.93,
+                    "zd": 4073.73,
+                    "high": 4103.93,
+                    "low": 4073.73,
+                    "klineCount": 2,
+                    "isCurrent": True,
+                }
+            ],
+            "currentSegment": {
+                "startDate": "2026-07-03",
+                "endDate": "2026-07-06",
+                "zg": 4103.93,
+                "zd": 4073.73,
+            },
+            "latestDate": "2026-07-06",
+            "latestPrice": 4041.24,
+        }
+        with TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            companion = root / "chanlun-html" / "2026-07-06_上证指数缠论.html"
+            companion.parent.mkdir(parents=True)
+            companion.write_text(
+                '<script id="chanlun-chart-data" type="application/json">'
+                + json.dumps(chart_payload, ensure_ascii=False)
+                + "</script>",
+                encoding="utf-8",
+            )
+            output_path = root / "report.html"
+            html = render_markdown_report_html(
+                "\n".join(
+                    [
+                        "# 图表日报",
+                        "",
+                        "**大盘结构图**：",
+                        '::market-structure-chart{src="chanlun-html/2026-07-06_上证指数缠论.html" title="2026-07-06 上证指数日线中枢"}',
+                    ]
+                ),
+                title="图表日报",
+                trade_date="2026-07-06",
+                output_path=output_path,
+            )
+
+        self.assertIn('class="market-structure-chart"', html)
+        self.assertIn("data-market-structure-chart", html)
+        self.assertIn("renderMarketStructureChart", html)
+        self.assertIn('"latestDate":"2026-07-06"', html)
+        self.assertIn("2026-07-06 上证指数日线中枢", html)
+        self.assertIn('red: "#C20C0C"', html)
+        self.assertIn('green: "#089981"', html)
+        self.assertIn('color: "transparent"', html)
+        self.assertIn('color: rising ? "transparent" : color', html)
+        self.assertIn("borderColor: marketStructureTone.red", html)
+        self.assertIn("borderColor: color", html)
+        self.assertIn("showTopLabel: Boolean(segment.isCurrent)", html)
+        self.assertIn("zoneIntersectsVisibleGrid", html)
+        self.assertIn("zoneRight > gridLeft && x < gridRight", html)
+        self.assertIn("labelAnchorVisibleInGrid", html)
+        self.assertIn("labelIndexVisibleInCurrentZoom", html)
+        self.assertIn("item.showLabel && labelIndexVisibleInCurrentZoom(startIndex)", html)
+        self.assertIn("encode: { x: [0, 2], y: [1, 3] }", html)
+        self.assertNotIn("<iframe", html)
+        self.assertNotIn("http://127.0.0.1:3040/work-page", html)
+
+    def test_render_ta_te_day_order_b2_cancel_as_cancel_badge(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                    "|------|------|----------|----------|-------------|------|",
+                    "| Ta | 2026-07-03（周五） | 最远复盘日 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tb | 2026-07-06（周一） | 历史复盘日 | - | 不生成B1/B2 | 只作路径校对，不改变Te动作 |",
+                    "| Tc | 2026-07-07（周二） | 上一交易日路径：华天科技(002185) | - | 可能形成B1旧仓 | 进入Td复核，不临场补B2 |",
+                    "| Td | 2026-07-08（周三） | 报告日：旧仓进入复核 | 无 | Te不新增参与，B2取消 | 只观察，不新增参与 |",
+                    "| Te | 2026-07-09（周四） | 只处理旧仓风险 | 无 | 没有B2；只处理旧仓风险 | 旧仓未修复则继续降风险 |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-08",
+        )
+
+        self.assertIn('<span class="timeline-action-badge is-cancel">取消B2</span>', html)
+        self.assertIn('Te不新增参与，B2取消', html)
+
+    def test_render_file_does_not_duplicate_position_timeline_after_reading_map(self):
+        timeline = "\n".join(
+            [
+                "| 轨道 | 标的 | 2026-07-05（周日） | 2026-07-06（周一） | 2026-07-07（周二） | 2026-07-08（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓 | 空仓 |",
+                "| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |",
+                "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |",
+            ]
+        )
+        markdown = "\n".join(
+            [
+                "# 2026-07-06 A股日报",
+                "",
+                "## 阅读地图",
+                "| 顺序 | 模块 | 用途 |",
+                "|---:|---|---|",
+                "| 1 | 日报裁决总览 | 先看动作 |",
+                "",
+                "## 账户日序表",
+                timeline,
+                "",
+                "## 日报裁决总览",
+                "正文",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            markdown_path = Path(tempdir) / "report.md"
+            html_path = Path(tempdir) / "report.html"
+            markdown_path.write_text(markdown, encoding="utf-8")
+
+            render_markdown_report_file(
+                markdown_path,
+                html_path,
+                title="测试日报",
+                trade_date="2026-07-06",
+                prepend_markdown=timeline,
+            )
+            html = html_path.read_text(encoding="utf-8")
+
+        self.assertEqual(html.count('class="position-timeline-shell"'), 1)
+        self.assertEqual(html.count('<tr class="timeline-row timeline-row-ta">'), 1)
 
     def test_render_empty_execution_day_intent_when_no_old_position_or_tb_path(self):
         html = render_markdown_report_html(
@@ -279,7 +543,7 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('red: cssValue("--accent-red", "#e73922")', html)
         self.assertIn('green: cssValue("--signal-green", "#176e54")', html)
         self.assertIn('surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)")', html)
-        self.assertIn('color: ["rgba(231,57,34,0.58)", chartTone.red]', html)
+        self.assertIn('color: ["rgba(231,57,34,0.58)", chartTone.red, "rgba(23,110,84,0.5)"]', html)
         self.assertIn("font-size: 15px", html)
         self.assertIn("pre.fenced-code", html)
         self.assertIn('<pre class="fenced-code"><code class="fenced-code-content" lang="sql">', html)
@@ -307,6 +571,100 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('td class="signal-hot"', html)
         self.assertNotIn("snapshots/replay", html)
         self.assertNotIn(".json", html)
+
+    def test_render_distinguishes_extreme_top50_share_above_25(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 1. 指数与市场底色",
+                    "> 近25个交易日Top50成交额占比趋势。",
+                    "| 日期 | Top50占比 | 状态 | 较前日 | Top50成交额 | 两市成交额 |",
+                    "|------|-----------|------|--------|-------------|------------|",
+                    "| 2026-06-10 | 25.01% | 极致 | +0.01pct | 7503.00亿 | 30000.00亿 |",
+                    "| 2026-06-09 | 25.00% | 资金活跃期 | +4.99pct | 7500.00亿 | 30000.00亿 |",
+                    "| 2026-06-08 | 20.01% | 资金活跃期 | +2.02pct | 6003.00亿 | 30000.00亿 |",
+                    "| 2026-06-07 | 20.00% | 震荡 | +2.00pct | 6000.00亿 | 30000.00亿 |",
+                    "| 2026-06-06 | 18.00% | 震荡 | +0.01pct | 5400.00亿 | 30000.00亿 |",
+                    "| 2026-06-05 | 17.99% | 冰点 | 待累计 | 5397.00亿 | 30000.00亿 |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-06-10",
+        )
+
+        self.assertIn(
+            '<td class="has-signal"><span class="signal-marker signal-extreme">25.01%</span></td>',
+            html,
+        )
+        self.assertIn(
+            '<td class="has-signal"><span class="signal-marker signal-hot">25.00%</span></td>',
+            html,
+        )
+        self.assertIn(
+            '<td class="has-signal"><span class="signal-marker signal-cold">17.99%</span></td>',
+            html,
+        )
+        self.assertIn("<td>20.00%</td>", html)
+        self.assertIn("<td>18.00%</td>", html)
+        self.assertNotIn('signal-hot">20.00%</span>', html)
+        self.assertNotIn('signal-cold">18.00%</span>', html)
+        self.assertIn("--signal-extreme: #F92722", html)
+        self.assertIn("--signal-extreme-text: #FFFFFF", html)
+        self.assertIn(".signal-marker.signal-extreme", html)
+        self.assertIn("text-shadow: 0 1px 1px rgba(94, 0, 0, 0.42)", html)
+        self.assertIn('extremeRed: cssValue("--signal-extreme", "#F92722")', html)
+        self.assertIn('extremeText: cssValue("--signal-extreme-text", "#FFFFFF")', html)
+        self.assertIn('name: ">25%极致"', html)
+        self.assertIn("backgroundColor: chartTone.extremeRed", html)
+        self.assertIn("color: chartTone.extremeText", html)
+        self.assertIn("max: (value) => Math.max(26, Math.ceil(value.max) + 1)", html)
+
+    def test_template_preview_includes_extreme_top50_demo(self):
+        html = (ROOT / "scripts" / "templates" / "daily_report_markdown_reader.html").read_text(encoding="utf-8")
+
+        self.assertIn('$outline_nav', html)
+        self.assertIn('const outlineMarker = "$" + "outline_nav";', html)
+        self.assertIn('document.body.textContent.includes(outlineMarker)', html)
+        self.assertIn('<span class="signal-marker signal-extreme">猩红极致</span>', html)
+        self.assertIn(
+            '<span class="signal-marker signal-extreme">25.16%</span></td><td>超过25%，极致</td>',
+            html,
+        )
+        self.assertIn(
+            '<span class="signal-marker signal-hot">23.28%</span></td><td>超过20%，资金活跃</td>',
+            html,
+        )
+        self.assertIn(
+            '<span class="signal-marker signal-cold">1.96%</span></td><td>低于2%，偏冷</td>',
+            html,
+        )
+
+    def test_generated_market_overview_keeps_extreme_wording_and_bear_color_aligned(self):
+        contract = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 150.06} for _ in range(50)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2400, "down_count": 2400},
+            },
+            target_date="2026-06-10",
+        )
+        html = render_markdown_report_html(
+            "\n".join(contract["lines"]),
+            title="图表日报",
+            trade_date="2026-06-10",
+        )
+
+        self.assertIn(
+            '<td class="has-signal"><span class="signal-marker signal-extreme">25.01%</span></td>',
+            html,
+        )
+        self.assertIn("<td>极致</td>", html)
+        self.assertIn("<td>Top50成交额占比超过25%，头部成交集中度进入极致区。</td>", html)
+        self.assertNotIn("Top50成交额占比超过20%，雨量变大，资金处于活跃期。", html)
 
     def test_render_marks_stock_name_code_references_as_inline_code(self):
         html = render_markdown_report_html(
@@ -345,6 +703,47 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertNotIn('<code class="stock-ref">华电辽能(600396)</code>', html)
         self.assertIn("普通说明(不是代码)不变", html)
 
+    def test_render_wraps_front_position_conclusion_cells(self):
+        position_text = (
+            "已决定满仓条件执行；最大可到100%，先B1再B2；"
+            "B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1；"
+            "盘中不满足取消，回到0%不参与"
+        )
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 2026-07-09 A股日报",
+                    "",
+                    "## 日报裁决总览",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    f"| 仓位姿态 | {position_text} |",
+                    "| 最终对象 | 明日执行对象：长电科技(600584) |",
+                    "",
+                    "## 明日执行结论",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    f"| 明日仓位 | {position_text} |",
+                    "| 明日执行对象 | 长电科技(600584) |",
+                    "",
+                    "## 明日账户建议",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    f"| 明日仓位 | {position_text} |",
+                ]
+            ),
+            title="测试日报",
+            trade_date="2026-07-09",
+        )
+
+        wrapped = (
+            "已决定满仓条件执行<br>最大可到100%，先B1再B2<br>"
+            "B1先买参与权，B2只买确认权<br>B1未变强不补B2，走弱先取消B2并检查B1<br>"
+            "盘中不满足取消，回到0%不参与"
+        )
+        self.assertEqual(html.count(wrapped), 2)
+        self.assertIn(f"<td>{position_text}</td>", html)
+
     def test_render_marks_action_and_evidence_sections_for_bear_reader(self):
         html = render_markdown_report_html(
             "\n".join(
@@ -374,6 +773,11 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "## 不执行条件",
                     "- 市场继续走弱",
                     "",
+                    "## 市场语言翻译（研究证据）",
+                    "| 项目 | 结论 |",
+                    "|------|------|",
+                    "| 当前阶段 | 向下压力扩散 |",
+                    "",
                     "## 板块资金扩散淘汰赛",
                     "| 层级 | 输入 |",
                     "|---|---:|",
@@ -388,7 +792,9 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('<h2 class="bear-section-action" id="明日执行结论">明日执行结论</h2>', html)
         self.assertIn('<h2 class="bear-section-action" id="满仓条件执行条件">满仓条件执行条件</h2>', html)
         self.assertIn('<h2 class="bear-section-action" id="不执行条件">不执行条件</h2>', html)
+        self.assertIn('<h2 class="bear-section-evidence" id="市场语言翻译研究证据">市场语言翻译（研究证据）</h2>', html)
         self.assertIn('<h2 class="bear-section-evidence" id="板块资金扩散淘汰赛">板块资金扩散淘汰赛</h2>', html)
+        self.assertLess(html.index('id="明日执行结论"'), html.index('id="市场语言翻译研究证据"'))
         self.assertLess(html.index('id="明日执行结论"'), html.index('id="板块资金扩散淘汰赛"'))
         self.assertIn(".markdown-body h2.bear-section-action", html)
         self.assertIn(".markdown-body h2.bear-section-evidence", html)
@@ -548,6 +954,13 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
                     "| 2026-06-09 | 21.86% | 资金活跃期 | +0.75pct | 5828.45亿 | 26667.33亿 |",
                     "| 2026-06-08 | 21.11% | 资金活跃期 | -2.17pct | 5958.98亿 | 28234.29亿 |",
                     "",
+                    "### 4. 创新高趋势反馈",
+                    "",
+                    "| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |",
+                    "|------|--------|---------|----------|--------|----------|",
+                    "| 2026-06-09 | 82 | 1.64% | 趋势扩散偏冷 | +24 | 元器件 |",
+                    "| 2026-06-08 | 58 | 1.16% | 趋势扩散偏冷 | -5 | 半导体 |",
+                    "",
                     "### 附录：七、龙虎榜结果",
                     "",
                     "#### 附录：净买入结果",
@@ -574,9 +987,19 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn("renderMarketTurnoverTop50TrendChart", html)
         self.assertIn("renderLhbNetFlowChart", html)
         self.assertIn('formatter: (value) => value === 0 ? "" : `${Math.abs(value)}亿`', html)
+        self.assertIn("创新高全A占比", html)
+        self.assertIn("item.new_high_share_pct", html)
+        self.assertIn("hasNewHighShare", html)
+        self.assertRegex(html, r'name: "创新高全A占比",\s+type: "line",\s+yAxisIndex: 1')
+        self.assertIn("青线辅助看趋势扩散", html)
+        self.assertIn('symbol: "circle"', html)
+        self.assertIn("showSymbol: false", html)
+        self.assertIn('lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 }', html)
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][0]["date"], "2026-06-08")
+        self.assertEqual(payload["market_turnover_top50_trend"]["items"][0]["new_high_share_pct"], 1.16)
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["top50_share_pct"], 21.86)
         self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["total_turnover"], 26667.33)
+        self.assertEqual(payload["market_turnover_top50_trend"]["items"][1]["new_high_share_pct"], 1.64)
         self.assertEqual(payload["lhb_net_flow"]["items"][0]["name"], "英维克")
         self.assertEqual(payload["lhb_net_flow"]["items"][0]["amount"], 8.01)
         self.assertEqual(payload["lhb_net_flow"]["items"][1]["name"], "科泰电源")
@@ -585,6 +1008,37 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertEqual(payload["lhb_net_flow"]["items"][2]["amount"], -0.12)
         self.assertEqual(payload["lhb_net_flow"]["items"][3]["name"], "北玻股份")
         self.assertEqual(payload["lhb_net_flow"]["items"][3]["amount"], -2.31)
+
+    def test_render_skips_lhb_net_flow_chart_when_amounts_are_zero(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "### 附录：七、龙虎榜结果",
+                    "",
+                    "#### 附录：净买入结果",
+                    "| 排名 | 股票 | 代码 | 净买入(亿) | 所属板块 | 涨跌幅 | 涨停状态 | 蜡烛图形态 |",
+                    "|------|------|------|-----------|----------|--------|----------|------------|",
+                    "| 1 | 云创退 | 920305 | 0.00亿 | 待补充板块 | -80.67% | 跌停 | 下跌趋势(0分) |",
+                    "| 2 | 新睿电子 | 920211 | 0.00亿 | 待补充板块 | +0.00% | 正常 | 震荡整理(0分) |",
+                    "",
+                    "#### 附录：净流出结果",
+                    "| 排名 | 股票 | 代码 | 净流出(亿) | 所属板块 | 涨跌幅 | 涨停状态 | 蜡烛图形态 |",
+                    "|------|------|------|-----------|----------|--------|----------|------------|",
+                    "| 1 | 云创退 | 920305 | 0.00亿 | 待补充板块 | -80.67% | 跌停 | 下跌趋势(0分) |",
+                    "| 2 | 新睿电子 | 920211 | 0.00亿 | 待补充板块 | +0.00% | 正常 | 震荡整理(0分) |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-07-09",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+
+        self.assertNotIn("lhb_net_flow", payload)
+        self.assertNotIn('data-bear-chart="lhb_net_flow"', html)
+        self.assertNotIn("龙虎榜净额表态", html)
 
     def test_render_adds_bear_echarts_for_board_tag_rank_bar(self):
         html = render_markdown_report_html(
@@ -612,9 +1066,58 @@ class DailyReportMarkdownHtmlTest(unittest.TestCase):
         self.assertIn('data-bear-chart="board_tag_rank_bar"', html)
         self.assertIn("renderBoardTagRankBarChart", html)
         self.assertNotIn('type: "treemap"', html)
+        self.assertNotIn("<th>热度条</th>", html)
+        self.assertNotIn("####################", html)
         self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["tag"], "光纤概念")
         self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["count"], 9)
         self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["share_pct"], 8.3)
+
+    def test_render_adds_bear_echarts_for_t100_board_tag_rank_table(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "**T-100**",
+                    "| 排名 | 标签 | 出现次数 | 全标签占比 | 热度条 |",
+                    "|------|------|----------|----------|--------|",
+                    "| 1 | 存储芯片 | 8 | 7.8% | `####################` |",
+                    "| 2 | 共封装光学(CPO) | 7 | 6.8% | `##################` |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-07-03",
+        )
+        payload_text = re.search(r'<script type="application/json" id="bear-chart-payload">(.*?)</script>', html).group(1)
+        payload = json.loads(payload_text)
+
+        self.assertIn('data-bear-chart="board_tag_rank_bar"', html)
+        self.assertIn("renderBoardTagRankBarChart", html)
+        self.assertNotIn("<th>热度条</th>", html)
+        self.assertNotIn("####################", html)
+        self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["tag"], "存储芯片")
+        self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["count"], 8)
+        self.assertEqual(payload["board_tag_rank_bar"]["items"][0]["share_pct"], 7.8)
+
+    def test_render_keeps_unscoped_board_like_table_as_plain_table(self):
+        html = render_markdown_report_html(
+            "\n".join(
+                [
+                    "# 图表日报",
+                    "",
+                    "## 普通统计表",
+                    "| 排名 | 标签 | 出现次数 | 全标签占比 | 热度条 |",
+                    "|------|------|----------|----------|--------|",
+                    "| 1 | 样本标签 | 8 | 7.8% | `####################` |",
+                ]
+            ),
+            title="图表日报",
+            trade_date="2026-07-03",
+        )
+
+        self.assertNotIn('data-bear-chart="board_tag_rank_bar"', html)
+        self.assertIn("<th>热度条</th>", html)
+        self.assertIn("####################", html)
 
     def test_render_adds_bear_echarts_for_intraday_feedback_review(self):
         html = render_markdown_report_html(

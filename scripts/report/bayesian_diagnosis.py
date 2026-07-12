@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Mapping
 
+from report.execution_wording import PREMARKET_50_EXECUTION_TEXT
 from report.surface_wording import sanitize_user_visible_text
 
 
@@ -163,7 +164,7 @@ def _final_action_context(
         "0%不参与" if position_pct <= 0 else "已决定按条件参与；不满足回到0%不参与",
     )
     if position_pct == 50 and ("50%条件执行" not in action_text or "回到0" not in action_text):
-        action_text = "已决定50%条件执行；盘中不满足取消，回到0%不参与"
+        action_text = PREMARKET_50_EXECUTION_TEXT
     return {
         "source": "final_target_resolution",
         "position_pct": position_pct,
@@ -384,7 +385,12 @@ def build_bayesian_diagnosis_packet(
             target_date,
             final_action,
             position_decision,
-            source_date_default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+            source_date_default=_source_date(
+                position_decision,
+                data,
+                market_research_snapshot,
+                default=_postgres_only_source_date(target_date, data, market_research_snapshot),
+            ),
         ),
         _counter_step(target_date, data, market_research_snapshot, final_target_resolution, position_decision, counter_evidence),
     ]

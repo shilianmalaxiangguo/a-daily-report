@@ -12,6 +12,17 @@ if __package__ in (None, ""):
 
 from report.surface_wording import find_legacy_surface_wording
 
+try:
+    from portfolio.position_strategy_report import (
+        _read_report_day_account_state as _read_day_order_account_state,
+        _read_report_day_path_target as _read_day_order_expected_path_target,
+        _target_label as _day_order_target_label,
+    )
+except (ImportError, ModuleNotFoundError):
+    _read_day_order_account_state = None
+    _read_day_order_expected_path_target = None
+    _day_order_target_label = None
+
 LEGACY_TRADING_TIME_WORDING_MARKERS = (
     "60" + "分钟" + "确认",
     "60 " + "分钟" + "确认",
@@ -1343,7 +1354,7 @@ def _extract_html_timeline_assets(companion_html):
         return {}
     assets = {}
     row_pattern = re.compile(
-        r'<tr\b[^>]*class=["\'][^"\']*timeline-row-(?P<lane>ta|tb|tc)[^"\']*["\'][^>]*>(?P<body>.*?)</tr>',
+        r'<tr\b[^>]*class=["\'][^"\']*timeline-row-(?P<lane>ta|tb|tc|td|te)[^"\']*["\'][^>]*>(?P<body>.*?)</tr>',
         re.I | re.S,
     )
     for match in row_pattern.finditer(text):
@@ -1360,33 +1371,550 @@ def _extract_html_timeline_assets(companion_html):
     return assets
 
 
+def _extract_html_timeline_row_markup(companion_html, lane):
+    text = str(companion_html or "")
+    match = re.search(
+        rf'<tr\b[^>]*class=["\'][^"\']*timeline-row-{re.escape(str(lane or "").lower())}[^"\']*["\'][^>]*>(.*?)</tr>',
+        text,
+        re.I | re.S,
+    )
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def _extract_html_timeline_row_text(companion_html, lane):
+    markup = _extract_html_timeline_row_markup(companion_html, lane)
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", markup))).strip()
+
+
 def _markdown_has_position_timeline(lines):
     for line in lines:
-        if not str(line or "").strip():
-            continue
-        return str(line).lstrip().startswith("| 轨道 | 标的 |")
+        text = str(line or "").lstrip()
+        if text.startswith("| 轨道 | 标的 |") or text.startswith("| 日序 | 日期 |"):
+            return True
     return False
 
 
-def _audit_position_timeline_parity(lines, companion_html=None):
+def _audit_position_timeline_parity(lines, companion_html=None, *, require_html_timeline=False):
     html_assets = _extract_html_timeline_assets(companion_html)
+    html_has_timeline = bool(html_assets) or "position-day-order-shell" in str(companion_html or "")
     markdown_has_timeline = _markdown_has_position_timeline(lines)
     findings = []
-    if html_assets and not markdown_has_timeline:
+    if html_has_timeline and not markdown_has_timeline:
         findings.append(
             _finding(
                 "position_timeline_markdown_missing",
-                "Bear HTML 已有 Ta/Tb/Tc 时间轴时，Markdown 也必须写出同一张可读表",
+                "Bear HTML 已有账户日序图时，Markdown 也必须写出同一张可读表",
             )
         )
+    if require_html_timeline and not html_has_timeline:
+        findings.append(
+            _finding(
+                "position_timeline_html_missing",
+                "Bear HTML 缺少账户日序表，关键数据不完整，停止生成",
+            )
+        )
+    if html_has_timeline:
+        for _offset, cells in _extract_day_order_rows(lines):
+            lane = cells[0].lower()
+            if lane not in {"ta", "tb", "tc"} or "持仓未输入" not in cells[2]:
+                continue
+            if html_assets.get(lane) != "持仓未输入":
+                findings.append(
+                    _finding(
+                        "position_day_order_html_unknown_rendered_as_empty",
+                        f"Bear HTML 必须保留 {cells[0]} 的持仓未输入，不能显示为空仓；停止生成",
+                    )
+                )
     old_asset = html_assets.get("ta", "")
-    if old_asset and old_asset not in {"无", "空仓", "-"}:
+    if old_asset and old_asset not in {"无", "空仓", "持仓未输入", "-"}:
         full_text = "\n".join(str(line or "") for line in lines)
         if "持仓未输入" in full_text and (old_asset in full_text or (companion_html and old_asset in str(companion_html))):
             findings.append(
                 _finding(
                     "known_old_position_conflicts_with_unknown_holding",
                     f"Ta旧仓已指向 {old_asset}，正文不能继续写持仓未输入",
+                )
+            )
+    return findings
+
+
+def _extract_position_timeline_tb_target(lines):
+    for offset, line in enumerate(_front_page_lines(lines), 1):
+        cells = _split_md_row(line)
+        if len(cells) >= 2 and cells[0] == "Tb明日目标":
+            return cells[1], offset
+        if len(cells) >= 4 and cells[0] == "Te":
+            execution_text = " ".join(cells[2:6])
+            if any(
+                marker in execution_text
+                for marker in (
+                    "只处理旧仓",
+                    "旧仓风险",
+                    "待成交确认",
+                    "确认已成交才视为B1",
+                    "没有B2",
+                )
+            ):
+                return "", None
+            return cells[3], offset
+    return "", None
+
+
+def _audit_position_timeline_final_conflict(lines):
+    tb_target, offset = _extract_position_timeline_tb_target(lines)
+    if not _target_identity(tb_target):
+        return []
+    front = _front_page_lines(lines)
+    final_target = _extract_final_unique_target(front)
+    final_identity = _target_identity(final_target)
+    tb_identity = _target_identity(tb_target)
+    if final_identity and not _is_empty_target(final_target) and tb_identity != final_identity:
+        return [
+            _finding(
+                "position_timeline_final_conflict",
+                f"账户日序目标 {tb_target} 与最终对象 {final_target} 不一致",
+                line=offset,
+            )
+        ]
+    front_execution_object = _extract_front_execution_object(lines)
+    final_empty = (
+        _selection_workflow_declares_empty_final(lines)
+        or _final_summary_is_zero_position(front)
+        or (bool(front_execution_object) and _is_empty_target(front_execution_object))
+    )
+    if not final_empty:
+        return []
+    return [
+        _finding(
+            "position_timeline_final_conflict",
+            f"最终动作是不参与或无执行对象，但账户日序目标写了 {tb_target}",
+            line=offset,
+        )
+    ]
+
+
+def _day_order_date(value):
+    match = re.search(r"\d{4}-\d{2}-\d{2}", str(value or ""))
+    return match.group(0) if match else ""
+
+
+def _extract_day_order_rows(lines):
+    rows = []
+    for offset, line in enumerate(_front_page_lines(lines), 1):
+        cells = _split_md_row(line)
+        if len(cells) >= 6 and cells[0] in {"Ta", "Tb", "Tc", "Td", "Te"}:
+            rows.append((offset, cells))
+    return rows
+
+
+def _declared_final_execution_target(lines):
+    front = _front_page_lines(lines)
+    front_execution_object = _extract_front_execution_object(lines)
+    return front_execution_object if front_execution_object else _extract_final_unique_target(front)
+
+
+def _day_order_has_pending_previous_plan(rows):
+    for _offset, cells in rows:
+        if cells[0] not in {"Td", "Te"}:
+            continue
+        text = " ".join(cells[2:6])
+        if "待成交确认" in text and (
+            "前日报计划" in text
+            or "计划推定" in text
+            or "确认已成交才视为B1" in text
+        ):
+            return True
+    return False
+
+
+def _audit_position_day_order_execution_target(lines, companion_html=None):
+    rows = _extract_day_order_rows(lines)
+    te_row = next(((offset, cells) for offset, cells in rows if cells[0] == "Te"), None)
+    if te_row is None:
+        return []
+
+    pending_previous_plan = _day_order_has_pending_previous_plan(rows)
+    te_offset, te_cells = te_row
+    markdown_target_identity = _target_identity(te_cells[3])
+    declared_target_identity = _target_identity(_declared_final_execution_target(lines))
+    findings = []
+    if pending_previous_plan and markdown_target_identity != declared_target_identity:
+        findings.append(
+            _finding(
+                "position_day_order_inferred_target_conflict",
+                "Te执行目标必须与日报最终执行对象一致，不能沿用待成交确认对象；停止生成",
+                line=te_offset,
+            )
+        )
+
+    html_assets = _extract_html_timeline_assets(companion_html)
+    if "te" in html_assets:
+        html_target_identity = _target_identity(html_assets.get("te", ""))
+        if html_target_identity != markdown_target_identity:
+            findings.append(
+                _finding(
+                    "position_day_order_html_inferred_target_conflict"
+                    if pending_previous_plan
+                    else "position_day_order_html_target_conflict",
+                    "Bear HTML 的Te必须与Markdown账户日序的Te执行目标一致；停止生成",
+                )
+            )
+    return findings
+
+
+def _expected_current_position_codes(lines, expected_position_summary=None):
+    expected = expected_position_summary if isinstance(expected_position_summary, dict) else {}
+    if expected.get("has_position") or expected.get("has_pending_position") or (
+        expected.get("inferred_from_previous_report") is True
+        or expected.get("position_source") == "previous_report_target_default_1x"
+    ):
+        expected_text = " ".join(
+            str(expected.get(key) or "")
+            for key in ("name", "stock_name", "code", "stock_code", "summary")
+        )
+        codes = _stock_codes_in_text(expected_text)
+        if codes:
+            return codes
+    codes = set()
+    for line in _front_page_lines(lines):
+        text = str(line or "")
+        cells = _split_md_row(text)
+        label = cells[0] if cells else ""
+        if label not in {"旧仓处理", "持仓确认", "已有旧仓", "当前持仓"} and not any(
+            marker in text for marker in ("已有旧仓：", "已有旧仓:")
+        ):
+            continue
+        if any(marker in text for marker in ("无旧仓", "持仓未输入", "已清仓")):
+            continue
+        codes.update(_stock_codes_in_text(text))
+    return codes
+
+
+def _audit_position_day_order_current_position(
+    lines,
+    *,
+    companion_html=None,
+    expected_position_summary=None,
+):
+    expected = expected_position_summary if isinstance(expected_position_summary, dict) else {}
+    expected_codes = _expected_current_position_codes(lines, expected_position_summary)
+    if not expected_codes:
+        return []
+    inferred_position = bool(
+        expected.get("inferred_from_previous_report") is True
+        or expected.get("position_source") == "previous_report_target_default_1x"
+    )
+    inferred_verification_only = inferred_position and not _target_identity(
+        _declared_final_execution_target(lines)
+    )
+    inferred_confirmed_markers = (
+        "旧仓进入复核",
+        "只处理旧仓风险",
+        "已有1x",
+        "同股旧仓1x",
+        "旧仓1x",
+        "已有同股旧仓",
+        "已有昨日持仓",
+        "同股T",
+        "旧仓处理",
+        "先处理旧仓",
+        "持有100%",
+        "默认1x旧仓",
+        "上一份日报明日标的默认1x旧仓",
+        "旧仓按旧路径",
+    )
+    inferred_global_stale_markers = (
+        "默认1x旧仓",
+        "上一份日报明日标的默认1x旧仓",
+        "旧仓按旧路径",
+    )
+    td_row = next(
+        ((offset, cells) for offset, cells in _extract_day_order_rows(lines) if cells[0] == "Td"),
+        None,
+    )
+    te_row = next(
+        ((offset, cells) for offset, cells in _extract_day_order_rows(lines) if cells[0] == "Te"),
+        None,
+    )
+    findings = []
+    if td_row is None:
+        findings.append(
+            _finding(
+                "position_day_order_current_position_missing",
+                "正文已有旧仓对象，但账户日序缺少Td报告日行，关键数据不完整，停止生成",
+            )
+        )
+    else:
+        offset, cells = td_row
+        visible_codes = _stock_codes_in_text(f"{cells[2]} {cells[3]}")
+        missing_codes = sorted(expected_codes - visible_codes)
+        if missing_codes:
+            findings.append(
+                _finding(
+                    "position_day_order_current_position_missing",
+                    "正文或数据库已有旧仓对象，但Td没有写出同一股票："
+                    + "、".join(missing_codes)
+                    + "；关键数据不完整，停止生成",
+                    line=offset,
+                )
+            )
+        elif inferred_position:
+            td_text = " ".join(cells[2:6])
+            if (
+                "前日报计划推定" not in td_text
+                or "待成交确认" not in td_text
+                or any(marker in td_text for marker in inferred_confirmed_markers)
+            ):
+                findings.append(
+                    _finding(
+                        "position_day_order_inferred_confirmation_missing",
+                        "Td虽然写出了前日报计划对象，但没有保留计划推定、待成交确认口径；停止生成",
+                        line=offset,
+                    )
+                )
+    if inferred_position:
+        if te_row is None:
+            findings.append(
+                _finding(
+                    "position_day_order_inferred_confirmation_missing",
+                    "前日报计划对象待成交确认时，账户日序缺少Te执行日行；停止生成",
+                )
+            )
+        else:
+            te_offset, te_cells = te_row
+            te_text = " ".join(te_cells[2:6])
+            te_target_identity = _target_identity(te_cells[3])
+            te_tracks_inferred_position = (
+                not te_target_identity
+                or bool(_stock_codes_in_text(te_cells[3]) & expected_codes)
+            )
+            if te_tracks_inferred_position and (
+                "待成交确认" not in te_text
+                or "确认已成交才视为B1" not in te_text
+                or "未确认不新增B2" not in te_text
+                or (
+                    inferred_verification_only
+                    and ("0%不参与" not in te_text or "只核实成交记录" not in te_text)
+                )
+                or any(marker in te_text for marker in inferred_confirmed_markers)
+            ):
+                findings.append(
+                    _finding(
+                        "position_day_order_inferred_confirmation_missing",
+                        "Te没有保留前日报计划对象的待成交确认口径；停止生成",
+                        line=te_offset,
+                    )
+                )
+        for offset, line in enumerate(lines, 1):
+            cells = _split_md_row(line)
+            label = cells[0] if cells else ""
+            current_action_labels = {
+                "账户约束",
+                "明日仓位",
+                "账户风险暴露",
+                "明日动作",
+                "账户后台任务负担",
+                "持仓优先动作",
+                "明天是否参与",
+                "市场情绪状态",
+            }
+            stale_global_wording = any(marker in line for marker in inferred_global_stale_markers)
+            stale_current_action = label in current_action_labels and any(
+                marker in line for marker in inferred_confirmed_markers
+            )
+            stale_current_verdict = str(line or "").lstrip().startswith(
+                ("**明日裁决**", "- **明日裁决**")
+            ) and any(marker in line for marker in ("只处理旧仓", "已有1x", "同股T"))
+            stale_compact_action = str(line or "").lstrip().startswith(
+                ("- **明天能不能开仓**:", "- 明日动作：", "- 明日动作:")
+            ) and any(marker in line for marker in ("只处理旧仓", "已有1x", "同股T"))
+            if stale_global_wording or stale_current_action or stale_current_verdict or stale_compact_action:
+                findings.append(
+                    _finding(
+                        "position_inferred_rendered_as_confirmed_holding",
+                        "前日报计划对象被账户动作行写成确认持仓，未确认成交前必须按0x处理；停止生成",
+                        line=offset,
+                    )
+                )
+                break
+            if not cells or cells[0] not in {"旧仓处理", "当前持仓", "已有旧仓", "成交确认"}:
+                continue
+            row_codes = _stock_codes_in_text(line)
+            if not (row_codes & expected_codes):
+                continue
+            if "前日报计划推定" not in line or "待成交确认" not in line:
+                findings.append(
+                    _finding(
+                        "position_inferred_rendered_as_confirmed_holding",
+                        "前日报计划对象被正文写成确认持仓，必须保留计划推定、待成交确认口径；停止生成",
+                        line=offset,
+                    )
+                )
+                break
+    html_assets = _extract_html_timeline_assets(companion_html)
+    if html_assets:
+        html_codes = _stock_codes_in_text(html_assets.get("td", ""))
+        missing_html_codes = sorted(expected_codes - html_codes)
+        if missing_html_codes:
+            findings.append(
+                _finding(
+                    "position_day_order_html_current_position_missing",
+                    "Bear HTML 的Td没有写出数据库旧仓对象："
+                    + "、".join(missing_html_codes)
+                    + "；停止生成",
+                )
+            )
+        if inferred_position:
+            td_html_text = _extract_html_timeline_row_text(companion_html, "td")
+            te_html_text = _extract_html_timeline_row_text(companion_html, "te")
+            te_html_markup = _extract_html_timeline_row_markup(companion_html, "te")
+            te_html_identity = _target_identity(html_assets.get("te", ""))
+            te_html_tracks_inferred_position = (
+                not te_html_identity
+                or bool(_stock_codes_in_text(html_assets.get("te", "")) & expected_codes)
+            )
+            if (
+                "前日报计划推定" not in td_html_text
+                or "待成交确认" not in td_html_text
+                or (
+                    te_html_tracks_inferred_position
+                    and (
+                        "待成交确认" not in te_html_text
+                        or "确认已成交才视为B1" not in te_html_text
+                        or "未确认不新增B2" not in te_html_text
+                        or (
+                            inferred_verification_only
+                            and (
+                                "0%不参与" not in te_html_text
+                                or "只核实成交记录" not in te_html_text
+                            )
+                        )
+                    )
+                )
+                or bool(inferred_verification_only and te_html_tracks_inferred_position and
+                    re.search(
+                        r'class=["\'][^"\']*timeline-action-badge[^"\']*(?:is-participate|is-confirm)[^"\']*["\']',
+                        te_html_markup,
+                        re.I,
+                    )
+                )
+                or bool(inferred_verification_only and te_html_tracks_inferred_position and
+                    re.search(
+                        r'class=["\'][^"\']*timeline-date-intent[^"\']*(?:is-buy|is-confirm)[^"\']*["\']',
+                        str(companion_html or ""),
+                        re.I,
+                    )
+                )
+                or any(
+                    marker in f"{td_html_text} {te_html_text}"
+                    for marker in inferred_confirmed_markers
+                )
+            ):
+                findings.append(
+                    _finding(
+                        "position_day_order_html_inferred_confirmation_missing",
+                        "Bear HTML 没有保留前日报计划对象的待成交确认口径；停止生成",
+                    )
+                )
+    return findings
+
+
+def _audit_position_day_order_history_paths(
+    lines,
+    source_path=None,
+    *,
+    prefer_postgres_history=False,
+):
+    if source_path is None:
+        if _extract_day_order_rows(lines):
+            return [
+                _finding(
+                    "position_day_order_history_source_path_missing",
+                    "账户日序历史校验需要报告路径，程序化调用必须传入 source_path",
+                )
+            ]
+        return []
+    if _read_day_order_account_state is None or _day_order_target_label is None:
+        return []
+    output_root = Path(source_path).parent
+    findings = []
+    for offset, cells in _extract_day_order_rows(lines):
+        code = cells[0]
+        if code not in {"Ta", "Tb", "Tc"}:
+            continue
+        row_date = _day_order_date(cells[1])
+        if not row_date:
+            continue
+        expected_state = _read_day_order_account_state(
+            row_date,
+            output_root=output_root,
+            prefer_postgres_history=prefer_postgres_history,
+        )
+        expected_state_name = expected_state.get("state")
+        expected = (
+            expected_state.get("target")
+            if expected_state_name in {"target", "inferred"}
+            else {}
+        )
+        expected_label = _day_order_target_label(expected) if expected else ""
+        visible_text = f"{cells[2]} {cells[3]}"
+        visible_identity = _target_identity(cells[3])
+        if not visible_identity:
+            code_match = re.search(r"(?<!\d)(\d{6})(?!\d)", visible_text)
+            visible_identity = code_match.group(1) if code_match else ""
+        if not visible_identity and re.search(r"[：:]", cells[2]):
+            account_prefix, account_value = re.split(r"[：:]", cells[2], maxsplit=1)
+            account_value = account_value.rsplit("：", 1)[-1].rsplit(":", 1)[-1].strip()
+            unknown_values = {"", "-", "无", "空仓", "持仓未输入"}
+            if (
+                any(marker in account_prefix for marker in ("路径", "复盘日", "交易日", "持仓", "旧仓"))
+                and account_value not in unknown_values
+                and "持仓未输入" not in account_value
+                and not any(marker in account_value for marker in ("待确认", "事实待确认", "无旧仓"))
+            ):
+                visible_identity = account_value
+        if expected_label and expected_label not in visible_text:
+            findings.append(
+                _finding(
+                    "position_day_order_history_path_missing",
+                    f"{code} 对应 {row_date} 的历史路径是 {expected_label}，账户日序不能写成空仓或缺失路径",
+                    line=offset,
+                )
+            )
+        elif expected_state_name == "inferred":
+            pending_text = " ".join(cells[2:6])
+            confirmed_markers = (
+                "历史持仓",
+                "可能形成B1旧仓",
+                "已有旧仓",
+                "旧仓进入复核",
+            )
+            if "待成交确认" not in pending_text or any(
+                marker in pending_text for marker in confirmed_markers
+            ):
+                findings.append(
+                    _finding(
+                        "position_day_order_history_inferred_confirmation_missing",
+                        f"{code} 对应 {row_date} 是计划待成交确认路径，不能写成确认持仓",
+                        line=offset,
+                    )
+                )
+        elif expected_state_name == "empty" and visible_identity:
+            findings.append(
+                _finding(
+                    "position_day_order_history_empty_conflict",
+                    f"{code} 对应 {row_date} 的账户日是空仓，账户日序不能写成 {visible_text.strip()}",
+                    line=offset,
+                )
+            )
+        elif expected_state_name == "unknown" and visible_identity:
+            findings.append(
+                _finding(
+                    "position_day_order_history_unknown_conflict",
+                    f"{code} 对应 {row_date} 的账户事实未确认，账户日序不能写成确定股票 {visible_text.strip()}",
+                    line=offset,
                 )
             )
     return findings
@@ -2185,6 +2713,32 @@ POSITIVE_PREMARKET_UNDECIDED_ACTION_MARKERS = (
     "才评估50%",
 )
 POSITIVE_PREMARKET_DECIDED_MARKERS = ("已决定", "昨晚预案")
+POSITIVE_PREMARKET_TWO_B_MARKERS = ("B1", "B2")
+POSITIVE_PREMARKET_TWO_B_CANCEL_MARKERS = ("取消B2", "不补B2", "B1未变强", "走弱先取消")
+ONE_SHOT_BUY_WORDING_MARKERS = (
+    "必须买够",
+    "一次买满",
+    "一次买齐",
+    "开盘一次买满",
+    "补足任务仓",
+    "必须补足",
+)
+LEGACY_TIMELINE_QUALIFICATION_MARKERS = (
+    "Tb/Tc资格",
+    "单独看Tb/Tc",
+    "新仓是否叠加单独看Tb/Tc",
+)
+LEGACY_EXECUTION_OBJECT_SURFACE_MARKERS = (
+    "已进入明日执行对象",
+)
+
+
+def _has_two_b_cancellation_language(text):
+    value = str(text or "")
+    return (
+        all(marker in value for marker in POSITIVE_PREMARKET_TWO_B_MARKERS)
+        and any(marker in value for marker in POSITIVE_PREMARKET_TWO_B_CANCEL_MARKERS)
+    )
 
 
 def _audit_premarket_fixed_decision_language(lines):
@@ -2335,7 +2889,7 @@ def _audit_positive_premarket_fixed_decision_language(lines):
             findings.append(
                 _finding(
                     "positive_premarket_action_undecided_wording",
-                    "50%或100%正仓位必须表达为当晚已决定的执行计划；盘中只检查执行资格，不满足取消或回到0%",
+                    "50%或100%正仓位必须表达为当晚已决定的执行计划；B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1；不满足取消或回到0%",
                     line=offset,
                 )
             )
@@ -2351,10 +2905,72 @@ def _audit_positive_premarket_fixed_decision_language(lines):
             findings.append(
                 _finding(
                     "positive_premarket_action_missing_decided_wording",
-                    "50%或100%正仓位必须写清当晚已决定执行，并说明盘中只按昨晚预案检查执行资格",
+                    "50%或100%正仓位必须表达为当晚已决定的执行计划；B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1；不满足取消或回到0%",
                     line=section[0][0],
                 )
             )
+        if key_text and not _has_two_b_cancellation_language(key_text):
+            findings.append(
+                _finding(
+                    "positive_premarket_action_missing_two_b_cancellation",
+                    "50%或100%正仓位必须写清B1/B2拆分和取消第二笔：B1是参与权，B2是确认权；B1未变强不补B2，走弱先取消B2并检查B1",
+                    line=section[0][0],
+                )
+            )
+    return findings
+
+
+def _audit_one_shot_buy_wording(lines):
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        for marker in ONE_SHOT_BUY_WORDING_MARKERS:
+            if marker not in text:
+                continue
+            findings.append(
+                _finding(
+                    "one_shot_buy_wording",
+                    f"日报不能出现会诱导一次买满或把B2当任务的表达：{marker}",
+                    line=offset,
+                )
+            )
+            break
+    return findings
+
+
+def _audit_legacy_timeline_qualification_wording(lines):
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        for marker in LEGACY_TIMELINE_QUALIFICATION_MARKERS:
+            if marker not in text:
+                continue
+            findings.append(
+                _finding(
+                    "legacy_timeline_qualification_wording",
+                    "账户日序已迁移为Ta-Te：明日执行资格必须写Te执行资格，不能继续写Tb/Tc资格",
+                    line=offset,
+                )
+            )
+            break
+    return findings
+
+
+def _audit_legacy_execution_object_surface_wording(lines):
+    findings = []
+    for offset, line in enumerate(lines, 1):
+        text = str(line or "")
+        for marker in LEGACY_EXECUTION_OBJECT_SURFACE_MARKERS:
+            if marker not in text:
+                continue
+            findings.append(
+                _finding(
+                    "legacy_execution_object_surface_wording",
+                    "明日对象表达必须写清B1/B2执行计划，不能只写已进入明日执行对象",
+                    line=offset,
+                )
+            )
+            break
     return findings
 
 
@@ -2627,6 +3243,7 @@ def _is_empty_target(value):
         "",
         "-",
         "无",
+        "空仓",
         "暂无",
         "待补事实",
         "不做",
@@ -2640,6 +3257,7 @@ def _is_empty_target(value):
         return False
     return (
         "暂无" in text
+        or "空仓" in text
         or "不做" in text
         or "无明日执行对象" in text
         or "无执行对象" in text
@@ -2669,10 +3287,17 @@ def _audit_zero_position_decision_attribution(lines):
     front_execution_object = _extract_front_execution_object(lines)
     front_text = "\n".join(str(line or "") for line in front)
     required_labels = ("明日仓位", "执行目标", "不参与依据", "无执行目标原因", "责任归因")
+    label_aliases = {
+        "执行目标": ("执行目标", "明日执行对象"),
+    }
     values = {}
     offsets = {}
     for label in required_labels:
-        value, offset = _extract_front_kv_value(front, label)
+        value, offset = "", None
+        for candidate_label in label_aliases.get(label, (label,)):
+            value, offset = _extract_front_kv_value(front, candidate_label)
+            if str(value or "").strip():
+                break
         values[label] = str(value or "").strip()
         offsets[label] = offset
 
@@ -3881,7 +4506,15 @@ def _audit_empty_unique_focus_contradictions(front_lines):
     return findings
 
 
-def audit_report_markdown(markdown, companion_html=None):
+def audit_report_markdown(
+    markdown,
+    companion_html=None,
+    source_path=None,
+    *,
+    position_companion_html=None,
+    expected_position_summary=None,
+    prefer_postgres_history=False,
+):
     stopped_report_findings = _audit_stopped_report_notice(markdown)
     if stopped_report_findings is not None:
         return {
@@ -3913,7 +4546,30 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_degraded_fake_zero(lines))
     findings.extend(_audit_market_breadth_incomplete(lines))
     findings.extend(_audit_position_context_contradictions(lines))
-    findings.extend(_audit_position_timeline_parity(lines, companion_html))
+    timeline_companion_html = position_companion_html if position_companion_html is not None else companion_html
+    findings.extend(
+        _audit_position_timeline_parity(
+            lines,
+            timeline_companion_html,
+            require_html_timeline=position_companion_html is not None,
+        )
+    )
+    findings.extend(_audit_position_timeline_final_conflict(lines))
+    findings.extend(_audit_position_day_order_execution_target(lines, timeline_companion_html))
+    findings.extend(
+        _audit_position_day_order_current_position(
+            lines,
+            companion_html=timeline_companion_html,
+            expected_position_summary=expected_position_summary,
+        )
+    )
+    findings.extend(
+        _audit_position_day_order_history_paths(
+            lines,
+            source_path=source_path,
+            prefer_postgres_history=prefer_postgres_history,
+        )
+    )
     findings.extend(_audit_account_advice_position_contract(lines))
     findings.extend(_audit_opportunity_comparison_contract(lines))
     findings.extend(_audit_incomplete_candidate_execution_plan(lines))
@@ -3943,6 +4599,9 @@ def audit_report_markdown(markdown, companion_html=None):
     findings.extend(_audit_zero_position_participation_language(lines))
     findings.extend(_audit_premarket_fixed_decision_language(lines))
     findings.extend(_audit_full_or_empty_account_visible_language(lines))
+    findings.extend(_audit_one_shot_buy_wording(lines))
+    findings.extend(_audit_legacy_timeline_qualification_wording(lines))
+    findings.extend(_audit_legacy_execution_object_surface_wording(lines))
     findings.extend(_audit_market_snapshot_risk_consistency(lines))
     findings.extend(_audit_sector_fund_flow_visible_zero_tables(lines))
     findings.extend(_audit_positive_premarket_fixed_decision_language(lines))
@@ -3969,7 +4628,7 @@ def main(argv=None):
     companion_html = None
     if args.companion_html:
         companion_html = Path(args.companion_html).read_text(encoding="utf-8")
-    result = audit_report_markdown(path.read_text(encoding="utf-8"), companion_html=companion_html)
+    result = audit_report_markdown(path.read_text(encoding="utf-8"), companion_html=companion_html, source_path=path)
     if args.as_json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:

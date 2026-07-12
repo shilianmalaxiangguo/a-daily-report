@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -9,6 +10,7 @@ PERMISSION_LABEL = "参与资格"
 
 from domains.execution_chain.entry_plan_stage import build_entry_plan_runtime, build_entry_plan_stage
 from domains.execution_chain.stage_runtime import build_execution_stage_lookup
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class EntryPlanStageTest(unittest.TestCase):
@@ -169,6 +171,70 @@ class EntryPlanStageTest(unittest.TestCase):
         self.assertIn("**结论**:", rendered)
         self.assertNotIn("**交易优先级纪律**", rendered)
         self.assertNotIn("**明日止损锚定**", rendered)
+
+    def test_entry_plan_quant_branch_writes_two_b_confirmation_in_tomorrow_action(self):
+        result = build_entry_plan_runtime(
+            {
+                "target_date": "2026-04-22",
+                "mainline_name": "军工",
+                "position_level": "50%条件执行",
+                "final_gate": {"can_new_entry": True},
+                "focus_group": [{"name": "军工一号", "code": "000001", "close": 10.0, "volume": 1000}],
+                "keep_group": [],
+                "delete_group": [],
+                "extreme_conviction_list": [{"name": "军工一号", "code": "000001"}],
+                "leader_memory_bank": [],
+                "market_research_snapshot": {"state_machine": {"leading_line": "军工"}},
+                "quant_system_available": True,
+                "stop_prior_low_trading_days": 3,
+                "normalize_stock_code": lambda code: str(code or "").strip(),
+                "get_execution_framework_text": lambda: "先60分钟确认，再看30分钟止损",
+                "get_trade_permission": lambda *args, **kwargs: {
+                    "permission_label": PERMISSION_LABEL,
+                    "permission_reason": "主线最强，可执行",
+                    "can_execute": True,
+                },
+                "fetch_recent_price_bars": lambda code, target_date, lookback_days=4: [],
+                "evaluate_live_tradability": lambda stock, target_date, recent_bars=None: {
+                    "can_trade": True,
+                    "report_day_is_one_word": False,
+                },
+                "analyze_buy_signal": lambda code, name, close, volume: SimpleNamespace(
+                    is_valid=True,
+                    signal_type="breakout",
+                    entry_price=10.0,
+                    stop_loss=9.5,
+                    position_pct=50,
+                    reason="放量突破",
+                ),
+                "build_intraday_execution_plan": lambda code, target_date, entry_price, signal_type=None, fallback_stop=None: {
+                    "confirm_price_60m": 10.5,
+                    "confirm_rule_60m": "站上10.50再执行",
+                    "stop_plan": {"effective_stop": 9.8},
+                },
+                "build_stop_execution_plan": lambda entry_price, stop_loss=None, structure_label=None: {
+                    "effective_stop": 9.8,
+                },
+                "enrich_stop_plan_with_reference_anchors": lambda stop_plan, code, target_date, recent_bars=None: stop_plan,
+                "build_waiting_stock_plan": lambda *args, **kwargs: {},
+                "finalize_waiting_candidate": lambda waiting_item, stock, permission: waiting_item,
+                "build_trade_price_focus": lambda minute_plan, stop_plan: {
+                    "compact_text": "盯10.50与9.80",
+                },
+                "build_observation_price_focus_text": lambda price_focus: price_focus.get("compact_text", "-"),
+                "append_price_focus_note": lambda report_lines, price_focus: None,
+                "append_observation_price_focus_note": lambda report_lines, price_focus: None,
+                "compose_observation_focus_text": lambda confirm_text, price_focus_text: f"{confirm_text} / {price_focus_text}",
+                "build_front_structure_layer_text": lambda **kwargs: "环境打开，但只允许唯一动作",
+            },
+            {"label": "Step 4", "title": "明日买点预计算"},
+            enabled_node_keys=["entry_judgement"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("| 股票 | 代码 | 买入资格 | 怎么买 | 日线预设区间 | 09:50-10:10观察价 | 价格怎么盯 | 明天具体怎么做 |", rendered)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, rendered)
+        self.assertNotIn("按固定交易窗口条件买入", rendered)
 
     def test_entry_plan_process_candidate_is_rendered_as_replay(self):
         result = build_entry_plan_runtime(

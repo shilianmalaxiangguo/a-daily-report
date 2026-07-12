@@ -4,1699 +4,437 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; font-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>量化压力阶段离线回放研究报告</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+  <title>一分钟量化压力表象、公式与交易窗口复核</title>
   <style>
-    :root {
-      color-scheme: light;
-      --canvas: #edf0ed;
-      --paper: #ffffff;
-      --ink: #202623;
-      --muted: #626c67;
-      --faint: #f4f6f4;
-      --line: #cfd5d1;
-      --line-dark: #929b96;
-      --red: #b13a31;
-      --red-soft: #f7e9e7;
-      --green: #1f6b58;
-      --green-soft: #e7f1ed;
-      --amber: #9a650f;
-      --amber-soft: #f6eedc;
-      --blue: #2d6475;
-      --blue-soft: #e7f0f3;
-      --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
-      --font-body: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
-      --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    html {
-      scroll-behavior: smooth;
-      background: var(--canvas);
-    }
-
-    body {
-      margin: 0;
-      color: var(--ink);
-      background: var(--canvas);
-      font-family: var(--font-body);
-      font-size: 16px;
-      line-height: 1.72;
-      letter-spacing: 0;
-      text-rendering: optimizeLegibility;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    button,
-    a {
-      font: inherit;
-    }
-
-    button:focus-visible,
-    a:focus-visible {
-      outline: 3px solid var(--blue);
-      outline-offset: 3px;
-    }
-
-    .report-shell {
-      width: min(1240px, calc(100% - 32px));
-      margin: 24px auto 48px;
-      background: var(--paper);
-      border-top: 6px solid var(--ink);
-    }
-
-    .masthead {
-      padding: 32px 48px 28px;
-      border-bottom: 1px solid var(--line-dark);
-    }
-
-    .masthead-top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 32px;
-    }
-
-    .journal-mark {
-      margin: 0;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      text-transform: uppercase;
-    }
-
-    .print-button {
-      min-height: 44px;
-      padding: 8px 16px;
-      border: 1px solid var(--ink);
-      border-radius: 4px;
-      color: var(--paper);
-      background: var(--ink);
-      cursor: pointer;
-    }
-
-    .print-button:active {
-      transform: scale(0.97);
-    }
-
-    h1,
-    h2,
-    h3,
-    p {
-      margin-top: 0;
-    }
-
-    h1,
-    h2,
-    h3 {
-      letter-spacing: 0;
-    }
-
-    h1 {
-      max-width: 980px;
-      margin-bottom: 16px;
-      font-family: var(--font-display);
-      font-size: 48px;
-      font-weight: 500;
-      line-height: 1.18;
-    }
-
-    .subtitle {
-      max-width: 860px;
-      margin-bottom: 24px;
-      color: var(--muted);
-      font-family: var(--font-display);
-      font-size: 21px;
-      line-height: 1.55;
-    }
-
-    .meta-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px 20px;
-      margin: 0;
-      padding: 0;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      list-style: none;
-    }
-
-    .headline-findings {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      border-bottom: 1px solid var(--line-dark);
-    }
-
-    .headline-finding {
-      min-height: 152px;
-      padding: 24px;
-      border-right: 1px solid var(--line);
-    }
-
-    .headline-finding:last-child {
-      border-right: 0;
-    }
-
-    .finding-index {
-      display: block;
-      margin-bottom: 10px;
-      color: var(--red);
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }
-
-    .headline-finding strong {
-      display: block;
-      margin-bottom: 8px;
-      font-family: var(--font-display);
-      font-size: 18px;
-      font-weight: 500;
-      line-height: 1.42;
-    }
-
-    .headline-finding p {
-      margin-bottom: 0;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.58;
-    }
-
-    .report-grid {
-      display: grid;
-      grid-template-columns: 220px minmax(0, 1fr);
-      gap: 48px;
-      padding: 40px 48px 64px;
-    }
-
-    .toc {
-      align-self: start;
-      position: sticky;
-      top: 24px;
-      padding-top: 4px;
-    }
-
-    .toc h2 {
-      margin-bottom: 14px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 12px;
-      font-weight: 500;
-      text-transform: uppercase;
-    }
-
-    .toc ol {
-      margin: 0;
-      padding: 0;
-      list-style: none;
-      counter-reset: toc;
-    }
-
-    .toc li {
-      counter-increment: toc;
-      border-top: 1px solid var(--line);
-    }
-
-    .toc a {
-      display: grid;
-      grid-template-columns: 28px 1fr;
-      min-height: 44px;
-      align-items: center;
-      color: var(--ink);
-      text-decoration: none;
-      font-size: 13px;
-      line-height: 1.4;
-    }
-
-    .toc a::before {
-      content: counter(toc, decimal-leading-zero);
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-
-    .toc a:hover {
-      color: var(--red);
-    }
-
-    .paper-content {
-      min-width: 0;
-    }
-
-    .paper-section {
-      scroll-margin-top: 24px;
-      padding-bottom: 48px;
-      border-bottom: 1px solid var(--line-dark);
-      margin-bottom: 48px;
-    }
-
-    .paper-section:last-child {
-      margin-bottom: 0;
-      border-bottom: 0;
-    }
-
-    .section-kicker {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--red);
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }
-
-    h2 {
-      margin-bottom: 20px;
-      font-family: var(--font-display);
-      font-size: 31px;
-      font-weight: 500;
-      line-height: 1.28;
-    }
-
-    h3 {
-      margin-bottom: 10px;
-      font-size: 18px;
-      font-weight: 500;
-      line-height: 1.45;
-    }
-
-    p {
-      margin-bottom: 16px;
-    }
-
-    .lead-paragraph {
-      color: #303936;
-      font-family: var(--font-display);
-      font-size: 20px;
-      line-height: 1.78;
-    }
-
-    .key-sentence {
-      margin: 24px 0;
-      padding: 18px 20px;
-      border-left: 4px solid var(--red);
-      background: var(--red-soft);
-      font-family: var(--font-display);
-      font-size: 19px;
-      line-height: 1.7;
-    }
-
-    .method-flow {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 0;
-      margin: 28px 0 8px;
-      border: 1px solid var(--line-dark);
-    }
-
-    .method-step {
-      position: relative;
-      min-height: 150px;
-      padding: 20px;
-      border-right: 1px solid var(--line);
-    }
-
-    .method-step:last-child {
-      border-right: 0;
-    }
-
-    .method-step:not(:last-child)::after {
-      content: "→";
-      position: absolute;
-      top: 50%;
-      right: -12px;
-      z-index: 1;
-      width: 24px;
-      color: var(--red);
-      background: var(--paper);
-      text-align: center;
-      transform: translateY(-50%);
-    }
-
-    .method-step span {
-      display: block;
-      margin-bottom: 12px;
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-    }
-
-    .method-step strong {
-      display: block;
-      margin-bottom: 8px;
-      font-size: 15px;
-      font-weight: 500;
-    }
-
-    .method-step p {
-      margin-bottom: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.55;
-    }
-
-    .axis-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-      margin-top: 24px;
-    }
-
-    .axis-card {
-      padding: 20px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-    }
-
-    .axis-card:nth-child(1) {
-      border-top: 4px solid var(--red);
-    }
-
-    .axis-card:nth-child(2) {
-      border-top: 4px solid var(--amber);
-    }
-
-    .axis-card:nth-child(3) {
-      border-top: 4px solid var(--green);
-    }
-
-    .axis-card code,
-    code {
-      color: var(--blue);
-      font-family: var(--font-mono);
-      font-size: 0.9em;
-    }
-
-    .axis-card ul,
-    .plain-list {
-      margin: 12px 0 0;
-      padding-left: 20px;
-    }
-
-    .axis-card li,
-    .plain-list li {
-      margin-bottom: 8px;
-    }
-
-    .figure {
-      margin: 28px 0 0;
-    }
-
-    .figure-header {
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 24px;
-      margin-bottom: 16px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .figure-header h3 {
-      margin-bottom: 0;
-    }
-
-    .figure-header p {
-      max-width: 520px;
-      margin-bottom: 0;
-      color: var(--muted);
-      font-size: 13px;
-      text-align: right;
-    }
-
-    .case-plots {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-    }
-
-    .case-plot {
-      min-width: 0;
-      padding: 18px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      background: var(--paper);
-    }
-
-    .case-plot.protection {
-      background: var(--faint);
-    }
-
-    .case-plot:last-child {
-      grid-column: 1 / -1;
-    }
-
-    .plot-title {
-      display: flex;
-      align-items: baseline;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 8px;
-    }
-
-    .plot-title strong {
-      font-size: 15px;
-      font-weight: 500;
-    }
-
-    .plot-title span {
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      text-align: right;
-    }
-
-    .plot-slot {
-      width: 100%;
-      height: 220px;
-    }
-
-    .plot-slot svg,
-    .model-chart svg,
-    .timeline-figure svg {
-      display: block;
-      width: 100%;
-      height: 100%;
-      overflow: visible;
-    }
-
-    .chart-grid {
-      stroke: var(--line);
-      stroke-width: 1;
-    }
-
-    .chart-zero {
-      stroke: var(--line-dark);
-      stroke-width: 1.5;
-    }
-
-    .chart-line-risk {
-      fill: none;
-      stroke: var(--red);
-      stroke-width: 2.5;
-      vector-effect: non-scaling-stroke;
-    }
-
-    .chart-line-repair {
-      fill: none;
-      stroke: var(--green);
-      stroke-width: 2.5;
-      vector-effect: non-scaling-stroke;
-    }
-
-    .chart-line-protection {
-      fill: none;
-      stroke: var(--blue);
-      stroke-width: 2;
-      vector-effect: non-scaling-stroke;
-    }
-
-    .chart-label {
-      fill: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 10px;
-    }
-
-    .event-line {
-      stroke-width: 1.5;
-      vector-effect: non-scaling-stroke;
-    }
-
-    .event-label {
-      font-family: var(--font-body);
-      font-size: 10px;
-      font-weight: 500;
-    }
-
-    .figure-caption {
-      margin-top: 12px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.6;
-    }
-
-    .table-wrap {
-      margin-top: 24px;
-      overflow-x: auto;
-      border-top: 2px solid var(--ink);
-      border-bottom: 1px solid var(--ink);
-    }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
-    }
-
-    th,
-    td {
-      padding: 14px 12px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    tbody tr:last-child td {
-      border-bottom: 0;
-    }
-
-    .status-risk,
-    .status-clear,
-    .status-unknown {
-      display: inline-block;
-      padding: 2px 7px;
-      border-radius: 2px;
-      font-size: 12px;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    .status-risk {
-      color: var(--red);
-      background: var(--red-soft);
-    }
-
-    .status-clear {
-      color: var(--green);
-      background: var(--green-soft);
-    }
-
-    .status-unknown {
-      color: var(--amber);
-      background: var(--amber-soft);
-    }
-
-    .model-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 16px;
-      margin-top: 24px;
-    }
-
-    .model-chart {
-      min-width: 0;
-      padding: 18px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-    }
-
-    .model-chart h3 {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin-bottom: 12px;
-      font-size: 15px;
-    }
-
-    .model-chart h3 span {
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      font-weight: 400;
-    }
-
-    .model-svg-slot {
-      width: 100%;
-      height: 300px;
-    }
-
-    .formula-bar {
-      fill: var(--blue-soft);
-      stroke: var(--blue);
-      stroke-width: 1;
-    }
-
-    .formula-bar.best {
-      fill: var(--green-soft);
-      stroke: var(--green);
-    }
-
-    .formula-bar.ellipse {
-      fill: var(--amber-soft);
-      stroke: var(--amber);
-    }
-
-    .formula-label,
-    .formula-value {
-      fill: var(--ink);
-      font-family: var(--font-body);
-      font-size: 10px;
-    }
-
-    .formula-value {
-      fill: var(--muted);
-      font-family: var(--font-mono);
-    }
-
-    .timeline-figure {
-      margin-top: 24px;
-      padding: 20px;
-      border: 1px solid var(--line-dark);
-      border-radius: 4px;
-      background: var(--faint);
-    }
-
-    .timeline-slot {
-      width: 100%;
-      height: 210px;
-    }
-
-    .timeline-base {
-      stroke: var(--line-dark);
-      stroke-width: 2;
-    }
-
-    .timeline-node {
-      stroke: var(--paper);
-      stroke-width: 3;
-    }
-
-    .timeline-text {
-      fill: var(--ink);
-      font-family: var(--font-body);
-      font-size: 11px;
-    }
-
-    .timeline-time {
-      fill: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 10px;
-    }
-
-    .decision-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-      margin-top: 24px;
-    }
-
-    .decision-column {
-      padding: 20px;
-      border-top: 4px solid var(--line-dark);
-      background: var(--faint);
-    }
-
-    .decision-column:nth-child(1) {
-      border-top-color: var(--green);
-    }
-
-    .decision-column:nth-child(2) {
-      border-top-color: var(--amber);
-    }
-
-    .decision-column:nth-child(3) {
-      border-top-color: var(--red);
-    }
-
-    .decision-column ul {
-      margin: 12px 0 0;
-      padding-left: 20px;
-    }
-
-    .decision-column li {
-      margin-bottom: 8px;
-    }
-
-    .formula-list {
-      display: grid;
-      gap: 0;
-      margin-top: 24px;
-      border-top: 2px solid var(--ink);
-    }
-
-    .formula-row {
-      display: grid;
-      grid-template-columns: 180px minmax(0, 1fr);
-      gap: 24px;
-      padding: 20px 0;
-      border-bottom: 1px solid var(--line);
-    }
-
-    .formula-row h3 {
-      margin-bottom: 4px;
-      font-family: var(--font-mono);
-      font-size: 13px;
-    }
-
-    .formula-expression {
-      display: block;
-      margin-bottom: 8px;
-      color: var(--ink);
-      font-family: var(--font-mono);
-      font-size: 14px;
-      overflow-wrap: anywhere;
-    }
-
-    .formula-row p {
-      margin-bottom: 0;
-      color: var(--muted);
-      font-size: 14px;
-    }
-
-    .limitation-list {
-      display: grid;
-      gap: 12px;
-      margin: 24px 0 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .limitation-list li {
-      display: grid;
-      grid-template-columns: 36px minmax(0, 1fr);
-      gap: 12px;
-      padding: 14px 0;
-      border-top: 1px solid var(--line);
-    }
-
-    .limitation-list span {
-      color: var(--red);
-      font-family: var(--font-mono);
-      font-size: 12px;
-    }
-
-    .conclusion {
-      padding: 24px;
-      border: 1px solid var(--green);
-      border-radius: 4px;
-      background: var(--green-soft);
-    }
-
-    .conclusion p:last-child {
-      margin-bottom: 0;
-    }
-
-    .provenance {
-      color: var(--muted);
-      font-family: var(--font-mono);
-      font-size: 11px;
-      line-height: 1.7;
-      overflow-wrap: anywhere;
-    }
-
-    .report-footer {
-      padding: 24px 48px 32px;
-      border-top: 1px solid var(--line-dark);
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    noscript {
-      display: block;
-      margin: 16px 0;
-      padding: 16px;
-      border: 1px solid var(--amber);
-      background: var(--amber-soft);
-    }
-
-    @media (max-width: 980px) {
-      .masthead {
-        padding-inline: 32px;
-      }
-
-      .headline-findings {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .headline-finding:nth-child(2) {
-        border-right: 0;
-      }
-
-      .headline-finding:nth-child(-n + 2) {
-        border-bottom: 1px solid var(--line);
-      }
-
-      .report-grid {
-        grid-template-columns: 1fr;
-        gap: 32px;
-        padding-inline: 32px;
-      }
-
-      .toc {
-        position: static;
-      }
-
-      .toc ol {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      .toc li:nth-child(odd) {
-        border-right: 1px solid var(--line);
-      }
-
-      .toc a {
-        padding-inline: 8px;
-      }
-
-      .method-flow,
-      .axis-grid,
-      .decision-grid {
-        grid-template-columns: 1fr 1fr;
-      }
-
-      .method-step:nth-child(2) {
-        border-right: 0;
-      }
-
-      .method-step:nth-child(-n + 2) {
-        border-bottom: 1px solid var(--line);
-      }
-
-      .method-step:nth-child(2)::after {
-        display: none;
-      }
-
-      .axis-card:last-child,
-      .decision-column:last-child {
-        grid-column: 1 / -1;
-      }
-    }
-
-    @media (max-width: 720px) {
-      .report-shell {
-        width: 100%;
-        margin: 0;
-      }
-
-      .masthead,
-      .report-grid,
-      .report-footer {
-        padding-inline: 20px;
-      }
-
-      .masthead-top {
-        align-items: flex-start;
-        flex-direction: column;
-        margin-bottom: 24px;
-      }
-
-      h1 {
-        font-size: 36px;
-      }
-
-      .subtitle,
-      .lead-paragraph {
-        font-size: 18px;
-      }
-
-      .headline-findings,
-      .case-plots,
-      .model-grid,
-      .method-flow,
-      .axis-grid,
-      .decision-grid,
-      .toc ol {
-        grid-template-columns: 1fr;
-      }
-
-      .headline-finding,
-      .headline-finding:nth-child(2),
-      .toc li:nth-child(odd),
-      .method-step,
-      .method-step:nth-child(2) {
-        border-right: 0;
-      }
-
-      .headline-finding,
-      .headline-finding:nth-child(-n + 2),
-      .method-step,
-      .method-step:nth-child(-n + 2) {
-        border-bottom: 1px solid var(--line);
-      }
-
-      .headline-finding:last-child,
-      .method-step:last-child {
-        border-bottom: 0;
-      }
-
-      .method-step::after {
-        display: none;
-      }
-
-      .axis-card:last-child,
-      .decision-column:last-child,
-      .case-plot:last-child {
-        grid-column: auto;
-      }
-
-      .figure-header,
-      .plot-title {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 6px;
-      }
-
-      .figure-header p,
-      .plot-title span {
-        text-align: left;
-      }
-
-      .plot-slot,
-      .timeline-slot {
-        height: 240px;
-      }
-
-      .model-svg-slot {
-        height: 320px;
-      }
-
-      .formula-row {
-        grid-template-columns: 1fr;
-        gap: 8px;
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      html {
-        scroll-behavior: auto;
-      }
-    }
-
-    @media print {
-      @page {
-        size: A4 portrait;
-        margin: 14mm;
-      }
-
-      html,
-      body,
-      .report-shell {
-        width: auto;
-        margin: 0;
-        background: #ffffff;
-      }
-
-      .report-shell {
-        border-top: 0;
-      }
-
-      .print-button,
-      .toc {
-        display: none;
-      }
-
-      .masthead,
-      .report-grid,
-      .report-footer {
-        padding-inline: 0;
-      }
-
-      .report-grid {
-        display: block;
-      }
-
-      .paper-section,
-      .case-plot,
-      .model-chart,
-      .timeline-figure,
-      .formula-row {
-        break-inside: avoid;
-      }
-
-      .paper-section {
-        break-before: page;
-      }
-
-      .paper-section:first-child {
-        break-before: auto;
-      }
-    }
+    :root { color-scheme: light dark; --bg:#eef1ef; --paper:#fff; --ink:#1d2421; --muted:#5f6a65; --line:#cbd2ce; --soft:#f5f7f5; --red:#a9362e; --red-soft:#f6e6e3; --blue:#28657a; --blue-soft:#e4f0f4; --green:#236a56; --green-soft:#e4f0eb; --amber:#956510; --purple:#6d557d; }
+    * { box-sizing:border-box; }
+    html { background:var(--bg); scroll-behavior:smooth; }
+    body { margin:0; color:var(--ink); background:var(--bg); font-family:"Avenir Next","PingFang SC","Microsoft YaHei",sans-serif; font-size:16px; line-height:1.72; letter-spacing:0; }
+    .sheet { width:min(1240px,calc(100% - 28px)); margin:22px auto 44px; background:var(--paper); border-top:6px solid var(--ink); }
+    header { padding:38px 52px 34px; border-bottom:1px solid var(--line); }
+    .kicker,.eyebrow { margin:0 0 12px; color:var(--red); font:500 12px/1.4 "SFMono-Regular",Consolas,monospace; text-transform:uppercase; }
+    h1,h2,h3 { margin:0; font-family:"Songti SC","STSong",Georgia,serif; font-weight:500; letter-spacing:0; }
+    h1 { max-width:960px; font-size:46px; line-height:1.18; }
+    .subtitle { max-width:900px; margin:18px 0 0; color:var(--muted); font-family:"Songti SC","STSong",Georgia,serif; font-size:21px; }
+    .meta { display:flex; flex-wrap:wrap; gap:8px 20px; margin:24px 0 0; padding:0; color:var(--muted); font:400 12px/1.5 "SFMono-Regular",Consolas,monospace; list-style:none; }
+    .findings { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); border-bottom:1px solid var(--line); }
+    .finding { min-height:154px; padding:25px; border-right:1px solid var(--line); }
+    .finding:last-child { border-right:0; }
+    .finding strong { display:block; margin-bottom:8px; font-family:"Songti SC","STSong",Georgia,serif; font-size:18px; font-weight:500; }
+    .finding p { margin:0; color:var(--muted); font-size:14px; }
+    main { padding:46px 52px 64px; }
+    section { margin-bottom:56px; padding-bottom:52px; border-bottom:1px solid var(--line); }
+    section:last-child { margin-bottom:0; border-bottom:0; }
+    h2 { margin-bottom:18px; font-size:30px; line-height:1.3; }
+    h3 { font-size:23px; line-height:1.35; }
+    p { margin:0 0 16px; }
+    .lead { max-width:920px; font-family:"Songti SC","STSong",Georgia,serif; font-size:20px; }
+    .truth { padding:18px 22px; border-left:4px solid var(--red); background:var(--red-soft); }
+    .case-study { padding:34px 0 40px; border-bottom:1px solid var(--line); }
+    .case-heading { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-bottom:18px; }
+    .case-result { margin:0; color:var(--muted); font-size:14px; text-align:right; }
+    figure { margin:26px 0 32px; }
+    figcaption { margin-top:10px; color:var(--muted); font-size:13px; }
+    .chart-wrap { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    svg { display:block; width:100%; height:auto; overflow:visible; }
+    .price-line,.fit-actual,.fit-one,.fit-two,.fit-three,.family-linear,.family-sqrt,.family-critical,.family-ordinary { fill:none; vector-effect:non-scaling-stroke; stroke-linecap:round; stroke-linejoin:round; }
+    .price-line,.fit-actual { stroke:var(--ink); stroke-width:2; }
+    .fit-one,.family-critical { stroke:var(--red); stroke-width:2; }
+    .fit-two,.family-sqrt { stroke:var(--blue); stroke-width:1.8; stroke-dasharray:7 4; }
+    .fit-three,.family-linear { stroke:var(--green); stroke-width:1.8; stroke-dasharray:2 4; }
+    .family-ordinary { stroke:var(--purple); stroke-width:1.8; stroke-dasharray:10 4 2 4; }
+    .chart-grid { stroke:var(--line); stroke-width:1; vector-effect:non-scaling-stroke; }
+    .axis-label,.point-label,.family-label,.chart-legend-label { fill:var(--muted); font-family:"SFMono-Regular",Consolas,monospace; font-size:12px; }
+    .chart-legend-label { fill:var(--ink); }
+    .point-label { fill:var(--ink); }
+    .peak-mark { fill:var(--blue); } .low-mark { fill:var(--red); }
+    .window-a { fill:var(--red-soft); opacity:.7; } .window-scout { fill:var(--amber); opacity:.18; } .window-b { fill:var(--blue-soft); opacity:.7; } .window-c { fill:var(--green-soft); opacity:.7; }
+    .table-wrap { width:100%; overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th,td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--muted); font-weight:500; white-space:nowrap; }
+    code { font-family:"SFMono-Regular",Consolas,monospace; font-size:.92em; overflow-wrap:anywhere; word-break:break-word; }
+    .formula { margin:22px 0; padding:20px 22px; background:var(--soft); font-family:"SFMono-Regular",Consolas,monospace; overflow-wrap:anywhere; }
+    .formula-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1px; background:var(--line); margin:26px 0; }
+    .formula-item { padding:20px; background:var(--paper); }
+    .formula-item strong { display:block; margin-bottom:8px; font-weight:500; }
+    .formula-item p { margin:0; color:var(--muted); font-size:14px; }
+    .steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); margin:28px 0; padding:0; list-style:none; }
+    .steps li { padding:22px; border-top:3px solid var(--ink); border-right:1px solid var(--line); }
+    .steps li:last-child { border-right:0; }
+    .steps strong { display:block; margin-bottom:10px; font-size:18px; }
+    .steps span { color:var(--muted); font-size:14px; }
+    .plain-list { margin:12px 0 0; padding-left:22px; }
+    .plain-list li { margin:8px 0; }
+    footer { padding:24px 52px 34px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+    @media (prefers-color-scheme: dark) { :root { --bg:#171b19; --paper:#202522; --ink:#edf2ef; --muted:#abb6b0; --line:#45504a; --soft:#292f2c; --red:#ee8177; --red-soft:#3b2927; --blue:#76bad0; --blue-soft:#25363c; --green:#72bea5; --green-soft:#25372f; --amber:#d7a94e; --purple:#bfa0d0; } }
+    @media (max-width:800px) { .sheet { width:100%; margin:0; border-top-width:4px; } header,main,footer { padding-left:20px; padding-right:20px; } h1 { font-size:34px; } .subtitle { font-size:18px; } .findings,.formula-grid,.steps { grid-template-columns:1fr; } .finding { min-height:0; border-right:0; border-bottom:1px solid var(--line); } .finding:last-child { border-bottom:0; } .case-heading { align-items:start; flex-direction:column; } .case-result { text-align:left; } .chart-wrap svg { width:780px; max-width:none; } table { min-width:760px; } .case-study table { min-width:620px; } }
+    @media print { :root { --bg:#fff; --paper:#fff; --ink:#111; --muted:#555; --line:#bbb; } .sheet { width:100%; margin:0; border:0; } section,.case-study,figure { break-inside:avoid; } }
   </style>
 </head>
 <body>
-  <main class="report-shell">
-    <header class="masthead">
-      <div class="masthead-top">
-        <p class="journal-mark">Independent Market Microstructure Note · Research v1.1</p>
-        <button class="print-button" id="print-report" type="button">打印 / 导出 PDF</button>
-      </div>
-      <h1>量化压力阶段离线回放研究报告</h1>
-      <p class="subtitle">从“鸭蛋弧”的生活直觉，走向能够被历史前缀检验、被保护样本否定、并且不冒充量化身份识别的研究框架。</p>
-      <ul class="meta-row" aria-label="报告元信息">
-        <li>研究日期 2026-07-11</li>
-        <li>样本 5 个交易日</li>
-        <li>粒度 5 分钟 / 48 bars</li>
-        <li>代码提交 43911824</li>
-        <li>正式日报接入 否</li>
-      </ul>
-    </header>
-
-    <section class="headline-findings" aria-label="核心研究结论">
-      <article class="headline-finding">
-        <span class="finding-index">FINDING 01</span>
-        <strong>弧形是现象，不是身份</strong>
-        <p>五分钟价格路径能描述压力生命周期，不能证明卖方账户属于量化，更不能推出量化成交占比。</p>
-      </article>
-      <article class="headline-finding">
-        <span class="finding-index">FINDING 02</span>
-        <strong>两个案例不是同一条公式</strong>
-        <p>5·21 上证指数由指数模型略胜，兆易创新由分段模型明显胜出；椭圆不是统一答案。</p>
-      </article>
-      <article class="headline-finding">
-        <span class="finding-index">FINDING 03</span>
-        <strong>阶段字段比曲线冠军更有用</strong>
-        <p>滚动斜率、首轮降温、弱修复和第二轮压力，才是能在路径尚未走完时逐步观察的变量。</p>
-      </article>
-      <article class="headline-finding">
-        <span class="finding-index">FINDING 04</span>
-        <strong>早识别仍未被证明</strong>
-        <p>兆易变化候选到 13:20 才确认，晚于 10:40 的第二轮压力；当前结果不能宣称已能提前退出。</p>
-      </article>
+<article class="sheet">
+  <header>
+    <p class="kicker">MARKET LANGUAGE RESEARCH · REVISION 4</p>
+    <h1>一分钟市场语言：公式、事件时钟与日报只读落地</h1>
+    <p class="subtitle">把“鸭蛋弧”拆成可复算的一分钟事实，再把形状、压力阶段、机制假说和交易动作分层。市场确实在说话，但曲线本身不提供账户身份证明。</p>
+    <ul class="meta"><li>案例冻结：2026-07-11</li><li>落地复核：2026-07-12</li><li>主源：通达信历史一分钟</li><li>范围：三例锚定 + 七类保护路径，不外推普遍命中率</li></ul>
+  </header>
+  <div class="findings">
+    <div class="finding"><strong>公式不再强行单选</strong><p>全日：兆易创新=单变化点分段；长电科技=单变化点分段；上证指数=平移椭圆弧；下降段：兆易创新=单变化点分段；长电科技=单变化点分段；上证指数=单变化点分段。上证全日包络最像平移椭圆弧，三例客观下降段都由单变化点分段领先；日报盘中只用斜率、连续性和事件时钟。</p></div>
+    <div class="finding"><strong>研究证据已经只读接入</strong><p><code>market_language_translation.v1</code> 只在原有明日动作之后展示；完整版和摘要版的正式对象、仓位、B1/B2 与退出动作逐字段保持不变。</p></div>
+    <div class="finding"><strong>保护样本限制了过度解释</strong><p>普通缓跌、一次性重估、单股卖压、快速修复、权重与宽度背离、健康扩散和五分钟降级都已固定；形状只能描述压力，不能确认量化身份或 40% 成交占比。</p></div>
+  </div>
+  <main>
+    <section id="verdict">
+      <h2>先给结论</h2>
+      <p class="lead">你的“像椭圆鸭蛋、像根号或 log”不是错觉，而是对负曲率和跌速变化的生活化识别。数学真正提供的不是一个万能答案，而是一套分工：椭圆描述包络，分段描述换挡，幂律与 Gompertz 描述候选经验过程，事件时钟负责盘中识别。</p>
+      <p class="truth"><strong>最终答案：</strong>三例从收盘峰值到其后低点，都是灵活的单变化点分段模型最好，但单断点平均换挡方向并不相同：兆易创新和上证指数后段更负，长电科技在 10:04 后的全段平均明显降温；这不否认长电尾盘再次加速，一个断点也不能描述全部多轮换挡。共同冠军只说明一条直线不够，不说明同一种量化机制。上证全日由平移椭圆弧第一，说明“鸭蛋”适合描述全天包络。正式日报不拿某条最佳拟合公式直接发出动作，只翻译合力范围、方向、阶段、候选、确认、失效与反证。不能确认卖方账户身份，也不能据此推出量化成交占比。</p>
     </section>
 
-    <div class="report-grid">
-      <nav class="toc" aria-label="报告目录">
-        <h2>Contents</h2>
-        <ol>
-          <li><a href="#abstract">摘要</a></li>
-          <li><a href="#question">研究问题</a></li>
-          <li><a href="#method">数据与方法</a></li>
-          <li><a href="#paths">五案例路径</a></li>
-          <li><a href="#models">公式比较</a></li>
-          <li><a href="#timing">识别时序</a></li>
-          <li><a href="#daily-report">日报作用</a></li>
-          <li><a href="#limits">局限与结论</a></li>
-          <li><a href="#appendix">公式附录</a></li>
-        </ol>
-      </nav>
+    <section id="data">
+      <h2>数据先过关：三例都是一分钟，不再用五分钟代替</h2>
+      <p>每例固定为 240 个交易分钟结束时点，横轴压缩午休。通达信的 14:59 无成交占位值已归零；上证指数的通达信 volume 不是实际股数，因此彻底停用，只保留价格与成交额。</p>
+      <p><strong>Tushare 官方能力与项目实测：</strong>官方股票历史分钟接口是 <code>stk_mins</code>，指数历史分钟接口是 <code>idx_mins</code>；两者都支持 <code>1min/5min/15min/30min/60min</code>，单次最多 8000 行。当前项目通道实测中，两只股票的兼容端点 <code>stock_mins</code> 返回空表，正式 <code>stk_mins</code> 显示当前账号未开通历史分钟数据；上证的 <code>idx_mins</code> 返回空表。现有封装既会接受股票空表并提前结束，也没有为指数调用 <code>idx_mins</code>，最终三例均为 0 个可用 bar。结论是 Tushare 本身能提供一分钟历史数据，但当前项目配置与封装尚不能把它作为有效来源，也不能把空表解释为目标日期无行情。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>分钟数</th><th>主源</th><th>源日期</th><th>成交额覆盖</th><th>成交量</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>240</td><td>pytdx.TdxHq_API</td><td>2026-07-10</td><td>99.99996%</td><td>可用</td></tr><tr><td>2026-07-10 长电科技</td><td>240</td><td>pytdx.TdxHq_API</td><td>2026-07-10</td><td>100.00002%</td><td>可用</td></tr><tr><td>2026-05-21 上证指数</td><td>240</td><td>pytdx.TdxHq_API</td><td>2026-05-21</td><td>100.00000%</td><td>不可用；仅用成交额</td></tr></tbody></table></div>
+    </section>
 
-      <article class="paper-content">
-        <section class="paper-section" id="abstract">
-          <span class="section-kicker">ABSTRACT</span>
-          <h2>摘要</h2>
-          <p class="lead-paragraph">“像一个横长竖短的鸭蛋弧”是有价值的观察语言。它捕捉到的不是某条神秘公式，而是卖压、流动性和触发条件在时间上连续传播后留下的几何外观。</p>
-          <p>本研究把这种生活经验拆成两层。盘中层只使用当时已经结束的五分钟 bar，逐点输出当前动力、事件结构和证据完整度；收盘后层才比较线性、分段、幂律、椭圆代理、指数、Gompertz 与对数模型。两个层级严格隔离，避免用全天最优曲线倒推早盘“本来就应该知道”。</p>
-          <p class="key-sentence">结果支持“多轮压力与弱修复可以形成级联式流畅下跌”的机制假说，但不支持“看见鸭蛋弧就确认量化踩踏”，也不支持从龙虎榜席位或大单流向反推出市场量化占比约 40%。</p>
-          <p>五个样本中，两个压力正例都形成第二轮结构；快速修复样本最终清除风险；普通下跌样本没有被升级为多轮交接；价格限制样本停止曲线排名。保护样本的作用不是装饰，而是专门阻止模型把任何顺滑下跌都解释成量化互踩。</p>
-        </section>
+    <section id="cases">
+      <h2>三例路径与公式比较</h2>
+      <p>上图是完整一分钟路径；下图只取“客观收盘峰值 → 其后收盘低点”。这样既展示你看到的全天鸭蛋外观，也避免手挑一小段来证明预设公式。</p>
 
-        <section class="paper-section" id="question">
-          <span class="section-kicker">01 · RESEARCH QUESTION</span>
-          <h2>研究问题：从“像”推进到“何时可知”</h2>
-          <p>这项研究不再追问“哪条曲线最像鸭蛋”，而是改问三个更严格的问题：</p>
-          <ol class="plain-list">
-            <li>在完整弧形走完之前，历史前缀能否识别压力加速、第一轮降温、第二轮压力和持续修复？</li>
-            <li>普通下跌、隔夜缺口、快速修复和价格限制路径，能否阻止模型把特殊样本泛化成普遍规律？</li>
-            <li>公式比较究竟能回答“形状”，还是能进一步回答“量化身份、资金类型与成交占比”？</li>
-          </ol>
-          <p>答案是：前两个问题得到有限支持；第三个问题必须明确回答“不能”。这也是本轮研究最重要的边界。</p>
-        </section>
-
-        <section class="paper-section" id="method">
-          <span class="section-kicker">02 · DATA & METHOD</span>
-          <h2>数据与方法：把未来信息从盘中判断里拿掉</h2>
-          <div class="method-flow" aria-label="回放数据流程">
-            <div class="method-step">
-              <span>STEP 01</span>
-              <strong>冻结原始样本</strong>
-              <p>保存来源、查询日、单位、单段语义、48 个固定交易时点和本地可重算哈希。</p>
-            </div>
-            <div class="method-step">
-              <span>STEP 02</span>
-              <strong>逐前缀独立重算</strong>
-              <p>每个时点只读此前数据；午休不计时，盘中缺 bar 不压缩。</p>
-            </div>
-            <div class="method-step">
-              <span>STEP 03</span>
-              <strong>三条判断轴</strong>
-              <p>动力、结构、证据分开，避免一个标签同时冒充速度、阶段和可信度。</p>
-            </div>
-            <div class="method-step">
-              <span>STEP 04</span>
-              <strong>全天事后诊断</strong>
-              <p>七类公式只比较完整路径形状，标记为 hindsight only，不返回历史前缀。</p>
-            </div>
-          </div>
-
-          <div class="axis-grid">
-            <section class="axis-card">
-              <h3><code>current_dynamics</code></h3>
-              <p>回答“此刻的速度怎样”。</p>
-              <ul>
-                <li>压力加速</li>
-                <li>稳定下压</li>
-                <li>边际降温</li>
-                <li>持续修复</li>
-              </ul>
-            </section>
-            <section class="axis-card">
-              <h3><code>episode_structure</code></h3>
-              <p>回答“事件走到哪一段”。</p>
-              <ul>
-                <li>第一轮压力</li>
-                <li>第一轮已降温</li>
-                <li>峰后未修复长尾</li>
-                <li>第二轮压力</li>
-              </ul>
-            </section>
-            <section class="axis-card">
-              <h3><code>evidence_status</code></h3>
-              <p>回答“这句话有多少证据”。</p>
-              <ul>
-                <li>证据充分</li>
-                <li>部分完整</li>
-                <li>证据不足</li>
-                <li>空值必须附原因</li>
-              </ul>
-            </section>
-          </div>
-        </section>
-
-        <section class="paper-section" id="paths">
-          <span class="section-kicker">03 · CASE REPLAY</span>
-          <h2>五案例路径：两个正例必须同时面对三个反例</h2>
-          <p>图中纵轴是相对首根收盘价的对数基点，横轴是固定 A 股五分钟交易序号。负值表示相对首根价格下跌。事件竖线来自历史前缀首次形成的结构字段，不是收盘后人工描线。</p>
-
-          <figure class="figure" aria-labelledby="path-figure-title">
-            <div class="figure-header">
-              <h3 id="path-figure-title">图 1 · 五分钟归一化价格路径与事件标记</h3>
-              <p>红线为压力路径正例，绿线为持续修复保护样本，蓝线为其他保护样本。</p>
-            </div>
-            <div class="case-plots" id="case-plots"></div>
-            <figcaption class="figure-caption">5·21 上证与兆易创新都形成第二轮，但曲线形状和识别时序并不相同。博云新材因价格限制呈常数路径，公式排名停止。</figcaption>
-          </figure>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>案例</th>
-                  <th>样本角色</th>
-                  <th>最终动力 / 结构</th>
-                  <th>交接风险候选</th>
-                  <th>研究解释</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>2026-05-21 上证指数</td>
-                  <td>压力路径正例</td>
-                  <td><code>steady_down / second_wave</code></td>
-                  <td><span class="status-risk">保留</span></td>
-                  <td>午后第二轮持续，14:40 单次反弹不足以确认修复，14:55 再创新低。</td>
-                </tr>
-                <tr>
-                  <td>2026-07-10 兆易创新</td>
-                  <td>压力路径正例</td>
-                  <td><code>decelerating / second_wave</code></td>
-                  <td><span class="status-risk">保留</span></td>
-                  <td>10:25 首轮降温，10:40 第二轮出现；全天弱修复，尾盘仍贴近低位。</td>
-                </tr>
-                <tr>
-                  <td>2026-07-09 上证指数</td>
-                  <td>快速修复保护</td>
-                  <td><code>repairing / first_burst_completed</code></td>
-                  <td><span class="status-clear">清除</span></td>
-                  <td>午后修复持续，旧压力事件结束，不再保留负向交接风险。</td>
-                </tr>
-                <tr>
-                  <td>2026-06-04 上证指数</td>
-                  <td>隔夜缺口保护</td>
-                  <td><code>unclear / nonrepair_tail</code></td>
-                  <td><span class="status-clear">不确认</span></td>
-                  <td>普通回落没有足够材料强度，不把隔夜缺口或后续回落拼成量化踩踏。</td>
-                </tr>
-                <tr>
-                  <td>2026-05-27 博云新材</td>
-                  <td>价格限制保护</td>
-                  <td><code>unclear / unclear</code></td>
-                  <td><span class="status-unknown">不可识别</span></td>
-                  <td>常数价格路径缺少有效形状，不运行公式排名，也不确认程序化级联。</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="paper-section" id="models">
-          <span class="section-kicker">04 · MODEL COMPARISON</span>
-          <h2>公式比较：保留竞争假说，不选一条万能曲线</h2>
-          <p>图 2 使用 AICc 比较同一完整日对数价格响应。每个小图中的 0 是该案例样本内最佳模型，数值越大表示相对支持越弱。AICc 只回答“这一整天哪种形状拟合得更省参数”，不回答卖方是谁。</p>
-
-          <div class="model-grid" id="model-grid"></div>
-
-          <p class="key-sentence">5·21 上证指数中，指数模型第一，椭圆代理只差约 2.14，区分强度较弱；兆易创新中，分段模型第一，椭圆代理落后约 39.25。视觉上都像弧，不代表数学上由同一公式支配。</p>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>公式家族</th>
-                  <th>它描述什么</th>
-                  <th>本轮角色</th>
-                  <th>不能得出什么</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>滚动线性斜率</td>
-                  <td>最近窗口的即时方向和速度</td>
-                  <td>盘中前缀主变量</td>
-                  <td>不能单独确认第二轮或账户身份</td>
-                </tr>
-                <tr>
-                  <td>连续分段</td>
-                  <td>前后斜率发生阶段性变化</td>
-                  <td>变化点与全天形状对照</td>
-                  <td>保护样本也可能第一，不能识别量化</td>
-                </tr>
-                <tr>
-                  <td>幂律 / 椭圆代理</td>
-                  <td>有限时间内曲率逐步增强</td>
-                  <td>检验“鸭蛋弧”直觉</td>
-                  <td>不能因为看起来像就认定真实生成机制</td>
-                </tr>
-                <tr>
-                  <td>指数</td>
-                  <td>变化速度按比例放大</td>
-                  <td>5·21 上证样本内第一</td>
-                  <td>不能证明模型同步卖出或自激踩踏</td>
-                </tr>
-                <tr>
-                  <td>Gompertz</td>
-                  <td>招募、扩散与耗尽的单轮 S 形过程</td>
-                  <td>机制稳健性对照</td>
-                  <td>不能估计真实剩余库存或触发账户数</td>
-                </tr>
-                <tr>
-                  <td>对数</td>
-                  <td>前快后慢的衰减型路径</td>
-                  <td>稳健性对照</td>
-                  <td>不能替代事件生命周期字段</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="paper-section" id="timing">
-          <span class="section-kicker">05 · DETECTION TIMING</span>
-          <h2>识别时序：最早可见的不是“最佳公式”</h2>
-          <p>兆易创新是检验提前识别能力的关键样本。滚动动力在 10:00 已显示压力加速，10:25 确认第一轮降温，10:40 形成第二轮结构；但变化点算法对 10:50 候选直到 13:20 才完成连续确认。</p>
-
-          <figure class="timeline-figure" aria-labelledby="timing-title">
-            <h3 id="timing-title">图 3 · 兆易创新结构字段与变化点确认时序</h3>
-            <div class="timeline-slot" id="timing-chart"></div>
-            <figcaption class="figure-caption">变化点从候选到确认相隔 12 根五分钟 bar，即 60 个交易分钟。因此它目前适合复盘“发生了变化”，不适合充当最早退出信号。</figcaption>
-          </figure>
-
-          <p>这也带来一个更实际的结论：日报若将来接入研究段，应优先观察多变量的事件顺序，而不是等待单一变化点算法确认。早盘能用的是“压力加速 → 首轮降温但修复弱 → 第二轮再压”的组合；全天最佳曲线只能在事后说明形状。</p>
-        </section>
-
-        <section class="paper-section" id="daily-report">
-          <span class="section-kicker">06 · DAILY REPORT USE</span>
-          <h2>它如何服务量化跟踪日报</h2>
-          <p>本轮没有接入正式日报，也没有生成评分、仓位或买卖动作。研究对日报的价值，是先确定未来可以接入哪一层信息，以及哪些信息永远不该被伪装成已知事实。</p>
-
-          <div class="decision-grid">
-            <section class="decision-column">
-              <h3>盘中可观察</h3>
-              <ul>
-                <li>四根窗口对数斜率</li>
-                <li>压力是否边际加速</li>
-                <li>第一轮速度峰值是否降温确认</li>
-                <li>固定首轮低点后的修复比例</li>
-                <li>第二轮压力与峰后未修复驻留</li>
-              </ul>
-            </section>
-            <section class="decision-column">
-              <h3>收盘后复盘</h3>
-              <ul>
-                <li>完整路径的七类公式比较</li>
-                <li>AICc、ΔAICc 与区分强度</li>
-                <li>参数是否撞到搜索边界</li>
-                <li>正例与保护样本的差异</li>
-                <li>识别延迟和撤销时刻</li>
-              </ul>
-            </section>
-            <section class="decision-column">
-              <h3>仍然禁止推断</h3>
-              <ul>
-                <li>量化账户身份</li>
-                <li>量化成交占比约 40%</li>
-                <li>主动卖出额与真实订单失衡</li>
-                <li>盘口深度、撤单和剩余库存</li>
-                <li>慢资金已经接棒</li>
-              </ul>
-            </section>
-          </div>
-
-          <p class="key-sentence">对个人交易者真正有帮助的不是“反过来收割量化”的口号，而是把追涨杀跌冲动改造成有撤销条件的观察：看到压力加速不急着抄底；看到一根反弹不急着宣布修复；看到第二轮结构时，承认风险仍在。</p>
-
-          <h3>建议的后续接入条件</h3>
-          <ol class="plain-list">
-            <li>先扩大到跨指数、跨波动个股和更多普通下跌日，估计误报与识别延迟分布。</li>
-            <li>把固定 80bp 材料强度改成按目标自身历史波动标准化的相对阈值。</li>
-            <li>只有保护样本误报可控、并且风险字段稳定早于完整曲线出现，才进入日报研究段。</li>
-            <li>即使接入，仍只输出三轴观察和缺失原因，不直接生成仓位或买卖动作。</li>
-          </ol>
-        </section>
-
-        <section class="paper-section" id="limits">
-          <span class="section-kicker">07 · LIMITATIONS & CONCLUSION</span>
-          <h2>局限与结论</h2>
-          <ul class="limitation-list">
-            <li><span>L01</span><div><strong>样本太小。</strong> 两个压力正例和三个保护样本只能验证计算契约与事件顺序，不能估计命中率。</div></li>
-            <li><span>L02</span><div><strong>80bp 未按波动标准化。</strong> 指数与高波动个股使用同一绝对材料强度，不代表相同经济含义。</div></li>
-            <li><span>L03</span><div><strong>变化点确认偏慢。</strong> 兆易样本直到 13:20 才确认候选，尚未证明具有足够早的退潮预警价值。</div></li>
-            <li><span>L04</span><div><strong>公式误差并非独立。</strong> 五分钟残差自相关、网格择优和参数边界都会让 AICc 的解释比教科书条件更弱。</div></li>
-            <li><span>L05</span><div><strong>订单层证据缺失。</strong> OHLCV 与成交额无法恢复账户类别、主动买卖方向、盘口深度或真实触发链。</div></li>
-            <li><span>L06</span><div><strong>来源核验仍有边界。</strong> 原始源行 SHA 依赖采集时声明，两份指数样本缺少独立日成交额参考。</div></li>
-          </ul>
-
-          <div class="conclusion">
-            <h3>最终结论</h3>
-            <p>“鸭蛋弧”不是错觉，但它应被重新定义为<strong>压力生命周期的视觉外观</strong>，而不是量化身份的指纹。当前最有研究价值的不是选出椭圆、根号或指数中的唯一赢家，而是维护一套有因果时间、有保护样本、有空值原因、可以撤销的阶段识别框架。</p>
-            <p>因此，本轮只保留一个盘中主框架：三条判断轴加事件生命周期；同时保留全部公式作为收盘后竞争假说。前者回答“现在发生到哪一步”，后者只回答“整天看起来更像什么”。</p>
-          </div>
-        </section>
-
-        <section class="paper-section" id="appendix">
-          <span class="section-kicker">APPENDIX · FORMULA TOOLBOX</span>
-          <h2>公式附录：每个变量究竟代表什么</h2>
-          <div class="formula-list">
-            <div class="formula-row">
-              <div>
-                <h3>滚动对数斜率</h3>
-                <span class="formula-expression">β = Cov(i, ln Cᵢ) / Var(i)</span>
-              </div>
-              <p><code>Cᵢ</code> 是第 i 根五分钟收盘价。输出乘以 10,000，单位是 bp / 5分钟。它描述最近窗口的速度，不直接描述事件结构。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>变化点 BIC</h3>
-                <span class="formula-expression">ΔBIC = BIC(linear) − BIC(segmented)</span>
-              </div>
-              <p>比较无变化直线与连续折线，并要求同一候选连续三次出现。候选时间与实际发现时间分开保存，避免未来回填。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>成交冲击代理</h3>
-                <span class="formula-expression">I = 10⁴[−Δln C]₊ / Amount(亿元)</span>
-              </div>
-              <p>表示每亿元无方向总成交对应的净下跌基点。它不是主动卖出额、订单流失衡或真实 q/L。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>修复比例</h3>
-                <span class="formula-expression">Rₜ = (Cₜ − L₁) / (A₁ − L₁)</span>
-              </div>
-              <p><code>A₁</code> 是第一轮锚点，<code>L₁</code> 是固定的第一轮低点。创新低时 R 可以为负，不截成 0；完全修复可以超过 1。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>椭圆 / 根号代理</h3>
-                <span class="formula-expression">y(t) = a + b[1 − √(1 − (t/tc)²)]</span>
-              </div>
-              <p>描述有限区间中曲率逐步增强的外观。它能检验“鸭蛋弧”直觉，但 tc 和 b 的拟合不等于真实触发阈值或卖压库存。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>指数形状</h3>
-                <span class="formula-expression">y(t) = a + b[exp(kt) − 1]</span>
-              </div>
-              <p>描述变化速度按比例放大。5·21 上证样本内第一，但与椭圆代理区分较弱，不能因此确认指数式自激机制。</p>
-            </div>
-            <div class="formula-row">
-              <div>
-                <h3>AICc</h3>
-                <span class="formula-expression">AICc = n ln(SSE/n) + 2k + 2k(k+1)/(n−k−1)</span>
-              </div>
-              <p><code>n</code> 是观测数，<code>k</code> 包含残差方差。排名使用未舍入值；若存在零残差模型，则停止整组排名。</p>
-            </div>
-          </div>
-
-          <h3>数据与复现信息</h3>
-          <p class="provenance">输入格式 quant_pressure_replay.v1 · 输出格式 quant_pressure_replay_result.v1 · 配置 research.v1.1 · 五分钟源：新浪接口冻结行 · 独立日线交叉核对：腾讯日线 · 博云新材量额覆盖约 99.7859%，标记为 partial · runtime SHA256 31604e989a6e7a79398ad139a247c1982a6d5b5d9481000c77ed872e393d333b · tests SHA256 db0419f59f5e7ac4018ac1a4d3b285dbbbc83c63ebd29d24f98f9ba2051671b8</p>
-        </section>
-      </article>
+<section class="case-study" aria-labelledby="case-sh603986_20260710_1m">
+  <div class="case-heading">
+    <div>
+      <p class="eyebrow">2026-07-10 · 1 MIN</p>
+      <h3 id="case-sh603986_20260710_1m">兆易创新</h3>
     </div>
+    <p class="case-result">全天 -7.76% · 峰到谷 -13.30% · 全日最优 单变化点分段 · 下降段最优 单变化点分段</p>
+  </div>
+  <figure>
+    <div class="chart-wrap">
+<svg class="price-chart" viewBox="0 0 860 280" role="img" aria-labelledby="path-sh603986_20260710_1m-title path-sh603986_20260710_1m-desc">
+  <title id="path-sh603986_20260710_1m-title">2026-07-10 兆易创新 一分钟收盘路径</title>
+  <desc id="path-sh603986_20260710_1m-desc">连续交易分钟横轴。四段阴影依次表示开盘正式窗口、早盘前哨观察、早盘正式窗口和尾盘正式窗口；标记客观收盘峰值和日内最低。</desc>
+  <rect class="window-a" x="60.00" y="22" width="13.09" height="220" /><rect class="window-scout" x="105.81" y="22" width="16.36" height="220" /><rect class="window-b" x="122.17" y="22" width="65.44" height="220" /><rect class="window-c" x="743.84" y="22" width="81.80" height="220" />
+  <line class="chart-grid" x1="60" y1="22.00" x2="842" y2="22.00" /><text class="axis-label" x="52" y="26.00" text-anchor="end">713.38</text><line class="chart-grid" x1="60" y1="132.00" x2="842" y2="132.00" /><text class="axis-label" x="52" y="136.00" text-anchor="end">656.35</text><line class="chart-grid" x1="60" y1="242.00" x2="842" y2="242.00" /><text class="axis-label" x="52" y="246.00" text-anchor="end">599.31</text>
+  <polyline class="price-line" points="60.00,54.36 63.27,38.75 66.54,47.80 69.82,42.01 73.09,47.80 76.36,57.93 79.63,47.80 82.90,40.51 86.18,40.08 89.45,40.08 92.72,38.16 95.99,37.17 99.26,46.82 102.54,45.70 105.81,47.74 109.08,57.37 112.35,55.51 115.62,43.42 118.90,43.21 122.17,45.85 125.44,40.07 128.71,40.62 131.98,37.96 135.26,38.21 138.53,39.45 141.80,41.24 145.07,49.54 148.34,50.52 151.62,49.65 154.89,60.65 158.16,63.23 161.43,70.79 164.70,64.52 167.97,68.05 171.25,76.73 174.52,69.79 177.79,65.33 181.06,75.15 184.33,78.70 187.61,76.73 190.88,85.26 194.15,94.09 197.42,85.84 200.69,93.94 203.97,83.50 207.24,81.59 210.51,72.89 213.78,80.59 217.05,72.91 220.33,79.61 223.60,92.16 226.87,86.38 230.14,84.58 233.41,86.38 236.69,86.38 239.96,86.82 243.23,85.80 246.50,78.14 249.77,81.57 253.05,86.61 256.32,92.01 259.59,92.88 262.86,105.64 266.13,104.02 269.41,99.88 272.68,105.66 275.95,110.29 279.22,107.30 282.49,111.35 285.77,105.66 289.04,107.59 292.31,101.44 295.58,101.69 298.85,100.53 302.13,105.91 305.40,111.45 308.67,112.41 311.94,108.21 315.21,113.40 318.49,116.85 321.76,110.48 325.03,109.50 328.30,110.48 331.57,114.15 334.85,115.31 338.12,119.16 341.39,107.82 344.66,98.39 347.93,97.95 351.21,102.69 354.48,111.72 357.75,111.02 361.02,113.30 364.29,113.94 367.56,117.25 370.84,117.70 374.11,117.25 377.38,116.89 380.65,111.28 383.92,113.82 387.20,113.38 390.47,110.37 393.74,107.05 397.01,110.99 400.28,115.33 403.56,114.34 406.83,112.10 410.10,113.96 413.37,111.99 416.64,111.68 419.92,115.21 423.19,116.00 426.46,118.05 429.73,124.95 433.00,131.68 436.28,122.89 439.55,130.35 442.82,131.95 446.09,128.83 449.36,118.43 452.64,126.88 455.91,123.99 459.18,125.49 462.45,118.97 465.72,124.99 469.00,128.79 472.27,120.75 475.54,111.45 478.81,110.50 482.08,108.56 485.36,105.68 488.63,103.93 491.90,104.74 495.17,109.33 498.44,106.92 501.72,109.62 504.99,105.53 508.26,108.38 511.53,119.14 514.80,121.09 518.08,127.34 521.35,122.56 524.62,126.86 527.89,126.92 531.16,130.72 534.44,131.51 537.71,133.53 540.98,138.84 544.25,136.52 547.52,137.55 550.79,142.29 554.07,137.85 557.34,139.99 560.61,144.24 563.88,151.53 567.15,146.17 570.43,151.95 573.70,152.18 576.97,153.88 580.24,156.77 583.51,150.58 586.79,142.93 590.06,146.42 593.33,151.07 596.60,153.30 599.87,155.02 603.15,157.35 606.42,158.41 609.69,150.02 612.96,152.96 616.23,155.79 619.51,148.10 622.78,150.02 626.05,152.92 629.32,151.86 632.59,155.79 635.87,160.21 639.14,156.66 642.41,160.83 645.68,162.56 648.95,165.24 652.23,168.27 655.50,161.40 658.77,161.62 662.04,157.74 665.31,160.25 668.59,165.28 671.86,168.08 675.13,169.93 678.40,169.12 681.67,162.56 684.95,167.38 688.22,170.28 691.49,171.24 694.76,173.00 698.03,164.12 701.31,161.64 704.58,164.86 707.85,161.60 711.12,154.69 714.39,167.07 717.67,170.49 720.94,173.05 724.21,175.75 727.48,180.88 730.75,182.54 734.03,179.34 737.30,180.17 740.57,182.14 743.84,192.46 747.11,193.61 750.38,197.68 753.66,199.57 756.93,192.59 760.20,189.58 763.47,196.31 766.74,199.23 770.02,203.82 773.29,198.24 776.56,204.43 779.83,209.82 783.10,208.12 786.38,202.18 789.65,205.57 792.92,207.31 796.19,203.84 799.46,200.00 802.74,204.67 806.01,208.12 809.28,209.41 812.55,209.82 815.82,209.33 819.10,207.96 822.37,207.12 825.64,208.95 828.91,218.19 832.18,217.84 835.46,217.53 838.73,217.53 842.00,217.53" />
+  <circle class="peak-mark" cx="95.99" cy="37.17" r="4" />
+  <text class="point-label" x="95.99" y="28.17" text-anchor="middle">峰 09:42</text>
+  <circle class="low-mark" cx="832.18" cy="226.83" r="4" />
+  <text class="point-label" x="832.18" y="238.00" text-anchor="middle">低 14:57</text>
+  <text class="axis-label" x="60.00" y="268" text-anchor="middle">09:31</text><text class="axis-label" x="187.61" y="268" text-anchor="middle">10:10</text><text class="axis-label" x="743.84" y="268" text-anchor="middle">14:30</text><text class="axis-label" x="842.00" y="268" text-anchor="middle">15:00</text><text class="axis-label" x="451.00" y="268" text-anchor="middle">11:30 / 13:01</text>
+</svg>
+</div>
+    <figcaption>真实一分钟结束时点。浅红、浅蓝、浅绿是三段正式窗口；黄色是 09:45-09:50 前哨观察，不是新增买卖窗口。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh603986_20260710_1m-full_day-title model-sh603986_20260710_1m-full_day-desc">
+  <title id="model-sh603986_20260710_1m-full_day-title">2026-07-10 兆易创新 全日公式拟合</title>
+  <desc id="model-sh603986_20260710_1m-full_day-desc">全日实际对数基点路径与样本内前三种公式拟合。实线：实际；单变化点分段 Δ0.0；有限时刻幂律 Δ32.4；临界对数 Δ41.7</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">单变化点分段 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">有限时刻幂律 Δ32.4</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">临界对数 Δ41.7</text>
+  <line class="chart-grid" x1="62" y1="88.21" x2="842" y2="88.21" />
+  <polyline class="fit-actual" points="62.00,88.21 65.26,75.80 68.53,82.97 71.79,78.38 75.05,82.97 78.32,91.06 81.58,82.97 84.85,77.19 88.11,76.85 91.37,76.85 94.64,75.33 97.90,74.55 101.16,82.19 104.43,81.30 107.69,82.93 110.95,90.61 114.22,89.13 117.48,79.50 120.74,79.33 124.01,81.43 127.27,76.84 130.54,77.28 133.80,75.18 137.06,75.37 140.33,76.35 143.59,77.77 146.85,84.36 150.12,85.14 153.38,84.45 156.64,93.24 159.91,95.32 163.17,101.43 166.44,96.36 169.70,99.21 172.96,106.25 176.23,100.61 179.49,97.02 182.75,104.96 186.02,107.85 189.28,106.25 192.54,113.20 195.81,120.45 199.07,113.67 202.33,120.33 205.60,111.76 208.86,110.20 212.13,103.13 215.39,109.39 218.65,103.14 221.92,108.58 225.18,118.87 228.44,114.12 231.71,112.65 234.97,114.12 238.23,114.12 241.50,114.48 244.76,113.64 248.03,107.39 251.29,110.19 254.55,114.30 257.82,118.74 261.08,119.45 264.34,130.01 267.61,128.67 270.87,125.23 274.13,130.03 277.40,133.89 280.66,131.39 283.92,134.77 287.19,130.03 290.45,131.64 293.72,126.53 296.98,126.73 300.24,125.77 303.51,130.24 306.77,134.85 310.03,135.66 313.30,132.15 316.56,136.48 319.82,139.37 323.09,134.05 326.35,133.23 329.62,134.05 332.88,137.11 336.14,138.08 339.41,141.31 342.67,131.83 345.93,124.00 349.20,123.64 352.46,127.56 355.72,135.08 358.99,134.50 362.25,136.40 365.51,136.93 368.78,139.71 372.04,140.08 375.31,139.71 378.57,139.40 381.83,134.71 385.10,136.83 388.36,136.46 391.62,133.95 394.89,131.19 398.15,134.47 401.41,138.09 404.68,137.27 407.94,135.40 411.21,136.95 414.47,135.30 417.73,135.04 421.00,138.00 424.26,138.66 427.52,140.37 430.79,146.19 434.05,151.88 437.31,144.45 440.58,150.75 443.84,152.11 447.10,149.46 450.37,140.70 453.63,147.81 456.90,145.37 460.16,146.64 463.42,141.15 466.69,146.22 469.95,149.43 473.21,142.64 476.48,134.85 479.74,134.06 483.00,132.44 486.27,130.05 489.53,128.59 492.79,129.26 496.06,133.08 499.32,131.07 502.59,133.32 505.85,129.92 509.11,132.29 512.38,141.30 515.64,142.94 518.90,148.21 522.17,144.17 525.43,147.80 528.69,147.85 531.96,151.06 535.22,151.73 538.49,153.45 541.75,157.97 545.01,156.00 548.28,156.87 551.54,160.92 554.80,157.13 558.07,158.96 561.33,162.59 564.59,168.85 567.86,164.24 571.12,169.22 574.38,169.42 577.65,170.88 580.91,173.38 584.18,168.04 587.44,161.46 590.70,164.46 593.97,168.45 597.23,170.38 600.49,171.87 603.76,173.88 607.02,174.80 610.28,167.56 613.55,170.08 616.81,172.53 620.08,165.90 623.34,167.56 626.60,170.05 629.87,169.14 633.13,172.53 636.39,176.36 639.66,173.28 642.92,176.90 646.18,178.40 649.45,180.74 652.71,183.38 655.97,177.40 659.24,177.58 662.50,174.22 665.77,176.39 669.03,180.77 672.29,183.21 675.56,184.83 678.82,184.12 682.08,178.40 685.35,182.61 688.61,185.13 691.87,185.98 695.14,187.52 698.40,179.76 701.67,177.60 704.93,180.40 708.19,177.57 711.46,171.58 714.72,182.34 717.98,185.32 721.25,187.57 724.51,189.94 727.77,194.46 731.04,195.92 734.30,193.10 737.56,193.83 740.83,195.56 744.09,204.72 747.36,205.75 750.62,209.39 753.88,211.08 757.15,204.84 760.41,202.16 763.67,208.16 766.94,210.77 770.20,214.89 773.46,209.89 776.73,215.45 779.99,220.30 783.26,218.77 786.52,213.42 789.78,216.47 793.05,218.04 796.31,214.91 799.57,211.46 802.84,215.66 806.10,218.77 809.36,219.94 812.63,220.30 815.89,219.87 819.15,218.63 822.42,217.86 825.68,219.52 828.95,227.90 832.21,227.58 835.47,227.30 838.74,227.30 842.00,227.30" /><polyline class="fit-one" points="62.00,82.08 65.26,82.60 68.53,83.12 71.79,83.64 75.05,84.16 78.32,84.68 81.58,85.20 84.85,85.72 88.11,86.24 91.37,86.76 94.64,87.28 97.90,87.80 101.16,88.32 104.43,88.85 107.69,89.37 110.95,89.89 114.22,90.41 117.48,90.93 120.74,91.45 124.01,91.97 127.27,92.49 130.54,93.01 133.80,93.53 137.06,94.05 140.33,94.57 143.59,95.09 146.85,95.61 150.12,96.13 153.38,96.66 156.64,97.18 159.91,97.70 163.17,98.22 166.44,98.74 169.70,99.26 172.96,99.78 176.23,100.30 179.49,100.82 182.75,101.34 186.02,101.86 189.28,102.38 192.54,102.90 195.81,103.42 199.07,103.95 202.33,104.47 205.60,104.99 208.86,105.51 212.13,106.03 215.39,106.55 218.65,107.07 221.92,107.59 225.18,108.11 228.44,108.63 231.71,109.15 234.97,109.67 238.23,110.19 241.50,110.71 244.76,111.23 248.03,111.76 251.29,112.28 254.55,112.80 257.82,113.32 261.08,113.84 264.34,114.36 267.61,114.88 270.87,115.40 274.13,115.92 277.40,116.44 280.66,116.96 283.92,117.48 287.19,118.00 290.45,118.52 293.72,119.04 296.98,119.57 300.24,120.09 303.51,120.61 306.77,121.13 310.03,121.65 313.30,122.17 316.56,122.69 319.82,123.21 323.09,123.73 326.35,124.25 329.62,124.77 332.88,125.29 336.14,125.81 339.41,126.33 342.67,126.86 345.93,127.38 349.20,127.90 352.46,128.42 355.72,128.94 358.99,129.46 362.25,129.98 365.51,130.50 368.78,131.02 372.04,131.54 375.31,132.06 378.57,132.58 381.83,133.10 385.10,133.62 388.36,134.14 391.62,134.67 394.89,135.19 398.15,135.71 401.41,136.23 404.68,136.75 407.94,137.27 411.21,137.79 414.47,138.31 417.73,138.83 421.00,139.35 424.26,139.87 427.52,140.39 430.79,140.91 434.05,141.43 437.31,141.95 440.58,142.48 443.84,143.00 447.10,143.52 450.37,144.04 453.63,144.56 456.90,145.08 460.16,145.60 463.42,146.12 466.69,146.64 469.95,147.16 473.21,147.68 476.48,148.20 479.74,148.72 483.00,149.24 486.27,149.76 489.53,150.29 492.79,150.81 496.06,151.33 499.32,151.85 502.59,152.37 505.85,152.89 509.11,153.41 512.38,153.93 515.64,154.45 518.90,154.97 522.17,155.49 525.43,156.01 528.69,156.53 531.96,157.05 535.22,157.58 538.49,158.10 541.75,158.62 545.01,159.14 548.28,159.66 551.54,160.18 554.80,160.70 558.07,161.22 561.33,161.74 564.59,162.26 567.86,162.78 571.12,163.30 574.38,163.82 577.65,164.34 580.91,164.86 584.18,165.39 587.44,165.91 590.70,166.43 593.97,166.95 597.23,167.47 600.49,167.99 603.76,168.51 607.02,169.03 610.28,169.55 613.55,170.07 616.81,170.59 620.08,171.11 623.34,171.63 626.60,172.15 629.87,172.67 633.13,173.20 636.39,173.72 639.66,174.24 642.92,174.76 646.18,175.28 649.45,175.80 652.71,176.32 655.97,176.84 659.24,177.36 662.50,177.88 665.77,178.40 669.03,178.92 672.29,179.44 675.56,179.96 678.82,180.49 682.08,181.01 685.35,181.53 688.61,182.05 691.87,182.57 695.14,183.09 698.40,183.61 701.67,184.13 704.93,184.65 708.19,185.76 711.46,186.88 714.72,187.99 717.98,189.11 721.25,190.22 724.51,191.34 727.77,192.45 731.04,193.56 734.30,194.68 737.56,195.79 740.83,196.91 744.09,198.02 747.36,199.14 750.62,200.25 753.88,201.36 757.15,202.48 760.41,203.59 763.67,204.71 766.94,205.82 770.20,206.94 773.46,208.05 776.73,209.16 779.99,210.28 783.26,211.39 786.52,212.51 789.78,213.62 793.05,214.73 796.31,215.85 799.57,216.96 802.84,218.08 806.10,219.19 809.36,220.31 812.63,221.42 815.89,222.53 819.15,223.65 822.42,224.76 825.68,225.88 828.95,226.99 832.21,228.11 835.47,229.22 838.74,230.33 842.00,231.45" /><polyline class="fit-two" points="62.00,85.45 65.26,85.88 68.53,86.31 71.79,86.74 75.05,87.17 78.32,87.60 81.58,88.04 84.85,88.47 88.11,88.91 91.37,89.34 94.64,89.78 97.90,90.21 101.16,90.65 104.43,91.09 107.69,91.53 110.95,91.96 114.22,92.40 117.48,92.84 120.74,93.29 124.01,93.73 127.27,94.17 130.54,94.61 133.80,95.06 137.06,95.50 140.33,95.94 143.59,96.39 146.85,96.84 150.12,97.28 153.38,97.73 156.64,98.18 159.91,98.63 163.17,99.08 166.44,99.53 169.70,99.98 172.96,100.43 176.23,100.88 179.49,101.34 182.75,101.79 186.02,102.25 189.28,102.70 192.54,103.16 195.81,103.62 199.07,104.07 202.33,104.53 205.60,104.99 208.86,105.45 212.13,105.91 215.39,106.37 218.65,106.84 221.92,107.30 225.18,107.76 228.44,108.23 231.71,108.70 234.97,109.16 238.23,109.63 241.50,110.10 244.76,110.57 248.03,111.04 251.29,111.51 254.55,111.98 257.82,112.45 261.08,112.93 264.34,113.40 267.61,113.88 270.87,114.35 274.13,114.83 277.40,115.31 280.66,115.78 283.92,116.26 287.19,116.74 290.45,117.23 293.72,117.71 296.98,118.19 300.24,118.68 303.51,119.16 306.77,119.65 310.03,120.14 313.30,120.62 316.56,121.11 319.82,121.60 323.09,122.09 326.35,122.59 329.62,123.08 332.88,123.57 336.14,124.07 339.41,124.56 342.67,125.06 345.93,125.56 349.20,126.06 352.46,126.56 355.72,127.06 358.99,127.56 362.25,128.07 365.51,128.57 368.78,129.08 372.04,129.59 375.31,130.09 378.57,130.60 381.83,131.11 385.10,131.63 388.36,132.14 391.62,132.65 394.89,133.17 398.15,133.69 401.41,134.20 404.68,134.72 407.94,135.24 411.21,135.76 414.47,136.29 417.73,136.81 421.00,137.34 424.26,137.86 427.52,138.39 430.79,138.92 434.05,139.45 437.31,139.98 440.58,140.52 443.84,141.05 447.10,141.59 450.37,142.12 453.63,142.66 456.90,143.20 460.16,143.75 463.42,144.29 466.69,144.83 469.95,145.38 473.21,145.93 476.48,146.48 479.74,147.03 483.00,147.58 486.27,148.13 489.53,148.69 492.79,149.25 496.06,149.81 499.32,150.37 502.59,150.93 505.85,151.49 509.11,152.06 512.38,152.63 515.64,153.20 518.90,153.77 522.17,154.34 525.43,154.92 528.69,155.49 531.96,156.07 535.22,156.65 538.49,157.23 541.75,157.82 545.01,158.40 548.28,158.99 551.54,159.58 554.80,160.17 558.07,160.77 561.33,161.36 564.59,161.96 567.86,162.56 571.12,163.17 574.38,163.77 577.65,164.38 580.91,164.99 584.18,165.60 587.44,166.21 590.70,166.83 593.97,167.45 597.23,168.07 600.49,168.70 603.76,169.32 607.02,169.95 610.28,170.58 613.55,171.22 616.81,171.86 620.08,172.50 623.34,173.14 626.60,173.78 629.87,174.43 633.13,175.08 636.39,175.74 639.66,176.40 642.92,177.06 646.18,177.72 649.45,178.39 652.71,179.06 655.97,179.73 659.24,180.41 662.50,181.09 665.77,181.78 669.03,182.46 672.29,183.16 675.56,183.85 678.82,184.55 682.08,185.25 685.35,185.96 688.61,186.67 691.87,187.39 695.14,188.11 698.40,188.83 701.67,189.56 704.93,190.30 708.19,191.03 711.46,191.78 714.72,192.53 717.98,193.28 721.25,194.04 724.51,194.80 727.77,195.57 731.04,196.35 734.30,197.13 737.56,197.92 740.83,198.71 744.09,199.51 747.36,200.32 750.62,201.13 753.88,201.96 757.15,202.78 760.41,203.62 763.67,204.47 766.94,205.32 770.20,206.18 773.46,207.05 776.73,207.93 779.99,208.82 783.26,209.72 786.52,210.63 789.78,211.55 793.05,212.48 796.31,213.43 799.57,214.38 802.84,215.35 806.10,216.34 809.36,217.34 812.63,218.36 815.89,219.39 819.15,220.44 822.42,221.51 825.68,222.61 828.95,223.72 832.21,224.86 835.47,226.03 838.74,227.23 842.00,228.46" /><polyline class="fit-three" points="62.00,85.34 65.26,85.76 68.53,86.18 71.79,86.60 75.05,87.02 78.32,87.44 81.58,87.86 84.85,88.28 88.11,88.71 91.37,89.13 94.64,89.56 97.90,89.98 101.16,90.41 104.43,90.84 107.69,91.27 110.95,91.70 114.22,92.13 117.48,92.56 120.74,92.99 124.01,93.43 127.27,93.86 130.54,94.30 133.80,94.73 137.06,95.17 140.33,95.61 143.59,96.05 146.85,96.49 150.12,96.93 153.38,97.37 156.64,97.82 159.91,98.26 163.17,98.71 166.44,99.15 169.70,99.60 172.96,100.05 176.23,100.50 179.49,100.95 182.75,101.40 186.02,101.85 189.28,102.31 192.54,102.76 195.81,103.22 199.07,103.67 202.33,104.13 205.60,104.59 208.86,105.05 212.13,105.51 215.39,105.97 218.65,106.43 221.92,106.90 225.18,107.36 228.44,107.83 231.71,108.30 234.97,108.77 238.23,109.24 241.50,109.71 244.76,110.18 248.03,110.65 251.29,111.12 254.55,111.60 257.82,112.08 261.08,112.55 264.34,113.03 267.61,113.51 270.87,113.99 274.13,114.47 277.40,114.96 280.66,115.44 283.92,115.93 287.19,116.41 290.45,116.90 293.72,117.39 296.98,117.88 300.24,118.37 303.51,118.86 306.77,119.36 310.03,119.85 313.30,120.35 316.56,120.85 319.82,121.35 323.09,121.85 326.35,122.35 329.62,122.85 332.88,123.35 336.14,123.86 339.41,124.37 342.67,124.87 345.93,125.38 349.20,125.89 352.46,126.40 355.72,126.92 358.99,127.43 362.25,127.95 365.51,128.46 368.78,128.98 372.04,129.50 375.31,130.02 378.57,130.55 381.83,131.07 385.10,131.60 388.36,132.12 391.62,132.65 394.89,133.18 398.15,133.71 401.41,134.24 404.68,134.78 407.94,135.31 411.21,135.85 414.47,136.38 417.73,136.92 421.00,137.46 424.26,138.01 427.52,138.55 430.79,139.10 434.05,139.64 437.31,140.19 440.58,140.74 443.84,141.29 447.10,141.85 450.37,142.40 453.63,142.96 456.90,143.51 460.16,144.07 463.42,144.63 466.69,145.19 469.95,145.76 473.21,146.32 476.48,146.89 479.74,147.46 483.00,148.03 486.27,148.60 489.53,149.18 492.79,149.75 496.06,150.33 499.32,150.91 502.59,151.49 505.85,152.07 509.11,152.65 512.38,153.24 515.64,153.82 518.90,154.41 522.17,155.00 525.43,155.59 528.69,156.19 531.96,156.78 535.22,157.38 538.49,157.98 541.75,158.58 545.01,159.19 548.28,159.79 551.54,160.40 554.80,161.01 558.07,161.62 561.33,162.23 564.59,162.84 567.86,163.46 571.12,164.08 574.38,164.70 577.65,165.32 580.91,165.94 584.18,166.57 587.44,167.20 590.70,167.83 593.97,168.46 597.23,169.09 600.49,169.73 603.76,170.36 607.02,171.00 610.28,171.65 613.55,172.29 616.81,172.94 620.08,173.58 623.34,174.23 626.60,174.89 629.87,175.54 633.13,176.20 636.39,176.86 639.66,177.52 642.92,178.18 646.18,178.85 649.45,179.51 652.71,180.18 655.97,180.86 659.24,181.53 662.50,182.21 665.77,182.89 669.03,183.57 672.29,184.25 675.56,184.94 678.82,185.63 682.08,186.32 685.35,187.01 688.61,187.70 691.87,188.40 695.14,189.10 698.40,189.81 701.67,190.51 704.93,191.22 708.19,191.93 711.46,192.64 714.72,193.36 717.98,194.08 721.25,194.80 724.51,195.52 727.77,196.25 731.04,196.98 734.30,197.71 737.56,198.44 740.83,199.18 744.09,199.92 747.36,200.66 750.62,201.40 753.88,202.15 757.15,202.90 760.41,203.66 763.67,204.41 766.94,205.17 770.20,205.93 773.46,206.70 776.73,207.47 779.99,208.24 783.26,209.01 786.52,209.79 789.78,210.57 793.05,211.35 796.31,212.14 799.57,212.93 802.84,213.72 806.10,214.52 809.36,215.31 812.63,216.12 815.89,216.92 819.15,217.73 822.42,218.54 825.68,219.36 828.95,220.18 832.21,221.00 835.47,221.82 838.74,222.65 842.00,223.48" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">09:31</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">15:00</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">244 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-1450 bp</text>
+</svg>
+</div>
+    <figcaption>全日拟合回答“整张图看起来像什么”，会把早盘抬头和午后下落一起纳入。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh603986_20260710_1m-decline_segment-title model-sh603986_20260710_1m-decline_segment-desc">
+  <title id="model-sh603986_20260710_1m-decline_segment-title">2026-07-10 兆易创新 客观下降段公式拟合</title>
+  <desc id="model-sh603986_20260710_1m-decline_segment-desc">客观下降段实际对数基点路径与样本内前三种公式拟合。实线：实际；单变化点分段 Δ0.0；有限时刻幂律 Δ26.7；临界对数 Δ35.0</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">单变化点分段 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">有限时刻幂律 Δ26.7</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">临界对数 Δ35.0</text>
+  <line class="chart-grid" x1="62" y1="74.55" x2="842" y2="74.55" />
+  <polyline class="fit-actual" points="62.00,74.55 65.48,82.36 68.96,81.45 72.45,83.12 75.93,90.97 79.41,89.46 82.89,79.61 86.38,79.44 89.86,81.58 93.34,76.89 96.82,77.34 100.30,75.19 103.79,75.39 107.27,76.39 110.75,77.84 114.23,84.58 117.71,85.38 121.20,84.67 124.68,93.66 128.16,95.79 131.64,102.03 135.12,96.85 138.61,99.76 142.09,106.95 145.57,101.20 149.05,97.52 152.54,105.64 156.02,108.59 159.50,106.95 162.98,114.06 166.46,121.48 169.95,114.55 173.43,121.35 176.91,112.59 180.39,111.00 183.88,103.77 187.36,110.16 190.84,103.78 194.32,109.34 197.80,119.85 201.29,115.00 204.77,113.50 208.25,115.00 211.73,115.00 215.21,115.37 218.70,114.51 222.18,108.12 225.66,110.98 229.14,115.19 232.62,119.72 236.11,120.46 239.59,131.25 243.07,129.88 246.55,126.36 250.04,131.27 253.52,135.21 257.00,132.66 260.48,136.12 263.96,131.27 267.45,132.91 270.93,127.69 274.41,127.90 277.89,126.92 281.38,131.48 284.86,136.20 288.34,137.02 291.82,133.44 295.30,137.86 298.79,140.82 302.27,135.38 305.75,134.54 309.23,135.38 312.71,138.51 316.20,139.50 319.68,142.80 323.16,133.11 326.64,125.11 330.12,124.73 333.61,128.75 337.09,136.43 340.57,135.84 344.05,137.78 347.54,138.32 351.02,141.17 354.50,141.55 357.98,141.17 361.46,140.85 364.95,136.05 368.43,138.23 371.91,137.85 375.39,135.28 378.88,132.45 382.36,135.80 385.84,139.51 389.32,138.67 392.80,136.76 396.29,138.34 399.77,136.66 403.25,136.40 406.73,139.41 410.21,140.09 413.70,141.84 417.18,147.79 420.66,153.61 424.14,146.01 427.62,152.45 431.11,153.84 434.59,151.13 438.07,142.18 441.55,149.45 445.04,146.95 448.52,148.25 452.00,142.64 455.48,147.82 458.96,151.10 462.45,144.16 465.93,136.20 469.41,135.39 472.89,133.73 476.38,131.29 479.86,129.80 483.34,130.48 486.82,134.39 490.30,132.34 493.79,134.64 497.27,131.15 500.75,133.58 504.23,142.79 507.71,144.46 511.20,149.85 514.68,145.72 518.16,149.43 521.64,149.48 525.12,152.77 528.61,153.46 532.09,155.22 535.57,159.83 539.05,157.82 542.54,158.71 546.02,162.85 549.50,158.97 552.98,160.84 556.46,164.55 559.95,170.96 563.43,166.24 566.91,171.33 570.39,171.54 573.88,173.03 577.36,175.59 580.84,170.13 584.32,163.40 587.80,166.46 591.29,170.55 594.77,172.52 598.25,174.04 601.73,176.10 605.21,177.04 608.70,169.63 612.18,172.22 615.66,174.72 619.14,167.94 622.62,169.63 626.11,172.18 629.59,171.25 633.07,174.72 636.55,178.63 640.04,175.49 643.52,179.18 647.00,180.72 650.48,183.11 653.96,185.81 657.45,179.69 660.93,179.88 664.41,176.44 667.89,178.67 671.38,183.14 674.86,185.64 678.34,187.29 681.82,186.57 685.30,180.72 688.79,185.02 692.27,187.60 695.75,188.47 699.23,190.04 702.71,182.11 706.20,179.90 709.68,182.77 713.16,179.87 716.64,173.75 720.12,184.74 723.61,187.79 727.09,190.09 730.57,192.51 734.05,197.13 737.54,198.63 741.02,195.74 744.50,196.49 747.98,198.27 751.46,207.63 754.95,208.68 758.43,212.40 761.91,214.13 765.39,207.75 768.88,205.01 772.36,211.15 775.84,213.81 779.32,218.03 782.80,212.91 786.29,218.59 789.77,223.56 793.25,221.99 796.73,216.52 800.21,219.64 803.70,221.24 807.18,218.04 810.66,214.52 814.14,218.81 817.62,221.99 821.11,223.18 824.59,223.56 828.07,223.11 831.55,221.85 835.04,221.06 838.52,222.76 842.00,231.32" /><polyline class="fit-one" points="62.00,89.06 65.48,89.59 68.96,90.11 72.45,90.64 75.93,91.16 79.41,91.69 82.89,92.21 86.38,92.74 89.86,93.26 93.34,93.78 96.82,94.31 100.30,94.83 103.79,95.36 107.27,95.88 110.75,96.41 114.23,96.93 117.71,97.45 121.20,97.98 124.68,98.50 128.16,99.03 131.64,99.55 135.12,100.08 138.61,100.60 142.09,101.13 145.57,101.65 149.05,102.17 152.54,102.70 156.02,103.22 159.50,103.75 162.98,104.27 166.46,104.80 169.95,105.32 173.43,105.84 176.91,106.37 180.39,106.89 183.88,107.42 187.36,107.94 190.84,108.47 194.32,108.99 197.80,109.52 201.29,110.04 204.77,110.56 208.25,111.09 211.73,111.61 215.21,112.14 218.70,112.66 222.18,113.19 225.66,113.71 229.14,114.23 232.62,114.76 236.11,115.28 239.59,115.81 243.07,116.33 246.55,116.86 250.04,117.38 253.52,117.91 257.00,118.43 260.48,118.95 263.96,119.48 267.45,120.00 270.93,120.53 274.41,121.05 277.89,121.58 281.38,122.10 284.86,122.63 288.34,123.15 291.82,123.67 295.30,124.20 298.79,124.72 302.27,125.25 305.75,125.77 309.23,126.30 312.71,126.82 316.20,127.34 319.68,127.87 323.16,128.39 326.64,128.92 330.12,129.44 333.61,129.97 337.09,130.49 340.57,131.02 344.05,131.54 347.54,132.06 351.02,132.59 354.50,133.11 357.98,133.64 361.46,134.16 364.95,134.69 368.43,135.21 371.91,135.73 375.39,136.26 378.88,136.78 382.36,137.31 385.84,137.83 389.32,138.36 392.80,138.88 396.29,139.41 399.77,139.93 403.25,140.45 406.73,140.98 410.21,141.50 413.70,142.03 417.18,142.55 420.66,143.08 424.14,143.60 427.62,144.12 431.11,144.65 434.59,145.17 438.07,145.70 441.55,146.22 445.04,146.75 448.52,147.27 452.00,147.80 455.48,148.32 458.96,148.84 462.45,149.37 465.93,149.89 469.41,150.42 472.89,150.94 476.38,151.47 479.86,151.99 483.34,152.51 486.82,153.04 490.30,153.56 493.79,154.09 497.27,154.61 500.75,155.14 504.23,155.66 507.71,156.19 511.20,156.71 514.68,157.23 518.16,157.76 521.64,158.28 525.12,158.81 528.61,159.33 532.09,159.86 535.57,160.38 539.05,160.91 542.54,161.43 546.02,161.95 549.50,162.48 552.98,163.00 556.46,163.53 559.95,164.05 563.43,164.58 566.91,165.10 570.39,165.62 573.88,166.15 577.36,166.67 580.84,167.20 584.32,167.72 587.80,168.25 591.29,168.77 594.77,169.30 598.25,169.82 601.73,170.34 605.21,170.87 608.70,171.39 612.18,171.92 615.66,172.44 619.14,172.97 622.62,173.49 626.11,174.01 629.59,174.54 633.07,175.06 636.55,175.59 640.04,176.11 643.52,176.64 647.00,177.16 650.48,177.69 653.96,178.21 657.45,178.73 660.93,179.26 664.41,179.78 667.89,180.31 671.38,180.83 674.86,181.36 678.34,181.88 681.82,182.40 685.30,182.93 688.79,183.45 692.27,183.98 695.75,184.50 699.23,185.03 702.71,185.55 706.20,186.08 709.68,186.60 713.16,187.78 716.64,188.96 720.12,190.14 723.61,191.32 727.09,192.50 730.57,193.68 734.05,194.86 737.54,196.04 741.02,197.22 744.50,198.40 747.98,199.58 751.46,200.76 754.95,201.94 758.43,203.12 761.91,204.30 765.39,205.48 768.88,206.66 772.36,207.84 775.84,209.02 779.32,210.20 782.80,211.38 786.29,212.56 789.77,213.74 793.25,214.93 796.73,216.11 800.21,217.29 803.70,218.47 807.18,219.65 810.66,220.83 814.14,222.01 817.62,223.19 821.11,224.37 824.59,225.55 828.07,226.73 831.55,227.91 835.04,229.09 838.52,230.27 842.00,231.45" /><polyline class="fit-two" points="62.00,92.12 65.48,92.56 68.96,92.99 72.45,93.43 75.93,93.86 79.41,94.30 82.89,94.74 86.38,95.18 89.86,95.62 93.34,96.06 96.82,96.50 100.30,96.94 103.79,97.38 107.27,97.82 110.75,98.27 114.23,98.71 117.71,99.15 121.20,99.60 124.68,100.05 128.16,100.49 131.64,100.94 135.12,101.39 138.61,101.84 142.09,102.29 145.57,102.74 149.05,103.19 152.54,103.64 156.02,104.09 159.50,104.55 162.98,105.00 166.46,105.46 169.95,105.91 173.43,106.37 176.91,106.83 180.39,107.28 183.88,107.74 187.36,108.20 190.84,108.66 194.32,109.12 197.80,109.59 201.29,110.05 204.77,110.51 208.25,110.98 211.73,111.44 215.21,111.91 218.70,112.38 222.18,112.85 225.66,113.32 229.14,113.78 232.62,114.26 236.11,114.73 239.59,115.20 243.07,115.67 246.55,116.15 250.04,116.62 253.52,117.10 257.00,117.58 260.48,118.05 263.96,118.53 267.45,119.01 270.93,119.49 274.41,119.98 277.89,120.46 281.38,120.94 284.86,121.43 288.34,121.91 291.82,122.40 295.30,122.89 298.79,123.38 302.27,123.87 305.75,124.36 309.23,124.85 312.71,125.34 316.20,125.84 319.68,126.33 323.16,126.83 326.64,127.32 330.12,127.82 333.61,128.32 337.09,128.82 340.57,129.32 344.05,129.83 347.54,130.33 351.02,130.84 354.50,131.34 357.98,131.85 361.46,132.36 364.95,132.87 368.43,133.38 371.91,133.89 375.39,134.40 378.88,134.92 382.36,135.43 385.84,135.95 389.32,136.47 392.80,136.99 396.29,137.51 399.77,138.03 403.25,138.56 406.73,139.08 410.21,139.61 413.70,140.14 417.18,140.67 420.66,141.20 424.14,141.73 427.62,142.26 431.11,142.80 434.59,143.33 438.07,143.87 441.55,144.41 445.04,144.95 448.52,145.49 452.00,146.04 455.48,146.58 458.96,147.13 462.45,147.68 465.93,148.23 469.41,148.78 472.89,149.33 476.38,149.89 479.86,150.44 483.34,151.00 486.82,151.56 490.30,152.12 493.79,152.69 497.27,153.25 500.75,153.82 504.23,154.39 507.71,154.96 511.20,155.53 514.68,156.10 518.16,156.68 521.64,157.26 525.12,157.84 528.61,158.42 532.09,159.01 535.57,159.59 539.05,160.18 542.54,160.77 546.02,161.36 549.50,161.96 552.98,162.56 556.46,163.15 559.95,163.76 563.43,164.36 566.91,164.97 570.39,165.57 573.88,166.19 577.36,166.80 580.84,167.41 584.32,168.03 587.80,168.65 591.29,169.28 594.77,169.90 598.25,170.53 601.73,171.16 605.21,171.80 608.70,172.43 612.18,173.07 615.66,173.72 619.14,174.36 622.62,175.01 626.11,175.66 629.59,176.32 633.07,176.98 636.55,177.64 640.04,178.30 643.52,178.97 647.00,179.64 650.48,180.32 653.96,180.99 657.45,181.68 660.93,182.36 664.41,183.05 667.89,183.74 671.38,184.44 674.86,185.14 678.34,185.85 681.82,186.56 685.30,187.27 688.79,187.99 692.27,188.72 695.75,189.44 699.23,190.18 702.71,190.92 706.20,191.66 709.68,192.41 713.16,193.16 716.64,193.92 720.12,194.68 723.61,195.45 727.09,196.23 730.57,197.01 734.05,197.80 737.54,198.60 741.02,199.40 744.50,200.21 747.98,201.03 751.46,201.85 754.95,202.68 758.43,203.52 761.91,204.37 765.39,205.23 768.88,206.09 772.36,206.97 775.84,207.85 779.32,208.75 782.80,209.66 786.29,210.57 789.77,211.50 793.25,212.45 796.73,213.40 800.21,214.37 803.70,215.36 807.18,216.36 810.66,217.37 814.14,218.41 817.62,219.46 821.11,220.53 824.59,221.63 828.07,222.75 831.55,223.90 835.04,225.07 838.52,226.28 842.00,227.52" /><polyline class="fit-three" points="62.00,92.03 65.48,92.45 68.96,92.88 72.45,93.30 75.93,93.72 79.41,94.15 82.89,94.58 86.38,95.00 89.86,95.43 93.34,95.86 96.82,96.29 100.30,96.72 103.79,97.15 107.27,97.59 110.75,98.02 114.23,98.46 117.71,98.89 121.20,99.33 124.68,99.77 128.16,100.21 131.64,100.65 135.12,101.09 138.61,101.53 142.09,101.98 145.57,102.42 149.05,102.87 152.54,103.31 156.02,103.76 159.50,104.21 162.98,104.66 166.46,105.11 169.95,105.56 173.43,106.01 176.91,106.47 180.39,106.92 183.88,107.38 187.36,107.84 190.84,108.29 194.32,108.75 197.80,109.21 201.29,109.68 204.77,110.14 208.25,110.60 211.73,111.07 215.21,111.54 218.70,112.00 222.18,112.47 225.66,112.94 229.14,113.41 232.62,113.88 236.11,114.36 239.59,114.83 243.07,115.31 246.55,115.79 250.04,116.26 253.52,116.74 257.00,117.22 260.48,117.71 263.96,118.19 267.45,118.67 270.93,119.16 274.41,119.65 277.89,120.13 281.38,120.62 284.86,121.11 288.34,121.61 291.82,122.10 295.30,122.59 298.79,123.09 302.27,123.59 305.75,124.08 309.23,124.58 312.71,125.09 316.20,125.59 319.68,126.09 323.16,126.60 326.64,127.10 330.12,127.61 333.61,128.12 337.09,128.63 340.57,129.14 344.05,129.66 347.54,130.17 351.02,130.69 354.50,131.20 357.98,131.72 361.46,132.24 364.95,132.77 368.43,133.29 371.91,133.81 375.39,134.34 378.88,134.87 382.36,135.40 385.84,135.93 389.32,136.46 392.80,136.99 396.29,137.53 399.77,138.07 403.25,138.60 406.73,139.14 410.21,139.69 413.70,140.23 417.18,140.77 420.66,141.32 424.14,141.87 427.62,142.42 431.11,142.97 434.59,143.52 438.07,144.07 441.55,144.63 445.04,145.19 448.52,145.74 452.00,146.31 455.48,146.87 458.96,147.43 462.45,148.00 465.93,148.56 469.41,149.13 472.89,149.70 476.38,150.28 479.86,150.85 483.34,151.43 486.82,152.01 490.30,152.58 493.79,153.17 497.27,153.75 500.75,154.33 504.23,154.92 507.71,155.51 511.20,156.10 514.68,156.69 518.16,157.29 521.64,157.88 525.12,158.48 528.61,159.08 532.09,159.68 535.57,160.29 539.05,160.89 542.54,161.50 546.02,162.11 549.50,162.72 552.98,163.33 556.46,163.95 559.95,164.57 563.43,165.19 566.91,165.81 570.39,166.43 573.88,167.06 577.36,167.69 580.84,168.32 584.32,168.95 587.80,169.58 591.29,170.22 594.77,170.86 598.25,171.50 601.73,172.14 605.21,172.78 608.70,173.43 612.18,174.08 615.66,174.73 619.14,175.39 622.62,176.04 626.11,176.70 629.59,177.36 633.07,178.03 636.55,178.69 640.04,179.36 643.52,180.03 647.00,180.70 650.48,181.38 653.96,182.05 657.45,182.73 660.93,183.42 664.41,184.10 667.89,184.79 671.38,185.48 674.86,186.17 678.34,186.86 681.82,187.56 685.30,188.26 688.79,188.96 692.27,189.67 695.75,190.38 699.23,191.09 702.71,191.80 706.20,192.52 709.68,193.24 713.16,193.96 716.64,194.68 720.12,195.41 723.61,196.14 727.09,196.87 730.57,197.61 734.05,198.35 737.54,199.09 741.02,199.83 744.50,200.58 747.98,201.33 751.46,202.08 754.95,202.84 758.43,203.60 761.91,204.36 765.39,205.12 768.88,205.89 772.36,206.66 775.84,207.44 779.32,208.22 782.80,209.00 786.29,209.78 789.77,210.57 793.25,211.36 796.73,212.16 800.21,212.95 803.70,213.75 807.18,214.56 810.66,215.37 814.14,216.18 817.62,216.99 821.11,217.81 824.59,218.63 828.07,219.46 831.55,220.29 835.04,221.12 838.52,221.96 842.00,222.80" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">09:42</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">14:56</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">114 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-1543 bp</text>
+</svg>
+</div>
+    <figcaption>下降段拟合固定为客观收盘峰值到其后收盘低点，回答“下跌过程如何换速”；两种排名都只描述收盘后形状。</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>下降段公式</th><th>ΔAICc</th><th>RMSE</th><th>残差一阶相关</th><th>参数触边</th></tr></thead>
+      <tbody><tr><td>单变化点分段</td><td>0.00</td><td>77.45 bp</td><td>0.870</td><td>否</td></tr><tr><td>有限时刻幂律</td><td>26.70</td><td>82.19 bp</td><td>0.881</td><td>否</td></tr><tr><td>临界对数</td><td>35.03</td><td>84.11 bp</td><td>0.885</td><td>是</td></tr><tr><td>指数</td><td>39.80</td><td>85.01 bp</td><td>0.887</td><td>否</td></tr><tr><td>线性</td><td>52.47</td><td>87.84 bp</td><td>0.894</td><td>否</td></tr><tr><td>Gompertz</td><td>60.47</td><td>88.59 bp</td><td>0.894</td><td>是</td></tr><tr><td>普通对数</td><td>67.16</td><td>90.34 bp</td><td>0.899</td><td>是</td></tr><tr><td>平移椭圆弧</td><td>92.13</td><td>95.05 bp</td><td>0.902</td><td>是</td></tr><tr><td>四分之一椭圆代理</td><td>155.89</td><td>110.03 bp</td><td>0.919</td><td>是</td></tr></tbody>
+    </table>
+  </div>
+</section>
 
-    <footer class="report-footer">
-      本报告是离线研究汇报，不构成量化身份确认、量化成交占比估计或交易建议。正式日报、评分、仓位和买卖动作均未接入。
-    </footer>
+<section class="case-study" aria-labelledby="case-sh600584_20260710_1m">
+  <div class="case-heading">
+    <div>
+      <p class="eyebrow">2026-07-10 · 1 MIN</p>
+      <h3 id="case-sh600584_20260710_1m">长电科技</h3>
+    </div>
+    <p class="case-result">全天 -2.33% · 峰到谷 -11.20% · 全日最优 单变化点分段 · 下降段最优 单变化点分段</p>
+  </div>
+  <figure>
+    <div class="chart-wrap">
+<svg class="price-chart" viewBox="0 0 860 280" role="img" aria-labelledby="path-sh600584_20260710_1m-title path-sh600584_20260710_1m-desc">
+  <title id="path-sh600584_20260710_1m-title">2026-07-10 长电科技 一分钟收盘路径</title>
+  <desc id="path-sh600584_20260710_1m-desc">连续交易分钟横轴。四段阴影依次表示开盘正式窗口、早盘前哨观察、早盘正式窗口和尾盘正式窗口；标记客观收盘峰值和日内最低。</desc>
+  <rect class="window-a" x="60.00" y="22" width="13.09" height="220" /><rect class="window-scout" x="105.81" y="22" width="16.36" height="220" /><rect class="window-b" x="122.17" y="22" width="65.44" height="220" /><rect class="window-c" x="743.84" y="22" width="81.80" height="220" />
+  <line class="chart-grid" x1="60" y1="22.00" x2="842" y2="22.00" /><text class="axis-label" x="52" y="26.00" text-anchor="end">114.88</text><line class="chart-grid" x1="60" y1="132.00" x2="842" y2="132.00" /><text class="axis-label" x="52" y="136.00" text-anchor="end">107.48</text><line class="chart-grid" x1="60" y1="242.00" x2="842" y2="242.00" /><text class="axis-label" x="52" y="246.00" text-anchor="end">100.09</text>
+  <polyline class="price-line" points="60.00,112.44 63.27,69.90 66.54,85.66 69.82,65.29 73.09,77.04 76.36,94.44 79.63,79.27 82.90,58.89 86.18,51.60 89.45,50.11 92.72,49.22 95.99,52.94 99.26,62.16 102.54,59.04 105.81,53.24 109.08,69.30 112.35,70.94 115.62,52.20 118.90,52.20 122.17,63.65 125.44,52.94 128.71,45.65 131.98,37.17 135.26,37.62 138.53,42.68 141.80,46.69 145.07,55.02 148.34,57.40 151.62,53.39 154.89,65.29 158.16,70.94 161.43,88.49 164.70,73.76 167.97,77.63 171.25,95.93 174.52,78.38 177.79,85.96 181.06,90.13 184.33,91.17 187.61,84.47 190.88,102.32 194.15,102.18 197.42,94.59 200.69,97.12 203.97,83.43 207.24,85.22 210.51,74.36 213.78,79.57 217.05,75.25 220.33,76.74 223.60,94.59 226.87,83.14 230.14,85.66 233.41,87.30 236.69,88.94 239.96,83.28 243.23,82.84 246.50,80.46 249.77,78.82 253.05,86.41 256.32,93.40 259.59,97.56 262.86,114.97 266.13,120.03 269.41,109.91 272.68,123.89 275.95,124.49 279.22,125.68 282.49,121.81 285.77,114.22 289.04,134.16 292.31,124.79 295.58,131.03 298.85,119.13 302.13,123.00 305.40,127.76 308.67,124.34 311.94,119.88 315.21,127.31 318.49,121.36 321.76,113.18 325.03,108.13 328.30,118.39 331.57,124.19 334.85,125.08 338.12,127.91 341.39,113.18 344.66,100.39 347.93,104.11 351.21,109.61 354.48,112.14 357.75,112.59 361.02,115.86 364.29,122.26 367.56,122.26 370.84,123.15 374.11,124.34 377.38,117.94 380.65,113.93 383.92,119.88 387.20,120.47 390.47,116.90 393.74,112.44 397.01,111.40 400.28,119.58 403.56,117.20 406.83,109.61 410.10,113.93 413.37,112.29 416.64,107.68 419.92,113.18 423.19,112.44 426.46,114.52 429.73,118.69 433.00,124.34 436.28,122.85 439.55,125.38 442.82,124.93 446.09,121.36 449.36,116.01 452.64,125.98 455.91,129.99 459.18,125.38 462.45,131.18 465.72,133.26 469.00,133.41 472.27,119.58 475.54,124.49 478.81,118.24 482.08,116.90 485.36,120.32 488.63,117.20 491.90,116.90 495.17,122.85 498.44,129.10 501.72,127.02 504.99,127.31 508.26,128.80 511.53,134.75 514.80,130.44 518.08,133.12 521.35,133.56 524.62,128.95 527.89,130.29 531.16,136.24 534.44,132.97 537.71,139.07 540.98,140.70 544.25,134.75 547.52,133.26 550.79,134.16 554.07,129.10 557.34,136.24 560.61,144.72 563.88,145.76 567.15,150.22 570.43,153.94 573.70,161.38 576.97,163.61 580.24,160.04 583.51,151.56 586.79,153.94 590.06,145.91 593.33,158.85 596.60,155.13 599.87,161.53 603.15,169.26 606.42,166.29 609.69,158.70 612.96,166.44 616.23,163.91 619.51,156.32 622.78,155.43 626.05,159.74 629.32,157.81 632.59,161.53 635.87,164.80 639.14,155.43 642.41,162.42 645.68,166.58 648.95,161.08 652.23,162.57 655.50,164.20 658.77,158.55 662.04,156.17 665.31,164.50 668.59,174.62 671.86,176.40 675.13,179.38 678.40,174.91 681.67,165.84 684.95,171.20 688.22,180.12 691.49,176.55 694.76,172.83 698.03,161.53 701.31,166.88 704.58,152.60 707.85,142.49 711.12,132.07 714.39,152.90 717.67,141.00 720.94,147.40 724.21,161.82 727.48,157.06 730.75,170.45 734.03,166.14 737.30,166.88 740.57,164.50 743.84,171.49 747.11,174.91 750.38,165.25 753.66,173.72 756.93,173.43 760.20,162.72 763.47,166.44 766.74,170.75 770.02,175.36 773.29,173.72 776.56,174.91 779.83,192.91 783.10,190.09 786.38,196.04 789.65,195.29 792.92,195.74 796.19,177.59 799.46,168.96 802.74,183.84 806.01,188.30 809.28,193.21 812.55,187.56 815.82,190.98 819.10,193.51 822.37,206.15 825.64,220.58 828.91,206.30 832.18,216.27 835.46,220.88 838.73,220.88 842.00,226.83" />
+  <circle class="peak-mark" cx="131.98" cy="37.17" r="4" />
+  <text class="point-label" x="131.98" y="28.17" text-anchor="middle">峰 09:53</text>
+  <circle class="low-mark" cx="842.00" cy="226.83" r="4" />
+  <text class="point-label" x="842.00" y="238.00" text-anchor="middle">低 15:00</text>
+  <text class="axis-label" x="60.00" y="268" text-anchor="middle">09:31</text><text class="axis-label" x="187.61" y="268" text-anchor="middle">10:10</text><text class="axis-label" x="743.84" y="268" text-anchor="middle">14:30</text><text class="axis-label" x="842.00" y="268" text-anchor="middle">15:00</text><text class="axis-label" x="451.00" y="268" text-anchor="middle">11:30 / 13:01</text>
+</svg>
+</div>
+    <figcaption>真实一分钟结束时点。浅红、浅蓝、浅绿是三段正式窗口；黄色是 09:45-09:50 前哨观察，不是新增买卖窗口。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh600584_20260710_1m-full_day-title model-sh600584_20260710_1m-full_day-desc">
+  <title id="model-sh600584_20260710_1m-full_day-title">2026-07-10 长电科技 全日公式拟合</title>
+  <desc id="model-sh600584_20260710_1m-full_day-desc">全日实际对数基点路径与样本内前三种公式拟合。实线：实际；单变化点分段 Δ0.0；有限时刻幂律 Δ28.7；线性 Δ29.0</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">单变化点分段 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">有限时刻幂律 Δ28.7</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">线性 Δ29.0</text>
+  <line class="chart-grid" x1="62" y1="134.61" x2="842" y2="134.61" />
+  <polyline class="fit-actual" points="62.00,134.61 65.26,100.33 68.53,112.93 71.79,96.67 75.05,106.02 78.32,120.00 81.58,107.80 84.85,91.60 88.11,85.85 91.37,84.69 94.64,83.98 97.90,86.91 101.16,94.19 104.43,91.72 107.69,87.14 110.95,99.85 114.22,101.16 117.48,86.32 120.74,86.32 124.01,95.37 127.27,86.91 130.54,81.18 133.80,74.55 137.06,74.90 140.33,78.85 143.59,82.00 146.85,88.55 150.12,90.43 153.38,87.26 156.64,96.67 159.91,101.16 163.17,115.20 166.44,103.41 169.70,106.49 172.96,121.20 176.23,107.09 179.49,113.17 182.75,116.52 186.02,117.36 189.28,111.97 192.54,126.38 195.81,126.26 199.07,120.12 202.33,122.16 205.60,111.14 208.86,112.57 212.13,103.88 215.39,108.04 218.65,104.59 221.92,105.78 225.18,120.12 228.44,110.90 231.71,112.93 234.97,114.24 238.23,115.56 241.50,111.02 244.76,110.66 248.03,108.76 251.29,107.45 254.55,113.53 257.82,119.16 261.08,122.52 264.34,136.67 267.61,140.81 270.87,132.54 274.13,143.99 277.40,144.48 280.66,145.46 283.92,142.28 287.19,136.07 290.45,152.46 293.72,144.72 296.98,149.87 300.24,140.08 303.51,143.26 306.77,147.17 310.03,144.36 313.30,140.69 316.56,146.81 319.82,141.91 323.09,135.21 326.35,131.09 329.62,139.47 332.88,144.24 336.14,144.97 339.41,147.30 342.67,135.21 345.93,124.81 349.20,127.82 352.46,132.30 355.72,134.36 358.99,134.73 362.25,137.40 365.51,142.65 368.78,142.65 372.04,143.38 375.31,144.36 378.57,139.11 381.83,135.82 385.10,140.69 388.36,141.18 391.62,138.26 394.89,134.61 398.15,133.76 401.41,140.45 404.68,138.50 407.94,132.30 411.21,135.82 414.47,134.49 417.73,130.73 421.00,135.21 424.26,134.61 427.52,136.31 430.79,139.72 434.05,144.36 437.31,143.13 440.58,145.21 443.84,144.85 447.10,141.91 450.37,137.52 453.63,145.70 456.90,149.01 460.16,145.21 463.42,150.00 466.69,151.72 469.95,151.84 473.21,140.45 476.48,144.48 479.74,139.35 483.00,138.26 486.27,141.06 489.53,138.50 492.79,138.26 496.06,143.13 499.32,148.28 502.59,146.56 505.85,146.81 509.11,148.03 512.38,152.95 515.64,149.38 518.90,151.59 522.17,151.96 525.43,148.15 528.69,149.26 531.96,154.18 535.22,151.47 538.49,156.52 541.75,157.88 545.01,152.95 548.28,151.72 551.54,152.46 554.80,148.28 558.07,154.18 561.33,161.22 564.59,162.09 567.86,165.82 571.12,168.93 574.38,175.17 577.65,177.05 580.91,174.05 584.18,166.93 587.44,168.93 590.70,162.21 593.97,173.05 597.23,169.92 600.49,175.30 603.76,181.83 607.02,179.31 610.28,172.92 613.55,179.44 616.81,177.30 620.08,170.92 623.34,170.17 626.60,173.80 629.87,172.17 633.13,175.30 636.39,178.06 639.66,170.17 642.92,176.05 646.18,179.56 649.45,174.92 652.71,176.18 655.97,177.55 659.24,172.80 662.50,170.80 665.77,177.81 669.03,186.36 672.29,187.88 675.56,190.41 678.82,186.62 682.08,178.93 685.35,183.46 688.61,191.04 691.87,188.01 695.14,184.85 698.40,175.30 701.67,179.81 704.93,167.81 708.19,159.37 711.46,150.73 714.72,168.06 717.98,158.13 721.25,163.46 724.51,175.55 727.77,171.55 731.04,182.83 734.30,179.19 737.56,179.81 740.83,177.81 744.09,183.72 747.36,186.62 750.62,178.43 753.88,185.61 757.15,185.35 760.41,176.30 763.67,179.44 766.94,183.09 770.20,187.00 773.46,185.61 776.73,186.62 779.99,201.99 783.26,199.56 786.52,204.67 789.78,204.03 793.05,204.42 796.31,188.89 799.57,181.57 802.84,194.22 806.10,198.03 809.36,202.24 812.63,197.40 815.89,200.33 819.15,202.50 822.42,213.41 825.68,225.97 828.95,213.54 832.21,222.20 835.47,226.23 838.74,226.23 842.00,231.45" /><polyline class="fit-one" points="62.00,94.17 65.26,94.61 68.53,95.05 71.79,95.48 75.05,95.92 78.32,96.36 81.58,96.79 84.85,97.23 88.11,97.67 91.37,98.10 94.64,98.54 97.90,98.98 101.16,99.41 104.43,99.85 107.69,100.29 110.95,100.72 114.22,101.16 117.48,101.60 120.74,102.03 124.01,102.47 127.27,102.91 130.54,103.34 133.80,103.78 137.06,104.21 140.33,104.65 143.59,105.09 146.85,105.52 150.12,105.96 153.38,106.40 156.64,106.83 159.91,107.27 163.17,107.71 166.44,108.14 169.70,108.58 172.96,109.02 176.23,109.45 179.49,109.89 182.75,110.33 186.02,110.76 189.28,111.20 192.54,111.64 195.81,112.07 199.07,112.51 202.33,112.95 205.60,113.38 208.86,113.82 212.13,114.25 215.39,114.69 218.65,115.13 221.92,115.56 225.18,116.00 228.44,116.44 231.71,116.87 234.97,117.31 238.23,117.75 241.50,118.18 244.76,118.62 248.03,119.06 251.29,119.49 254.55,119.93 257.82,120.37 261.08,120.80 264.34,121.24 267.61,121.68 270.87,122.11 274.13,122.55 277.40,122.99 280.66,123.42 283.92,123.86 287.19,124.29 290.45,124.73 293.72,125.17 296.98,125.60 300.24,126.04 303.51,126.48 306.77,126.91 310.03,127.35 313.30,127.79 316.56,128.22 319.82,128.66 323.09,129.10 326.35,129.53 329.62,129.97 332.88,130.41 336.14,130.84 339.41,131.28 342.67,131.72 345.93,132.15 349.20,132.59 352.46,133.02 355.72,133.46 358.99,133.90 362.25,134.33 365.51,134.77 368.78,135.21 372.04,135.64 375.31,136.08 378.57,136.52 381.83,136.95 385.10,137.39 388.36,137.83 391.62,138.26 394.89,138.70 398.15,139.14 401.41,139.57 404.68,140.01 407.94,140.45 411.21,140.88 414.47,141.32 417.73,141.76 421.00,142.19 424.26,142.63 427.52,143.06 430.79,143.50 434.05,143.94 437.31,144.37 440.58,144.81 443.84,145.25 447.10,145.68 450.37,146.12 453.63,146.56 456.90,146.99 460.16,147.43 463.42,147.87 466.69,148.30 469.95,148.74 473.21,149.18 476.48,149.61 479.74,150.05 483.00,150.49 486.27,150.92 489.53,151.36 492.79,151.80 496.06,152.23 499.32,152.67 502.59,153.10 505.85,153.54 509.11,153.98 512.38,154.41 515.64,154.85 518.90,155.29 522.17,155.72 525.43,156.16 528.69,156.60 531.96,157.03 535.22,157.47 538.49,157.91 541.75,158.34 545.01,158.78 548.28,159.22 551.54,159.65 554.80,160.09 558.07,160.53 561.33,160.96 564.59,161.40 567.86,161.84 571.12,162.27 574.38,162.71 577.65,163.14 580.91,163.58 584.18,164.02 587.44,164.45 590.70,164.89 593.97,165.33 597.23,165.76 600.49,166.20 603.76,166.64 607.02,167.07 610.28,167.51 613.55,167.95 616.81,168.38 620.08,168.82 623.34,169.26 626.60,169.69 629.87,170.13 633.13,170.57 636.39,171.00 639.66,171.44 642.92,171.88 646.18,172.31 649.45,172.75 652.71,173.18 655.97,173.62 659.24,174.06 662.50,174.49 665.77,174.93 669.03,175.37 672.29,175.80 675.56,176.24 678.82,176.68 682.08,177.11 685.35,177.55 688.61,177.99 691.87,178.42 695.14,178.86 698.40,179.30 701.67,179.73 704.93,180.17 708.19,180.61 711.46,181.04 714.72,181.48 717.98,181.92 721.25,182.35 724.51,182.79 727.77,183.22 731.04,183.66 734.30,184.10 737.56,184.53 740.83,184.97 744.09,185.41 747.36,185.84 750.62,186.28 753.88,186.72 757.15,187.15 760.41,187.59 763.67,188.03 766.94,188.46 770.20,188.90 773.46,189.34 776.73,189.77 779.99,190.21 783.26,190.65 786.52,191.08 789.78,191.52 793.05,191.96 796.31,192.39 799.57,192.83 802.84,193.26 806.10,196.39 809.36,199.52 812.63,202.65 815.89,205.77 819.15,208.90 822.42,212.03 825.68,215.15 828.95,218.28 832.21,221.41 835.47,224.53 838.74,227.66 842.00,230.79" /><polyline class="fit-two" points="62.00,96.01 65.26,96.40 68.53,96.79 71.79,97.18 75.05,97.56 78.32,97.95 81.58,98.34 84.85,98.73 88.11,99.12 91.37,99.51 94.64,99.90 97.90,100.29 101.16,100.68 104.43,101.07 107.69,101.46 110.95,101.86 114.22,102.25 117.48,102.64 120.74,103.03 124.01,103.43 127.27,103.82 130.54,104.22 133.80,104.61 137.06,105.00 140.33,105.40 143.59,105.79 146.85,106.19 150.12,106.59 153.38,106.98 156.64,107.38 159.91,107.78 163.17,108.18 166.44,108.57 169.70,108.97 172.96,109.37 176.23,109.77 179.49,110.17 182.75,110.57 186.02,110.97 189.28,111.37 192.54,111.77 195.81,112.17 199.07,112.57 202.33,112.98 205.60,113.38 208.86,113.78 212.13,114.19 215.39,114.59 218.65,114.99 221.92,115.40 225.18,115.80 228.44,116.21 231.71,116.62 234.97,117.02 238.23,117.43 241.50,117.84 244.76,118.24 248.03,118.65 251.29,119.06 254.55,119.47 257.82,119.88 261.08,120.29 264.34,120.70 267.61,121.11 270.87,121.52 274.13,121.93 277.40,122.34 280.66,122.76 283.92,123.17 287.19,123.58 290.45,124.00 293.72,124.41 296.98,124.83 300.24,125.24 303.51,125.66 306.77,126.08 310.03,126.49 313.30,126.91 316.56,127.33 319.82,127.75 323.09,128.17 326.35,128.58 329.62,129.00 332.88,129.42 336.14,129.85 339.41,130.27 342.67,130.69 345.93,131.11 349.20,131.54 352.46,131.96 355.72,132.38 358.99,132.81 362.25,133.23 365.51,133.66 368.78,134.09 372.04,134.51 375.31,134.94 378.57,135.37 381.83,135.80 385.10,136.23 388.36,136.66 391.62,137.09 394.89,137.52 398.15,137.95 401.41,138.38 404.68,138.82 407.94,139.25 411.21,139.68 414.47,140.12 417.73,140.55 421.00,140.99 424.26,141.43 427.52,141.86 430.79,142.30 434.05,142.74 437.31,143.18 440.58,143.62 443.84,144.06 447.10,144.50 450.37,144.95 453.63,145.39 456.90,145.83 460.16,146.28 463.42,146.72 466.69,147.17 469.95,147.61 473.21,148.06 476.48,148.51 479.74,148.96 483.00,149.41 486.27,149.86 489.53,150.31 492.79,150.76 496.06,151.22 499.32,151.67 502.59,152.12 505.85,152.58 509.11,153.04 512.38,153.49 515.64,153.95 518.90,154.41 522.17,154.87 525.43,155.33 528.69,155.79 531.96,156.25 535.22,156.72 538.49,157.18 541.75,157.65 545.01,158.11 548.28,158.58 551.54,159.05 554.80,159.52 558.07,159.99 561.33,160.46 564.59,160.93 567.86,161.40 571.12,161.88 574.38,162.35 577.65,162.83 580.91,163.31 584.18,163.79 587.44,164.27 590.70,164.75 593.97,165.23 597.23,165.71 600.49,166.20 603.76,166.68 607.02,167.17 610.28,167.66 613.55,168.15 616.81,168.64 620.08,169.13 623.34,169.63 626.60,170.12 629.87,170.62 633.13,171.12 636.39,171.62 639.66,172.12 642.92,172.62 646.18,173.12 649.45,173.63 652.71,174.14 655.97,174.64 659.24,175.15 662.50,175.67 665.77,176.18 669.03,176.70 672.29,177.21 675.56,177.73 678.82,178.25 682.08,178.78 685.35,179.30 688.61,179.83 691.87,180.36 695.14,180.89 698.40,181.42 701.67,181.95 704.93,182.49 708.19,183.03 711.46,183.57 714.72,184.12 717.98,184.67 721.25,185.22 724.51,185.77 727.77,186.32 731.04,186.88 734.30,187.44 737.56,188.00 740.83,188.57 744.09,189.14 747.36,189.71 750.62,190.29 753.88,190.87 757.15,191.45 760.41,192.04 763.67,192.63 766.94,193.23 770.20,193.83 773.46,194.43 776.73,195.04 779.99,195.66 783.26,196.28 786.52,196.90 789.78,197.53 793.05,198.17 796.31,198.81 799.57,199.46 802.84,200.12 806.10,200.78 809.36,201.46 812.63,202.14 815.89,202.83 819.15,203.54 822.42,204.25 825.68,204.98 828.95,205.73 832.21,206.49 835.47,207.27 838.74,208.07 842.00,208.91" /><polyline class="fit-three" points="62.00,92.53 65.26,92.99 68.53,93.44 71.79,93.90 75.05,94.36 78.32,94.82 81.58,95.27 84.85,95.73 88.11,96.19 91.37,96.65 94.64,97.10 97.90,97.56 101.16,98.02 104.43,98.48 107.69,98.93 110.95,99.39 114.22,99.85 117.48,100.31 120.74,100.76 124.01,101.22 127.27,101.68 130.54,102.14 133.80,102.60 137.06,103.05 140.33,103.51 143.59,103.97 146.85,104.43 150.12,104.88 153.38,105.34 156.64,105.80 159.91,106.26 163.17,106.71 166.44,107.17 169.70,107.63 172.96,108.09 176.23,108.54 179.49,109.00 182.75,109.46 186.02,109.92 189.28,110.37 192.54,110.83 195.81,111.29 199.07,111.75 202.33,112.21 205.60,112.66 208.86,113.12 212.13,113.58 215.39,114.04 218.65,114.49 221.92,114.95 225.18,115.41 228.44,115.87 231.71,116.32 234.97,116.78 238.23,117.24 241.50,117.70 244.76,118.15 248.03,118.61 251.29,119.07 254.55,119.53 257.82,119.98 261.08,120.44 264.34,120.90 267.61,121.36 270.87,121.82 274.13,122.27 277.40,122.73 280.66,123.19 283.92,123.65 287.19,124.10 290.45,124.56 293.72,125.02 296.98,125.48 300.24,125.93 303.51,126.39 306.77,126.85 310.03,127.31 313.30,127.76 316.56,128.22 319.82,128.68 323.09,129.14 326.35,129.59 329.62,130.05 332.88,130.51 336.14,130.97 339.41,131.43 342.67,131.88 345.93,132.34 349.20,132.80 352.46,133.26 355.72,133.71 358.99,134.17 362.25,134.63 365.51,135.09 368.78,135.54 372.04,136.00 375.31,136.46 378.57,136.92 381.83,137.37 385.10,137.83 388.36,138.29 391.62,138.75 394.89,139.20 398.15,139.66 401.41,140.12 404.68,140.58 407.94,141.04 411.21,141.49 414.47,141.95 417.73,142.41 421.00,142.87 424.26,143.32 427.52,143.78 430.79,144.24 434.05,144.70 437.31,145.15 440.58,145.61 443.84,146.07 447.10,146.53 450.37,146.98 453.63,147.44 456.90,147.90 460.16,148.36 463.42,148.81 466.69,149.27 469.95,149.73 473.21,150.19 476.48,150.65 479.74,151.10 483.00,151.56 486.27,152.02 489.53,152.48 492.79,152.93 496.06,153.39 499.32,153.85 502.59,154.31 505.85,154.76 509.11,155.22 512.38,155.68 515.64,156.14 518.90,156.59 522.17,157.05 525.43,157.51 528.69,157.97 531.96,158.42 535.22,158.88 538.49,159.34 541.75,159.80 545.01,160.26 548.28,160.71 551.54,161.17 554.80,161.63 558.07,162.09 561.33,162.54 564.59,163.00 567.86,163.46 571.12,163.92 574.38,164.37 577.65,164.83 580.91,165.29 584.18,165.75 587.44,166.20 590.70,166.66 593.97,167.12 597.23,167.58 600.49,168.03 603.76,168.49 607.02,168.95 610.28,169.41 613.55,169.87 616.81,170.32 620.08,170.78 623.34,171.24 626.60,171.70 629.87,172.15 633.13,172.61 636.39,173.07 639.66,173.53 642.92,173.98 646.18,174.44 649.45,174.90 652.71,175.36 655.97,175.81 659.24,176.27 662.50,176.73 665.77,177.19 669.03,177.64 672.29,178.10 675.56,178.56 678.82,179.02 682.08,179.48 685.35,179.93 688.61,180.39 691.87,180.85 695.14,181.31 698.40,181.76 701.67,182.22 704.93,182.68 708.19,183.14 711.46,183.59 714.72,184.05 717.98,184.51 721.25,184.97 724.51,185.42 727.77,185.88 731.04,186.34 734.30,186.80 737.56,187.25 740.83,187.71 744.09,188.17 747.36,188.63 750.62,189.09 753.88,189.54 757.15,190.00 760.41,190.46 763.67,190.92 766.94,191.37 770.20,191.83 773.46,192.29 776.73,192.75 779.99,193.20 783.26,193.66 786.52,194.12 789.78,194.58 793.05,195.03 796.31,195.49 799.57,195.95 802.84,196.41 806.10,196.86 809.36,197.32 812.63,197.78 815.89,198.24 819.15,198.70 822.42,199.15 825.68,199.61 828.95,200.07 832.21,200.53 835.47,200.98 838.74,201.44 842.00,201.90" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">09:31</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">15:00</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">550 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-828 bp</text>
+</svg>
+</div>
+    <figcaption>全日拟合回答“整张图看起来像什么”，会把早盘抬头和午后下落一起纳入。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh600584_20260710_1m-decline_segment-title model-sh600584_20260710_1m-decline_segment-desc">
+  <title id="model-sh600584_20260710_1m-decline_segment-title">2026-07-10 长电科技 客观下降段公式拟合</title>
+  <desc id="model-sh600584_20260710_1m-decline_segment-desc">客观下降段实际对数基点路径与样本内前三种公式拟合。实线：实际；单变化点分段 Δ0.0；有限时刻幂律 Δ30.9；线性 Δ33.0</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">单变化点分段 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">有限时刻幂律 Δ30.9</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">线性 Δ33.0</text>
+  <line class="chart-grid" x1="62" y1="76.60" x2="842" y2="76.60" />
+  <polyline class="fit-actual" points="62.00,76.60 65.59,76.94 69.19,80.84 72.78,83.95 76.38,90.41 79.97,92.26 83.57,89.14 87.16,98.42 90.76,102.85 94.35,116.72 97.94,105.08 101.54,108.12 105.13,122.63 108.73,108.71 112.32,114.71 115.92,118.01 119.51,118.84 123.11,113.53 126.70,127.74 130.29,127.63 133.89,121.57 137.48,123.58 141.08,112.71 144.67,114.12 148.27,105.54 151.86,109.65 155.46,106.25 159.05,107.42 162.65,121.57 166.24,112.47 169.83,114.47 173.43,115.77 177.02,117.07 180.62,112.59 184.21,112.24 187.81,110.35 191.40,109.06 195.00,115.06 198.59,120.62 202.18,123.94 205.78,137.91 209.37,142.00 212.97,133.83 216.56,145.13 220.16,145.61 223.75,146.58 227.35,143.44 230.94,137.31 234.53,153.48 238.13,145.85 241.72,150.94 245.32,141.27 248.91,144.41 252.51,148.27 256.10,145.49 259.70,141.87 263.29,147.91 266.88,143.08 270.48,136.47 274.07,132.40 277.67,140.67 281.26,145.37 284.86,146.10 288.45,148.39 292.05,136.47 295.64,126.20 299.24,129.17 302.83,133.59 306.42,135.63 310.02,135.99 313.61,138.63 317.21,143.80 320.80,143.80 324.40,144.53 327.99,145.49 331.59,140.31 335.18,137.07 338.77,141.87 342.37,142.36 345.96,139.47 349.56,135.87 353.15,135.03 356.75,141.63 360.34,139.71 363.94,133.59 367.53,137.07 371.12,135.75 374.72,132.04 378.31,136.47 381.91,135.87 385.50,137.55 389.10,140.91 392.69,145.49 396.29,144.28 399.88,146.34 403.47,145.97 407.07,143.08 410.66,138.75 414.26,146.82 417.85,150.09 421.45,146.34 425.04,151.06 428.64,152.76 432.23,152.88 435.82,141.63 439.42,145.61 443.01,140.55 446.61,139.47 450.20,142.24 453.80,139.71 457.39,139.47 460.99,144.28 464.58,149.36 468.18,147.67 471.77,147.91 475.36,149.12 478.96,153.97 482.55,150.45 486.15,152.63 489.74,153.00 493.34,149.24 496.93,150.33 500.53,155.19 504.12,152.51 507.71,157.50 511.31,158.84 514.90,153.97 518.50,152.76 522.09,153.48 525.69,149.36 529.28,155.19 532.88,162.14 536.47,162.99 540.06,166.67 543.66,169.74 547.25,175.91 550.85,177.76 554.44,174.79 558.04,167.78 561.63,169.74 565.23,163.12 568.82,173.81 572.41,170.73 576.01,176.03 579.60,182.47 583.20,179.99 586.79,173.68 590.39,180.11 593.98,178.01 597.58,171.71 601.17,170.97 604.76,174.55 608.36,172.94 611.95,176.03 615.55,178.75 619.14,170.97 622.74,176.77 626.33,180.24 629.93,175.66 633.52,176.90 637.12,178.26 640.71,173.56 644.30,171.59 647.90,178.50 651.49,186.95 655.09,188.45 658.68,190.95 662.28,187.20 665.87,179.62 669.47,184.09 673.06,191.57 676.65,188.57 680.25,185.46 683.84,176.03 687.44,180.49 691.03,168.64 694.63,160.30 698.22,151.78 701.82,168.88 705.41,159.08 709.00,164.34 712.60,176.28 716.19,172.33 719.79,183.47 723.38,179.87 726.98,180.49 730.57,178.50 734.17,184.34 737.76,187.20 741.35,179.12 744.95,186.20 748.54,185.95 752.14,177.02 755.73,180.11 759.33,183.72 762.92,187.57 766.52,186.20 770.11,187.20 773.71,202.37 777.30,199.98 780.89,205.02 784.49,204.39 788.08,204.77 791.68,189.45 795.27,182.22 798.87,194.70 802.46,198.47 806.06,202.62 809.65,197.84 813.24,200.73 816.84,202.88 820.43,213.65 824.03,226.04 827.62,213.77 831.22,222.32 834.81,226.30 838.41,226.30 842.00,231.45" /><polyline class="fit-one" points="62.00,74.55 65.59,78.02 69.19,81.49 72.78,84.96 76.38,88.43 79.97,91.90 83.57,95.38 87.16,98.85 90.76,102.32 94.35,105.79 97.94,109.26 101.54,112.73 105.13,113.15 108.73,113.58 112.32,114.01 115.92,114.43 119.51,114.86 123.11,115.29 126.70,115.71 130.29,116.14 133.89,116.56 137.48,116.99 141.08,117.42 144.67,117.84 148.27,118.27 151.86,118.70 155.46,119.12 159.05,119.55 162.65,119.97 166.24,120.40 169.83,120.83 173.43,121.25 177.02,121.68 180.62,122.11 184.21,122.53 187.81,122.96 191.40,123.39 195.00,123.81 198.59,124.24 202.18,124.66 205.78,125.09 209.37,125.52 212.97,125.94 216.56,126.37 220.16,126.80 223.75,127.22 227.35,127.65 230.94,128.07 234.53,128.50 238.13,128.93 241.72,129.35 245.32,129.78 248.91,130.21 252.51,130.63 256.10,131.06 259.70,131.48 263.29,131.91 266.88,132.34 270.48,132.76 274.07,133.19 277.67,133.62 281.26,134.04 284.86,134.47 288.45,134.89 292.05,135.32 295.64,135.75 299.24,136.17 302.83,136.60 306.42,137.03 310.02,137.45 313.61,137.88 317.21,138.30 320.80,138.73 324.40,139.16 327.99,139.58 331.59,140.01 335.18,140.44 338.77,140.86 342.37,141.29 345.96,141.71 349.56,142.14 353.15,142.57 356.75,142.99 360.34,143.42 363.94,143.85 367.53,144.27 371.12,144.70 374.72,145.12 378.31,145.55 381.91,145.98 385.50,146.40 389.10,146.83 392.69,147.26 396.29,147.68 399.88,148.11 403.47,148.54 407.07,148.96 410.66,149.39 414.26,149.81 417.85,150.24 421.45,150.67 425.04,151.09 428.64,151.52 432.23,151.95 435.82,152.37 439.42,152.80 443.01,153.22 446.61,153.65 450.20,154.08 453.80,154.50 457.39,154.93 460.99,155.36 464.58,155.78 468.18,156.21 471.77,156.63 475.36,157.06 478.96,157.49 482.55,157.91 486.15,158.34 489.74,158.77 493.34,159.19 496.93,159.62 500.53,160.04 504.12,160.47 507.71,160.90 511.31,161.32 514.90,161.75 518.50,162.18 522.09,162.60 525.69,163.03 529.28,163.45 532.88,163.88 536.47,164.31 540.06,164.73 543.66,165.16 547.25,165.59 550.85,166.01 554.44,166.44 558.04,166.86 561.63,167.29 565.23,167.72 568.82,168.14 572.41,168.57 576.01,169.00 579.60,169.42 583.20,169.85 586.79,170.27 590.39,170.70 593.98,171.13 597.58,171.55 601.17,171.98 604.76,172.41 608.36,172.83 611.95,173.26 615.55,173.69 619.14,174.11 622.74,174.54 626.33,174.96 629.93,175.39 633.52,175.82 637.12,176.24 640.71,176.67 644.30,177.10 647.90,177.52 651.49,177.95 655.09,178.37 658.68,178.80 662.28,179.23 665.87,179.65 669.47,180.08 673.06,180.51 676.65,180.93 680.25,181.36 683.84,181.78 687.44,182.21 691.03,182.64 694.63,183.06 698.22,183.49 701.82,183.92 705.41,184.34 709.00,184.77 712.60,185.19 716.19,185.62 719.79,186.05 723.38,186.47 726.98,186.90 730.57,187.33 734.17,187.75 737.76,188.18 741.35,188.60 744.95,189.03 748.54,189.46 752.14,189.88 755.73,190.31 759.33,190.74 762.92,191.16 766.52,191.59 770.11,192.01 773.71,192.44 777.30,192.87 780.89,193.29 784.49,193.72 788.08,194.15 791.68,194.57 795.27,195.00 798.87,195.42 802.46,195.85 806.06,196.28 809.65,196.70 813.24,197.13 816.84,197.56 820.43,197.98 824.03,198.41 827.62,198.84 831.22,199.26 834.81,199.69 838.41,200.11 842.00,200.54" /><polyline class="fit-two" points="62.00,107.54 65.59,107.92 69.19,108.30 72.78,108.68 76.38,109.07 79.97,109.45 83.57,109.83 87.16,110.22 90.76,110.60 94.35,110.99 97.94,111.37 101.54,111.76 105.13,112.14 108.73,112.53 112.32,112.92 115.92,113.30 119.51,113.69 123.11,114.08 126.70,114.47 130.29,114.85 133.89,115.24 137.48,115.63 141.08,116.02 144.67,116.41 148.27,116.80 151.86,117.19 155.46,117.58 159.05,117.98 162.65,118.37 166.24,118.76 169.83,119.15 173.43,119.55 177.02,119.94 180.62,120.33 184.21,120.73 187.81,121.12 191.40,121.52 195.00,121.91 198.59,122.31 202.18,122.71 205.78,123.10 209.37,123.50 212.97,123.90 216.56,124.30 220.16,124.69 223.75,125.09 227.35,125.49 230.94,125.89 234.53,126.29 238.13,126.70 241.72,127.10 245.32,127.50 248.91,127.90 252.51,128.30 256.10,128.71 259.70,129.11 263.29,129.52 266.88,129.92 270.48,130.33 274.07,130.73 277.67,131.14 281.26,131.54 284.86,131.95 288.45,132.36 292.05,132.77 295.64,133.18 299.24,133.59 302.83,134.00 306.42,134.41 310.02,134.82 313.61,135.23 317.21,135.64 320.80,136.05 324.40,136.47 327.99,136.88 331.59,137.30 335.18,137.71 338.77,138.13 342.37,138.54 345.96,138.96 349.56,139.38 353.15,139.79 356.75,140.21 360.34,140.63 363.94,141.05 367.53,141.47 371.12,141.89 374.72,142.31 378.31,142.73 381.91,143.16 385.50,143.58 389.10,144.00 392.69,144.43 396.29,144.85 399.88,145.28 403.47,145.71 407.07,146.13 410.66,146.56 414.26,146.99 417.85,147.42 421.45,147.85 425.04,148.28 428.64,148.71 432.23,149.14 435.82,149.58 439.42,150.01 443.01,150.45 446.61,150.88 450.20,151.32 453.80,151.75 457.39,152.19 460.99,152.63 464.58,153.07 468.18,153.51 471.77,153.95 475.36,154.39 478.96,154.83 482.55,155.28 486.15,155.72 489.74,156.16 493.34,156.61 496.93,157.06 500.53,157.50 504.12,157.95 507.71,158.40 511.31,158.85 514.90,159.30 518.50,159.76 522.09,160.21 525.69,160.66 529.28,161.12 532.88,161.57 536.47,162.03 540.06,162.49 543.66,162.95 547.25,163.41 550.85,163.87 554.44,164.33 558.04,164.80 561.63,165.26 565.23,165.73 568.82,166.19 572.41,166.66 576.01,167.13 579.60,167.60 583.20,168.07 586.79,168.55 590.39,169.02 593.98,169.49 597.58,169.97 601.17,170.45 604.76,170.93 608.36,171.41 611.95,171.89 615.55,172.37 619.14,172.86 622.74,173.35 626.33,173.83 629.93,174.32 633.52,174.81 637.12,175.31 640.71,175.80 644.30,176.30 647.90,176.79 651.49,177.29 655.09,177.79 658.68,178.30 662.28,178.80 665.87,179.31 669.47,179.82 673.06,180.33 676.65,180.84 680.25,181.35 683.84,181.87 687.44,182.39 691.03,182.91 694.63,183.43 698.22,183.96 701.82,184.48 705.41,185.01 709.00,185.55 712.60,186.08 716.19,186.62 719.79,187.16 723.38,187.70 726.98,188.25 730.57,188.80 734.17,189.35 737.76,189.91 741.35,190.47 744.95,191.03 748.54,191.59 752.14,192.16 755.73,192.74 759.33,193.32 762.92,193.90 766.52,194.48 770.11,195.08 773.71,195.67 777.30,196.27 780.89,196.88 784.49,197.49 788.08,198.11 791.68,198.73 795.27,199.37 798.87,200.00 802.46,200.65 806.06,201.31 809.65,201.97 813.24,202.65 816.84,203.33 820.43,204.03 824.03,204.74 827.62,205.47 831.22,206.21 834.81,206.98 838.41,207.77 842.00,208.59" /><polyline class="fit-three" points="62.00,104.46 65.59,104.91 69.19,105.36 72.78,105.81 76.38,106.27 79.97,106.72 83.57,107.17 87.16,107.62 90.76,108.07 94.35,108.52 97.94,108.97 101.54,109.42 105.13,109.87 108.73,110.32 112.32,110.77 115.92,111.22 119.51,111.67 123.11,112.12 126.70,112.58 130.29,113.03 133.89,113.48 137.48,113.93 141.08,114.38 144.67,114.83 148.27,115.28 151.86,115.73 155.46,116.18 159.05,116.63 162.65,117.08 166.24,117.53 169.83,117.98 173.43,118.44 177.02,118.89 180.62,119.34 184.21,119.79 187.81,120.24 191.40,120.69 195.00,121.14 198.59,121.59 202.18,122.04 205.78,122.49 209.37,122.94 212.97,123.39 216.56,123.84 220.16,124.29 223.75,124.75 227.35,125.20 230.94,125.65 234.53,126.10 238.13,126.55 241.72,127.00 245.32,127.45 248.91,127.90 252.51,128.35 256.10,128.80 259.70,129.25 263.29,129.70 266.88,130.15 270.48,130.61 274.07,131.06 277.67,131.51 281.26,131.96 284.86,132.41 288.45,132.86 292.05,133.31 295.64,133.76 299.24,134.21 302.83,134.66 306.42,135.11 310.02,135.56 313.61,136.01 317.21,136.47 320.80,136.92 324.40,137.37 327.99,137.82 331.59,138.27 335.18,138.72 338.77,139.17 342.37,139.62 345.96,140.07 349.56,140.52 353.15,140.97 356.75,141.42 360.34,141.87 363.94,142.32 367.53,142.78 371.12,143.23 374.72,143.68 378.31,144.13 381.91,144.58 385.50,145.03 389.10,145.48 392.69,145.93 396.29,146.38 399.88,146.83 403.47,147.28 407.07,147.73 410.66,148.18 414.26,148.64 417.85,149.09 421.45,149.54 425.04,149.99 428.64,150.44 432.23,150.89 435.82,151.34 439.42,151.79 443.01,152.24 446.61,152.69 450.20,153.14 453.80,153.59 457.39,154.04 460.99,154.49 464.58,154.95 468.18,155.40 471.77,155.85 475.36,156.30 478.96,156.75 482.55,157.20 486.15,157.65 489.74,158.10 493.34,158.55 496.93,159.00 500.53,159.45 504.12,159.90 507.71,160.35 511.31,160.81 514.90,161.26 518.50,161.71 522.09,162.16 525.69,162.61 529.28,163.06 532.88,163.51 536.47,163.96 540.06,164.41 543.66,164.86 547.25,165.31 550.85,165.76 554.44,166.21 558.04,166.67 561.63,167.12 565.23,167.57 568.82,168.02 572.41,168.47 576.01,168.92 579.60,169.37 583.20,169.82 586.79,170.27 590.39,170.72 593.98,171.17 597.58,171.62 601.17,172.07 604.76,172.52 608.36,172.98 611.95,173.43 615.55,173.88 619.14,174.33 622.74,174.78 626.33,175.23 629.93,175.68 633.52,176.13 637.12,176.58 640.71,177.03 644.30,177.48 647.90,177.93 651.49,178.38 655.09,178.84 658.68,179.29 662.28,179.74 665.87,180.19 669.47,180.64 673.06,181.09 676.65,181.54 680.25,181.99 683.84,182.44 687.44,182.89 691.03,183.34 694.63,183.79 698.22,184.24 701.82,184.69 705.41,185.15 709.00,185.60 712.60,186.05 716.19,186.50 719.79,186.95 723.38,187.40 726.98,187.85 730.57,188.30 734.17,188.75 737.76,189.20 741.35,189.65 744.95,190.10 748.54,190.55 752.14,191.01 755.73,191.46 759.33,191.91 762.92,192.36 766.52,192.81 770.11,193.26 773.71,193.71 777.30,194.16 780.89,194.61 784.49,195.06 788.08,195.51 791.68,195.96 795.27,196.41 798.87,196.87 802.46,197.32 806.06,197.77 809.65,198.22 813.24,198.67 816.84,199.12 820.43,199.57 824.03,200.02 827.62,200.47 831.22,200.92 834.81,201.37 838.41,201.82 842.00,202.27" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">09:53</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">15:00</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">112 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-1284 bp</text>
+</svg>
+</div>
+    <figcaption>下降段拟合固定为客观收盘峰值到其后收盘低点，回答“下跌过程如何换速”；两种排名都只描述收盘后形状。</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>下降段公式</th><th>ΔAICc</th><th>RMSE</th><th>残差一阶相关</th><th>参数触边</th></tr></thead>
+      <tbody><tr><td>单变化点分段</td><td>0.00</td><td>76.07 bp</td><td>0.798</td><td>否</td></tr><tr><td>有限时刻幂律</td><td>30.89</td><td>81.66 bp</td><td>0.813</td><td>是</td></tr><tr><td>线性</td><td>33.00</td><td>82.84 bp</td><td>0.815</td><td>否</td></tr><tr><td>指数</td><td>34.60</td><td>82.75 bp</td><td>0.815</td><td>是</td></tr><tr><td>临界对数</td><td>37.23</td><td>83.26 bp</td><td>0.817</td><td>是</td></tr><tr><td>普通对数</td><td>37.27</td><td>83.26 bp</td><td>0.817</td><td>是</td></tr><tr><td>Gompertz</td><td>42.81</td><td>83.92 bp</td><td>0.818</td><td>是</td></tr><tr><td>平移椭圆弧</td><td>73.56</td><td>90.06 bp</td><td>0.837</td><td>是</td></tr><tr><td>四分之一椭圆代理</td><td>109.38</td><td>98.24 bp</td><td>0.857</td><td>是</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="case-study" aria-labelledby="case-sh000001_20260521_1m">
+  <div class="case-heading">
+    <div>
+      <p class="eyebrow">2026-05-21 · 1 MIN</p>
+      <h3 id="case-sh000001_20260521_1m">上证指数</h3>
+    </div>
+    <p class="case-result">全天 -2.04% · 峰到谷 -2.95% · 全日最优 平移椭圆弧 · 下降段最优 单变化点分段</p>
+  </div>
+  <figure>
+    <div class="chart-wrap">
+<svg class="price-chart" viewBox="0 0 860 280" role="img" aria-labelledby="path-sh000001_20260521_1m-title path-sh000001_20260521_1m-desc">
+  <title id="path-sh000001_20260521_1m-title">2026-05-21 上证指数 一分钟收盘路径</title>
+  <desc id="path-sh000001_20260521_1m-desc">连续交易分钟横轴。四段阴影依次表示开盘正式窗口、早盘前哨观察、早盘正式窗口和尾盘正式窗口；标记客观收盘峰值和日内最低。</desc>
+  <rect class="window-a" x="60.00" y="22" width="13.09" height="220" /><rect class="window-scout" x="105.81" y="22" width="16.36" height="220" /><rect class="window-b" x="122.17" y="22" width="65.44" height="220" /><rect class="window-c" x="743.84" y="22" width="81.80" height="220" />
+  <line class="chart-grid" x1="60" y1="22.00" x2="842" y2="22.00" /><text class="axis-label" x="52" y="26.00" text-anchor="end">4208.11</text><line class="chart-grid" x1="60" y1="132.00" x2="842" y2="132.00" /><text class="axis-label" x="52" y="136.00" text-anchor="end">4136.20</text><line class="chart-grid" x1="60" y1="242.00" x2="842" y2="242.00" /><text class="axis-label" x="52" y="246.00" text-anchor="end">4064.30</text>
+  <polyline class="price-line" points="60.00,68.04 63.27,64.28 66.54,60.56 69.82,63.24 73.09,64.60 76.36,69.65 79.63,73.29 82.90,69.24 86.18,71.52 89.45,66.64 92.72,61.80 95.99,60.24 99.26,69.56 102.54,68.87 105.81,67.72 109.08,61.04 112.35,59.60 115.62,56.74 118.90,52.87 122.17,54.87 125.44,56.28 128.71,50.96 131.98,50.24 135.26,56.39 138.53,55.12 141.80,54.63 145.07,52.70 148.34,49.93 151.62,46.37 154.89,42.92 158.16,39.47 161.43,38.08 164.70,42.65 167.97,42.70 171.25,43.54 174.52,39.50 177.79,38.40 181.06,37.23 184.33,41.30 187.61,42.21 190.88,38.34 194.15,40.35 197.42,38.12 200.69,37.17 203.97,42.92 207.24,42.91 210.51,45.42 213.78,42.39 217.05,43.70 220.33,40.14 223.60,40.46 226.87,41.78 230.14,45.20 233.41,48.19 236.69,44.99 239.96,43.40 243.23,41.85 246.50,44.42 249.77,45.30 253.05,43.43 256.32,44.93 259.59,44.16 262.86,44.99 266.13,47.41 269.41,51.12 272.68,56.82 275.95,51.02 279.22,46.90 282.49,53.34 285.77,59.97 289.04,61.24 292.31,55.93 295.58,54.38 298.85,56.95 302.13,64.42 305.40,61.91 308.67,66.03 311.94,61.85 315.21,66.97 318.49,64.80 321.76,63.85 325.03,59.65 328.30,66.33 331.57,69.45 334.85,72.39 338.12,72.53 341.39,71.50 344.66,68.11 347.93,68.23 351.21,69.22 354.48,68.81 357.75,65.34 361.02,65.23 364.29,64.08 367.56,62.12 370.84,63.96 374.11,68.89 377.38,68.49 380.65,66.87 383.92,64.54 387.20,70.87 390.47,70.46 393.74,68.98 397.01,71.92 400.28,73.23 403.56,68.21 406.83,71.40 410.10,79.27 413.37,80.56 416.64,80.22 419.92,78.05 423.19,74.09 426.46,75.77 429.73,75.40 433.00,74.68 436.28,84.37 439.55,90.87 442.82,90.84 446.09,92.58 449.36,91.97 452.64,87.81 455.91,82.65 459.18,83.70 462.45,85.38 465.72,83.86 469.00,82.35 472.27,83.33 475.54,86.20 478.81,91.85 482.08,96.64 485.36,99.28 488.63,99.64 491.90,97.66 495.17,93.38 498.44,95.69 501.72,93.70 504.99,90.70 508.26,87.44 511.53,89.00 514.80,86.23 518.08,84.77 521.35,86.91 524.62,89.06 527.89,90.85 531.16,87.52 534.44,89.94 537.71,90.87 540.98,89.17 544.25,86.07 547.52,90.23 550.79,97.30 554.07,95.54 557.34,96.39 560.61,99.70 563.88,104.36 567.15,103.06 570.43,105.79 573.70,100.72 576.97,102.36 580.24,101.82 583.51,105.83 586.79,102.31 590.06,97.78 593.33,98.98 596.60,97.57 599.87,98.76 603.15,101.50 606.42,103.08 609.69,109.53 612.96,113.62 616.23,111.46 619.51,112.96 622.78,116.45 626.05,114.93 629.32,114.55 632.59,115.24 635.87,117.50 639.14,120.63 642.41,120.23 645.68,122.80 648.95,122.23 652.23,126.73 655.50,129.68 658.77,128.18 662.04,131.32 665.31,125.89 668.59,128.32 671.86,132.13 675.13,130.69 678.40,136.63 681.67,139.06 684.95,139.79 688.22,145.00 691.49,150.63 694.76,142.12 698.03,140.30 701.31,142.73 704.58,143.80 707.85,153.56 711.12,151.96 714.39,155.40 717.67,159.82 720.94,160.88 724.21,162.51 727.48,166.64 730.75,169.69 734.03,167.58 737.30,174.75 740.57,180.64 743.84,182.40 747.11,182.26 750.38,189.39 753.66,195.31 756.93,196.89 760.20,203.05 763.47,206.79 766.74,202.03 770.02,181.82 773.29,172.44 776.56,185.25 779.83,182.13 783.10,192.99 786.38,200.51 789.65,204.43 792.92,202.30 796.19,200.48 799.46,207.48 802.74,201.92 806.01,204.09 809.28,211.64 812.55,217.57 815.82,220.88 819.10,226.66 822.37,225.40 825.64,224.61 828.91,222.12 832.18,220.07 835.46,220.20 838.73,220.20 842.00,222.15" />
+  <circle class="peak-mark" cx="200.69" cy="37.17" r="4" />
+  <text class="point-label" x="200.69" y="28.17" text-anchor="middle">峰 10:14</text>
+  <circle class="low-mark" cx="819.10" cy="226.83" r="4" />
+  <text class="point-label" x="819.10" y="238.00" text-anchor="middle">低 14:53</text>
+  <text class="axis-label" x="60.00" y="268" text-anchor="middle">09:31</text><text class="axis-label" x="187.61" y="268" text-anchor="middle">10:10</text><text class="axis-label" x="743.84" y="268" text-anchor="middle">14:30</text><text class="axis-label" x="842.00" y="268" text-anchor="middle">15:00</text><text class="axis-label" x="451.00" y="268" text-anchor="middle">11:30 / 13:01</text>
+</svg>
+</div>
+    <figcaption>真实一分钟结束时点。浅红、浅蓝、浅绿是三段正式窗口；黄色是 09:45-09:50 前哨观察，不是新增买卖窗口。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh000001_20260521_1m-full_day-title model-sh000001_20260521_1m-full_day-desc">
+  <title id="model-sh000001_20260521_1m-full_day-title">2026-05-21 上证指数 全日公式拟合</title>
+  <desc id="model-sh000001_20260521_1m-full_day-desc">全日实际对数基点路径与样本内前三种公式拟合。实线：实际；平移椭圆弧 Δ0.0；四分之一椭圆代理 Δ36.3；指数 Δ36.7</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">平移椭圆弧 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">四分之一椭圆代理 Δ36.3</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">指数 Δ36.7</text>
+  <line class="chart-grid" x1="62" y1="98.57" x2="842" y2="98.57" />
+  <polyline class="fit-actual" points="62.00,98.57 65.26,95.64 68.53,92.74 71.79,94.83 75.05,95.89 78.32,99.83 81.58,102.67 84.85,99.50 88.11,101.28 91.37,97.47 94.64,93.71 97.90,92.49 101.16,99.75 104.43,99.22 107.69,98.32 110.95,93.11 114.22,91.99 117.48,89.76 120.74,86.75 124.01,88.31 127.27,89.41 130.54,85.26 133.80,84.70 137.06,89.49 140.33,88.50 143.59,88.12 146.85,86.62 150.12,84.46 153.38,81.69 156.64,79.02 159.91,76.33 163.17,75.25 166.44,78.80 169.70,78.84 172.96,79.49 176.23,76.36 179.49,75.50 182.75,74.60 186.02,77.76 189.28,78.46 192.54,75.45 195.81,77.02 199.07,75.29 202.33,74.55 205.60,79.02 208.86,79.01 212.13,80.96 215.39,78.60 218.65,79.62 221.92,76.86 225.18,77.11 228.44,78.13 231.71,80.79 234.97,83.11 238.23,80.62 241.50,79.39 244.76,78.19 248.03,80.18 251.29,80.86 254.55,79.41 257.82,80.58 261.08,79.98 264.34,80.62 267.61,82.50 270.87,85.39 274.13,89.82 277.40,85.31 280.66,82.11 283.92,87.12 287.19,92.28 290.45,93.27 293.72,89.13 296.98,87.93 300.24,89.93 303.51,95.75 306.77,93.79 310.03,97.00 313.30,93.74 316.56,97.74 319.82,96.04 323.09,95.30 326.35,92.03 329.62,97.24 332.88,99.67 336.14,101.96 339.41,102.07 342.67,101.27 345.93,98.62 349.20,98.72 352.46,99.49 355.72,99.17 358.99,96.46 362.25,96.38 365.51,95.48 368.78,93.96 372.04,95.39 375.31,99.23 378.57,98.92 381.83,97.65 385.10,95.84 388.36,100.78 391.62,100.46 394.89,99.30 398.15,101.59 401.41,102.62 404.68,98.70 407.94,101.19 411.21,107.34 414.47,108.34 417.73,108.08 421.00,106.38 424.26,103.29 427.52,104.60 430.79,104.31 434.05,103.75 437.31,111.32 440.58,116.41 443.84,116.38 447.10,117.75 450.37,117.27 453.63,114.01 456.90,109.98 460.16,110.79 463.42,112.11 466.69,110.93 469.95,109.74 473.21,110.51 476.48,112.76 479.74,117.17 483.00,120.92 486.27,123.00 489.53,123.27 492.79,121.73 496.06,118.37 499.32,120.18 502.59,118.62 505.85,116.27 509.11,113.72 512.38,114.95 515.64,112.78 518.90,111.63 522.17,113.31 525.43,114.99 528.69,116.39 531.96,113.78 535.22,115.68 538.49,116.41 541.75,115.08 545.01,112.65 548.28,115.90 551.54,121.44 554.80,120.06 558.07,120.73 561.33,123.32 564.59,126.98 567.86,125.96 571.12,128.10 574.38,124.12 577.65,125.41 580.91,124.99 584.18,128.13 587.44,125.37 590.70,121.82 593.97,122.76 597.23,121.65 600.49,122.59 603.76,124.74 607.02,125.97 610.28,131.04 613.55,134.24 616.81,132.55 620.08,133.73 623.34,136.47 626.60,135.28 629.87,134.98 633.13,135.52 636.39,137.30 639.66,139.75 642.92,139.44 646.18,141.46 649.45,141.02 652.71,144.55 655.97,146.88 659.24,145.70 662.50,148.17 665.77,143.89 669.03,145.81 672.29,148.81 675.56,147.67 678.82,152.35 682.08,154.27 685.35,154.85 688.61,158.95 691.87,163.40 695.14,156.68 698.40,155.25 701.67,157.17 704.93,158.01 708.19,165.72 711.46,164.45 714.72,167.17 717.98,170.67 721.25,171.51 724.51,172.80 727.77,176.07 731.04,178.48 734.30,176.81 737.56,182.50 740.83,187.17 744.09,188.57 747.36,188.46 750.62,194.13 753.88,198.84 757.15,200.09 760.41,205.00 763.67,207.97 766.94,204.18 770.20,188.11 773.46,180.67 776.73,190.83 779.99,188.35 783.26,196.98 786.52,202.98 789.78,206.10 793.05,204.40 796.31,202.95 799.57,208.52 802.84,204.10 806.10,205.83 809.36,211.84 812.63,216.58 815.89,219.22 819.15,223.84 822.42,222.84 825.68,222.20 828.95,220.21 832.21,218.57 835.47,218.68 838.74,218.68 842.00,220.23" /><polyline class="fit-one" points="62.00,94.34 65.26,94.04 68.53,93.75 71.79,93.46 75.05,93.18 78.32,92.90 81.58,92.63 84.85,92.37 88.11,92.11 91.37,91.87 94.64,91.62 97.90,91.39 101.16,91.16 104.43,90.94 107.69,90.72 110.95,90.51 114.22,90.30 117.48,90.11 120.74,89.92 124.01,89.73 127.27,89.55 130.54,89.38 133.80,89.22 137.06,89.06 140.33,88.91 143.59,88.76 146.85,88.62 150.12,88.49 153.38,88.36 156.64,88.24 159.91,88.12 163.17,88.01 166.44,87.91 169.70,87.82 172.96,87.73 176.23,87.64 179.49,87.57 182.75,87.50 186.02,87.43 189.28,87.37 192.54,87.32 195.81,87.28 199.07,87.24 202.33,87.20 205.60,87.18 208.86,87.16 212.13,87.14 215.39,87.13 218.65,87.13 221.92,87.14 225.18,87.15 228.44,87.16 231.71,87.19 234.97,87.22 238.23,87.25 241.50,87.29 244.76,87.34 248.03,87.40 251.29,87.46 254.55,87.52 257.82,87.60 261.08,87.68 264.34,87.76 267.61,87.85 270.87,87.95 274.13,88.06 277.40,88.17 280.66,88.29 283.92,88.41 287.19,88.54 290.45,88.67 293.72,88.82 296.98,88.97 300.24,89.12 303.51,89.28 306.77,89.45 310.03,89.62 313.30,89.81 316.56,89.99 319.82,90.19 323.09,90.39 326.35,90.59 329.62,90.80 332.88,91.02 336.14,91.25 339.41,91.48 342.67,91.72 345.93,91.96 349.20,92.22 352.46,92.47 355.72,92.74 358.99,93.01 362.25,93.29 365.51,93.57 368.78,93.86 372.04,94.16 375.31,94.46 378.57,94.78 381.83,95.09 385.10,95.42 388.36,95.75 391.62,96.09 394.89,96.43 398.15,96.78 401.41,97.14 404.68,97.50 407.94,97.87 411.21,98.25 414.47,98.64 417.73,99.03 421.00,99.43 424.26,99.84 427.52,100.25 430.79,100.67 434.05,101.10 437.31,101.53 440.58,101.97 443.84,102.42 447.10,102.87 450.37,103.34 453.63,103.81 456.90,104.28 460.16,104.77 463.42,105.26 466.69,105.76 469.95,106.26 473.21,106.78 476.48,107.30 479.74,107.83 483.00,108.36 486.27,108.90 489.53,109.45 492.79,110.01 496.06,110.58 499.32,111.15 502.59,111.73 505.85,112.32 509.11,112.92 512.38,113.52 515.64,114.14 518.90,114.76 522.17,115.39 525.43,116.02 528.69,116.67 531.96,117.32 535.22,117.98 538.49,118.65 541.75,119.33 545.01,120.01 548.28,120.70 551.54,121.41 554.80,122.12 558.07,122.84 561.33,123.56 564.59,124.30 567.86,125.05 571.12,125.80 574.38,126.56 577.65,127.33 580.91,128.11 584.18,128.90 587.44,129.70 590.70,130.51 593.97,131.33 597.23,132.15 600.49,132.99 603.76,133.83 607.02,134.69 610.28,135.55 613.55,136.43 616.81,137.31 620.08,138.20 623.34,139.11 626.60,140.02 629.87,140.94 633.13,141.88 636.39,142.82 639.66,143.77 642.92,144.74 646.18,145.71 649.45,146.70 652.71,147.70 655.97,148.70 659.24,149.72 662.50,150.75 665.77,151.79 669.03,152.85 672.29,153.91 675.56,154.99 678.82,156.07 682.08,157.17 685.35,158.29 688.61,159.41 691.87,160.55 695.14,161.69 698.40,162.85 701.67,164.03 704.93,165.21 708.19,166.41 711.46,167.63 714.72,168.85 717.98,170.09 721.25,171.35 724.51,172.62 727.77,173.90 731.04,175.20 734.30,176.51 737.56,177.83 740.83,179.17 744.09,180.53 747.36,181.90 750.62,183.29 753.88,184.69 757.15,186.11 760.41,187.55 763.67,189.00 766.94,190.47 770.20,191.96 773.46,193.47 776.73,194.99 779.99,196.53 783.26,198.10 786.52,199.68 789.78,201.28 793.05,202.89 796.31,204.53 799.57,206.19 802.84,207.88 806.10,209.58 809.36,211.30 812.63,213.05 815.89,214.82 819.15,216.62 822.42,218.43 825.68,220.28 828.95,222.15 832.21,224.04 835.47,225.96 838.74,227.91 842.00,229.89" /><polyline class="fit-two" points="62.00,82.17 65.26,82.17 68.53,82.18 71.79,82.19 75.05,82.20 78.32,82.21 81.58,82.23 84.85,82.26 88.11,82.28 91.37,82.31 94.64,82.34 97.90,82.38 101.16,82.42 104.43,82.46 107.69,82.51 110.95,82.56 114.22,82.61 117.48,82.67 120.74,82.73 124.01,82.79 127.27,82.86 130.54,82.93 133.80,83.00 137.06,83.08 140.33,83.16 143.59,83.24 146.85,83.33 150.12,83.42 153.38,83.51 156.64,83.61 159.91,83.71 163.17,83.82 166.44,83.93 169.70,84.04 172.96,84.15 176.23,84.27 179.49,84.39 182.75,84.52 186.02,84.65 189.28,84.78 192.54,84.92 195.81,85.06 199.07,85.20 202.33,85.35 205.60,85.50 208.86,85.65 212.13,85.81 215.39,85.97 218.65,86.14 221.92,86.31 225.18,86.48 228.44,86.65 231.71,86.83 234.97,87.02 238.23,87.20 241.50,87.39 244.76,87.59 248.03,87.79 251.29,87.99 254.55,88.19 257.82,88.40 261.08,88.61 264.34,88.83 267.61,89.05 270.87,89.27 274.13,89.50 277.40,89.73 280.66,89.97 283.92,90.21 287.19,90.45 290.45,90.70 293.72,90.95 296.98,91.20 300.24,91.46 303.51,91.72 306.77,91.99 310.03,92.26 313.30,92.53 316.56,92.81 319.82,93.09 323.09,93.38 326.35,93.67 329.62,93.96 332.88,94.26 336.14,94.56 339.41,94.87 342.67,95.18 345.93,95.49 349.20,95.81 352.46,96.13 355.72,96.46 358.99,96.79 362.25,97.12 365.51,97.46 368.78,97.81 372.04,98.16 375.31,98.51 378.57,98.86 381.83,99.22 385.10,99.59 388.36,99.96 391.62,100.33 394.89,100.71 398.15,101.10 401.41,101.48 404.68,101.87 407.94,102.27 411.21,102.67 414.47,103.08 417.73,103.49 421.00,103.90 424.26,104.32 427.52,104.75 430.79,105.18 434.05,105.61 437.31,106.05 440.58,106.49 443.84,106.94 447.10,107.39 450.37,107.85 453.63,108.32 456.90,108.79 460.16,109.26 463.42,109.74 466.69,110.22 469.95,110.71 473.21,111.20 476.48,111.70 479.74,112.21 483.00,112.72 486.27,113.23 489.53,113.76 492.79,114.28 496.06,114.81 499.32,115.35 502.59,115.89 505.85,116.44 509.11,117.00 512.38,117.56 515.64,118.13 518.90,118.70 522.17,119.28 525.43,119.86 528.69,120.45 531.96,121.05 535.22,121.65 538.49,122.26 541.75,122.87 545.01,123.50 548.28,124.12 551.54,124.76 554.80,125.40 558.07,126.05 561.33,126.70 564.59,127.36 567.86,128.03 571.12,128.71 574.38,129.39 577.65,130.08 580.91,130.78 584.18,131.48 587.44,132.20 590.70,132.92 593.97,133.64 597.23,134.38 600.49,135.12 603.76,135.87 607.02,136.63 610.28,137.40 613.55,138.17 616.81,138.96 620.08,139.75 623.34,140.55 626.60,141.36 629.87,142.18 633.13,143.01 636.39,143.84 639.66,144.69 642.92,145.55 646.18,146.41 649.45,147.29 652.71,148.17 655.97,149.07 659.24,149.98 662.50,150.90 665.77,151.82 669.03,152.76 672.29,153.71 675.56,154.68 678.82,155.65 682.08,156.63 685.35,157.63 688.61,158.64 691.87,159.67 695.14,160.70 698.40,161.75 701.67,162.82 704.93,163.89 708.19,164.98 711.46,166.09 714.72,167.21 717.98,168.35 721.25,169.50 724.51,170.67 727.77,171.86 731.04,173.06 734.30,174.28 737.56,175.52 740.83,176.78 744.09,178.06 747.36,179.35 750.62,180.67 753.88,182.01 757.15,183.38 760.41,184.76 763.67,186.17 766.94,187.60 770.20,189.06 773.46,190.55 776.73,192.07 779.99,193.61 783.26,195.19 786.52,196.79 789.78,198.43 793.05,200.11 796.31,201.82 799.57,203.58 802.84,205.37 806.10,207.21 809.36,209.09 812.63,211.03 815.89,213.02 819.15,215.06 822.42,217.17 825.68,219.34 828.95,221.59 832.21,223.91 835.47,226.33 838.74,228.83 842.00,231.45" /><polyline class="fit-three" points="62.00,80.65 65.26,80.75 68.53,80.85 71.79,80.95 75.05,81.05 78.32,81.15 81.58,81.25 84.85,81.36 88.11,81.47 91.37,81.57 94.64,81.68 97.90,81.79 101.16,81.91 104.43,82.02 107.69,82.13 110.95,82.25 114.22,82.37 117.48,82.49 120.74,82.61 124.01,82.73 127.27,82.85 130.54,82.98 133.80,83.11 137.06,83.23 140.33,83.36 143.59,83.50 146.85,83.63 150.12,83.76 153.38,83.90 156.64,84.04 159.91,84.18 163.17,84.32 166.44,84.47 169.70,84.61 172.96,84.76 176.23,84.91 179.49,85.06 182.75,85.21 186.02,85.37 189.28,85.52 192.54,85.68 195.81,85.84 199.07,86.01 202.33,86.17 205.60,86.34 208.86,86.51 212.13,86.68 215.39,86.85 218.65,87.03 221.92,87.21 225.18,87.39 228.44,87.57 231.71,87.76 234.97,87.94 238.23,88.13 241.50,88.33 244.76,88.52 248.03,88.72 251.29,88.92 254.55,89.12 257.82,89.32 261.08,89.53 264.34,89.74 267.61,89.95 270.87,90.17 274.13,90.38 277.40,90.60 280.66,90.83 283.92,91.05 287.19,91.28 290.45,91.51 293.72,91.75 296.98,91.99 300.24,92.23 303.51,92.47 306.77,92.72 310.03,92.97 313.30,93.22 316.56,93.48 319.82,93.74 323.09,94.00 326.35,94.27 329.62,94.53 332.88,94.81 336.14,95.08 339.41,95.36 342.67,95.65 345.93,95.93 349.20,96.22 352.46,96.52 355.72,96.82 358.99,97.12 362.25,97.42 365.51,97.73 368.78,98.05 372.04,98.36 375.31,98.68 378.57,99.01 381.83,99.34 385.10,99.67 388.36,100.01 391.62,100.35 394.89,100.70 398.15,101.05 401.41,101.41 404.68,101.76 407.94,102.13 411.21,102.50 414.47,102.87 417.73,103.25 421.00,103.63 424.26,104.02 427.52,104.41 430.79,104.81 434.05,105.21 437.31,105.62 440.58,106.03 443.84,106.45 447.10,106.88 450.37,107.30 453.63,107.74 456.90,108.18 460.16,108.62 463.42,109.07 466.69,109.53 469.95,109.99 473.21,110.46 476.48,110.93 479.74,111.41 483.00,111.90 486.27,112.39 489.53,112.89 492.79,113.40 496.06,113.91 499.32,114.42 502.59,114.95 505.85,115.48 509.11,116.02 512.38,116.56 515.64,117.11 518.90,117.67 522.17,118.24 525.43,118.81 528.69,119.39 531.96,119.97 535.22,120.57 538.49,121.17 541.75,121.78 545.01,122.40 548.28,123.02 551.54,123.65 554.80,124.29 558.07,124.94 561.33,125.60 564.59,126.27 567.86,126.94 571.12,127.62 574.38,128.31 577.65,129.01 580.91,129.72 584.18,130.44 587.44,131.16 590.70,131.90 593.97,132.64 597.23,133.40 600.49,134.16 603.76,134.93 607.02,135.72 610.28,136.51 613.55,137.31 616.81,138.13 620.08,138.95 623.34,139.78 626.60,140.63 629.87,141.48 633.13,142.35 636.39,143.23 639.66,144.12 642.92,145.01 646.18,145.92 649.45,146.85 652.71,147.78 655.97,148.73 659.24,149.68 662.50,150.65 665.77,151.63 669.03,152.63 672.29,153.64 675.56,154.65 678.82,155.69 682.08,156.73 685.35,157.79 688.61,158.86 691.87,159.95 695.14,161.05 698.40,162.16 701.67,163.29 704.93,164.43 708.19,165.58 711.46,166.75 714.72,167.94 717.98,169.14 721.25,170.35 724.51,171.59 727.77,172.83 731.04,174.09 734.30,175.37 737.56,176.66 740.83,177.98 744.09,179.30 747.36,180.65 750.62,182.01 753.88,183.38 757.15,184.78 760.41,186.19 763.67,187.62 766.94,189.07 770.20,190.54 773.46,192.02 776.73,193.53 779.99,195.05 783.26,196.59 786.52,198.16 789.78,199.74 793.05,201.34 796.31,202.96 799.57,204.60 802.84,206.27 806.10,207.95 809.36,209.66 812.63,211.38 815.89,213.13 819.15,214.90 822.42,216.70 825.68,218.51 828.95,220.35 832.21,222.21 835.47,224.10 838.74,226.01 842.00,227.94" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">09:31</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">15:00</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">73 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-292 bp</text>
+</svg>
+</div>
+    <figcaption>全日拟合回答“整张图看起来像什么”，会把早盘抬头和午后下落一起纳入。</figcaption>
+  </figure>
+  <figure>
+    <div class="chart-wrap">
+<svg class="model-chart" viewBox="0 0 860 282" role="img" aria-labelledby="model-sh000001_20260521_1m-decline_segment-title model-sh000001_20260521_1m-decline_segment-desc">
+  <title id="model-sh000001_20260521_1m-decline_segment-title">2026-05-21 上证指数 客观下降段公式拟合</title>
+  <desc id="model-sh000001_20260521_1m-decline_segment-desc">客观下降段实际对数基点路径与样本内前三种公式拟合。实线：实际；单变化点分段 Δ0.0；临界对数 Δ86.2；有限时刻幂律 Δ96.1</desc>
+  <line class="fit-actual" x1="62.00" y1="25" x2="86.00" y2="25" /><text class="chart-legend-label" x="93.00" y="29">实际</text><line class="fit-one" x1="257.00" y1="25" x2="281.00" y2="25" /><text class="chart-legend-label" x="288.00" y="29">单变化点分段 Δ0.0</text><line class="fit-two" x1="452.00" y1="25" x2="476.00" y2="25" /><text class="chart-legend-label" x="483.00" y="29">临界对数 Δ86.2</text><line class="fit-three" x1="647.00" y1="25" x2="671.00" y2="25" /><text class="chart-legend-label" x="678.00" y="29">有限时刻幂律 Δ96.1</text>
+  <line class="chart-grid" x1="62" y1="74.55" x2="842" y2="74.55" />
+  <polyline class="fit-actual" points="62.00,74.55 66.13,79.16 70.25,79.15 74.38,81.16 78.51,78.73 82.63,79.79 86.76,76.93 90.89,77.19 95.02,78.24 99.14,80.99 103.27,83.39 107.40,80.82 111.52,79.54 115.65,78.31 119.78,80.37 123.90,81.07 128.03,79.57 132.16,80.77 136.29,80.16 140.41,80.82 144.54,82.76 148.67,85.75 152.79,90.32 156.92,85.66 161.05,82.36 165.17,87.53 169.30,92.85 173.43,93.88 177.56,89.61 181.68,88.36 185.81,90.43 189.94,96.44 194.06,94.42 198.19,97.73 202.32,94.37 206.44,98.49 210.57,96.74 214.70,95.98 218.83,92.60 222.95,97.98 227.08,100.49 231.21,102.86 235.33,102.97 239.46,102.14 243.59,99.40 247.71,99.50 251.84,100.30 255.97,99.97 260.10,97.17 264.22,97.09 268.35,96.16 272.48,94.59 276.60,96.07 280.73,100.03 284.86,99.71 288.98,98.41 293.11,96.53 297.24,101.63 301.37,101.30 305.49,100.11 309.62,102.47 313.75,103.53 317.87,99.49 322.00,102.05 326.13,108.41 330.25,109.44 334.38,109.17 338.51,107.42 342.63,104.22 346.76,105.58 350.89,105.28 355.02,104.71 359.14,112.52 363.27,117.77 367.40,117.75 371.52,119.16 375.65,118.66 379.78,115.30 383.90,111.13 388.03,111.97 392.16,113.33 396.29,112.11 400.41,110.89 404.54,111.68 408.67,114.00 412.79,118.56 416.92,122.43 421.05,124.58 425.17,124.86 429.30,123.26 433.43,119.80 437.56,121.67 441.68,120.06 445.81,117.63 449.94,115.00 454.06,116.26 458.19,114.03 462.32,112.84 466.44,114.57 470.57,116.31 474.70,117.76 478.83,115.06 482.95,117.02 487.08,117.77 491.21,116.40 495.33,113.89 499.46,117.25 503.59,122.97 507.71,121.54 511.84,122.24 515.97,124.91 520.10,128.69 524.22,127.63 528.35,129.84 532.48,125.74 536.60,127.06 540.73,126.63 544.86,129.88 548.98,127.03 553.11,123.36 557.24,124.33 561.37,123.19 565.49,124.15 569.62,126.37 573.75,127.65 577.87,132.88 582.00,136.19 586.13,134.44 590.25,135.66 594.38,138.49 598.51,137.26 602.63,136.95 606.76,137.51 610.89,139.34 615.02,141.88 619.14,141.55 623.27,143.64 627.40,143.18 631.52,146.84 635.65,149.24 639.78,148.02 643.90,150.57 648.03,146.15 652.16,148.13 656.29,151.23 660.41,150.06 664.54,154.89 668.67,156.87 672.79,157.47 676.92,161.70 681.05,166.30 685.17,159.36 689.30,157.88 693.43,159.86 697.56,160.73 701.68,168.69 705.81,167.38 709.94,170.19 714.06,173.80 718.19,174.67 722.32,176.00 726.44,179.38 730.57,181.87 734.70,180.14 738.83,186.02 742.95,190.84 747.08,192.29 751.21,192.17 755.33,198.02 759.46,202.89 763.59,204.18 767.71,209.25 771.84,212.32 775.97,208.41 780.10,191.81 784.22,184.13 788.35,194.62 792.48,192.06 796.60,200.97 800.73,207.16 804.86,210.38 808.98,208.63 813.11,207.14 817.24,212.89 821.37,208.32 825.49,210.11 829.62,216.32 833.75,221.21 837.87,223.93 842.00,228.71" /><polyline class="fit-one" points="62.00,77.75 66.13,78.17 70.25,78.60 74.38,79.03 78.51,79.46 82.63,79.89 86.76,80.32 90.89,80.74 95.02,81.17 99.14,81.60 103.27,82.03 107.40,82.46 111.52,82.89 115.65,83.32 119.78,83.74 123.90,84.17 128.03,84.60 132.16,85.03 136.29,85.46 140.41,85.89 144.54,86.31 148.67,86.74 152.79,87.17 156.92,87.60 161.05,88.03 165.17,88.46 169.30,88.89 173.43,89.31 177.56,89.74 181.68,90.17 185.81,90.60 189.94,91.03 194.06,91.46 198.19,91.88 202.32,92.31 206.44,92.74 210.57,93.17 214.70,93.60 218.83,94.03 222.95,94.46 227.08,94.88 231.21,95.31 235.33,95.74 239.46,96.17 243.59,96.60 247.71,97.03 251.84,97.45 255.97,97.88 260.10,98.31 264.22,98.74 268.35,99.17 272.48,99.60 276.60,100.02 280.73,100.45 284.86,100.88 288.98,101.31 293.11,101.74 297.24,102.17 301.37,102.60 305.49,103.02 309.62,103.45 313.75,103.88 317.87,104.31 322.00,104.74 326.13,105.17 330.25,105.59 334.38,106.02 338.51,106.45 342.63,106.88 346.76,107.31 350.89,107.74 355.02,108.17 359.14,108.59 363.27,109.02 367.40,109.45 371.52,109.88 375.65,110.31 379.78,110.74 383.90,111.16 388.03,111.59 392.16,112.02 396.29,112.45 400.41,112.88 404.54,113.31 408.67,113.74 412.79,114.16 416.92,114.59 421.05,115.02 425.17,115.45 429.30,115.88 433.43,116.31 437.56,116.73 441.68,117.16 445.81,117.59 449.94,118.02 454.06,118.45 458.19,118.88 462.32,119.30 466.44,119.73 470.57,120.16 474.70,120.59 478.83,121.02 482.95,121.45 487.08,121.88 491.21,122.30 495.33,122.73 499.46,123.16 503.59,123.59 507.71,124.02 511.84,124.45 515.97,124.87 520.10,125.30 524.22,125.73 528.35,126.16 532.48,126.59 536.60,127.02 540.73,127.45 544.86,127.87 548.98,128.30 553.11,128.73 557.24,129.16 561.37,129.59 565.49,130.02 569.62,130.44 573.75,130.87 577.87,131.30 582.00,131.73 586.13,132.16 590.25,132.59 594.38,133.02 598.51,133.44 602.63,133.87 606.76,135.39 610.89,136.91 615.02,138.43 619.14,139.95 623.27,141.47 627.40,142.99 631.52,144.51 635.65,146.03 639.78,147.55 643.90,149.06 648.03,150.58 652.16,152.10 656.29,153.62 660.41,155.14 664.54,156.66 668.67,158.18 672.79,159.70 676.92,161.22 681.05,162.74 685.17,164.26 689.30,165.78 693.43,167.30 697.56,168.81 701.68,170.33 705.81,171.85 709.94,173.37 714.06,174.89 718.19,176.41 722.32,177.93 726.44,179.45 730.57,180.97 734.70,182.49 738.83,184.01 742.95,185.53 747.08,187.05 751.21,188.57 755.33,190.08 759.46,191.60 763.59,193.12 767.71,194.64 771.84,196.16 775.97,197.68 780.10,199.20 784.22,200.72 788.35,202.24 792.48,203.76 796.60,205.28 800.73,206.80 804.86,208.32 808.98,209.83 813.11,211.35 817.24,212.87 821.37,214.39 825.49,215.91 829.62,217.43 833.75,218.95 837.87,220.47 842.00,221.99" /><polyline class="fit-two" points="62.00,79.85 66.13,80.15 70.25,80.46 74.38,80.77 78.51,81.08 82.63,81.39 86.76,81.70 90.89,82.01 95.02,82.33 99.14,82.65 103.27,82.96 107.40,83.28 111.52,83.61 115.65,83.93 119.78,84.25 123.90,84.58 128.03,84.91 132.16,85.24 136.29,85.57 140.41,85.91 144.54,86.24 148.67,86.58 152.79,86.92 156.92,87.26 161.05,87.60 165.17,87.95 169.30,88.29 173.43,88.64 177.56,88.99 181.68,89.35 185.81,89.70 189.94,90.06 194.06,90.41 198.19,90.77 202.32,91.14 206.44,91.50 210.57,91.87 214.70,92.24 218.83,92.61 222.95,92.98 227.08,93.36 231.21,93.73 235.33,94.11 239.46,94.50 243.59,94.88 247.71,95.27 251.84,95.66 255.97,96.05 260.10,96.44 264.22,96.84 268.35,97.24 272.48,97.64 276.60,98.05 280.73,98.45 284.86,98.86 288.98,99.27 293.11,99.69 297.24,100.11 301.37,100.53 305.49,100.95 309.62,101.38 313.75,101.80 317.87,102.24 322.00,102.67 326.13,103.11 330.25,103.55 334.38,103.99 338.51,104.44 342.63,104.89 346.76,105.34 350.89,105.80 355.02,106.26 359.14,106.73 363.27,107.19 367.40,107.66 371.52,108.14 375.65,108.61 379.78,109.10 383.90,109.58 388.03,110.07 392.16,110.56 396.29,111.06 400.41,111.56 404.54,112.06 408.67,112.57 412.79,113.08 416.92,113.60 421.05,114.12 425.17,114.64 429.30,115.17 433.43,115.71 437.56,116.25 441.68,116.79 445.81,117.34 449.94,117.89 454.06,118.45 458.19,119.01 462.32,119.58 466.44,120.15 470.57,120.73 474.70,121.31 478.83,121.90 482.95,122.49 487.08,123.09 491.21,123.70 495.33,124.31 499.46,124.93 503.59,125.55 507.71,126.18 511.84,126.82 515.97,127.46 520.10,128.11 524.22,128.77 528.35,129.43 532.48,130.10 536.60,130.78 540.73,131.46 544.86,132.15 548.98,132.85 553.11,133.56 557.24,134.27 561.37,135.00 565.49,135.73 569.62,136.47 573.75,137.22 577.87,137.98 582.00,138.74 586.13,139.52 590.25,140.31 594.38,141.10 598.51,141.91 602.63,142.73 606.76,143.55 610.89,144.39 615.02,145.24 619.14,146.10 623.27,146.98 627.40,147.86 631.52,148.76 635.65,149.67 639.78,150.59 643.90,151.53 648.03,152.48 652.16,153.45 656.29,154.43 660.41,155.43 664.54,156.44 668.67,157.47 672.79,158.52 676.92,159.58 681.05,160.67 685.17,161.77 689.30,162.89 693.43,164.03 697.56,165.19 701.68,166.38 705.81,167.58 709.94,168.81 714.06,170.07 718.19,171.35 722.32,172.65 726.44,173.99 730.57,175.35 734.70,176.74 738.83,178.17 742.95,179.62 747.08,181.12 751.21,182.64 755.33,184.21 759.46,185.81 763.59,187.46 767.71,189.15 771.84,190.89 775.97,192.67 780.10,194.51 784.22,196.40 788.35,198.35 792.48,200.37 796.60,202.45 800.73,204.60 804.86,206.83 808.98,209.13 813.11,211.53 817.24,214.02 821.37,216.61 825.49,219.31 829.62,222.13 833.75,225.09 837.87,228.19 842.00,231.45" /><polyline class="fit-three" points="62.00,78.38 66.13,78.71 70.25,79.04 74.38,79.37 78.51,79.71 82.63,80.05 86.76,80.38 90.89,80.72 95.02,81.06 99.14,81.40 103.27,81.75 107.40,82.09 111.52,82.44 115.65,82.79 119.78,83.14 123.90,83.49 128.03,83.84 132.16,84.20 136.29,84.56 140.41,84.91 144.54,85.28 148.67,85.64 152.79,86.00 156.92,86.37 161.05,86.73 165.17,87.10 169.30,87.48 173.43,87.85 177.56,88.22 181.68,88.60 185.81,88.98 189.94,89.36 194.06,89.74 198.19,90.13 202.32,90.52 206.44,90.90 210.57,91.30 214.70,91.69 218.83,92.08 222.95,92.48 227.08,92.88 231.21,93.28 235.33,93.69 239.46,94.09 243.59,94.50 247.71,94.91 251.84,95.33 255.97,95.74 260.10,96.16 264.22,96.58 268.35,97.00 272.48,97.43 276.60,97.86 280.73,98.29 284.86,98.72 288.98,99.15 293.11,99.59 297.24,100.03 301.37,100.48 305.49,100.92 309.62,101.37 313.75,101.82 317.87,102.28 322.00,102.73 326.13,103.20 330.25,103.66 334.38,104.12 338.51,104.59 342.63,105.07 346.76,105.54 350.89,106.02 355.02,106.50 359.14,106.99 363.27,107.48 367.40,107.97 371.52,108.46 375.65,108.96 379.78,109.46 383.90,109.97 388.03,110.48 392.16,110.99 396.29,111.51 400.41,112.03 404.54,112.55 408.67,113.08 412.79,113.61 416.92,114.15 421.05,114.69 425.17,115.23 429.30,115.78 433.43,116.33 437.56,116.89 441.68,117.45 445.81,118.02 449.94,118.59 454.06,119.16 458.19,119.74 462.32,120.33 466.44,120.92 470.57,121.51 474.70,122.11 478.83,122.71 482.95,123.32 487.08,123.94 491.21,124.56 495.33,125.18 499.46,125.82 503.59,126.45 507.71,127.10 511.84,127.75 515.97,128.40 520.10,129.06 524.22,129.73 528.35,130.40 532.48,131.08 536.60,131.77 540.73,132.47 544.86,133.17 548.98,133.88 553.11,134.59 557.24,135.31 561.37,136.04 565.49,136.78 569.62,137.53 573.75,138.28 577.87,139.05 582.00,139.82 586.13,140.60 590.25,141.39 594.38,142.19 598.51,142.99 602.63,143.81 606.76,144.64 610.89,145.47 615.02,146.32 619.14,147.18 623.27,148.05 627.40,148.93 631.52,149.82 635.65,150.72 639.78,151.64 643.90,152.57 648.03,153.51 652.16,154.46 656.29,155.43 660.41,156.41 664.54,157.41 668.67,158.42 672.79,159.44 676.92,160.49 681.05,161.54 685.17,162.62 689.30,163.71 693.43,164.82 697.56,165.95 701.68,167.10 705.81,168.27 709.94,169.46 714.06,170.68 718.19,171.91 722.32,173.17 726.44,174.45 730.57,175.76 734.70,177.10 738.83,178.46 742.95,179.85 747.08,181.27 751.21,182.72 755.33,184.21 759.46,185.73 763.59,187.29 767.71,188.88 771.84,190.52 775.97,192.20 780.10,193.92 784.22,195.69 788.35,197.51 792.48,199.38 796.60,201.32 800.73,203.31 804.86,205.36 808.98,207.49 813.11,209.68 817.24,211.96 821.37,214.32 825.49,216.78 829.62,219.34 833.75,222.00 837.87,224.79 842.00,227.71" />
+  <text class="axis-label" x="62" y="270" text-anchor="start">10:14</text>
+  <text class="axis-label" x="842" y="270" text-anchor="end">14:53</text>
+  <text class="axis-label" x="54" y="66" text-anchor="end">24 bp</text>
+  <text class="axis-label" x="54" y="244" text-anchor="end">-329 bp</text>
+</svg>
+</div>
+    <figcaption>下降段拟合固定为客观收盘峰值到其后收盘低点，回答“下跌过程如何换速”；两种排名都只描述收盘后形状。</figcaption>
+  </figure>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>下降段公式</th><th>ΔAICc</th><th>RMSE</th><th>残差一阶相关</th><th>参数触边</th></tr></thead>
+      <tbody><tr><td>单变化点分段</td><td>0.00</td><td>9.21 bp</td><td>0.762</td><td>否</td></tr><tr><td>临界对数</td><td>86.17</td><td>11.61 bp</td><td>0.852</td><td>否</td></tr><tr><td>有限时刻幂律</td><td>96.11</td><td>11.85 bp</td><td>0.859</td><td>是</td></tr><tr><td>平移椭圆弧</td><td>103.30</td><td>12.08 bp</td><td>0.860</td><td>是</td></tr><tr><td>指数</td><td>116.23</td><td>12.57 bp</td><td>0.864</td><td>否</td></tr><tr><td>四分之一椭圆代理</td><td>128.02</td><td>12.96 bp</td><td>0.871</td><td>否</td></tr><tr><td>Gompertz</td><td>187.69</td><td>15.08 bp</td><td>0.895</td><td>是</td></tr><tr><td>线性</td><td>370.11</td><td>24.65 bp</td><td>0.943</td><td>否</td></tr><tr><td>普通对数</td><td>397.08</td><td>26.32 bp</td><td>0.946</td><td>是</td></tr></tbody>
+    </table>
+  </div>
+</section>
+
+    </section>
+
+    <section id="formula">
+      <h2>哪个公式最贴切：下降过程是分段，鸭蛋外观是椭圆类包络</h2>
+      <p class="lead">严格按数据回答，三例下降段最接近单变化点分段模型；上证全日才最接近可平移的椭圆弧。它们不是二选一：分段回答“哪里换挡”，椭圆回答“全天包络像什么”。幂律、指数、Gompertz 和两种对数继续留在 replay 做竞争与反证，不进入普通日报的盘中动作计算。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>全日第一</th><th>全日第二</th><th>下降段第一</th><th>下降段第二</th><th>分段点（全日 / 下降段）</th><th>下降段前后速度（bp/分钟）</th><th>分段搜索边界</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>单变化点分段</td><td>有限时刻幂律（Δ32.45）</td><td>单变化点分段</td><td>有限时刻幂律（Δ26.70）</td><td>14:18 / 14:18</td><td>-4.775 → -10.746（加速）</td><td>全日未触边 / 下降段未触边</td></tr><tr><td>2026-07-10 长电科技</td><td>单变化点分段</td><td>有限时刻幂律（Δ28.73）</td><td>单变化点分段</td><td>有限时刻幂律（Δ30.89）</td><td>14:48 / 10:04</td><td>-26.617 → -3.269（降温）</td><td>全日触边 / 下降段未触边</td></tr><tr><td>2026-05-21 上证指数</td><td>平移椭圆弧</td><td>四分之一椭圆代理（Δ36.26）</td><td>单变化点分段</td><td>临界对数（Δ86.17）</td><td>13:45 / 13:55</td><td>-0.832 → -2.951（加速）</td><td>全日未触边 / 下降段未触边</td></tr></tbody></table></div>
+      <p>表中的前后速度是“只允许一个断点”后的区间平均，不是全天每一分钟的固定机制。长电科技下降段在 10:04 后平均降温，但 14:30-14:55 又出现尾部加速；这正是多轮压力不能被一个断点概括的例子。</p>
+      <div class="formula">D(t) = A · [1 - (1 - t/T)<sup>m</sup>] / m</div>
+      <p><code>D(t)</code> 是累计向下位移，<code>T</code> 是只用于形状的临界尺度，<code>m</code> 控制后段是否变陡。<code>m=1</code> 退化为线性；<code>0&lt;m&lt;1</code> 表示越到后段跌速越快；<code>m≈0.5</code> 是根号临界，接近椭圆端点的外观；<code>m→0</code> 逼近临界对数。这个 <code>T</code> 不是预测真实崩溃时刻。</p>
+      <figure><div class="chart-wrap">
+<svg class="family-chart" viewBox="0 0 860 270" role="img" aria-labelledby="family-title family-desc">
+  <title id="family-title">有限时刻幂律母公式的曲率变化</title>
+  <desc id="family-desc">横轴是归一化交易时间，纵轴是归一化向下位移。m 从 1 降到 0 时后段越来越陡，普通对数则前快后慢。</desc>
+  <line class="chart-grid" x1="52" y1="24" x2="52" y2="228" />
+  <line class="chart-grid" x1="52" y1="228" x2="842" y2="228" />
+  <polyline class="family-linear" points="52.00,24.00 59.90,26.04 67.80,28.08 75.70,30.12 83.60,32.16 91.50,34.20 99.40,36.24 107.30,38.28 115.20,40.32 123.10,42.36 131.00,44.40 138.90,46.44 146.80,48.48 154.70,50.52 162.60,52.56 170.50,54.60 178.40,56.64 186.30,58.68 194.20,60.72 202.10,62.76 210.00,64.80 217.90,66.84 225.80,68.88 233.70,70.92 241.60,72.96 249.50,75.00 257.40,77.04 265.30,79.08 273.20,81.12 281.10,83.16 289.00,85.20 296.90,87.24 304.80,89.28 312.70,91.32 320.60,93.36 328.50,95.40 336.40,97.44 344.30,99.48 352.20,101.52 360.10,103.56 368.00,105.60 375.90,107.64 383.80,109.68 391.70,111.72 399.60,113.76 407.50,115.80 415.40,117.84 423.30,119.88 431.20,121.92 439.10,123.96 447.00,126.00 454.90,128.04 462.80,130.08 470.70,132.12 478.60,134.16 486.50,136.20 494.40,138.24 502.30,140.28 510.20,142.32 518.10,144.36 526.00,146.40 533.90,148.44 541.80,150.48 549.70,152.52 557.60,154.56 565.50,156.60 573.40,158.64 581.30,160.68 589.20,162.72 597.10,164.76 605.00,166.80 612.90,168.84 620.80,170.88 628.70,172.92 636.60,174.96 644.50,177.00 652.40,179.04 660.30,181.08 668.20,183.12 676.10,185.16 684.00,187.20 691.90,189.24 699.80,191.28 707.70,193.32 715.60,195.36 723.50,197.40 731.40,199.44 739.30,201.48 747.20,203.52 755.10,205.56 763.00,207.60 770.90,209.64 778.80,211.68 786.70,213.72 794.60,215.76 802.50,217.80 810.40,219.84 818.30,221.88 826.20,223.92 834.10,225.96 842.00,228.00" /><polyline class="family-sqrt" points="52.00,24.00 59.90,25.33 67.80,26.67 75.70,28.01 83.60,29.36 91.50,30.71 99.40,32.08 107.30,33.45 115.20,34.82 123.10,36.20 131.00,37.59 138.90,38.99 146.80,40.39 154.70,41.80 162.60,43.22 170.50,44.64 178.40,46.07 186.30,47.51 194.20,48.96 202.10,50.42 210.00,51.88 217.90,53.35 225.80,54.83 233.70,56.32 241.60,57.82 249.50,59.32 257.40,60.84 265.30,62.36 273.20,63.90 281.10,65.44 289.00,66.99 296.90,68.55 304.80,70.12 312.70,71.70 320.60,73.30 328.50,74.90 336.40,76.51 344.30,78.14 352.20,79.77 360.10,81.42 368.00,83.08 375.90,84.75 383.80,86.43 391.70,88.12 399.60,89.83 407.50,91.55 415.40,93.29 423.30,95.03 431.20,96.79 439.10,98.57 447.00,100.36 454.90,102.16 462.80,103.98 470.70,105.82 478.60,107.67 486.50,109.54 494.40,111.43 502.30,113.33 510.20,115.25 518.10,117.19 526.00,119.15 533.90,121.13 541.80,123.13 549.70,125.15 557.60,127.19 565.50,129.26 573.40,131.34 581.30,133.46 589.20,135.59 597.10,137.75 605.00,139.94 612.90,142.16 620.80,144.40 628.70,146.67 636.60,148.98 644.50,151.32 652.40,153.69 660.30,156.09 668.20,158.53 676.10,161.02 684.00,163.54 691.90,166.10 699.80,168.71 707.70,171.36 715.60,174.07 723.50,176.83 731.40,179.64 739.30,182.51 747.20,185.45 755.10,188.45 763.00,191.52 770.90,194.68 778.80,197.92 786.70,201.24 794.60,204.67 802.50,208.21 810.40,211.87 818.30,215.66 826.20,219.60 834.10,223.70 842.00,228.00" /><polyline class="family-critical" points="52.00,24.00 59.90,24.87 67.80,25.75 75.70,26.64 83.60,27.54 91.50,28.44 99.40,29.35 107.30,30.27 115.20,31.20 123.10,32.13 131.00,33.08 138.90,34.03 146.80,34.99 154.70,35.96 162.60,36.94 170.50,37.92 178.40,38.92 186.30,39.93 194.20,40.95 202.10,41.97 210.00,43.01 217.90,44.06 225.80,45.11 233.70,46.18 241.60,47.26 249.50,48.35 257.40,49.46 265.30,50.57 273.20,51.70 281.10,52.84 289.00,53.99 296.90,55.16 304.80,56.33 312.70,57.53 320.60,58.73 328.50,59.95 336.40,61.19 344.30,62.44 352.20,63.70 360.10,64.99 368.00,66.28 375.90,67.60 383.80,68.93 391.70,70.28 399.60,71.65 407.50,73.04 415.40,74.44 423.30,75.87 431.20,77.32 439.10,78.78 447.00,80.27 454.90,81.79 462.80,83.32 470.70,84.88 478.60,86.47 486.50,88.08 494.40,89.71 502.30,91.38 510.20,93.07 518.10,94.79 526.00,96.54 533.90,98.33 541.80,100.15 549.70,102.00 557.60,103.89 565.50,105.81 573.40,107.78 581.30,109.78 589.20,111.83 597.10,113.92 605.00,116.06 612.90,118.24 620.80,120.48 628.70,122.77 636.60,125.12 644.50,127.53 652.40,130.00 660.30,132.53 668.20,135.14 676.10,137.82 684.00,140.58 691.90,143.42 699.80,146.36 707.70,149.39 715.60,152.52 723.50,155.76 731.40,159.12 739.30,162.61 747.20,166.24 755.10,170.02 763.00,173.97 770.90,178.10 778.80,182.42 786.70,186.97 794.60,191.77 802.50,196.85 810.40,202.24 818.30,207.99 826.20,214.15 834.10,220.79 842.00,228.00" /><polyline class="family-ordinary" points="52.00,24.00 59.90,28.35 67.80,32.57 75.70,36.68 83.60,40.68 91.50,44.57 99.40,48.36 107.30,52.05 115.20,55.65 123.10,59.17 131.00,62.61 138.90,65.97 146.80,69.25 154.70,72.46 162.60,75.60 170.50,78.68 178.40,81.69 186.30,84.64 194.20,87.54 202.10,90.38 210.00,93.16 217.90,95.90 225.80,98.58 233.70,101.22 241.60,103.81 249.50,106.35 257.40,108.85 265.30,111.31 273.20,113.73 281.10,116.11 289.00,118.45 296.90,120.76 304.80,123.03 312.70,125.26 320.60,127.46 328.50,129.63 336.40,131.77 344.30,133.88 352.20,135.96 360.10,138.00 368.00,140.03 375.90,142.02 383.80,143.98 391.70,145.93 399.60,147.84 407.50,149.73 415.40,151.60 423.30,153.44 431.20,155.26 439.10,157.06 447.00,158.84 454.90,160.59 462.80,162.33 470.70,164.04 478.60,165.74 486.50,167.41 494.40,169.07 502.30,170.71 510.20,172.33 518.10,173.93 526.00,175.51 533.90,177.08 541.80,178.63 549.70,180.17 557.60,181.69 565.50,183.19 573.40,184.68 581.30,186.16 589.20,187.62 597.10,189.06 605.00,190.49 612.90,191.91 620.80,193.31 628.70,194.70 636.60,196.08 644.50,197.44 652.40,198.80 660.30,200.14 668.20,201.46 676.10,202.78 684.00,204.08 691.90,205.38 699.80,206.66 707.70,207.93 715.60,209.19 723.50,210.44 731.40,211.68 739.30,212.90 747.20,214.12 755.10,215.33 763.00,216.53 770.90,217.72 778.80,218.89 786.70,220.06 794.60,221.22 802.50,222.38 810.40,223.52 818.30,224.65 826.20,225.78 834.10,226.89 842.00,228.00" />
+  <text class="family-label" x="62" y="42">m=1 线性</text><text class="family-label" x="62" y="62">m=0.5 根号临界</text><text class="family-label" x="62" y="82">m=0.1 接近临界对数</text><text class="family-label" x="62" y="102">普通对数（前快后慢）</text>
+  <text class="axis-label" x="52" y="258" text-anchor="start">开始</text>
+  <text class="axis-label" x="842" y="258" text-anchor="end">临界端</text>
+</svg>
+</div><figcaption>图形向下绘制的是归一化位移。普通 <code>log(1+kt)</code> 前快后慢，不能再与临界对数混称。</figcaption></figure>
+      <h3>公式职责与变量，换成生活语言</h3>
+      <p>下表统一令 <code>t</code> 为压缩午休后的交易时间进度（0 到 1），<code>y(t)</code> 为相对区间起点的对数价格基点；<code>a</code> 是起点位置，<code>b</code> 是方向和幅度。</p>
+      <div class="table-wrap"><table><thead><tr><th>公式类</th><th>表达式</th><th>变量含义</th><th>看到什么</th></tr></thead><tbody>
+        <tr><td>单变化点分段</td><td><code>y(t)=a+bt+c(t-τ)<sub>+</sub></code></td><td><code>τ</code> 是换挡位置；前段速度是 <code>b</code>，后段速度是 <code>b+c</code></td><td>卖压或承接在某处发生速度变化</td></tr>
+        <tr><td>平移椭圆弧</td><td><code>y(t)=a+b√[1-((t-h)/r)²]</code></td><td><code>h</code> 是鸭蛋最高点的横向位置，<code>r</code> 是横向半径，<code>b</code> 是纵向高度</td><td>先抬头、再沿椭圆右侧越来越陡；上证全日最接近这一类</td></tr>
+        <tr><td>有限时刻幂律</td><td><code>y(t)=a+b[1-(1-t/T)<sup>m</sup>]/m</code></td><td><code>m</code> 控制弯曲；<code>T</code> 是形状尺度，不是真实崩溃时刻</td><td>比较后段越来越陡的经验过程，不指认生成机制</td></tr>
+        <tr><td>指数</td><td><code>y(t)=a+b(e<sup>kt</sup>-1)</code></td><td><code>k</code> 越大，速度按比例放大越快</td><td>比较没有明显换挡的持续加速包络</td></tr>
+        <tr><td>Gompertz</td><td><code>y(t)=a+b·exp[-exp(-k(t-h))]</code></td><td><code>h</code> 靠近最大速度位置，<code>k</code> 控制曲线先增后减的快慢</td><td>比较单轮压力先增强、后边际衰减的经验外形</td></tr>
+        <tr><td>临界对数</td><td><code>y(t)=a+b[-ln(1-t/T)]</code></td><td><code>b&lt;0</code> 时后段向下越来越陡</td><td>极强的临界端加速，仅作压力上界对照</td></tr>
+        <tr><td>普通对数</td><td><code>y(t)=a+b·ln(1+kt)</code></td><td><code>b&lt;0</code> 时前段快、后段慢</td><td>一开始猛烈、随后逐渐耗尽，方向与临界对数相反</td></tr>
+      </tbody></table></div>
+      <div class="formula-grid">
+        <div class="formula-item"><strong>分段模型</strong><p>最适合描述速度换挡和多轮压力；最佳断点是事后几何断点，不等于真实触发时刻。</p></div>
+        <div class="formula-item"><strong>椭圆类</strong><p>四分之一代理受限；平移椭圆弧允许峰值左右移动，更接近上证全天“先抬头再沿鸭蛋右侧下落”的外观，但仍不是任意旋转椭圆。</p></div>
+        <div class="formula-item"><strong>Gompertz</strong><p>适合单轮“招募增强 → 最大跌速 → 边际耗尽”；两轮压力仍需分段或事件结构。</p></div>
+        <div class="formula-item"><strong>两种对数</strong><p>普通对数前快后慢；临界对数后段加速。上一版只放普通对数，数学口径不完整。</p></div>
+      </div>
+      <h3>下降段小范围起点敏感性</h3>
+      <p>AICc 使用一分钟价格水平残差，残差高度相关，ΔAICc 会显得比真实证据更强。下降段起点前后移动时，三例的分段冠军稳定；但上证从“下降段”换成“全日”后冠军改为椭圆类，说明研究范围仍会改变答案。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>下降段不同起点 → 最优公式</th><th>局部结论</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>09:37→单变化点分段, 09:42→单变化点分段, 09:47→单变化点分段, 09:52→单变化点分段, 10:02→单变化点分段, 10:12→单变化点分段</td><td>稳定</td></tr><tr><td>2026-07-10 长电科技</td><td>09:48→单变化点分段, 09:53→单变化点分段, 09:58→单变化点分段, 10:03→单变化点分段, 10:13→单变化点分段, 10:23→单变化点分段</td><td>稳定</td></tr><tr><td>2026-05-21 上证指数</td><td>10:09→单变化点分段, 10:14→单变化点分段, 10:19→单变化点分段, 10:24→单变化点分段, 10:34→单变化点分段, 10:44→单变化点分段</td><td>稳定</td></tr></tbody></table></div>
+    </section>
+
+    <section id="windows">
+      <h2>三段正式窗口反推：角色暂时合理，时点有效性仍待样本外验收</h2>
+      <p><strong>09:30-09:35</strong> 只有五个完整分钟，适合看开盘冲击和相对强弱，不够识别椭圆或多轮级联。<strong>09:45-09:50</strong> 只作前哨观察，为 <strong>09:50-10:10</strong> 正式窗口准备证据，不新增买卖动作。<strong>14:30-14:55</strong> 适合判断尾部是否继续创新低、是否修复以及隔夜风险，但不能包装成“提前退出”。候选要求十五分钟斜率低于 -0.05 bp/分钟；三根相邻结束时点的十五分钟斜率同向只记为“重叠斜率连续”，还要检查候选后价格是否继续同向移动。这是透明研究口径，不是买入资格。</p>
+      <div class="formula">κ<sub>20</sub>(t) = [s<sub>5</sub>(t) - s<sub>5</sub>(t-15)] / 15</div>
+      <p>表中的二十分钟曲率代理不是另一套二次回归：<code>s5</code> 是六个收盘点拟合出的五交易分钟对数价格斜率，<code>κ20</code> 是最近十五个交易分钟里这条短斜率的平均变化，单位为 bp/交易分钟²。判断使用未舍入值，表格只在显示时保留小数。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>窗口</th><th>窗口收益</th><th>距当时峰值</th><th>窗口成交额（亿元）</th><th>近10分钟下跌占比</th><th>5分斜率（bp/分钟）</th><th>15分斜率（bp/分钟）</th><th>20分曲率代理（bp/分钟²）</th><th>截止时表象</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>09:30-09:35</td><td>1.74%</td><td>-1.13%</td><td>99.18</td><td>—</td><td>—</td><td>—</td><td>—</td><td>样本过短</td></tr><tr><td>2026-07-10 兆易创新</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>-2.15%</td><td>-3.24%</td><td>89.61</td><td>60%</td><td>-7.88</td><td>-18.59</td><td>-1.091</td><td>下压仍在、短线降温</td></tr><tr><td>2026-07-10 兆易创新</td><td>14:30-14:55</td><td>-1.37%</td><td>-12.93%</td><td>57.28</td><td>50%</td><td>2.83</td><td>-1.89</td><td>1.531</td><td>下压中的短线回抽</td></tr><tr><td>2026-07-10 长电科技</td><td>09:30-09:35</td><td>2.11%</td><td>-1.35%</td><td>47.09</td><td>—</td><td>—</td><td>—</td><td>—</td><td>样本过短</td></tr><tr><td>2026-07-10 长电科技</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>-1.86%</td><td>-2.80%</td><td>58.91</td><td>70%</td><td>2.59</td><td>-19.31</td><td>-1.633</td><td>下压中的短线回抽</td></tr><tr><td>2026-07-10 长电科技</td><td>14:30-14:55</td><td>-3.15%</td><td>-10.84%</td><td>31.90</td><td>70%</td><td>-36.52</td><td>-7.96</td><td>-1.368</td><td>下跌加速表象</td></tr><tr><td>2026-05-21 上证指数</td><td>09:30-09:35</td><td>0.14%</td><td>-0.08%</td><td>1551.50</td><td>—</td><td>—</td><td>—</td><td>—</td><td>样本过短</td></tr><tr><td>2026-05-21 上证指数</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>0.40%</td><td>-0.11%</td><td>2283.00</td><td>50%</td><td>0.11</td><td>1.54</td><td>0.010</td><td>上行或修复表象</td></tr><tr><td>2026-05-21 上证指数</td><td>14:30-14:55</td><td>-0.67%</td><td>-2.95%</td><td>2068.48</td><td>60%</td><td>-4.31</td><td>-4.35</td><td>-0.932</td><td>下压仍在、短线降温</td></tr></tbody></table></div>
+      <h3>首次候选、重叠斜率连续与价格同向延续</h3>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>观察范围</th><th>截至截止全日首次候选</th><th>范围内首次候选</th><th>范围覆盖全日首次</th><th>首次重叠斜率连续</th><th>候选后价格同向延续</th><th>首次证据质量</th><th>截至截止当前轮</th><th>范围内候选失效次数</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>09:30-09:35</td><td>未出现</td><td>未出现</td><td>否</td><td>未形成</td><td>未出现</td><td>未形成</td><td>未出现</td><td>0</td></tr><tr><td>2026-07-10 兆易创新</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>09:47</td><td>09:47</td><td>是</td><td>09:49</td><td>未出现</td><td>仅重叠斜率连续</td><td>10:00 起；10:02 重叠斜率连续；价格同向延续 10:01；连续 11 个分钟结束点（跨度 10 个交易分钟）</td><td>1</td></tr><tr><td>2026-07-10 兆易创新</td><td>14:30-14:55</td><td>09:47</td><td>未出现</td><td>否</td><td>09:49</td><td>未出现</td><td>仅重叠斜率连续</td><td>14:24 起；14:26 重叠斜率连续；价格同向延续 14:25；连续 32 个分钟结束点（跨度 31 个交易分钟）</td><td>0</td></tr><tr><td>2026-07-10 长电科技</td><td>09:30-09:35</td><td>未出现</td><td>未出现</td><td>否</td><td>未形成</td><td>未出现</td><td>未形成</td><td>未出现</td><td>0</td></tr><tr><td>2026-07-10 长电科技</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>10:02</td><td>10:02</td><td>是</td><td>10:04</td><td>10:05</td><td>斜率连续 + 价格同向延续</td><td>10:02 起；10:04 重叠斜率连续；价格同向延续 10:05；连续 9 个分钟结束点（跨度 8 个交易分钟）</td><td>0</td></tr><tr><td>2026-07-10 长电科技</td><td>14:30-14:55</td><td>10:02</td><td>14:30</td><td>否</td><td>10:04</td><td>10:05</td><td>斜率连续 + 价格同向延续</td><td>14:30 起；14:32 重叠斜率连续；价格同向延续 14:31；连续 26 个分钟结束点（跨度 25 个交易分钟）</td><td>0</td></tr><tr><td>2026-05-21 上证指数</td><td>09:30-09:35</td><td>未出现</td><td>未出现</td><td>否</td><td>未形成</td><td>未出现</td><td>未形成</td><td>未出现</td><td>0</td></tr><tr><td>2026-05-21 上证指数</td><td>09:45-09:50 前哨 + 09:50-10:10 正式</td><td>未出现</td><td>未出现</td><td>否</td><td>未形成</td><td>未出现</td><td>未形成</td><td>未出现</td><td>0</td></tr><tr><td>2026-05-21 上证指数</td><td>14:30-14:55</td><td>10:17</td><td>未出现</td><td>否</td><td>10:19</td><td>10:24</td><td>斜率连续 + 价格同向延续</td><td>13:50 起；13:52 重叠斜率连续；价格同向延续 13:53；连续 66 个分钟结束点（跨度 65 个交易分钟）</td><td>0</td></tr></tbody></table></div>
+      <h3>09:45-09:50 前哨 / 09:50-10:10 正式窗口拆解</h3>
+      <p>前哨段只负责发现异动，不直接给新增动作；正式窗口再看中短斜率是否同向、短线回抽能否改变十五分钟压力。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>子阶段</th><th>区间</th><th>区间收益</th><th>区间成交额（亿元）</th><th>近10分钟下跌占比</th><th>5分斜率（bp/分钟）</th><th>15分斜率（bp/分钟）</th><th>截止时表象</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>前哨观察</td><td>09:45-09:50</td><td>0.14%</td><td>18.70</td><td>40%</td><td>13.57</td><td>-0.63</td><td>下压中的短线回抽</td></tr><tr><td>2026-07-10 兆易创新</td><td>主执行</td><td>09:50-10:10</td><td>-2.28%</td><td>70.91</td><td>60%</td><td>-7.88</td><td>-18.59</td><td>下压仍在、短线降温</td></tr><tr><td>2026-07-10 长电科技</td><td>前哨观察</td><td>09:45-09:50</td><td>-0.62%</td><td>10.48</td><td>50%</td><td>3.09</td><td>6.76</td><td>上行或修复表象</td></tr><tr><td>2026-07-10 长电科技</td><td>主执行</td><td>09:50-10:10</td><td>-1.25%</td><td>48.42</td><td>70%</td><td>2.59</td><td>-19.31</td><td>下压中的短线回抽</td></tr><tr><td>2026-05-21 上证指数</td><td>前哨观察</td><td>09:45-09:50</td><td>0.20%</td><td>562.21</td><td>20%</td><td>4.09</td><td>1.54</td><td>上行或修复表象</td></tr><tr><td>2026-05-21 上证指数</td><td>主执行</td><td>09:50-10:10</td><td>0.20%</td><td>1720.78</td><td>50%</td><td>0.11</td><td>1.54</td><td>上行或修复表象</td></tr></tbody></table></div>
+      <h3>13:45-14:10 午后风险复核：只是待验证候选</h3>
+      <p class="lead"><strong>13:45-14:10 只是待验证候选</strong>，不是第四段正式买卖时间。这三个案例只能说明：三例的向下分钟事件在 13:45 已经可见，不能反推出 14:10 是更好的结束点。它的研究价值是让事件时间钟在 14:30 前持续回答方向、连续性、对应市场范围和失效；正式三段窗口目前保持不变。</p>
+      <p>你的生活经验可以改写成一个可检验假说：如果一只股票到 14:30 已经处于强势大涨，通常在 13:45-14:10 会更早留下向上斜率、VWAP 上方驻留、板块同步和成交参与的足迹。因此不能只凭“时间到了”卖出；有持续向上证据时，过早卖反而会放弃趋势。但这不是“14:30 后几乎不会再大涨”的统计结论。尾盘突袭涨停、消息驱动的快速重估和先弱后强的快速修复都是必须保留的反例。<strong>三例只复算向下分钟事件</strong>，没有历史强势尾盘样本验证这条向上假说。</p>
+      <h3>三例午后事件原始时钟</h3>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>候选</th><th>斜率连续</th><th>价格同向延续</th><th>失效</th><th>证据质量</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>13:21</td><td>13:23</td><td>13:25</td><td>14:20</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-07-10 兆易创新</td><td>14:24</td><td>14:26</td><td>14:25</td><td>持续到收盘</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-07-10 长电科技</td><td>13:19</td><td>13:21</td><td>13:25</td><td>13:59</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-07-10 长电科技</td><td>14:03</td><td>未形成</td><td>未出现</td><td>14:05</td><td>未形成</td></tr><tr><td>2026-07-10 长电科技</td><td>14:06</td><td>14:08</td><td>14:07</td><td>14:19</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-07-10 长电科技</td><td>14:30</td><td>14:32</td><td>14:31</td><td>持续到收盘</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-05-21 上证指数</td><td>13:31</td><td>13:33</td><td>13:34</td><td>13:48</td><td>斜率连续 + 价格同向延续</td></tr><tr><td>2026-05-21 上证指数</td><td>13:50</td><td>13:52</td><td>13:53</td><td>持续到收盘</td><td>斜率连续 + 价格同向延续</td></tr></tbody></table></div>
+      <h3>截止分钟截面会变化，但三例不能选出 14:10</h3>
+      <div class="table-wrap"><table><thead><tr><th>截止</th><th>13:45 至截止曾捕获</th><th>截止分钟截面仍有效</th></tr></thead><tbody><tr><td>14:00</td><td>3 / 3（兆易创新、长电科技、上证指数）</td><td>2 / 3（兆易创新、上证指数）</td></tr><tr><td>14:05</td><td>3 / 3（兆易创新、长电科技、上证指数）</td><td>2 / 3（兆易创新、上证指数）</td></tr><tr><td>14:10</td><td>3 / 3（兆易创新、长电科技、上证指数）</td><td>3 / 3（兆易创新、长电科技、上证指数）</td></tr><tr><td>14:20</td><td>3 / 3（兆易创新、长电科技、上证指数）</td><td>1 / 3（上证指数）</td></tr></tbody></table></div>
+      <p><strong>正确读法：</strong>13:45 当下三例都已经具备斜率连续和价格同向延续；从 13:45 到四个截止时刻都曾捕获三例，所以 14:00 和 14:05 并没有漏掉长电。右栏只显示截止分钟截面：长电第一轮在 13:59 失效，14:06 再候选后到 14:10 又有效；到 14:20，长电与兆易此前那一轮均已失效。这张表说明事件会失效和重来，不能证明必须观察到 14:10。</p>
+      <p>所有精确分钟都依赖当前尚未校准的 <code>0.05 bp/分钟</code> 研究阈值。阈值变化会移动候选与失效边界；后续必须加入普通日和多阈值敏感性，三例不能选出 14:10，也不能确定 13:45 是全市场最优起点。</p>
+      <h3>怎样判断卖出：不是一根曲线，而是三种处理分支</h3>
+      <div class="table-wrap"><table><thead><tr><th>当时证据</th><th>当前处理</th></tr></thead><tbody><tr><td>向下事件已形成斜率连续和价格同向延续，反抽不能收回 VWAP 或关键参考线，事件尚未失效；全市场或板块合力必须有对应层级同步证据。单股独立风险不升级为市场合力</td><td>可卖仓位进入减风险或退出候选；当前研究版仍等 14:30-14:55 正式窗口复核后处理</td></tr><tr><td>中短斜率保持向上，价格持续驻留 VWAP 上方，板块宽度和成交参与仍在扩散</td><td>继续持有，不因为到了 13:45-14:10 就卖；先观察上行是否衰减</td></tr><tr><td>只有短暂候选、价格快速收回、出现快速修复，或指数、板块和个股证据冲突</td><td>不抢结论，等 14:30-14:55 再处理</td></tr></tbody></table></div>
+      <p>真正进入减风险候选至少要同时满足：方向向下；斜率连续并有价格同向延续；反抽未能修复；事件没有失效；证据与合力范围相配。全市场范围要有指数、宽度和多板块同步，板块范围要有板块内部扩散，单股独立风险只进入原有个股退出条件，不能升级成市场合力。只有向下斜率、只有跌破 VWAP、只有一根急跌，均不足以单独决定卖出；还要服从可卖仓位、前一晚计划、认错线和亏损边界。</p>
+      <p><strong>防守式卖出和高位止盈要分开：</strong>前者看向下事件是否成立；后者看原本向上的合力是否衰减。价格仍高，但板块宽度先收缩、成交推动效率下降、后排掉队、核心跌回 VWAP 后反弹失败，才进入高位止盈候选。若向上斜率、VWAP 驻留、板块扩散和成交参与仍互相支持，持续上涨本身不是卖出条件。</p>
+      <h3>事后验收，不回填当时判断</h3>
+      <p>下表故意与上面的当时证据分开。主要下降完成比例、后续最低和未来 5/10/20 分钟收益都只有收盘后才知道，只用于检验窗口是否真的领先。</p>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>窗口</th><th>主要下降已完成</th><th>客观峰值 → 谷值</th><th>截止后最低时刻</th><th>截止后剩余跌幅</th><th>后5分钟</th><th>后10分钟</th><th>后20分钟</th></tr></thead><tbody><tr><td>2026-07-10 兆易创新</td><td>09:30-09:35</td><td>0.0%</td><td>09:42 → 14:56</td><td>14:56</td><td>-12.62%</td><td>0.57%</td><td>0.00%</td><td>0.62%</td></tr><tr><td>2026-07-10 兆易创新</td><td>09:45-10:10</td><td>20.7%</td><td>09:42 → 14:56</td><td>14:56</td><td>-10.71%</td><td>-0.51%</td><td>-0.22%</td><td>-0.75%</td></tr><tr><td>2026-07-10 兆易创新</td><td>14:30-14:55</td><td>94.5%</td><td>09:42 → 14:56</td><td>14:56</td><td>-0.78%</td><td>-0.72%</td><td>—</td><td>—</td></tr><tr><td>2026-07-10 长电科技</td><td>09:30-09:35</td><td>0.0%</td><td>09:53 → 15:00</td><td>15:00</td><td>-9.06%</td><td>1.63%</td><td>1.44%</td><td>2.08%</td></tr><tr><td>2026-07-10 长电科技</td><td>09:45-10:10</td><td>23.9%</td><td>09:53 → 15:00</td><td>15:00</td><td>-8.65%</td><td>0.06%</td><td>0.47%</td><td>-0.12%</td></tr><tr><td>2026-07-10 长电科技</td><td>14:30-14:55</td><td>96.5%</td><td>09:53 → 15:00</td><td>15:00</td><td>-0.41%</td><td>-0.41%</td><td>—</td><td>—</td></tr><tr><td>2026-05-21 上证指数</td><td>09:30-09:35</td><td>0.0%</td><td>10:14 → 14:53</td><td>14:53</td><td>-2.53%</td><td>-0.03%</td><td>-0.05%</td><td>0.15%</td></tr><tr><td>2026-05-21 上证指数</td><td>09:45-10:10</td><td>0.0%</td><td>10:14 → 14:53</td><td>14:53</td><td>-2.87%</td><td>-0.01%</td><td>0.03%</td><td>-0.02%</td></tr><tr><td>2026-05-21 上证指数</td><td>14:30-14:55</td><td>100.0%</td><td>10:14 → 14:53</td><td>14:55</td><td>0.00%</td><td>0.04%</td><td>—</td><td>—</td></tr></tbody></table></div>
+      <p class="truth">5·21 上证到 10:10 没有越过噪声带的下压候选；第一轮可记录候选是 10:17，10:19 只说明重叠斜率连续，10:24 才出现候选后价格同向延续，13:50 开始的这一轮才持续到尾盘。因此，本研究压力口径截至 10:10 未识别后来形成的午后鸭蛋弧，早盘窗口不能保证提前识别所有午后风险。兆易创新 09:47 的首次候选虽在 09:49 出现重叠斜率连续，却没有价格同向延续并于 09:54 失效；10:00 的第二轮才补齐延续证据。三段正式窗口的角色暂不冲突，但仍不能证明已经具备可交易领先量。</p>
+    </section>
+
+    <section id="implementation">
+      <h2>日报落地：一个只读研究产物，两种时间钟</h2>
+      <p class="lead">正式日报新增的不是“量化买卖按钮”，而是一份 <code>market_language_translation.v1</code> 研究证据。它在入口从目标日事实构建一次，完整版和摘要版各拿独立副本，只在原有明日执行结论之后展示。</p>
+      <div class="formula">目标日事实 → 来源投影 → 合力范围 / 方向 / 阶段 / 多轮事件 → 研究证据区<br>正式候选 / 最终对象 / 仓位 / B1-B2 / 退出动作 ─────────────────→ 保持原链路</div>
+      <div class="table-wrap"><table><thead><tr><th>层次</th><th>进入内容</th><th>时间边界</th><th>对正式动作的影响</th></tr></thead><tbody>
+        <tr><td>当时事实</td><td>目标日指数、宽度、板块同步、参与度与可追溯分钟路径</td><td>只能读到 <code>causal_cutoff</code></td><td>仅生成研究解释</td></tr>
+        <tr><td>市场语言产物</td><td>范围、方向、阶段、候选、确认、失效、反证、下一窗口任务</td><td>候选、确认与失效各自保留因果截止点</td><td>不进入正式决定输入</td></tr>
+        <tr><td>正式日报</td><td><code>selection_workflow</code>、<code>final_target_resolution</code>、仓位与执行计划</td><td>继续按原有 T0 决定</td><td>研究产物只能在后方展示</td></tr>
+        <tr><td>replay 验收</td><td>未来 5/10/20 分钟、MFE/MAE、低高区、T+1/T+2 与行情完成比例</td><td>仅在未来事实已发生后填写</td><td>只批改，不回写当时判断</td></tr>
+      </tbody></table></div>
+      <h3>固定时间钟没有扩张</h3>
+      <p><code>09:30-09:35</code>、<code>09:50-10:10</code>、<code>14:30-14:55</code> 仍是唯一三段买卖处理时间。<code>09:45-09:50</code> 只作前哨观察；全天事件时钟可以记录午间或午后新候选，但窗口外只形成观察记录，等下一正式窗口或下一份日报处理。</p>
+      <h3>正式决定逐字段不变</h3>
+      <div class="table-wrap"><table><thead><tr><th>比较项</th><th>完整版</th><th>摘要版</th><th>结果</th></tr></thead><tbody>
+        <tr><td><code>selection_workflow</code></td><td>接入前后逐字段比较</td><td>接入前后逐字段比较</td><td>相同</td></tr>
+        <tr><td><code>final_target_resolution</code></td><td>接入前后逐字段比较</td><td>接入前后逐字段比较</td><td>相同</td></tr>
+        <tr><td>明日执行对象 / 仓位 / 执行性质</td><td>显式投影比较</td><td>显式投影比较</td><td>相同</td></tr>
+        <tr><td>B1 / B2 / 退出动作</td><td>显式投影比较</td><td>显式投影比较</td><td>相同</td></tr>
+        <tr><td>原研究产物哈希</td><td>渲染前后核对</td><td>渲染前后核对</td><td>未改写</td></tr>
+      </tbody></table></div>
+      <p>fresh 产物的 <code>posthoc_validation</code> 固定为 <code>null</code>。PostgreSQL 只按目标日和专属 <code>source_policy=postgresql.market_language_translation.v1</code> 精确读写；本地 fresh 写入 <code>data/market-language/fresh/</code>，replay 只写入 <code>snapshots/replay/market-language/</code>，两者不互相覆盖。</p>
+    </section>
+
+    <section id="protection-samples">
+      <h2>保护样本：先证明它会克制，再讨论是否有用</h2>
+      <p>以下是受控路径回归，不是历史命中率。它们的任务是阻止三个极端案例反推普通行情，确保“同样像弧线”时仍允许得出不同范围、阶段或失败记录。</p>
+      <div class="table-wrap"><table><thead><tr><th>保护路径</th><th>研究产物应怎样翻译</th><th>防止的误判</th></tr></thead><tbody>
+        <tr><td>普通匀速缓跌</td><td>可以记录向下压力，但不能因浮点误差写成向下反馈加速</td><td>把所有缓跌都叫踩踏</td></tr>
+        <tr><td>单根消息重估后横盘</td><td>重叠斜率可以短暂连续；没有候选后价格延续时降为“仅重叠斜率连续”，随后完整记录失效</td><td>把一次性价值重估解释为持续级联</td></tr>
+        <tr><td>单股持续卖压、市场宽度向上</td><td>范围保持 <code>single_stock</code>，并记录聚合方向冲突</td><td>把单一大资金执行提高为全市场合力</td></tr>
+        <tr><td>快速下跌后持续回升</td><td>先保留下压事件，再把当前阶段写成修复</td><td>只看日内曾经下跌而忽略恢复力</td></tr>
+        <tr><td>权重指数下跌、上涨家数占优</td><td>范围保持 <code>index_weighted</code>，不能写 <code>whole_market</code></td><td>把上证的平滑鸭蛋等同于全部个股</td></tr>
+        <tr><td>指数、宽度、板块健康同向上行</td><td>可提高为全市场向上扩散，不写拥挤、衰减或修复</td><td>系统只能识别下跌，无法描述健康合力</td></tr>
+        <tr><td>只有五分钟路径</td><td>保留五分钟粒度并停止输出一分钟候选时刻</td><td>把桶结束时刻冒充真实一分钟事件</td></tr>
+      </tbody></table></div>
+      <p class="truth"><strong>保护样本带来的关键修正：</strong>三根重叠十五分钟斜率同向，只能确认下压表象仍在滚动窗口中可见，不等于确认持续卖压，更不等于确认量化账户。还要继续看价格是否同向延续、事件是否失效、范围是否扩散、宽度是否同向以及恢复力是否回来。</p>
+    </section>
+
+    <section id="strategy">
+      <h2>T+0 识别 → T+1 条件参与 → T+2 处理：仍是待验收研究协议</h2>
+      <p>市场语言产物不会自行把任何股票送入这条链。压力日的顺滑下跌最多提示次日研究对象，“压力大”本身更像回避信号；只有原日报已经在 T0 决定条件参与，且次日持续修复、相对强度和承接同时成立，才执行 B1，B2 仍只在进一步确认后补。</p>
+      <ol class="steps"><li><strong>T+0</strong><span>只识别压力表象、降温与修复质量；加速本身用于回避，不直接生成次日抄底资格。</span></li><li><strong>T+1</strong><span>只有板块、相对强度和承接继续确认才给 B1；B2 只在进一步确认后补。</span></li><li><strong>T+2</strong><span>固定卖出仍是待检验假说，必须与压力半衰期、可成交性和单账户资金占用一起回测。</span></li></ol>
+      <h3>7 月 10 日两例只能前瞻登记</h3>
+      <div class="table-wrap"><table><thead><tr><th>案例</th><th>T+0</th><th>T+1</th><th>T+2</th><th>当前状态</th></tr></thead><tbody><tr><td>sh603986_20260710_1m</td><td>2026-07-10</td><td>2026-07-13</td><td>2026-07-14</td><td>截至 2026-07-12 尚未发生</td></tr><tr><td>sh600584_20260710_1m</td><td>2026-07-10</td><td>2026-07-13</td><td>2026-07-14</td><td>截至 2026-07-12 尚未发生</td></tr></tbody></table></div>
+      <p>截至本版复核日，2026-07-13 和 2026-07-14 尚未发生。报告不能提前填写收益，也不能用后来发生的数据倒推今天“已经成功”。</p>
+      <h3>单账户资金会重叠</h3>
+      <ul class="plain-list"><li>单仓持有期间跳过重叠新信号</li><li>两个 50% 资金槽交替</li><li>T+2 开盘先处理旧仓再判断新信号，但这会改变原退出规则</li></ul>
+      <p>满仓逐日执行在资金上不可行。未来回测必须使用单账户逐日净值，计入一手金额、最低佣金、卖出税费、滑点、涨跌停和空闲现金；不能把每笔事件收益直接相加。</p>
+    </section>
+
+    <section id="limits">
+      <h2>这一步真正帮助日报什么，以及下一轮怎样验收</h2>
+      <p>它已经把“乌云密布”的生活经验拆成可追溯字段：压力发生在指数、单股、单板块还是全市场；方向向上还是向下；处于启动、扩散、衰减、向下反馈加速或修复；候选何时出现、确认、失效和再来；指数、宽度和板块是否互相支持。</p>
+      <div class="formula-grid">
+        <div class="formula-item"><strong>现在能做</strong><p>在原有动作之后解释市场正在表达的范围、方向和阶段；让下一正式窗口知道应该核对延续、扩散、失效还是修复。</p></div>
+        <div class="formula-item"><strong>现在不能做</strong><p>仅凭曲线确认量化账户、龙虎榜席位触发链、真实撤单率、A 股量化成交占比或次日必然反弹。</p></div>
+        <div class="formula-item"><strong>下一轮验收</strong><p>连续积累样本外 replay，比较候选后的 5/10/20 分钟、MFE/MAE、失效率和不同市场范围，不只挑成功样本。</p></div>
+        <div class="formula-item"><strong>升级前提</strong><p>只有研究证据在足够样本中稳定提高窗口复核质量，且没有改写正式决定，才单独讨论是否影响候选或仓位。</p></div>
+      </div>
+      <p class="truth">三例和保护路径足以支持“先记录并翻译一分钟表象”，仍不能证明“看到鸭蛋弧就买次日反弹”，也不能证明 A 股量化成交占比约 40%。真正的进步不是把直觉包装成确定性，而是让每次候选、失效和反证都能留下来接受未来事实批改。</p>
+    </section>
   </main>
-
-  <noscript>图表需要浏览器启用本地 JavaScript；正文、表格和结论仍可直接阅读。</noscript>
-
-  <script>
-    "use strict";
-
-    const CASES = {
-      "sh000001_20260521": {
-        name: "上证指数",
-        date: "2026-05-21",
-        role: "pressure",
-        price: [0,-3.2,-4.9,15.2,14.8,33.8,32.9,35,33.8,38.2,30.6,33,21.1,7.2,0.3,-0.3,-12.2,-7.2,3.9,0.1,-13.5,-24.5,-15.8,-42.9,-30.2,-50.2,-48.7,-33.9,-35.9,-40.2,-62.4,-58.4,-51.7,-77,-78.4,-91.4,-104.9,-113.3,-122,-137.6,-160.8,-185.9,-218.9,-190.5,-217.7,-232.6,-253.4,-249.5],
-        events: {burst: 11, cooling: 18, second: 31},
-        final: "稳定下压 · 第二轮压力 · 风险保留"
-      },
-      "sh603986_20260710": {
-        name: "兆易创新",
-        date: "2026-07-10",
-        role: "pressure",
-        price: [0,71.5,21.7,22,62,-94.4,-230.8,-216.3,-275.2,-238.1,-291.1,-289.6,-387,-436.5,-440.7,-515.7,-512.6,-413.9,-529.2,-497.6,-514.3,-485.6,-641.3,-537,-571.3,-445.7,-453.4,-557.9,-631.9,-690.3,-799.1,-846,-815.5,-811,-801.7,-894.3,-849.1,-939.8,-972.9,-818,-1037.5,-1142.6,-1116.7,-1235.9,-1257,-1274.8,-1271.7,-1343.2],
-        events: {burst: 3, cooling: 10, second: 13},
-        final: "边际降温 · 第二轮压力 · 风险保留"
-      },
-      "sh000001_20260709": {
-        name: "上证指数",
-        date: "2026-07-09",
-        role: "repair",
-        price: [0,19.5,18.9,9.2,5.6,-11.5,-15.9,5.2,4.6,9.5,-1.1,-17.3,-34.4,-35.2,-37.1,-57.9,-42.5,-64.5,-64.4,-60.2,-71.9,-81.2,-63.4,-52.9,-46.5,-12.4,3.9,-23.1,-27.9,-0.6,-10.6,16.5,28.7,50.8,60.4,80.7,83.7,88.7,102.2,83.5,97.3,113.1,119.8,132.6,152.1,167.1,151.9,157.7],
-        events: {burst: 3, cooling: 8, repair: 32},
-        final: "持续修复 · 第一轮结束 · 风险清除"
-      },
-      "sh000001_20260604": {
-        name: "上证指数",
-        date: "2026-06-04",
-        role: "protection",
-        price: [0,0.2,10.5,13.2,11.2,26.4,17.3,27.6,14.5,11.2,-3.1,8.8,-4.3,-4.3,3.3,8.8,5.3,5.5,19.3,7.4,-0.6,-1.2,-7,-2.4,-9,-20.6,-6.4,-6.6,-11.5,-11,-30,-24.9,-13.6,-24.5,-18.2,-13.3,-5.1,-1.8,-15.1,-22.3,-57.6,-41.4,-21.7,-32.7,-29.4,-22.9,-19.7,-24],
-        events: {burst: 8, cooling: 12, repair: 16},
-        final: "动力不明 · 普通回落 · 不确认交接"
-      },
-      "sz002297_20260527": {
-        name: "博云新材",
-        date: "2026-05-27",
-        role: "protection",
-        price: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
-        events: {},
-        final: "证据不足 · 价格限制 · 停止排名"
-      }
-    };
-
-    const MODEL_DATA = {
-      "2026-05-21 上证指数": {strength: "弱区分", values: {exponential:0,sqrt_ellipse_proxy:2.14,segmented:7.67,gompertz:13.65,finite_time_power:31.48,linear:84.38,logarithmic:92.07}},
-      "2026-07-10 兆易创新": {strength: "中等区分", values: {segmented:0,finite_time_power:6.44,exponential:6.97,linear:7.48,logarithmic:12.83,gompertz:13.51,sqrt_ellipse_proxy:39.25}},
-      "2026-07-09 上证指数": {strength: "强区分", values: {segmented:0,gompertz:63.81,exponential:85.87,sqrt_ellipse_proxy:92.18,finite_time_power:108.20,linear:125.08,logarithmic:129.96}},
-      "2026-06-04 上证指数": {strength: "弱区分", values: {segmented:0,linear:2.88,gompertz:3.40,exponential:4.80,logarithmic:5.82,finite_time_power:7.51,sqrt_ellipse_proxy:9.27}}
-    };
-
-    const MODEL_LABELS = {
-      linear: "线性",
-      segmented: "分段",
-      finite_time_power: "幂律",
-      sqrt_ellipse_proxy: "椭圆代理",
-      exponential: "指数",
-      gompertz: "Gompertz",
-      logarithmic: "对数"
-    };
-
-    const TIMES = ["09:35","09:40","09:45","09:50","09:55","10:00","10:05","10:10","10:15","10:20","10:25","10:30","10:35","10:40","10:45","10:50","10:55","11:00","11:05","11:10","11:15","11:20","11:25","11:30","13:05","13:10","13:15","13:20","13:25","13:30","13:35","13:40","13:45","13:50","13:55","14:00","14:05","14:10","14:15","14:20","14:25","14:30","14:35","14:40","14:45","14:50","14:55","15:00"];
-
-    const SVG_NS = "http://www.w3.org/2000/svg";
-
-    function svgEl(name, attrs = {}, text = null) {
-      const element = document.createElementNS(SVG_NS, name);
-      Object.entries(attrs).forEach(([key, value]) => element.setAttribute(key, String(value)));
-      if (text !== null) element.textContent = text;
-      return element;
-    }
-
-    function addSvgText(svg, x, y, text, className, anchor = "start") {
-      svg.appendChild(svgEl("text", {x, y, class: className, "text-anchor": anchor}, text));
-    }
-
-    function renderPathPlot(target, item) {
-      const width = 640;
-      const height = 240;
-      const margin = {top: 34, right: 18, bottom: 30, left: 52};
-      const chartW = width - margin.left - margin.right;
-      const chartH = height - margin.top - margin.bottom;
-      const minRaw = Math.min(...item.price, 0);
-      const maxRaw = Math.max(...item.price, 0);
-      const padding = Math.max(18, (maxRaw - minRaw) * 0.1);
-      const minY = minRaw - padding;
-      const maxY = maxRaw + padding;
-      const x = index => margin.left + (index / (item.price.length - 1)) * chartW;
-      const y = value => margin.top + ((maxY - value) / (maxY - minY || 1)) * chartH;
-      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${item.date}${item.name}五分钟归一化价格路径`});
-      svg.appendChild(svgEl("title", {}, `${item.date} ${item.name} 五分钟归一化价格路径`));
-      svg.appendChild(svgEl("desc", {}, `收盘路径从 ${item.price[0]} 基点变化到 ${item.price[item.price.length - 1]} 基点。${item.final}`));
-
-      for (let i = 0; i < 5; i += 1) {
-        const value = maxY - ((maxY - minY) * i / 4);
-        const yy = y(value);
-        svg.appendChild(svgEl("line", {x1: margin.left, y1: yy, x2: width - margin.right, y2: yy, class: Math.abs(value) < (maxY - minY) / 16 ? "chart-zero" : "chart-grid"}));
-        addSvgText(svg, margin.left - 8, yy + 3, `${Math.round(value)}`, "chart-label", "end");
-      }
-
-      [0, 23, 24, 47].forEach(index => {
-        const xx = x(index);
-        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: height - margin.bottom, class: "chart-grid"}));
-        const labelX = xx + (index === 23 ? -4 : index === 24 ? 4 : 0);
-        const anchor = index === 0 || index === 24 ? "start" : index === 47 || index === 23 ? "end" : "middle";
-        addSvgText(svg, labelX, height - 8, TIMES[index], "chart-label", anchor);
-      });
-
-      const pathData = item.price.map((value, index) => `${index === 0 ? "M" : "L"}${x(index).toFixed(2)},${y(value).toFixed(2)}`).join(" ");
-      const pathClass = item.role === "pressure" ? "chart-line-risk" : item.role === "repair" ? "chart-line-repair" : "chart-line-protection";
-      svg.appendChild(svgEl("path", {d: pathData, class: pathClass}));
-
-      const eventStyles = {
-        burst: {label: "首轮", color: "var(--amber)"},
-        cooling: {label: "降温", color: "var(--blue)"},
-        second: {label: "第二轮", color: "var(--red)"},
-        repair: {label: "修复确认", color: "var(--green)"}
-      };
-
-      Object.entries(item.events).forEach(([eventName, index], order) => {
-        const style = eventStyles[eventName];
-        const xx = x(index);
-        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: height - margin.bottom, class: "event-line", stroke: style.color}));
-        svg.appendChild(svgEl("circle", {cx: xx, cy: y(item.price[index]), r: 4, fill: style.color}));
-        addSvgText(svg, xx + 4, 14 + order * 11, `${style.label} ${TIMES[index]}`, "event-label");
-      });
-
-      item.price.forEach((value, index) => {
-        const point = svgEl("circle", {cx: x(index), cy: y(value), r: 7, fill: "transparent"});
-        point.appendChild(svgEl("title", {}, `${TIMES[index]} · ${value.toFixed(1)} bp`));
-        svg.appendChild(point);
-      });
-
-      target.appendChild(svg);
-    }
-
-    function buildCasePlots() {
-      const container = document.getElementById("case-plots");
-      Object.values(CASES).forEach(item => {
-        const article = document.createElement("article");
-        article.className = `case-plot ${item.role === "pressure" ? "" : "protection"}`.trim();
-        const titleRow = document.createElement("div");
-        titleRow.className = "plot-title";
-        const title = document.createElement("strong");
-        title.textContent = `${item.date} ${item.name}`;
-        const status = document.createElement("span");
-        status.textContent = item.final;
-        titleRow.append(title, status);
-        const slot = document.createElement("div");
-        slot.className = "plot-slot";
-        article.append(titleRow, slot);
-        container.appendChild(article);
-        renderPathPlot(slot, item);
-      });
-    }
-
-    function renderModelChart(target, title, item) {
-      const entries = Object.entries(item.values).sort((a, b) => a[1] - b[1]);
-      const width = 520;
-      const height = 330;
-      const margin = {top: 18, right: 58, bottom: 22, left: 100};
-      const chartW = width - margin.left - margin.right;
-      const rowH = 38;
-      const cap = 40;
-      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": `${title}模型ΔAICc比较`});
-      svg.appendChild(svgEl("title", {}, `${title} 模型 ΔAICc 比较`));
-      svg.appendChild(svgEl("desc", {}, `最佳模型为${MODEL_LABELS[entries[0][0]]}。数值越低越好，图形宽度在40处截断。`));
-
-      [0, 10, 20, 30, 40].forEach(value => {
-        const xx = margin.left + (value / cap) * chartW;
-        svg.appendChild(svgEl("line", {x1: xx, y1: margin.top, x2: xx, y2: margin.top + rowH * entries.length, class: "chart-grid"}));
-        addSvgText(svg, xx, height - 5, `${value}`, "chart-label", "middle");
-      });
-
-      entries.forEach(([name, value], index) => {
-        const yy = margin.top + index * rowH + 6;
-        const barWidth = value === 0 ? 4 : Math.max(6, Math.min(value, cap) / cap * chartW);
-        const className = `formula-bar${index === 0 ? " best" : name === "sqrt_ellipse_proxy" ? " ellipse" : ""}`;
-        svg.appendChild(svgEl("rect", {x: margin.left, y: yy, width: barWidth, height: 22, rx: 2, class: className}));
-        addSvgText(svg, margin.left - 8, yy + 15, MODEL_LABELS[name], "formula-label", "end");
-        addSvgText(svg, margin.left + Math.min(barWidth + 6, chartW + 8), yy + 15, value.toFixed(2), "formula-value");
-      });
-      target.appendChild(svg);
-    }
-
-    function buildModelCharts() {
-      const container = document.getElementById("model-grid");
-      Object.entries(MODEL_DATA).forEach(([title, item]) => {
-        const article = document.createElement("article");
-        article.className = "model-chart";
-        const heading = document.createElement("h3");
-        const label = document.createElement("span");
-        heading.textContent = title;
-        label.textContent = item.strength;
-        heading.appendChild(label);
-        const slot = document.createElement("div");
-        slot.className = "model-svg-slot";
-        article.append(heading, slot);
-        container.appendChild(article);
-        renderModelChart(slot, title, item);
-      });
-    }
-
-    function buildTimingChart() {
-      const target = document.getElementById("timing-chart");
-      const width = 760;
-      const height = 190;
-      const margin = {left: 40, right: 40};
-      const axisY = 100;
-      const x = index => margin.left + (index / 47) * (width - margin.left - margin.right);
-      const svg = svgEl("svg", {viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "兆易创新压力结构与变化点确认时序"});
-      svg.appendChild(svgEl("title", {}, "兆易创新压力结构与变化点确认时序"));
-      svg.appendChild(svgEl("desc", {}, "10点出现压力加速，10点25首轮降温，10点40第二轮压力，10点50形成变化候选，13点20才确认。"));
-      svg.appendChild(svgEl("line", {x1: margin.left, y1: axisY, x2: width - margin.right, y2: axisY, class: "timeline-base"}));
-
-      const events = [
-        {index: 5, time: "10:00", label: "压力加速", color: "var(--amber)", upper: true},
-        {index: 10, time: "10:25", label: "首轮降温", color: "var(--blue)", upper: false},
-        {index: 13, time: "10:40", label: "第二轮压力", color: "var(--red)", upper: true},
-        {index: 15, time: "10:50", label: "变化候选", color: "var(--amber)", upper: false},
-        {index: 27, time: "13:20", label: "候选确认", color: "var(--green)", upper: true}
-      ];
-
-      events.forEach(event => {
-        const xx = x(event.index);
-        const labelY = event.upper ? 42 : 150;
-        svg.appendChild(svgEl("line", {x1: xx, y1: axisY, x2: xx, y2: event.upper ? 58 : 132, stroke: event.color, "stroke-width": 1.5}));
-        svg.appendChild(svgEl("circle", {cx: xx, cy: axisY, r: 7, fill: event.color, class: "timeline-node"}));
-        addSvgText(svg, xx, labelY, event.label, "timeline-text", "middle");
-        addSvgText(svg, xx, labelY + 15, event.time, "timeline-time", "middle");
-      });
-
-      const lagStart = x(15);
-      const lagEnd = x(27);
-      svg.appendChild(svgEl("line", {x1: lagStart, y1: 176, x2: lagEnd, y2: 176, stroke: "var(--red)", "stroke-width": 2}));
-      svg.appendChild(svgEl("line", {x1: lagStart, y1: 171, x2: lagStart, y2: 181, stroke: "var(--red)", "stroke-width": 2}));
-      svg.appendChild(svgEl("line", {x1: lagEnd, y1: 171, x2: lagEnd, y2: 181, stroke: "var(--red)", "stroke-width": 2}));
-      addSvgText(svg, (lagStart + lagEnd) / 2, 172, "确认延迟 12 bars / 60交易分钟", "timeline-time", "middle");
-      target.appendChild(svg);
-    }
-
-    document.getElementById("print-report").addEventListener("click", () => window.print());
-    buildCasePlots();
-    buildModelCharts();
-    buildTimingChart();
-  </script>
+  <footer>案例数据冻结于 2026-07-11 · 日报只读落地复核于 2026-07-12 · 通达信一分钟主源 · 腾讯 / 新浪交叉核对 · AICc 与未来表现仅作 replay 验收 · 研究证据不改写正式日报交易决定</footer>
+</article>
 </body>
 </html>

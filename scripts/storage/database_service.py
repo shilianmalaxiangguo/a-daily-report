@@ -387,6 +387,18 @@ class DatabaseService:
             return {}
         return reader(trade_date)
 
+    def replace_market_language_translation_artifact(self, artifact):
+        writer = getattr(self.repository, "replace_market_language_translation_artifact", None)
+        if not callable(writer):
+            return {}
+        return writer(artifact)
+
+    def load_market_language_translation_artifact(self, trade_date):
+        reader = getattr(self.repository, "load_market_language_translation_artifact", None)
+        if not callable(reader):
+            return {}
+        return reader(trade_date)
+
     def save_daily_report_snapshot(self, trade_date, data):
         writer = getattr(self.repository, "save_daily_report_facts", None)
         if not callable(writer):

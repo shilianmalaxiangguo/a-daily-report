@@ -5,7 +5,7 @@ DEFAULT_POSITIONING_NODE_SPECS = [
     {"node_key": "intraday_note", "title": "盘中说明"},
     {"node_key": "environment_status", "title": "明日市场环境"},
     {"node_key": "structure_range", "title": "结构区间"},
-    {"node_key": "ascii_diagram", "title": "ASCII结构图"},
+    {"node_key": "ascii_diagram", "title": "大盘结构图"},
     {"node_key": "state_basis", "title": "状态依据"},
     {"node_key": "structure_overview", "title": "结构识别概览"},
     {"node_key": "zhongshu_table", "title": "结构中枢表"},

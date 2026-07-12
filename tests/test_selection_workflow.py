@@ -74,6 +74,11 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["candidate_pool"][0]["brooks_price_action_judge"]["volume_signal"], "放量")
         self.assertEqual(workflow["candidate_pool"][0]["common_selection_consistency"]["status"], "待复核")
         self.assertEqual(workflow["candidate_pool"][0]["status"], "最终执行对象")
+        self.assertEqual(
+            workflow["candidate_pool"][0]["front_observation_reason"],
+            "已归入明日执行结论，后续只按B1/B2执行计划展示",
+        )
+        self.assertNotIn("已进入明日执行对象", workflow["candidate_pool"][0]["front_observation_reason"])
         n6 = next(node for node in workflow["nodes"] if node["node_id"] == "N6")
         n7 = next(node for node in workflow["nodes"] if node["node_id"] == "N7")
         self.assertEqual(workflow["market_layer"]["market_atmosphere"], "发酵")
@@ -117,6 +122,123 @@ class SelectionWorkflowTest(unittest.TestCase):
         self.assertEqual(workflow["candidate_pool"][0]["candidate_origin"], "legacy_signal_only")
         self.assertFalse(workflow["candidate_pool"][0]["front_observation_qualified"])
         self.assertEqual(workflow["candidate_pool"][0]["observation_layer"], "process_observation")
+
+    def test_weak_close_risk_first_candidate_cannot_be_final_execution_object(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-10",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%不参与",
+                        "open": 26.10,
+                        "high": 26.10,
+                        "low": 25.10,
+                        "close": 25.31,
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(row["brooks_price_action_judge"]["status"], "risk_first")
+        self.assertEqual(row["brooks_price_action_judge"]["verdict"], "先处理风险")
+        self.assertIn("价格否定优先", row["price_action_block_reason"])
+        self.assertNotIn("跌停反包专项", row["eliminated_reason"])
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+        self.assertNotEqual(row["status"], "最终执行对象")
+
+    def test_target_date_quote_ohlc_overrides_stale_candidate_ohlc(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-10",
+            data={
+                "selection_workflow_quote_rows": [
+                    {
+                        "trade_date": "2026-07-10",
+                        "stock_code": "002185",
+                        "name": "华天科技",
+                        "open": 26.10,
+                        "high": 26.10,
+                        "low": 25.10,
+                        "close": 25.31,
+                    }
+                ]
+            },
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "收缩防守"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "华天科技",
+                        "code": "002185",
+                        "sector": "半导体",
+                        "pattern": "放量",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%不参与",
+                        "front_observation_qualified": False,
+                        "front_observation_reason": "已归入明日执行结论，后续只按B1/B2执行计划展示",
+                        "open": 25.00,
+                        "high": 25.60,
+                        "low": 24.80,
+                        "close": 25.60,
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(row["brooks_price_action_judge"]["candlestick_consequence"], "弱收盘")
+        self.assertEqual(row["brooks_price_action_judge"]["status"], "risk_first")
+        self.assertIn("价格否定优先", row["front_observation_reason"])
+        self.assertNotIn("已归入明日执行结论", row["front_observation_reason"])
+        self.assertNotIn("B1/B2执行", row["front_observation_reason"])
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
+
+    def test_price_rejected_candidate_cannot_be_final_execution_object(self):
+        workflow = build_selection_workflow(
+            target_date="2026-07-10",
+            execution_stage_context={
+                "market_state_snapshot": {"market_state": "震荡"},
+                "mainline_name": "半导体",
+                "sector_derived_candidates": [
+                    {
+                        "name": "样本乙",
+                        "code": "000002",
+                        "sector": "半导体",
+                        "anchor_reversal_decision": "可作为主对象",
+                        "candidate_role": "板块锚",
+                        "sector_derivation_evidence": "半导体进入板块候选，容量成交",
+                        "participation_window": "09:50-10:10",
+                        "fallback_state": "不满足回到0%不参与",
+                        "volume_summary": "放量",
+                        "pattern": "冲高回落，长上影",
+                    }
+                ],
+            },
+            position_decision={"target_position_pct": 50},
+        )
+
+        row = workflow["candidate_pool"][0]
+        self.assertEqual(row["brooks_price_action_judge"]["status"], "price_rejected")
+        self.assertIn("降级观察", row["price_action_block_reason"])
+        self.assertNotIn("跌停反包专项", row["eliminated_reason"])
+        self.assertEqual(workflow["final"]["execution_object"], {})
+        self.assertEqual(workflow["final"]["position_pct"], 0)
 
     def test_t_board_or_one_line_limit_cannot_create_new_entry_without_sector_derivation(self):
         workflow = build_selection_workflow(

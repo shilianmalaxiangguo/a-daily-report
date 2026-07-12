@@ -573,6 +573,436 @@ Explicit selected candidate enters the candidate pool first. Weak fallback rows
 can only override it with positive current core evidence.
 ```
 
+### Daily Report Market Wording Consistency Contract
+
+- When `mainline_capacity_regime_summary.mainline_regime` is `无主线`,
+  `混沌轮动`, or `混沌接力`, appendix market analysis must render
+  `当前主线: 暂无确认主线`. Strong sectors may remain under candidate evidence,
+  but none may be relabeled as the confirmed current mainline.
+- Market-volume wording must distinguish breadth from downside-tail pressure.
+  When advancing stocks outnumber declining stocks but the limit-down count is
+  elevated, the turnover row should state that the limit-down side remains
+  under pressure; it must not call the whole profit effect weak while the next
+  row calls breadth strong.
+- The Markdown and Bear HTML must use the same wording because Bear HTML reads
+  the finalized Markdown and must not recompute either judgment.
+
+Required tests:
+
+- `tests.test_market_analysis_builder.MarketAnalysisBuilderTest.test_build_market_and_sector_analysis_contract_downgrades_stale_mainline_when_capacity_regime_has_no_mainline`
+- `tests.test_market_analysis_builder.MarketAnalysisBuilderTest.test_build_market_and_sector_analysis_contract_separates_positive_breadth_from_limit_down_pressure`
+- `tests.test_market_overview_builder`
+- `tests.test_daily_report_markdown_html`
+- The generated target-date Markdown must pass
+  `scripts/report/report_acceptance_audit.py`, and its Bear HTML must preserve
+  the same position, execution object, and action type.
+
+### Tushare A/B Daily Query Contract
+
+#### 1. Scope / Trigger
+
+Use this contract when changing Tushare environment selection, source-health
+labels, or the single-day full-market `daily` query used by turnover and market
+breadth calculations. It prevents a B-channel pagination contract from being
+sent to an A-channel SDK POST endpoint.
+
+#### 2. Signatures
+
+```python
+create_tushare_pro_api(
+    *,
+    ts_module=None,
+    token=None,
+    http_url=None,
+    timeout_seconds=8,
+) -> DataApi | TushareReplayProApi
+
+fetch_stock_daily_turnover_records(
+    trade_date,
+    *,
+    pro=None,
+    ts_module=None,
+    page_limit=1000,
+    page_retry_count=5,
+) -> list[dict]
+```
+
+Environment contract:
+
+```text
+TUSHARE_TOKEN=<non-empty token>
+TUSHARE_HTTP_URL=<one A SDK POST endpoint or one/more comma-separated B replay endpoints>
+```
+
+#### 3. Contracts
+
+- A configured URL that does not end with `/tushare/pro` uses the Tushare SDK
+  POST client and is reported as `Tushare A 通道`.
+- A single-day full-market A query must call
+  `pro.daily(trade_date=YYYYMMDD, fields=...)`. It must not include
+  `start_date`, `end_date`, `limit`, or `offset`.
+- A configured URL ending with `/tushare/pro` uses `TushareReplayProApi` and is
+  reported as `Tushare B 通道`.
+- The B single-day query keeps the replay pagination contract:
+  `start_date=YYYYMMDD`, `end_date=YYYYMMDD`, `limit=<page_limit>`, and an
+  increasing `offset` until the returned page is shorter than `page_limit`.
+- This A-channel change must not alter B pagination. The current B adapter
+  treats an empty continuation page as an error; a legal exact-multiple empty
+  tail remains a known pre-existing B issue for a separate change.
+- Both channels normalize returned rows to the same record fields, including
+  `trade_date`, `ts_code`, `stock_code`, `market`, OHLC values, `pct_chg`,
+  `amount_raw_qianyuan`, `amount_yi`, and `data_source == "tushare.daily"`.
+- `daily_report_source_health.py` must derive the visible A/B channel name from
+  the resolved HTTP URL and pass that same token and URL into the connectivity
+  check. A uses `index_basic`; B keeps its `daily` check. Missing credentials or
+  a failed check must stop report generation.
+- An A response with no valid daily rows is a failed attempt and must follow the
+  retry path. A non-empty response alone does not prove full-market coverage;
+  run-level checks must retain and review the returned row count.
+- Tokens are environment-only data. Tests, logs, reports, health-check JSON,
+  and Bear HTML must redact token values and credential-bearing URLs.
+
+#### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| `trade_date` cannot be normalized | Return `[]` without a remote call |
+| A URL is configured | Use one non-paginated `trade_date` request per attempt |
+| A returns no valid normalized rows | Treat the attempt as failed and retry |
+| A request fails before retries are exhausted | Wait briefly and retry the same non-paginated request |
+| A request still fails after `page_retry_count` retries | Re-raise the last error |
+| B URL is configured | Keep same-day `start_date` / `end_date` pagination |
+| B page after offset zero is empty | Preserve the current retry/raise behavior in this A-only change; review exact-multiple termination separately |
+| Token or HTTP URL is missing | Source health reports failure and stops generation |
+| Connectivity check succeeds | Report the resolved A/B channel name and returned provider without exposing credentials |
+
+#### 5. Good / Base / Bad Cases
+
+| Case | Input | Expected Output |
+|---|---|---|
+| Good A full market | A URL plus `2026-07-10` | `daily(trade_date="20260710", fields=...)`; no pagination fields |
+| Good B full market | B replay URL plus `2026-07-10`, page size 1000 | Same-day range calls with offsets `0, 1000, ...` until complete |
+| Base invalid date | Empty or malformed date | `[]`; no API call |
+| Base transient A failure | First A call fails, next succeeds | Same A payload retried; normalized rows returned |
+| Bad mixed contract | A URL plus `start_date`, `end_date`, `limit`, or `offset` | Invalid implementation; can return incomplete or rejected data |
+| Bad ambiguous tail | B offset page is empty after a full prior page | Current code raises; do not silently redefine it as complete without a separate B completeness decision |
+| Bad source label | A URL rendered as `Tushare B 通道` | Health output is invalid because it hides the active source contract |
+
+#### 6. Tests Required
+
+- `tests.test_tushare_turnover_service.TushareTurnoverServiceTest.test_fetch_stock_daily_turnover_records_uses_trade_date_for_a_channel`
+- `tests.test_tushare_turnover_service.TushareTurnoverServiceTest.test_fetch_stock_daily_turnover_records_retries_empty_a_channel_result`
+- `tests.test_tushare_turnover_service.TushareTurnoverServiceTest.test_fetch_stock_daily_turnover_records_paginates_single_day_rows`
+- `tests.test_daily_report_source_health.DailyReportSourceHealthTest.test_tushare_a_proxy_is_probed_and_can_pass`
+- `tests.test_daily_report_source_health.DailyReportSourceHealthTest.test_tushare_health_retries_once_before_stopping_generation`
+- `tests.test_tushare_client`
+- A live A-channel smoke check must return at least one `index_basic` row.
+- A generated target-date report must pass its consistency check and
+  `scripts/report/report_acceptance_audit.py`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+pro.daily(
+    start_date=trade_date,
+    end_date=trade_date,
+    limit=1000,
+    offset=0,
+)
+```
+
+Correct for A:
+
+```python
+pro.daily(trade_date=trade_date, fields=fields)
+```
+
+Correct for B:
+
+```python
+pro.daily(
+    start_date=trade_date,
+    end_date=trade_date,
+    fields=fields,
+    limit=page_limit,
+    offset=offset,
+)
+```
+
+## Scenario: Read-Only Market Language Research Artifact
+
+### 1. Scope / Trigger
+
+Use this contract when adding or changing research evidence that translates
+minute price paths into force scope, pressure direction, phase, event timing,
+or replay-only validation. The artifact may explain the report, but it must not
+change the formal candidate, final object, position, B1/B2 plan, or exit action.
+
+### 2. Signatures
+
+```python
+build_market_language_source_projection(
+    data,
+    *,
+    target_date,
+    analysis_mode,
+) -> dict
+
+build_market_language_translation(
+    projection,
+    *,
+    target_date,
+    analysis_mode,
+    artifact_origin="computed",
+    include_posthoc=False,
+) -> dict
+
+read_verified_saved_report_markdown(
+    report_path,
+    expected_markdown,
+) -> str
+
+PostgresDailyFactDb.replace_market_language_translation_artifact(artifact)
+PostgresDailyFactDb.load_market_language_translation_artifact(target_date)
+
+_market_stats_from_daily_rows(
+    rows,
+    zt_count,
+    dt_count,
+    *,
+    target_date=None,
+) -> dict
+
+PostgresDailyFactDb.query_market_breadth_counts(trade_date) -> dict
+
+load_fresh_market_language_translation(
+    target_date,
+    *,
+    root_dir=".",
+    service=None,
+) -> dict | None
+```
+
+Stable identifiers and paths:
+
+```text
+schema_version = market_language_translation.v1
+source_policy = postgresql.market_language_translation.v1
+fresh path = data/market-language/fresh/<target_date>.json
+replay path = snapshots/replay/market-language/<target_date>.json
+```
+
+### 3. Contracts
+
+- Every source records `target_date`, `source_date`, `query_date`, granularity,
+  time semantics, fields, and provider. A missing `source_date` does not inherit
+  the target date. A missing `query_date` remains null; a non-null value must be
+  an exact ISO date and cannot precede `source_date`.
+- Tushare and PostgreSQL producers that answer an exact-date market-breadth
+  query must stamp `market_stats.trade_date` and `market_stats.source_date` at
+  that producer boundary. The translator must not infer either value from the
+  outer report date. Preserve an explicit conflicting child date so validation
+  can exclude it instead of silently relabeling the fact.
+- Replay treats market breadth as complete only when positive up/down counts
+  also carry `trade_date` or `source_date` equal to the replay target. Undated
+  legacy counts must be replaced from the exact-date fact reader, preserving
+  its `trade_date`, `source_date`, and `query_date` in `market_stats`.
+- One-minute evidence must match the complete A-share interval-end grid:
+  exactly 240 rows across `09:31-11:30` and `13:01-15:00`. Five-minute rows,
+  illegal session times, internal gaps, or a missing `14:56-15:00` tail cannot
+  produce `evidence_status=sufficient`.
+- Direction and short/long slope comparison use a `0.05 bp/trading-minute`
+  noise band. Each event stores `confirmation_basis`, `confirmation_quality`,
+  and `directional_follow_through_at`. Three overlapping 15-minute slopes only
+  establish slope persistence; they are not three independent observations.
+- The 20-minute curvature proxy is shared by the production artifact and the
+  research generator: `kappa20(t) = [s5(t) - s5(t-15)] / 15`. Classification
+  uses the full-precision value; round only for rendered display.
+- A confirmed event may tolerate at most two neutral minutes. A third neutral
+  minute invalidates it; an opposite direction invalidates it immediately.
+- When the latest minute surface is balanced or unclear and an event remains
+  active, the artifact direction follows that active event. Conflicting end-of-
+  day votes remain counter-evidence and cannot relabel the event or its times.
+- `whole_market` requires cap-weighted direction, market breadth, and sector
+  synchrony to align. Sector direction text alone is insufficient; the cross-
+  sector synchrony percentage must be present and at least 50%, the semantic
+  majority floor. `crowding` requires an explicit source-dated crowding fact;
+  anchor cases cannot manufacture a general crowding threshold.
+- The artifact remains in the entry-point local scope and reaches the final
+  renderer through an explicit optional parameter. Do not write it into
+  `data`, `market_research_snapshot`, or `execution_stage_context`.
+- Render it only after the final `selection_workflow` and
+  `final_target_resolution` pass, under `## 市场语言翻译（研究证据）`, after the
+  formal action content.
+- Full and summary output receive independent deep copies. Compare the original
+  artifact canonical hash before and after both renders.
+- Fresh persistence occurs only after both variants, report checks, and whole-day
+  fact sync succeed. Replay persistence never calls the fresh writer.
+- Before either entry path writes the research artifact, read the saved full
+  Markdown from disk and compare it byte-for-byte with the accepted in-memory
+  body. A missing, unreadable, or different file stops artifact persistence.
+- Replay T+1/T+2 price ranges require an explicit open-trading-day calendar,
+  source date, query date, exchange-qualified instrument identity, and distinct
+  dates. Missing T+1 data does not move T+2 forward. Future price, MFE/MAE, and
+  low/high-zone facts stay under `posthoc_validation`; both the fresh source
+  projection and fresh artifact contain no future inputs.
+- PostgreSQL replacement deletes only the exact target date plus exact research
+  `source_policy`, in the same transaction as insert. Whole-day resave preserves
+  those rows. Report output directories and artifact roots are separate inputs;
+  the command entry always writes replay artifacts below the project root even
+  when a report is saved to an absolute external directory.
+- When `A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME=1`, a PostgreSQL exact-date miss is
+  final for the fresh artifact reader. It must return `None` and must not read
+  `data/market-language/fresh/<target_date>.json` from the local filesystem.
+
+### 4. Validation & Error Matrix
+
+| Situation | Required Handling |
+|---|---|
+| Source date is missing or differs from target date | Exclude it from derived judgment; report missing evidence |
+| Query date is missing | Keep null; do not substitute target date |
+| Query date is malformed or earlier than source date | Reject before render or persistence |
+| Claimed one-minute path has gaps or five-minute spacing | Downgrade granularity; emit no one-minute event time |
+| Minute path has 230-239 rows or misses the closing tail | Keep partial; never mark sufficient |
+| Direction/phase or event quality combination is invalid | Raise validation error before rendering or persistence |
+| A fixed-window direction/phase is invalid, or either evidence list references a missing id | Raise validation error before rendering or persistence |
+| Exact-date breadth producer omits its child trade/source date | Fix the producer; do not make the translator inherit the outer report date |
+| Replay snapshot has complete but undated market-breadth counts | Query the exact-date fact reader and replace counts while retaining source dates |
+| Width disagrees with index/sector direction, or sector has direction text only | Do not emit `whole_market`; preserve counter-evidence |
+| Active minute event conflicts with end-of-day votes | Keep the active event direction; preserve the vote conflict as counter-evidence |
+| Fresh artifact contains posthoc facts | Reject or normalize to `posthoc_validation=null` before use |
+| Fresh source projection receives future bars/calendar/overlap | Omit them from the projection; replay mode owns posthoc inputs |
+| T+ calendar is absent, exchange differs, or T+1 bar is missing | Keep the affected range null; never substitute another date or exchange |
+| AgentRunner receives fresh mode | Reject at `run()` entry, including custom-loader calls |
+| Saved full-report path is absent, unreadable, or differs | Raise `SavedReportVerificationError`; do not write artifact |
+| Report check or whole-day sync fails | Do not write fresh artifact |
+| Replay final check fails | Do not write replay artifact |
+| Exact target-date artifact is absent | Reconstruct only from target-date facts or return insufficient; never load nearest date |
+| PostgreSQL-only fresh artifact lookup misses | Return `None`; do not fall back to local fresh JSON |
+
+### 5. Good / Base / Bad Cases
+
+- Good: target-date one-minute data, breadth, and sector facts align; the report
+  renders a sourced research section while formal decision projections and the
+  source artifact hash remain unchanged.
+- Good: PostgreSQL writes the artifact, whole-day facts are saved again, and the
+  artifact loads with the same canonical hash.
+- Good: an exact-date Tushare or PostgreSQL breadth query returns `up_count`,
+  `down_count`, `trade_date`, and `source_date`; source projection retains the
+  market-breadth source with that same date.
+- Good: an old replay snapshot has undated breadth counts, so replay replaces
+  them from PostgreSQL and retains the exact `trade_date/source_date/query_date`.
+- Base: only source-dated end-of-day facts exist; output is partial or
+  insufficient and contains no invented minute timestamp.
+- Base: a message shock remains inside three overlapping windows but price does
+  not continue; record `slope_persistence_only`, then preserve invalidation.
+- Bad: assign the artifact into shared report data and rely on call order to
+  keep formal decisions unchanged.
+- Bad: inspect accepted in-memory Markdown after saving, without reading the
+  actual file, then persist a research artifact beside a corrupted report.
+- Bad: treat a smooth index arc as `whole_market` without breadth and sector
+  alignment, or infer program-trading identity from curve shape.
+- Bad: omit dates from `market_stats`, then make the translator borrow the
+  outer report date. That turns an unproved child fact into false same-date
+  evidence and hides a broken producer contract.
+- Bad: PostgreSQL-only lookup returns no artifact, then the reader silently
+  loads a same-date local JSON created by another runtime.
+
+### 6. Tests Required
+
+- `tests.test_market_language_translation`: source dates, full minute grid,
+  noise band, event quality, neutral buffer, phase legality, scope alignment,
+  explicit crowding, active-event direction, future isolation, and T+1/T+2
+  calendar/exchange/date rules.
+- `tests.test_tushare_input_runtime` and `tests.test_postgres_daily_fact_db`:
+  exact-date market-breadth producers retain child trade/source dates, and the
+  real producer shape survives source projection.
+- `tests.test_daily_report_render`: independent full/summary copies, real
+  runtime decision-projection equality, canonical hash stability, and saved
+  Markdown readback errors.
+- `tests.test_daily_report_agent_runner`: replay-only enforcement, pre-save and
+  post-save checks, corrupted disk report, and replay write timing.
+- `tests.test_report_replay` and
+  `tests.test_market_language_translation_lifecycle`: exact-date reconstruction,
+  undated breadth replacement with source-date retention, PostgreSQL-only miss
+  behavior, fresh/replay path separation, and persistence ordering.
+- `tests.test_postgres_daily_fact_db.PostgresMarketLanguageIntegrationTest`:
+  actual database round trip across whole-day resave, followed by cleanup.
+- `tests.test_front_page_v2_renderer` and
+  `tests.test_daily_report_markdown_html`: evidence placement and user wording.
+- `tests.test_quant_pressure_one_minute_study`: anchor-case timing, formula/report
+  semantics, shared full-precision curvature, formal-window shading, and
+  checked-in HTML reproducibility.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```python
+data["market_language_translation"] = artifact
+outputs = build_report_outputs(data)
+write_replay_artifact(artifact)  # trusts the in-memory body after save
+```
+
+Correct:
+
+```python
+artifact = prepare_market_language_translation(source_data, target_date=target_date)
+outputs = build_report_outputs(
+    source_data,
+    market_language_translation=artifact,
+)
+saved_full = read_verified_saved_report_markdown(
+    saved_paths["full"],
+    outputs["full"],
+)
+run_final_report_check(saved_full)
+write_replay_artifact(artifact)
+```
+
+Wrong for exact-date breadth:
+
+```python
+market_stats = {"up_count": up_count, "down_count": down_count}
+source_date = report_data["trade_date"]  # The translator guesses ownership.
+```
+
+Correct for exact-date breadth:
+
+```python
+market_stats = {
+    "up_count": up_count,
+    "down_count": down_count,
+    "trade_date": queried_trade_date,
+    "source_date": queried_trade_date,
+}
+projection = build_market_language_source_projection(
+    {"market_stats": market_stats},
+    target_date=queried_trade_date,
+    analysis_mode="fresh",
+)
+```
+
+Wrong for PostgreSQL-only artifact reads:
+
+```python
+loaded = postgres_reader(target_date)
+return loaded or read_local_fresh_json(target_date)
+```
+
+Correct for PostgreSQL-only artifact reads:
+
+```python
+loaded = postgres_reader(target_date)
+if loaded is not None:
+    return loaded
+if os.environ.get("A_DAILY_REPORT_POSTGRES_ONLY_RUNTIME") == "1":
+    return None
+return read_local_fresh_json(target_date)
+```
+
 (To be filled by the team)
 
 ---

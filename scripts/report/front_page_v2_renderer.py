@@ -14,6 +14,14 @@ from report.market_research_snapshot_nodes import (
     derive_market_research_cycle_layer,
 )
 from report.front_summary_renderer import sanitize_front_page_text
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_SHORT_TEXT,
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    PREMARKET_FIXED_EXECUTION_TEXT,
+    PREMARKET_FULL_EXECUTION_TEXT,
+    SAME_STOCK_T_CONFIRMATION_CLAUSE,
+)
 from report.mainline_turnover_summary_support import (
     render_hot_sector_turnover_watch_grouped_lines,
     resolve_hot_sector_turnover_watch_rows,
@@ -154,10 +162,6 @@ def _append_sentence(text, addition):
     return f"{text}{addition}" if text else addition
 
 
-PREMARKET_50_EXECUTION_TEXT = "已决定50%条件执行；盘中不满足取消，回到0%不参与"
-PREMARKET_50_EXECUTION_SHORT_TEXT = "已决定50%条件执行；不满足回到0%"
-PREMARKET_50_TRIGGER_TEXT = "按昨晚预案检查执行资格；不满足回到0%不参与"
-PREMARKET_FIXED_EXECUTION_TEXT = "已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与"
 ZERO_OBSERVATION_REVIEW_TEXT = "最终0%时只观察，不做新增参与；观察对象只进入复盘和下一份日报判断"
 
 
@@ -182,6 +186,10 @@ def _front_trade_text(text):
         ("不能转成新增参与", "盘中不生成新买入决定"),
         ("不能转新增参与", "盘中不生成新买入决定"),
         ("不是执行对象", "不是执行目标"),
+        ("已决定50%条件执行；盘中不满足取消，回到0%不参与", PREMARKET_50_EXECUTION_TEXT),
+        ("已决定50%条件执行；不满足回到0%", PREMARKET_50_EXECUTION_SHORT_TEXT),
+        ("按昨晚预案检查执行资格；不满足回到0%不参与", PREMARKET_50_TRIGGER_TEXT),
+        ("已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与", PREMARKET_FIXED_EXECUTION_TEXT),
         ("条件满足才50%条件执行；不满足回到0%", PREMARKET_50_EXECUTION_TEXT),
         ("条件满足才50%条件执行", PREMARKET_50_EXECUTION_SHORT_TEXT),
         ("固定交易窗口条件成立才参与，不满足回到0%", PREMARKET_50_TRIGGER_TEXT),
@@ -754,8 +762,8 @@ def _discipline_table(final_gate=None, position_level="", snapshot=None):
         f"| {position_state['discipline']} | T日只给T+1观察资格；普通候选只等{SECOND_CONFIRM_WINDOW} MA5回踩收回 | 强核心全天强且偏离MA5不大，{TAIL_WINDOW}最多25%试仓 | 当天新买不可卖；买点失败仓次日先处理 | {position_label}；先分普通候选、强核心、已有旧仓、失败仓和退潮警戒，再决定参与 |",
         f"| 普通候选 | T+1 MA5回踩是基础入口；{OPENING_WINDOW}不抢，{SECOND_CONFIRM_WINDOW}确认站回MA5/VWAP/0轴才可做50% | 没有强核心身份时不做尾盘试仓 | 大高开远离MA5、大低开、收不回MA5或板块退潮都不做 | 分不清是不是强核心，退回MA5回踩，不用混合规则追高 |",
         f"| 强核心 | T+1混合龙头只用于板块核心、高辨识度、承接强；优先MA5回踩，其次健康低开转强 | 全天强、偏离不大且没有舒服回踩，{TAIL_WINDOW}只允许25%试仓 | 秒板/一字无换手、偏离MA5过远、低开后继续下杀都放弃 | 龙头不给舒服买点也不能无条件追，只在三窗口确认后参与 |",
-        f"| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T；50%底仓跟随，50%机动仓只在确认后做T | 尾盘卖可卖旧仓，隔夜尽量回到50%底仓 | 今天新增仓不能当天卖；做T卖的是昨天以前的旧仓 | 做T先降风险，确认后买回，不用第二笔证明第一笔 |",
-        f"| 失败仓/退潮 | 当天MA5买入后收盘跌破MA5，次日先按买点失败仓处理 | 只给{SECOND_CONFIRM_WINDOW}一次站回MA5和分时均价的修复窗口 | 放量下杀、收盘低位、板块核心退潮或反抽不过线，优先处理可卖仓 | 退潮警戒切MA5清，必要时不新增参与，不继续套MA7容错 |",
+        f"| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T；50%底仓跟随，50%机动仓只在确认后做T；同股T强表态存活才允许临时加B2 | 尾盘卖可卖旧仓，隔夜尽量回到50%底仓；同股T失败不等尾盘幻想 | 今天新增仓不能当天卖；做T卖的是昨天以前的旧仓；跌破VWAP/昨收/MA7先卖可卖旧仓 | 做T先降风险，确认后买回，不用第二笔证明第一笔 |",
+        f"| 失败仓/退潮 | 当天MA5买入后收盘跌破MA5，次日先按买点失败仓处理 | 只给{SECOND_CONFIRM_WINDOW}一次站回MA5和分时均价的修复窗口 | 放量下杀、收盘低位、板块核心退潮、反抽不过线或接近最大亏损，优先处理可卖仓 | 退潮警戒切MA5清，必要时不新增参与，不继续套MA7容错；尾盘卖出只适用于正常样本 |",
         "",
     ]
 
@@ -1270,9 +1278,9 @@ def _promote_selected_candidate_to_standard_attack(snapshot):
             "target_position_pct": target_pct,
             "participation_mode": decision.get("participation_mode") or ("full_100" if signal_grade == "100" else "attack_50_preview"),
             "sizing_reason": (
-                "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按100%核心进攻；固定交易窗口不成立再回0%。"
+                f"已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，{PREMARKET_FULL_EXECUTION_TEXT}。"
                 if signal_grade == "100"
-                else "已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，按50%条件执行；固定交易窗口不成立再回0%。"
+                else f"已有明确候选且没有弱市场、冰点、趋势失效、数据缺口或账户限制，{PREMARKET_50_TRIGGER_TEXT}。"
             ),
             "front_page_promoted_from_zero": True,
         }
@@ -1355,8 +1363,8 @@ def _position_state_contract(snapshot=None, final_gate=None):
             "execution_style": "50%条件执行",
             "stock_state": "50%条件执行对象",
             "stock_state_without_target": "50%等待合格对象",
-            "default_action": "50%条件执行，只做合格对象",
-            "action_with_target": "50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0%",
+            "default_action": PREMARKET_50_EXECUTION_TEXT,
+            "action_with_target": f"50%：只做合格对象；{PREMARKET_50_TRIGGER_TEXT}",
             "action_without_target": "50%：没有合格对象前不下单，等市场缩到可做目标",
         },
         "100": {
@@ -1365,12 +1373,22 @@ def _position_state_contract(snapshot=None, final_gate=None):
             "execution_style": "100%核心进攻",
             "stock_state": "100%唯一核心对象",
             "stock_state_without_target": "100%等待唯一核心对象",
-            "default_action": "100%核心进攻，只做唯一核心对象",
-            "action_with_target": "100%：唯一核心对象确认后进攻；跌破失效价才降级",
-            "action_without_target": "100%：没有唯一核心对象就不满仓，等待真正核心出现",
+            "default_action": PREMARKET_FULL_EXECUTION_TEXT,
+            "action_with_target": f"100%：只做唯一核心对象；最大可到100%，先B1再B2；{PREMARKET_50_TRIGGER_TEXT}",
+            "action_without_target": "100%：没有唯一核心对象就不满仓；没有确认不补B2，等待真正核心出现",
         },
     }
     return contract.get(grade, contract["0"])
+
+
+def _position_label_with_two_b(position_state):
+    position_state = position_state or {}
+    grade = position_state.get("grade")
+    if grade == "50":
+        return "50%条件执行；最大上限50%；B1参与权，B2确认权"
+    if grade == "100":
+        return "100%核心进攻；最大可到100%，先B1再B2"
+    return position_state.get("discipline") or "0%不参与"
 
 
 def _monthly_profit_cushion_text(monthly_rhythm):
@@ -1849,11 +1867,13 @@ def _account_exposure_plan(snapshot):
 
 def _account_exposure_text(snapshot):
     plan = _account_exposure_plan(snapshot)
+    if plan.get("possible_intraday_overlap_2x"):
+        if plan.get("same_stock_t"):
+            return f"同股T：{SAME_STOCK_T_CONFIRMATION_CLAUSE}；B2只作临时风险暴露，尾盘回到1x或更低"
+        return "旧仓1x + 新买1x只作临时交叉最高2x；旧仓失效先卖可卖旧仓"
     text = str(plan.get("policy") or "").strip()
     if text:
         return text
-    if plan.get("possible_intraday_overlap_2x"):
-        return "旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x"
     max_exposure = plan.get("max_runtime_exposure_x")
     if max_exposure in (None, ""):
         return ""
@@ -1870,6 +1890,11 @@ def _tradable_proxy_priority_active(snapshot):
 
 def _new_entry_after_old_exit_active(snapshot):
     return _capital_priority(snapshot) == "new_entry_after_old_exit"
+
+
+def _same_stock_t_action_active(snapshot):
+    plan = _account_exposure_plan(snapshot)
+    return _capital_priority(snapshot) == "same_stock_t" or bool(plan.get("same_stock_t"))
 
 
 def _resolution_target(snapshot, key):
@@ -2286,13 +2311,29 @@ def _candidate_decision_contract_rows(snapshot, position_state, *, final_gate=No
             rows.insert(1, premarket_review_row)
         return rows
     rows = [
-        f"| 明日仓位 | {position_state.get('discipline') or '0%不参与'} |",
+        f"| 明日仓位 | {_position_label_with_two_b(position_state)} |",
     ]
     if premarket_review_row:
         rows.append(premarket_review_row)
     if grade == "0":
         holding = _existing_position_summary(snapshot)
         if holding:
+            if _holding_is_inferred_default_old_position(holding):
+                rows.extend(
+                    [
+                        "| 执行目标 | 无 |",
+                        f"| 成交确认 | {holding.get('summary')} |",
+                        "| 不参与依据 | 前日报计划对象尚未确认成交；未确认前不视为B1，不新增B2。 |",
+                        "| 无执行目标原因 | 新开仓没有执行对象；先确认前日报计划对象是否成交 |",
+                        "| 责任归因 | 账户问题 |",
+                        *_observation_anchor_lifecycle_rows(
+                            observation_target,
+                            has_observation_target=has_observation_target,
+                        ),
+                    ]
+                )
+                rows[0] = "| 明日仓位 | 0%新仓；先确认成交事实 |"
+                return rows
             rows.extend(
                 [
                     "| 执行目标 | 无 |",
@@ -2343,11 +2384,28 @@ def _existing_position_summary(snapshot):
     summary = (snapshot or {}).get("existing_position_summary") or {}
     if not isinstance(summary, dict):
         return {}
-    text = str(summary.get("summary") or "").strip()
+    text = _normalize_ta_te_execution_wording(summary.get("summary"))
+    inferred = _holding_is_inferred_default_old_position(summary)
+    if inferred:
+        name = str(summary.get("name") or summary.get("stock_name") or "").strip()
+        code = str(summary.get("code") or summary.get("stock_code") or "").strip()
+        if not (name or code):
+            stock_match = re.search(r"([^，；|：:\n]+?)\((\d{6})\)", text)
+            if stock_match:
+                name = re.sub(r"^(?:持有|已有旧仓|当前持仓)", "", stock_match.group(1)).strip()
+                code = stock_match.group(2)
+        label = f"{name}({code})" if name and code else (name or code or "前日报计划对象")
+        source_report_date = str(summary.get("source_report_date") or "").strip()
+        source_note = f"；上一份日报目标来源={source_report_date}" if source_report_date else ""
+        text = (
+            f"前日报计划推定，待成交确认：{label}{source_note}；"
+            "未确认成交前不视为B1，不新增B2"
+        )
     if not summary.get("has_position") and not text:
         return {}
     result = {
-        "has_position": True,
+        "has_position": bool(summary.get("has_position")) and not inferred,
+        "has_pending_position": inferred,
         "summary": text or "已有昨日持仓，先按持仓预案处理",
     }
     for key in (
@@ -2364,14 +2422,25 @@ def _existing_position_summary(snapshot):
     return result
 
 
+def _normalize_ta_te_execution_wording(text):
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    replacements = {
+        "新仓是否叠加单独看Tb/Tc资格": "新仓是否叠加单独看Te执行资格",
+        "单独看Tb/Tc资格": "单独看Te执行资格",
+        "Tb/Tc资格": "Te执行资格",
+    }
+    for old, new in replacements.items():
+        value = value.replace(old, new)
+    return value
+
+
 def _holding_is_inferred_default_old_position(holding):
     holding = holding if isinstance(holding, dict) else {}
     return bool(
         holding.get("inferred_from_previous_report") is True
-        and (
-            holding.get("position_source") == "previous_report_target_default_1x"
-            or holding.get("default_position_pct") in (100, 100.0, "100", "100.0")
-        )
+        or holding.get("position_source") == "previous_report_target_default_1x"
     )
 
 
@@ -2544,7 +2613,7 @@ def _account_price_condition_text(snapshot, target, position_state):
         trigger = f"{window or SECOND_CONFIRM_WINDOW}看承接"
     else:
         trigger = str(trigger).replace("窗口条件", "").strip()
-    return f"执行条件：{_account_buy_zone_text(snapshot, target)}；按昨晚预案检查执行资格：{trigger}；不满足取消，回到0%不参与"
+    return f"执行条件：{_account_buy_zone_text(snapshot, target)}；{trigger}后{PREMARKET_50_TRIGGER_TEXT}"
 
 
 def _no_t0_context_text(position_context_provided):
@@ -2656,13 +2725,15 @@ def _account_status_lines(snapshot=None, final_gate=None):
         and one_lot_amount > cash_available
     )
     holding_requires_action = _existing_position_requires_action(holding)
+    inferred_holding = _holding_is_inferred_default_old_position(holding)
 
     position_context_provided = _position_context_provided(snapshot)
     two_layer_execution_label = _two_layer_execution_target_label(snapshot)
     knowledge_basis_label = ""
     extra_account_rows = []
-    position_label = position_state.get("discipline") or "0%不参与"
+    position_label = _position_label_with_two_b(position_state)
     price_condition = _account_price_condition_text(snapshot, main_target, position_state)
+    entry_limit_label = "新开仓上限"
     if actual_unbuyable_core and proxy_priority and proxy_target and position_state.get("grade") != "0":
         account_constraint = (
             f"{capital_text}；先处理旧仓，目标标的买不了一手，改用ETF替代表达"
@@ -2684,7 +2755,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
                 or f"目标标的{original_label}，小资金账户可用{proxy_label}替代"
             )
         )
-        position_label = position_state.get("discipline") or "50%条件执行"
+        position_label = _position_label_with_two_b(position_state)
         identity_text = main_identity or "市场核心"
         if holding:
             primary_row_label = "旧仓处理" if holding_requires_action else "当前持仓"
@@ -2697,7 +2768,11 @@ def _account_status_lines(snapshot=None, final_gate=None):
             main_label = f"{proxy_label}：{proxy_effect}替代表达"
             secondary_row_label = "观察对象"
             backup_label = f"{original_label}：{identity_text}保留观察"
-        new_entry_limit = "资金释放后1" if holding and holding_requires_action else ("条件满足后1" if holding else "1")
+        new_entry_limit = (
+            "资金释放后先B1参与权；B2确认后才补"
+            if holding and holding_requires_action
+            else ("B1参与权；B2确认后才补" if holding else "B1参与权；B2确认权")
+        )
         price_condition = _account_price_condition_text(snapshot, proxy_target, position_state)
     elif actual_unbuyable_core:
         account_constraint = f"{capital_text}；当前账户买不了一手"
@@ -2716,13 +2791,13 @@ def _account_status_lines(snapshot=None, final_gate=None):
             if position_context_provided
             else f"{capital_text}；未输入持仓，先确认旧仓再看明日执行目标"
         )
-        position_label = position_state.get("discipline") or "50%条件执行"
+        position_label = _position_label_with_two_b(position_state)
         tomorrow_action = (
             PREMARKET_FIXED_EXECUTION_TEXT
             if position_context_provided
             else f"先确认旧仓情况；{PREMARKET_FIXED_EXECUTION_TEXT}"
         )
-        new_entry_limit = "1"
+        new_entry_limit = "B1参与权；B2确认后才补"
         price_condition = _account_price_condition_text(snapshot, main_target, position_state)
         primary_row_label = "明日执行目标"
         main_label = f"{_t0_target_label(main_target)}：{main_role}"
@@ -2733,10 +2808,43 @@ def _account_status_lines(snapshot=None, final_gate=None):
             secondary_row_label = "持仓确认"
             backup_label = "持仓未输入，执行前先确认旧仓情况"
     elif holding:
-        if position_state.get("grade") == "0":
+        if inferred_holding:
+            target_label = _t0_target_label(main_target) if has_main_target else ""
+            account_constraint = f"{capital_text}；前日报计划对象待成交确认"
+            primary_row_label = "成交确认"
+            main_label = holding.get("summary") or "前日报计划对象待成交确认"
+            if position_state.get("grade") == "0":
+                position_label = "0%新仓；先确认成交事实"
+                tomorrow_action = "先确认前日报计划对象是否成交；未确认不视为B1，不新增B2"
+                secondary_row_label = "观察对象"
+                backup_label = f"{target_label}：仅作观察对象" if target_label else "暂无"
+                new_entry_limit = "未确认成交前为0"
+            else:
+                tomorrow_action = (
+                    f"先确认前日报计划对象是否成交；{target_label}{PREMARKET_50_TRIGGER_TEXT}"
+                    if target_label
+                    else "先确认前日报计划对象是否成交"
+                )
+                secondary_row_label = "明日执行目标"
+                backup_label = f"{target_label}：{main_role}" if target_label else "暂无"
+                new_entry_limit = "前日报对象先确认；新目标先B1，B2确认后才补"
+            price_condition = "先确认成交事实；未成交不补B2"
+        elif position_state.get("grade") == "0":
             position_label = "0%新仓；旧仓处理"
             zero_position_reason = ""
-        if has_main_target and holding_requires_action and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
+        if not inferred_holding and has_main_target and _same_stock_t_action_active(snapshot):
+            target_label = _t0_target_label(main_target)
+            account_constraint = f"{capital_text}；已有同股旧仓，只按同股T候选处理"
+            position_label = "同股T候选；已有1x视为B1"
+            tomorrow_action = f"同股T候选：{target_label}；{SAME_STOCK_T_CONFIRMATION_CLAUSE}"
+            primary_row_label = "当前持仓"
+            main_label = holding.get("summary") or "已有同股旧仓：先按持仓预案处理"
+            secondary_row_label = "同股T候选"
+            backup_label = f"{target_label}：强表态存活才临时加B2；走弱先取消B2"
+            entry_limit_label = "同股T上限"
+            new_entry_limit = "B2临时风险暴露，尾盘回到1x或更低"
+            price_condition = "跌破VWAP/昨收/MA7且不能快速收回，先卖可卖旧仓"
+        elif not inferred_holding and has_main_target and holding_requires_action and _new_entry_after_old_exit_active(snapshot) and position_state.get("grade") != "0":
             target_label = _t0_target_label(main_target)
             account_constraint = f"{capital_text}；先处理旧仓腾出资金"
             tomorrow_action = f"先处理旧仓，买{target_label}"
@@ -2744,20 +2852,20 @@ def _account_status_lines(snapshot=None, final_gate=None):
             main_label = holding.get("summary") or "昨日持仓对象：先按持仓预案处理"
             secondary_row_label = "明日执行目标"
             backup_label = f"{target_label}：{main_role}"
-            new_entry_limit = "资金释放后1"
+            new_entry_limit = "资金释放后先B1；B2确认后才补"
             price_condition = _account_price_condition_text(snapshot, main_target, position_state)
-        elif has_main_target and not holding_requires_action and position_state.get("grade") != "0":
+        elif not inferred_holding and has_main_target and not holding_requires_action and position_state.get("grade") != "0":
             target_label = _t0_target_label(main_target)
             account_constraint = f"{capital_text}；已有持仓继续独立评估"
-            position_label = position_state.get("discipline") or "50%条件执行"
+            position_label = _position_label_with_two_b(position_state)
             tomorrow_action = f"持仓独立评估；{target_label}{PREMARKET_50_TRIGGER_TEXT}"
             primary_row_label = "当前持仓"
             main_label = holding.get("summary") or "已有持仓继续独立评估"
             secondary_row_label = "明日执行目标"
             backup_label = f"{target_label}：{main_role}"
-            new_entry_limit = "条件满足后1"
+            new_entry_limit = "B1参与权；B2确认后才补"
             price_condition = _account_price_condition_text(snapshot, main_target, position_state)
-        else:
+        elif not inferred_holding:
             account_constraint = f"{capital_text}；已有昨日持仓优先处理"
             tomorrow_action = "先处理旧仓，不新增参与"
             primary_row_label = "旧仓处理"
@@ -2774,7 +2882,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             account_constraint = f"{capital_text}；未输入持仓，执行前先确认旧仓情况"
             tomorrow_action = PREMARKET_50_EXECUTION_TEXT
             position_label = PREMARKET_50_EXECUTION_TEXT
-            new_entry_limit = "条件满足后1"
+            new_entry_limit = "B1参与权；B2确认后才补"
             primary_row_label = "明日执行目标"
             main_label = f"{two_layer_execution_label}：{PREMARKET_50_EXECUTION_SHORT_TEXT}"
         elif position_state.get("grade") == "0":
@@ -2786,7 +2894,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
         else:
             account_constraint = f"{capital_text}；未输入持仓，先确认旧仓再看明日执行目标"
             tomorrow_action = f"先确认旧仓情况；{PREMARKET_FIXED_EXECUTION_TEXT}"
-            new_entry_limit = "1"
+            new_entry_limit = "B1参与权；B2确认后才补"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
         secondary_row_label = "持仓确认" if position_state.get("grade") == "0" and two_layer_execution_label else "明日执行目标"
@@ -2804,7 +2912,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
             main_label = f"{_t0_target_label(main_target)}：观察对象，不是执行目标" if has_main_target else "暂无"
         else:
             tomorrow_action = PREMARKET_FIXED_EXECUTION_TEXT
-            new_entry_limit = "1"
+            new_entry_limit = "B1参与权；B2确认后才补"
             primary_row_label = "明日执行目标"
             main_label = f"{_t0_target_label(main_target)}：{main_role}" if has_main_target else "暂无"
         secondary_row_label = "明日执行目标"
@@ -2817,7 +2925,11 @@ def _account_status_lines(snapshot=None, final_gate=None):
         f"| 账户约束 | {account_constraint} |",
         f"| 明日仓位 | {position_label} |",
     ]
-    exposure_text = _account_exposure_text(snapshot)
+    exposure_text = (
+        "前日报计划对象未确认成交前按0x；确认成交后才计入B1"
+        if inferred_holding
+        else _account_exposure_text(snapshot)
+    )
     if exposure_text:
         lines.append(f"| 账户风险暴露 | {exposure_text} |")
     if zero_position_reason:
@@ -2834,7 +2946,7 @@ def _account_status_lines(snapshot=None, final_gate=None):
     lines.extend(
         [
             f"| 价格条件 | {price_condition} |",
-            f"| 新开仓上限 | {new_entry_limit} |",
+            f"| {entry_limit_label} | {new_entry_limit} |",
             "| 今日不看 | 其他观察层只放附录观察，不同时盯多只，不为多个名单分散资金 |",
         ]
     )
@@ -2876,7 +2988,7 @@ def _candidate_lines(report_lines, snapshot=None, final_gate=None):
     if is_zero_participation and front_no_buy_reason:
         front_no_buy_reason = front_no_buy_reason.replace("没有唯一对象", "没有观察对象").replace("有唯一对象", "有观察对象")
     if two_layer_execution:
-        no_buy_reason = f"盘中只按昨晚预案检查执行资格；{PREMARKET_50_EXECUTION_TEXT}"
+        no_buy_reason = PREMARKET_50_EXECUTION_TEXT
     elif has_unique_object and (
         not front_no_buy_reason
         or "没有唯一对象" in front_no_buy_reason
@@ -3094,8 +3206,8 @@ def _execution_plan_lines(snapshot=None, final_gate=None):
     position_state = _position_state_contract(snapshot, final_gate=final_gate)
     if _two_layer_execution_active(snapshot):
         schedule_lines = [
-            "| 09:30-09:35 | 主动进攻、分时大单净流入、VWAP上方保持 | 已决定50%条件执行，只检查执行资格 | 弱仓/错仓先降风险 | 不满足取消 |",
-            "| 09:50-10:10 | MA5承接、VWAP/0轴收回、市场与方向同步 | 已决定50%条件执行，只检查执行资格 | 窗口内处理弱仓/错仓 | 不满足回到0% |",
+            f"| 09:30-09:35 | 主动进攻、分时大单净流入、VWAP上方保持 | {PREMARKET_50_TRIGGER_TEXT} | 弱仓/错仓先降风险 | 不满足取消 |",
+            f"| 09:50-10:10 | MA5承接、VWAP/0轴收回、市场与方向同步 | {PREMARKET_50_TRIGGER_TEXT} | 窗口内处理弱仓/错仓 | 不满足回到0% |",
             f"| {TAIL_WINDOW} | 只判断是否仍有健康承接 | 无新增追高资格 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     elif position_state.get("grade") == "0":
@@ -3106,8 +3218,8 @@ def _execution_plan_lines(snapshot=None, final_gate=None):
         ]
     else:
         schedule_lines = [
-            "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 核心对象承接连续可按预演参与 | 弱仓/错仓先降风险 | 前几分钟进攻窗口 |",
-            "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 未走竞价/前几分钟路径的对象进入二次确认 | 窗口内处理弱仓/错仓 | 核心执行窗口 |",
+            "| 09:30-09:35 | 开盘前几分钟主动资金、分时承接、板块同步 | 只给B1参与权；连续变强才保留B2资格 | 弱仓/错仓先降风险 | B1参与窗口 |",
+            "| 09:50-10:10 | 市场底色、主线承接、唯一对象强弱 | 确认变强才B2；B1未变强不补B2 | 窗口内处理弱仓/错仓 | B2确认窗口 |",
             f"| {TAIL_WINDOW} | 只判断是否量化电风扇行情 | 仅电风扇行情例外，次日高开兑现 | 非电风扇不新增参与 | 例外，不是常规 |",
         ]
     return [
@@ -3165,7 +3277,7 @@ def _next_day_action_no_participation_condition(snapshot, target, position_state
         return "低开承接型和主动进攻型都不满足，回到0%不参与"
     fallback = normalize_trading_time_text(_text_value(target.get("fallback_state")))
     if not fallback:
-        fallback = "条件未满足继续0%" if position_state.get("grade") == "0" else "不满足回到0%"
+        fallback = "条件未满足继续0%" if position_state.get("grade") == "0" else "B1未变强取消B2，回到0%"
     return _ensure_no_trade_fallback(fallback)
 
 
@@ -3173,6 +3285,8 @@ def _next_day_action_old_position_text(snapshot):
     holding = _existing_position_summary(snapshot)
     if holding:
         return holding.get("summary") or "已有昨日持仓，先按持仓预案处理"
+    if _position_context_provided(snapshot):
+        return "今日空仓，无旧仓处理"
     return "持仓未输入，执行前先确认旧仓情况"
 
 
@@ -3185,7 +3299,7 @@ def _next_day_action_checklist_lines(snapshot=None, final_gate=None):
         "### 明日行动清单",
         "| 项目 | 明日动作 |",
         "|------|----------|",
-        f"| 仓位 | {PREMARKET_50_EXECUTION_TEXT if _two_layer_execution_active(snapshot) else position_state.get('discipline')} |",
+        f"| 仓位 | {PREMARKET_50_EXECUTION_TEXT if _two_layer_execution_active(snapshot) else _position_label_with_two_b(position_state)} |",
         f"| 最终对象 | {target_label} |",
         f"| 执行/观察条件 | {_next_day_action_condition(snapshot, target, position_state)} |",
         f"| 不参与条件 | {_next_day_action_no_participation_condition(snapshot, target, position_state)} |",
@@ -3207,7 +3321,7 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     if _two_layer_execution_active(snapshot):
         action = PREMARKET_50_EXECUTION_TEXT
         unique_target = _two_layer_execution_target_label(snapshot)
-        one_line_action = f"低开承接型或主动进攻型只检查执行资格；{PREMARKET_50_EXECUTION_TEXT}"
+        one_line_action = f"低开承接型或主动进攻型；{PREMARKET_50_TRIGGER_TEXT}"
         execution_style = "50%条件执行"
     else:
         action = position_state["default_action"]
@@ -3240,11 +3354,177 @@ def _final_summary_lines(report_lines, snapshot, final_gate=None):
     ]
 
 
-def render_front_page_v2(report_lines, *, target_date="", market_research_snapshot=None, final_gate=None, position_level=""):
+def _market_language_time_label(value):
+    text = str(value or "").strip()
+    if len(text) >= 16 and text[10:11] in {" ", "T"}:
+        return text[11:16]
+    return text[:5] if len(text) >= 5 and text[2:3] == ":" else ""
+
+
+def _market_language_number(value, suffix=""):
+    if value in (None, "") or isinstance(value, bool):
+        return "待补"
+    try:
+        return f"{float(value):.2f}{suffix}"
+    except (TypeError, ValueError):
+        return "待补"
+
+
+def _market_language_event_clock_text(artifact, timeline):
+    structured_events = timeline.get("events")
+    events = [row for row in structured_events or [] if isinstance(row, dict)]
+    current_direction = artifact.get("pressure_direction")
+    if current_direction in {"upward", "downward"}:
+        events = [
+            row for row in events if row.get("pressure_direction") == current_direction
+        ]
+    if events:
+        direction_labels = {"upward": "向上", "downward": "向下"}
+        numbered_events = list(enumerate(events, start=1))[-2:]
+        rendered_events = []
+        for event_number, event in numbered_events:
+            candidate_at = _market_language_time_label(event.get("candidate_at"))
+            confirmed_at = _market_language_time_label(event.get("confirmed_at"))
+            follow_through_at = _market_language_time_label(
+                event.get("directional_follow_through_at")
+            )
+            invalidated_at = _market_language_time_label(event.get("invalidated_at"))
+            parts = [f"{candidate_at}候选"] if candidate_at else []
+            confirmation_quality = event.get("confirmation_quality")
+            if confirmed_at and confirmation_quality == "slope_persistence_only":
+                parts.append(f"{confirmed_at}仅见重叠斜率连续")
+            elif confirmed_at and confirmation_quality == "directional_follow_through":
+                follow_note = f"（{follow_through_at}起有同向延续）" if follow_through_at else ""
+                parts.append(f"{confirmed_at}确认{follow_note}")
+            elif confirmed_at:
+                parts.append(f"{confirmed_at}确认")
+            if invalidated_at:
+                parts.append(f"{invalidated_at}失效")
+            else:
+                parts.append("仍在观察")
+            direction_label = direction_labels.get(event.get("pressure_direction"), "方向")
+            rendered_events.append(
+                f"{direction_label}第{event_number}轮：{'，'.join(parts)}"
+            )
+        return "；".join(rendered_events)
+
+    if isinstance(structured_events, list):
+        return "当前方向尚无同向事件；早前反向事件只作为反证" if structured_events else ""
+
+    candidate_at = _market_language_time_label(timeline.get("first_candidate_at"))
+    confirmed_at = _market_language_time_label(timeline.get("latest_confirmed_at"))
+    invalidations = int(timeline.get("candidate_invalidations") or 0)
+    legacy_parts = []
+    if candidate_at:
+        legacy_parts.append(f"{candidate_at}候选")
+    if confirmed_at:
+        legacy_parts.append(f"{confirmed_at}确认")
+    if candidate_at or confirmed_at or invalidations:
+        legacy_parts.append(f"失效{invalidations}次")
+    return "，".join(legacy_parts)
+
+
+def _market_language_translation_lines(artifact):
+    if not isinstance(artifact, dict) or artifact.get("schema_version") != "market_language_translation.v1":
+        return []
+    scope_labels = {
+        "index_weighted": "市值加权指数",
+        "single_stock": "单一个股",
+        "single_sector": "单一板块",
+        "multi_sector": "多板块",
+        "whole_market": "全市场",
+        "unclear": "范围不清楚",
+    }
+    direction_labels = {
+        "upward": "向上压力",
+        "downward": "向下压力",
+        "balanced": "多空接近平衡",
+        "unclear": "方向不清楚",
+    }
+    status_labels = {
+        "sufficient": "当前范围内事实充分",
+        "partial": "事实不完整",
+        "insufficient": "事实不足",
+    }
+    missing_labels = {
+        "one_minute_price_path": "一分钟价格路径",
+        "market_breadth": "全市场宽度",
+        "sector_synchrony": "板块同步",
+        "cap_weighted_index": "市值加权指数",
+        "target_date_minute_source": "目标日分钟来源",
+    }
+    timeline = artifact.get("timeline") if isinstance(artifact.get("timeline"), dict) else {}
+    event_text = _market_language_event_clock_text(artifact, timeline)
+
+    comparison = (
+        artifact.get("aggregation_comparison")
+        if isinstance(artifact.get("aggregation_comparison"), dict)
+        else {}
+    )
+    cap = comparison.get("cap_weighted") if isinstance(comparison.get("cap_weighted"), dict) else {}
+    breadth = comparison.get("market_breadth") if isinstance(comparison.get("market_breadth"), dict) else {}
+    sector = comparison.get("sector_synchrony") if isinstance(comparison.get("sector_synchrony"), dict) else {}
+    sector_text = str(sector.get("leading_sector") or "板块待补").strip()
+    if sector.get("cross_sector_sync_pct") not in (None, ""):
+        sector_text = f"{sector_text}跨板块同步{_market_language_number(sector.get('cross_sector_sync_pct'), '%')}"
+    three_layers = "；".join(
+        (
+            f"指数{_market_language_number(cap.get('return_pct'), '%')}",
+            f"上涨家数占比{_market_language_number(breadth.get('advance_ratio_pct'), '%')}",
+            sector_text,
+        )
+    )
+    counter_rows = [
+        str(row.get("fact") or "").strip()
+        for row in artifact.get("counter_evidence") or []
+        if isinstance(row, dict) and str(row.get("fact") or "").strip()
+    ]
+    missing = [
+        missing_labels.get(str(item), str(item))
+        for item in artifact.get("missing_evidence") or []
+        if str(item or "").strip()
+    ]
+    counter_text = counter_rows[0] if counter_rows else "暂无新增反证"
+    if missing:
+        counter_text = f"{counter_text}；待补：{'、'.join(missing)}"
+    counter_text = counter_text.replace("|", "／")
+    next_task = str(artifact.get("next_window_task") or "下一正式窗口继续复核，不据此新增临时动作。").strip()
+    next_task = next_task.replace("|", "／")
+    phase_label = str(artifact.get("phase_label") or "事实不足，阶段不清楚").strip()
+    lines = [
+        "## 市场语言翻译（研究证据）",
+        f"- **范围与方向**: {scope_labels.get(artifact.get('force_scope'), '范围不清楚')}；{direction_labels.get(artifact.get('pressure_direction'), '方向不清楚')}",
+        f"- **当前阶段**: {phase_label}",
+    ]
+    if event_text:
+        lines.append(f"- **事件时钟**: {event_text}")
+    else:
+        lines.append(f"- **事实状态**: {status_labels.get(artifact.get('evidence_status'), '事实不足')}；未形成可追溯事件时点")
+    lines.extend(
+        [
+            f"- **三层对照**: {three_layers}",
+            f"- **反证与缺失**: {counter_text}",
+            f"- **下一窗口任务**: {next_task}",
+            "",
+        ]
+    )
+    return lines
+
+
+def render_front_page_v2(
+    report_lines,
+    *,
+    target_date="",
+    market_research_snapshot=None,
+    final_gate=None,
+    position_level="",
+    market_language_translation=None,
+):
     report_lines = list(report_lines or [])
     snapshot = _with_derived_cycle_layer(market_research_snapshot or {})
     lines = [f"# {target_date} a股市场分析" if target_date else "# a股市场分析", ""]
     lines.extend(_opening_tone_lines(snapshot))
+    _append_nonempty(lines, _market_language_translation_lines(market_language_translation))
     derivation_packet = _sniper_target_derivation(snapshot)
     market_base = _market_base_lines(report_lines, snapshot)
     lines.extend(market_base or ["## 二、市场基底", "| 项目 | 结论 |", "|------|------|", "| 市场状态 | 待确认 |", ""])

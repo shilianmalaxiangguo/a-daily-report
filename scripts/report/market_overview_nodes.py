@@ -115,9 +115,11 @@ def _turnover_rank_amount(row):
 
 
 def _top50_share_regime(share_pct):
-    share_pct = _safe_float(share_pct)
+    share_pct = round(_safe_float(share_pct), 2)
     if share_pct < 18:
         return "冰点"
+    if share_pct > 25:
+        return "极致"
     if share_pct > 20:
         return "资金活跃期"
     return "震荡"
@@ -127,9 +129,15 @@ def _top50_share_interpretation(share_pct):
     regime = _top50_share_regime(share_pct)
     if regime == "冰点":
         return "Top50成交额占比低于18%，头部资金活跃度不足。"
+    if regime == "极致":
+        return "Top50成交额占比超过25%，头部成交集中度进入极致区。"
     if regime == "资金活跃期":
         return "Top50成交额占比超过20%，雨量变大，资金处于活跃期。"
     return "Top50成交额占比处在18%到20%，市场仍以震荡结构看待。"
+
+
+def _top50_share_is_hot(top50_share):
+    return _safe_float((top50_share or {}).get("share_pct")) > 20
 
 
 def _top20_capacity_regime(near_150_count, rank20_amount):
@@ -459,7 +467,7 @@ def _etf_capacity_combo_judgment(etf_capacity, top50_share, new_high_regime, mar
 
     etf_label = str((etf_capacity or {}).get("label") or "")
     etf_hot = etf_label == "机构容量放大"
-    top50_hot = (top50_share or {}).get("regime") == "资金活跃期"
+    top50_hot = _top50_share_is_hot(top50_share)
     new_high_hot = new_high_regime == "高潮"
     margin_label = str((margin_pressure or {}).get("latest_pressure_label") or "").strip()
     margin_ok = margin_label in ("舒缓", "中性")
@@ -818,7 +826,8 @@ def resolve_unified_market_sentiment(data, target_date="", *, db_path=None):
         and str(margin_pressure.get("latest_pressure_label") or "").strip() == "高压"
     )
     risk_weak = _index_risk_is_weak(data) or _breadth_risk_is_weak(data)
-    local_hot = top50_share.get("regime") == "资金活跃期" or new_high_regime == "高潮" or margin_pressure_hot
+    top50_hot = _top50_share_is_hot(top50_share)
+    local_hot = top50_hot or new_high_regime == "高潮" or margin_pressure_hot
 
     if risk_weak and local_hot:
         return {
@@ -842,7 +851,7 @@ def resolve_unified_market_sentiment(data, target_date="", *, db_path=None):
             "rr_text": "不值得主动参与",
             "meaning": "默认先防守，等待下一次更清晰的强化。",
         }
-    if local_hot and top50_share.get("regime") == "资金活跃期" and new_high_regime == "高潮":
+    if local_hot and top50_hot and new_high_regime == "高潮":
         return {
             "state": "高潮",
             "local_heat": "盘面亏钱效应不重，资金聚焦和趋势扩散同步走热，整体可按高潮看待。",

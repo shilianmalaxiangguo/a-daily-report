@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.appendix_renderer import _request_step_timer_alias, render_execution_appendix
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class AppendixRendererTest(unittest.TestCase):
@@ -275,6 +276,38 @@ class AppendixRendererTest(unittest.TestCase):
         self.assertIn("| 标的 | 上市窗口 | 新股周期 | C阶段承接 | 情绪出口 | 辨识度 | 是否升级 | 结论 |", rendered)
         self.assertIn("| 龙辰科技(920161) | missing_listing_date | single_stock_watch | pending | none | ordinary_new_stock | 否 | 有新股研究池，但今日未形成买入资格。暂不升级：新股周期证明不足。 |", rendered)
         self.assertIn("| C理奇智能(301608) | recently_listed | spread | confirmed | market_flag | emotion_flag | 是 | 有新股研究升级，进入观察。 |", rendered)
+
+    def test_render_execution_appendix_marks_same_stock_t_candidate_as_final_execution_object(self):
+        lines = render_execution_appendix(
+            {
+                "enabled_node_keys": ["visible_candidate_lists"],
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "太极实业", "code": "600667"},
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "display_target": {"name": "太极实业", "code": "600667"},
+                    "capital_priority_decision": {
+                        "capital_priority": "same_stock_t",
+                        "reason": "已有旧仓，同一标的只按T+1确认处理",
+                    },
+                },
+                "extreme_conviction_list": [
+                    {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                        "sniper_role": "候选观察",
+                        "conviction_reason": "板块锚定龙",
+                        "principle": "只观察",
+                    }
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn(
+            f"| 1 | 太极实业 | 600667 | 半导体 | 明日执行对象 | 板块锚定龙 | 已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT} |",
+            rendered,
+        )
 
     def test_render_execution_appendix_outputs_empty_continuity_tables_as_recording_contract(self):
         lines = render_execution_appendix(

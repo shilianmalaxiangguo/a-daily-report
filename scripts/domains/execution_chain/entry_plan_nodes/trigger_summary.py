@@ -1,4 +1,5 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 def _is_process_candidate(candidate):
@@ -70,7 +71,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
         lines.append("")
     if executable_stocks:
         if final_gate.get("can_new_entry", False):
-            lines.append(f"**明日可触发**（{len(executable_stocks)}只，满足条件即可买入）:")
+            lines.append(f"**明日可触发**（{len(executable_stocks)}只，{PREMARKET_50_TRIGGER_TEXT}）:")
         else:
             lines.append(f"**明天先观察谁**（{len(executable_stocks)}只，仅供观察，⛔{position_level}禁止买入）:")
 
@@ -99,7 +100,8 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                     display_position_pct = safe_float(item.get("position_pct", signal.position_pct))
                     lines.append(
                         f"- ✅ {item.get('name')}({item.get('code')}) - {buy_type}，日线预设区间"
-                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日09:50-10:10观察价{confirm_text}，仓位{display_position_pct:.0f}%"
+                        f"{entry_range[0]:.2f}-{entry_range[1]:.2f}；明日09:50-10:10观察价{confirm_text}，"
+                        f"计划仓位{display_position_pct:.0f}%，{PREMARKET_50_TRIGGER_TEXT}"
                     )
                     if confirm_rule:
                         lines.append(f"  {item.get('permission_label', '执行资格')}；{confirm_rule}；{price_focus_text}")
@@ -125,7 +127,7 @@ def build_entry_plan_trigger_summary_node(context, node_meta=None, node_lookup=N
                     confirm_text = f"{confirm_price:.2f}" if confirm_price else "待盘中确认"
                     lines.append(
                         f"- ✅ {item.get('name')}({item.get('code')}) - {item.get('permission_label', '执行资格')}，"
-                        f"明日09:50-10:10观察价{confirm_text}后按{item.get('trigger')}执行"
+                        f"明日09:50-10:10观察价{confirm_text}，{item.get('trigger', '条件确认')}后{PREMARKET_50_TRIGGER_TEXT}"
                     )
                     if confirm_rule:
                         lines.append(f"  {confirm_rule}；{price_focus_text}")

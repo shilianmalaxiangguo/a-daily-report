@@ -619,7 +619,7 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
         html = render_elimination_tournament_html(payload)
 
         self.assertIn('meta name="artifact" content="elimination-tournament"', html)
-        self.assertIn("明日标的选股淘汰赛", html)
+        self.assertIn("过程候选淘汰赛", html)
         self.assertIn("生成前复核流程图", html)
         self.assertIn('class="preflight-flowchart"', html)
         self.assertIn('data-flowchart-rendered="static"', html)
@@ -640,7 +640,7 @@ class EliminationTournamentHtmlTest(unittest.TestCase):
 
         self.assertEqual(
             str(path),
-            str(ROOT / "reports" / "replay" / "2026-06-12_明日标的选股淘汰赛.html"),
+            str(ROOT / "reports" / "replay" / "2026-06-12_过程候选淘汰赛.html"),
         )
 
     def test_sector_capital_preflight_payload_reuses_elimination_final_action(self):

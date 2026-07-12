@@ -1,3 +1,4 @@
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,12 @@ from storage.postgres_daily_fact_db import (
     POSTGRES_SCHEMA_STATEMENTS,
     PostgresDailyFactDb,
     _recent_replay_min_trade_date,
+)
+from domains.market_state.market_language_translation import (
+    MARKET_LANGUAGE_SOURCE_POLICY,
+    build_market_language_source_projection,
+    build_market_language_translation,
+    canonical_market_language_hash,
 )
 
 
@@ -502,6 +509,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(result["down_count"], 1)
         self.assertEqual(result["flat_count"], 1)
         self.assertEqual(result["stock_count"], 3)
+        self.assertEqual(result["trade_date"], "2026-06-08")
+        self.assertEqual(result["source_date"], "2026-06-08")
         self.assertEqual(result["source"], "storage.stock_daily_quotes_recent")
 
     def test_top50_share_series_merges_structured_target_date_with_previous_report_window(self):
@@ -2758,6 +2767,8 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertEqual(data["cycle_calendar_rows"][0]["thursday"]["state"], "强化")
         self.assertEqual(data["cycle_interpretation_rows"][0]["attack_line"], "火电")
         self.assertEqual(data["market_stats"]["up_count"], 2600)
+        self.assertEqual(data["market_stats"]["trade_date"], "2026-06-04")
+        self.assertEqual(data["market_stats"]["source_date"], "2026-06-04")
         self.assertEqual(data["turnover_rank"][0]["code"], "600578")
         self.assertEqual(data["wind_a_alternative"]["price"], 5088.8)
         self.assertEqual(data["csi500_index"]["price"], 5666.6)
@@ -3192,6 +3203,212 @@ class PostgresDailyFactDbTest(unittest.TestCase):
         self.assertTrue(any("sniper_target_derivation" in path and "final_action" in path for path in field_paths))
         self.assertTrue(any("execution_stage_context" in path and "selection_workflow" in path for path in field_paths))
         self.assertTrue(any("market_research_snapshot" in path and "final_target_resolution" in path for path in field_paths))
+
+    def test_market_language_writer_uses_exact_source_policy_and_round_trips_structure(self):
+        projection = build_market_language_source_projection(
+            {
+                "market_stats": {
+                    "up_count": 900,
+                    "down_count": 3600,
+                    "flat_count": 100,
+                    "trade_date": "2026-07-10",
+                }
+            },
+            target_date="2026-07-10",
+            analysis_mode="fresh",
+        )
+        artifact = build_market_language_translation(
+            projection,
+            target_date="2026-07-10",
+            analysis_mode="fresh",
+        )
+        write_conn = _FakeConnection()
+        writer = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: write_conn,
+            ensure_schema=False,
+        )
+
+        result = writer.replace_market_language_translation_artifact(artifact)
+
+        delete_call = next(
+            call
+            for call in write_conn.cursor_obj.calls
+            if call[0] == "execute" and "DELETE FROM daily_report_fact_fields" in call[1]
+        )
+        self.assertIn("source_policy = %s", delete_call[1])
+        self.assertNotIn("LIKE", delete_call[1])
+        self.assertEqual(delete_call[2], ("2026-07-10", MARKET_LANGUAGE_SOURCE_POLICY))
+        inserted = next(
+            call[2]
+            for call in write_conn.cursor_obj.calls
+            if call[0] == "executemany" and "INSERT INTO daily_report_fact_fields" in call[1]
+        )
+        self.assertEqual(result["field_count"], len(inserted))
+        self.assertTrue(all(row[-1] == MARKET_LANGUAGE_SOURCE_POLICY for row in inserted))
+
+        read_conn = _FakeConnection()
+        read_conn.cursor_obj.rows = [
+            (row[1], row[2], row[3], row[4], row[5])
+            for row in inserted
+        ]
+        reader = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: read_conn,
+            ensure_schema=False,
+        )
+        loaded = reader.load_market_language_translation_artifact("2026-07-10")
+
+        select_call = next(
+            call
+            for call in read_conn.cursor_obj.calls
+            if call[0] == "execute" and "SELECT field_path" in call[1]
+        )
+        self.assertIn("source_policy = %s", select_call[1])
+        self.assertEqual(select_call[2], ("2026-07-10", MARKET_LANGUAGE_SOURCE_POLICY))
+        self.assertEqual(
+            canonical_market_language_hash(loaded),
+            canonical_market_language_hash(artifact),
+        )
+
+    def test_whole_day_save_and_load_exclude_market_language_source_policy(self):
+        save_conn = _FakeConnection()
+        saver = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: save_conn,
+            ensure_schema=False,
+        )
+
+        saver.save_daily_report_snapshot("2026-07-10", {"total_turnover": 12345.0})
+
+        delete_call = next(
+            call
+            for call in save_conn.cursor_obj.calls
+            if call[0] == "execute" and "DELETE FROM daily_report_fact_fields" in call[1]
+        )
+        self.assertIn("source_policy <> %s", delete_call[1])
+        self.assertEqual(delete_call[2], ("2026-07-10", MARKET_LANGUAGE_SOURCE_POLICY))
+
+        load_conn = _FakeConnection()
+        load_conn.cursor_obj.row_batches = [
+            [("k:14:total_turnover", "", 12345.0, None, "number")],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+            [],
+        ]
+        loader = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: load_conn,
+            ensure_schema=False,
+        )
+        loaded = loader.load_daily_report_snapshot("2026-07-10")
+        select_call = next(
+            call
+            for call in load_conn.cursor_obj.calls
+            if call[0] == "execute" and "SELECT field_path" in call[1]
+        )
+        self.assertIn("source_policy <> %s", select_call[1])
+        self.assertEqual(select_call[2], ("2026-07-10", MARKET_LANGUAGE_SOURCE_POLICY))
+        self.assertNotIn("market_language_translation", loaded["data"])
+
+    def test_daily_report_fact_coverage_does_not_count_market_language_rows_as_report_spine(self):
+        conn = _FakeConnection()
+        db = PostgresDailyFactDb(
+            "postgresql://unit-test",
+            connect=lambda: conn,
+            ensure_schema=False,
+        )
+
+        db.daily_report_fact_coverage("2026-07-10")
+
+        coverage_call = next(
+            call
+            for call in conn.cursor_obj.calls
+            if call[0] == "execute" and "FROM daily_report_fact_fields" in call[1]
+        )
+        self.assertIn("source_policy <> %s", coverage_call[1])
+        self.assertEqual(
+            coverage_call[2],
+            ("2026-07-10", MARKET_LANGUAGE_SOURCE_POLICY),
+        )
+
+
+@unittest.skipUnless(
+    os.environ.get("A_DAILY_REPORT_RUN_POSTGRES_INTEGRATION") == "1",
+    "set A_DAILY_REPORT_RUN_POSTGRES_INTEGRATION=1 to run PostgreSQL integration",
+)
+class PostgresMarketLanguageIntegrationTest(unittest.TestCase):
+    database_url = os.environ.get("A_DAILY_REPORT_DATABASE_URL") or (
+        "postgresql:///a_daily_report_psql_529"
+    )
+    trade_date = "2099-12-30"
+
+    def setUp(self):
+        self.db = PostgresDailyFactDb(self.database_url, ensure_schema=False)
+        self._delete_test_rows()
+
+    def tearDown(self):
+        self._delete_test_rows()
+
+    def _delete_test_rows(self):
+        with self.db._connect() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM daily_report_fact_fields WHERE trade_date = %s",
+                    (self.trade_date,),
+                )
+            conn.commit()
+
+    def test_artifact_survives_whole_day_resave_in_same_database(self):
+        projection = build_market_language_source_projection(
+            {
+                "market_stats": {
+                    "up_count": 900,
+                    "down_count": 3600,
+                    "flat_count": 100,
+                    "trade_date": self.trade_date,
+                    "query_date": self.trade_date,
+                }
+            },
+            target_date=self.trade_date,
+            analysis_mode="fresh",
+        )
+        artifact = build_market_language_translation(
+            projection,
+            target_date=self.trade_date,
+            analysis_mode="fresh",
+        )
+
+        self.db.replace_market_language_translation_artifact(artifact)
+        before_resave = self.db.load_market_language_translation_artifact(
+            self.trade_date
+        )
+        self.db.save_daily_report_snapshot(
+            self.trade_date,
+            {"total_turnover": 12345.0, "source_date": self.trade_date},
+        )
+        after_resave = self.db.load_market_language_translation_artifact(
+            self.trade_date
+        )
+
+        expected_hash = canonical_market_language_hash(artifact)
+        self.assertEqual(canonical_market_language_hash(before_resave), expected_hash)
+        self.assertEqual(canonical_market_language_hash(after_resave), expected_hash)
 
 
 if __name__ == "__main__":

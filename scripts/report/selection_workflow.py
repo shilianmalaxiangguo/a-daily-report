@@ -311,11 +311,18 @@ def _candidate_has_explicit_limit_down_reversal_plan(candidate):
 
 def _candidate_blocks_new_entry_by_price(candidate):
     reason = _candidate_limit_down_block_reason(candidate)
-    if not reason:
-        return ""
-    if _candidate_has_explicit_limit_down_reversal_plan(candidate):
-        return ""
-    return reason
+    if reason:
+        if _candidate_has_explicit_limit_down_reversal_plan(candidate):
+            return ""
+        return reason
+    price_action = _brooks_price_action_judge(candidate)
+    if price_action.get("status") in {"risk_first", "price_rejected"}:
+        return clean_visible_text(
+            price_action.get("participation_effect")
+            or price_action.get("verdict")
+            or "价格否定优先，不新增参与"
+        )
+    return ""
 
 
 def _quote_row_has_price_context(row):
@@ -324,7 +331,18 @@ def _quote_row_has_price_context(row):
         return False
     if _candidate_change_pct(row) is not None:
         return True
-    return bool(_limit_status_text(row))
+    if _limit_status_text(row):
+        return True
+    ohlc_keys = (
+        ("open", "开盘价", "开盘", "open_price"),
+        ("high", "最高价", "最高", "high_price"),
+        ("low", "最低价", "最低", "low_price"),
+        ("close", "收盘价", "最新价", "收盘", "price", "当前价", "close_price"),
+    )
+    return all(
+        any(_safe_float(row.get(key)) is not None for key in keys)
+        for keys in ohlc_keys
+    )
 
 
 def _quote_identity(row, *, code="", name=""):
@@ -556,17 +574,20 @@ def _candidate_price_text(candidate):
 
 def _candlestick_consequence(candidate):
     candidate = _as_dict(candidate)
-    open_price = _safe_float(candidate.get("open") or candidate.get("open_price") or candidate.get("开盘价"))
-    high_price = _safe_float(candidate.get("high") or candidate.get("high_price") or candidate.get("最高价"))
-    low_price = _safe_float(candidate.get("low") or candidate.get("low_price") or candidate.get("最低价"))
-    close_price = _safe_float(
-        candidate.get("close")
-        or candidate.get("close_price")
-        or candidate.get("latest_price")
-        or candidate.get("price")
-        or candidate.get("最新价")
-        or candidate.get("收盘价")
-    )
+    quote = _as_dict(candidate.get("same_day_quote"))
+
+    def price_value(*keys):
+        for source in (quote, candidate):
+            for key in keys:
+                parsed = _safe_float(source.get(key))
+                if parsed is not None:
+                    return parsed
+        return None
+
+    open_price = price_value("open", "open_price", "开盘价", "开盘")
+    high_price = price_value("high", "high_price", "最高价", "最高")
+    low_price = price_value("low", "low_price", "最低价", "最低")
+    close_price = price_value("close", "close_price", "latest_price", "price", "最新价", "收盘价", "收盘", "当前价")
     if None in (open_price, high_price, low_price, close_price) or high_price <= low_price:
         return ""
     tolerance = max(abs(close_price) * 0.01, 0.02)
@@ -992,6 +1013,7 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
         eliminated_at = "N6" if status in {"降级观察", "不参与"} else ""
         brooks = _brooks_price_action_judge(candidate)
         price_block_reason = _candidate_blocks_new_entry_by_price(candidate)
+        limit_down_block_reason = _candidate_limit_down_block_reason(candidate)
         if price_block_reason and status != "最终执行对象":
             eliminated_at = "N7"
         if status == "最终执行对象":
@@ -1000,6 +1022,8 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
             (
                 price_block_reason
                 + "；如要参与必须写成跌停反包专项，并给出确认窗口、作废线和回到0%的条件"
+                if price_block_reason and limit_down_block_reason
+                else price_block_reason
                 if price_block_reason
                 else ""
             )
@@ -1021,9 +1045,15 @@ def _build_candidate_pool(execution_stage_context, final_stock, selected_positio
             explicit_selected=explicit_selected,
         )
         observation_layer = "front_observation" if front_observation_qualified else "process_observation"
+        if price_block_reason:
+            front_observation_qualified = False
+            front_observation_reason = (
+                f"价格否定优先：{price_block_reason}；只保留过程回放，不进入明日执行结论"
+            )
+            observation_layer = "process_observation"
         if status == "最终执行对象":
             front_observation_qualified = False
-            front_observation_reason = "已进入明日执行对象"
+            front_observation_reason = "已归入明日执行结论，后续只按B1/B2执行计划展示"
             observation_layer = "execution_object"
         pool.append(
             {

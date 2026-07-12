@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import candidate_can_be_current_observation_target
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    SAME_STOCK_T_CONFIRMATION_CLAUSE,
+    TWO_B_CONFIRMATION_CLAUSE,
+)
+from report.position_context import is_inferred_previous_report_position
 from report.selection_workflow import render_selection_workflow_mermaid
 from report.sniper_target_derivation import clean_text, normalize_stock_code
 
 
 SCHEMA_VERSION = "two_layer_daily_decision.v1"
 EMPTY_STOCK_TEXTS = {"", "-", "无", "暂无", "不做", "无明日执行对象", "无执行对象", "无执行目标"}
-PREMARKET_50_EXECUTION_TEXT = "已决定50%条件执行；盘中不满足取消，回到0%不参与"
-PREMARKET_50_TRIGGER_TEXT = "按昨晚预案检查执行资格；不满足回到0%不参与"
 
 
 def _safe_float(value, default=0.0):
@@ -146,7 +151,7 @@ def _build_b_level_conditions(target):
             "window": "09:30-09:35或09:50-10:10",
             "price_action": "开盘直线进攻，不快速冲高回落",
             "intraday_hold": "VWAP上方保持，短暂震荡后要快速收回",
-            "action": "50%条件执行",
+            "action": PREMARKET_50_TRIGGER_TEXT,
         }
     )
     return {
@@ -155,7 +160,7 @@ def _build_b_level_conditions(target):
             "window": "09:50-10:10",
             "daily_structure": "靠近MA5、不有效跌破MA5，或跌破后快速收回MA5",
             "intraday_reclaim": "收回VWAP或0轴并能站住",
-            "action": "50%条件执行",
+            "action": PREMARKET_50_TRIGGER_TEXT,
         },
         "active_attack": active_attack,
         "invalidations": [
@@ -303,12 +308,14 @@ def _discipline_evidence(context, final_object):
     return [discipline, invalid_text or "固定窗口和失效线未同时满足时不参与"]
 
 
-def _final_action_text(has_target, selected_label):
+def _final_action_text(has_target, selected_label, zero_action_text=""):
     if has_target:
         return f"只看{selected_label}；{PREMARKET_50_TRIGGER_TEXT}"
     if selected_label and selected_label != "暂无":
         return f"只观察{selected_label}，不新增参与"
-    return "空仓等待或只处理旧仓"
+    if clean_text(zero_action_text):
+        return clean_text(zero_action_text)
+    return "0%不参与；无执行对象"
 
 
 def _stock_key(value):
@@ -853,7 +860,13 @@ def _final_object_payload(target, observation_target, position_stance, b_level_c
     }
 
 
-def _next_day_action_payload(final_object, b_level_conditions):
+def _next_day_action_payload(
+    final_object,
+    b_level_conditions,
+    *,
+    pending_position_confirmation=False,
+    has_confirmed_position=False,
+):
     final_object = final_object if isinstance(final_object, dict) else {}
     stock = final_object.get("stock") if isinstance(final_object.get("stock"), dict) else {}
     label = _stock_label(stock)
@@ -879,7 +892,13 @@ def _next_day_action_payload(final_object, b_level_conditions):
         "time_windows": ["09:30-09:35", "09:50-10:10"] if execution_conditions else [],
         "buy_conditions": execution_conditions,
         "no_buy_conditions": failure_conditions,
-        "old_position_handling": "旧仓优先时，新机会只观察，不新增参与",
+        "old_position_handling": (
+            "只核实成交记录；未确认成交前按0x"
+            if pending_position_confirmation
+            else "旧仓优先时，新机会只观察，不新增参与"
+            if has_confirmed_position
+            else "无旧仓需要处理；保持0%不参与"
+        ),
         "review_points": ["收盘后复核条件是否命中", "记录失败条件是否触发"],
     }
 
@@ -897,7 +916,7 @@ def _opening_verdict_payload(position_stance, candidate_pool_verdict, final_obje
     }
 
 
-def _step_payloads(target, execution_stage_context, final_object=None):
+def _step_payloads(target, execution_stage_context, final_object=None, zero_action_text=""):
     context = execution_stage_context if isinstance(execution_stage_context, dict) else {}
     final_object = final_object if isinstance(final_object, dict) else {}
     market_state = context.get("market_state_snapshot") if isinstance(context.get("market_state_snapshot"), dict) else {}
@@ -950,7 +969,7 @@ def _step_payloads(target, execution_stage_context, final_object=None):
             "title": "明天只做什么",
             "conclusion": "参与" if has_target else "不参与",
             "evidence": _discipline_evidence(context, final_object),
-            "action": f"明日动作：{_final_action_text(has_target, selected_label)}",
+            "action": f"明日动作：{_final_action_text(has_target, selected_label, zero_action_text)}",
         },
     ]
 
@@ -998,7 +1017,65 @@ def build_two_layer_decision_payload(
                 resolution.get("new_entry_target"),
                 resolution.get("tradable_proxy_target"),
             )
-    position_plan = _position_plan_from_pct(workflow_pct if workflow_controls_target else (50 if target else 0))
+    position_pct = _position_pct(position_decision)
+    resolved_position_pct = workflow_pct if workflow_controls_target else ((position_pct if position_pct >= 50 else 50) if target else 0)
+    position_plan = _position_plan_from_pct(resolved_position_pct)
+    existing_position_target = (
+        resolution.get("existing_position_target")
+        if isinstance(resolution.get("existing_position_target"), dict)
+        else {}
+    )
+    inferred_pending_position = bool(
+        not target
+        and resolved_position_pct <= 0
+        and priority == "wait"
+        and is_inferred_previous_report_position(existing_position_target)
+    )
+    has_confirmed_position = bool(
+        not inferred_pending_position
+        and (
+            priority in {"old_position_t", "same_stock_t"}
+            or (
+                bool(existing_position_target)
+                and existing_position_target.get("has_position") is not False
+                and not is_inferred_previous_report_position(existing_position_target)
+            )
+        )
+    )
+    workflow_final = _workflow_final(workflow)
+    capital_reason = clean_text((resolution.get("capital_priority_decision") or {}).get("reason"))
+    if inferred_pending_position:
+        zero_basis = "前日报计划对象尚未确认成交；未确认前不视为B1，不新增B2。"
+        zero_reason = "新开仓没有执行对象；先确认前日报计划对象是否成交"
+        zero_attribution = "账户问题"
+        zero_action_text = "0%不参与；只核实成交记录"
+    else:
+        zero_basis = clean_text(
+            position_decision.get("sizing_reason")
+            or workflow_final.get("fail_action")
+            or workflow_final.get("reason")
+            or workflow_final.get("action_text")
+            or capital_reason,
+            "候选全部未达参与资格，需要复盘候选筛选。",
+        )
+        zero_reason = clean_text(
+            workflow_final.get("reason") or capital_reason or zero_basis,
+            "候选池没有选出足够强的核心",
+        )
+        attribution_text = f"{zero_basis} {zero_reason}"
+        if any(marker in attribution_text for marker in ("关键数据", "数据缺失", "待补事实")):
+            zero_attribution = "数据问题"
+        elif any(marker in attribution_text for marker in ("账户", "资金不足", "买不了")):
+            zero_attribution = "账户问题"
+        elif any(marker in attribution_text for marker in ("市场", "退潮", "冰点", "指数", "主线")):
+            zero_attribution = "市场问题"
+        else:
+            zero_attribution = "决策问题"
+        zero_action_text = (
+            "0%不参与；只处理已确认旧仓风险"
+            if has_confirmed_position
+            else "0%不参与；无执行对象"
+        )
     observation_target = {}
     if not target and not workflow_controls_target:
         observation_target = {} if final_empty_without_current_object else _first_stock(resolution.get("watch_target"))
@@ -1029,7 +1106,12 @@ def build_two_layer_decision_payload(
         candidate_pool_verdict,
         position_plan,
     )
-    next_day_action = _next_day_action_payload(final_object, b_level_conditions)
+    next_day_action = _next_day_action_payload(
+        final_object,
+        b_level_conditions,
+        pending_position_confirmation=inferred_pending_position,
+        has_confirmed_position=has_confirmed_position,
+    )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "target_date": clean_text(target_date),
@@ -1045,17 +1127,29 @@ def build_two_layer_decision_payload(
         "next_day_action": next_day_action,
         "front_decision": {
             "position_plan": position_plan,
-            "position_pct": workflow_pct if workflow_controls_target else (50 if position_plan == "50%条件执行" else 0),
+            "position_pct": resolved_position_pct,
             "execution_object": target,
             "execution_identity": "明日执行对象" if target else "无明日执行对象",
             "if_fail": "不参与",
+            "no_participation_basis": zero_basis,
+            "no_execution_reason": zero_reason,
+            "attribution": zero_attribution,
+            "zero_action_text": zero_action_text,
         },
         "b_level_conditions": b_level_conditions,
+        "capital_priority": priority,
         "selection_workflow": workflow,
     }
     if final_empty_without_current_object:
         payload["workflow_zero_position"] = True
-    payload["derivation_steps"] = _step_payloads(target, execution_stage_context, final_object)
+    if inferred_pending_position:
+        payload["pending_position_confirmation"] = True
+    payload["derivation_steps"] = _step_payloads(
+        target,
+        execution_stage_context,
+        final_object,
+        zero_action_text=zero_action_text,
+    )
     return payload
 
 
@@ -1112,9 +1206,34 @@ def render_front_decision_layer(payload):
     target = front.get("execution_object") if isinstance(front.get("execution_object"), dict) else {}
     target_label = _stock_label(target)
     conditions = payload.get("b_level_conditions") if isinstance(payload.get("b_level_conditions"), dict) else {}
+    next_day_action = (
+        payload.get("next_day_action")
+        if isinstance(payload.get("next_day_action"), dict)
+        else {}
+    )
+    account_first_action = clean_text(next_day_action.get("old_position_handling"))
+    account_first_action_line = (
+        [f"| 账户先处理 | {account_first_action} |"]
+        if account_first_action and not account_first_action.startswith("无旧仓需要处理")
+        else []
+    )
     low_open = conditions.get("low_open_acceptance") if isinstance(conditions.get("low_open_acceptance"), dict) else {}
     active = conditions.get("active_attack") if isinstance(conditions.get("active_attack"), dict) else {}
     position_plan = clean_text(front.get("position_plan"), "50%条件执行")
+    priority_value = clean_text(payload.get("capital_priority"))
+    same_stock_t = priority_value == "same_stock_t"
+    if same_stock_t:
+        position_text = f"同股T候选；{SAME_STOCK_T_CONFIRMATION_CLAUSE}"
+        condition_action = SAME_STOCK_T_CONFIRMATION_CLAUSE
+    elif position_plan == "50%条件执行":
+        position_text = PREMARKET_50_EXECUTION_TEXT
+        condition_action = PREMARKET_50_TRIGGER_TEXT
+    elif "100%" in position_plan or "满仓" in position_plan or "核心进攻" in position_plan:
+        position_text = f"已决定{position_plan}；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0%"
+        condition_action = PREMARKET_50_TRIGGER_TEXT
+    else:
+        position_text = f"已决定{position_plan}；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0%"
+        condition_action = PREMARKET_50_TRIGGER_TEXT
     opening_lines = _render_opening_verdict_lines(payload)
     if not target:
         lines = [
@@ -1123,16 +1242,21 @@ def render_front_decision_layer(payload):
             "|------|------|",
             "| 明日仓位 | 0%不参与 |",
             "| 明日执行对象 | 无 |",
+            *account_first_action_line,
             "| 执行性质 | 无明日执行对象 |",
             f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",
+            f"| 不参与依据 | {clean_text(front.get('no_participation_basis'), '候选全部未达参与资格，需要复盘候选筛选。')} |",
+            f"| 无执行目标原因 | {clean_text(front.get('no_execution_reason'), '候选池没有选出足够强的核心')} |",
+            f"| 责任归因 | {clean_text(front.get('attribution'), '决策问题')} |",
         ]
         return opening_lines + ([""] if opening_lines else []) + lines
     lines = [
         "## 明日执行结论",
         "| 项目 | 结论 |",
         "|------|------|",
-        f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT if position_plan == '50%条件执行' else f'已决定{position_plan}；不满足回到0%'} |",
+        f"| 明日仓位 | {position_text} |",
         f"| 明日执行对象 | {target_label} |",
+        *account_first_action_line,
         f"| 执行性质 | {position_plan} |",
         f"| 不满足条件 | {clean_text(front.get('if_fail'), '不参与')} |",
         "",
@@ -1143,14 +1267,14 @@ def render_front_decision_layer(payload):
             daily=clean_text(low_open.get("daily_structure"), "靠近MA5或快速收回MA5"),
             intraday=clean_text(low_open.get("intraday_reclaim"), "收回VWAP或0轴"),
             window=clean_text(low_open.get("window"), "09:50-10:10"),
-            action=clean_text(low_open.get("action"), "50%条件执行"),
+            action=condition_action if same_stock_t else clean_text(low_open.get("action"), condition_action),
         ),
         "| 主动进攻型 | {price}；{money}；{hold} | {window} | {action} |".format(
             price=clean_text(active.get("price_action"), "开盘直线进攻"),
             money=clean_text(active.get("money_confirmation"), "分时大单净流入达标"),
             hold=clean_text(active.get("intraday_hold"), "VWAP上方保持"),
             window=clean_text(active.get("window"), "09:30-09:35或09:50-10:10"),
-            action=clean_text(active.get("action"), "50%条件执行"),
+            action=condition_action if same_stock_t else clean_text(active.get("action"), condition_action),
         ),
         "",
         "## 不执行条件",

@@ -241,8 +241,11 @@ def collect_watch_candidate_history_request_bundle(
         },
     }
 
-    emit(f"   📊 获取 {min(len(candidates), limit)} 只候选股的历史成交额...")
-    emit("   📝 策略：Tushare优先（完整近期窗口） → QuickTiny/BaoStock仅兜底 | 缓存仅作降级补充")
+    emit(
+        f"   📊 候选股补数：获取 {min(len(candidates), limit)} 只过程候选的历史成交额"
+        "（只作筛选证据，不代表最终动作）..."
+    )
+    emit("   📝 候选补数策略：Tushare优先（完整近期窗口） → QuickTiny/BaoStock仅兜底 | 缓存仅作降级补充")
 
     try:
         cache = get_cache() if get_cache else None
@@ -323,10 +326,10 @@ def collect_watch_candidate_history_request_bundle(
                 data_source = "未知"
                 if tushare_cached_part:
                     combined, merged_source = tushare_cached_part, "Tushare缓存"
-                    emit(f"      💾 Tushare缓存足够: {code_for_lookup} ({len(combined)}天)，跳过实时补充")
+                    emit(f"      💾 候选补数Tushare缓存足够: {code_for_lookup} ({len(combined)}天)，跳过实时补充")
                 elif len(historical_part) >= cached_history_min_days:
                     combined, merged_source = historical_part, "缓存"
-                    emit(f"      💾 缓存足够: {code_for_lookup} ({len(historical_part)}天)，跳过QuickTiny实时补充")
+                    emit(f"      💾 候选补数缓存足够: {code_for_lookup} ({len(historical_part)}天)，跳过QuickTiny实时补充")
                 else:
                     combined = []
                     merged_source = ""
@@ -340,14 +343,14 @@ def collect_watch_candidate_history_request_bundle(
                             results["history_fetch_stats"]["tushare_success"] += 1
                             data_source = "Tushare"
                             _save_tushare_cached_history(cache, code_for_lookup, target_date, recent_part)
-                            emit(f"      ✅ Tushare成交额历史成功: {code_for_lookup} ({len(recent_part)}天)")
+                            emit(f"      ✅ 候选补数Tushare成交额历史成功: {code_for_lookup} ({len(recent_part)}天)")
                         else:
                             results["history_fetch_stats"]["tushare_fail"] += 1
                             results["history_fetch_stats"]["tushare_failed_codes"].append(code_for_lookup)
                             if error:
-                                emit(f"      ⚠️ Tushare成交额历史失败: {code_for_lookup} - {error}, 将使用QuickTiny/BaoStock兜底")
+                                emit(f"      ⚠️ 候选补数Tushare成交额历史失败: {code_for_lookup} - {error}, 将使用QuickTiny/BaoStock兜底")
                             else:
-                                emit(f"      ⚠️ Tushare成交额历史空数据: {code_for_lookup}")
+                                emit(f"      ⚠️ 候选补数Tushare成交额历史空数据: {code_for_lookup}")
 
                     if enable_live_quicktiny:
                         if not recent_part:
@@ -366,18 +369,18 @@ def collect_watch_candidate_history_request_bundle(
                                 if recent_part:
                                     results["history_fetch_stats"]["quicktiny_success"] += 1
                                     data_source = "QuickTiny"
-                                    emit(f"      ⚡ QuickTiny成功: {code_for_lookup} ({len(recent_part)}天)")
+                                    emit(f"      ⚡ 候选补数QuickTiny成功: {code_for_lookup} ({len(recent_part)}天)")
                                 else:
                                     results["history_fetch_stats"]["quicktiny_fail"] += 1
                             except _HardTimeoutError as error:
                                 results["history_fetch_stats"]["quicktiny_fail"] += 1
-                                emit(f"      ⏱️ QuickTiny超时: {code_for_lookup} - {error}, 将使用BaoStock兜底")
+                                emit(f"      ⏱️ 候选补数QuickTiny超时: {code_for_lookup} - {error}, 将使用BaoStock兜底")
                             except Exception:
                                 results["history_fetch_stats"]["quicktiny_fail"] += 1
-                                emit(f"      ⚡ QuickTiny失败: {code_for_lookup}, 将使用BaoStock兜底")
+                                emit(f"      ⚡ 候选补数QuickTiny失败: {code_for_lookup}, 将使用BaoStock兜底")
                     else:
                         if not recent_part:
-                            emit(f"      ⏭️ 跳过QuickTiny实时补充: {code_for_lookup}, 使用缓存/BaoStock")
+                            emit(f"      ⏭️ 候选补数跳过QuickTiny实时补充: {code_for_lookup}, 使用缓存/BaoStock")
 
                     if not recent_part and baostock_source_factory and enable_baostock_fallback:
                         try:
@@ -387,14 +390,14 @@ def collect_watch_candidate_history_request_bundle(
                             if recent_part:
                                 results["history_fetch_stats"]["baostock_success"] += 1
                                 data_source = "BaoStock"
-                                emit(f"      🔄 BaoStock兜底成功: {code_for_lookup} ({len(recent_part)}天)")
+                                emit(f"      🔄 候选补数BaoStock兜底成功: {code_for_lookup} ({len(recent_part)}天)")
                             else:
                                 results["history_fetch_stats"]["baostock_fail"] += 1
                         except Exception as error:
                             results["history_fetch_stats"]["baostock_fail"] += 1
-                            emit(f"      ❌ BaoStock也失败: {code_for_lookup} - {error}")
+                            emit(f"      ❌ 候选补数BaoStock也失败: {code_for_lookup} - {error}")
                     elif not recent_part and baostock_source_factory and not enable_baostock_fallback:
-                        emit(f"      ⏭️ 跳过BaoStock兜底: {code_for_lookup}")
+                        emit(f"      ⏭️ 候选补数跳过BaoStock兜底: {code_for_lookup}")
 
                     combined, merged_source = _merge_history_parts(
                         historical_part,
@@ -404,7 +407,7 @@ def collect_watch_candidate_history_request_bundle(
                     )
 
                 if not combined:
-                    emit(f"      ⚠️ {code_for_lookup} 无数据可用")
+                    emit(f"      ⚠️ 候选补数无数据可用: {code_for_lookup}")
                     return
 
                 if cache is not None and len(combined) > 3:

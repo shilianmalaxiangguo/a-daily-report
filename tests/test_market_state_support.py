@@ -313,6 +313,28 @@ assert leader["name"] == "军工龙头"
         self.assertEqual(result["state_code"], "contract")
         self.assertEqual(result["execution_bias"], "avoid")
 
+    def test_funding_activity_marks_only_top50_share_above_25_as_extreme(self):
+        support = self._load_module()
+
+        boundary = support._funding_activity_from_top50(
+            {
+                "total_turnover": 20000.0,
+                "turnover_rank": [{"turnover": 100.0} for _ in range(50)],
+            }
+        )
+        extreme = support._funding_activity_from_top50(
+            {
+                "total_turnover": 20000.0,
+                "turnover_rank": [{"turnover": 100.04} for _ in range(50)],
+            }
+        )
+
+        self.assertEqual(boundary["top50_share_pct"], 25.0)
+        self.assertEqual(boundary["regime"], "资金活跃期")
+        self.assertEqual(extreme["top50_share_pct"], 25.01)
+        self.assertEqual(extreme["regime"], "极致")
+        self.assertIn("超过25%", extreme["meaning"])
+
     def test_build_market_state_machine_snapshot_support_ignores_board_label_trend_density(self):
         support = self._load_module()
 

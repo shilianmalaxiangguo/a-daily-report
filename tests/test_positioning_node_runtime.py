@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from report.positioning_nodes import render_positioning_section
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class PositioningNodeRuntimeTest(unittest.TestCase):
@@ -46,6 +47,39 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
         self.assertIn("**状态依据**：中枢内震荡且市场偏弱，应清仓或极轻仓观望", rendered)
         self.assertNotIn("**ASCII结构图**", rendered)
         self.assertNotIn("**识别出 1 个结构中枢**", rendered)
+
+    def test_render_positioning_section_uses_market_structure_chart_instead_of_ascii(self):
+        lines = render_positioning_section(
+            {
+                "enabled_node_keys": ["ascii_diagram"],
+                "compact": False,
+                "market_zhongshu": {
+                    "success": True,
+                    "today_date": "2026-07-06",
+                    "current_zhongshu": {"start_date": "2026-06-16", "end_date": "2026-07-03"},
+                    "signal": {
+                        "status": "➖ 中枢内震荡",
+                        "signal_type": "按个股信号操作",
+                        "zd": 4073.73,
+                        "zg": 4103.93,
+                        "today_price": 4041.24,
+                    },
+                },
+                "ascii_diagram": "test-diagram",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**大盘结构图**", rendered)
+        self.assertIn(
+            '::market-structure-chart{src="chanlun-html/2026-07-06_上证指数缠论.html" title="2026-07-06 上证指数日线中枢"}',
+            rendered,
+        )
+        self.assertNotIn("snap-ui", rendered)
+        self.assertNotIn("http://127.0.0.1:3040/work-page", rendered)
+        self.assertNotIn("**ASCII结构图**", rendered)
+        self.assertNotIn("```text", rendered)
+        self.assertNotIn("test-diagram", rendered)
 
     def test_render_positioning_section_splits_daily_box_and_chanlun_confirmation(self):
         lines = render_positioning_section(
@@ -130,9 +164,32 @@ class PositioningNodeRuntimeTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("**怎么执行**：先处理旧仓，再按固定交易窗口确认工业富联", rendered)
-        self.assertIn("明日只按09:30-09:35、09:50-10:10、14:30-14:55三段窗口处理", rendered)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, rendered)
         self.assertNotIn("最终0%时不按固定交易窗口执行", rendered)
         self.assertNotIn("明日不新增参与", rendered)
+
+    def test_same_stock_t_resolution_keeps_positive_intraday_wording(self):
+        lines = render_positioning_section(
+            {
+                "enabled_node_keys": ["execution_framework", "intraday_note"],
+                "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "太极实业", "code": "600667"},
+                    "existing_position_target": {"name": "太极实业", "code": "600667"},
+                    "display_target": {"name": "太极实业", "code": "600667"},
+                    "capital_priority_decision": {
+                        "capital_priority": "same_stock_t",
+                        "reason": "已有旧仓，同一标的只按T+1确认处理",
+                    },
+                },
+                "get_execution_framework_text": lambda: "已有旧仓，同一标的按临时2x风险处理",
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn("**怎么执行**：已有旧仓，同一标的按临时2x风险处理", rendered)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, rendered)
+        self.assertNotIn("最终0%时不按固定交易窗口执行", rendered)
 
 
 if __name__ == "__main__":

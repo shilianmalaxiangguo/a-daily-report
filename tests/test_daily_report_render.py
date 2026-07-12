@@ -1,3 +1,4 @@
+import copy
 import io
 import json
 import os
@@ -27,6 +28,7 @@ from daily_report_render import (
     build_run_log_text,
     finalize_run_log_text,
     persist_report_runtime_artifacts,
+    read_verified_saved_report_markdown,
     render_report_preflight_lines,
     generate_markdown_report,
     generate_markdown_report_from_sections,
@@ -34,6 +36,7 @@ from daily_report_render import (
     save_report_outputs,
 )
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from domains.market_state.market_language_translation import canonical_market_language_hash
 from report.decision_ledger import (
     build_decision_ledger_index,
     build_decision_ledger_snapshot,
@@ -128,6 +131,58 @@ def _complete_report_facts(overrides=None):
     return data
 
 
+def _market_language_test_artifact():
+    return {
+        "schema_version": "market_language_translation.v1",
+        "target_date": "2026-07-10",
+        "analysis_mode": "fresh",
+        "artifact_origin": "computed",
+        "data_granularity": "end_of_day",
+        "evidence_status": "insufficient",
+        "missing_evidence": ["one_minute_price_path"],
+        "force_scope": "unclear",
+        "pressure_direction": "unclear",
+        "phase": "unclear",
+        "phase_label": "事实不足，阶段不清楚",
+        "timeline": {
+            "first_candidate_at": None,
+            "latest_confirmed_at": None,
+            "candidate_invalidations": 0,
+            "latest_transition_at": None,
+            "events": [],
+        },
+        "aggregation_comparison": {},
+        "price_pressure": {},
+        "participation": {},
+        "liquidity_proxies": {},
+        "fixed_window_observations": [],
+        "evidence": [],
+        "counter_evidence": [],
+        "next_window_task": "补齐事实。",
+        "posthoc_validation": None,
+        "sources": [],
+        "as_of_time": "15:00",
+    }
+
+
+def _formal_decision_projection(data):
+    selection_workflow = data.get("selection_workflow") or {}
+    final_target_resolution = data.get("final_target_resolution") or {}
+    next_day_action = (data.get("two_layer_decision_payload") or {}).get("next_day_action") or {}
+    return copy.deepcopy(
+        {
+            "selection_workflow": selection_workflow,
+            "final_target_resolution": final_target_resolution,
+            "execution_object": next_day_action.get("execution_object"),
+            "position_pct": next_day_action.get("position_pct"),
+            "execution_nature": next_day_action.get("execution_nature"),
+            "b1_action": next_day_action.get("b1_action"),
+            "b2_action": next_day_action.get("b2_action"),
+            "exit_action": next_day_action.get("exit_action"),
+        }
+    )
+
+
 class _DecisionLedgerMemoryFactStore:
     def __init__(self, index=None):
         self.index = index or {}
@@ -154,6 +209,113 @@ class _DecisionLedgerMemoryFactStore:
 
 
 class DailyReportRenderTest(unittest.TestCase):
+    def test_build_report_outputs_passes_isolated_market_language_copies_without_shared_data(self):
+        data = _complete_report_facts({"foo": "bar"})
+        artifact = _market_language_test_artifact()
+        original_hash = canonical_market_language_hash(artifact)
+        seen = []
+
+        def render(display_mode, payload, target_date, **kwargs):
+            received = kwargs["market_language_translation"]
+            seen.append(received)
+            received["phase_label"] = f"mutated-{display_mode}"
+            return "# summary" if display_mode else "# full"
+
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=render):
+            build_report_outputs(
+                data,
+                "2026-07-10",
+                emit_preflight=False,
+                market_language_translation=artifact,
+            )
+
+        self.assertEqual(len(seen), 2)
+        self.assertIsNot(seen[0], seen[1])
+        self.assertIsNot(seen[0], artifact)
+        self.assertEqual(canonical_market_language_hash(artifact), original_hash)
+        self.assertNotIn("market_language_translation", data)
+        self.assertNotIn("market_language_translation_artifact", data)
+
+    def test_market_language_integration_keeps_full_and_summary_formal_decisions_identical(self):
+        formal_decision = {
+            "selection_workflow": {
+                "schema_version": "selection_workflow.v1",
+                "final": {
+                    "execution_object": {"code": "603986", "name": "兆易创新"},
+                    "position_pct": 50,
+                    "action_text": "50%条件执行",
+                },
+            },
+            "final_target_resolution": {
+                "new_entry_target": {"code": "603986", "name": "兆易创新"},
+                "position_pct": 50,
+                "execution_nature": "50%条件执行",
+            },
+            "two_layer_decision_payload": {
+                "next_day_action": {
+                    "execution_object": {"code": "603986", "name": "兆易创新"},
+                    "position_pct": 50,
+                    "execution_nature": "50%条件执行",
+                    "b1_action": "B1先买参与权",
+                    "b2_action": "确认后才补B2",
+                    "exit_action": "失效条件出现则退出",
+                }
+            },
+        }
+        baseline_data = _complete_report_facts(copy.deepcopy(formal_decision))
+        integrated_data = _complete_report_facts(copy.deepcopy(formal_decision))
+        snapshots = []
+
+        def render(display_mode, payload, target_date, **kwargs):
+            snapshots.append(
+                {
+                    "display_mode": bool(display_mode),
+                    "decision": _formal_decision_projection(payload),
+                    "artifact": kwargs.get("market_language_translation"),
+                    "artifact_in_data": any(
+                        key in payload
+                        for key in (
+                            "market_language_translation",
+                            "market_language_translation_artifact",
+                        )
+                    ),
+                }
+            )
+            return "# 摘要版" if display_mode else "# 完整版"
+
+        with patch("daily_report_render._raise_if_critical_data_missing"), patch(
+            "daily_report_render._clear_quote_sensitive_derived_outputs"
+        ), patch(
+            "daily_report_render._render_report_with_display_mode", side_effect=render
+        ):
+            build_report_outputs(
+                baseline_data,
+                "2026-07-10",
+                emit_preflight=False,
+            )
+            build_report_outputs(
+                integrated_data,
+                "2026-07-10",
+                emit_preflight=False,
+                market_language_translation=_market_language_test_artifact(),
+            )
+
+        expected = _formal_decision_projection(formal_decision)
+        self.assertEqual([row["display_mode"] for row in snapshots], [False, True, False, True])
+        for row in snapshots:
+            self.assertEqual(row["decision"], expected)
+            self.assertFalse(row["artifact_in_data"])
+        self.assertIsNone(snapshots[0]["artifact"])
+        self.assertIsNone(snapshots[1]["artifact"])
+        self.assertEqual(
+            snapshots[2]["artifact"]["schema_version"],
+            "market_language_translation.v1",
+        )
+        self.assertEqual(
+            snapshots[3]["artifact"]["schema_version"],
+            "market_language_translation.v1",
+        )
+
     def test_save_report_output_can_explicitly_overwrite_official_report(self):
         with TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -171,6 +333,20 @@ class DailyReportRenderTest(unittest.TestCase):
 
             self.assertEqual(saved_path, str(target_path))
             self.assertEqual(target_path.read_text(encoding="utf-8"), "# new")
+
+    def test_saved_report_verification_reads_disk_and_rejects_mismatch_or_missing_path(self):
+        with TemporaryDirectory() as tempdir:
+            report_path = Path(tempdir) / "full.md"
+            report_path.write_text("# accepted", encoding="utf-8")
+
+            self.assertEqual(
+                read_verified_saved_report_markdown(report_path, "# accepted"),
+                "# accepted",
+            )
+            with self.assertRaisesRegex(RuntimeError, "正文不一致"):
+                read_verified_saved_report_markdown(report_path, "# expected")
+            with self.assertRaisesRegex(RuntimeError, "无法读取"):
+                read_verified_saved_report_markdown(Path(tempdir) / "missing.md", "# expected")
 
     def test_build_report_outputs_suppresses_helper_diagnostics_for_summary_render(self):
         data = _complete_report_facts({"foo": "bar"})
@@ -202,6 +378,55 @@ class DailyReportRenderTest(unittest.TestCase):
         )
         self.assertIs(render_mock.call_args_list[0].kwargs["shared_runtime_cache"], render_mock.call_args_list[1].kwargs["shared_runtime_cache"])
 
+    def test_build_report_outputs_normalizes_inferred_previous_target_before_render(self):
+        inferred_summary = {
+            "has_position": True,
+            "name": "长电科技",
+            "code": "600584",
+            "summary": "持有长电科技(600584)，100%仓位",
+            "position_source": "previous_report_target_default_1x",
+        }
+        nested_copy = dict(inferred_summary)
+        data = _complete_report_facts(
+            {
+                "personal_position_context": {"existing_position_summary": inferred_summary},
+                "market_research_snapshot": {"existing_position_summary": nested_copy},
+            }
+        )
+
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]):
+            build_report_outputs(data, "2026-07-10", emit_preflight=False)
+
+        for summary in (inferred_summary, nested_copy):
+            self.assertFalse(summary["has_position"])
+            self.assertTrue(summary["has_pending_position"])
+            self.assertTrue(summary["inferred_from_previous_report"])
+            self.assertEqual(summary["position"], 0.0)
+            self.assertEqual(summary["position_pct"], 0.0)
+            self.assertIn("前日报计划推定，待成交确认：长电科技(600584)", summary["summary"])
+
+    def test_build_report_outputs_prepends_position_timeline_to_full_report(self):
+        data = _complete_report_facts({"foo": "bar"})
+        position_report_text = (
+            "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+            "|------|------|----------|----------|-------------|------|\n"
+            "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+            "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认（只核实记录）：长电科技(600584) | 无 | 确认已成交才视为B1；未确认不新增B2 | 0%不参与；只核实成交记录 |\n\n"
+            "# 持仓策略"
+        )
+
+        with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]):
+            outputs = build_report_outputs(
+                data,
+                "2026-07-10",
+                emit_preflight=False,
+                position_report_text=position_report_text,
+            )
+
+        self.assertIn("## 账户日序表", outputs[REPORT_VARIANT_FULL])
+        self.assertIn("长电科技(600584)", outputs[REPORT_VARIANT_FULL])
+        self.assertNotIn("## 账户日序表", outputs[REPORT_VARIANT_SUMMARY])
+
     def test_build_report_outputs_forwards_postgres_only_runtime_config(self):
         data = _complete_report_facts({"postgres_only": True})
         with patch("daily_report_render._render_report_with_display_mode", side_effect=["# full", "# summary"]) as render_mock:
@@ -210,7 +435,7 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertTrue(render_mock.call_args_list[0].kwargs["postgres_only"])
         self.assertTrue(render_mock.call_args_list[1].kwargs["postgres_only"])
 
-    def test_build_report_outputs_refreshes_quote_sensitive_derived_outputs(self):
+    def test_build_report_outputs_validates_frozen_inputs_before_refreshing_quote_sensitive_outputs(self):
         data = _complete_report_facts(
             {
                 "postgres_only": True,
@@ -220,7 +445,6 @@ class DailyReportRenderTest(unittest.TestCase):
                 "current_sector_turnover_snapshot": {"sector": "半导体", "turnover": 100},
                 "market_state_snapshot": {"market_state": "修复"},
                 "mainline_turnover_summary": {"current_mainline": "半导体"},
-                "selected_position_candidate": {"code": "600667", "name": "太极实业"},
                 "position_decision": {"target_position_pct": 0},
                 "front_page_final_gate": {"final_action": "0%不参与"},
                 "execution_stage_context": {
@@ -275,12 +499,12 @@ class DailyReportRenderTest(unittest.TestCase):
         self.assertEqual(
             preflight_seen[0],
             {
-                "data_selection_workflow": False,
-                "data_final_target_resolution": False,
-                "context_selection_workflow": False,
-                "context_candidate_traces": False,
-                "snapshot_selection_workflow": False,
-                "snapshot_sniper_target_derivation": False,
+                "data_selection_workflow": True,
+                "data_final_target_resolution": True,
+                "context_selection_workflow": True,
+                "context_candidate_traces": True,
+                "snapshot_selection_workflow": True,
+                "snapshot_sniper_target_derivation": True,
             },
         )
         self.assertEqual(
@@ -2124,7 +2348,9 @@ Top50长趋势表不该进入轻量版
             "- FOMO 是外部价格刺激被自己接住后的情绪，不是执行资格；卖出后第一天因反包、后悔或怕踏空想买回，默认不执行，只能收盘后重新进入 T0 评估。\n"
             "- 反包先批改情绪反应，不直接批改前一日信息集；正确动作出现亏损结果，仍按可控小亏和纪律成本复盘。\n"
             "- 必卖日里，反抽、0轴、VWAP和开盘价修复先看作旧仓退出流动性；价格只决定卖得舒服还是狼狈，不重新决定卖不卖。\n"
-            "- Ta/Tb/Tc日序表必须区分换仓日和空仓日：有Tb明日目标时，Ta+2默认按昨晚预案尾盘卖出；没有Tb+0/没有Tc+0且只剩Ta+2旧仓时，才优先处理旧仓，让账户尽可能接近全天空仓。\n\n"
+            "- Ta-Te账户日序表必须区分历史路径、今日报告和明日执行：Ta最远，Tb/Tc是前两段，Td是报告日，Te是明日执行日；明日标的为空时，Te写只处理旧仓风险或空仓等待B1资格。\n"
+            "- 节奏复位空仓和延后确认空仓只解释候选复核，不改变最终0%动作；T+1强弱只能进入批改和下一份日报。\n"
+            "- 日报不是每天预测一个股；先判断是否有可参与节拍，没有买入资格就0%不参与；B1只买参与权，B2等待确认。\n\n"
             "## Summary",
         )
         self.assertEqual(rendered.count("去弱留强是短线执行表达"), 1)

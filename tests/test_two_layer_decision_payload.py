@@ -10,6 +10,12 @@ from report.two_layer_decision_payload import (
     render_derivation_audit_layer,
     render_front_decision_layer,
 )
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    SAME_STOCK_T_CONFIRMATION_CLAUSE,
+    TWO_B_CONFIRMATION_CLAUSE,
+)
 from report.sniper_target_derivation import build_sniper_target_derivation_packet, full_section
 
 
@@ -32,7 +38,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["front_decision"]["position_plan"], "50%条件执行")
         self.assertEqual(payload["front_decision"]["position_pct"], 50)
-        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", text)
+        self.assertIn(f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT} |", text)
         self.assertIn("## 50%条件执行条件", text)
         for forbidden in ("A" + "档", "B" + "档", "C" + "档", "一" + "档", "二" + "档", "三" + "档", "50%" + " / 条件执行"):
             self.assertNotIn(forbidden, text)
@@ -87,6 +93,139 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertEqual(payload["front_decision"]["execution_object"], {})
         self.assertEqual(payload["front_decision"]["position_plan"], "0%不参与")
         self.assertEqual(payload["b_level_conditions"], {})
+
+    def test_inferred_previous_plan_zero_position_uses_confirmation_only_action(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+                "source_node": "N8",
+            },
+            "nodes": [{"node_id": "N8", "node_name": "仓位与执行条件", "judgement": "0%不参与"}],
+            "candidate_pool": [],
+        }
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-10",
+            final_target_resolution={
+                "existing_position_target": {
+                    "name": "长电科技",
+                    "code": "600584",
+                    "inferred_from_previous_report": True,
+                    "has_position": False,
+                    "has_pending_position": True,
+                },
+                "new_entry_target": {},
+                "display_target": {},
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "明日无新增参与对象，前日报计划对象待成交确认；未确认前按0x",
+                },
+            },
+            position_decision={
+                "target_position_pct": 0,
+                "signal_grade": "0",
+                "participation_mode": "no_trade",
+            },
+            execution_stage_context={"selection_workflow": workflow},
+        )
+
+        self.assertTrue(payload["pending_position_confirmation"])
+        self.assertEqual(payload["front_decision"]["attribution"], "账户问题")
+        self.assertEqual(payload["front_decision"]["zero_action_text"], "0%不参与；只核实成交记录")
+        self.assertEqual(
+            payload["next_day_action"]["old_position_handling"],
+            "只核实成交记录；未确认成交前按0x",
+        )
+        self.assertEqual(payload["derivation_steps"][-1]["action"], "明日动作：0%不参与；只核实成交记录")
+        front_text = "\n".join(render_front_decision_layer(payload))
+        derivation_text = "\n".join(render_derivation_audit_layer(payload))
+        self.assertIn("| 明日执行对象 | 无 |", front_text)
+        self.assertIn(
+            "| 账户先处理 | 只核实成交记录；未确认成交前按0x |",
+            front_text,
+        )
+        self.assertIn("| 不参与依据 | 前日报计划对象尚未确认成交", front_text)
+        self.assertIn("| 无执行目标原因 | 新开仓没有执行对象；先确认前日报计划对象是否成交 |", front_text)
+        self.assertIn("| 责任归因 | 账户问题 |", front_text)
+        self.assertNotIn("只处理旧仓", front_text + "\n" + derivation_text)
+
+    def test_pure_zero_without_position_does_not_create_old_position_action(self):
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-10",
+            final_target_resolution={
+                "new_entry_target": {},
+                "display_target": {},
+                "existing_position_target": {},
+                "capital_priority_decision": {
+                    "capital_priority": "wait",
+                    "reason": "无明日执行对象",
+                },
+            },
+            position_decision={"target_position_pct": 0},
+            execution_stage_context={},
+        )
+
+        self.assertEqual(
+            payload["front_decision"]["zero_action_text"],
+            "0%不参与；无执行对象",
+        )
+        self.assertEqual(
+            payload["next_day_action"]["old_position_handling"],
+            "无旧仓需要处理；保持0%不参与",
+        )
+        self.assertNotIn("旧仓优先", str(payload))
+
+    def test_same_stock_t_resolution_does_not_override_zero_workflow(self):
+        workflow = {
+            "schema_version": "selection_workflow.v1",
+            "final": {
+                "execution_object": {},
+                "position_pct": 0,
+                "action_text": "0%不参与",
+                "source_node": "N8",
+            },
+            "nodes": [{"node_id": "N8", "node_name": "仓位与执行条件", "judgement": "0%不参与"}],
+            "candidate_pool": [],
+        }
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-06",
+            final_target_resolution={
+                "new_entry_target": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                "existing_position_target": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                "display_target": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                "capital_priority_decision": {
+                    "capital_priority": "same_stock_t",
+                    "reason": "已有1x旧仓且今日目标仍是同一只票，只按同股T候选处理",
+                },
+            },
+            position_decision={"target_position_pct": 0},
+            execution_stage_context={"selection_workflow": workflow},
+        )
+
+        self.assertEqual(payload["front_decision"]["execution_object"], {})
+        self.assertEqual(payload["front_decision"]["position_pct"], 0)
+        self.assertEqual(payload["front_decision"]["position_plan"], "0%不参与")
+        self.assertEqual(payload["b_level_conditions"], {})
+        text = "\n".join(render_front_decision_layer(payload))
+        self.assertNotIn(SAME_STOCK_T_CONFIRMATION_CLAUSE, text)
+        self.assertNotIn("| 明日仓位 | 已决定50%条件执行", text)
+
+    def test_core_attack_front_decision_layer_uses_two_b_position_text(self):
+        payload = build_two_layer_decision_payload(
+            target_date="2026-07-06",
+            final_target_resolution={
+                "display_target": {"name": "工业富联", "code": "601138", "sector": "通信设备"},
+                "capital_priority_decision": {"capital_priority": "new_entry"},
+            },
+            position_decision={"target_position_pct": 100, "participation_mode": "core_attack_100"},
+        )
+
+        text = "\n".join(render_front_decision_layer(payload))
+
+        self.assertIn(f"| 明日仓位 | 已决定100%核心进攻；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0% |", text)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, text)
 
     def test_workflow_zero_position_suppresses_stale_resolution_observation_target(self):
         workflow = {
@@ -521,7 +660,15 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertEqual(payload["front_decision"]["execution_identity"], "无明日执行对象")
         self.assertEqual(payload["front_decision"]["position_plan"], "0%不参与")
         self.assertEqual(payload["b_level_conditions"], {})
+        self.assertEqual(
+            payload["next_day_action"]["old_position_handling"],
+            "旧仓优先时，新机会只观察，不新增参与",
+        )
         self.assertIn("| 明日执行对象 | 无 |", text)
+        self.assertIn(
+            "| 账户先处理 | 旧仓优先时，新机会只观察，不新增参与 |",
+            text,
+        )
         self.assertNotIn("| 明日执行对象 | 豫能控股(001896) |", text)
 
     def test_zero_position_new_entry_priority_can_render_conditional_b_level_execution(self):
@@ -543,7 +690,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
 
         self.assertEqual(payload["front_decision"]["position_plan"], "50%条件执行")
         self.assertEqual(payload["front_decision"]["position_pct"], 50)
-        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", text)
+        self.assertIn(f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT} |", text)
         self.assertNotIn("条件满足才0%不参与", text)
 
     def test_process_target_only_does_not_create_execution_object(self):
@@ -812,7 +959,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         self.assertIn("- 不做新仓", text)
         self.assertIn("- 不新增参与", text)
         self.assertIn("### Step 4：明天只做什么", text)
-        self.assertIn("明日动作：空仓等待或只处理旧仓", text)
+        self.assertIn("明日动作：0%不参与；无执行对象", text)
         self.assertNotIn("条件执行对象：暂无", text)
         self.assertNotIn("暂无作为条件执行对象", text)
         self.assertNotIn("暂无进入50%条件执行计划", text)
@@ -838,7 +985,7 @@ class TwoLayerDecisionPayloadTest(unittest.TestCase):
         text = "\n".join(render_derivation_audit_layer(payload))
 
         self.assertIn("无保留对象", text)
-        self.assertIn("明日动作：空仓等待或只处理旧仓", text)
+        self.assertIn("明日动作：0%不参与；无执行对象", text)
         self.assertNotIn("保留对象：豫能控股(001896)", text)
         self.assertNotIn("明日动作：只观察豫能控股(001896)，不新增参与", text)
         self.assertNotIn("淘汰：上海石化(600688)、豫能控股(001896)", text)

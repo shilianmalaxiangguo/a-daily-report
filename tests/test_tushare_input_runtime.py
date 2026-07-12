@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from input.request_registry import build_input_request_registry
 import input.tushare_runtime as tushare_runtime
+from domains.market_state.market_language_translation import build_market_language_source_projection
 from input.tushare_runtime import (
     get_margin_pressure_from_tushare_first,
     get_hot_concept_fund_flow_from_tushare_first,
@@ -2472,6 +2473,152 @@ class TushareInputRuntimeTest(unittest.TestCase):
             ],
         )
 
+    def test_new_high_report_markdown_parser_uses_only_new_high_section_table(self):
+        markdown = """
+### 3. 价格带风格
+| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |
+|------|--------|---------|----------|--------|----------|
+| 2026-07-08 | 999 | 88.88% | 错误样本 | +1 | 错误板块 |
+
+### 4. 创新高趋势反馈
+| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |
+|------|--------|---------|----------|--------|----------|
+| 2026-07-08 | 20 | 0.40% | 趋势扩散偏冷 | 待累计 | IT设备、元器件、化工原料 |
+"""
+
+        result = tushare_runtime._new_high_record_from_report_markdown(markdown, "2026-07-08")
+
+        self.assertEqual(result["new_high_count"], 20)
+        self.assertEqual(result["all_a_share_pct"], 0.40)
+        self.assertEqual(result["leading_sectors"], "IT设备、元器件、化工原料")
+
+    def test_new_high_report_markdown_parser_rejects_similar_table_outside_section(self):
+        markdown = """
+### 3. 价格带风格
+| 日期 | 新高数 | 全A占比 | 趋势信号 | 较前日 | 主导板块 |
+|------|--------|---------|----------|--------|----------|
+| 2026-07-08 | 999 | 88.88% | 错误样本 | +1 | 错误板块 |
+"""
+
+        self.assertEqual(tushare_runtime._new_high_record_from_report_markdown(markdown, "2026-07-08"), {})
+
+    def test_new_high_feedback_fills_missing_history_from_report_markdown(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [{"trade_date": "2026-06-17", "new_high_count": 46, "all_a_share_pct": 0.92}]
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return service
+
+        def ensure_index(**kwargs):
+            calls.append(("ensure", kwargs["end_date"], tuple(kwargs.get("candidate_dates") or [])))
+            return {"indexed_count": 0}
+
+        def report_record(trade_date):
+            records = {
+                "2026-07-07": {"trade_date": "2026-07-07", "new_high_count": 23, "all_a_share_pct": 0.46, "leading_sectors": "IT设备"},
+                "2026-07-08": {"trade_date": "2026-07-08", "new_high_count": 20, "all_a_share_pct": 0.40, "leading_sectors": "IT设备、元器件、化工原料"},
+            }
+            return dict(records.get(trade_date) or {})
+
+        with patch.object(tushare_runtime, "_new_high_record_from_report_file", side_effect=report_record):
+            result = get_new_high_feedback_from_tushare_first(
+                "2026-07-09",
+                fetch_stock_factor_pro_rows_fn=lambda trade_date: [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260709",
+                        "pct_chg": 5.2,
+                        "amount": 2500000,
+                        "topdays": 260,
+                    }
+                ],
+                fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                    "2026-06-17",
+                    "2026-07-07",
+                    "2026-07-08",
+                    "2026-07-09",
+                ],
+                fetch_stock_basic_map_fn=lambda: {
+                    "000001": {"name": "趋势一号", "industry": "半导体", "list_date": "20200102"},
+                },
+                stock_risk_map={},
+                database_service_cls=FakeDatabaseService,
+                ensure_daily_metric_history_index_fn=ensure_index,
+                db_path="daily.db",
+            )
+
+        self.assertEqual(
+            [row["trade_date"] for row in result["trend_rows"]],
+            ["2026-06-17", "2026-07-07", "2026-07-08", "2026-07-09"],
+        )
+        self.assertEqual(result["trend_rows"][1]["all_a_share_pct"], 0.46)
+        self.assertEqual(result["trend_rows"][2]["all_a_share_pct"], 0.40)
+
+    def test_new_high_feedback_fills_report_history_when_fact_rows_still_have_gap(self):
+        calls = []
+
+        class FakeService:
+            def query_new_high_feedback_series(self, end_date, *, window_days=25):
+                calls.append(("query", end_date, window_days))
+                return [{"trade_date": "2026-06-17", "new_high_count": 166, "all_a_share_pct": 3.32}]
+
+        service = FakeService()
+
+        class FakeDatabaseService:
+            @classmethod
+            def fact_store_from_environment(cls, db_path=None):
+                calls.append(("db", db_path))
+                return service
+
+        def report_record(trade_date):
+            records = {
+                "2026-07-07": {"trade_date": "2026-07-07", "new_high_count": 23, "all_a_share_pct": 0.46, "leading_sectors": "机械基件、化工原料、半导体"},
+                "2026-07-08": {"trade_date": "2026-07-08", "new_high_count": 20, "all_a_share_pct": 0.40, "leading_sectors": "IT设备、元器件、化工原料"},
+            }
+            return dict(records.get(trade_date) or {})
+
+        with patch.object(tushare_runtime, "_new_high_record_from_report_file", side_effect=report_record), \
+             patch.object(tushare_runtime, "_new_high_report_history_dates_before", return_value=["2026-07-07", "2026-07-08"]):
+            result = get_new_high_feedback_from_tushare_first(
+                "2026-07-09",
+                fetch_stock_factor_pro_rows_fn=lambda trade_date: [
+                    {
+                        "ts_code": "000001.SZ",
+                        "trade_date": "20260709",
+                        "pct_chg": 5.2,
+                        "amount": 2500000,
+                        "topdays": 260,
+                    }
+                ],
+                fetch_tushare_open_trade_dates_fn=lambda start_date, end_date: [
+                    "2026-06-17",
+                    "2026-07-09",
+                ],
+                fetch_stock_basic_map_fn=lambda: {
+                    "000001": {"name": "趋势一号", "industry": "半导体", "list_date": "20200102"},
+                },
+                stock_risk_map={},
+                database_service_cls=FakeDatabaseService,
+                ensure_daily_metric_history_index_fn=lambda **kwargs: {"indexed_count": 0},
+                db_path="daily.db",
+            )
+
+        self.assertEqual(
+            [row["trade_date"] for row in result["trend_rows"]],
+            ["2026-06-17", "2026-07-07", "2026-07-08", "2026-07-09"],
+        )
+        self.assertEqual(result["trend_rows"][1]["all_a_share_pct"], 0.46)
+        self.assertEqual(result["trend_rows"][2]["all_a_share_pct"], 0.40)
+
     def test_new_high_feedback_rebuilds_fact_db_history_when_index_is_empty(self):
         calls = []
 
@@ -3360,7 +3507,17 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["provider"], "tushare.limit_list_ths")
         self.assertEqual(result["fallback_used"], False)
-        self.assertEqual(result["market_stats"], {"up_count": 2, "down_count": 2, "zt_count": 1, "dt_count": 1})
+        self.assertEqual(
+            result["market_stats"],
+            {
+                "up_count": 2,
+                "down_count": 2,
+                "zt_count": 1,
+                "dt_count": 1,
+                "trade_date": "2026-05-13",
+                "source_date": "2026-05-13",
+            },
+        )
         self.assertEqual(result["zt_pool"][0]["代码"], "000001")
         self.assertEqual(result["zt_pool"][0]["所属行业"], "银行")
         self.assertEqual(result["dt_pool"][0]["代码"], "000002")
@@ -3452,7 +3609,17 @@ class TushareInputRuntimeTest(unittest.TestCase):
 
         self.assertEqual(result["provider"], "legacy.limit_pool_snapshot")
         self.assertTrue(result["fallback_used"])
-        self.assertEqual(result["market_stats"], {"up_count": 1, "down_count": 1, "zt_count": 1, "dt_count": 1})
+        self.assertEqual(
+            result["market_stats"],
+            {
+                "up_count": 1,
+                "down_count": 1,
+                "zt_count": 1,
+                "dt_count": 1,
+                "trade_date": "2026-05-29",
+                "source_date": "2026-05-29",
+            },
+        )
 
     def test_limit_pool_snapshot_returns_daily_market_breadth_when_no_fallback_is_bound(self):
         result = get_limit_pool_snapshot_from_tushare_first(
@@ -3465,8 +3632,29 @@ class TushareInputRuntimeTest(unittest.TestCase):
             retry_sleep_fn=lambda seconds: None,
         )
 
-        self.assertEqual(result["market_stats"], {"up_count": 1, "down_count": 1, "zt_count": 0, "dt_count": 0})
+        self.assertEqual(
+            result["market_stats"],
+            {
+                "up_count": 1,
+                "down_count": 1,
+                "zt_count": 0,
+                "dt_count": 0,
+                "trade_date": "2026-05-29",
+                "source_date": "2026-05-29",
+            },
+        )
         self.assertEqual(result["source_status"], "daily_breadth_only")
+
+        projection = build_market_language_source_projection(
+            {"market_stats": result["market_stats"]},
+            target_date="2026-05-29",
+            analysis_mode="fresh",
+        )
+        self.assertEqual(projection["daily"]["market_breadth"]["up_count"], 1)
+        breadth_source = next(
+            row for row in projection["sources"] if row["source_id"] == "src-market-breadth-eod"
+        )
+        self.assertEqual(breadth_source["source_date"], "2026-05-29")
 
     def test_limit_pool_snapshot_uses_storage_breadth_when_daily_fetch_fails(self):
         class FakeService:
@@ -3489,7 +3677,17 @@ class TushareInputRuntimeTest(unittest.TestCase):
             retry_sleep_fn=lambda seconds: None,
         )
 
-        self.assertEqual(result["market_stats"], {"up_count": 899, "down_count": 4591, "zt_count": 93, "dt_count": 40})
+        self.assertEqual(
+            result["market_stats"],
+            {
+                "up_count": 899,
+                "down_count": 4591,
+                "zt_count": 93,
+                "dt_count": 40,
+                "trade_date": "2026-07-02",
+                "source_date": "2026-07-02",
+            },
+        )
         self.assertEqual(result["provider"], "storage.stock_daily_quotes_recent")
         self.assertEqual(result["source_status"], "daily_breadth_only")
 
@@ -3856,6 +4054,25 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["rows"][0]["fund_flow_status"], "pending")
         self.assertEqual(result["rows"][0]["data_source"], "tushare.ths_hot.pending_moneyflow")
 
+    def test_hot_concept_fund_flow_keeps_industry_hot_plate_context_when_no_concept_code(self):
+        result = get_hot_concept_fund_flow_from_tushare_first(
+            "2026-07-06",
+            hot_plates=[
+                {"name": "半导体", "code": "881121", "tag": "1家涨停", "order": 1, "rate": 33119},
+                {"name": "通信设备", "code": "881129", "tag": "3家涨停", "order": 7, "rate": 8304},
+            ],
+            fetch_tushare_ths_member_fn=lambda ts_code: [],
+            fetch_stock_moneyflow_map_fn=lambda target_date: {},
+            snapshot_fallback_fn=lambda target_date: {},
+            retry_sleep_fn=lambda seconds: None,
+        )
+
+        self.assertEqual(result["provider"], "tushare.ths_hot.pending_moneyflow")
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual([row["name"] for row in result["rows"]], ["半导体", "通信设备"])
+        self.assertEqual(result["rows"][0]["net_inflow"], "")
+        self.assertEqual(result["rows"][0]["fund_flow_status"], "pending")
+
     def test_lhb_snapshot_uses_tushare_top_list_before_finshare_fallback(self):
         fallback_calls = []
 
@@ -3944,6 +4161,73 @@ class TushareInputRuntimeTest(unittest.TestCase):
         self.assertEqual(result["lhb_inst_detail"][0]["net_buy_yi"], 0.7)
         self.assertEqual(result["lhb_inst_detail"][1]["seat_type"], "非机构")
         self.assertEqual(result["lhb_inst_detail"][1]["net_buy_yi"], -0.1)
+
+    def test_lhb_snapshot_falls_back_when_top_list_net_amount_is_missing(self):
+        fallback_calls = []
+
+        result = get_lhb_snapshot_from_tushare_first(
+            "2026-07-09",
+            fetch_tushare_top_list_fn=lambda trade_date: [
+                {
+                    "ts_code": "920305.BJ",
+                    "name": "云创退",
+                    "net_amount": "",
+                    "l_buy": "",
+                    "l_sell": "",
+                    "close": 0.69,
+                    "pct_change": -80.67,
+                },
+                {
+                    "ts_code": "688610.SH",
+                    "name": "埃科光电",
+                    "net_amount": "",
+                    "l_buy": "",
+                    "l_sell": "",
+                    "close": 231.5,
+                    "pct_change": 20.0,
+                },
+            ],
+            fetch_tushare_top_inst_fn=lambda trade_date: [],
+            legacy_get_lhb_snapshot_fn=lambda target_date=None: fallback_calls.append(target_date)
+            or {
+                "lhb_net_buy_top10": [
+                    {
+                        "rank": 1,
+                        "code": "600584",
+                        "name": "长电科技",
+                        "net_buy_amount_yi": 2.5,
+                        "sector": "半导体",
+                    }
+                ],
+                "lhb_net_sell_top10": [],
+                "lhb_analysis": [{"代码": "600584", "data_source": "finshare.get_lhb"}],
+                "provider": "finshare.get_lhb",
+            },
+        )
+
+        self.assertEqual(fallback_calls, ["2026-07-09"])
+        self.assertEqual(result["provider"], "finshare.get_lhb")
+        self.assertTrue(result["fallback_used"])
+        self.assertEqual(result["lhb_net_buy_top10"][0]["code"], "600584")
+        self.assertEqual(result["lhb_net_buy_top10"][0]["net_buy_amount_yi"], 2.5)
+
+    def test_lhb_snapshot_derives_missing_net_amount_from_buy_and_sell(self):
+        result = get_lhb_snapshot_from_tushare_first(
+            "2026-07-09",
+            fetch_tushare_top_list_fn=lambda trade_date: [
+                {"ts_code": "000001.SZ", "name": "平安银行", "net_amount": "", "l_buy": 500000000, "l_sell": 120000000},
+                {"ts_code": "000002.SZ", "name": "万科A", "net_amount": "", "l_buy": 10000000, "l_sell": 210000000},
+            ],
+            fetch_tushare_top_inst_fn=lambda trade_date: [],
+            fetch_stock_industry_map_fn=lambda: {"000001": "银行", "000002": "房地产"},
+            legacy_get_lhb_snapshot_fn=lambda target_date=None: {},
+        )
+
+        self.assertEqual(result["provider"], "tushare.top_list")
+        self.assertEqual(result["lhb_net_buy_top10"][0]["code"], "000001")
+        self.assertEqual(result["lhb_net_buy_top10"][0]["net_buy_amount_yi"], 3.8)
+        self.assertEqual(result["lhb_net_sell_top10"][0]["code"], "000002")
+        self.assertEqual(result["lhb_net_sell_top10"][0]["net_buy_amount_yi"], -2.0)
 
     def test_lhb_snapshot_keeps_top_list_when_tushare_top_inst_errors(self):
         result = get_lhb_snapshot_from_tushare_first(

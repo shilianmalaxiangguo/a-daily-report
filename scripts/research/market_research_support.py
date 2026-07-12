@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import daily_report_analysis_utils as analysis_utils
+from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 from domains.market_state.mainline_history_runtime import (
     build_mainline_history_record as build_mainline_history_record_runtime,
     load_recent_mainline_history as load_recent_mainline_history_runtime,
@@ -1195,7 +1196,7 @@ def _build_follow_verdict_legacy_body(final_gate, position_level, state_machine_
             "code": "follow",
             "label": "🟢 跟随主线",
             "reason": "热点、趋势密度和异常承接正在同向共振，可以跟，但只能跟最强方向。",
-            "action": "只在主线和异常承接对象里按三段固定交易窗口分层参与",
+            "action": f"只在主线和异常承接对象里按三段固定交易窗口处理；{TWO_B_CONFIRMATION_CLAUSE}",
         }
     if state_code == "migrate":
         return {

@@ -5,6 +5,11 @@ from domains.execution_chain.pk_decision_nodes.candidate_surface_filter import (
     candidate_identity_keys,
     candidate_matches_any_key,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
+from report.position_context import (
+    existing_position_summary_from_context,
+    is_inferred_previous_report_position,
+)
 
 
 def get_watch_anchor_note(watch_anchor):
@@ -22,13 +27,8 @@ def format_stock_label(stock):
 
 
 def existing_position_summary_text(context):
-    context = context or {}
-    summary = context.get("existing_position_summary")
-    if not isinstance(summary, dict):
-        personal_position_context = context.get("personal_position_context")
-        if isinstance(personal_position_context, dict):
-            summary = personal_position_context.get("existing_position_summary")
-    if not isinstance(summary, dict) or not summary.get("has_position"):
+    summary = existing_position_summary_from_context(context)
+    if is_inferred_previous_report_position(summary) or not summary.get("has_position"):
         return ""
     return str(summary.get("summary") or "").strip()
 
@@ -127,6 +127,8 @@ def resolve_watch_anchor(context):
 
 
 def _old_position_priority_active(context):
+    if is_inferred_previous_report_position(existing_position_summary_from_context(context)):
+        return False
     return _capital_priority(context) in {"old_position_t", "old_position", "existing_position", "existing_position_t"}
 
 
@@ -250,7 +252,7 @@ def build_focus_recap_text(context):
         if _old_position_priority_active(context):
             return f"{format_stock_label(selected)}：观察对象，旧仓先处理"
         if selected_target_is_attack_ready(context):
-            return f"{format_stock_label(selected)}：明日目标标的，固定交易窗口内条件成立才执行"
+            return f"{format_stock_label(selected)}：明日目标标的，{PREMARKET_50_TRIGGER_TEXT}"
         return f"{format_stock_label(selected)}：观察对象，先观察强弱与承接"
 
     best_stock = resolve_best_stock(context)

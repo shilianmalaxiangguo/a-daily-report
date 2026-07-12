@@ -1,4 +1,5 @@
 from report.legacy_stage_summary import build_legacy_report_stage_rows
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
 from report.stage_registry import build_report_stages
 from report.conclusion_support import (
     build_focus_recap_text as _build_focus_recap_text,
@@ -49,7 +50,7 @@ def _build_mvp_target_row(context):
         if _selected_target_is_attack_ready(context):
             return (
                 "| 如果要买只买谁 | "
-                f"{_format_stock_label(selected)}，按{LAYERED_PARTICIPATION_TEXT}触发 |"
+                f"{_format_stock_label(selected)}，按{LAYERED_PARTICIPATION_TEXT}触发；{TWO_B_CONFIRMATION_CLAUSE} |"
             )
         return (
             "| 重点观察谁 | "
@@ -61,11 +62,12 @@ def _build_mvp_target_row(context):
             return (
                 "| 如果要买只买谁 | "
                 f"{best_stock.get('name')}({best_stock.get('code')})，"
-                f"按{LAYERED_PARTICIPATION_TEXT}触发，价格预案{entry_range[0]:.2f}-{entry_range[1]:.2f} |"
+                f"按{LAYERED_PARTICIPATION_TEXT}触发；{TWO_B_CONFIRMATION_CLAUSE}；"
+                f"价格预案{entry_range[0]:.2f}-{entry_range[1]:.2f} |"
             )
         return (
             "| 如果要买只买谁 | "
-            f"{best_stock.get('name')}({best_stock.get('code')})，按{LAYERED_PARTICIPATION_TEXT}触发 |"
+            f"{best_stock.get('name')}({best_stock.get('code')})，按{LAYERED_PARTICIPATION_TEXT}触发；{TWO_B_CONFIRMATION_CLAUSE} |"
         )
     if watch_anchor:
         if trade_gate_open:
@@ -97,7 +99,7 @@ def _build_full_mode_strategy_row(context):
         return (
             "明日策略",
             f"明日目标标的条件触发：只操作{selected.get('name') or selected.get('code') or selected.get('stock_code')}，"
-            "按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理，不满足回到0%",
+            f"按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；不满足回到0%",
         )
 
     if not final_gate.get("can_new_entry"):
@@ -106,12 +108,12 @@ def _build_full_mode_strategy_row(context):
         return ("明日策略", "不开新仓，只观察：当前裁决不允许新增跟随，先看环境和主线是否继续强化")
 
     if step0_prediction == "DIFFICULT":
-        return ("明日策略", "开盘再评估：环境仍需确认，只记录竞价表态和开盘承接，不满足固定交易窗口条件就回到0%")
+        return ("明日策略", "开盘再评估：环境仍需确认，只记录竞价表态和开盘承接，不满足执行资格就回到0%")
 
     if best_stock:
         if step0_prediction == "CLEAR":
-            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理，买后用失效价和单笔-5%底线处理风险，其他标的禁止")
-        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，固定交易窗口内条件成立才执行，其他标的无论多诱人都禁止")
+            return ("明日策略", f"执行唯一标的：只操作{best_stock.get('name')}，按09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；买后用失效价和单笔-5%底线处理风险，其他标的禁止")
+        return ("明日策略", f"唯一标的条件触发：只操作{best_stock.get('name')}，{PREMARKET_50_TRIGGER_TEXT}；其他标的无论多诱人都禁止")
 
     if watch_anchor:
         if trade_gate_open:
@@ -211,7 +213,7 @@ def build_final_conclusion_mvp_discipline_node(context, node_meta=None, node_loo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足固定交易窗口条件就回到0%；买后用失效价和单笔-5%底线处理风险 |"
+            f"| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；{TWO_B_CONFIRMATION_CLAUSE}；不满足执行资格就回到0%；买后用失效价和单笔-5%底线处理风险 |"
         ],
         "exports": {},
         "module_logs": [],
@@ -272,7 +274,7 @@ def build_final_conclusion_full_discipline_node(context, node_meta=None, node_lo
         return {"lines": [], "exports": {}, "module_logs": []}
     return {
         "lines": [
-            "| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；不满足固定交易窗口条件就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
+            f"| 执行纪律 | 09:30-09:35竞价表态/开盘前几分钟/回封，或09:50-10:10窗口；{TWO_B_CONFIRMATION_CLAUSE}；不满足执行资格就回到0%；若直接高开离计划过远且无回封/承接方案则放弃 |"
         ],
         "exports": {},
         "module_logs": [],

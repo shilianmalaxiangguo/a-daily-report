@@ -5,6 +5,7 @@ import json
 import re
 import datetime as _dt
 from pathlib import Path
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 SCHEMA_VERSION = "elimination_tournament.v1"
@@ -698,7 +699,10 @@ def _final_action_from_resolution(final_target_resolution, position_decision):
     new_entry = stock_payload(resolution.get("new_entry_target"))
     display = stock_payload(resolution.get("display_target"))
     priority = _as_dict(resolution.get("capital_priority_decision"))
+    priority_value = clean_text(priority.get("capital_priority"))
     pct = _position_pct_from_decision(position_decision)
+    if priority_value == "same_stock_t" and new_entry and pct <= 0:
+        pct = 50
     target = new_entry if new_entry and pct > 0 else {}
     source = "final_target_resolution"
     reason = clean_text(priority.get("reason")) or "最终解析未给出新增参与对象"
@@ -718,8 +722,12 @@ def _final_action_from_resolution(final_target_resolution, position_decision):
 def _final_action(selection_workflow, final_target_resolution, position_decision):
     workflow = _as_dict(selection_workflow)
     workflow_final = _as_dict(workflow.get("final"))
+    resolution_priority = _as_dict(_as_dict(final_target_resolution).get("capital_priority_decision"))
+    priority_value = clean_text(resolution_priority.get("capital_priority"))
     if workflow_final:
         final = _workflow_final(workflow)
+        if final["position_pct"] <= 0 and priority_value == "same_stock_t":
+            return _final_action_from_resolution(final_target_resolution, position_decision)
         if final["position_pct"] <= 0:
             final["target"] = {}
             final["label"] = "0%不参与"
@@ -1108,7 +1116,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
         layer["survivors"] = [final_entry]
         layer["eliminated"] = []
         layer["input_entries"] = [final_entry]
-        layer["note"] = "唯一明日动作来自板块资金扩散链路；T+1只按昨晚预案检查执行资格，不满足则回到0%不参与。"
+        layer["note"] = f"唯一明日动作来自板块资金扩散链路；T+1{PREMARKET_50_TRIGGER_TEXT}。"
         synced.append(_normalize_preflight_layer(layer))
         replaced = True
     if not replaced:
@@ -1124,7 +1132,7 @@ def _sync_preflight_final_action_layer(layers, final_action):
                     "survivors": [final_entry],
                     "eliminated": [],
                     "input_entries": [final_entry],
-                    "note": "唯一明日动作来自板块资金扩散链路；T+1只按昨晚预案检查执行资格，不满足则回到0%不参与。",
+                    "note": f"唯一明日动作来自板块资金扩散链路；T+1{PREMARKET_50_TRIGGER_TEXT}。",
                 }
             )
         )
@@ -3355,7 +3363,7 @@ def render_elimination_tournament_html(payload):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="artifact" content="elimination-tournament">
-  <title>{_html(payload.get("trade_date"))} 明日标的选股淘汰赛</title>
+  <title>{_html(payload.get("trade_date"))} 过程候选淘汰赛</title>
   <style>
     :root {{
       color-scheme: light;
@@ -3877,7 +3885,7 @@ def render_elimination_tournament_html(payload):
 <body>
   <main>
     <header>
-      <h1>{_html(payload.get("trade_date"))} 明日标的选股淘汰赛</h1>
+      <h1>{_html(payload.get("trade_date"))} 过程候选淘汰赛</h1>
       <p class="subtitle">从板块到最终动作逐层复核；非最终层只展示过程证据，不生成新的明日标的。</p>
     </header>
 	    <section class="final-summary final-action-summary" aria-label="最终动作摘要">
@@ -4897,7 +4905,7 @@ def render_sector_capital_preflight_html(payload):
 
 def elimination_tournament_html_path(markdown_path, trade_date):
     base = Path(markdown_path).parent if markdown_path else Path("reports")
-    return base / f"{clean_text(trade_date)}_明日标的选股淘汰赛.html"
+    return base / f"{clean_text(trade_date)}_过程候选淘汰赛.html"
 
 
 def sector_capital_preflight_html_path(markdown_path, trade_date):

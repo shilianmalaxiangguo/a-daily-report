@@ -231,6 +231,55 @@ class MarketAnalysisBuilderTest(unittest.TestCase):
         self.assertIn("> 多方向局部活跃但资金未明显胜出", rendered)
         self.assertNotIn("**当前主线**: 半导体", rendered)
 
+    def test_build_market_and_sector_analysis_contract_downgrades_stale_mainline_when_capacity_regime_has_no_mainline(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "total_turnover": 34106.93,
+                "mainline_turnover_summary": {
+                    "current_mainline": "创新药",
+                    "mainline_capacity_regime_summary": {
+                        "mainline_regime": "无主线",
+                        "primary_line": "暂无",
+                        "confirmation_evidence": "多方向局部活跃但资金未明显胜出",
+                    },
+                },
+            },
+            market_analysis={"market_status": "大幅下跌"},
+            sh_change=-1.00,
+            indices={"深证成指": {"涨跌幅": -2.29}, "创业板指": {"涨跌幅": -4.37}},
+            exit_analysis={"sector_name": "创新药"},
+            main_sectors_info=[{"name": "创新药", "zt_count": 0, "change": 3.03, "net_inflow": 56.4}],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+            enabled_node_keys=["mainline"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("**当前主线**: 暂无确认主线", rendered)
+        self.assertNotIn("**当前主线**: 创新药", rendered)
+        self.assertIn("**创新药**: 涨停0只，涨幅+3.03%，净流入56.4亿", rendered)
+
+    def test_build_market_and_sector_analysis_contract_separates_positive_breadth_from_limit_down_pressure(self):
+        result = build_market_and_sector_analysis_contract(
+            data={
+                "total_turnover": 34106.93,
+                "market_stats": {"up_count": 3772, "down_count": 1678},
+                "dt_pool": [{"code": "000001"}] * 5,
+            },
+            market_analysis={"market_status": "大幅下跌"},
+            sh_change=-1.00,
+            indices={"深证成指": {"涨跌幅": -2.29}, "创业板指": {"涨跌幅": -4.37}},
+            exit_analysis={},
+            main_sectors_info=[],
+            secondary_sectors_info=[],
+            ai_group_concepts_into_chains=lambda concepts: {},
+            enabled_node_keys=["market_state"],
+        )
+
+        rendered = "\n".join(result["lines"])
+        self.assertIn("量能充沛，但跌停端压力仍高", rendered)
+        self.assertNotIn("量能充沛，但赚钱效应不足", rendered)
+
     def test_build_market_and_sector_analysis_contract_keeps_high_turnover_weak_breadth_wording_consistent(self):
         result = build_market_and_sector_analysis_contract(
             data={

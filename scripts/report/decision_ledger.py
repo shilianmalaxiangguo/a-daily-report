@@ -10,6 +10,7 @@ from selection.candidate_execution_contracts import (
     build_participation_window_from_candidate,
     build_participation_window_policy,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 ARTIFACT_VERSION = 1
 DECISION_REVISION_LEDGER_SCHEMA_VERSION = "decision_revision_ledger.v1"
@@ -125,7 +126,7 @@ def _final_execution_label(target):
 
 
 def _final_execution_history_action(target):
-    return f"{_final_execution_label(target)}已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+    return f"{_final_execution_label(target)}已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT}"
 
 
 def _is_valid_sector_label(value):
@@ -1356,11 +1357,11 @@ def _standard_action_text(entry_timing, buy_window, decision):
     if decision == "waiting_window_review":
         return f"仅凭日线不能判死{window}窗口；等待分钟窗口承接事实回写后再定观察位质量"
     if decision == "window_confirm_buy":
-        return f"按{window}承接成立参与；只做计划内试错，不因盘中噪音临时加码"
+        return f"{window}承接成立后{PREMARKET_50_TRIGGER_TEXT}；不因盘中噪音临时加码"
     if decision == "window_confirm_failed":
         return f"{window}继续走弱，0%不参与；不把日内反抽当观察位"
     if entry_timing == "open_core":
-        return f"按{window}开盘核心参与；只在竞价表态、开盘承接、回封/打板同时成立时买"
+        return f"{window}开盘核心确认后{PREMARKET_50_TRIGGER_TEXT}"
     if entry_timing == "ten_confirm":
         return f"按{window}完成二次确认后再参与；确认前不抢跑"
     if entry_timing == "tail_exception":

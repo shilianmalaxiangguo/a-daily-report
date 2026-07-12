@@ -20,10 +20,216 @@ def _cycle_sector_label_pattern(sector):
     )
 
 
+from report.execution_wording import (
+    PREMARKET_50_EXECUTION_SHORT_TEXT,
+    PREMARKET_50_EXECUTION_TEXT,
+    PREMARKET_50_TRIGGER_TEXT,
+    PREMARKET_FIXED_EXECUTION_TEXT,
+    SAME_STOCK_T_CONFIRMATION_CLAUSE,
+)
 from report.front_page_v2_renderer import render_front_page_v2
 
 
 class FrontPageV2RendererTest(unittest.TestCase):
+    def test_market_language_translation_renders_compact_research_evidence_only(self):
+        artifact = {
+            "schema_version": "market_language_translation.v1",
+            "evidence_status": "sufficient",
+            "force_scope": "index_weighted",
+            "pressure_direction": "downward",
+            "phase": "cascade",
+            "phase_label": "向下反馈加速",
+            "timeline": {
+                "first_candidate_at": "2026-05-21 13:50:00",
+                "latest_confirmed_at": "2026-05-21 13:52:00",
+                "candidate_invalidations": 1,
+                "events": [
+                    {
+                        "candidate_at": "2026-05-21 13:50:00",
+                        "confirmed_at": "2026-05-21 13:52:00",
+                        "directional_follow_through_at": "2026-05-21 13:53:00",
+                        "invalidated_at": None,
+                        "pressure_direction": "downward",
+                        "confirmation_quality": "directional_follow_through",
+                    }
+                ],
+            },
+            "aggregation_comparison": {
+                "cap_weighted": {"return_pct": -1.25},
+                "market_breadth": {"advance_ratio_pct": 23.4},
+                "sector_synchrony": {"leading_sector": "半导体", "cross_sector_sync_pct": 68.0},
+            },
+            "counter_evidence": [
+                {"fact": "市值加权指数仍不能单独证明全市场同步。"},
+            ],
+            "missing_evidence": [],
+            "next_window_task": "下一交易日09:30-09:35先核对向下压力是否延续。",
+        }
+
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={},
+                market_language_translation=artifact,
+            )
+        )
+
+        self.assertIn("## 市场语言翻译（研究证据）", rendered)
+        self.assertIn("**范围与方向**: 市值加权指数；向下压力", rendered)
+        self.assertIn("向下第1轮：13:50候选，13:52确认（13:53起有同向延续），仍在观察", rendered)
+        self.assertIn("市值加权指数仍不能单独证明全市场同步", rendered)
+        self.assertNotIn("量化概率", rendered)
+        self.assertNotIn("AICc", rendered)
+        self.assertLess(
+            rendered.index("## 市场语言翻译（研究证据）"),
+            rendered.index("## 二、市场基底"),
+        )
+
+    def test_market_language_event_clock_keeps_same_direction_rounds_separate(self):
+        artifact = {
+            "schema_version": "market_language_translation.v1",
+            "evidence_status": "sufficient",
+            "force_scope": "single_stock",
+            "pressure_direction": "downward",
+            "phase": "expansion",
+            "phase_label": "向下压力扩散",
+            "timeline": {
+                "first_candidate_at": "2026-07-10 09:46:00",
+                "latest_confirmed_at": "2026-07-10 14:26:00",
+                "candidate_invalidations": 13,
+                "events": [
+                    {
+                        "candidate_at": "2026-07-10 09:46:00",
+                        "confirmed_at": None,
+                        "directional_follow_through_at": None,
+                        "invalidated_at": "2026-07-10 09:47:00",
+                        "pressure_direction": "upward",
+                        "confirmation_quality": "unconfirmed",
+                    },
+                    {
+                        "candidate_at": "2026-07-10 09:47:00",
+                        "confirmed_at": "2026-07-10 09:49:00",
+                        "directional_follow_through_at": None,
+                        "invalidated_at": "2026-07-10 09:54:00",
+                        "pressure_direction": "downward",
+                        "confirmation_quality": "slope_persistence_only",
+                    },
+                    {
+                        "candidate_at": "2026-07-10 10:00:00",
+                        "confirmed_at": "2026-07-10 10:02:00",
+                        "directional_follow_through_at": "2026-07-10 10:01:00",
+                        "invalidated_at": None,
+                        "pressure_direction": "downward",
+                        "confirmation_quality": "directional_follow_through",
+                    },
+                ],
+            },
+            "aggregation_comparison": {},
+            "counter_evidence": [],
+            "missing_evidence": [],
+            "next_window_task": "下一正式窗口继续复核。",
+        }
+
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-10",
+                market_research_snapshot={},
+                market_language_translation=artifact,
+            )
+        )
+        section = rendered.split("## 市场语言翻译（研究证据）", 1)[1].split(
+            "## 二、市场基底",
+            1,
+        )[0]
+
+        self.assertIn("向下第1轮：09:47候选，09:49仅见重叠斜率连续，09:54失效", section)
+        self.assertIn("向下第2轮：10:00候选，10:02确认（10:01起有同向延续），仍在观察", section)
+        self.assertNotIn("09:46候选", section)
+        self.assertNotIn("14:26确认", section)
+        self.assertNotIn("失效13次", section)
+
+    def test_market_language_event_clock_does_not_fallback_to_opposite_direction_times(self):
+        artifact = {
+            "schema_version": "market_language_translation.v1",
+            "evidence_status": "partial",
+            "force_scope": "index_weighted",
+            "pressure_direction": "upward",
+            "phase": "repair",
+            "phase_label": "此前向下压力后的修复",
+            "timeline": {
+                "first_candidate_at": "2026-05-21 14:41:00",
+                "latest_confirmed_at": "2026-05-21 14:43:00",
+                "candidate_invalidations": 0,
+                "events": [
+                    {
+                        "candidate_at": "2026-05-21 14:41:00",
+                        "confirmed_at": "2026-05-21 14:43:00",
+                        "directional_follow_through_at": None,
+                        "invalidated_at": None,
+                        "pressure_direction": "downward",
+                        "confirmation_quality": "slope_persistence_only",
+                    }
+                ],
+            },
+            "aggregation_comparison": {},
+            "counter_evidence": [{"fact": "分钟事件方向与日终方向不一致。"}],
+            "missing_evidence": [],
+            "next_window_task": "下一正式窗口继续复核。",
+        }
+
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-05-21",
+                market_research_snapshot={},
+                market_language_translation=artifact,
+            )
+        )
+        section = rendered.split("## 市场语言翻译（研究证据）", 1)[1].split(
+            "## 二、市场基底",
+            1,
+        )[0]
+
+        self.assertIn("向上压力", section)
+        self.assertIn("此前向下压力后的修复", section)
+        self.assertIn("当前方向尚无同向事件；早前反向事件只作为反证", section)
+        self.assertNotIn("14:41候选", section)
+        self.assertNotIn("14:43确认", section)
+
+    def test_market_language_translation_insufficient_state_does_not_invent_times(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-10",
+                market_research_snapshot={},
+                market_language_translation={
+                    "schema_version": "market_language_translation.v1",
+                    "evidence_status": "insufficient",
+                    "force_scope": "unclear",
+                    "pressure_direction": "unclear",
+                    "phase": "unclear",
+                    "phase_label": "事实不足，阶段不清楚",
+                    "timeline": {
+                        "first_candidate_at": None,
+                        "latest_confirmed_at": None,
+                        "candidate_invalidations": 0,
+                    },
+                    "aggregation_comparison": {},
+                    "counter_evidence": [],
+                    "missing_evidence": ["one_minute_price_path", "market_breadth"],
+                    "next_window_task": "下一交易日09:30-09:35先补齐事实。",
+                },
+            )
+        )
+
+        section = rendered.split("## 市场语言翻译（研究证据）", 1)[1].split("## 二、市场基底", 1)[0]
+        self.assertIn("**事实状态**: 事实不足", section)
+        self.assertIn("一分钟价格路径、全市场宽度", section)
+        self.assertNotIn("候选，", section)
+        self.assertNotIn("确认，", section)
+
     def test_front_page_opens_with_overtake_tone_when_window_summary_exists(self):
         rendered = "\n".join(
             render_front_page_v2(
@@ -78,7 +284,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 普通候选 | T+1 MA5回踩是基础入口", discipline_section)
         self.assertIn("| 强核心 | T+1混合龙头只用于板块核心、高辨识度、承接强", discipline_section)
         self.assertIn("| 已有旧仓/做T | 强势周期用MA5入/MA7清/MA5T", discipline_section)
+        self.assertIn("同股T强表态存活才允许临时加B2", discipline_section)
+        self.assertIn("跌破VWAP/昨收/MA7先卖可卖旧仓", discipline_section)
         self.assertIn("| 失败仓/退潮 | 当天MA5买入后收盘跌破MA5，次日先按买点失败仓处理", discipline_section)
+        self.assertIn("尾盘卖出只适用于正常样本", discipline_section)
         self.assertIn("退潮警戒切MA5清", discipline_section)
 
     def test_front_page_surfaces_monthly_rhythm_position_grade_and_month_return(self):
@@ -518,7 +727,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 明日仓位 | 50%条件执行 |", rendered)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", rendered)
         self.assertIn("| 执行目标 | 600578 京能电力（电力） |", rendered)
         self.assertIn("| 观察对象 | 无 |", rendered)
         self.assertNotIn("| 明日仓位 | 0%不参与 |", rendered)
@@ -573,8 +782,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "position_decision": {"signal_grade": "0", "target_position_pct": 0},
                     "existing_position_summary": {
                         "has_position": True,
-                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
-                        "inferred_from_previous_report": True,
+                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Te执行资格",
                         "position_source": "previous_report_target_default_1x",
                     },
                 },
@@ -582,9 +790,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 明日仓位 | 0%新仓；旧仓处理 |", rendered)
-        self.assertIn("| 旧仓处理 | 持有太极实业(600667)，100%仓位", rendered)
-        self.assertIn("| 不参与依据 | 已有旧仓先按持仓预案处理；不新增参与。 |", rendered)
+        self.assertIn("| 明日仓位 | 0%新仓；先确认成交事实 |", rendered)
+        self.assertIn("| 成交确认 | 前日报计划推定，待成交确认：太极实业(600667)", rendered)
+        self.assertIn("| 不参与依据 | 前日报计划对象尚未确认成交；未确认前不视为B1，不新增B2。 |", rendered)
+        self.assertNotIn("持有太极实业(600667)", rendered)
         self.assertNotIn("| 明日仓位 | 0%不参与 |", rendered)
 
     def test_front_page_unique_action_prefers_structured_required_steps(self):
@@ -1068,7 +1277,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                 "100%核心进攻",
                 "100%唯一核心对象",
                 "100%核心进攻",
-                "100%：唯一核心对象确认后进攻",
+                f"100%：只做唯一核心对象；最大可到100%，先B1再B2；{PREMARKET_50_TRIGGER_TEXT}",
             ),
         ]
         for grade, target_position_pct, final_gate, execution_style, stock_state, discipline, action_text in cases:
@@ -1476,7 +1685,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日执行目标 | 豫能控股(001896)：已决定50%条件执行；不满足回到0% |", account_section)
+        self.assertIn(f"| 明日执行目标 | 豫能控股(001896)：{PREMARKET_50_EXECUTION_SHORT_TEXT} |", account_section)
         self.assertNotIn("不是执行对象", account_section)
         self.assertNotIn("不能定义明日执行对象", account_section)
 
@@ -1507,11 +1716,11 @@ class FrontPageV2RendererTest(unittest.TestCase):
             )
         )
 
-        self.assertIn("| 明日仓位 | 已决定50%条件执行；盘中不满足取消，回到0%不参与 |", rendered)
+        self.assertIn(f"| 明日仓位 | {PREMARKET_50_EXECUTION_TEXT} |", rendered)
         self.assertIn("| 执行目标 | 豫能控股(001896) |", rendered)
         self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", rendered)
         self.assertIn("| 只看明日执行对象 | 豫能控股(001896) | 09:30-09:35或09:50-10:10 |", rendered)
-        self.assertIn("| 已决定50%条件执行；盘中不满足取消，回到0%不参与 | 不确定时不值得主动参与 |", rendered)
+        self.assertIn(f"| {PREMARKET_50_EXECUTION_TEXT} | 不确定时不值得主动参与 |", rendered)
         self.assertIn("| 豫能控股(001896) | 50%条件执行 |", rendered)
         self.assertNotIn("观察" + "锚性质", rendered)
         self.assertNotIn("不是执行对象", rendered)
@@ -1539,7 +1748,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
 
         final_section = rendered[rendered.index("## 七、最终结论") :]
         self.assertIn("### 明日行动清单", final_section)
-        self.assertIn("| 仓位 | 50%条件执行 |", final_section)
+        self.assertIn("| 仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", final_section)
         self.assertIn("| 最终对象 | 601991 大唐发电（电力） |", final_section)
         self.assertIn("| 执行/观察条件 | 09:50-10:10；主线承接 + 个股站回MA5 |", final_section)
         self.assertIn("| 不参与条件 | 不满足回到0%不参与 |", final_section)
@@ -1597,15 +1806,15 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
-        self.assertIn("| 明日动作 | 先确认旧仓情况；已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", account_section)
+        self.assertIn(f"| 明日动作 | 先确认旧仓情况；{PREMARKET_FIXED_EXECUTION_TEXT} |", account_section)
         self.assertIn("| 明日执行目标 | 大唐发电(601991)：固定交易窗口条件 |", account_section)
         self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
         self.assertNotIn("无旧仓", account_section)
         self.assertNotIn("确认没有旧仓", account_section)
-        self.assertIn("| 价格条件 | 执行条件：MA5附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn(f"| 价格条件 | 执行条件：MA5附近；09:50-10:10看承接后{PREMARKET_50_TRIGGER_TEXT} |", account_section)
         self.assertNotIn("命中才新开", account_section)
-        self.assertIn("| 新开仓上限 | 1 |", account_section)
+        self.assertIn("| 新开仓上限 | B1参与权；B2确认后才补 |", account_section)
         self.assertNotIn("| T0主对象 |", account_section)
         self.assertNotIn("预计", account_section)
         self.assertIn("| 50%条件执行 |", rendered)
@@ -1634,12 +1843,14 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        final_section = rendered[rendered.index("### 明日行动清单") :]
         self.assertIn("| 账户约束 | 约1w账户；无昨日持仓先看明日执行目标 |", account_section)
-        self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
         self.assertIn("| 备用观察 | 暂无 |", account_section)
-        self.assertIn("| 价格条件 | 执行条件：MA7附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
-        self.assertIn("| 明日动作 | 已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn("| 旧仓处理 | 今日空仓，无旧仓处理 |", final_section)
+        self.assertIn(f"| 价格条件 | 执行条件：MA7附近；09:50-10:10看承接后{PREMARKET_50_TRIGGER_TEXT} |", account_section)
+        self.assertIn(f"| 明日动作 | {PREMARKET_FIXED_EXECUTION_TEXT} |", account_section)
         self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日执行目标 | 无昨日持仓，不涉及明日执行对象 |", account_section)
         self.assertNotIn("预计", account_section)
@@ -1669,10 +1880,10 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日仓位 | 100%核心进攻 |", account_section)
+        self.assertIn("| 明日仓位 | 100%核心进攻；最大可到100%，先B1再B2 |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
-        self.assertIn("| 价格条件 | 执行条件：MA7附近；按昨晚预案检查执行资格：09:50-10:10看承接；不满足取消，回到0%不参与 |", account_section)
-        self.assertIn("| 明日动作 | 已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn(f"| 价格条件 | 执行条件：MA7附近；09:50-10:10看承接后{PREMARKET_50_TRIGGER_TEXT} |", account_section)
+        self.assertIn(f"| 明日动作 | {PREMARKET_FIXED_EXECUTION_TEXT} |", account_section)
         self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日仓位 | 50%条件执行 |", account_section)
         self.assertNotIn("预计", account_section)
@@ -1716,13 +1927,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
-        self.assertIn("| 明日动作 | 先确认旧仓情况；已决定执行；按昨晚预案检查执行资格；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", account_section)
+        self.assertIn(f"| 明日动作 | 先确认旧仓情况；{PREMARKET_FIXED_EXECUTION_TEXT} |", account_section)
         self.assertIn("| 明日执行目标 | 华电能源(600726)：固定交易窗口条件 |", account_section)
         self.assertIn("| 持仓确认 | 持仓未输入，执行前先确认旧仓情况 |", account_section)
         self.assertNotIn("无旧仓", account_section)
         self.assertNotIn("确认没有旧仓", account_section)
-        self.assertIn("| 价格条件 | 执行条件：MA5附近；按昨晚预案检查执行资格：09:50-10:10站上9.21且不破8.75；不满足取消，回到0%不参与 |", account_section)
+        self.assertIn(f"| 价格条件 | 执行条件：MA5附近；09:50-10:10站上9.21且不破8.75后{PREMARKET_50_TRIGGER_TEXT} |", account_section)
         self.assertNotIn("命中才新开", account_section)
         self.assertNotIn("| 明日仓位 | 0%不参与 |", account_section)
         self.assertNotIn("| 观察对象 | 华电能源(600726)：观察" + "锚，不是执行对象 |", account_section)
@@ -1786,12 +1997,12 @@ class FrontPageV2RendererTest(unittest.TestCase):
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
         self.assertIn("| 账户约束 | 约1w账户；已有持仓继续独立评估 |", account_section)
         self.assertIn(
-            "| 明日动作 | 持仓独立评估；太极实业(600667)按昨晚预案检查执行资格；不满足回到0%不参与 |",
+            f"| 明日动作 | 持仓独立评估；太极实业(600667){PREMARKET_50_TRIGGER_TEXT} |",
             account_section,
         )
         self.assertIn("| 当前持仓 | 持有芯片ETF(159995)，33%仓位；持仓继续独立评估，不因新机会自动处理 |", account_section)
         self.assertIn("| 明日执行目标 | 太极实业(600667)：固定交易窗口条件 |", account_section)
-        self.assertIn("| 新开仓上限 | 条件满足后1 |", account_section)
+        self.assertIn("| 新开仓上限 | B1参与权；B2确认后才补 |", account_section)
         self.assertNotIn("先处理旧仓", account_section)
 
     def test_front_page_t0_card_keeps_inferred_default_old_position_separate_from_new_target(self):
@@ -1803,7 +2014,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                     "account_profile": {"capital_text": "约1w账户"},
                     "existing_position_summary": {
                         "has_position": True,
-                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格",
+                        "summary": "持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Te执行资格",
                         "inferred_from_previous_report": True,
                         "position_source": "previous_report_target_default_1x",
                         "default_position_pct": 100.0,
@@ -1831,7 +2042,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
                             "max_runtime_exposure_x": 2,
                             "old_position_label": "太极实业(600667)",
                             "new_entry_label": "工业富联(601138)",
-                            "policy": "旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x",
+                            "policy": "旧仓1x + 新买1x只作临时交叉最高2x；旧仓失效先卖可卖旧仓",
                         },
                         "capital_priority_decision": {
                             "capital_priority": "new_entry",
@@ -1844,19 +2055,128 @@ class FrontPageV2RendererTest(unittest.TestCase):
         )
 
         account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
-        self.assertIn("| 账户约束 | 约1w账户；已有持仓继续独立评估 |", account_section)
+        self.assertIn("| 账户约束 | 约1w账户；前日报计划对象待成交确认 |", account_section)
         self.assertIn(
-            "| 明日动作 | 持仓独立评估；工业富联(601138)按昨晚预案检查执行资格；不满足回到0%不参与 |",
+            f"| 明日动作 | 先确认前日报计划对象是否成交；工业富联(601138){PREMARKET_50_TRIGGER_TEXT} |",
             account_section,
         )
         self.assertIn(
-            "| 当前持仓 | 持有太极实业(600667)，100%仓位；先看28.89能否守住，09:50-10:10收不回先卖；新仓是否叠加单独看Tb/Tc资格 |",
+            "| 成交确认 | 前日报计划推定，待成交确认：太极实业(600667)；未确认成交前不视为B1，不新增B2 |",
             account_section,
         )
-        self.assertIn("| 账户风险暴露 | 旧仓1x + 新买1x；若旧仓未先卖且新买成交，盘中交叉最高2x |", account_section)
+        self.assertIn("| 账户风险暴露 | 前日报计划对象未确认成交前按0x；确认成交后才计入B1 |", account_section)
         self.assertIn("| 明日执行目标 | 工业富联(601138)：固定交易窗口条件 |", account_section)
-        self.assertIn("| 新开仓上限 | 条件满足后1 |", account_section)
+        self.assertIn("| 新开仓上限 | 前日报对象先确认；新目标先B1，B2确认后才补 |", account_section)
+        self.assertNotIn("持有太极实业(600667)", account_section)
         self.assertNotIn("先处理旧仓", account_section)
+
+    def test_front_page_t0_card_marks_same_stock_t_as_candidate_not_normal_new_entry(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-06",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有太极实业(600667)，100%仓位；先看VWAP、昨收和MA7承接",
+                        "name": "太极实业",
+                        "code": "600667",
+                        "inferred_from_previous_report": True,
+                        "position_source": "previous_report_target_default_1x",
+                        "default_position_pct": 100.0,
+                    },
+                    "selected_position_candidate": {
+                        "name": "太极实业",
+                        "code": "600667",
+                        "sector": "半导体",
+                    },
+                    "position_decision": {
+                        "signal_grade": "50",
+                        "target_position_pct": 50,
+                    },
+                    "final_target_resolution": {
+                        "new_entry_target": {
+                            "name": "太极实业",
+                            "code": "600667",
+                            "sector": "半导体",
+                        },
+                        "display_target": {
+                            "name": "太极实业",
+                            "code": "600667",
+                            "sector": "半导体",
+                        },
+                        "account_exposure_plan": {
+                            "schema_version": "full_or_empty_exposure.v1",
+                            "old_position_1x": True,
+                            "new_entry_1x": True,
+                            "same_stock_t": True,
+                            "possible_intraday_overlap_2x": True,
+                            "max_runtime_exposure_x": 2,
+                            "old_position_label": "太极实业(600667)",
+                            "new_entry_label": "太极实业(600667)",
+                            "policy": "同股T：旧仓1x + B2只作临时风险暴露；强表态失败先卖可卖旧仓，尾盘回到1x或更低",
+                        },
+                        "capital_priority_decision": {
+                            "capital_priority": "same_stock_t",
+                            "reason": "已有1x旧仓且今日目标仍是同一只票，只按同股T候选处理",
+                        },
+                    },
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn("| 账户约束 | 约1w账户；前日报计划对象待成交确认 |", account_section)
+        self.assertIn("| 账户风险暴露 | 前日报计划对象未确认成交前按0x；确认成交后才计入B1 |", account_section)
+        self.assertIn(
+            f"| 明日动作 | 先确认前日报计划对象是否成交；太极实业(600667){PREMARKET_50_TRIGGER_TEXT} |",
+            account_section,
+        )
+        self.assertIn("| 成交确认 | 前日报计划推定，待成交确认：太极实业(600667)", account_section)
+        self.assertIn("| 明日执行目标 | 太极实业(600667)：固定交易窗口条件 |", account_section)
+        self.assertIn("| 新开仓上限 | 前日报对象先确认；新目标先B1，B2确认后才补 |", account_section)
+        self.assertNotIn("同股T候选", account_section)
+
+    def test_front_page_t0_card_keeps_same_stock_t_when_position_decision_is_stale_zero(self):
+        rendered = "\n".join(
+            render_front_page_v2(
+                [],
+                target_date="2026-07-06",
+                market_research_snapshot={
+                    "account_profile": {"capital_text": "约1w账户"},
+                    "existing_position_summary": {
+                        "has_position": True,
+                        "summary": "持有太极实业(600667)，100股，先看VWAP、昨收和MA7承接",
+                        "name": "太极实业",
+                        "code": "600667",
+                    },
+                    "selected_position_candidate": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                    "position_decision": {"signal_grade": "0", "target_position_pct": 0},
+                    "final_target_resolution": {
+                        "new_entry_target": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                        "display_target": {"name": "太极实业", "code": "600667", "sector": "半导体"},
+                        "account_exposure_plan": {
+                            "schema_version": "full_or_empty_exposure.v1",
+                            "old_position_1x": True,
+                            "new_entry_1x": True,
+                            "same_stock_t": True,
+                            "possible_intraday_overlap_2x": True,
+                            "max_runtime_exposure_x": 2,
+                            "policy": f"同股T：{SAME_STOCK_T_CONFIRMATION_CLAUSE}；B2只作临时风险暴露，尾盘回到1x或更低",
+                        },
+                        "capital_priority_decision": {"capital_priority": "same_stock_t"},
+                    },
+                },
+                final_gate={"can_new_entry": True},
+            )
+        )
+
+        account_section = rendered[rendered.index("## 明日账户建议") : rendered.index("## 一、交易纪律")]
+        self.assertIn(f"| 明日动作 | 同股T候选：太极实业(600667)；{SAME_STOCK_T_CONFIRMATION_CLAUSE} |", account_section)
+        self.assertIn("| 明日仓位 | 同股T候选；已有1x视为B1 |", account_section)
+        self.assertNotIn("| 新开仓上限 | 0 |", account_section)
 
     def test_front_page_account_advice_uses_knowledge_hit_for_unbuyable_core(self):
         rendered = "\n".join(
@@ -2018,15 +2338,15 @@ class FrontPageV2RendererTest(unittest.TestCase):
         execution_section = rendered[rendered.index("## 六、明日执行计划") : rendered.index("## 七、最终结论")]
         final_section = rendered[rendered.index("## 七、最终结论") :]
 
-        self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", account_section)
         self.assertIn("| 明日动作 | 目标标的中际旭创(300308)，小资金账户可用通信ETF(515880)替代 |", account_section)
         self.assertIn("| 明日执行目标 | 通信ETF(515880)：行业板块效应替代表达 |", account_section)
         self.assertIn("| 观察对象 | 中际旭创(300308)：市场核心保留观察 |", account_section)
-        self.assertIn("| 新开仓上限 | 1 |", account_section)
+        self.assertIn("| 新开仓上限 | B1参与权；B2确认权 |", account_section)
         self.assertIn("| 执行目标 | 515880 通信ETF（通信设备） |", stock_section)
         self.assertIn("| 明日唯一动作 | 标的 | 参与窗 | 条件 | 不满足怎么办 |", execution_section)
         self.assertIn("| 只看唯一对象 | 515880 通信ETF（通信设备） | 09:50-10:10 | 通信设备承接继续 | 不满足回到0%不参与 |", execution_section)
-        self.assertIn("| 50%条件执行，只做合格对象 |", final_section)
+        self.assertIn(f"| {PREMARKET_50_EXECUTION_TEXT} |", final_section)
         self.assertIn("515880 通信ETF（通信设备）", final_section)
         self.assertNotIn("| 观察对象 | 中际旭创(300308)：当前账户买不了一手，只保留观察 |", account_section)
 
@@ -2723,7 +3043,7 @@ class FrontPageV2RendererTest(unittest.TestCase):
         expected_label = "300613 富瀚微（半导体、AI端侧芯片）"
         self.assertIn(f"| 只看唯一对象 | {expected_label} | 09:50-10:10 | 主线确认 / 承接 / 09:50-10:10窗口 | 不满足回到0%不参与 |", rendered)
         self.assertIn(
-            f"| 50%条件执行，只做合格对象 | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | {expected_label} | 50%条件执行 |",
+            f"| {PREMARKET_50_EXECUTION_TEXT} | 不确定时不值得主动参与 | 半导体 | 半导体 | 先看市场基底 | {expected_label} | 50%条件执行 |",
             rendered,
         )
         self.assertIn("| 50%条件执行 |", rendered)
@@ -3389,11 +3709,11 @@ class FrontPageV2RendererTest(unittest.TestCase):
         self.assertIn("| 明日动作 | 先处理旧仓，买工业富联(601138) |", account_section)
         self.assertIn("| 旧仓处理 | 华电辽能(600396)：已有仓先按MA5T处理 |", account_section)
         self.assertIn("| 明日执行目标 | 工业富联(601138)：固定交易窗口条件 |", account_section)
-        self.assertIn("| 新开仓上限 | 资金释放后1 |", account_section)
-        self.assertIn("| 明日仓位 | 50%条件执行 |", stock_section)
+        self.assertIn("| 新开仓上限 | 资金释放后先B1；B2确认后才补 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", stock_section)
         self.assertIn("| 执行目标 | 601138 工业富联（通信设备） |", stock_section)
         self.assertIn("| 只看唯一对象 | 601138 工业富联（通信设备） | 09:50-10:10 | 板块锚承接继续 | 不满足回到0%不参与 |", execution_section)
-        self.assertIn("| 50%条件执行，只做合格对象 |", final_section)
+        self.assertIn(f"| {PREMARKET_50_EXECUTION_TEXT} |", final_section)
         self.assertIn("601138 工业富联（通信设备）", final_section)
         self.assertNotIn("观察" + "锚：601138 工业富联", final_section)
 
@@ -3476,13 +3796,13 @@ class FrontPageV2RendererTest(unittest.TestCase):
         execution_section = rendered[rendered.index("## 六、明日执行计划") : rendered.index("## 七、最终结论")]
         final_section = rendered[rendered.index("## 七、最终结论") :]
 
-        self.assertIn("| 明日仓位 | 50%条件执行 |", account_section)
+        self.assertIn("| 明日仓位 | 50%条件执行；最大上限50%；B1参与权，B2确认权 |", account_section)
         self.assertIn("| 明日动作 | 先处理旧仓，买通信ETF(515880) |", account_section)
         self.assertIn("| 旧仓处理 | 华电辽能(600396)：已有仓先按MA5T处理 |", account_section)
         self.assertIn("| 明日执行目标 | 通信ETF(515880)：行业板块效应替代表达 |", account_section)
         self.assertIn("| 执行目标 | 515880 通信ETF（通信设备） |", stock_section)
         self.assertIn("| 只看唯一对象 | 515880 通信ETF（通信设备） | 09:50-10:10 | 通信设备承接继续 | 不满足回到0%不参与 |", execution_section)
-        self.assertIn("| 50%条件执行，只做合格对象 |", final_section)
+        self.assertIn(f"| {PREMARKET_50_EXECUTION_TEXT} |", final_section)
         self.assertIn("515880 通信ETF（通信设备）", final_section)
         self.assertNotIn("当前账户买不了一手，只保留观察", account_section)
 

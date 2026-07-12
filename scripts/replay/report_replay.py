@@ -1,6 +1,13 @@
 import datetime
 from pathlib import Path
 
+from report.position_context import (
+    existing_position_summary_from_context,
+    extract_position_timeline_markdown,
+    normalize_inferred_previous_target_records,
+    prepend_position_timeline_markdown,
+)
+
 __all__ = [
     "build_replay_snapshot_contract",
     "build_replay_report_outputs_contract",
@@ -1497,16 +1504,30 @@ def _market_breadth_complete(market_stats, safe_float):
     return safe_float(market_stats.get("up_count")) > 0 and safe_float(market_stats.get("down_count")) > 0
 
 
+def _market_breadth_matches_target(market_stats, target_date):
+    market_stats = market_stats or {}
+    return any(
+        str(market_stats.get(key) or "").strip()[:10] == str(target_date or "").strip()[:10]
+        for key in ("trade_date", "source_date")
+    )
+
+
 def _ensure_replay_market_breadth(snapshot_data, target_date, safe_float, helpers=None):
     if not isinstance(snapshot_data, dict):
         return snapshot_data
-    if _market_breadth_complete(snapshot_data.get("market_stats"), safe_float):
+    if _market_breadth_complete(
+        snapshot_data.get("market_stats"),
+        safe_float,
+    ) and _market_breadth_matches_target(snapshot_data.get("market_stats"), target_date):
         return snapshot_data
 
     helpers = helpers or {}
     fetcher = helpers.get("get_market_breadth_from_fact_db")
     breadth = fetcher(target_date) if callable(fetcher) else {}
-    if not _market_breadth_complete(breadth, safe_float):
+    if not _market_breadth_complete(breadth, safe_float) or not _market_breadth_matches_target(
+        breadth,
+        target_date,
+    ):
         snapshot_data.setdefault("data_status", {})["大盘涨跌统计"] = False
         _refresh_request_diagnostics(snapshot_data)
         return snapshot_data
@@ -1524,6 +1545,9 @@ def _ensure_replay_market_breadth(snapshot_data, target_date, safe_float, helper
         market_stats["min_pct_chg"] = safe_float(breadth.get("min_pct_chg"))
     if breadth.get("max_pct_chg") not in (None, ""):
         market_stats["max_pct_chg"] = safe_float(breadth.get("max_pct_chg"))
+    for key in ("trade_date", "source_date", "query_date"):
+        if breadth.get(key) not in (None, ""):
+            market_stats[key] = breadth[key]
     snapshot_data["market_stats"] = market_stats
     snapshot_data.setdefault("data_status", {})["大盘涨跌统计"] = True
     snapshot_data.setdefault("step_status", {})["涨停跌停数据获取"] = True
@@ -2150,60 +2174,128 @@ def _ensure_replay_advanced_activity(snapshot_data):
 
 
 def _apply_replay_limit_pool_snapshot(snapshot_data, pool_snapshot, safe_float):
+    data_status = snapshot_data.setdefault("data_status", {})
     existing_zt_pool = list(snapshot_data.get("zt_pool") or [])
     existing_dt_pool = list(snapshot_data.get("dt_pool") or [])
-    zt_pool = list((pool_snapshot or {}).get("zt_pool") or []) or existing_zt_pool
-    dt_pool = list((pool_snapshot or {}).get("dt_pool") or []) or existing_dt_pool
-    market_stats = dict((pool_snapshot or {}).get("market_stats") or {}) or dict(snapshot_data.get("market_stats") or {})
+    incoming_zt_pool = list((pool_snapshot or {}).get("zt_pool") or [])
+    incoming_dt_pool = list((pool_snapshot or {}).get("dt_pool") or [])
+    zt_status = data_status.get("涨停池")
+    dt_status = data_status.get("跌停池")
+    preserve_zt_pool = zt_status is True or (zt_status is None and bool(existing_zt_pool))
+    preserve_dt_pool = dt_status is True or (dt_status is None and bool(existing_dt_pool))
+    use_incoming_zt_pool = not preserve_zt_pool and bool(incoming_zt_pool)
+    use_incoming_dt_pool = not preserve_dt_pool and bool(incoming_dt_pool)
+    zt_pool = existing_zt_pool if preserve_zt_pool else incoming_zt_pool or existing_zt_pool
+    dt_pool = existing_dt_pool if preserve_dt_pool else incoming_dt_pool or existing_dt_pool
+
+    existing_market_stats = dict(snapshot_data.get("market_stats") or {})
+    incoming_market_stats = dict((pool_snapshot or {}).get("market_stats") or {})
+    if _market_breadth_complete(existing_market_stats, safe_float):
+        market_stats = dict(existing_market_stats)
+        market_stats_backfilled = False
+    elif _market_breadth_complete(incoming_market_stats, safe_float):
+        market_stats = dict(existing_market_stats)
+        for key in ("up_count", "down_count", "flat_count", "stock_count", "total_count"):
+            if key in incoming_market_stats:
+                market_stats[key] = incoming_market_stats[key]
+        market_stats_backfilled = True
+    else:
+        market_stats = dict(existing_market_stats)
+        if not market_stats:
+            for key in ("up_count", "down_count", "flat_count", "stock_count", "total_count"):
+                if key in incoming_market_stats:
+                    market_stats[key] = incoming_market_stats[key]
+        market_stats_backfilled = False
+
+    zt_pool_resolved = zt_status is True or bool(zt_pool)
+    dt_pool_resolved = dt_status is True or bool(dt_pool)
+    if zt_pool_resolved:
+        market_stats["zt_count"] = len(zt_pool)
+    if dt_pool_resolved:
+        market_stats["dt_count"] = len(dt_pool)
     if not (zt_pool or dt_pool or market_stats):
         return False
 
     snapshot_data["zt_pool"] = zt_pool
     snapshot_data["dt_pool"] = dt_pool
+    limit_up_codes = (
+        snapshot_data.get("limit_up_codes")
+        if preserve_zt_pool
+        else (pool_snapshot or {}).get("limit_up_codes")
+    )
+    limit_down_codes = (
+        snapshot_data.get("limit_down_codes")
+        if preserve_dt_pool
+        else (pool_snapshot or {}).get("limit_down_codes")
+    )
     snapshot_data["limit_up_codes"] = list(
-        (pool_snapshot or {}).get("limit_up_codes")
-        or snapshot_data.get("limit_up_codes")
+        limit_up_codes
         or [row.get("代码") for row in zt_pool if isinstance(row, dict) and row.get("代码")]
     )
     snapshot_data["limit_down_codes"] = list(
-        (pool_snapshot or {}).get("limit_down_codes")
-        or snapshot_data.get("limit_down_codes")
+        limit_down_codes
         or [row.get("代码") for row in dt_pool if isinstance(row, dict) and row.get("代码")]
     )
+    zt_pool_by_sector = (
+        snapshot_data.get("zt_pool_by_sector")
+        if preserve_zt_pool
+        else (pool_snapshot or {}).get("zt_pool_by_sector")
+    )
+    dt_pool_by_sector = (
+        snapshot_data.get("dt_pool_by_sector")
+        if preserve_dt_pool
+        else (pool_snapshot or {}).get("dt_pool_by_sector")
+    )
     snapshot_data["zt_pool_by_sector"] = (
-        (pool_snapshot or {}).get("zt_pool_by_sector")
-        or snapshot_data.get("zt_pool_by_sector")
+        zt_pool_by_sector
         or _build_sector_bucket(zt_pool, include_zt_type=True)
     )
     snapshot_data["dt_pool_by_sector"] = (
-        (pool_snapshot or {}).get("dt_pool_by_sector")
-        or snapshot_data.get("dt_pool_by_sector")
+        dt_pool_by_sector
         or _build_sector_bucket(dt_pool)
     )
     snapshot_data["market_stats"] = market_stats
 
-    data_status = snapshot_data.setdefault("data_status", {})
     step_status = snapshot_data.setdefault("step_status", {})
-    data_status["涨停池"] = bool(zt_pool)
-    data_status["跌停池"] = bool(dt_pool)
-    data_status["大盘涨跌统计"] = bool(market_stats)
+    data_status["涨停池"] = zt_pool_resolved
+    data_status["跌停池"] = dt_pool_resolved
+    data_status["大盘涨跌统计"] = _market_breadth_complete(market_stats, safe_float)
     if zt_pool:
         data_status["涨停股板块分布"] = True
     if dt_pool:
         data_status["跌停股板块分布"] = True
-    step_status["涨停跌停数据获取"] = True
-    _mark_replayed_step_success(snapshot_data, "涨停跌停数据获取", safe_float)
+    pool_step_complete = bool(zt_pool_resolved and dt_pool_resolved)
+    step_status["涨停跌停数据获取"] = pool_step_complete
+    if pool_step_complete:
+        _mark_replayed_step_success(snapshot_data, "涨停跌停数据获取", safe_float)
+
+    backfilled_keys = []
+    preserved_keys = []
+    if use_incoming_zt_pool:
+        backfilled_keys.extend(["zt_pool", "limit_up_codes", "zt_pool_by_sector"])
+    elif preserve_zt_pool:
+        preserved_keys.extend(["zt_pool", "limit_up_codes", "zt_pool_by_sector"])
+    if use_incoming_dt_pool:
+        backfilled_keys.extend(["dt_pool", "limit_down_codes", "dt_pool_by_sector"])
+    elif preserve_dt_pool:
+        preserved_keys.extend(["dt_pool", "limit_down_codes", "dt_pool_by_sector"])
+    if market_stats_backfilled:
+        backfilled_keys.append("market_stats")
+    elif _market_breadth_complete(existing_market_stats, safe_float):
+        preserved_keys.append("market_stats")
+    used_remote_backfill = bool(backfilled_keys)
     _replace_request_module_log(
         snapshot_data,
         module="domains.market_activity.request",
         step="request.pool_snapshot",
-        status="success",
-        message="已回补涨停跌停池与市场活跃度快照",
-        provider=(pool_snapshot or {}).get("provider", "tushare.limit_list_ths"),
-        target_keys=["zt_pool", "dt_pool", "zt_pool_by_sector", "dt_pool_by_sector", "market_stats"],
+        status="success" if pool_step_complete and data_status["大盘涨跌统计"] else "degraded",
+        message="已按缺失项回补并保留历史快照已有事实" if used_remote_backfill else "已保留历史快照已有事实",
+        provider=(pool_snapshot or {}).get("provider", "tushare.limit_list_ths") if used_remote_backfill else "replay.snapshot.preserved",
+        target_keys=backfilled_keys,
+        preserved_keys=preserved_keys,
         zt_count=len(zt_pool),
         dt_count=len(dt_pool),
-        fallback_used=bool((pool_snapshot or {}).get("fallback_used")),
+        fallback_used=bool((pool_snapshot or {}).get("fallback_used")) if used_remote_backfill else False,
     )
     return True
 
@@ -2709,11 +2801,15 @@ def build_replay_report_outputs_contract(
     safe_float,
     build_report_outputs,
     save_report_outputs,
+    audit_report=None,
     output_dir=None,
     has_personal_positions=False,
     position_report_text="",
     print_fn=print,
     helpers=None,
+    prepare_market_language_translation_fn=None,
+    write_replay_market_language_translation_fn=None,
+    market_language_root_dir=None,
 ):
     replay_contract = build_replay_snapshot_contract(
         target_date,
@@ -2732,8 +2828,25 @@ def build_replay_report_outputs_contract(
 
     logs = replay_contract.setdefault("module_logs", [])
     replay_data = replay_contract.get("data") or {}
+    normalize_inferred_previous_target_records(replay_data)
     resolved_target_date = replay_contract.get("target_date") or target_date
     supplementary = replay_contract.get("supplementary_perspective") or ""
+    if prepare_market_language_translation_fn is None:
+        from report.market_language_translation_artifacts import (
+            prepare_market_language_translation as prepare_market_language_translation_fn,
+        )
+    artifact_root = (
+        Path(market_language_root_dir)
+        if market_language_root_dir is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    market_language_translation = prepare_market_language_translation_fn(
+        replay_data,
+        target_date=resolved_target_date,
+        analysis_mode="replay",
+        root_dir=artifact_root,
+    )
+    replay_contract["market_language_translation"] = market_language_translation
 
     try:
         report_outputs = build_report_outputs(
@@ -2744,13 +2857,24 @@ def build_replay_report_outputs_contract(
             run_mode="replay",
             position_report_text=position_report_text,
             persist_runtime_artifacts=False,
+            market_language_translation=market_language_translation,
         )
-        from daily_report_render import assert_report_required_facts_complete
+        from daily_report_render import (
+            assert_report_required_facts_complete,
+            read_verified_saved_report_markdown,
+        )
 
         assert_report_required_facts_complete(replay_data, resolved_target_date, run_mode="replay")
     except Exception as exc:
         _append_log(logs, "render.report_outputs", "error", "生成 replay 报告产物失败", error=str(exc))
         raise
+
+    position_timeline = extract_position_timeline_markdown(position_report_text)
+    if position_timeline and isinstance(report_outputs, dict):
+        report_outputs["full"] = prepend_position_timeline_markdown(
+            report_outputs.get("full", ""),
+            position_timeline,
+        )
 
     replay_contract["report_outputs"] = report_outputs
     _append_log(
@@ -2759,6 +2883,44 @@ def build_replay_report_outputs_contract(
         "success",
         "已生成 replay 报告产物",
         variants=sorted((report_outputs or {}).keys()),
+    )
+
+    if audit_report is None:
+        from report.report_acceptance_audit import audit_report_markdown
+
+        audit_report = audit_report_markdown
+    if output_dir:
+        planned_source_path = Path(output_dir) / f"{resolved_target_date}_A股日报_完整版_replay.md"
+    else:
+        from daily_report_render import _get_report_output_path
+
+        planned_source_path = Path(_get_report_output_path(resolved_target_date, mode="replay"))
+    audit_result = audit_report(
+        report_outputs.get("full", ""),
+        source_path=planned_source_path,
+        expected_position_summary=existing_position_summary_from_context(replay_data),
+        prefer_postgres_history=True,
+    )
+    replay_contract["audit"] = audit_result
+    if not audit_result.get("passed"):
+        finding_text = "；".join(
+            f"{item.get('code') or 'report_acceptance_failed'}: {item.get('message') or ''}".strip()
+            for item in audit_result.get("findings") or []
+        )
+        _append_log(
+            logs,
+            "audit.report_outputs",
+            "error",
+            "replay 日报检查未通过，停止生成",
+            findings=audit_result.get("findings") or [],
+        )
+        raise RuntimeError(finding_text or "replay 日报检查未通过，停止生成")
+    _append_log(
+        logs,
+        "audit.report_outputs",
+        "success",
+        "replay 日报检查通过",
+        finding_count=int(audit_result.get("finding_count") or 0),
     )
 
     try:
@@ -2781,6 +2943,57 @@ def build_replay_report_outputs_contract(
         variants=sorted((saved_paths or {}).keys()),
         output_dir=output_dir,
     )
+    final_source_path = saved_paths.get("full")
+    try:
+        saved_full_markdown = read_verified_saved_report_markdown(
+            final_source_path,
+            report_outputs.get("full", ""),
+        )
+    except RuntimeError as exc:
+        _append_log(
+            logs,
+            "audit.saved_report_outputs",
+            "error",
+            "replay 日报保存后正文不一致，研究证据不落盘",
+            error=str(exc),
+        )
+        raise
+    final_audit_result = audit_report(
+        saved_full_markdown,
+        source_path=final_source_path,
+        expected_position_summary=existing_position_summary_from_context(replay_data),
+        prefer_postgres_history=True,
+    )
+    replay_contract["final_audit"] = final_audit_result
+    if not final_audit_result.get("passed"):
+        finding_text = "；".join(
+            f"{item.get('code') or 'report_acceptance_failed'}: {item.get('message') or ''}".strip()
+            for item in final_audit_result.get("findings") or []
+        )
+        _append_log(
+            logs,
+            "audit.saved_report_outputs",
+            "error",
+            "replay 日报保存后检查未通过，研究证据不落盘",
+            findings=final_audit_result.get("findings") or [],
+        )
+        raise RuntimeError(finding_text or "replay 日报保存后检查未通过，研究证据不落盘")
+    _append_log(
+        logs,
+        "audit.saved_report_outputs",
+        "success",
+        "replay 日报保存后检查通过",
+        finding_count=int(final_audit_result.get("finding_count") or 0),
+    )
+    if write_replay_market_language_translation_fn is None:
+        from report.market_language_translation_artifacts import (
+            write_replay_market_language_translation as write_replay_market_language_translation_fn,
+        )
+    market_language_storage = write_replay_market_language_translation_fn(
+        market_language_translation,
+        root_dir=artifact_root,
+    )
+    replay_contract["market_language_storage"] = market_language_storage
     return replay_contract
 
 

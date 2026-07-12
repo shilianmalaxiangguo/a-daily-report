@@ -599,7 +599,7 @@ def _build_abnormal_watch_pool_legacy_body(
                         "setup_signal_label": setup_signal.get("label", ""),
                         "setup_signal_phase": setup_signal.get("phase", ""),
                         "anchor_price": round(anchor_price, 2) if anchor_price else 0,
-                        "action_rule": "MVP快照回退：先看次日是否继续强于市场，再按固定交易窗口条件确认。",
+                        "action_rule": "观察样本：先看是否强于市场，不预设参与。",
                         "abnormal_note": "缺少近期K线，先按强势/主线优先级纳入异常观察。",
                         "abnormal_score": abnormal_score,
                         "source": stock.get("source", ""),

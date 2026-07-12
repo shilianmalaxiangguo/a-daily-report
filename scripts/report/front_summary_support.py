@@ -12,6 +12,7 @@ from report.front_summary_builder import (
     render_core_mvp_digest_contract,
     render_mvp_focus_summary_contract,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 __all__ = [
     "build_bridge_prep_context",
@@ -458,7 +459,7 @@ def _build_front_follow_action_text_legacy_body(
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
 
     if target_position_pct == 50 and best_stock:
-        text = f"只做唯一对象，{trigger_text}后按50%执行"
+        text = f"只做唯一对象，{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     probe_state = str((special_probe_verdict or {}).get("probe_state", "") or "").strip()
 
@@ -466,8 +467,8 @@ def _build_front_follow_action_text_legacy_body(
         if execute_anchor_window_text:
             return execute_anchor_window_text
         if probe_state == "probe_crossline_upgrade_ready":
-            return f"跨线对象已先走势符合强势标准；已决定50%条件执行，{trigger_text}后只检查执行资格，不满足转为0%不参与"
-        return f"只允许一只进入50%条件执行；{trigger_text}后只检查执行资格，不满足转为0%不参与"
+            return f"跨线对象已先走势符合强势标准；已决定50%条件执行，{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
+        return f"只允许一只进入50%条件执行；{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
     if execution_bias == "avoid":
         text = "0%，先不跟随，继续观察，等下一轮真正的新启动"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
@@ -660,7 +661,7 @@ def _build_front_structure_layer_text_legacy_body(
     if watch_anchor and watch_source == "gem_breathing_20cm":
         note_text = str((watch_anchor or {}).get("watch_anchor_note", "") or "").strip()
         if 0 < target_position_pct < 50:
-            text = f"创业板20cm预启动已决定50%条件执行；{trigger_text}后只检查执行资格，不满足继续0%不参与"
+            text = f"创业板20cm预启动已决定50%条件执行；{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
         else:
             text = "创业板20cm预启动只先进观察池；先看右侧确认和09:50-10:10窗口，确认结果进入复盘和下一份日报判断"
         if note_text:
@@ -668,14 +669,14 @@ def _build_front_structure_layer_text_legacy_body(
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
 
     if target_position_pct == 50 and best_stock:
-        text = f"市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，{trigger_text}后只检查执行资格"
+        text = f"市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text
     if 0 < target_position_pct < 50:
         if execute_anchor_window_text:
-            return "50%条件执行；观察对象已进入二次突破确认阶段，T+1只检查昨晚预案的执行资格"
+            return f"50%条件执行；观察对象已进入二次突破确认阶段，T+1{PREMARKET_50_TRIGGER_TEXT}"
         if probe_state == "probe_crossline_upgrade_ready":
-            return f"50%条件执行；跨线对象已先走势符合强势标准，{trigger_text}后只检查执行资格，不直接当成主攻线切换"
-        return f"50%条件执行；{trigger_text}后只检查执行资格，不满足继续0%不参与"
+            return f"50%条件执行；跨线对象已先走势符合强势标准，{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}，不直接当成主攻线切换"
+        return f"50%条件执行；{trigger_text}后{PREMARKET_50_TRIGGER_TEXT}"
     if execution_bias == "avoid":
         text = "0%，先不跟随，继续观察，等下一轮真正的新启动"
         return f"{text}；{philosophy_constraint_text}" if philosophy_constraint_text else text

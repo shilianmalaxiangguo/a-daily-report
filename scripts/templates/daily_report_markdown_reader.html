@@ -18,11 +18,15 @@
 	      --reader-muted: #6c4537;
 	      --reader-muted-soft: #8b6a5b;
 	      --accent: #e73922;
-	      --accent-red: #e73922;
-	      --accent-orange: #ff8a1f;
-	      --accent-amber: #ffd86a;
-	      --accent-soft: rgba(255, 126, 0, 0.12);
+      --accent-red: #e73922;
+      --accent-orange: #ff8a1f;
+      --accent-amber: #ffd86a;
+      --accent-blue: #2364aa;
+      --accent-green: #176e54;
+      --accent-soft: rgba(255, 126, 0, 0.12);
 	      --accent-soft-text: #7d231b;
+	      --signal-extreme: #F92722;
+	      --signal-extreme-text: #FFFFFF;
 	      --signal-green: #176e54;
 	      --signal-green-soft: rgba(224, 245, 235, 0.8);
 	      --reader-cream: #fffaf3;
@@ -540,6 +544,10 @@
       line-height: 1.35;
     }
 
+    .position-timeline-shell.is-day-order .position-timeline-table {
+      min-width: 1824px;
+    }
+
     .position-timeline-table col.timeline-col-lane {
       width: var(--timeline-lane-width);
     }
@@ -682,7 +690,8 @@
 
     .timeline-date-action,
     .timeline-date-context,
-    .timeline-date-intent {
+    .timeline-date-intent,
+    .timeline-date-state {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -697,6 +706,46 @@
       font-weight: 800;
       line-height: 1;
       box-shadow: 0 5px 12px rgba(231, 57, 34, 0.16), inset 0 1px 0 rgba(255,255,255,0.24);
+    }
+
+    .timeline-date-state {
+      max-width: calc(100% - 8px);
+      min-width: 46px;
+      height: 20px;
+      margin-top: 5px;
+      padding: 0 9px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--accent-blue) 14%, #ffffff);
+      color: var(--accent-blue);
+      font-size: 10px;
+      font-weight: 900;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 24%, #ffffff), 0 5px 12px rgba(35, 100, 170, 0.08);
+    }
+
+    .timeline-date-state.is-empty {
+      background: color-mix(in srgb, var(--reader-heading) 10%, #ffffff);
+      color: var(--reader-muted);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--reader-muted) 20%, #ffffff);
+    }
+
+    .timeline-date-state.is-unknown {
+      background: color-mix(in srgb, var(--accent-orange) 11%, #ffffff);
+      color: color-mix(in srgb, var(--accent-orange) 72%, var(--reader-heading));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-orange) 24%, #ffffff);
+    }
+
+    .timeline-date-state.is-report {
+      background: color-mix(in srgb, var(--accent-green) 14%, #ffffff);
+      color: var(--accent-green);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-green) 24%, #ffffff), 0 5px 12px rgba(23, 110, 84, 0.08);
+    }
+
+    .timeline-date-state.is-buy {
+      background: color-mix(in srgb, var(--accent-orange) 18%, #ffffff);
+      color: color-mix(in srgb, var(--accent-orange) 82%, var(--reader-heading));
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-orange) 30%, #ffffff), 0 5px 12px rgba(255, 138, 31, 0.1);
     }
 
     .timeline-date-context {
@@ -754,6 +803,10 @@
       box-shadow: inset 3px 0 0 var(--timeline-row-accent);
     }
 
+    .position-timeline-shell.is-day-order .timeline-lane {
+      min-height: 106px;
+    }
+
 	    .timeline-asset {
 	      left: var(--timeline-lane-width);
 	      padding: 12px;
@@ -763,6 +816,10 @@
 	      font-weight: 900;
 	      box-shadow: 8px 0 14px rgba(43, 39, 36, 0.025);
 	    }
+
+    .position-timeline-shell.is-day-order .timeline-asset {
+      min-height: 106px;
+    }
 
 	    .timeline-row {
 		      --timeline-row-accent: #8b6a5b;
@@ -790,6 +847,20 @@
 	      --timeline-row-text: #176e54;
 	      --timeline-row-ink: #0e4d3b;
 	    }
+
+    .timeline-row-td {
+      --timeline-row-accent: #1d5f9f;
+      --timeline-row-bg: #edf5ff;
+      --timeline-row-text: #1d5f9f;
+      --timeline-row-ink: #143d63;
+    }
+
+    .timeline-row-te {
+      --timeline-row-accent: #7c3f8c;
+      --timeline-row-bg: #f6eff9;
+      --timeline-row-text: #7c3f8c;
+      --timeline-row-ink: #512b5a;
+    }
 
     .timeline-lane-code,
     .timeline-lane-label {
@@ -876,16 +947,17 @@
       width: 100%;
     }
 
-	    .timeline-bar {
-      display: grid;
-      grid-column: var(--bar-start) / span var(--bar-span);
-      grid-template-columns: repeat(var(--bar-segments), minmax(0, 1fr));
-      min-width: 0;
-      min-height: 48px;
-      align-items: stretch;
-	      border-radius: 14px;
-      overflow: hidden;
-      color: var(--timeline-row-ink, var(--reader-text));
+		    .timeline-bar {
+	      display: grid;
+	      grid-column: var(--bar-start) / span var(--bar-span);
+	      grid-template-columns: repeat(var(--bar-segments), minmax(0, 1fr));
+	      min-width: 0;
+	      height: 48px;
+	      min-height: 0;
+	      align-items: stretch;
+		      border-radius: 14px;
+	      overflow: hidden;
+	      color: var(--timeline-row-ink, var(--reader-text));
 	      box-shadow: 0 10px 24px rgba(104, 56, 24, 0.055), inset 0 1px 0 rgba(255,255,255,0.88);
     }
 
@@ -908,12 +980,51 @@
     .timeline-bar-segment {
       display: flex;
       min-width: 0;
+      overflow: hidden;
       align-items: center;
-      gap: 8px;
-      padding: 0 14px;
+	      gap: 8px;
+	      padding: 0 14px;
       border-inline-end: 0;
       background: transparent;
       color: inherit;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-track-cell {
+      height: 106px;
+      padding: 12px 0;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-track {
+      height: 80px;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-bar {
+      height: 72px;
+      width: auto;
+      max-width: none;
+      margin: 0 6px;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-bar-segment {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas:
+        "code badges"
+        "text text";
+      column-gap: 8px;
+      row-gap: 5px;
+      align-content: center;
+      align-items: center;
+      padding: 8px 12px;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-bar-segment.is-selected {
+      padding-left: 18px;
+    }
+
+    .timeline-bar-segment:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--timeline-row-accent) 54%, #ffffff);
+      outline-offset: -3px;
     }
 
     .timeline-bar-segment.is-selected {
@@ -955,17 +1066,53 @@
       box-shadow: 0 1px 2px rgba(44, 44, 46, 0.055);
     }
 
+    .position-timeline-shell.is-day-order .timeline-state-code {
+      grid-area: code;
+      justify-self: start;
+    }
+
     .timeline-state-text {
+      min-width: 0;
       color: inherit;
       font-size: 11px;
       font-weight: 700;
-      line-height: 1.35;
-      overflow-wrap: anywhere;
+	      line-height: 1.35;
+	      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-state-text {
+      display: -webkit-box;
+      grid-area: text;
+      overflow: hidden;
+      max-height: 4.08em;
+      color: color-mix(in srgb, currentColor 92%, var(--reader-text));
+      font-size: 11px;
+      line-height: 1.36;
+      white-space: normal;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
+    }
+
+    .timeline-action-badges {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-action-badges {
+      grid-area: badges;
+      max-width: none;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 4px;
+      margin-left: 0;
     }
 
     .timeline-action-badge {
       flex: 0 0 auto;
-      margin-left: auto;
       padding: 3px 7px;
       border-radius: 999px;
       background: color-mix(in srgb, var(--accent-red) 10%, #ffffff);
@@ -977,10 +1124,61 @@
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-red) 28%, #ffffff);
     }
 
+    .timeline-state-code + .timeline-action-badge,
+    .timeline-state-text + .timeline-action-badge,
+    .timeline-state-code + .timeline-action-badges,
+    .timeline-state-text + .timeline-action-badges {
+      margin-left: auto;
+    }
+
+    .timeline-action-badge + .timeline-action-badge {
+      margin-left: -3px;
+    }
+
+    .position-timeline-shell.is-day-order .timeline-action-badge + .timeline-action-badge {
+      margin-left: 0;
+    }
+
+    .timeline-action-badge.is-participate {
+      background: color-mix(in srgb, var(--accent-blue) 12%, #ffffff);
+      color: var(--accent-blue);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-blue) 24%, #ffffff);
+    }
+
+    .timeline-action-badge.is-confirm {
+      background: color-mix(in srgb, var(--accent-green) 14%, #ffffff);
+      color: #176e54;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-green) 26%, #ffffff);
+    }
+
+    .timeline-action-badge.is-cancel {
+      background: color-mix(in srgb, var(--accent-red) 12%, #ffffff);
+      color: var(--accent-red);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-red) 28%, #ffffff);
+    }
+
+    .timeline-action-badge.is-check {
+      background: color-mix(in srgb, var(--accent-orange) 12%, #ffffff);
+      color: #8a4a0a;
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-orange) 26%, #ffffff);
+    }
+
     .timeline-bar-segment.is-selected .timeline-action-badge {
       background: var(--accent-red);
       color: #ffffff;
       box-shadow: 0 4px 10px rgba(231, 57, 34, 0.16), inset 0 1px 0 rgba(255,255,255,0.24);
+    }
+
+    .timeline-bar-segment.is-selected .timeline-action-badge.is-confirm {
+      background: #176e54;
+      color: #ffffff;
+      box-shadow: 0 4px 10px rgba(23, 110, 84, 0.16), inset 0 1px 0 rgba(255,255,255,0.24);
+    }
+
+    .timeline-bar-segment.is-selected .timeline-action-badge.is-participate {
+      background: var(--accent-blue);
+      color: #ffffff;
+      box-shadow: 0 4px 10px rgba(29, 95, 159, 0.16), inset 0 1px 0 rgba(255,255,255,0.24);
     }
 
 	    .timeline-bar-segment.is-ta {
@@ -993,6 +1191,14 @@
 
 	    .timeline-bar-segment.is-tc {
 	      color: #176e54;
+    }
+
+    .timeline-bar-segment.is-td {
+      color: #1d5f9f;
+    }
+
+    .timeline-bar-segment.is-te {
+      color: #7c3f8c;
     }
 
     .timeline-bar-segment.is-exit {
@@ -1014,6 +1220,40 @@
     .timeline-bar-segment.is-missing .timeline-state-code {
       background: #ffffff;
       color: color-mix(in srgb, var(--timeline-row-text) 70%, var(--reader-muted));
+    }
+
+    .el-tooltip-popover {
+      position: fixed;
+      z-index: 20;
+      max-width: min(440px, calc(100vw - 32px));
+      padding: 10px 12px;
+      border: 1px solid color-mix(in srgb, var(--reader-line-strong) 76%, #ffffff);
+      border-radius: 12px;
+      background:
+        linear-gradient(135deg, rgba(255, 252, 246, 0.96), rgba(255, 255, 255, 0.91));
+      box-shadow:
+        0 18px 38px rgba(104, 56, 24, 0.16),
+        inset 0 1px 0 rgba(255,255,255,0.92);
+      color: var(--reader-text);
+      font-size: 12px;
+      font-weight: 760;
+      line-height: 1.58;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(4px);
+      transition: opacity 140ms ease, transform 140ms ease;
+      white-space: normal;
+    }
+
+    .el-tooltip-popover.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .el-tooltip-popover {
+        transition: none;
+      }
     }
 
 	    .markdown-body .mermaid {
@@ -1133,12 +1373,71 @@
 	      min-height: 320px;
 	    }
 
-	    .bear-chart-footnote {
-	      margin-top: 10px;
-	    }
+		    .bear-chart-footnote {
+		      margin-top: 10px;
+		    }
 
-		    table {
-	      border-collapse: separate;
+		    .market-structure-chart-card {
+		      position: relative;
+		      margin: 18px 0 22px;
+		      padding: 18px;
+		      overflow: hidden;
+		      border: 1px solid rgba(255, 255, 255, 0.72);
+		      border-radius: 22px;
+		      background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(255, 252, 246, 0.72));
+		      box-shadow: 0 18px 42px rgba(104, 56, 24, 0.075), inset 0 1px 0 rgba(255,255,255,0.86);
+		    }
+
+		    .market-structure-chart-copy {
+		      display: grid;
+		      gap: 5px;
+		      margin-bottom: 12px;
+		    }
+
+		    .market-structure-chart-eyebrow {
+		      width: fit-content;
+		      padding: 2px 8px;
+		      border: 1px solid color-mix(in srgb, var(--accent-red) 28%, var(--reader-line));
+		      border-radius: 999px;
+		      background: rgba(255, 252, 246, 0.78);
+		      color: var(--accent-soft-text);
+		      font-size: 12px;
+		      font-weight: 900;
+		      line-height: 1.45;
+		    }
+
+		    .market-structure-chart-copy h4,
+		    .market-structure-chart-copy p {
+		      margin: 0;
+		    }
+
+		    .market-structure-chart-copy h4 {
+		      color: var(--reader-heading);
+		      font-size: 1.12em;
+		      font-weight: 900;
+		      line-height: 1.45;
+		    }
+
+		    .market-structure-chart-copy p {
+		      color: var(--reader-muted);
+		      font-size: 0.92em;
+		      line-height: 1.55;
+		    }
+
+		    .market-structure-chart-frame {
+		      height: 680px;
+		      border-top: 1px solid var(--reader-line);
+		      padding-top: 10px;
+		    }
+
+		    .market-structure-chart {
+		      width: 100%;
+		      height: 100%;
+		      min-height: 520px;
+		    }
+
+			    table {
+		      border-collapse: separate;
 	      border-spacing: 0;
 	      width: max-content;
 	      min-width: min(100%, 36rem);
@@ -1207,6 +1506,16 @@
 	      border: 1px solid rgba(185, 47, 37, 0.24);
 	      background: var(--accent-soft);
 	      color: var(--accent-soft-text);
+	    }
+
+	    .signal-marker.signal-extreme {
+	      border: 1px solid var(--signal-extreme);
+	      background: var(--signal-extreme);
+	      color: var(--signal-extreme-text);
+	      text-shadow: 0 1px 1px rgba(94, 0, 0, 0.42);
+	      box-shadow:
+	        inset 0 1px 0 rgba(255, 255, 255, 0.32),
+	        0 3px 9px rgba(249, 39, 34, 0.24);
 	    }
 
 	    .signal-marker.signal-cold {
@@ -1437,9 +1746,10 @@
         if (body) {
           body.innerHTML = `
             <h2 id="preview-overview">日报裁决总览</h2>
-            <p>这是一段 Bear 风格预览正文。重点数据用 <span class="signal-marker signal-hot">网易云红</span> 或 <span class="signal-marker signal-cold">荧光绿</span> 标出来，而不是把整块表格染色。</p>
+            <p>这是一段 Bear 风格预览正文。重点数据按层级使用 <span class="signal-marker signal-extreme">猩红极致</span>、<span class="signal-marker signal-hot">网易云红</span> 或 <span class="signal-marker signal-cold">荧光绿</span>，而不是把整块表格染色。</p>
             <h2 id="preview-market">二、市场基底</h2>
             <div class="reader-table"><table><thead><tr><th>指标</th><th>数值</th><th>解读</th></tr></thead><tbody>
+              <tr><td>Top50成交额占比</td><td class="has-signal"><span class="signal-marker signal-extreme">25.16%</span></td><td>超过25%，极致</td></tr>
               <tr><td>Top50成交额占比</td><td class="has-signal"><span class="signal-marker signal-hot">23.28%</span></td><td>超过20%，资金活跃</td></tr>
               <tr><td>创新高全A占比</td><td class="has-signal"><span class="signal-marker signal-cold">1.96%</span></td><td>低于2%，偏冷</td></tr>
             </tbody></table></div>
@@ -1448,7 +1758,7 @@
             <h3 id="preview-new-high">4. 创新高趋势反馈</h3>
             <p>左侧目录会跟随当前标题高亮，并自动滚动到当前项。</p>
             <h2 id="preview-action">六、明日执行计划</h2>
-            <blockquote>明日动作以正文最终计划为准；盘中只检查执行资格或取消。</blockquote>
+            <blockquote>明日动作以正文最终计划为准；B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1。</blockquote>
           `;
 	        }
 	      }
@@ -1483,6 +1793,8 @@
 		        muted: cssValue("--reader-muted", "#6c4537"),
 		        line: cssValue("--reader-line", "rgba(108, 69, 55, 0.14)"),
 		        red: cssValue("--accent-red", "#e73922"),
+		        extremeRed: cssValue("--signal-extreme", "#F92722"),
+		        extremeText: cssValue("--signal-extreme-text", "#FFFFFF"),
 		        green: cssValue("--signal-green", "#176e54"),
 		        surface: cssValue("--reader-surface", "rgba(255, 252, 246, 0.86)"),
 		      };
@@ -1501,14 +1813,409 @@
 	        const number = numberValue(value);
 	        return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
 	      };
-	      const formatCount = (value) => `${numberValue(value).toFixed(0)}只`;
-	      const compactAxisLabel = (value) => {
-	        const text = String(value ?? "");
-	        return text.length > 10 ? `${text.slice(0, 9)}…` : text;
-	      };
-	      const compactDateLabel = (value) => String(value ?? "").replace(/^\d{4}-/, "");
+		      const formatCount = (value) => `${numberValue(value).toFixed(0)}只`;
+		      const compactAxisLabel = (value) => {
+		        const text = String(value ?? "");
+		        return text.length > 10 ? `${text.slice(0, 9)}…` : text;
+		      };
+		      const compactDateLabel = (value) => String(value ?? "").replace(/^\d{4}-/, "");
 
-	      const baseChartOption = () => ({
+		      const renderMarketStructureChart = (node) => {
+		        const card = node.closest("[data-market-structure-card]");
+		        const dataNode = card ? card.querySelector(".market-structure-chart-data") : null;
+		        if (!dataNode || !window.echarts) {
+		          node.textContent = "ECharts 未加载，无法显示上证结构图";
+		          return null;
+		        }
+		        let chartData = {};
+		        try {
+		          chartData = JSON.parse(dataNode.textContent || "{}");
+		        } catch (_error) {
+		          node.textContent = "上证结构图数据无法读取";
+		          return null;
+		        }
+		        const dates = Array.isArray(chartData.dates) ? chartData.dates : [];
+		        const candles = Array.isArray(chartData.candles) ? chartData.candles : [];
+		        const volumes = Array.isArray(chartData.volumes) ? chartData.volumes : [];
+		        const segments = Array.isArray(chartData.segments) ? chartData.segments : [];
+		        if (!dates.length || !candles.length) {
+		          node.textContent = "上证结构图数据不足";
+		          return null;
+		        }
+		        let chart = null;
+		        let visibleIndexRange = { start: 0, end: Math.max(0, dates.length - 1) };
+		        const marketStructureTone = {
+		          red: "#C20C0C",
+		          green: "#089981",
+		          redSoft: "rgba(194, 12, 12, 0.12)",
+		        };
+		        const isFiniteNumber = (value) => typeof value === "number" && Number.isFinite(value);
+		        const formatKlineCount = (value) => isFiniteNumber(value) ? String(Math.round(value)) : "-";
+		        const chartDateLabel = (date) => {
+		          const parts = String(date || "").split("-");
+		          return parts.length === 3 ? `${parts[0].slice(2)}/${parts[1]}/${parts[2]}` : String(date || "");
+		        };
+		        const zoneRangeLabel = (segment) => {
+		          if (segment.kind === "candidate_platform") {
+		            return `候选平台\n${formatKlineCount(segment.klineCount)}根K线`;
+		          }
+		          return `${segment.isCurrent ? "当前中枢" : "中枢"}\n${formatKlineCount(segment.klineCount)}根K线`;
+		        };
+		        const zoneTopLabel = (segment) => (
+		          `${chartDateLabel(segment.startDate)}-${chartDateLabel(segment.endDate)}\n${formatKlineCount(segment.klineCount)}日`
+		        );
+		        const indexByDate = {};
+		        dates.forEach((date, index) => {
+		          indexByDate[date] = index;
+		        });
+		        const clampDataIndex = (index) => Math.max(0, Math.min(dates.length - 1, Math.round(index)));
+		        const zoomValueToIndex = (value, fallback) => {
+		          if (Number.isFinite(value)) return clampDataIndex(value);
+		          const text = String(value ?? "").trim();
+		          if (Object.prototype.hasOwnProperty.call(indexByDate, text)) return indexByDate[text];
+		          return fallback;
+		        };
+		        const zoomPercentToIndex = (value, fallback) => {
+		          const percent = Number(value);
+		          if (!Number.isFinite(percent)) return fallback;
+		          return clampDataIndex((dates.length - 1) * percent / 100);
+		        };
+		        const syncVisibleIndexRange = () => {
+		          if (!chart || !dates.length) return;
+		          const zoom = (((chart.getOption() || {}).dataZoom || [])[0]) || {};
+		          const startIndex = zoomValueToIndex(zoom.startValue, zoomPercentToIndex(zoom.start, 0));
+		          const endIndex = zoomValueToIndex(zoom.endValue, zoomPercentToIndex(zoom.end, dates.length - 1));
+		          visibleIndexRange = {
+		            start: Math.min(startIndex, endIndex),
+		            end: Math.max(startIndex, endIndex),
+		          };
+		        };
+		        const labelIndexVisibleInCurrentZoom = (index) => (
+		          Number.isFinite(index) && index >= visibleIndexRange.start && index <= visibleIndexRange.end
+		        );
+		        const firstIndexOnOrAfter = (date) => {
+		          for (let index = 0; index < dates.length; index += 1) {
+		            if (dates[index] >= date) return index;
+		          }
+		          return null;
+		        };
+		        const lastIndexOnOrBefore = (date) => {
+		          for (let index = dates.length - 1; index >= 0; index -= 1) {
+		            if (dates[index] <= date) return index;
+		          }
+		          return null;
+		        };
+		        const startIndexFor = (date) => Object.prototype.hasOwnProperty.call(indexByDate, date)
+		          ? indexByDate[date]
+		          : firstIndexOnOrAfter(date);
+		        const endIndexFor = (date) => Object.prototype.hasOwnProperty.call(indexByDate, date)
+		          ? indexByDate[date]
+		          : lastIndexOnOrBefore(date);
+		        const zoneAnchorPrice = (segment, side) => {
+		          const close = side === "start" ? segment.startClose : segment.endClose;
+		          if (isFiniteNumber(close)) return close;
+		          if (isFiniteNumber(segment.zg) && isFiniteNumber(segment.zd)) return (segment.zg + segment.zd) / 2;
+		          if (isFiniteNumber(segment.high) && isFiniteNumber(segment.low)) return (segment.high + segment.low) / 2;
+		          return null;
+		        };
+		        const zoneShapeData = segments
+		          .filter((segment) => segment.kind !== "connector" && isFiniteNumber(segment.low) && isFiniteNumber(segment.high))
+		          .map((segment) => {
+		            const startIndex = startIndexFor(segment.startDate);
+		            const endIndex = endIndexFor(segment.endDate);
+		            if (startIndex === null || endIndex === null) return null;
+		            const low = Math.min(segment.low, segment.high);
+		            const high = Math.max(segment.low, segment.high);
+		            return {
+		              value: [Math.min(startIndex, endIndex), low, Math.max(startIndex, endIndex), high],
+		              label: zoneRangeLabel(segment),
+		              topLabel: zoneTopLabel(segment),
+		              showLabel: Boolean(segment.isCurrent),
+		              showTopLabel: Boolean(segment.isCurrent),
+		              fill: segment.isCurrent ? "rgba(255, 216, 106, 0.2)" : "rgba(255, 216, 106, 0.08)",
+		              stroke: segment.isCurrent ? marketStructureTone.red : "rgba(167, 94, 155, 0.42)",
+		              lineWidth: segment.isCurrent ? 1.8 : 1,
+		              labelColor: segment.isCurrent ? marketStructureTone.red : chartTone.muted,
+		              topLabelColor: marketStructureTone.green,
+		            };
+		          })
+		          .filter(Boolean);
+			        const clampTextX = (preferredX, width, params) => {
+			          const gridLeft = Number(params.coordSys && params.coordSys.x);
+			          const gridRight = gridLeft + Number(params.coordSys && params.coordSys.width);
+			          if (!Number.isFinite(gridLeft) || !Number.isFinite(gridRight) || gridRight <= gridLeft) {
+			            return preferredX;
+			          }
+			          return Math.min(Math.max(preferredX, gridLeft + 4), Math.max(gridLeft + 4, gridRight - width - 2));
+			        };
+				        const zoneIntersectsVisibleGrid = (x, width, params) => {
+				          const gridLeft = Number(params.coordSys && params.coordSys.x);
+				          const gridRight = gridLeft + Number(params.coordSys && params.coordSys.width);
+				          if (!Number.isFinite(gridLeft) || !Number.isFinite(gridRight) || gridRight <= gridLeft) {
+				            return true;
+				          }
+				          const zoneRight = x + width;
+				          return zoneRight > gridLeft && x < gridRight;
+				        };
+				        const labelAnchorVisibleInGrid = (preferredX, params) => {
+				          const gridLeft = Number(params.coordSys && params.coordSys.x);
+				          const gridRight = gridLeft + Number(params.coordSys && params.coordSys.width);
+				          if (!Number.isFinite(gridLeft) || !Number.isFinite(gridRight) || gridRight <= gridLeft) {
+				            return true;
+				          }
+				          return preferredX >= gridLeft && preferredX <= gridRight;
+				        };
+				        const buildZoneRenderItem = (data) => (params, api) => {
+		          const item = data[params.dataIndex];
+		          if (!item) return { type: "group", children: [] };
+		          const startIndex = Number(api.value(0));
+		          const low = Number(api.value(1));
+		          const endIndex = Number(api.value(2));
+		          const high = Number(api.value(3));
+		          const lowCoord = api.coord([startIndex, low]);
+		          const highCoord = api.coord([endIndex, high]);
+		          const size = api.size ? api.size([1, 0]) : null;
+		          const bandWidth = Array.isArray(size) && Number.isFinite(size[0]) ? size[0] : 0;
+		          if (!lowCoord || !highCoord || !Number.isFinite(lowCoord[0]) || !Number.isFinite(lowCoord[1]) || !Number.isFinite(highCoord[0]) || !Number.isFinite(highCoord[1])) {
+		            return { type: "group", children: [] };
+		          }
+		          const x = Math.min(lowCoord[0], highCoord[0]) - bandWidth / 2;
+		          const y = highCoord[1];
+			          const width = Math.abs(highCoord[0] - lowCoord[0]) + bandWidth;
+			          const height = lowCoord[1] - highCoord[1];
+			          if (width <= 0 || height <= 0) return { type: "group", children: [] };
+			          if (!zoneIntersectsVisibleGrid(x, width, params)) return { type: "group", children: [] };
+			          const gridTop = Number(params.coordSys && params.coordSys.y);
+		          const children = [{
+		            type: "rect",
+		            shape: { x, y, width, height },
+		            style: { fill: item.fill, stroke: item.stroke, lineWidth: item.lineWidth },
+		            silent: true,
+		          }];
+			          if (item.showTopLabel && labelIndexVisibleInCurrentZoom(startIndex) && labelAnchorVisibleInGrid(x + 2, params)) {
+			            children.push({
+			              type: "text",
+		              style: {
+		                text: item.topLabel,
+		                x: clampTextX(x + 2, 82, params),
+		                y: Number.isFinite(gridTop) ? Math.max(gridTop + 2, y - 40) : y - 40,
+		                width: 82,
+		                overflow: "break",
+		                fill: item.topLabelColor,
+		                textBorderColor: "rgba(255, 255, 255, 0.92)",
+		                textBorderWidth: 2,
+		                font: "600 9px sans-serif",
+		                lineHeight: 11,
+		              },
+		              silent: true,
+		            });
+		          }
+			          if (item.showLabel && labelIndexVisibleInCurrentZoom(startIndex) && labelAnchorVisibleInGrid(x + 6, params)) {
+			            children.push({
+		              type: "text",
+		              style: {
+		                text: item.label,
+		                x: clampTextX(x + 6, 72, params),
+		                y: Math.max(Number.isFinite(gridTop) ? gridTop + 26 : y - 22, y - 22),
+		                width: 72,
+		                overflow: "break",
+		                fill: item.labelColor,
+		                backgroundColor: "rgba(255, 255, 255, 0.92)",
+		                borderColor: "rgba(231, 57, 34, 0.3)",
+		                borderWidth: 1,
+		                borderRadius: 4,
+		                padding: [2, 4],
+		                font: "700 10px sans-serif",
+		                lineHeight: 12,
+		              },
+		              silent: true,
+		            });
+		          }
+		          return { type: "group", children };
+		        };
+		        const pushLinePoint = (points, index, price, anchor) => {
+		          if (index === null || !isFiniteNumber(price)) return;
+		          const normalizedAnchor = anchor || "center";
+		          const last = points[points.length - 1];
+		          if (last && last.index === index && last.price === price && last.anchor === normalizedAnchor) return;
+		          points.push({ index, price, anchor: normalizedAnchor });
+		        };
+		        const bridgeLineData = (previousPlatform, connectors, nextPlatform) => {
+		          const points = [];
+		          if (previousPlatform) {
+		            pushLinePoint(points, endIndexFor(previousPlatform.endDate), zoneAnchorPrice(previousPlatform, "end"), "right");
+		          } else if (connectors[0]) {
+		            pushLinePoint(points, startIndexFor(connectors[0].startDate), zoneAnchorPrice(connectors[0], "start"), "center");
+		          }
+		          if (nextPlatform) {
+		            pushLinePoint(points, startIndexFor(nextPlatform.startDate), zoneAnchorPrice(nextPlatform, "start"), "left");
+		          } else if (connectors[connectors.length - 1]) {
+		            const lastConnector = connectors[connectors.length - 1];
+		            pushLinePoint(points, endIndexFor(lastConnector.endDate), zoneAnchorPrice(lastConnector, "end"), "center");
+		          }
+		          return points;
+		        };
+		        const bridgePixelPoint = (api, point) => {
+		          const coord = api.coord([point.index, point.price]);
+		          if (!coord || !Number.isFinite(coord[0]) || !Number.isFinite(coord[1])) return null;
+		          const size = api.size ? api.size([1, 0]) : null;
+		          const bandWidth = Array.isArray(size) && Number.isFinite(size[0]) ? size[0] : 0;
+		          const offset = point.anchor === "left" ? -bandWidth / 2 : point.anchor === "right" ? bandWidth / 2 : 0;
+		          return [coord[0] + offset, coord[1]];
+		        };
+			        const buildBridgeSeriesItem = (points) => {
+			          const xValues = points.map((point) => point.index).filter((value) => Number.isFinite(value));
+			          const yValues = points.map((point) => point.price).filter((value) => Number.isFinite(value));
+			          const data = [{
+			            value: [Math.min(...xValues), Math.min(...yValues), Math.max(...xValues), Math.max(...yValues)],
+			            points,
+			          }];
+			          return {
+			            name: "平台桥接线",
+			            type: "custom",
+			            xAxisIndex: 0,
+			            yAxisIndex: 0,
+			            data,
+			            encode: { x: [0, 2], y: [1, 3] },
+			            renderItem: (params, api) => {
+		              const item = data[params.dataIndex] || data[0];
+		              const pixelPoints = [];
+		              (item.points || []).forEach((point) => {
+		                const pixelPoint = bridgePixelPoint(api, point);
+		                if (pixelPoint) pixelPoints.push(pixelPoint);
+		              });
+		              if (pixelPoints.length < 2) return { type: "group", children: [] };
+		              const children = [{
+		                type: "polyline",
+		                shape: { points: pixelPoints },
+		                style: { stroke: marketStructureTone.green, lineWidth: 2.6, fill: null, lineJoin: "round", lineCap: "round" },
+		                silent: true,
+		              }];
+		              pixelPoints.forEach((point) => {
+		                children.push({
+		                  type: "circle",
+		                  shape: { cx: point[0], cy: point[1], r: 3 },
+		                  style: { fill: "#fff", stroke: marketStructureTone.green, lineWidth: 1.7 },
+		                  silent: true,
+		                });
+		              });
+		              return { type: "group", children };
+		            },
+		            silent: true,
+		            tooltip: { show: false },
+		            emphasis: { disabled: true },
+		            z: 5,
+		          };
+		        };
+		        const buildBridgeLineSeries = () => {
+		          const series = [];
+		          let previousPlatform = null;
+		          let pendingConnectors = [];
+		          segments.forEach((segment) => {
+		            if (segment.kind === "connector") {
+		              pendingConnectors.push(segment);
+		              return;
+		            }
+		            if (pendingConnectors.length > 0) {
+		              const betweenData = bridgeLineData(previousPlatform, pendingConnectors, segment);
+		              if (betweenData.length >= 2) series.push(buildBridgeSeriesItem(betweenData));
+		              pendingConnectors = [];
+		            }
+		            previousPlatform = segment;
+		          });
+		          if (pendingConnectors.length > 0) {
+		            const trailingData = bridgeLineData(previousPlatform, pendingConnectors, null);
+		            if (trailingData.length >= 2) series.push(buildBridgeSeriesItem(trailingData));
+		          }
+		          return series;
+		        };
+		        const currentSegment = chartData.currentSegment || {};
+		        const markLines = [];
+		        if (isFiniteNumber(currentSegment.zg)) {
+		          markLines.push({ name: "ZG", yAxis: currentSegment.zg, lineStyle: { color: marketStructureTone.red, type: "dashed" }, label: { show: false } });
+		        }
+		        if (isFiniteNumber(currentSegment.zd)) {
+		          markLines.push({ name: "ZD", yAxis: currentSegment.zd, lineStyle: { color: marketStructureTone.red, type: "dashed" }, label: { show: false } });
+		        }
+		        if (isFiniteNumber(chartData.latestPrice)) {
+		          markLines.push({ name: "最新收盘", yAxis: chartData.latestPrice, lineStyle: { color: chartTone.muted, type: "dotted" }, label: { show: false } });
+		        }
+		        const volumeItems = volumes.map((value, index) => {
+		          const candle = candles[index] || [];
+		          const rising = Number(candle[1]) >= Number(candle[0]);
+			          const color = rising ? marketStructureTone.red : marketStructureTone.green;
+			          return {
+			            value,
+			            itemStyle: {
+			              color: rising ? "transparent" : color,
+			              borderColor: color,
+			              borderWidth: 1,
+			            },
+		          };
+		        });
+		        chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        chart.setOption({
+		          backgroundColor: "transparent",
+		          animation: false,
+		          tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+		          axisPointer: { link: [{ xAxisIndex: "all" }] },
+		          grid: [
+		            { left: 64, right: 28, top: 36, height: 470 },
+		            { left: 64, right: 28, top: 548, height: 74 },
+		          ],
+		          xAxis: [
+		            { type: "category", data: dates, boundaryGap: true, axisLine: { onZero: false }, axisLabel: { color: chartTone.muted } },
+		            { type: "category", data: dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false }, axisLine: { onZero: false } },
+		          ],
+		          yAxis: [
+		            { scale: true, axisLabel: { color: chartTone.muted }, splitLine: { lineStyle: { color: chartTone.line } }, splitArea: { show: true, areaStyle: { color: ["rgba(255,255,255,0.22)", "rgba(255,250,243,0.28)"] } } },
+		            { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, splitLine: { show: false } },
+		          ],
+		          dataZoom: [
+		            { type: "inside", xAxisIndex: [0, 1], filterMode: "none" },
+			            { type: "slider", xAxisIndex: [0, 1], filterMode: "none", bottom: 12, height: 22, borderColor: chartTone.line, fillerColor: marketStructureTone.redSoft },
+		          ],
+		          series: [
+		            {
+		              name: "日K",
+		              type: "candlestick",
+			              data: candles,
+			              itemStyle: {
+			                color: "transparent",
+			                color0: marketStructureTone.green,
+			                borderColor: marketStructureTone.red,
+			                borderColor0: marketStructureTone.green,
+			                borderWidth: 1.25,
+			              },
+		              markLine: { symbol: "none", data: markLines },
+		            },
+		            { name: "成交量", type: "bar", xAxisIndex: 1, yAxisIndex: 1, data: volumeItems },
+		            {
+			              name: "中枢框",
+			              type: "custom",
+			              xAxisIndex: 0,
+			              yAxisIndex: 0,
+			              encode: { x: [0, 2], y: [1, 3] },
+			              renderItem: buildZoneRenderItem(zoneShapeData),
+		              data: zoneShapeData,
+		              silent: true,
+		              tooltip: { show: false },
+		              emphasis: { disabled: true },
+		              z: 1,
+		            },
+			          ].concat(buildBridgeLineSeries()),
+			        });
+		        syncVisibleIndexRange();
+		        chart.on("dataZoom", () => {
+		          window.requestAnimationFrame(() => {
+		            syncVisibleIndexRange();
+		            chart.setOption({ series: [{ name: "中枢框", data: zoneShapeData }] });
+		          });
+		        });
+		        return chart;
+		      };
+
+		      const baseChartOption = () => ({
 	        backgroundColor: "transparent",
 	        animationDuration: 520,
 	        animationEasing: "cubicOut",
@@ -1542,13 +2249,14 @@
 
 	      const renderMarketTurnoverTop50TrendChart = (node, payload) => {
 	        const items = Array.isArray(payload?.items) ? payload.items : [];
-	        if (!items.length || !window.echarts) {
-	          return null;
-	        }
-	        const chart = window.echarts.init(node, null, { renderer: "canvas" });
-	        chart.setOption({
+		        if (!items.length || !window.echarts) {
+		          return null;
+		        }
+		        const chart = window.echarts.init(node, null, { renderer: "canvas" });
+		        const hasNewHighShare = items.some((item) => item.new_high_share_pct !== null && item.new_high_share_pct !== undefined);
+		        chart.setOption({
 	          ...baseChartOption(),
-	          color: ["rgba(231,57,34,0.58)", chartTone.red],
+	          color: ["rgba(231,57,34,0.58)", chartTone.red, "rgba(23,110,84,0.5)"],
 	          grid: { left: 72, right: 72, top: 46, bottom: 44, containLabel: false },
 	          legend: {
 	            top: 8,
@@ -1556,7 +2264,7 @@
 	            itemWidth: 10,
 	            itemHeight: 10,
 	            textStyle: { color: chartTone.muted, fontSize: 12 },
-	            data: ["两市成交额", "Top50占比"],
+	            data: ["两市成交额", "Top50占比", "创新高全A占比"],
 	          },
 	          tooltip: {
 	            ...baseChartOption().tooltip,
@@ -1569,6 +2277,7 @@
 	                `两市成交额：${escapeText(formatAmount(item.total_turnover))}`,
 	                `Top50成交额：${escapeText(item.top50_turnover == null ? "待确认" : formatAmount(item.top50_turnover))}`,
 	                `Top50占比：${escapeText(formatPct(item.top50_share_pct))}`,
+	                item.new_high_share_pct == null ? "" : `创新高全A占比：${escapeText(formatPct(item.new_high_share_pct))}`,
 	                item.change_pct_point == null ? "" : `较前日：${escapeText(`${numberValue(item.change_pct_point) > 0 ? "+" : ""}${numberValue(item.change_pct_point).toFixed(2)}pct`)}`,
 	                item.state ? `状态：${escapeText(item.state)}` : "",
 	              ].filter(Boolean).join("<br>");
@@ -1590,11 +2299,11 @@
 	              splitLine: { lineStyle: { color: chartTone.line, type: "dashed" } },
 	            },
 	            {
-	              type: "value",
-	              name: "Top50占比",
-	              min: (value) => Math.min(16, Math.floor(value.min) - 1),
-	              max: (value) => Math.max(25, Math.ceil(value.max) + 1),
-	              nameTextStyle: { color: chartTone.muted },
+		              type: "value",
+		              name: "占比",
+		              min: (value) => hasNewHighShare ? Math.min(0, Math.floor(value.min) - 1) : Math.min(16, Math.floor(value.min) - 1),
+		              max: (value) => Math.max(26, Math.ceil(value.max) + 1),
+		              nameTextStyle: { color: chartTone.muted },
 	              axisLabel: { color: chartTone.muted, formatter: (value) => `${value}%` },
 	              splitLine: { show: false },
 	            },
@@ -1627,15 +2336,44 @@
 	                  borderRadius: 999,
 	                  backgroundColor: "rgba(255,255,255,0.78)",
 	                },
-	                lineStyle: { color: chartTone.line, type: "dashed" },
-	                data: [
-	                  { yAxis: 20, name: "20%活跃" },
-	                  { yAxis: 18, name: "18%收缩" },
+		                lineStyle: { color: chartTone.line, type: "dashed" },
+		                data: [
+		                  {
+		                    yAxis: 25,
+		                    name: ">25%极致",
+		                    lineStyle: { color: chartTone.extremeRed, width: 1.4 },
+		                    label: {
+		                      color: chartTone.extremeText,
+		                      backgroundColor: chartTone.extremeRed,
+		                      textShadowColor: "rgba(94,0,0,0.5)",
+		                      textShadowBlur: 2,
+		                      textShadowOffsetY: 1,
+		                    },
+		                  },
+		                  { yAxis: 20, name: "20%活跃" },
+		                  { yAxis: 18, name: "18%收缩" },
 	                ],
-	              },
-	            },
-	          ],
-	        });
+		              },
+		            },
+		            {
+		              name: "创新高全A占比",
+		              type: "line",
+		              yAxisIndex: 1,
+		              smooth: 0.2,
+		              symbol: "circle",
+		              symbolSize: 4,
+		              showSymbol: false,
+		              connectNulls: false,
+		              lineStyle: { width: 1.8, color: "rgba(23,110,84,0.56)", opacity: 0.74 },
+		              itemStyle: { color: "rgba(23,110,84,0.72)" },
+		              emphasis: {
+		                lineStyle: { width: 2.4, opacity: 0.9 },
+		                itemStyle: { color: chartTone.green },
+		              },
+		              data: items.map((item) => ({ value: item.new_high_share_pct == null ? null : numberValue(item.new_high_share_pct), item })),
+		            },
+		          ],
+		        });
 	        return chart;
 	      };
 
@@ -2103,11 +2841,11 @@
 		              type: "category",
 		              gridIndex: 1,
 		              data: times,
-		              axisLabel: { color: chartTone.muted },
-		              axisTick: { show: false },
-		              axisLine: { lineStyle: { color: chartTone.line } },
-		            },
-		          ],
+			              axisLabel: { color: chartTone.muted },
+			              axisTick: { show: false },
+			              axisLine: { lineStyle: { color: chartTone.line } },
+			            },
+			          ],
 		          yAxis: [
 		            {
 		              type: "value",
@@ -2133,11 +2871,13 @@
 		        return chart;
 		      };
 
-		      const renderedCharts = Array.from(document.querySelectorAll("[data-bear-chart]"))
-		        .map((node) => {
-		          const key = node.dataset.bearChart;
-		          if (key === "intraday_feedback_review") {
-		            return renderIntradayFeedbackReviewChart(node, chartPayload.intraday_feedback_review);
+			      const renderedCharts = Array.from(document.querySelectorAll("[data-market-structure-chart]"))
+			        .map((node) => renderMarketStructureChart(node))
+			        .concat(Array.from(document.querySelectorAll("[data-bear-chart]"))
+			        .map((node) => {
+			          const key = node.dataset.bearChart;
+			          if (key === "intraday_feedback_review") {
+			            return renderIntradayFeedbackReviewChart(node, chartPayload.intraday_feedback_review);
 		          }
 		          if (key === "market_turnover_top50_trend") {
 		            return renderMarketTurnoverTop50TrendChart(node, chartPayload.market_turnover_top50_trend);
@@ -2156,10 +2896,10 @@
 	          }
 	          if (key === "lhb_net_flow") {
 	            return renderLhbNetFlowChart(node, chartPayload.lhb_net_flow);
-	          }
-	          return null;
-	        })
-	        .filter(Boolean);
+			          }
+			          return null;
+		        }))
+			        .filter(Boolean);
 
 	      let chartResizeTicking = false;
 	      window.addEventListener("resize", () => {
@@ -2174,6 +2914,77 @@
 	          chartResizeTicking = false;
 	        });
 	      });
+
+      const setupTimelineTooltips = () => {
+        const targets = Array.from(document.querySelectorAll("[data-el-tooltip]"));
+        if (!targets.length) {
+          return;
+        }
+        const tooltip = document.createElement("div");
+        tooltip.className = "el-tooltip-popover";
+        tooltip.setAttribute("role", "tooltip");
+        tooltip.id = "timeline-el-tooltip";
+        document.body.appendChild(tooltip);
+
+        let activeTarget = null;
+
+        const hideTooltip = () => {
+          activeTarget = null;
+          tooltip.classList.remove("is-visible");
+          tooltip.removeAttribute("style");
+        };
+
+        const positionTooltip = (target) => {
+          const rect = target.getBoundingClientRect();
+          const tooltipRect = tooltip.getBoundingClientRect();
+          const margin = 12;
+          const preferredLeft = rect.left + (rect.width / 2) - (tooltipRect.width / 2);
+          const left = Math.min(
+            Math.max(preferredLeft, margin),
+            Math.max(margin, window.innerWidth - tooltipRect.width - margin),
+          );
+          const aboveTop = rect.top - tooltipRect.height - 10;
+          const top = aboveTop > margin ? aboveTop : rect.bottom + 10;
+          tooltip.style.left = `${left}px`;
+          tooltip.style.top = `${Math.min(top, window.innerHeight - tooltipRect.height - margin)}px`;
+        };
+
+        const showTooltip = (target) => {
+          const text = target.getAttribute("data-el-tooltip") || "";
+          if (!text.trim()) {
+            return;
+          }
+          activeTarget = target;
+          tooltip.textContent = text;
+          tooltip.classList.add("is-visible");
+          target.setAttribute("aria-describedby", tooltip.id);
+          positionTooltip(target);
+        };
+
+        for (const target of targets) {
+          target.addEventListener("mouseenter", () => showTooltip(target));
+          target.addEventListener("focus", () => showTooltip(target));
+          target.addEventListener("mouseleave", hideTooltip);
+          target.addEventListener("blur", hideTooltip);
+        }
+
+        window.addEventListener("scroll", () => {
+          if (activeTarget) {
+            positionTooltip(activeTarget);
+          }
+        }, { passive: true });
+        window.addEventListener("resize", () => {
+          if (activeTarget) {
+            positionTooltip(activeTarget);
+          }
+        });
+        window.addEventListener("keydown", (event) => {
+          if (event.key === "Escape") {
+            hideTooltip();
+          }
+        });
+      };
+      setupTimelineTooltips();
 
 	      const outline = document.querySelector(".outline-sticky");
 	      const nav = document.querySelector(".outline-nav");

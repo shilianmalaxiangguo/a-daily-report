@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -8,6 +9,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 PERMISSION_LABEL = "参与资格"
 
 from report.pk_decision_renderer import render_pk_decision_section
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class PkDecisionRendererTest(unittest.TestCase):
@@ -166,6 +168,45 @@ class PkDecisionRendererTest(unittest.TestCase):
         self.assertIn("**淘汰原因**:", rendered)
         self.assertNotIn("为什么它排第一", rendered)
         self.assertNotIn("为什么没选它", rendered)
+
+    def test_render_pk_multi_candidate_signal_branch_writes_two_b_confirmation(self):
+        lines = render_pk_decision_section(
+            {
+                "stage_label": "Step 5",
+                "stage_title": "PK决胜局（期望值模型）",
+                "trade_gate_open": True,
+                "pk_candidates": [
+                    {
+                        "name": "军工一号",
+                        "code": "000001",
+                        "win_rate": 0.62,
+                        "r_reward_ratio": 2.4,
+                        "ev": 1.86,
+                        "profit_space": 0.9,
+                        "loss_space": 0.38,
+                        "position_pct": 50,
+                        "composite_score": 9.8,
+                        "signal": SimpleNamespace(signal_type="breakout", entry_price=10.0, stop_loss=9.5),
+                    },
+                    {
+                        "name": "军工二号",
+                        "code": "000002",
+                        "win_rate": 0.58,
+                        "r_reward_ratio": 2.0,
+                        "ev": 1.41,
+                        "profit_space": 0.7,
+                        "loss_space": 0.35,
+                        "position_pct": 30,
+                        "composite_score": 8.9,
+                        "signal": None,
+                    },
+                ],
+            }
+        )
+
+        rendered = "\n".join(lines)
+        self.assertIn(f"- **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后立刻按失效价和单笔-5%底线处理风险", rendered)
+        self.assertNotIn("明日真正入场仍需09:50-10:10窗口", rendered)
 
 
 if __name__ == "__main__":

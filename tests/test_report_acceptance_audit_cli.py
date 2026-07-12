@@ -59,7 +59,7 @@ def zero_position_report():
             "| 0%不参与 | 固定交易窗口条件 | 仅14:30-14:55例外 | 单笔最晚-5% | 不新增参与 |",
         )
         .replace(
-            "| 50%条件执行 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50%条件执行 | 50%：只做合格对象，满足固定交易窗口条件后执行，不满足回到0% |",
+            "| 50%条件执行 | 正盈亏比 | 半导体 | 半导体 | 修复 | 富瀚微(300613) | 50%条件执行 | 50%：只做合格对象，按昨晚预案检查执行资格，B1未变强不补B2，不满足回到0% |",
             "| 0%不参与 | 负盈亏比 | 半导体 | 半导体 | 修复 | 暂无 | 0%不参与 | 0%：不新增参与，等待下一次预演条件重新成立 |",
         )
     )
@@ -116,6 +116,32 @@ class ReportAcceptanceAuditCliTest(unittest.TestCase):
 
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("chanlun_tomorrow_decision_conflict", completed.stdout)
+        finally:
+            for path in tmp_dir.glob("*"):
+                path.unlink()
+            tmp_dir.rmdir()
+
+    def test_cli_flags_pending_plan_used_as_te_target_without_database_summary(self):
+        tmp_dir = ROOT / "reports" / "_audit_cli_test"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        report_path = tmp_dir / "pending_target_conflict.md"
+        report_path.write_text(
+            (
+                "## 账户日序表\n"
+                "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n"
+                "|------|------|----------|----------|-------------|------|\n"
+                "| Td | 2026-07-10（周五） | 报告日：前日报计划推定，待成交确认：长电科技(600584) | 长电科技(600584) | Te不新增参与，B2取消 | 只观察，不新增参与 |\n"
+                "| Te | 2026-07-13（周一） | 前日报计划对象待成交确认：长电科技(600584) | 长电科技(600584) | 确认已成交才视为B1；未确认不新增B2 | 先确认成交事实；未成交不补B2 |\n\n"
+                "| 成交确认 | 前日报计划推定，待成交确认：长电科技(600584)；未确认成交前不视为B1，不新增B2 |\n"
+                + zero_position_report()
+            ),
+            encoding="utf-8",
+        )
+        try:
+            completed = run_audit_cli(report_path)
+
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("position_day_order_inferred_target_conflict", completed.stdout)
         finally:
             for path in tmp_dir.glob("*"):
                 path.unlink()

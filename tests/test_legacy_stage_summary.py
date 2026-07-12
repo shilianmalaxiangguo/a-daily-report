@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 from report.legacy_stage_summary import build_legacy_report_stage_rows
 
 
@@ -123,7 +124,7 @@ class LegacyStageSummaryTest(unittest.TestCase):
         )
 
         row_map = {row["stage_key"]: row["guidance"] for row in rows}
-        self.assertEqual(row_map["selection_focus"], "工业富联(601138)：明日目标标的，固定交易窗口内条件成立才执行")
+        self.assertEqual(row_map["selection_focus"], f"工业富联(601138)：明日目标标的，{PREMARKET_50_TRIGGER_TEXT}")
         self.assertNotIn("15只；", row_map["selection_focus"])
 
 

@@ -7,6 +7,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from hooks.report.use_execution_appendix_tail import run
 from report.appendix_renderer import render_execution_appendix
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 class UseExecutionAppendixTailTest(unittest.TestCase):
@@ -438,7 +439,10 @@ class UseExecutionAppendixTailTest(unittest.TestCase):
 
         rendered = "\n".join(lines)
         self.assertIn("| 1 | 海南海药 | 000566 | 化学制药 | 候选观察 | 板块锚定龙 | 最终0%时只作观察样本，不构成明日新增参与 |", rendered)
-        self.assertIn("| 2 | 长电科技 | 600584 | 半导体 | 明日执行对象 | 主线内核 / 板块锚定龙 | 已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与 |", rendered)
+        self.assertIn(
+            f"| 2 | 长电科技 | 600584 | 半导体 | 明日执行对象 | 主线内核 / 板块锚定龙 | 已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT} |",
+            rendered,
+        )
         self.assertNotIn("| 2 | 长电科技 | 600584 | 半导体 | 候选观察补充 |", rendered)
 
 

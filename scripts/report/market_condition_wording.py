@@ -20,15 +20,17 @@ def _pool_count(data, pool_key, stats_key):
     return _safe_int(market_stats.get(stats_key, (data or {}).get(stats_key, 0)))
 
 
-def _has_weak_profit_effect(data):
+def _profit_effect_state(data):
     data = data or {}
     market_stats = data.get("market_stats") or {}
     up_count = _safe_int(market_stats.get("up_count", data.get("up_count", 0)))
     down_count = _safe_int(market_stats.get("down_count", data.get("down_count", 0)))
     dt_count = _pool_count(data, "dt_pool", "dt_count")
     if down_count > up_count and down_count > 0:
-        return True
-    return dt_count >= 3
+        return "weak_breadth"
+    if dt_count >= 3:
+        return "limit_down_pressure"
+    return "balanced"
 
 
 def describe_market_turnover_condition(data):
@@ -43,8 +45,11 @@ def describe_market_turnover_condition(data):
     else:
         return "量能偏弱，先看不做"
 
-    if _has_weak_profit_effect(data):
+    profit_effect_state = _profit_effect_state(data)
+    if profit_effect_state == "weak_breadth":
         return f"{volume_label}，但赚钱效应不足"
+    if profit_effect_state == "limit_down_pressure":
+        return f"{volume_label}，但跌停端压力仍高"
     return f"{volume_label}，赚钱效应尚可"
 
 

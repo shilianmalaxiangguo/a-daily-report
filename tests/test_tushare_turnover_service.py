@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -86,6 +87,70 @@ class TushareTurnoverServiceTest(unittest.TestCase):
         self.assertEqual(rows[0]["data_source"], "tushare.daily")
         self.assertEqual(rows[1]["market"], "SH")
         self.assertEqual(rows[1]["amount_yi"], 1.0)
+
+    def test_fetch_stock_daily_turnover_records_uses_trade_date_for_a_channel(self):
+        from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
+
+        class AChannelPro:
+            _DataApi__http_url = "https://fastapic.stockai888.top"
+
+            def __init__(self):
+                self.calls = []
+
+            def daily(self, **kwargs):
+                self.calls.append(kwargs)
+                return _FakeFrame(
+                    [
+                        {"ts_code": "000001.SZ", "trade_date": "20260710", "pct_chg": -0.38, "amount": 999718.25},
+                        {"ts_code": "600000.SH", "trade_date": "20260710", "pct_chg": 0.89, "amount": 691188.28},
+                    ]
+                )
+
+        pro = AChannelPro()
+        rows = fetch_stock_daily_turnover_records("2026-07-10", pro=pro)
+
+        self.assertEqual(
+            pro.calls,
+            [
+                {
+                    "trade_date": "20260710",
+                    "fields": (
+                        "ts_code,trade_date,open,high,low,close,pre_close,"
+                        "change,pct_chg,vol,amount"
+                    ),
+                }
+            ],
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertAlmostEqual(sum(row["amount_yi"] for row in rows), 16.909065, places=6)
+
+    def test_fetch_stock_daily_turnover_records_retries_empty_a_channel_result(self):
+        from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records
+
+        class AChannelPro:
+            _DataApi__http_url = "https://fastapic.stockai888.top"
+
+            def __init__(self):
+                self.calls = []
+
+            def daily(self, **kwargs):
+                self.calls.append(kwargs)
+                if len(self.calls) == 1:
+                    return _FakeFrame([])
+                return _FakeFrame(
+                    [{"ts_code": "000001.SZ", "trade_date": "20260710", "pct_chg": -0.38, "amount": 999718.25}]
+                )
+
+        pro = AChannelPro()
+        with patch("time.sleep") as sleep:
+            rows = fetch_stock_daily_turnover_records("2026-07-10", pro=pro, page_retry_count=1)
+
+        self.assertEqual(len(pro.calls), 2)
+        self.assertEqual(pro.calls[0], pro.calls[1])
+        self.assertNotIn("limit", pro.calls[0])
+        self.assertNotIn("offset", pro.calls[0])
+        sleep.assert_called_once_with(1)
+        self.assertEqual(len(rows), 1)
 
     def test_fetch_stock_daily_turnover_records_filters_invalid_dates_and_amounts(self):
         from market_data.tushare_turnover_service import fetch_stock_daily_turnover_records

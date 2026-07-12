@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/index.md","reason":"研究脚本与测试的后端规范入口"}
+{"file":".trellis/spec/frontend/index.md","reason":"独立研究 HTML 的前端规范入口"}
+{"file":".trellis/tasks/archive/2026-07/07-11-quant-pressure-replay-calibration/research/findings.md","reason":"上一轮五分钟回放的事实、公式和边界"}
+{"file":".trellis/tasks/07-11-07-11-quant-pressure-one-minute-window-review/research/findings.md","reason":"本轮一分钟数据、公式与窗口研究结论"}

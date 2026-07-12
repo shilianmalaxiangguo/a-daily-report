@@ -1,4 +1,5 @@
 from report.surface_wording import sanitize_user_visible_text
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT, TWO_B_CONFIRMATION_CLAUSE
 
 
 def build_pk_overview_node(context, node_meta=None, node_lookup=None):
@@ -58,9 +59,9 @@ def build_pk_single_candidate_node(context, node_meta=None, node_lookup=None):
         )
         lines.append(f"> **这笔值不值得做**: {best_stock.get('ev', 0):.2f}元/股")
         lines.append(f"> **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
-        lines.append("> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口分层参与，买后用失效价和单笔-5%底线处理风险")
+        lines.append(f"> **真到盘中怎么做**: 明日按竞价表态、开盘前几分钟承接、打板/回封、09:50-10:10窗口处理；{TWO_B_CONFIRMATION_CLAUSE}；买后用失效价和单笔-5%底线处理风险")
     else:
-        lines.append("> **真到盘中怎么做**: 明日只按昨晚预案检查执行资格，买后用失效价和单笔-5%底线处理风险")
+        lines.append(f"> **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后用失效价和单笔-5%底线处理风险")
     lines.append("")
     return {"lines": lines, "exports": {}, "module_logs": []}
 
@@ -115,7 +116,7 @@ def build_pk_multi_candidate_node(context, node_meta=None, node_lookup=None):
         )
         lines.append(f"- **参考依据**: {best_stock.get('ev_model_source', '类型先验')}")
         lines.append(f"- **仓位放多少**: {float(best_stock.get('position_pct', 0) or 0):.0f}%")
-        lines.append("- **真到盘中怎么做**: 明日真正入场仍需09:50-10:10窗口，买后立刻按失效价和单笔-5%底线处理风险")
+        lines.append(f"- **真到盘中怎么做**: {PREMARKET_50_TRIGGER_TEXT}；买后立刻按失效价和单笔-5%底线处理风险")
     if runner_up:
         lines.append(
             f"- **领先差距**: 比第二名高{best_stock.get('composite_score', 0) - runner_up.get('composite_score', 0):.2f}分"

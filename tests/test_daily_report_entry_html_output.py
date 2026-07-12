@@ -25,6 +25,26 @@ def _embedded_json_payload(rendered_html, script_id):
 
 
 class DailyReportEntryHtmlOutputTest(unittest.TestCase):
+    def setUp(self):
+        def accept_legacy_save_stub(report_path, expected_markdown):
+            return str(expected_markdown or "")
+
+        saved_report_patcher = patch.object(
+            daily_report_entry_demo,
+            "read_verified_saved_report_markdown",
+            side_effect=accept_legacy_save_stub,
+        )
+        saved_report_patcher.start()
+        self.addCleanup(saved_report_patcher.stop)
+
+        strategy_save_patcher = patch.object(
+            daily_report_entry_demo,
+            "save_position_strategy_report",
+            return_value="/tmp/position-strategy.md",
+        )
+        strategy_save_patcher.start()
+        self.addCleanup(strategy_save_patcher.stop)
+
     def test_position_timeline_is_inserted_after_heading_and_reading_map(self):
         markdown = "# 2026-07-02 a股市场分析\n\n## 阅读地图\n| 顺序 | 模块 | 用途 |\n|---:|---|---|\n| 1 | 日报裁决总览 | 先看动作 |\n\n## 日报裁决总览\n正文\n"
         timeline = "| 轨道 | 标的 | 2026-07-02 |\n|------|------|------|\n| Ta旧仓 | 太极实业(600667) | 旧路径复核 |"
@@ -37,6 +57,26 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(updated_again, updated)
         self.assertLess(updated.index("## 阅读地图"), updated.index("## 账户日序表"))
         self.assertLess(updated.index("## 账户日序表"), updated.index("## 日报裁决总览"))
+
+    def test_day_order_timeline_is_inserted_after_heading_and_reading_map(self):
+        markdown = "# 2026-07-08 A股日报\n\n## 阅读地图\n| 顺序 | 模块 | 用途 |\n|---:|---|---|\n| 1 | 明日执行结论 | 先看动作 |\n\n## 明日执行结论\n正文\n"
+        timeline = "\n".join(
+            [
+                "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |",
+                "|------|------|----------|----------|-------------|------|",
+                "| Td | 2026-07-08（周三） | 报告日：空仓 | 无 | 只定Te预案，不下单；B2不存在直到Te确认 | 写清执行资格和取消条件 |",
+                "| Te | 2026-07-09（周四） | 新目标单独看B1，不用旧仓亏损补仓 | 华天科技(002185) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |",
+            ]
+        )
+
+        updated = daily_report_entry_demo._prepend_position_timeline_markdown(markdown, timeline)
+        updated_again = daily_report_entry_demo._prepend_position_timeline_markdown(updated, timeline)
+
+        self.assertEqual(updated.count("## 账户日序表"), 1)
+        self.assertEqual(updated_again, updated)
+        self.assertLess(updated.index("## 阅读地图"), updated.index("## 账户日序表"))
+        self.assertIn("| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |", updated)
+        self.assertIn("| Te | 2026-07-09（周四） | 新目标单独看B1，不用旧仓亏损补仓 | 华天科技(002185) | B1参与权；B2确认权 | B1未变强则取消B2；只检查B1 |", updated)
 
     def _valid_data(self):
         return {
@@ -104,8 +144,12 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             daily_report_entry_demo.REPORT_VARIANT_SUMMARY: "# summary",
         }
 
-    def test_postgres_only_saves_bear_html_after_postgres_fact_sync(self):
+    def test_postgres_only_validates_bear_html_before_postgres_fact_sync(self):
         order = []
+
+        def render_html(*args, **kwargs):
+            order.append("bear_render")
+            return "<html>bear</html>"
 
         def save_outputs(*args, **kwargs):
             order.append("markdown")
@@ -128,12 +172,15 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return Path("/tmp/2026-06-05_A股日报_完整版.html")
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
+             patch.object(daily_report_entry_demo, "render_markdown_report_html", side_effect=render_html), \
              patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", side_effect=persist_runtime_artifacts) as persist_mock, \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
              patch.object(daily_report_entry_demo, "save_report_outputs", side_effect=save_outputs), \
@@ -143,7 +190,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html) as html_mock:
             daily_report_entry_demo.main()
 
-        self.assertEqual(order, ["sync", "runtime_artifacts", "markdown", "chanlun", "html"])
+        self.assertEqual(order, ["bear_render", "sync", "runtime_artifacts", "markdown", "chanlun", "html"])
         self.assertEqual(html_mock.call_count, 1)
         self.assertEqual(html_mock.call_args.args[0], "2026-06-05")
         self.assertEqual(html_mock.call_args.kwargs["run_mode"], daily_report_entry_demo.LEDGER_MODE_FROZEN)
@@ -151,11 +198,14 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             html_mock.call_args.kwargs["saved_report_paths"],
             {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
+        self.assertEqual(html_mock.call_args.kwargs["html_text"], "<html>bear</html>")
 
     def test_main_entry_uses_markdown_reader_html_not_structured_dashboard_html(self):
         data = self._valid_data()
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-10", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -180,8 +230,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
         prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
-        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
-        self.assertIn("顶部长时间轴按日报视角展示", prepend_markdown)
+        self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))
+        self.assertIn("顶部账户日序表按近5个交易日展示", prepend_markdown)
         structured_html_mock.assert_not_called()
 
     def test_saved_markdown_html_sync_overwrites_existing_reader_html(self):
@@ -257,7 +307,171 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(text, text_again)
         self.assertTrue(synced_again)
 
-    def test_inject_previous_report_target_as_existing_position_context(self):
+    def test_sync_position_timeline_replaces_existing_markdown_section(self):
+        timeline = "\n".join(
+            [
+                "| 轨道 | 标的 | 2026-07-05（周日） | 2026-07-06（周一） | 2026-07-07（周二） | 2026-07-08（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Ta旧仓 | 太极实业(600667) | 上一份日报目标，进入旧仓/旧路径复核 | Ta+1 继续处理旧仓或取消路径 | Ta+2 优先处理旧仓，空仓时间尽可能接近全天空仓 | 空仓 |",
+                "| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |",
+                "| Tc复核位 | 无 | 空仓 | 空仓 | 没有Tc+0，不提前占用 | 下一份日报再复核 |",
+            ]
+        )
+        old_text = "\n".join(
+            [
+                "# 2026-07-06 A股日报",
+                "",
+                "## 阅读地图",
+                "| 顺序 | 模块 | 用途 |",
+                "|---:|---|---|",
+                "| 1 | 日报裁决总览 | 先看动作 |",
+                "",
+                "## 账户日序表",
+                "| 轨道 | 标的 | 2026-07-05（周日） | 2026-07-06（周一） | 2026-07-07（周二） | 2026-07-08（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Tb明日目标 | 太极实业(600667) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |",
+                "",
+                "## 日报裁决总览",
+                "正文",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-07-06_A股日报_完整版.md"
+            full_path.write_text(old_text, encoding="utf-8")
+
+            synced = daily_report_entry_demo._sync_position_timeline_into_saved_markdown(
+                {daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+                timeline,
+            )
+            text = full_path.read_text(encoding="utf-8")
+
+        self.assertTrue(synced)
+        self.assertEqual(text.count("## 账户日序表"), 1)
+        self.assertIn("| Tb明日目标 | 空仓 | 空仓 | 没有Tb+0，空仓 | 没有Tb+1，空仓 | 空仓 |", text)
+        self.assertLess(text.index("## 账户日序表"), text.index("## 日报裁决总览"))
+        self.assertNotIn("| Tb明日目标 | 太极实业(600667)", text)
+
+    def test_extract_previous_report_target_ignores_observation_only_changdian_report(self):
+        text = """
+## 日报裁决总览
+| 项目 | 结论 |
+|------|------|
+| 仓位姿态 | 0%不参与 |
+| 最终对象 | 观察对象：长电科技(600584) |
+| 对象性质 | 观察对象，不新增参与 |
+| 推导摘要 | 明日执行目标为无，只观察长电科技(600584)的承接是否重新成立。 |
+
+## 明日执行结论
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+| 明日执行对象 | 无 |
+| 执行目标 | 无 |
+| 观察对象 | 长电科技(600584) |
+
+`-- 最终对象=长电科技(600584) 身份=观察对象（执行目标为无）
+"""
+
+        self.assertEqual(daily_report_entry_demo._extract_report_target_from_markdown(text), {})
+
+    def test_entry_timeline_sync_keeps_changdian_process_target_out_of_tb_path(self):
+        from portfolio.position_strategy_report import render_position_strategy_report
+
+        source_report = """
+## 日报裁决总览
+| 项目 | 结论 |
+|------|------|
+| 仓位姿态 | 0%不参与 |
+| 最终对象 | 观察对象：长电科技(600584) |
+| 对象性质 | 观察对象，不新增参与 |
+| 推导摘要 | 明日执行目标为无，只观察长电科技(600584)的承接是否重新成立。 |
+
+## 明日执行结论
+| 项目 | 结论 |
+|------|------|
+| 明日仓位 | 0%不参与 |
+| 明日执行对象 | 无 |
+| 执行目标 | 无 |
+| 观察对象 | 长电科技(600584) |
+
+`-- 最终对象=长电科技(600584) 身份=观察对象（执行目标为无）
+"""
+        with TemporaryDirectory() as strategy_root:
+            strategy = render_position_strategy_report(
+                data={
+                    "final_target_resolution": {
+                        "new_entry_target": {},
+                        "process_target": {"name": "长电科技", "code": "600584", "sector": "半导体"},
+                        "display_target": {"name": "长电科技", "code": "600584", "sector": "半导体"},
+                        "capital_priority_decision": {"capital_priority": "wait", "reason": "无明日执行对象，保持观察"},
+                    },
+                    "execution_stage_context": {
+                        "extreme_conviction_list": [
+                            {
+                                "name": "长电科技",
+                                "code": "600584",
+                                "sector": "半导体",
+                                "planned_participation": {"buy_window": "09:50-10:10", "attack_state": "50%"},
+                            }
+                        ],
+                        "selection_workflow": {
+                            "final": {
+                                "execution_object": {},
+                                "position_pct": 0,
+                                "action_text": "0%不参与",
+                            }
+                        },
+                    },
+                },
+                target_date="2026-07-06",
+                positions=[],
+                source_report_markdown=source_report,
+                output_root=Path(strategy_root),
+            )
+        timeline = daily_report_entry_demo._extract_position_timeline_markdown(strategy)
+        old_markdown = "\n".join(
+            [
+                "# 2026-07-06 A股日报",
+                "",
+                "## 账户日序表",
+                "| 轨道 | 标的 | 2026-07-05（周日） | 2026-07-06（周一） | 2026-07-07（周二） | 2026-07-08（周三） |",
+                "|------|------|------|------|------|------|",
+                "| Tb明日目标 | 长电科技(600584) | 空仓 | 报告日确认明日目标 | Tb+0 条件买入，不是无条件买入 | Tb+1 只按昨晚预案执行或取消 |",
+                "",
+                "## 日报裁决总览",
+                "| 项目 | 结论 |",
+                "|------|------|",
+                "| 仓位姿态 | 0%不参与 |",
+                "| 最终对象 | 无 |",
+                "",
+                "## 明日执行结论",
+                "| 项目 | 结论 |",
+                "|------|------|",
+                "| 明日仓位 | 0%不参与 |",
+                "| 明日执行对象 | 无 |",
+                "| 执行性质 | 无明日执行对象 |",
+            ]
+        )
+        with TemporaryDirectory() as tempdir:
+            full_path = Path(tempdir) / "2026-07-06_A股日报_完整版.md"
+            full_path.write_text(old_markdown, encoding="utf-8")
+
+            synced = daily_report_entry_demo._sync_position_timeline_into_saved_markdown(
+                {daily_report_entry_demo.REPORT_VARIANT_FULL: str(full_path)},
+                timeline,
+            )
+            text = full_path.read_text(encoding="utf-8")
+
+        self.assertTrue(synced)
+        self.assertIn("| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |", text)
+        self.assertIn("| Te | 2026-07-07（周二） | 空仓等待B1资格 | 无 | 没有B1/B2；保持空仓 | 空仓等待下一份日报 |", text)
+        self.assertNotIn("| Tb明日目标 | 长电科技(600584)", text)
+        self.assertIn(
+            "| 长电科技 | 600584 | 半导体 | 无新增参与窗口 | 0%不参与 | 只作过程回放，不新增参与 | 不参与 | - |",
+            strategy,
+        )
+
+    def test_inject_previous_report_target_as_pending_position_context(self):
         data = {}
         with TemporaryDirectory() as tempdir:
             reports_root = Path(tempdir)
@@ -272,27 +486,40 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
                 reports_root=reports_root,
             )
 
-        self.assertTrue(summary["has_position"])
+        self.assertFalse(summary["has_position"])
+        self.assertTrue(summary["has_pending_position"])
+        self.assertEqual(summary["role"], "前日报计划待成交确认")
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
-        self.assertIn("100%仓位", summary["summary"])
-        self.assertIn("新仓是否叠加单独看Tb/Tc资格", summary["summary"])
+        self.assertIn("前日报计划推定，待成交确认", summary["summary"])
+        self.assertIn("未确认成交前不视为B1，不新增B2", summary["summary"])
+        self.assertNotIn("持有", summary["summary"])
+        self.assertNotIn("100%仓位", summary["summary"])
         self.assertNotIn("新开仓0手", summary["summary"])
+        self.assertEqual(summary["position"], 0.0)
+        self.assertEqual(summary["position_pct"], 0.0)
         self.assertEqual(summary["default_position_pct"], 100.0)
         self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
         self.assertEqual(summary["source_report_date"], "2026-06-26")
         self.assertTrue(data["position_context_provided"])
         self.assertEqual(data["personal_position_context"]["existing_position_summary"], summary)
 
-    def test_inferred_previous_report_target_marks_default_old_position_without_manual_input(self):
+    def test_inferred_previous_report_target_marks_pending_account_path_without_manual_input(self):
         data = self._valid_data()
         report_output_calls = []
+        strategy_calls = []
 
         def capture_report_outputs(*args, **kwargs):
             report_output_calls.append(kwargs)
             return self._report_outputs()
 
+        def capture_strategy(*args, **kwargs):
+            strategy_calls.append((args, kwargs))
+            return "| 轨道 | 标的 | 2026-06-29（周一） |\n|------|------|------|\n| Td今日 | 太极实业(600667) | 前日报计划推定，待成交确认 |"
+
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-29", "--replay"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-06-29")), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -307,23 +534,343 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}), \
              patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-29", "field_count": 8}), \
              patch.object(daily_report_entry_demo, "_try_persist_report_runtime_artifacts", return_value={}), \
-             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"}), \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
-             patch.object(daily_report_entry_demo, "render_position_strategy_report", return_value="| 轨道 | 标的 | 2026-06-28（周日） |\n|------|------|------|\n| Ta旧仓 | 太极实业(600667) | 旧路径复核 |"), \
+             patch.object(daily_report_entry_demo, "render_position_strategy_report", side_effect=capture_strategy), \
              patch.object(daily_report_entry_demo, "save_position_strategy_report", return_value="/tmp/strategy.md"), \
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")):
             daily_report_entry_demo.main()
 
         self.assertEqual(len(report_output_calls), 1)
-        self.assertTrue(report_output_calls[0]["has_personal_positions"])
+        self.assertFalse(report_output_calls[0]["has_personal_positions"])
         self.assertTrue(data["position_context_provided"])
         summary = data["personal_position_context"]["existing_position_summary"]
         self.assertTrue(summary["inferred_from_previous_report"])
         self.assertIn("太极实业(600667)", summary["summary"])
         self.assertEqual(summary["position_source"], "previous_report_target_default_1x")
+        inferred_position = strategy_calls[0][0][2][0]
+        self.assertTrue(inferred_position["inferred_from_previous_report"])
+        self.assertFalse(inferred_position["has_position"])
+        self.assertTrue(inferred_position["has_pending_position"])
+        self.assertEqual(inferred_position["role"], "前日报计划待成交确认")
+        self.assertEqual(inferred_position["position"], 0.0)
+        self.assertEqual(inferred_position["position_pct"], 0.0)
+        self.assertEqual(inferred_position["default_position_pct"], 100.0)
+        self.assertEqual(inferred_position["position_source"], "previous_report_target_default_1x")
+        self.assertEqual(inferred_position["source_report_date"], "2026-06-26")
+
+    def test_postgres_only_does_not_infer_position_from_previous_report_markdown(self):
+        data = self._valid_data()
+        data.pop("personal_position_context", None)
+        data.pop("existing_position_summary", None)
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-07-10", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
+             patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
+             patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "_inject_previous_report_target_as_existing_position", return_value={}) as inject_mock, \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
+             patch.object(daily_report_entry_demo, "render_position_strategy_report", return_value="| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |"), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-07-10", "field_count": 8}), \
+             patch.object(daily_report_entry_demo, "_try_persist_report_runtime_artifacts", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "save_position_strategy_report", return_value="/tmp/strategy.md"), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")):
+            exit_code = daily_report_entry_demo.main()
+
+        self.assertEqual(exit_code, 0)
+        inject_mock.assert_not_called()
+        self.assertNotIn("personal_position_context", data)
+
+    def test_postgres_only_missing_history_stops_before_sync_or_artifact_save(self):
+        data = self._valid_data()
+        data["position_context_provided"] = True
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-07-10", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
+             patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
+             patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
+             patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
+             patch("portfolio.position_strategy_report._load_report_day_data_from_postgres", return_value={}), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres") as sync_mock, \
+             patch.object(daily_report_entry_demo, "save_report_outputs") as save_markdown_mock, \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report") as save_chanlun_mock, \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown") as save_html_mock:
+            with self.assertRaisesRegex(RuntimeError, "PostgreSQL .*事实不可用，停止生成"):
+                daily_report_entry_demo.main()
+
+        sync_mock.assert_not_called()
+        save_markdown_mock.assert_not_called()
+        save_chanlun_mock.assert_not_called()
+        save_html_mock.assert_not_called()
+
+    def test_normalize_inferred_previous_target_records_updates_all_snapshot_copies(self):
+        stale = {
+            "name": "长电科技",
+            "code": "600584",
+            "summary": "持有长电科技(600584)，100%仓位",
+            "position": 100.0,
+            "position_source": "previous_report_target_default_1x",
+            "source_report_date": "2026-07-09",
+            "inferred_from_previous_report": True,
+            "role": "旧仓处理",
+        }
+        data = {
+            "personal_position_context": {"existing_position_summary": dict(stale)},
+            "market_research_snapshot": {
+                "final_target_resolution": {"existing_position_target": dict(stale)}
+            },
+        }
+
+        normalized = daily_report_entry_demo._normalize_inferred_previous_target_records(data)
+
+        self.assertEqual(normalized, 2)
+        for record in (
+            data["personal_position_context"]["existing_position_summary"],
+            data["market_research_snapshot"]["final_target_resolution"]["existing_position_target"],
+        ):
+            self.assertEqual(
+                record["summary"],
+                "前日报计划推定，待成交确认：长电科技(600584)；上一份日报目标来源=2026-07-09；未确认成交前不视为B1，不新增B2",
+            )
+            self.assertFalse(record["has_position"])
+            self.assertTrue(record["has_pending_position"])
+            self.assertEqual(record["position"], 0.0)
+            self.assertEqual(record["position_pct"], 0.0)
+            self.assertEqual(record["default_position_pct"], 100.0)
+            self.assertEqual(record["role"], "前日报计划待成交确认")
+            self.assertNotIn("持有", record["summary"])
+
+    def test_normalize_inferred_previous_target_records_repairs_marker_only_legacy_record(self):
+        record = {
+            "name": "长电科技",
+            "code": "600584",
+            "summary": "持有长电科技(600584)，100%仓位",
+            "has_position": True,
+            "position": "100",
+            "position_pct": 100.0,
+            "position_source": "previous_report_target_default_1x",
+            "source_report_date": "2026-07-09",
+        }
+
+        normalized = daily_report_entry_demo._normalize_inferred_previous_target_records(record)
+
+        self.assertEqual(normalized, 1)
+        self.assertTrue(record["inferred_from_previous_report"])
+        self.assertTrue(record["has_pending_position"])
+        self.assertFalse(record["has_position"])
+        self.assertEqual(record["position"], 0.0)
+        self.assertEqual(record["position_pct"], 0.0)
+        self.assertEqual(record["default_position_pct"], 100.0)
+        self.assertEqual(record["role"], "前日报计划待成交确认")
+        self.assertIn("前日报计划推定，待成交确认", record["summary"])
+
+    def test_normalize_inferred_previous_target_records_handles_shared_reference_cycle(self):
+        pending = {
+            "name": "长电科技",
+            "code": "600584",
+            "summary": "持有长电科技(600584)，100%仓位",
+            "position": 100.0,
+            "position_source": "previous_report_target_default_1x",
+            "inferred_from_previous_report": True,
+        }
+        data = {"pending": pending}
+        data["execution_stage_context"] = {"pending": pending, "root": data}
+
+        normalized = daily_report_entry_demo._normalize_inferred_previous_target_records(data)
+
+        self.assertEqual(normalized, 1)
+        self.assertFalse(pending["has_position"])
+        self.assertTrue(pending["has_pending_position"])
+        self.assertEqual(pending["position"], 0.0)
+
+    def test_normalize_inferred_previous_target_records_keeps_confirmed_position_unchanged(self):
+        record = {
+            "name": "长电科技",
+            "code": "600584",
+            "summary": "持有长电科技(600584)，100%仓位",
+            "has_position": True,
+            "position": 100.0,
+            "position_pct": 100.0,
+            "position_source": "explicit_position_input",
+        }
+        expected = dict(record)
+
+        normalized = daily_report_entry_demo._normalize_inferred_previous_target_records(record)
+
+        self.assertEqual(normalized, 0)
+        self.assertEqual(record, expected)
+
+    def test_postgres_write_boundaries_normalize_pending_position_exposure(self):
+        captured = []
+
+        class FakeService:
+            def load_daily_report_snapshot(self, target_date):
+                return {
+                    "source": f"postgresql://daily-report-facts/{target_date}",
+                    "field_count": 10,
+                    "target_field_count": 10,
+                    "data": stale_data(),
+                }
+
+            def save_daily_report_snapshot(self, target_date, data):
+                captured.append(("save", target_date, data))
+                return {"source": "postgresql://save"}
+
+            def import_daily_report_facts(self, target_date, data):
+                captured.append(("import", target_date, data))
+                return {"source": "postgresql://import"}
+
+        def stale_data():
+            return {
+                "selection_workflow": {
+                    "schema_version": "selection_workflow.v1",
+                    "final": {
+                        "execution_object": {},
+                        "position_pct": 0,
+                        "action_text": "弱收盘价格否定，0%不参与",
+                    },
+                    "candidate_pool": [],
+                },
+                "position_decision": {
+                    "target_position_pct": 0,
+                    "signal_grade": "0",
+                    "participation_mode": "observe_0",
+                    "final_action": "已决定50%条件执行",
+                },
+                "final_target_resolution": {
+                    "new_entry_target": {"name": "长电科技", "code": "600584"},
+                    "display_target": {"name": "长电科技", "code": "600584"},
+                    "capital_priority_decision": {"capital_priority": "old_position_t"},
+                    "account_exposure_plan": {
+                        "old_position_1x": True,
+                        "new_entry_1x": False,
+                        "max_exposure_x": 1,
+                    },
+                },
+                "personal_position_context": {
+                    "existing_position_summary": {
+                        "name": "长电科技",
+                        "code": "600584",
+                        "has_position": True,
+                        "position": 100.0,
+                        "position_pct": 100.0,
+                        "position_source": "previous_report_target_default_1x",
+                    }
+                }
+            }
+
+        with patch.object(daily_report_entry_demo, "_postgres_daily_report_service", return_value=FakeService()):
+            loaded = daily_report_entry_demo.load_daily_report_data_from_postgres("2026-07-10")
+            daily_report_entry_demo.save_daily_report_data_to_postgres("2026-07-10", stale_data())
+            daily_report_entry_demo.import_daily_report_data_to_postgres("2026-07-10", stale_data())
+
+        self.assertEqual([item[0] for item in captured], ["save", "import"])
+        for data in [loaded, *(item[2] for item in captured)]:
+            summary = data["personal_position_context"]["existing_position_summary"]
+            self.assertFalse(summary["has_position"])
+            self.assertTrue(summary["has_pending_position"])
+            self.assertEqual(summary["position"], 0.0)
+            self.assertEqual(summary["position_pct"], 0.0)
+            self.assertEqual(summary["default_position_pct"], 100.0)
+            position_decision = data["position_decision"]
+            self.assertEqual(position_decision["target_position_pct"], 0)
+            self.assertEqual(position_decision["final_action"], "0%不参与")
+            resolution = data["final_target_resolution"]
+            self.assertEqual(resolution["new_entry_target"], {})
+            self.assertEqual(resolution["display_target"], {})
+            self.assertEqual(resolution["capital_priority_decision"]["capital_priority"], "wait")
+            self.assertFalse(resolution["account_exposure_plan"]["old_position_1x"])
+            self.assertEqual(resolution["account_exposure_plan"]["max_runtime_exposure_x"], 0)
+            for resolution_copy in (
+                data["final_target_resolution"],
+                data["execution_stage_context"]["final_target_resolution"],
+                data["market_research_snapshot"]["final_target_resolution"],
+            ):
+                pending = resolution_copy["existing_position_target"]
+                self.assertFalse(pending["has_position"])
+                self.assertTrue(pending["has_pending_position"])
+                self.assertEqual(pending["role"], "前日报计划待成交确认")
+                self.assertEqual(pending["position"], 0.0)
+                self.assertEqual(pending["position_pct"], 0.0)
+
+    def test_explicit_empty_position_skips_previous_report_target_inference(self):
+        data = self._valid_data()
+        data["personal_position_context"] = {
+            "existing_position_summary": {
+                "has_position": True,
+                "name": "华天科技",
+                "code": "002185",
+                "summary": "持有华天科技(002185)，100%仓位",
+            }
+        }
+        report_output_calls = []
+        strategy_calls = []
+
+        def capture_report_outputs(*args, **kwargs):
+            report_output_calls.append(kwargs)
+            return self._report_outputs()
+
+        def capture_strategy(*args, **kwargs):
+            strategy_calls.append((args, kwargs))
+            return "| 日序 | 日期 | 账户位置 | 执行目标 | B1/B2执行层 | 动作 |\n| Td | 2026-07-09（周四） | 报告日：空仓 | 无 | - | - |"
+
+        with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-07-09", "--replay", "-p", "空仓"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(data, "2026-07-09")), \
+             patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
+             patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
+             patch.object(daily_report_entry_demo, "_read_previous_report_target_for_entry", return_value={
+                 "name": "华天科技",
+                 "code": "002185",
+                 "source_report_date": "2026-07-08",
+             }), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", side_effect=capture_report_outputs), \
+             patch.object(daily_report_entry_demo, "_resolve_chanlun_tomorrow_decision", return_value={"position_pct": 0}), \
+             patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
+             patch.object(daily_report_entry_demo, "_audit_generated_report_with_chanlun_html", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-07-09", "field_count": 8}), \
+             patch.object(daily_report_entry_demo, "_try_persist_report_runtime_artifacts", return_value={}), \
+             patch.object(daily_report_entry_demo, "save_report_outputs", return_value={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"}), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "render_position_strategy_report", side_effect=capture_strategy), \
+             patch.object(daily_report_entry_demo, "save_position_strategy_report", return_value="/tmp/strategy.md"), \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=Path("/tmp/full.html")):
+            daily_report_entry_demo.main()
+
+        self.assertEqual(len(report_output_calls), 1)
+        self.assertFalse(report_output_calls[0]["has_personal_positions"])
+        self.assertTrue(data["position_context_provided"])
+        self.assertFalse(data["personal_position_context"]["existing_position_summary"]["has_position"])
+        self.assertEqual(
+            data["personal_position_context"]["existing_position_summary"]["position_source"],
+            "explicit_empty_input",
+        )
+        self.assertEqual(strategy_calls[0][0][2], [])
+        self.assertIsNotNone(strategy_calls[0][1]["output_root"])
 
     def test_normal_path_skips_snapshot_when_postgres_fact_sync_succeeds(self):
         order = []
+
+        def build_outputs(*args, **kwargs):
+            order.append("build")
+            return self._report_outputs()
+
+        def audit_report(*args, **kwargs):
+            order.append("audit")
+            return {"passed": True, "findings": []}
 
         def save_outputs(*args, **kwargs):
             order.append("markdown")
@@ -347,42 +894,80 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05"]), \
              patch.object(daily_report_entry_demo, "get_daily_data", return_value=self._valid_data()), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
-             patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
+             patch.object(daily_report_entry_demo, "build_report_outputs", side_effect=build_outputs) as build_mock, \
              patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", side_effect=persist_runtime_artifacts), \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
              patch.object(daily_report_entry_demo, "save_report_outputs", side_effect=save_outputs), \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", side_effect=save_chanlun), \
-             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", side_effect=audit_report), \
              patch.object(daily_report_entry_demo, "_save_data_snapshot") as snapshot_mock, \
              patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", side_effect=sync_postgres), \
              patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", side_effect=save_html):
             daily_report_entry_demo.main()
 
-        self.assertEqual(order, ["sync", "runtime_artifacts", "markdown", "chanlun", "html"])
+        self.assertEqual(
+            order,
+            ["build", "audit", "sync", "runtime_artifacts", "markdown", "chanlun", "html"],
+        )
+        self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
+        self.assertFalse(build_mock.call_args.kwargs["persist_decision_ledger"])
         snapshot_mock.assert_not_called()
 
-    def test_html_render_failure_after_save_does_not_prevent_markdown_save(self):
+    def test_bear_html_render_failure_stops_before_postgres_and_artifact_writes(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()), \
-             patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", return_value={}), \
+             patch.object(daily_report_entry_demo, "render_markdown_report_html", side_effect=ValueError("broken Bear renderer")), \
+             patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts", return_value={}) as persist_mock, \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
              patch.object(daily_report_entry_demo, "save_report_outputs", return_value={daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"}) as save_markdown_mock, \
-             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")), \
+             patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report", return_value=Path("/tmp/chanlun.html")) as save_chanlun_mock, \
              patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": True, "findings": []}), \
-             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-05", "field_count": 8}), \
-             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown", return_value=None):
-            daily_report_entry_demo.main()
+             patch.object(daily_report_entry_demo, "import_daily_report_data_to_postgres", return_value={"source": "postgresql://daily-report-facts/2026-06-05", "field_count": 8}) as sync_mock, \
+             patch.object(daily_report_entry_demo, "_try_save_daily_report_html_from_saved_markdown") as save_html_mock:
+            with self.assertRaises(daily_report_entry_demo.ReportCriticalDataMissingError):
+                daily_report_entry_demo.main()
 
-        save_markdown_mock.assert_called_once()
+        sync_mock.assert_not_called()
+        persist_mock.assert_not_called()
+        save_markdown_mock.assert_not_called()
+        save_chanlun_mock.assert_not_called()
+        save_html_mock.assert_not_called()
+
+    def test_bear_html_acceptance_failure_does_not_write_html(self):
+        with TemporaryDirectory() as tempdir:
+            report_path = Path(tempdir) / "2026-07-10_A股日报_完整版_replay.md"
+            report_path.write_text("# report\n", encoding="utf-8")
+            html_path = report_path.with_suffix(".html")
+
+            def reject_html(_html_text):
+                raise daily_report_entry_demo.ReportCriticalDataMissingError(
+                    "position_timeline_html_missing: Bear HTML缺少账户日序表，停止生成"
+                )
+
+            with patch.object(daily_report_entry_demo, "render_markdown_report_html", return_value="<html>invalid</html>"):
+                with self.assertRaises(daily_report_entry_demo.ReportCriticalDataMissingError):
+                    daily_report_entry_demo._try_save_daily_report_html_from_saved_markdown(
+                        "2026-07-10",
+                        run_mode=daily_report_entry_demo.LEDGER_MODE_REPLAY,
+                        saved_report_paths={daily_report_entry_demo.REPORT_VARIANT_FULL: str(report_path)},
+                        validate_html=reject_html,
+                    )
+
+            self.assertFalse(html_path.exists())
+            self.assertFalse(html_path.with_suffix(".html.tmp").exists())
 
     def test_runtime_artifact_failure_does_not_prevent_markdown_save(self):
         order = []
@@ -400,6 +985,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return Path("/tmp/2026-06-05_A股日报_完整版.html")
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -458,6 +1045,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return Path("/tmp/2026-06-05_A股日报_完整版.html")
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -479,6 +1068,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
     def test_chart_html_fact_missing_still_saves_bear_html(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -509,8 +1100,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
         prepend_markdown = html_mock.call_args.kwargs["prepend_markdown"]
-        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
-        self.assertIn("第一列是报告日，下一交易日是执行日", prepend_markdown)
+        self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))
+        self.assertIn("顶部账户日序表按近5个交易日展示", prepend_markdown)
 
     def test_bear_html_runs_after_report_runtime_data_exports(self):
         data = self._valid_data()
@@ -558,6 +1149,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return {"decision_ledger_artifacts": {}, "candidate_trace_artifact": None}
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-08", "--overwrite-official"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -677,7 +1270,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
             html = path.read_text(encoding="utf-8")
 
-        self.assertEqual(path.name, "2026-06-08_明日标的选股淘汰赛.html")
+        self.assertEqual(path.name, "2026-06-08_过程候选淘汰赛.html")
         embedded = _embedded_json_payload(html, "elimination-payload")
         by_id = {layer["id"]: layer for layer in embedded["layers"]}
         self.assertEqual(by_id["market_capital_structure"]["survivor_count"], 1)
@@ -689,10 +1282,18 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         self.assertEqual(by_id["final_action"]["survivor_count"], 0)
         self.assertIn("趋势龙头/二波预期", html)
 
-    def test_markdown_audit_failure_stops_before_runtime_artifact_persistence(self):
+    def test_joint_markdown_bear_chanlun_audit_failure_stops_before_persistence(self):
         data = self._valid_data()
+        captured = {}
+
+        def reject_joint_audit(markdown_text, **kwargs):
+            captured["markdown"] = markdown_text
+            captured.update(kwargs)
+            return {"passed": False, "findings": [{"code": "X", "message": "broken"}]}
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-08", "--overwrite-official"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "get_daily_data", return_value=data), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -700,7 +1301,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
              patch.object(daily_report_entry_demo.os.path, "exists", return_value=False), \
              patch.object(daily_report_entry_demo, "build_report_outputs", return_value=self._report_outputs()) as build_mock, \
              patch.object(daily_report_entry_demo, "_build_sh_index_chanlun_html_for_audit", return_value="<h2>明日抉择</h2>"), \
-             patch.object(daily_report_entry_demo, "audit_report_markdown", return_value={"passed": False, "findings": [{"code": "X", "message": "broken"}]}), \
+             patch.object(daily_report_entry_demo, "render_markdown_report_html", return_value="<html>bear</html>"), \
+             patch.object(daily_report_entry_demo, "audit_report_markdown", side_effect=reject_joint_audit), \
              patch.object(daily_report_entry_demo, "persist_report_runtime_artifacts") as persist_mock, \
              patch.object(daily_report_entry_demo, "save_report_outputs") as save_markdown_mock, \
              patch.object(daily_report_entry_demo, "save_sh_index_chanlun_html_report") as save_chanlun_mock, \
@@ -711,7 +1313,9 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         build_mock.assert_called_once()
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
-        self.assertTrue(build_mock.call_args.kwargs["persist_decision_ledger"])
+        self.assertFalse(build_mock.call_args.kwargs["persist_decision_ledger"])
+        self.assertEqual(captured["position_companion_html"], "<html>bear</html>")
+        self.assertEqual(captured["companion_html"], "<h2>明日抉择</h2>")
         persist_mock.assert_not_called()
         save_markdown_mock.assert_not_called()
         save_chanlun_mock.assert_not_called()
@@ -723,6 +1327,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
         data["mainline_context"] = {}
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--postgres-only"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_daily_report_data_from_postgres", return_value=data), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -741,7 +1347,7 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
 
         build_mock.assert_called_once()
         self.assertFalse(build_mock.call_args.kwargs["persist_runtime_artifacts"])
-        self.assertTrue(build_mock.call_args.kwargs["persist_decision_ledger"])
+        self.assertFalse(build_mock.call_args.kwargs["persist_decision_ledger"])
         persist_mock.assert_called_once()
         save_markdown_mock.assert_called_once()
         save_chanlun_mock.assert_called_once()
@@ -754,12 +1360,14 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             {daily_report_entry_demo.REPORT_VARIANT_FULL: "/tmp/full.md"},
         )
         prepend_markdown = bear_html_mock.call_args.kwargs["prepend_markdown"]
-        self.assertTrue(prepend_markdown.startswith("| 轨道 | 标的 |"))
-        self.assertIn("第一列是报告日，下一交易日是执行日", prepend_markdown)
+        self.assertTrue(prepend_markdown.startswith("| 日序 | 日期 |"))
+        self.assertIn("顶部账户日序表按近5个交易日展示", prepend_markdown)
         chart_html_mock.assert_not_called()
 
     def test_postgres_only_market_total_only_stops_before_any_artifact_save(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-08", "--postgres-only", "--overwrite-official"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(
                  daily_report_entry_demo,
                  "load_daily_report_data_from_postgres",
@@ -797,6 +1405,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return {"decision_ledger_artifacts": {}, "candidate_trace_artifact": None}
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--replay"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "replay_from_snapshot", return_value=(self._valid_data(), "2026-06-05")), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -837,6 +1447,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
             return {"decision_ledger_artifacts": {}, "candidate_trace_artifact": None}
 
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05"]), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "get_daily_data", return_value=self._valid_data()), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
@@ -921,6 +1533,8 @@ class DailyReportEntryHtmlOutputTest(unittest.TestCase):
     def test_no_report_does_not_save_html(self):
         with patch.object(sys, "argv", ["daily_report_entry_demo.py", "2026-06-05", "--no-report"]), \
              patch.object(daily_report_entry_demo, "get_daily_data", return_value=self._valid_data()), \
+             patch.object(daily_report_entry_demo, "run_source_health_check", return_value={"overall_result": "ready", "stop_reasons": [], "warnings": [], "artifacts": {}}), \
+             patch.object(daily_report_entry_demo, "render_source_health_terminal_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "build_report_preflight", return_value={"failures": []}), \
              patch.object(daily_report_entry_demo, "render_report_preflight_lines", return_value=[]), \
              patch.object(daily_report_entry_demo, "load_strategy_performance_ledger", return_value={"records": []}), \

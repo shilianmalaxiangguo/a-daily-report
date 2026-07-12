@@ -4,6 +4,7 @@ from report.monitoring_pool_support import (
     build_monitoring_pool_summary,
     collect_monitoring_pool_candidates,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 __all__ = [
     "append_strategy_performance_section",
@@ -433,9 +434,9 @@ def _build_strategy_plan_context_legacy_body(
         confirm_price = _round_or_none(minute_plan.get('confirm_price_60m'))
         if 0 < target_position_pct < 50:
             if confirm_price:
-                trigger_text = f"50%条件执行：已决定执行对象，09:50-10:10窗口内站上{confirm_price:.2f}后只检查执行资格"
+                trigger_text = f"50%条件执行：已决定执行对象，09:50-10:10窗口内站上{confirm_price:.2f}后{PREMARKET_50_TRIGGER_TEXT}"
             else:
-                trigger_text = "50%条件执行：已决定执行对象，固定交易窗口只检查执行资格，普通结构只看09:50-10:10窗口"
+                trigger_text = f"50%条件执行：已决定执行对象，固定交易窗口{PREMARKET_50_TRIGGER_TEXT}，普通结构只看09:50-10:10窗口"
         elif confirm_price:
             trigger_text = f"09:50-10:10站上{confirm_price:.2f}后，再回到{entry_low:.2f}-{entry_high:.2f}区间内执行"
         elif entry_low is not None and entry_high is not None:

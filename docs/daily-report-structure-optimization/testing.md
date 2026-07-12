@@ -99,7 +99,7 @@
   tests.test_daily_report_entry_html_output
 ```
 
-结果：687 个测试通过。
+结果：749 个测试通过。
 
 本轮动作优先和 Bear HTML 改动后的复跑结果：
 
@@ -112,7 +112,102 @@
   tests.test_report_acceptance_audit
 ```
 
-结果：576 个测试通过。
+结果：590 个测试通过。
+
+## 2B执行口径验证
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest \
+  tests.test_entry_plan_stage \
+  tests.test_positioning_node_runtime \
+  tests.test_pk_decision_renderer \
+  tests.test_front_summary_support \
+  tests.test_appendix_renderer \
+  tests.test_position_strategy_report
+```
+
+结果：58 个测试通过。
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest \
+  tests.test_front_page_v2_renderer \
+  tests.test_report_runtime \
+  tests.test_final_conclusion_renderer \
+  tests.test_action_plan_renderer \
+  tests.test_two_layer_decision_payload \
+  tests.test_pk_decision_renderer \
+  tests.test_positioning_node_runtime \
+  tests.test_sniper_target_derivation \
+  tests.test_bayesian_diagnosis
+```
+
+结果：485 个测试通过。
+
+覆盖点：
+
+- 账户页“明日动作”正向执行文案包含 B1/B2。
+- 同股T表达为已有1x先视为B1参与权，B2只在强表态存活后补。
+- 正文和附录中的“明天具体怎么做”“出手时怎么做”“真到盘中怎么做”同步到新口径。
+- “明日策略”同步到新口径。
+- 旧的 50%/满仓执行文案在归一化时升级到新口径。
+- 100%核心进攻首屏仓位文案同步包含 B1/B2，不再只写“不满足回到0%”。
+- 明日对象、明日仓位和执行性质仍来自原结构化结果。
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest \
+  tests.test_market_research_renderer \
+  tests.test_entry_plan_node_runtime \
+  tests.test_pk_decision_stage \
+  tests.test_llm_wiki_context \
+  tests.test_llm_wiki_router \
+  tests.test_positioning_node_runtime \
+  tests.test_gem_breathing_runtime
+```
+
+结果：194 个测试通过。
+
+覆盖点：
+
+- 市场研究、PK阶段、20cm分支和 LLM Wiki 路由没有继续输出旧的正向执行短句。
+- 过程观察类文案仍保持只观察、不新增参与。
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest \
+  tests.test_use_execution_appendix_tail \
+  tests.test_decision_ledger
+```
+
+结果：103 个测试通过。
+
+覆盖点：
+
+- 极度看好列表中被升级为“明日执行对象”的标的同步使用 B1/B2 口径。
+- 历史回测表中的“历史标准动作”同步使用共享执行文案。
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest tests.test_report_acceptance_audit
+```
+
+结果：166 个测试通过。
+
+### 2026-07-03 replay 生成尝试
+
+```bash
+.generated/venv-py314/bin/python3.14 scripts/daily_report_entry_demo.py 2026-07-03 --replay
+```
+
+结果：停止生成。
+
+原因：`snapshots/2026-07-03.json` 不存在，入口脚本按历史 replay 规则拒绝生成。
+
+本地已存在这些旧产物，但未在本轮覆盖：
+
+- `reports/2026-07-03_A股日报_完整版.md`
+- `reports/2026-07-03_A股日报_完整版.html`
+- `reports/replay/2026-07-03_A股日报_完整版_replay.md`
+- `reports/replay/2026-07-03_A股日报_完整版_replay.html`
+
+抽检结果：这些旧产物仍含旧执行文案。本轮已修生成代码和测试，后续要重写 2026-07-03 历史产物，需要先补齐同日快照，或明确允许按目标日期重新采集并覆盖对应 replay/正式产物。
 
 ## 格式检查
 
@@ -174,3 +269,34 @@ git diff --check
 结果：停止生成。
 
 原因：`ETF两市成交额趋势` 缺失。这个是历史 replay 数据缺口，不是本轮结构整理问题。
+
+## 市场语言研究证据验证
+
+相关整套回归命令：
+
+```bash
+.generated/venv-py314/bin/python3.14 -m unittest \
+  tests.test_market_language_translation \
+  tests.test_postgres_daily_fact_db \
+  tests.test_front_page_v2_renderer \
+  tests.test_daily_report_render \
+  tests.test_daily_report_agent_runner \
+  tests.test_market_language_translation_lifecycle \
+  tests.test_report_replay \
+  tests.test_daily_report_markdown_html \
+  tests.test_report_acceptance_audit \
+  tests.test_llm_wiki_context \
+  tests.test_quant_pressure_one_minute_study \
+  tests.test_tushare_input_runtime
+```
+
+结果：766 项通过，1 项按环境条件跳过。该组测试覆盖目标日来源、真实市场宽度生产形状、分钟事件、固定窗口内部一致性、正式决定隔离、fresh/replay 保存、前台顺序、Bear HTML 与 Revision 4 逐字一致。
+
+补充检查：
+
+- `A_DAILY_REPORT_RUN_POSTGRES_INTEGRATION=1` 的同库重存测试：1 项通过。
+- 真实 Runtime 与命令入口的正式决定不变、动作优先、保存时点和磁盘正文一致测试：5 项通过。
+- `.generated/venv-py314/bin/python3.14 -m html.parser reports/research/quant-pressure-replay-study-20260711.html`。
+- Playwright 桌面与 `390px`：页面级横向溢出、元素重叠、SVG 非空、公式可见、窗口底色和控制台错误。
+
+Revision 4 论文 HTML 解析和生成器逐字一致通过，23 项研究测试通过，SHA256 为 `b203af7a579eb16366da899baa7ac43b544fe9b96ba0ab76a26bdda866ca3f8d`。Playwright 结果保持为：桌面与 `390px` 页面级横向溢出和元素重叠均为零，10/10 SVG 非空，公式与四类窗口底色可见，控制台零错误。

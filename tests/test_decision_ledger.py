@@ -30,6 +30,7 @@ from report.decision_ledger import (
     write_decision_ledger_artifacts_from_markdown_report,
     write_decision_ledger_artifacts,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 from domains.execution_chain.candidate_selection_nodes.conviction_list import (
     build_candidate_selection_conviction_list_node,
 )
@@ -3172,7 +3173,7 @@ class DecisionLedgerTest(unittest.TestCase):
         rendered = "\n".join(render_extreme_conviction_backtest_lines(index, final_action=final_action))
 
         self.assertIn("| 2026-06-24 | 长电科技 | 600584 | 明日执行对象 |", rendered)
-        self.assertIn("长电科技(600584)已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与", rendered)
+        self.assertIn(f"长电科技(600584)已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT}", rendered)
         self.assertIn("| 2026-06-24 | 海南海药 | 000566 | 高惯性 / 资金选择后的承接观察样本 |", rendered)
         self.assertIn("等待计划窗口事实回写；不作为明日新增参与依据", rendered)
 

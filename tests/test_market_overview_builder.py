@@ -109,7 +109,7 @@ class MarketOverviewBuilderTest(unittest.TestCase):
         self.assertIn("| 上证指数 | 3200.12 | +0.52% | 温和修复 |", rendered)
         self.assertIn("| 中证全指 | 5432.10 | +0.31% | 温和修复 |", rendered)
         self.assertIn("| 中证500 | 待补 | 待补 | 待补 |", rendered)
-        self.assertIn("| 两市成交额 | 16888.00亿 | - | 量能不差，但赚钱效应不足 |", rendered)
+        self.assertIn("| 两市成交额 | 16888.00亿 | - | 量能不差，但跌停端压力仍高 |", rendered)
         self.assertIn("| 涨停 / 跌停 | 35 / 3 | - | 活跃度还在，但亏钱端不轻 |", rendered)
         self.assertIn("| 涨跌比 | 3600 / 1600 | - | 多头仍占优 |", rendered)
         self.assertIn("### 2. 市场状态结论", rendered)
@@ -408,9 +408,61 @@ class MarketOverviewBuilderTest(unittest.TestCase):
             },
             target_date="2026-05-18",
         )
+        active_boundary = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 150.0} for _ in range(50)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2400, "down_count": 2400},
+            },
+            target_date="2026-05-18",
+        )
+        rounded_boundary = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 150.0024} for _ in range(50)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2400, "down_count": 2400},
+            },
+            target_date="2026-05-18",
+        )
+        extreme = build_market_trend_sections_contract(
+            data={
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 150.06} for _ in range(50)],
+                "zt_pool": [],
+                "dt_pool": [],
+                "market_stats": {"up_count": 2400, "down_count": 2400},
+            },
+            target_date="2026-05-18",
+        )
 
         self.assertIn("| Top50成交额占比 | 17.50% | 冰点 |", "\n".join(cold["lines"]))
         self.assertIn("| Top50成交额占比 | 19.00% | 震荡 |", "\n".join(oscillating["lines"]))
+        self.assertIn("| Top50成交额占比 | 25.00% | 资金活跃期 |", "\n".join(active_boundary["lines"]))
+        self.assertIn("| Top50成交额占比 | 25.00% | 资金活跃期 |", "\n".join(rounded_boundary["lines"]))
+        self.assertIn(
+            "| Top50成交额占比 | 25.01% | 极致 | Top50成交额占比超过25%，头部成交集中度进入极致区。 |",
+            "\n".join(extreme["lines"]),
+        )
+
+    def test_unified_market_sentiment_keeps_extreme_top50_share_as_hot_evidence(self):
+        result = resolve_unified_market_sentiment(
+            {
+                "total_turnover": 30000.0,
+                "turnover_rank": [{"turnover": 150.06} for _ in range(50)],
+                "new_high_feedback": {"available": True, "all_a_share_pct": 5.1},
+                "market_stats": {"up_count": 2600, "down_count": 2200},
+                "zt_pool": [],
+                "dt_pool": [],
+            },
+            target_date="2026-05-18",
+        )
+
+        self.assertEqual(result["state"], "高潮")
+        self.assertIn("资金聚焦和趋势扩散同步走热", result["local_heat"])
 
     def test_build_market_trend_sections_contract_marks_top50_share_missing_as_pending(self):
         result = build_market_trend_sections_contract(

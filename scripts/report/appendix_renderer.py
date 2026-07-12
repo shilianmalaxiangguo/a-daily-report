@@ -1,5 +1,6 @@
 from report.appendix_node_registry import build_appendix_node_specs
 from report.appendix_node_runtime import run_appendix_nodes
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 def _context_value(context, key, default=None):
@@ -144,7 +145,7 @@ def _final_execution_stock_code(context):
         resolution = (context or {}).get("final_target_resolution")
         resolution = resolution if isinstance(resolution, dict) else {}
         decision = resolution.get("capital_priority_decision") if isinstance(resolution.get("capital_priority_decision"), dict) else {}
-        if str(decision.get("capital_priority") or "").strip() in {"new_entry", "new_entry_after_old_exit", "tradable_proxy"}:
+        if str(decision.get("capital_priority") or "").strip() in {"new_entry", "new_entry_after_old_exit", "tradable_proxy", "same_stock_t"}:
             for key in ("new_entry_target", "tradable_proxy_target", "display_target"):
                 candidate = resolution.get(key)
                 if isinstance(candidate, dict) and candidate:
@@ -158,7 +159,7 @@ def _candidate_visible_row(idx, item, final_execution_code):
     principle = item.get("conviction_rule") or item.get("next_action") or item.get("principle")
     if final_execution_code and _normalize_stock_code(_stock_code(item)) == final_execution_code:
         role = "明日执行对象"
-        principle = "已进入明日执行计划；只按昨晚预案检查执行资格，不满足回到0%不参与"
+        principle = f"已进入明日执行计划；{PREMARKET_50_TRIGGER_TEXT}"
     return [
         idx,
         _stock_name(item),

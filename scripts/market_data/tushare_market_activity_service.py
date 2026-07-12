@@ -233,7 +233,10 @@ def fetch_investor_qa_rows(
             return tushare_rows
 
     _load_local_env_file()
-    url = str(endpoint_url or os.environ.get(INVESTOR_QA_ENDPOINT_ENV, "")).strip()
+    if endpoint_url is None:
+        url = str(os.environ.get(INVESTOR_QA_ENDPOINT_ENV, "")).strip()
+    else:
+        url = str(endpoint_url or "").strip()
     if not url:
         return []
     normalized_date = normalize_kline_date_str(trade_date)

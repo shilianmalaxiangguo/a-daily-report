@@ -276,8 +276,9 @@ class PkDecisionStageTest(unittest.TestCase):
                 "has_personal_positions": False,
                 "position_context_provided": True,
                 "existing_position_summary": {
-                    "has_position": True,
-                    "summary": "持有太极实业(600667)，100%仓位，上一份日报明日标的默认1x旧仓；新仓是否叠加单独看Tb/Tc资格",
+                    "has_position": False,
+                    "has_pending_position": True,
+                    "summary": "前日报计划推定，待成交确认：太极实业(600667)；未确认成交前不视为B1，不新增B2",
                     "default_position_pct": 100.0,
                     "position_source": "previous_report_target_default_1x",
                     "inferred_from_previous_report": True,
@@ -292,8 +293,45 @@ class PkDecisionStageTest(unittest.TestCase):
         )
 
         panel_fields = result["exports"]["candidate_quality_panel_fields"]
-        self.assertEqual(panel_fields["account_attention_load"], "默认1x旧仓需复核")
-        self.assertEqual(panel_fields["holding_priority_action"], "旧仓按旧路径处理；新机会按自身资格判断")
+        self.assertEqual(panel_fields["account_attention_load"], "前日报计划对象待成交确认")
+        self.assertEqual(panel_fields["holding_priority_action"], "未确认成交前不视为B1；新机会按自身资格判断")
+
+    def test_candidate_quality_scorecard_repairs_cached_inferred_position_fields(self):
+        result = build_pk_decision_runtime(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "final_gate": {"can_new_entry": False},
+                "has_personal_positions": False,
+                "position_context_provided": True,
+                "existing_position_summary": {
+                    "has_position": False,
+                    "has_pending_position": True,
+                    "name": "长电科技",
+                    "code": "600584",
+                    "position_source": "previous_report_target_default_1x",
+                },
+                "candidate_quality_panel_fields": {
+                    "market_emotion_label": "🟠 只处理旧仓",
+                    "account_attention_load": "默认1x旧仓需复核",
+                    "holding_priority_action": "旧仓按旧路径处理；新机会按自身资格判断",
+                    "daily_new_entry_limit": 0,
+                    "primary_buy_candidate": None,
+                    "backup_candidate": None,
+                },
+                "candidate_quality_samples": [],
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+            },
+            {"label": "Step 5", "title": "PK决胜局（期望值模型）"},
+            enabled_node_keys=["candidate_quality_scorecard", "export_stage_state"],
+        )
+
+        panel_fields = result["exports"]["candidate_quality_panel_fields"]
+        self.assertEqual(panel_fields["market_emotion_label"], "🟠 0%不参与；先确认成交事实")
+        self.assertEqual(panel_fields["account_attention_load"], "前日报计划对象待成交确认")
+        self.assertEqual(panel_fields["holding_priority_action"], "未确认成交前不视为B1；新机会按自身资格判断")
 
     def test_pk_decision_runtime_uses_crossline_fallback_watch_anchor(self):
         result = build_pk_decision_runtime(
@@ -752,6 +790,35 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("不新增参与", rendered)
         self.assertNotIn("禁止任何买入", rendered)
 
+    def test_action_plan_context_rewrites_inferred_previous_plan_verdict(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "🟠 只处理旧仓",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False},
+                "has_personal_positions": False,
+                "position_context_provided": True,
+                "existing_position_summary": {
+                    "has_position": False,
+                    "has_pending_position": True,
+                    "summary": "前日报计划推定，待成交确认：长电科技(600584)；未确认成交前不视为B1，不新增B2",
+                    "position_source": "previous_report_target_default_1x",
+                    "inferred_from_previous_report": True,
+                },
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "最终0%时只观察",
+            }
+        )
+
+        rendered = "\n".join(result["exports"]["position_section_lines"])
+        self.assertIn("明日裁决**: 🟠 0%不参与；先确认成交事实", rendered)
+        self.assertNotIn("明日裁决**: 🟠 只处理旧仓", rendered)
+
     def test_action_plan_context_keeps_existing_position_when_no_new_target(self):
         result = build_pk_decision_action_plan_context_node(
             {
@@ -794,6 +861,46 @@ class PkDecisionStageTest(unittest.TestCase):
         self.assertIn("先看旧仓竞价表态", rendered)
         self.assertNotIn("- **现在到底是什么状态**: 空仓", rendered)
         self.assertNotIn("- **明天仓位放多少**: 0%（保持空仓）", rendered)
+
+    def test_action_plan_context_does_not_render_inferred_plan_as_existing_position(self):
+        result = build_pk_decision_action_plan_context_node(
+            {
+                "trade_gate_open": False,
+                "position_level": "0%不参与",
+                "step0_prediction": "DIFFICULT",
+                "step0_prediction_cn": "暂不跟随",
+                "final_gate": {"can_new_entry": False, "allow_attack_50_ready": False, "should_reduce": True},
+                "has_personal_positions": True,
+                "position_context_provided": True,
+                "existing_position_summary": {
+                    "has_position": True,
+                    "summary": "持有长电科技(600584)，100%仓位",
+                    "position_source": "previous_report_target_default_1x",
+                },
+                "display_observation_candidates": [],
+                "waiting_stocks": [],
+                "today_predictions": [],
+                "nextday_predictions": [],
+                "get_execution_framework_text": lambda: "固定交易窗口条件",
+            }
+        )
+
+        exports = result["exports"]
+        rendered = "\n".join(
+            exports["position_section_lines"]
+            + [
+                f"{row.get('action')} {row.get('name')} {row.get('trigger')}"
+                for row in exports["action_rows"]
+            ]
+            + exports["pre_market_lines"]
+            + exports["opening_lines"]
+            + exports["first_hour_lines"]
+            + exports["intraday_lines"]
+            + exports["closing_lines"]
+        )
+
+        self.assertNotIn("已有旧仓", rendered)
+        self.assertNotIn("持有长电科技", rendered)
 
     def test_action_plan_context_keeps_conviction_candidates_executable_after_ten_confirm(self):
         result = build_pk_decision_action_plan_context_node(
@@ -842,7 +949,7 @@ class PkDecisionStageTest(unittest.TestCase):
         )
         self.assertIn("极度看好", rendered)
         self.assertIn("09:50-10:10观察价60.50", rendered)
-        self.assertIn("只按昨晚预案检查执行资格；不满足取消", rendered)
+        self.assertIn("B1先买参与权，B2只买确认权；B1未变强不补B2，走弱先取消B2并检查B1", rendered)
         self.assertIn("结果进入复盘和下一份日报判断", rendered)
         self.assertNotIn("才评估50%条件执行", rendered)
         self.assertNotIn("明天没有可买对象", rendered)

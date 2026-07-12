@@ -15,6 +15,7 @@ from report.front_summary_builder import (
     build_front_mainline_label_contract,
     build_front_style_action_text_contract,
 )
+from report.execution_wording import PREMARKET_50_TRIGGER_TEXT
 
 
 def _run_legacy_entry_probe(script_body):
@@ -234,7 +235,10 @@ assert "helpers" not in structure_mock.call_args.kwargs
             },
         )
 
-        self.assertEqual(result, "只做唯一对象，09:50-10:10站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
+        self.assertEqual(
+            result,
+            f"只做唯一对象，09:50-10:10站上12.34且不破11.80后{PREMARKET_50_TRIGGER_TEXT}；不为新故事切掉旧事实",
+        )
 
     def test_build_front_follow_action_text_support_uses_runtime_default_dependencies(self):
         support = self._load_module()
@@ -256,7 +260,10 @@ assert "helpers" not in structure_mock.call_args.kwargs
                 },
             )
 
-        self.assertEqual(result, "只做唯一对象，09:50-10:10站上12.34且不破11.80后按50%执行；不为新故事切掉旧事实")
+        self.assertEqual(
+            result,
+            f"只做唯一对象，09:50-10:10站上12.34且不破11.80后{PREMARKET_50_TRIGGER_TEXT}；不为新故事切掉旧事实",
+        )
 
     def test_build_front_structure_layer_text_support_returns_execute_50_message(self):
         support = self._load_module()
@@ -282,7 +289,10 @@ assert "helpers" not in structure_mock.call_args.kwargs
             },
         )
 
-        self.assertEqual(result, "市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，09:50-10:10站上12.34且不破11.80后只检查执行资格；不为新故事切掉旧事实")
+        self.assertEqual(
+            result,
+            f"市场已允许出手，而且已经缩到明日执行对象；已决定50%条件执行，09:50-10:10站上12.34且不破11.80后{PREMARKET_50_TRIGGER_TEXT}；不为新故事切掉旧事实",
+        )
 
     def test_front_follow_action_text_passes_focus_keep_counts_to_position_sizing(self):
         support = self._load_module()
@@ -312,7 +322,7 @@ assert "helpers" not in structure_mock.call_args.kwargs
 
         self.assertEqual(captured_final_gate["candidate_count"], 2)
         self.assertEqual(captured_final_gate["unique_target_count"], 2)
-        self.assertIn("50%执行", result)
+        self.assertIn(PREMARKET_50_TRIGGER_TEXT, result)
         self.assertNotIn(_m("旧", "小仓", "条件", "试错"), result)
 
     def test_front_summary_support_maps_legacy_30_position_to_50_attack_window(self):

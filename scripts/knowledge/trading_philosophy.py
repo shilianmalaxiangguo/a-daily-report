@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Dict, List
 
 from daily_report_snapshot_io import LEDGER_MODE_FROZEN, LEDGER_MODE_REPLAY
+from report.execution_wording import TWO_B_CONFIRMATION_CLAUSE
 
 KNOWLEDGE_VERSION = "2026-04-22"
 KNOWLEDGE_SOURCE = "skillhub"
@@ -40,7 +41,10 @@ DECISION_GATE_CHAIN = [
     "失效价和单笔-5%底线",
 ]
 
-PARTICIPATION_WINDOW_LAYER_TEXT = "强核心走09:30-09:35竞价表态、开盘前几分钟或回封；普通结构只看09:50-10:10窗口"
+PARTICIPATION_WINDOW_LAYER_TEXT = (
+    f"强核心走09:30-09:35竞价表态、开盘前几分钟或回封；"
+    f"普通结构只看09:50-10:10窗口；{TWO_B_CONFIRMATION_CLAUSE}"
+)
 
 TRADING_PHILOSOPHY_BOTTOM_LINE_TEXT = "不买庄股，不靠孤立技术指标做买卖，不跟随大神/专家指令抄作业；这类方法即便偶尔赚钱，更多也是运气，不构成可复制优势"
 TRADING_PHILOSOPHY_TACTICAL_TEXT = "狙击手视角更接近卫宫切嗣式交易：不和市场正面缠斗，不为证明勇敢或追求漂亮买点而硬上；先隐藏、先观察、先等待，只在胜率明显倾斜时，对唯一目标做最务实的一击"
