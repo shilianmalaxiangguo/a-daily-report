@@ -52,8 +52,17 @@ __pycache__/
 /scripts/.codebuddy/**
 
 # Local agent/session artifacts
+/.playwright-mcp/
 /.superpowers/
 /.superpowers/**
 /.serena/
 /.serena/**
 /.agents/skills/superpowers
+
+# Daily report artifacts accidentally generated at the repository root
+/20??-??-??_明日标的选股淘汰赛.html
+/20??-??-??_板块资金扩散生成前复核.html
+/20??-??-??_过程候选淘汰赛.html
+/day-order-top.png
+/quant-pressure-rev*-mobile-*.png
+/structure_market_*.png
