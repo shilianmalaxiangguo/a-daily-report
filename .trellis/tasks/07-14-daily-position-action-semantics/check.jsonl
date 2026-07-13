@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/backend/daily-report-decision-loop.md", "reason": "Verify old-position and account-action contract compliance"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Verify report account advice and acceptance behavior"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Verify Markdown and Bear HTML remain consistent"}
+{"file": ".trellis/tasks/07-14-daily-position-action-semantics/research/longdian-20260713-calibration.md", "reason": "Verify both corrected and preserved behavior against calibration"}
